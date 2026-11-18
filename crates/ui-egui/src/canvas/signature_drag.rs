@@ -569,13 +569,13 @@ mod tests {
         h.run_steps(2);
         h.hover_at(centre + vec2(30.0, 20.0));
         h.run_steps(2);
-        assert_eq!(h.state().views[0].signature_drag.no_layer, Some(key), "remembered for this drag");
-        assert!(h.state().views[0].signature_drag.moving.is_none(), "nothing to draw");
+        assert_eq!(h.state().views[0].session.signature_drag.no_layer, Some(key), "remembered for this drag");
+        assert!(h.state().views[0].session.signature_drag.moving.is_none(), "nothing to draw");
         h.hover_at(centre + vec2(40.0, 30.0));
         h.run_steps(2);
-        assert_eq!(h.state().views[0].signature_drag.no_layer, Some(key), "and not made again");
+        assert_eq!(h.state().views[0].session.signature_drag.no_layer, Some(key), "and not made again");
         h.drop_at(centre + vec2(40.0, 30.0));
         h.run_steps(3);
-        assert_eq!(h.state().views[0].signature_drag.no_layer, None, "forgotten when the drag ends");
+        assert_eq!(h.state().views[0].session.signature_drag.no_layer, None, "forgotten when the drag ends");
     }
 }

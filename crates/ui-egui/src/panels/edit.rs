@@ -42,7 +42,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
     commands.push(HeaderCommand::new(IconId::new("settings"), "app.preferences"));
     let shown = Panel::new(title).titled().commands(commands).actions([HeaderAction::Close]).show(ui, |ui, _| {
         // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
-        let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].objects.count());
+        let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].session.objects.count());
         if count > 0 {
             Text::new(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected")).show(ui);
             Text::new(tl!("Drag the selection to move it. Esc clears the selection.").to_string()).show(ui);
@@ -265,7 +265,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use crate::format_text_ui::{Target, panel};
     // Editing a paragraph of existing text: its formatting, applied as it changes.
     if let Some((i, _)) = app.active_ids()
-        && let Some(ed) = app.views[i].line_editor.clone()
+        && let Some(ed) = app.views[i].session.line_editor.clone()
     {
         let mut ed = ed;
         let sources: Vec<(String, String)> = app
@@ -283,7 +283,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     // Typing added text: the box's formatting, and alignment for the lines a selection touches.
     if let Some(i) = app.active_ids().map(|(i, _)| i)
-        && let Some(draft) = app.views[i].content.draft.clone()
+        && let Some(draft) = app.views[i].session.content.draft.clone()
     {
         if draft.index.is_none() && app.quick_tool == crate::QuickTool::AddText {
             crate::content_ui::hint(ui);
@@ -292,7 +292,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     }
     let image = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
+        let (page, index) = app.views[i].session.content.selected?;
         let doc = app.session.get(id)?;
         match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
             pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
@@ -310,7 +310,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     }
     let selected = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
+        let (page, index) = app.views[i].session.content.selected?;
         let doc = app.session.get(id)?;
         let a = doc.added().iter().filter(|a| a.page == page).nth(index)?;
         match &a.content {
@@ -341,8 +341,8 @@ impl PdfCraftApp {
         style.drop_stale_ink();
         let Some(view) = self.views.get_mut(index) else { return };
         // Text the standard fonts can't draw stays in the box, unwritten, until it is corrected (#125).
-        let blocked = view.content.blocked().is_some();
-        let Some(d) = view.content.draft.as_mut() else { return };
+        let blocked = view.session.content.blocked().is_some();
+        let Some(d) = view.session.content.draft.as_mut() else { return };
         let committed = d.style.clone();
         // `text` and `rect` stay what the page has; the rest is the new style.
         d.style = pdfcraft_engine::AddedText { text: committed.text.clone(), rect: committed.rect, ..style };
@@ -357,7 +357,7 @@ impl PdfCraftApp {
             return;
         }
         if self.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index: item, content: pdfcraft_engine::AddedContent::Text(updated.clone()) })
-            && let Some(d) = self.views.get_mut(index).and_then(|v| v.content.draft.as_mut())
+            && let Some(d) = self.views.get_mut(index).and_then(|v| v.session.content.draft.as_mut())
         {
             // What the page has now. The aligns stay those of the text in the box.
             d.style = pdfcraft_engine::AddedText { aligns: std::mem::take(&mut d.style.aligns), ..updated };
@@ -382,6 +382,6 @@ impl PdfCraftApp {
                 ed.history.restart(now);
             }
         }
-        self.views[index].line_editor = Some(ed);
+        self.views[index].session.line_editor = Some(ed);
     }
 }

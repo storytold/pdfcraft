@@ -604,7 +604,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
     let Some(doc) = app.session.get(id) else { return };
     let Some(view) = app.views.get_mut(index) else { return };
-    let listed = view.calc_order.listed(doc);
+    let listed = view.session.calc_order.listed(doc);
     let order = &listed.order;
     if order.fields.is_empty() && order.extra.is_empty() {
         Text::new(tl!(
@@ -616,15 +616,15 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     let editable = doc.allows_modification();
     let undo = doc.can_undo() == Some("Set calculation order");
-    let selected = view.prepare.selected.as_ref().map(|(name, _)| name.clone());
+    let selected = view.session.prepare.selected.as_ref().map(|(name, _)| name.clone());
     let selected_objs: Vec<ObjRef> =
         selected.as_deref().map(|s| order.fields.iter().filter(|f| f.name == s).map(|f| f.obj).collect()).unwrap_or_default();
     let lead = selected_objs.first().copied();
     let mut selection = Selection::new(selected_objs, lead, lead);
     // A field selected since the last pass, whose row the list shows once.
-    let reveal = lead.filter(|_| selected != view.calc_order.scrolled_to);
-    view.calc_order.scrolled_to = selected.clone();
-    let mut links_on = !view.calc_order.hide_links;
+    let reveal = lead.filter(|_| selected != view.session.calc_order.scrolled_to);
+    view.session.calc_order.scrolled_to = selected.clone();
+    let mut links_on = !view.session.calc_order.hide_links;
     let objs: Vec<ObjRef> = order.fields.iter().map(|f| f.obj).collect();
     let count = objs.len();
     let mut hovered = None;
@@ -684,8 +684,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             Text::new(hint).shade(Shade::Faint).show(ui);
         }
     });
-    view.calc_order.hover_row = hovered.and_then(|key| order.fields.iter().find(|f| f.obj == key)).map(Focus::row);
-    view.calc_order.hide_links = !links_on;
+    view.session.calc_order.hover_row = hovered.and_then(|key| order.fields.iter().find(|f| f.obj == key)).map(Focus::row);
+    view.session.calc_order.hide_links = !links_on;
     match act {
         Some(Act::Order(names)) => {
             app.apply_edit(Edit::SetCalculationOrder { names });
@@ -695,7 +695,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
         Some(Act::EditFormula(name)) => {
             if let Some(view) = app.views.get_mut(index) {
-                view.prepare.select((name.clone(), 0), false);
+                view.session.prepare.select((name.clone(), 0), false);
             }
             crate::prepare::dialog::open(app, &name, 0, crate::prepare::FieldTab::Calculate);
         }
@@ -706,10 +706,10 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .get(id)
                 .and_then(|doc| doc.form.iter().find(|g| g.name == name).and_then(|g| g.widgets.first()).and_then(|w| Some((w.page?, w.rect))));
             if let Some(view) = app.views.get_mut(index) {
-                view.prepare.select((name, 0), false);
+                view.session.prepare.select((name, 0), false);
                 if let Some((page, rect)) = shown {
                     view.go_to_page(page);
-                    view.flash = Some((page, rect.map(|v| v as f32), 0.0));
+                    view.session.flash = Some((page, rect.map(|v| v as f32), 0.0));
                 }
             }
         }

@@ -67,16 +67,16 @@ impl<'a> RedactTool<'a> {
     pub(crate) fn finished(self, view: &mut DocView) {
         match self.finished {
             Some(RedactResult::Area { page, quad }) => {
-                view.pending_redaction = Some((QuickTool::Redact, vec![(page, vec![quad])], page));
+                view.session.pending_redaction = Some((QuickTool::Redact, vec![(page, vec![quad])], page));
             }
             // Across pages: a mark on each page it covers, once all are read; refused when one of
             // them could not be read, rather than leave it unmarked.
             Some(RedactResult::Text { page }) => match view.tool_marks(QuickTool::Redact, true, Some(page), true, self.info) {
                 ToolMarks::Marks(marks, head) => {
                     view.clear_selection();
-                    view.pending_redaction = Some((QuickTool::Redact, marks, head));
+                    view.session.pending_redaction = Some((QuickTool::Redact, marks, head));
                 }
-                ToolMarks::Unreadable => view.redaction_refused = true,
+                ToolMarks::Unreadable => view.session.redaction_refused = true,
                 ToolMarks::None => {}
             },
             None => {}

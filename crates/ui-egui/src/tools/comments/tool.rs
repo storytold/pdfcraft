@@ -396,8 +396,8 @@ pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, 
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
             let at = [last[2].max(last[6]), last[1].max(last[3])];
-            view.comments.replace = Some(quads);
-            view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Replace, text: String::new(), focus: true });
+            view.session.comments.replace = Some(quads);
+            view.session.comments.composer = Some(Composer { page, at, kind: ComposerKind::Replace, text: String::new(), focus: true });
         }
         return;
     }
@@ -416,6 +416,6 @@ pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, 
                 author: cx.prefs.author.clone(),
             })
         });
-        view.pending_edit = view.selection_marks_edit(edits.collect(), head);
+        view.session.pending_edit = view.selection_marks_edit(edits.collect(), head);
     }
 }

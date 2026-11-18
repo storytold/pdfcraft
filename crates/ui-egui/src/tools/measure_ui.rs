@@ -611,7 +611,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let units = app.units;
     let page = app.views[index].current;
     let info = doc.info.pages.get(page).cloned();
-    let state = &mut app.views[index].measure;
+    let state = &mut app.views[index].session.measure;
     if state.listing.as_ref().is_none_or(|(g, _)| *g != doc.edit_generation()) {
         state.listing = Some((doc.edit_generation(), doc.measurements()));
     }
@@ -781,7 +781,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let [x, y, w, h] = if state.whole_page { [0.0, 0.0, f64::from(info.width), f64::from(info.height)] } else { state.rect };
                 let a = info.view_to_user(x as f32, y as f32);
                 let b = info.view_to_user((x + w) as f32, (y + h) as f32);
-                app.views[index].pending_edit = Some(Edit::SetMeasurementScale {
+                app.views[index].session.pending_edit = Some(Edit::SetMeasurementScale {
                     page,
                     bbox: [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))],
                     name: state.name.clone(),
@@ -793,13 +793,13 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some((page, annotation, reading, scale)) = select {
         app.views[index].current = page;
-        app.views[index].comments.select_only((page, annotation));
-        app.views[index].measure.reading = Some(reading);
-        app.views[index].measure.scale = Some(scale);
+        app.views[index].session.comments.select_only((page, annotation));
+        app.views[index].session.measure.reading = Some(reading);
+        app.views[index].session.measure.scale = Some(scale);
         app.quick_tool = QuickTool::Select;
     }
     if let Some(tool) = tool {
-        app.views[index].measure.cancel();
+        app.views[index].session.measure.cancel();
         app.quick_tool = QuickTool::Measure(tool);
     }
     if export {
@@ -827,7 +827,7 @@ pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
     if let Some((index, _)) = app.active_ids()
         && let Some(tool) = id.strip_prefix("measure.").and_then(Tool::from_name)
     {
-        app.views[index].measure.cancel();
+        app.views[index].session.measure.cancel();
         app.quick_tool = QuickTool::Measure(tool);
     }
     if id == "measure.export" {

@@ -159,8 +159,8 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
         // macOS ⌘W closes the window when no document is open (#869).
         "file.close" if !has_doc && super::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => true,
         "edit.copy" if organize => enabled_id("page.copy"),
-        "edit.copy" if view.is_some_and(|v| v.picked_image.is_some()) => doc.is_some_and(|d| d.allows_copying()),
-        "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.objects.count() > 0) => {
+        "edit.copy" if view.is_some_and(|v| v.session.picked_image.is_some()) => doc.is_some_and(|d| d.allows_copying()),
+        "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.session.objects.count() > 0) => {
             doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
         }
         PASTE if edit_objects && app.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),

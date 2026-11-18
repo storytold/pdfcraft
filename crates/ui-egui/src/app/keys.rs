@@ -41,7 +41,7 @@ impl PdfCraftApp {
             self.right == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
         let view = &self.views[i];
         // A paragraph or text box open for typing keeps ⌘A for its own text.
-        let edit_objects = self.quick_tool == QuickTool::EditText && view.line_editor.is_none() && view.content.draft.is_none();
+        let edit_objects = self.quick_tool == QuickTool::EditText && view.session.line_editor.is_none() && view.session.content.draft.is_none();
         if pages_owns_keyboard {
             self.views[i].select_all_pages();
         } else if let Some(doc) = self.session.get(view.id).filter(|d| edit_objects && d.allows_modification()) {

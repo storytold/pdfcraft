@@ -97,13 +97,13 @@ fn recolour(app: &mut PdfCraftApp, view: usize, which: Recolour, color: craft::t
     let rgb = [color.r, color.g, color.b].map(f64::from);
     match which {
         Recolour::Paragraph => {
-            if let Some(mut ed) = app.views.get(view).and_then(|v| v.line_editor.clone()) {
+            if let Some(mut ed) = app.views.get(view).and_then(|v| v.session.line_editor.clone()) {
                 ed.look.set_color(rgb);
                 app.apply_line_format(view, ed);
             }
         }
         Recolour::Draft => {
-            if let Some(mut style) = app.views.get(view).and_then(|v| v.content.draft.as_ref()).map(|d| d.style.clone()) {
+            if let Some(mut style) = app.views.get(view).and_then(|v| v.session.content.draft.as_ref()).map(|d| d.style.clone()) {
                 style.set_color(rgb);
                 app.restyle_draft(view, style);
             }
@@ -633,7 +633,7 @@ pub(crate) fn apply(app: &mut PdfCraftApp, view: usize, target: Target, edits: &
             if let Some(next) = toggled
                 && let Some(slot) = app.views.get_mut(view)
             {
-                slot.content.draft = Some(next);
+                slot.session.content.draft = Some(next);
             }
             if style != draft.style {
                 app.restyle_draft(view, style);
@@ -786,7 +786,7 @@ mod tests {
     fn open_draft(app: &mut PdfCraftApp) -> TextDraft {
         let stored = item(app);
         let draft = TextDraft::new(0, Some(0), stored.rect, stored.text.clone(), stored);
-        app.views[0].content.draft = Some(draft.clone());
+        app.views[0].session.content.draft = Some(draft.clone());
         draft
     }
 

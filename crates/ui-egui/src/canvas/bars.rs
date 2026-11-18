@@ -203,7 +203,7 @@ pub(super) fn notices(
     let mut results: Vec<Option<Notice>> = Vec::new();
     let mut notice = bar(tone, icon, text).dismiss();
     if fields {
-        let label = if view.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
+        let label = if view.session.highlight_fields { tl!("Hide field highlights") } else { tl!("Highlight fields") };
         notice = notice.action(NoticeAction::new(label.to_string()));
         results.push(None);
     }
@@ -234,8 +234,8 @@ pub(super) fn notices(
     }
     let taken = results.into_iter().nth(out.action?)?;
     Some(taken.unwrap_or_else(|| {
-        view.highlight_fields = !view.highlight_fields;
-        Notice::FieldHighlights(view.highlight_fields)
+        view.session.highlight_fields = !view.session.highlight_fields;
+        Notice::FieldHighlights(view.session.highlight_fields)
     }))
 }
 

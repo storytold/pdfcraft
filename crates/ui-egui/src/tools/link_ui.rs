@@ -194,28 +194,28 @@ impl CanvasTool for LinkTool<'_> {
         let Some((page, r)) = self.drawn(pointer.pos) else { return };
         // A click that moved nothing draws nothing and leaves the page's selection empty.
         if r.width() < MIN_LINK_SIDE || r.height() < MIN_LINK_SIDE {
-            self.view.links.selected = None;
+            self.view.session.links.selected = None;
             return;
         }
         let Some(placed) = self.placed(page) else { return };
         let (Some(a), Some(b)) = (to_user(placed, self.info, r.min), to_user(placed, self.info, r.max)) else { return };
-        self.view.links.open_new = Some((page, [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]));
+        self.view.session.links.open_new = Some((page, [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]));
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {}
 
     fn claims(&self) -> ToolClaims {
-        if self.view.links.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.view.session.links.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         match key {
             ToolKey::Delete { .. } => {
-                let Some((page, index)) = self.view.links.selected.take() else { return false };
-                self.view.pending_edit = Some(Edit::DeleteLink { page, index });
+                let Some((page, index)) = self.view.session.links.selected.take() else { return false };
+                self.view.session.pending_edit = Some(Edit::DeleteLink { page, index });
                 true
             }
-            ToolKey::Cancel => self.view.links.selected.take().is_some(),
+            ToolKey::Cancel => self.view.session.links.selected.take().is_some(),
             _ => false,
         }
     }

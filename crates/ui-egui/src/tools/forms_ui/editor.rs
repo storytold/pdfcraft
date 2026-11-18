@@ -327,7 +327,7 @@ pub(super) fn offset_at(
     widget: usize,
     at: Pos2,
 ) -> usize {
-    let Some(focus) = view.forms.focus.as_ref() else { return 0 };
+    let Some(focus) = view.session.forms.focus.as_ref() else { return 0 };
     let Some(f) = form.get(field) else { return 0 };
     let Some(w) = f.widgets.get(widget) else { return 0 };
     let Some(page) = w.page else { return 0 };
@@ -343,9 +343,9 @@ pub(super) fn offset_at(
 /// by queuing its edit in `view.pending_edit` (a commit), by moving to another field, or by
 /// dropping the draft.
 pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc: &Document, form: &[FormField], info: &DocInfo) {
-    let Some(focus) = view.forms.focus.as_ref() else { return };
+    let Some(focus) = view.session.forms.focus.as_ref() else { return };
     let Some(f) = focused_field(focus, form) else {
-        view.forms.focus = None;
+        view.session.forms.focus = None;
         return;
     };
     let widget = focus.widget;
@@ -363,7 +363,7 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, d
     let mut ended = None;
     if types {
         let room = (f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL)).then(|| doc.field_text_box(&focus.name, widget)).flatten();
-        let Some(focus) = view.forms.focus.as_mut() else { return };
+        let Some(focus) = view.session.forms.focus.as_mut() else { return };
         let Focus { text, selection, .. } = focus;
         let mut host = FieldHost { ctx: ui.ctx().clone(), view: body.view, field: f, widget: w, geo, room, text, caret: selection.caret, laid: None };
         // PLAN: paints through an egui `Painter` with black text, as pdf-forms-w7's `paint_page` does; both move to the `Draw` tokens and the field's `/DA` colour together.
@@ -379,12 +379,12 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, d
     }
     match ended {
         Some(EditorEnd::Commit) => commit(view, form),
-        Some(EditorEnd::Next) => view.pending_edit = super::tab_to_next_field(view, info, form, f, widget, true, None),
-        Some(EditorEnd::Previous) => view.pending_edit = super::tab_to_next_field(view, info, form, f, widget, false, None),
-        Some(EditorEnd::Cancel) => view.forms.focus = None,
+        Some(EditorEnd::Next) => view.session.pending_edit = super::tab_to_next_field(view, info, form, f, widget, true, None),
+        Some(EditorEnd::Previous) => view.session.pending_edit = super::tab_to_next_field(view, info, form, f, widget, false, None),
+        Some(EditorEnd::Cancel) => view.session.forms.focus = None,
         None => {}
     }
-    let Some(focus) = view.forms.focus.as_mut() else { return };
+    let Some(focus) = view.session.forms.focus.as_mut() else { return };
     // A list box is picked from in place on the page, so only a combo box has a drop-down list.
     let picked = if combo { super::choice_list(ui, f, w, rect, zoom, &mut focus.list_open) } else { None };
     let date = match &f.actions.format {
@@ -392,8 +392,8 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, d
         _ => false,
     };
     if let Some(i) = picked {
-        view.pending_edit = Some(list_pick_edit(form, f, vec![i]));
-        view.forms.focus = None;
+        view.session.pending_edit = Some(list_pick_edit(form, f, vec![i]));
+        view.session.forms.focus = None;
     } else if date {
         commit(view, form);
     }

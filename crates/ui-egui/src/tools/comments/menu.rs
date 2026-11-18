@@ -42,7 +42,7 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
     let rows = attachment_rows(info, a);
     for row in &rows {
         if MenuItem::new(row.label).show(ui).ran {
-            view.comments.attachment_request = Some((a.page, a.index, row.open_in_tab));
+            view.session.comments.attachment_request = Some((a.page, a.index, row.open_in_tab));
         }
     }
     if !rows.is_empty() {
@@ -105,30 +105,30 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
     // Connected lines, a polygon or a cloud being drawn: finish it from the menu, as other editors do (Enter
     // and a double-click finish it too), take the last point back, or stop.
     if let Some(tool) = tool.filter(|t| t.clicks_points())
-        && !view.comments.tool.drawing().is_empty()
+        && !view.session.comments.tool.drawing().is_empty()
     {
-        let enough = view.comments.tool.drawing().len() >= if tool == CommentTool::PolyLine { 2 } else { 3 };
+        let enough = view.session.comments.tool.drawing().len() >= if tool == CommentTool::PolyLine { 2 } else { 3 };
         if row(ui, tl!("Complete"), enough) {
             let words = Env::of(ui).words::<AnnotateWords>();
-            view.comments.tool.finish_drawing(&words);
+            view.session.comments.tool.finish_drawing(&words);
         }
         if row(ui, tl!("Undo last point"), true) {
-            view.comments.tool.undo_point();
+            view.session.comments.tool.undo_point();
         }
         if row(ui, tl!("Cancel drawing"), true) {
-            view.comments.tool.cancel_drawing();
+            view.session.comments.tool.cancel_drawing();
         }
         return None;
     }
     // PLAN: assumed `CommentView::primary() -> Option<(usize, usize)>` and `selection()` (pdf-comments-w7, A-2)
-    let selected = view.comments.primary().and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && !a.is_reply()));
-    let several = view.comments.selection().len() > 1;
+    let selected = view.session.comments.primary().and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && !a.is_reply()));
+    let several = view.session.comments.selection().len() > 1;
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
             attachment_items(ui, view, info, a);
             if row(ui, tl!("Edit text…"), allowed) {
-                view.comments.composer = Some(Composer {
+                view.session.comments.composer = Some(Composer {
                     page,
                     at: super::bridge::edit_anchor(info, a),
                     kind: ComposerKind::Edit(index),
@@ -137,7 +137,7 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
                 });
             }
             if row(ui, tl!("Reply"), allowed) {
-                view.comments.reveal = true;
+                view.session.comments.reveal = true;
                 action = Some(CanvasAction::OpenComments);
             }
             Menu::submenu_row_enabled(ui, tl!("Set status"), allowed, |ui, _| {
@@ -181,23 +181,23 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
             Divider::horizontal().show(ui);
             // The engine's own check, for each selected comment: a locked comment, or one with a locked
             // reply, stays. On a group subordinate, Delete takes just it, as Acrobat's does.
-            let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
-            let deletes = deletable(dpage, dindex) && view.comments.selection().iter().all(|&(p, i)| deletable(p, i));
+            let (dpage, dindex) = view.session.comments.target().unwrap_or((page, index));
+            let deletes = deletable(dpage, dindex) && view.session.comments.selection().iter().all(|&(p, i)| deletable(p, i));
             if row(ui, tl!(if several { "Delete comments" } else { "Delete" }), allowed && deletes) {
-                action = super::bridge::delete_selected(&mut view.comments, info).map(|e| CanvasAction::Edit(Box::new(e)));
+                action = super::bridge::delete_selected(&mut view.session.comments, info).map(|e| CanvasAction::Edit(Box::new(e)));
             }
             if row(ui, tl!("Properties…"), allowed) {
                 action = Some(CanvasAction::Properties(page, index));
             }
             if row(ui, tl!("Make Current Properties Default"), defaultable(a)) {
-                view.comments.default_request = Some((page, index));
+                view.session.comments.default_request = Some((page, index));
             }
         }
         None => {
-            if let Some((page, at)) = view.comments.context_at
+            if let Some((page, at)) = view.session.comments.context_at
                 && row(ui, tl!("Add a sticky note here"), allowed)
             {
-                view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
+                view.session.comments.composer = Some(Composer { page, at, kind: ComposerKind::Note, text: String::new(), focus: true });
             }
             if row(ui, tl!("Comments panel"), true) {
                 action = Some(CanvasAction::OpenComments);
@@ -209,7 +209,7 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
     if !info.annotations.is_empty() {
         Divider::horizontal().show(ui);
         if row(ui, tl!("Flatten comments"), can_modify) {
-            view.comments.select(None);
+            view.session.comments.select(None);
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
         }
     }

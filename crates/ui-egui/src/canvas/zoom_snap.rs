@@ -137,7 +137,7 @@ impl PdfCraftApp {
         }
         match self.snapshot(index, page, view_rect) {
             Ok((w, h)) => {
-                self.views[index].area_pick = Some((page, view_rect));
+                self.views[index].session.area_pick = Some((page, view_rect));
                 self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
             }
             Err(e) => self.notify_fmt("Couldn't take the snapshot: {e}", &[("e", &e.to_string())]),

@@ -673,7 +673,7 @@ impl PdfCraftApp {
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             let shut = blocked || self.active != Some(index);
-            view.objects.set_input_blocked(shut);
+            view.session.objects.set_input_blocked(shut);
             // Edit text and Add text's drags end while their input is blocked rather than wait, to
             // land wherever the pointer is once it opens again.
             if shut && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
@@ -714,12 +714,12 @@ impl PdfCraftApp {
         // Another tool lets go of a click whose picture is still being found.
         if self.quick_tool != QuickTool::Select {
             for view in &mut self.views {
-                view.pending_pick = None;
+                view.session.pending_pick = None;
             }
         }
         panes::frame(self);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
-        let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.highlight_fields);
+        let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);
         self.session.set_field_highlight(highlight);
         self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on

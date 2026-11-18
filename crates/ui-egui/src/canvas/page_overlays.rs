@@ -119,7 +119,7 @@ impl PageLinks<'_> {
         if !self.text_links {
             return;
         }
-        let (Some((_, found)), Some(page_info)) = (self.view.text_links.get(&self.page), self.info.pages.get(self.page)) else { return };
+        let (Some((_, found)), Some(page_info)) = (self.view.session.text_links.get(&self.page), self.info.pages.get(self.page)) else { return };
         for (index, link) in found.iter().enumerate() {
             // The annotation over an address is what the document asks for there.
             if self.info.links.iter().any(|l| l.page == self.page && link.covered_by(page_info, l.rect)) {
@@ -238,7 +238,7 @@ fn link_part(owner: Owner, page: usize, shape: HitShape, tip: Option<String>) ->
 /// the one on screen, so its links, fields, text and comments take no input. Turning the page (a click, a
 /// key) is handled apart and still works.
 pub(super) fn veiled(view: &DocView) -> bool {
-    view.presentation.is_some() && !view.presenter.settled_on(view.current)
+    view.presentation.is_some() && !view.session.presenter.settled_on(view.current)
 }
 
 /// The sign tabs of one page: their parts, and the layouts those parts and the paint share.

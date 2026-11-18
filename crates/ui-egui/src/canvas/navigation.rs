@@ -37,7 +37,7 @@ impl DocView {
         // PLAN: assumed `self.text.selection: Option<TextSelection>` and
         // `self.page_text_source(page) -> Option<impl PageTextSource>` (the page's `AppText` at view
         // rotation 0) (pdf-canvas-w12).
-        if let Some(sel) = self.text.selection
+        if let Some(sel) = self.session.text.selection
             && let first = *sel.pages().start()
             && let Some(source) = self.page_text_source(first)
             && let Some(p) = info.pages.get(first)

@@ -186,8 +186,8 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
                 (false, false) => Some(all.iter().filter(|n| listed(n)).cloned().collect()),
                 (false, true) => Some(all.iter().filter(|n| !listed(n)).cloned().collect()),
             };
-            app.views[index].forms.focus = None;
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
+            app.views[index].session.forms.focus = None;
+            app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::ResetForm { names });
         }
         B::Named(n) => match n.as_str() {
             "Print" => app.open_print(),
@@ -226,7 +226,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
                 .collect();
             if !changes.is_empty() {
                 let label = if hide { "Hide a field" } else { "Show a field" };
-                app.views[index].pending_edit =
+                app.views[index].session.pending_edit =
                     Some(pdfcraft_engine::Edit::Batch { label: label.into(), edits: vec![pdfcraft_engine::Edit::ApplyScriptChanges { changes }] });
             }
         }

@@ -282,12 +282,12 @@ pub(crate) fn show(
     let (list, map) = threads(doc, prefs);
     // A comment selected elsewhere (on the page, or just added) is revealed in this same pass: the
     // panel unfolds its page and scrolls its card in. A reply or group member reveals its comment.
-    if std::mem::take(&mut view.comments.reveal)
-        && let Some(id) = view.comments.selection().first().and_then(|key| map.owner.get(key).copied())
+    if std::mem::take(&mut view.session.comments.reveal)
+        && let Some(id) = view.session.comments.selection().first().and_then(|key| map.owner.get(key).copied())
     {
-        view.comments.panel.reveal(id);
+        view.session.comments.panel.reveal(id);
     }
-    let output = CommentsPanel::new(tl!("Comments"), &list, &mut view.comments.panel)
+    let output = CommentsPanel::new(tl!("Comments"), &list, &mut view.session.comments.panel)
         .header(CommentsHeader::Hosted)
         .page_order(PageOrder::Document)
         .select_mode(SelectMode::Multi)
@@ -328,7 +328,7 @@ pub(crate) fn show(
                     && doc.annotation_deletable(page, at)
                 {
                     if index == 0 {
-                        view.comments.clear_selection();
+                        view.session.comments.clear_selection();
                     }
                     applied.push(Edit::DeleteAnnotation { page, index: at });
                 }
@@ -345,10 +345,10 @@ pub(crate) fn show(
             }
             CommentEdit::Select(ids) => {
                 // The lead goes first: `select_keys` makes its first key the one with the handles.
-                let lead = view.comments.panel.selected.lead;
+                let lead = view.session.comments.panel.selected.lead;
                 let ordered = lead.into_iter().chain(ids.iter().copied().filter(|id| Some(*id) != lead));
                 let keys: Vec<(usize, usize)> = ordered.filter_map(|id| map.key(id, 0)).collect();
-                view.comments.select_keys(&keys);
+                view.session.comments.select_keys(&keys);
                 if let Some(&key) = keys.first()
                     && let Some(a) = annotation_at(info, key)
                 {
@@ -358,7 +358,7 @@ pub(crate) fn show(
             }
             CommentEdit::CopyText { thread, index, .. } => {
                 if let Some(a) = map.key(thread, index).and_then(|key| annotation_at(info, key)) {
-                    view.comments.copy_text_request = Some(a.contents.clone().unwrap_or_default());
+                    view.session.comments.copy_text_request = Some(a.contents.clone().unwrap_or_default());
                 }
             }
             _ => {}
@@ -368,22 +368,22 @@ pub(crate) fn show(
         && let Some(key) = map.key(id, index)
     {
         match row {
-            CardRow::SaveAttachment => view.comments.attachment_request = Some((key.0, key.1, false)),
-            CardRow::OpenAttachment => view.comments.attachment_request = Some((key.0, key.1, true)),
+            CardRow::SaveAttachment => view.session.comments.attachment_request = Some((key.0, key.1, false)),
+            CardRow::OpenAttachment => view.session.comments.attachment_request = Some((key.0, key.1, true)),
             CardRow::ToggleCheck => {
                 let marked = list.iter().find(|t| t.id == id).is_some_and(|t| t.marked);
                 applied.push(Edit::MarkAnnotation { page: key.0, index: key.1, marked: !marked, author: prefs.author.clone() });
             }
             CardRow::CopyText => {
                 let text = annotation_at(info, key).and_then(|a| a.contents.clone()).unwrap_or_default();
-                view.comments.copy_text_request = Some(text);
+                view.session.comments.copy_text_request = Some(text);
             }
-            CardRow::Properties => view.comments.props_request = Some(key),
-            CardRow::MakeDefault => view.comments.default_request = Some(key),
+            CardRow::Properties => view.session.comments.props_request = Some(key),
+            CardRow::MakeDefault => view.session.comments.default_request = Some(key),
             CardRow::CopyComment => {
                 // The card's comment alone (the page's menu copies the whole selection).
-                view.comments.select_only(key);
-                view.comments.copy_request = true;
+                view.session.comments.select_only(key);
+                view.session.comments.copy_request = true;
             }
         }
     }
@@ -415,11 +415,11 @@ pub(crate) fn header(
         Entry::separator(),
         Entry::new("comment.flatten", tl!("Flatten comments").to_string()).enabled(enabled("comment.flatten")),
     ];
-    let command = comments_more_menu(ui, &more, &list, &mut view.comments.panel, &rows);
+    let command = comments_more_menu(ui, &more, &list, &mut view.session.comments.panel, &rows);
     let filter = IconButton::new(IconSpec::svg(IconId::new("funnel")))
         .label(tl!("Filter comments").to_string())
-        .selected(view.comments.panel.filter.is_active())
+        .selected(view.session.comments.panel.filter.is_active())
         .show(ui);
-    comments_filter_menu(ui, &filter, &list, &mut view.comments.panel);
+    comments_filter_menu(ui, &filter, &list, &mut view.session.comments.panel);
     command
 }

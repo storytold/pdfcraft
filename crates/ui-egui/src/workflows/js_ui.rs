@@ -144,7 +144,7 @@ impl PdfCraftApp {
             if self.views[i].page_screen_rect(page).is_none() {
                 self.views[i].go_to_page(page);
             }
-            self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, wi));
+            self.views[i].session.forms.focus = Some(crate::forms_ui::open_focus(f, wi));
         }
     }
 
@@ -185,7 +185,7 @@ impl PdfCraftApp {
     /// Highlight fields button does, for document `id` and the next ones.
     pub(crate) fn script_highlight(&mut self, id: DocId, on: bool) {
         if let Some(v) = self.views.iter_mut().find(|v| v.id == id) {
-            v.highlight_fields = on;
+            v.session.highlight_fields = on;
         }
         self.view_defaults.highlight_fields = on;
         self.session.set_field_highlight(on);
@@ -266,7 +266,7 @@ impl PdfCraftApp {
             }
             // The field being edited as it was, so a script changing it shows in its editor while
             // a draft the user already typed into is kept (as `run_field_triggers` does).
-            let before: Option<(String, Vec<String>)> = self.views[i].forms.focus.as_ref().and_then(|e| {
+            let before: Option<(String, Vec<String>)> = self.views[i].session.forms.focus.as_ref().and_then(|e| {
                 crate::forms_ui::focused_field(e, &self.session.get(id)?.form).map(|f| (crate::forms_ui::draft_text(f), f.value.clone()))
             });
             let run = if timers { self.session.run_timers(id, now_ms) } else { self.session.show_page(id, page, now_ms) };
@@ -278,7 +278,7 @@ impl PdfCraftApp {
                     self.views[i].document_changed(&info);
                 }
                 if let Some(before) = &before
-                    && let Some(draft) = self.views[i].forms.focus.as_mut()
+                    && let Some(draft) = self.views[i].session.forms.focus.as_mut()
                     && let Some(f) = self.session.get(id).and_then(|d| crate::forms_ui::focused_field(draft, &d.form))
                 {
                     crate::forms_ui::refresh_draft(draft, (&before.0, &before.1), (crate::forms_ui::draft_text(f), &f.value));

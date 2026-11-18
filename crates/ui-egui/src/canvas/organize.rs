@@ -101,7 +101,7 @@ fn commit_reorder(view: &mut DocView, mut pages: Vec<usize>, to: usize, copy: bo
     if copy {
         // The copies land at the gap as it is: nothing leaves its place.
         let gap = gap_of(&pages, to);
-        view.pending_edit = Some(Edit::DuplicatePages { pages, at: Some(gap) });
+        view.session.pending_edit = Some(Edit::DuplicatePages { pages, at: Some(gap) });
         view.selected = Selection::new((gap..gap + count).collect(), Some(gap), Some(gap));
         return;
     }
@@ -110,7 +110,7 @@ fn commit_reorder(view: &mut DocView, mut pages: Vec<usize>, to: usize, copy: bo
     if contiguous && to == first {
         return;
     }
-    view.pending_edit = Some(Edit::MovePages { pages, to });
+    view.session.pending_edit = Some(Edit::MovePages { pages, to });
     view.selected = Selection::new((to..to + count).collect(), Some(to), Some(to));
 }
 
@@ -168,10 +168,10 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
             later = IconButton::new(IconId::new("chevron-right")).label(tl!("Move later")).enabled(editable && last + 1 < n).show(ui).clicked();
         });
     if earlier {
-        view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first - 1 });
+        view.session.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first - 1 });
     }
     if later {
-        view.pending_edit = Some(Edit::MovePages { pages: targets, to: first + 1 });
+        view.session.pending_edit = Some(Edit::MovePages { pages: targets, to: first + 1 });
     }
     if save {
         view.pending_action = Some(ViewAction::Save);
@@ -218,7 +218,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         match event {
             ThumbnailEvent::Go(page) => view.go_to_page(page),
             ThumbnailEvent::Reorder(craft::behavior::EditEvent::Commit { after, .. }) => commit_reorder(view, after.keys, after.to, after.copy),
-            ThumbnailEvent::Delete(pages) => view.pending_edit = Some(Edit::DeletePages { pages }),
+            ThumbnailEvent::Delete(pages) => view.session.pending_edit = Some(Edit::DeletePages { pages }),
             ThumbnailEvent::Activate(page) => {
                 view.organize = false;
                 view.go_to_page(page);
@@ -227,11 +227,11 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
             ThumbnailEvent::Insert(at) => view.pending_action = Some(ViewAction::InsertFromFileAt(at)),
             ThumbnailEvent::FilesDropped { insert, .. } => view.grid_gap = Some(insert),
             ThumbnailEvent::Action { page, action, .. } => {
-                view.pending_edit = match action {
+                view.session.pending_edit = match action {
                     ROTATE_CCW => Some(Edit::RotatePages { pages: vec![page], degrees: -90 }),
                     ROTATE_CW => Some(Edit::RotatePages { pages: vec![page], degrees: 90 }),
                     DELETE => Some(Edit::DeletePages { pages: vec![page] }),
-                    _ => view.pending_edit.take(),
+                    _ => view.session.pending_edit.take(),
                 };
             }
             _ => {}

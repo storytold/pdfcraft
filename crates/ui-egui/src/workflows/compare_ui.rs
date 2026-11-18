@@ -276,12 +276,12 @@ impl PdfCraftApp {
                 let old_target = (ch.old.page, ch.old.rects.first().copied().or(ch.old.near).unwrap_or_default());
                 let v = &mut self.views[index];
                 v.go_to_page(page);
-                v.flash = Some((page, rect.map(|x| x as f32), 0.0));
+                v.session.flash = Some((page, rect.map(|x| x as f32), 0.0));
                 // The old file's half jumps to its side of the change too.
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
                     let v = &mut self.views[oi];
                     v.go_to_page(old_target.0);
-                    v.flash = Some((old_target.0, old_target.1.map(|x| x as f32), 0.0));
+                    v.session.flash = Some((old_target.0, old_target.1.map(|x| x as f32), 0.0));
                 }
             }
             PanelAction::SideBySide(on) => {
@@ -315,9 +315,9 @@ impl PdfCraftApp {
             },
             PanelAction::Clear => {
                 self.compare = None;
-                self.views[index].compare_marks.clear();
+                self.views[index].session.compare_marks.clear();
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
-                    self.views[oi].compare_marks.clear();
+                    self.views[oi].session.compare_marks.clear();
                 }
                 self.right = None;
             }
@@ -333,10 +333,10 @@ impl PdfCraftApp {
         let old = s.old;
         let (old_marks, new_marks) = (shading(s, true), shading(s, false));
         if let Some(v) = self.views.get_mut(index) {
-            v.compare_marks = new_marks;
+            v.session.compare_marks = new_marks;
         }
         if let Some(v) = self.views.iter_mut().find(|v| v.id == old) {
-            v.compare_marks = old_marks;
+            v.session.compare_marks = old_marks;
         }
     }
 }

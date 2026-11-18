@@ -140,7 +140,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         empty_state(ui, "text-cursor-input", tl!("This document has no form fields."));
         return result;
     }
-    let selection = &mut view.prepare;
+    let selection = &mut view.session.prepare;
     if preparing {
         Text::new(tl!("Tab order: move a field with its arrows.").to_string()).show(ui);
         Text::new(tl!("Shift- or Ctrl/Command-click to select several fields.").to_string()).show(ui);

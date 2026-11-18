@@ -229,7 +229,7 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
     let (index, id) = app.active_ids()?;
-    let (page, annotation) = app.views.get(index)?.comments.selected?;
+    let (page, annotation) = app.views.get(index)?.session.comments.selected?;
     let doc = app.session.get(id).filter(|doc| doc.allows_annotation())?;
     doc.info
         .annotations
@@ -371,7 +371,7 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
     if tool.has_border_color() {
         let style = app.comment_prefs.style(tool);
         let selected = app.active_ids().and_then(|(index, id)| {
-            let (page, annotation) = app.views.get(index)?.comments.selected?;
+            let (page, annotation) = app.views.get(index)?.session.comments.selected?;
             let doc = app.session.get(id)?;
             let made = doc.allows_annotation()
                 && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.locked && comments::made_by(a, tool));

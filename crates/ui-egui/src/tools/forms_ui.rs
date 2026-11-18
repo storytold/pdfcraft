@@ -325,15 +325,15 @@ pub(crate) fn hovered(form: &[FormField], hover: Option<&Owner>) -> Option<Widge
 /// Queue Mouse Exit for the widget the pointer left and Mouse Enter for the one it reached, when
 /// they differ from the last frame's (`now`: the widget under the pointer on any page).
 pub(crate) fn hover_moved(view: &mut DocView, now: Option<WidgetRef>) {
-    if view.forms.hovered == now {
+    if view.session.forms.hovered == now {
         return;
     }
-    let left = std::mem::replace(&mut view.forms.hovered, now.clone());
+    let left = std::mem::replace(&mut view.session.forms.hovered, now.clone());
     if let Some(w) = left {
-        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseExit));
+        view.session.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseExit));
     }
     if let Some(w) = now {
-        view.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseEnter));
+        view.session.forms.triggers.push((w, pdfcraft_engine::FieldTrigger::MouseEnter));
     }
 }
 
@@ -401,23 +401,23 @@ pub(crate) fn field_press(ctx: &egui::Context, view: &mut DocView, doc: &pdfcraf
         PressPhase::Down { start, .. } => {
             // The press runs the widget's Mouse Down JavaScript, as in Acrobat (#269).
             if usable {
-                view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseDown));
+                view.session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseDown));
             }
             if f.kind == FormFieldKind::Text && usable {
-                if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
+                if view.session.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                     commit(view, form);
-                    view.forms.focus = Some(open_focus(f, wi));
+                    view.session.forms.focus = Some(open_focus(f, wi));
                 }
                 let at = press_offset(ctx, view, doc, info, field, wi, start.origin);
-                if let Some(x) = view.forms.focus.as_mut() {
+                if let Some(x) = view.session.forms.focus.as_mut() {
                     x.selection = TextSelection::new(at, at);
                 }
             }
         }
         PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
-            if f.kind == FormFieldKind::Text && view.forms.focus.as_ref().is_some_and(|x| x.is_on(f, wi)) {
+            if f.kind == FormFieldKind::Text && view.session.forms.focus.as_ref().is_some_and(|x| x.is_on(f, wi)) {
                 let at = press_offset(ctx, view, doc, info, field, wi, *pos);
-                if let Some(x) = view.forms.focus.as_mut() {
+                if let Some(x) = view.session.forms.focus.as_mut() {
                     x.selection = TextSelection::new(x.selection.anchor, at);
                 }
             }
@@ -439,52 +439,52 @@ fn clicked(
 ) {
     let form = doc.form.as_slice();
     if !allowed {
-        view.forms.notice = Some(FormNotice::Security);
+        view.session.forms.notice = Some(FormNotice::Security);
         return;
     }
     match f.kind {
-        _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
+        _ if f.read_only() || w.read_only => view.session.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
-            Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
+            Some(a) => view.session.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
             // Its press already ran its mouse-down action.
             None if w.mouse_down => {}
-            None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
+            None => view.session.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
             // Close the editor so the script can replace its value without a stale draft.
             commit(view, form);
-            view.forms.button = Some((
+            view.session.forms.button = Some((
                 f.name.clone(),
                 pdfcraft_engine::js::field_object_id(f.obj),
                 pdfcraft_engine::form_scripts::ButtonAction::Script(script.clone()),
             ));
         }
-        FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
+        FormFieldKind::Signature => view.session.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223).
-            if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
+            if view.session.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
-                view.forms.focus = Some(open_focus(f, wi));
+                view.session.forms.focus = Some(open_focus(f, wi));
             }
             // The toggle goes after the edit for any text the click committed, in one batch: if that text is
             // refused, its field reopens and the toggle is dropped with it.
             let toggle = toggle_edit(f, wi);
-            view.pending_edit = match (view.pending_edit.take(), toggle) {
+            view.session.pending_edit = match (view.session.pending_edit.take(), toggle) {
                 (Some(first), Some(toggle)) => Some(Edit::Batch { label: "Edit field".into(), edits: vec![first, toggle] }),
                 (first, toggle) => first.or(toggle),
             };
             // The click's Mouse Up JavaScript runs once the toggle is stored, so it reads the new value (#247).
-            view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
+            view.session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
         // The press already committed the previous field and opened this one.
         FormFieldKind::Text => {}
         FormFieldKind::Combo => {
-            if view.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
+            if view.session.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(view, form);
-                view.forms.focus = Some(open_focus(f, wi));
+                view.session.forms.focus = Some(open_focus(f, wi));
             }
             // A combo box's click runs its Mouse Up JavaScript (#269).
-            view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
+            view.session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
         FormFieldKind::List => {
             let Some(xf) = view.page_xform(page) else { return };
@@ -492,7 +492,7 @@ fn clicked(
                 return;
             }
             commit(view, form);
-            view.forms.focus = Some(open_focus(f, wi));
+            view.session.forms.focus = Some(open_focus(f, wi));
             let r = widget_rect(&xf, info, page, w.rect);
             let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
             let zoom = (r.height() as f64) / height_pt;
@@ -518,7 +518,7 @@ fn clicked(
                 } else if multi
                     && shift
                     && let Some(anchor) =
-                        view.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map(|(_, row)| *row).or_else(|| in_order.last().copied())
+                        view.session.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map(|(_, row)| *row).or_else(|| in_order.last().copied())
                 {
                     let (min, max) = (anchor.min(opt_idx), anchor.max(opt_idx));
                     (min..=max).collect()
@@ -526,16 +526,16 @@ fn clicked(
                     vec![opt_idx]
                 };
                 if !(multi && shift) {
-                    view.forms.list_anchor = Some((f.name.clone(), opt_idx));
+                    view.session.forms.list_anchor = Some((f.name.clone(), opt_idx));
                 }
                 // A single-select list holding an array is written as one value even when its shown
                 // row is clicked again.
                 if picked != in_order || f.single_value_is_array {
-                    view.pending_edit = Some(list_pick_edit(form, f, picked));
+                    view.session.pending_edit = Some(list_pick_edit(form, f, picked));
                 }
             }
             // A list box's click runs its Mouse Up JavaScript after the pick is stored (#269).
-            view.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
+            view.session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
     }
 }
@@ -546,13 +546,13 @@ fn clicked(
 /// multi-select one. Tab goes on to the next field in the tab order. Escape ends the session. A page key drops the
 /// focus and is the page's.
 pub(crate) fn field_key(view: &mut DocView, info: &DocInfo, form: &[FormField], intent: &Intent) -> Option<Edit> {
-    let focus = view.forms.focus.clone()?;
+    let focus = view.session.forms.focus.clone()?;
     let f = focused_field(&focus, form)?;
     let widget = focus.widget;
     let read_only = f.read_only() || f.widgets.get(widget).is_some_and(|w| w.read_only);
     match intent {
         Intent::Cancel => {
-            view.forms.focus = None;
+            view.session.forms.focus = None;
             None
         }
         Intent::Tab => tab_to_next_field(view, info, form, f, widget, true, None),
@@ -562,7 +562,7 @@ pub(crate) fn field_key(view: &mut DocView, info: &DocInfo, form: &[FormField], 
             _ => None,
         },
         Intent::Move(NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End, _) => {
-            view.forms.focus = None;
+            view.session.forms.focus = None;
             None
         }
         Intent::Move(step @ (NavMove::Up | NavMove::Down | NavMove::Back | NavMove::Forward), mods) if !read_only => {
@@ -578,10 +578,10 @@ pub(crate) fn field_key(view: &mut DocView, info: &DocInfo, form: &[FormField], 
                     // By position, so the arrows step through options that share an export value, in the
                     // focused twin's own order.
                     let picked = if mods.extend && f.has(field_flags::MULTI_SELECT) {
-                        let anchor = view.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map_or(current, |(_, row)| *row);
+                        let anchor = view.session.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map_or(current, |(_, row)| *row);
                         (anchor.min(next)..=anchor.max(next)).collect()
                     } else {
-                        view.forms.list_anchor = Some((f.name.clone(), next));
+                        view.session.forms.list_anchor = Some((f.name.clone(), next));
                         vec![next]
                     };
                     Some(list_pick_edit(form, f, picked))
@@ -614,10 +614,10 @@ pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
 /// Close the focused field's editor, queueing the edit for its draft if it differs from the
 /// field's value.
 pub(crate) fn commit(view: &mut DocView, form: &[FormField]) {
-    let Some(focus) = view.forms.focus.take() else { return };
+    let Some(focus) = view.session.forms.focus.take() else { return };
     if let Some(edit) = draft_edit(&focus, form) {
-        view.pending_edit = Some(edit);
-        view.forms.committed = Some(focus);
+        view.session.pending_edit = Some(edit);
+        view.session.forms.committed = Some(focus);
     }
 }
 
@@ -640,7 +640,7 @@ pub(crate) fn paint_page(
     for (fi, f) in form.iter().enumerate() {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
-            if view.forms.unbaked.contains(&(f.name.clone(), page)) {
+            if view.session.forms.unbaked.contains(&(f.name.clone(), page)) {
                 paint_unbaked_widget(draw, painter, xf, TextFrame::of(xf, info, page, w, r), (f, wi, w), r);
             } else if fillable(f) && hovered == Some((fi, wi)) {
                 draw.surface(r.expand(1.0), SurfaceKind::Frame, Corners::All);
@@ -813,7 +813,7 @@ fn tab_to_next_field(
     edit: Option<Edit>,
 ) -> Option<Edit> {
     commit(view, form);
-    let pending = view.pending_edit.take();
+    let pending = view.session.pending_edit.take();
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
     let order = tab_order(form, info);
@@ -846,7 +846,7 @@ fn tab_to_next_field(
         let Some(target) = form.get(fi) else { return edit.or(pending) };
         let mut opened = open_focus(target, wi);
         opened.selection = TextSelection::new(0, opened.text.chars().count());
-        view.forms.focus = Some(opened);
+        view.session.forms.focus = Some(opened);
         if let Some(widget) = target.widgets.get(wi)
             && let Some(page) = widget.page
             && !field_screen_rect(view, info, target, wi).is_some_and(|rect| {
@@ -867,7 +867,7 @@ fn step_radio(view: &mut DocView, f: &FormField, widget: usize, forward: bool) -
     if let Some(pos) = stops.iter().position(|&i| i == widget) {
         let k = if forward { (pos + 1) % stops.len() } else { (pos + stops.len() - 1) % stops.len() };
         if let Some((wi, target)) = stops.get(k).and_then(|&wi| Some((wi, f.widgets.get(wi)?))) {
-            view.forms.focus = Some(open_focus(f, wi));
+            view.session.forms.focus = Some(open_focus(f, wi));
             edit = select_edit(f, wi);
             if let Some(p) = target.page
                 && view.page_screen_rect(p).is_none()

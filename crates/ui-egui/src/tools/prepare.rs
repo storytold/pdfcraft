@@ -272,7 +272,7 @@ fn place_tab_badge(widget: Rect, page: Rect, size: egui::Vec2, placed: &[Rect]) 
 pub(crate) fn context(form: &[FormField], field: usize, widget: usize, view: &mut DocView) {
     let Some(f) = form.get(field) else { return };
     let key = (f.name.clone(), widget);
-    let prep = &mut view.prepare;
+    let prep = &mut view.session.prepare;
     if !matches!(prep.gesture, Gesture::Idle) {
         return;
     }
@@ -387,9 +387,9 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 /// or one copy of a duplicated field, deletes only that one, as in Acrobat (#4609); a field's
 /// last widget takes the field with it.
 pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
-    let first = view.prepare.selected.take()?;
+    let first = view.session.prepare.selected.take()?;
     let mut picked = vec![first];
-    for w in std::mem::take(&mut view.prepare.also) {
+    for w in std::mem::take(&mut view.session.prepare.also) {
         if !picked.contains(&w) {
             picked.push(w);
         }
@@ -407,29 +407,29 @@ pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
 pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
     let mut selected =
         form.iter().flat_map(|f| f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(view.current)).map(|(wi, _)| (f.name.clone(), wi)));
-    view.prepare.selected = selected.next();
-    view.prepare.also = selected.collect();
+    view.session.prepare.selected = selected.next();
+    view.session.prepare.also = selected.collect();
 }
 
 /// After an Add field edit: select the new field (the form's last).
 pub(crate) fn after_refresh(view: &mut DocView, form: &[FormField]) {
-    view.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
-    if let Some(n) = view.prepare.select_added.take() {
+    view.session.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
+    if let Some(n) = view.session.prepare.select_added.take() {
         if form.len() > n
             && let Some(f) = form.last()
         {
-            view.prepare.selected = Some((f.name.clone(), 0));
-        } else if let Some((name, _)) = &view.prepare.selected
+            view.session.prepare.selected = Some((f.name.clone(), 0));
+        } else if let Some((name, _)) = &view.session.prepare.selected
             && let Some(f) = form.iter().find(|f| &f.name == name)
         {
             // A radio button joined the selected group: select the new button.
-            view.prepare.selected = Some((f.name.clone(), f.widgets.len().saturating_sub(1)));
+            view.session.prepare.selected = Some((f.name.clone(), f.widgets.len().saturating_sub(1)));
         }
     }
-    if let Some((name, wi)) = &view.prepare.selected
+    if let Some((name, wi)) = &view.session.prepare.selected
         && !form.iter().any(|f| &f.name == name && *wi < f.widgets.len())
     {
-        view.prepare.selected = None;
+        view.session.prepare.selected = None;
     }
 }
 

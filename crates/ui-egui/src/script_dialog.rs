@@ -330,7 +330,7 @@ impl PdfCraftApp {
             return;
         }
         let Some(view) = self.views.iter().find(|v| v.id == id) else { return };
-        let (zoom, page, highlight) = (view.zoom(), view.current(), view.highlight_fields);
+        let (zoom, page, highlight) = (view.zoom(), view.current(), view.session.highlight_fields);
         self.session.set_javascript_view(id, zoom * 100.0, highlight, page);
         match start(&mut self.session) {
             Ok(run) => {
@@ -613,7 +613,7 @@ mod review13_ui_tests {
         app.handle_js(id, JsOutput { requests: vec![pdfcraft_engine::js::Request::Focus("later".into())], ..Default::default() });
         let view = app.views.iter().find(|v| v.id == id).unwrap();
         assert_eq!(view.current(), 1);
-        assert_eq!(view.forms.focus.as_ref().unwrap().name, "later");
+        assert_eq!(view.session.forms.focus.as_ref().unwrap().name, "later");
     }
 }
 

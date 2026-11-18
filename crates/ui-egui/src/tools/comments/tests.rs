@@ -335,7 +335,7 @@ fn an_arrow_is_created_as_a_line_with_an_open_arrow_end() {
             aspect: None,
             handle_rule: Default::default(),
         };
-        bridge::edit(AnnotationEdit::Create(drawn), &map, &mut view.comments, &info, &prefs)
+        bridge::edit(AnnotationEdit::Create(drawn), &map, &mut view.session.comments, &info, &prefs)
     };
     assert!(matches!(
         created(craft::review::AnnotationKind::Arrow),
@@ -448,29 +448,29 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     let composer =
         |index: usize, text: &str| Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(index), text: text.into(), focus: false };
     let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
-    view.comments.select_only((0, 2));
-    view.comments.panel.editing = Some((thread(2), 0, "draft".into()));
+    view.session.comments.select_only((0, 2));
+    view.session.comments.panel.editing = Some((thread(2), 0, "draft".into()));
 
-    view.comments.composer = Some(composer(2, "body"));
+    view.session.comments.composer = Some(composer(2, "body"));
 
     // Moving/editing in place or appending a comment at index 3 preserves the (0, 2) selection, editor and composer.
     let mut appended = info.clone();
     appended.annotations.push(annot(3, "c3"));
     view.document_changed(&appended);
-    assert_eq!(view.comments.selection(), vec![(0, 2)]);
-    assert!(view.comments.panel.editing.is_some());
-    assert!(view.comments.composer.is_some());
+    assert_eq!(view.session.comments.selection(), vec![(0, 2)]);
+    assert!(view.session.comments.panel.editing.is_some());
+    assert!(view.session.comments.composer.is_some());
 
     // Deleting comment 1 shifts comment 2 down to index 1: stale state at (0, 2) and shifted (0, 1) must clear.
     let mut shifted = info.clone();
     shifted.annotations = vec![annot(1, "c2")];
-    view.comments.select_only((0, 1));
-    view.comments.panel.editing = Some((thread(1), 0, "for c1, not c2".into()));
-    view.comments.composer = Some(composer(1, "for c1"));
+    view.session.comments.select_only((0, 1));
+    view.session.comments.panel.editing = Some((thread(1), 0, "for c1, not c2".into()));
+    view.session.comments.composer = Some(composer(1, "for c1"));
     view.document_changed(&shifted);
-    assert!(view.comments.selection().is_empty());
-    assert_eq!(view.comments.panel.editing, None);
-    assert_eq!(view.comments.composer, None);
+    assert!(view.session.comments.selection().is_empty());
+    assert_eq!(view.session.comments.panel.editing, None);
+    assert_eq!(view.session.comments.composer, None);
 
     // Deleting a widget slot (0, 0) or a stale slot (0, 2) asks the engine for nothing.
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
@@ -478,7 +478,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     let map = page_map(&placed, &shifted, 0);
     let prefs = CommentPrefs::default();
     for bad_index in [0, 2] {
-        let edit = bridge::edit(AnnotationEdit::Delete(vec![bridge::id_of(0, bad_index)]), &map, &mut view.comments, &shifted, &prefs);
+        let edit = bridge::edit(AnnotationEdit::Delete(vec![bridge::id_of(0, bad_index)]), &map, &mut view.session.comments, &shifted, &prefs);
         assert_eq!(edit, None, "index {bad_index} must not emit DeleteAnnotation");
     }
 }
@@ -491,20 +491,20 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
     let page = || PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
     let info = DocInfo { pages: vec![page(), page()], annotations: vec![annot(1), annot(2)], ..Default::default() };
     let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
-    view.comments.select_only((0, 1));
-    view.comments.panel.editing = Some((ThreadId(bridge::id_of(0, 1).0), 0, "the first note".into()));
-    view.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
+    view.session.comments.select_only((0, 1));
+    view.session.comments.panel.editing = Some((ThreadId(bridge::id_of(0, 1).0), 0, "the first note".into()));
+    view.session.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
     let placed = [placed_page(&xf, 1.0)];
     let map = page_map(&placed, &info, 0);
-    let deleted = bridge::edit(AnnotationEdit::Delete(vec![bridge::id_of(0, 1)]), &map, &mut view.comments, &info, &CommentPrefs::default());
+    let deleted = bridge::edit(AnnotationEdit::Delete(vec![bridge::id_of(0, 1)]), &map, &mut view.session.comments, &info, &CommentPrefs::default());
     assert!(deleted.is_some(), "the unnamed comment is deletable");
     let mut shifted = info.clone();
     shifted.annotations = vec![annot(1)];
     view.document_changed(&shifted);
-    assert!(view.comments.selection().is_empty());
-    assert_eq!(view.comments.panel.editing, None);
-    assert_eq!(view.comments.composer, None);
+    assert!(view.session.comments.selection().is_empty());
+    assert_eq!(view.session.comments.panel.editing, None);
+    assert_eq!(view.session.comments.composer, None);
 }
 
 /// Review on #4358: a Replace Text group is selected by its caret, the group's primary (ISO
@@ -561,12 +561,12 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     assert_eq!(pick_at(&annotations, over, tolerance, side, &markers), Some(bridge::id_of(0, 0)), "the highlight a press there selects");
     // PLAN: the outline shape itself is the overlay's `HoverOutline` (pdf-comments-w8); a request to w8 for an `overlay` helper
     // the test can compare against the part's annotation. The part registered at the pointer is asserted here.
-    let parts = |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.comments.tool, tolerance, side);
+    let parts = |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side);
     assert_eq!(parts(&view, Some(over)).len(), 1, "one part for the comment under the pointer");
     assert!(parts(&view, None).is_empty(), "no pointer, no part");
     assert!(parts(&view, Some(Point::new(5.0, 5.0))).is_empty(), "nor where nothing would take the press");
     // Over the comment that is selected, no outline part: the handles are what is there.
-    view.comments.select_only((0, 0));
+    view.session.comments.select_only((0, 0));
     assert!(parts(&view, Some(over)).is_empty(), "no outline over a selected comment");
 }
 
@@ -595,7 +595,7 @@ fn an_annotation_round_trips_through_the_page_map_on_turned_and_zoomed_pages() {
         let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
         let delta = Vec2::new(1.0, 0.0);
         let moved =
-            bridge::edit(AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta }, &map, &mut view.comments, &info, &CommentPrefs::default());
+            bridge::edit(AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta }, &map, &mut view.session.comments, &info, &CommentPrefs::default());
         let Some(Edit::MoveAnnotation { dx, dy, .. }) = moved else { panic!("{case}: a move is one MoveAnnotation, got {moved:?}") };
         let origin = map.to_doc(0, [50.0, 80.0]);
         let (from, to) = (map.to_user(0, origin), map.to_user(0, origin + delta));

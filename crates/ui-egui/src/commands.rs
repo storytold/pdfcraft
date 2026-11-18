@@ -228,11 +228,11 @@ impl PdfCraftApp {
             || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
-                    !v.organize && (v.all_text || v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()))
+                    !v.organize && (v.session.all_text || v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()))
                 }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
-                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
+                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.session.comments.selected.is_some()),
                 "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
@@ -739,8 +739,8 @@ impl PdfCraftApp {
                     && let Some(view) = self.views.get_mut(i)
                     && let Some(page) = self.session.get(view.id).and_then(|d| d.info.pages.get(view.current()).cloned())
                 {
-                    view.camera_done = None;
-                    view.camera = self.session.detect_camera_corners(view.id, view.current()).map(|found| crate::camera_ui::CameraQuad {
+                    view.session.camera_done = None;
+                    view.session.camera = self.session.detect_camera_corners(view.id, view.current()).map(|found| crate::camera_ui::CameraQuad {
                         page: view.current(),
                         corners: found.map(|[x, y]| page.user_to_view(x as f32, y as f32)),
                     });
@@ -772,7 +772,7 @@ impl PdfCraftApp {
             }
             "form.clear" => {
                 if let Some(i) = active {
-                    self.views[i].forms.focus = None;
+                    self.views[i].session.forms.focus = None;
                 }
                 self.apply_edit(Edit::ResetForm { names: None });
             }
@@ -815,7 +815,7 @@ impl PdfCraftApp {
             }
             "form.detect" => self.detect_fields(),
             "form.field.properties" => {
-                if let Some((name, w)) = active.and_then(|i| self.views[i].prepare.selected.clone()) {
+                if let Some((name, w)) = active.and_then(|i| self.views[i].session.prepare.selected.clone()) {
                     self.open_field_props(&name, w);
                 }
             }
@@ -825,7 +825,7 @@ impl PdfCraftApp {
                 self.left = crate::LeftPanel::Tool("form");
                 self.reveal_tools();
                 if let Some(i) = active {
-                    self.views[i].forms.focus = None;
+                    self.views[i].session.forms.focus = None;
                 }
                 self.notify_fmt(
                     "Click on the page to add a {tool}, or drag to set its size",

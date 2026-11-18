@@ -72,16 +72,16 @@ pub(crate) fn page_points(placed: &PlacedPage) -> (f32, f32) {
 /// Esc into Cancel. Called only while the Camera image tool is open.
 pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed: bool) {
     // Once the page is enhanced, the bar's buttons take over.
-    if view.camera_done.is_some() {
+    if view.session.camera_done.is_some() {
         return;
     }
-    if view.camera.is_none()
+    if view.session.camera.is_none()
         && let Some(placed) = body.pages.iter().find(|p| p.page == view.current)
     {
         let (w, h) = page_points(placed);
-        view.camera = Some(CameraQuad::inset(placed.page, w, h));
+        view.session.camera = Some(CameraQuad::inset(placed.page, w, h));
     }
-    let Some(quad) = view.camera else { return };
+    let Some(quad) = view.session.camera else { return };
     let Some(placed) = body.pages.iter().find(|p| p.page == quad.page) else { return };
     let to_doc = |c: [f32; 2]| body.view.to_doc(placed.to_screen(Point::new(f64::from(c[0]), f64::from(c[1]))));
     let mut doc_quad = Some(quad.corners.map(to_doc));
@@ -97,7 +97,7 @@ pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, al
             let p = placed.to_page(body.view.to_screen(d));
             [p.x as f32, p.y as f32]
         };
-        view.camera = Some(CameraQuad { page: quad.page, corners: moved.map(to_page) });
+        view.session.camera = Some(CameraQuad { page: quad.page, corners: moved.map(to_page) });
     }
     if allowed && out.apply {
         view.pending_action = Some(ViewAction::EnhanceCamera);
@@ -113,7 +113,7 @@ pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, al
 pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed: bool) {
     TaskBar::at_edge(tl!("Camera image"), Align::End).show(ui, body.rect, |ui, _| {
         // After Enhance page: put the page the right way up, trim it, or move on.
-        if let Some(mut done) = view.camera_done {
+        if let Some(mut done) = view.session.camera_done {
             let looks = [
                 Entry::new(Look::Original, tl!("Original")),
                 Entry::new(Look::Colour, tl!("Colour")),
@@ -138,7 +138,7 @@ pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed:
             if again && (done.look, done.level) != done.applied {
                 view.pending_action = Some(ViewAction::CameraLevel);
             }
-            view.camera_done = Some(done);
+            view.session.camera_done = Some(done);
             if clicked(&IconButton::new(IconId::new("rotate_ccw")).label(tl!("Rotate counterclockwise")).enabled(allowed).show(ui)) {
                 view.pending_action = Some(ViewAction::CameraRotate { clockwise: false });
             }
@@ -156,7 +156,7 @@ pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed:
             }
             return;
         }
-        let ready = allowed && view.camera.is_some();
+        let ready = allowed && view.session.camera.is_some();
         if clicked(&Button::new(tl!("Enhance page")).variant(Variant::PRIMARY).enabled(ready).show(ui)) {
             view.pending_action = Some(ViewAction::EnhanceCamera);
         }

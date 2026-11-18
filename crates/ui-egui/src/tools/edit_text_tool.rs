@@ -45,7 +45,7 @@ impl<'a> EditTextTool<'a> {
 
 impl CanvasTool for EditTextTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
-        if self.view.objects.input_blocked() {
+        if self.view.session.objects.input_blocked() {
             return ToolAction::Ignored;
         }
         let Some((page, xf)) = self.view.page_xforms().into_iter().find(|(_, xf)| xf.rect.contains(pointer.pos)) else {
@@ -63,7 +63,7 @@ impl CanvasTool for EditTextTool<'_> {
     fn drag(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {}
 
     fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        if self.view.objects.input_blocked() {
+        if self.view.session.objects.input_blocked() {
             return;
         }
         if let Some(start) = self.press.phase.start() {
@@ -98,13 +98,13 @@ impl CanvasTool for EditTextTool<'_> {
                 true
             }
             ToolKey::Cancel => {
-                if let Some(image) = &mut self.view.image_selection
+                if let Some(image) = &mut self.view.session.image_selection
                     && image.crop.take().is_some()
                 {
                     return true;
                 }
-                let had_objects = self.view.objects.count() > 0;
-                self.view.objects.clear();
+                let had_objects = self.view.session.objects.count() > 0;
+                self.view.session.objects.clear();
                 let deselected = crate::content_ui::deselect(self.view);
                 had_objects || deselected
             }
