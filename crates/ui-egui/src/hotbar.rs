@@ -174,10 +174,7 @@ fn from_srgba(color: Srgba) -> Rgb {
 
 /// Opens the colour picker in the main window, the window the rail's footer lives in, and runs `then` with the answer.
 fn open_picker(app: &mut PdfCraftApp, request: craft::ui::runtime::requests::ColorRequest, then: impl FnOnce(&mut PdfCraftApp, Srgba) + 'static) {
-    // PLAN: assumed `PdfCraftApp::main_dialog_host(&self) -> DialogHost` and
-    // `open_colour_picker(&mut self, DialogHost, ColorRequest, impl FnOnce(&mut PdfCraftApp, Srgba) + 'static)` (pdf-comments-w10, q180).
-    let host = app.main_dialog_host();
-    app.open_colour_picker(host, request, then);
+    app.open_colour_picker(crate::colour_picker::PickerHost::App, request, then);
 }
 
 /// Shows the toolbar's rail in the width `ui` has left, with the active tool's controls under it, and applies what
@@ -220,7 +217,7 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.hotbar.normalize();
     }
     if let Some(id) = drawer.select {
-        app.execute(&id);
+        app.execute(ui.ctx(), &id);
     }
     if drawer.closed {
         app.hotbar.drawer_open = false;
@@ -229,7 +226,7 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
     let (index, id) = app.active_ids()?;
-    let (page, annotation) = app.views.get(index)?.session.comments.selected?;
+    let (page, annotation) = app.views.get(index)?.session.comments.primary()?;
     let doc = app.session.get(id).filter(|doc| doc.allows_annotation())?;
     doc.info
         .annotations
@@ -371,7 +368,7 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
     if tool.has_border_color() {
         let style = app.comment_prefs.style(tool);
         let selected = app.active_ids().and_then(|(index, id)| {
-            let (page, annotation) = app.views.get(index)?.session.comments.selected?;
+            let (page, annotation) = app.views.get(index)?.session.comments.primary()?;
             let doc = app.session.get(id)?;
             let made = doc.allows_annotation()
                 && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.locked && comments::made_by(a, tool));
@@ -439,15 +436,15 @@ mod tests {
         assert_eq!(restored.tools, bar.tools, "an old object with the dropped keys still deserializes");
 
         // The floating bar's options are gone from the control channel.
-        // PLAN: the app is built through `with_host` (pdf-shell-w9); the options error once pdf-hub-w3 removes them.
+        let ctx = egui::Context::default();
         let mut app = PdfCraftApp::for_unit_tests();
         for key in ["hotbar-size", "hotbar-side", "hotbar-full-side"] {
-            assert!(app.set_option(key, "left").is_err(), "{key} is removed");
+            assert!(app.set_option(&ctx, key, "left").is_err(), "{key} is removed");
         }
-        app.set_option("hotbar-tools", "comment.freehand_highlight,comment.ink").unwrap();
-        let saved = app.persist();
+        app.set_option(&ctx, "hotbar-tools", "comment.freehand_highlight,comment.ink").unwrap();
+        let saved = app.settings_snapshot();
         let mut fresh = PdfCraftApp::for_unit_tests();
-        fresh.restore(&saved);
+        fresh.apply_settings(&saved);
         assert_eq!(fresh.hotbar.tools, app.hotbar.tools);
     }
 
@@ -460,7 +457,7 @@ mod tests {
 
         let mut app = PdfCraftApp::for_unit_tests();
         app.hotbar.set_tools("comment.ink").unwrap();
-        assert!(app.set_option("hotbar-tools", "does.not.exist").is_err());
+        assert!(app.set_option(&egui::Context::default(), "hotbar-tools", "does.not.exist").is_err());
         assert_eq!(app.hotbar.tools, ["comment.ink"]);
     }
 }

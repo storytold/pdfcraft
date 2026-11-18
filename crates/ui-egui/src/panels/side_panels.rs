@@ -327,12 +327,16 @@ impl DockPanels<PanelId> for Panels<'_> {
 impl Panels<'_> {
     fn comments_header(&mut self, ui: &mut Ui) {
         let Some((index, id)) = self.app.active_ids() else { return };
+        let enabled: Vec<&str> = ["comment.hide_all", "comment.summarize", "comment.export", "comment.import", "comment.flatten"]
+            .into_iter()
+            .filter(|id| pdfcraft_engine::commands::command(id).is_some_and(|spec| self.app.command_enabled(spec)))
+            .collect();
         let command = {
             let Some(doc) = self.app.session.get(id) else { return };
-            crate::comments_panel::header(ui, doc, &mut self.app.views[index], &self.app.comment_prefs)
+            crate::comments_panel::header(ui, doc, &mut self.app.views[index], &self.app.comment_prefs, |id| enabled.contains(&id))
         };
         if let Some(command) = command {
-            self.app.run_command(command);
+            self.app.run_command(&ui.ctx().clone(), command);
         }
     }
 }
@@ -841,7 +845,7 @@ mod tests {
     fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option("language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             setup(&mut app);
             app
         });

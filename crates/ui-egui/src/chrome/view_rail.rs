@@ -6,7 +6,7 @@ use craft::behavior::{DockSide, IconId};
 use craft::pages::PageDisplay;
 use craft::theme::TypeRole;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Bind, PopupKind, Trigger};
+use craft::ui::contract::{Bind, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft::ui::display::Text;
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::text::{TextField, ZoomField, ZoomScale};

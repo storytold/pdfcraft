@@ -139,9 +139,10 @@ pub(super) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, shared: Shared<'_>) ->
     let tabs = d.tabs();
     let keys: Vec<FieldTab> = tabs.iter().map(|(tab, _)| *tab).collect();
     let source = keyed(&keys, |key: &FieldTab| *key);
-    let strip = TabStrip::new(tl!("Field properties")).kind(TabKind::Panel).shown(d.tab).show_items(ui, &source, &mut |key, _| {
-        Tab::new(tabs.iter().find(|(tab, _)| tab == key).map_or("", |(_, label)| tl!(label)))
-    });
+    let strip = TabStrip::new(tl!("Field properties"))
+        .kind(TabKind::Panel)
+        .shown(d.tab)
+        .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|(tab, _)| tab == key).map_or("", |(_, label)| tl!(label))));
     for event in strip.response.events {
         if let CollectionEvent::Selection(SelectionChange::Set(picked)) = event
             && let Some(tab) = picked.last()
@@ -231,7 +232,8 @@ fn appearance_tab(ui: &mut egui::Ui, d: &mut FieldDraft, recent: &RecentColours,
 }
 
 fn position_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
-    for (i, (salt, label)) in [("left", tl!("Left:")), ("bottom", tl!("Bottom:")), ("width", tl!("Width:")), ("height", tl!("Height:"))].into_iter().enumerate()
+    for (i, (salt, label)) in
+        [("left", tl!("Left:")), ("bottom", tl!("Bottom:")), ("width", tl!("Width:")), ("height", tl!("Height:"))].into_iter().enumerate()
     {
         let range = if i < 2 { -14_400.0..=14_400.0 } else { 4.0..=14_400.0 };
         number_row(ui, salt, label, &mut d.position[i], range, Some(tl!("pt")), true);

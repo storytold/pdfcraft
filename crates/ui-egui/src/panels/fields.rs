@@ -151,10 +151,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         }
     }
     let rows = Rows::new(&info.fields, doc.form.as_slice());
-    let is_selected = |row: &Row<'_>| row.select.as_ref().is_some_and(|key| selection.selected.as_ref() == Some(key) || selection.also.contains(key));
+    // What the list shows is the selection as this pass found it; the events below change `selection`.
+    let (lead, also) = (selection.selected.clone(), selection.also.clone());
+    let is_selected = |row: &Row<'_>| row.select.as_ref().is_some_and(|key| lead.as_ref() == Some(key) || also.contains(key));
     let shown = Selection::new(
         rows.rows.iter().filter(|r| is_selected(r)).map(|r| r.key.clone()).collect(),
-        rows.rows.iter().find(|r| r.select.is_some() && r.select.as_ref() == selection.selected.as_ref()).map(|r| r.key.clone()),
+        rows.rows.iter().find(|r| r.select.is_some() && r.select.as_ref() == lead.as_ref()).map(|r| r.key.clone()),
         None,
     );
     let mode = if preparing { SelectMode::Multi } else { SelectMode::None };

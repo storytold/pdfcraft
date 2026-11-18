@@ -15,8 +15,8 @@ use egui::{Pos2, Rect, Ui, Vec2};
 use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
+use crate::canvas::{DocView, PageXform};
 
 #[derive(Default)]
 pub(crate) struct ObjectSelection {
@@ -412,7 +412,8 @@ pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, 
         PressPhase::Down { .. } => {
             if let Owner::Frame { block } = press.owner {
                 let object = view
-                    .session.objects
+                    .session
+                    .objects
                     .inventory(doc, page)
                     .ok()
                     .and_then(|objects| objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block }));

@@ -224,7 +224,8 @@ pub(crate) fn panel(
     let dirty = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)).is_some_and(|tag| state.draft.edit(tag).is_some());
     Text::new(crate::i18n::fmt(tl!("{n} tags"), &[("n", &matching.len().to_string())])).shade(Shade::Muted).show(ui);
     let mut page = None;
-    let source = TagRows { rows: &matching, parents: &parents, collapsed: &state.collapsed, searching: !query.is_empty(), selected: state.selected, dirty };
+    let source =
+        TagRows { rows: &matching, parents: &parents, collapsed: &state.collapsed, searching: !query.is_empty(), selected: state.selected, dirty };
     let mut picked = match state.selected {
         Some(object) => Selection::single(object),
         None => Selection::new(Vec::new(), None, None),
@@ -289,7 +290,8 @@ pub(crate) fn panel(
     let position = siblings.iter().position(|sibling| sibling.object == tag.object);
     let before = position.and_then(|position| position.checked_sub(1)).and_then(|position| siblings.get(position).copied());
     let after = position.and_then(|position| siblings.get(position + 1)).copied();
-    let save = Button::new(tl!("Save tag properties")).enabled(can_edit && !state.draft.kind.is_empty() && edit.is_some()).show(ui).response().clicked();
+    let save =
+        Button::new(tl!("Save tag properties")).enabled(can_edit && !state.draft.kind.is_empty() && edit.is_some()).show(ui).response().clicked();
     if Button::new(tl!("Revert changes")).enabled(dirty).show(ui).response().clicked() {
         state.draft = Draft::from_tag(tag);
     }

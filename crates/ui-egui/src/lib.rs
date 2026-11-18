@@ -87,8 +87,14 @@ pub use workflows::js_dialogs::JsDialog;
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+pub(crate) mod brand;
+pub(crate) mod colour_picker;
+pub(crate) mod credits_data;
+pub mod fonts;
 mod frame_guard;
 mod hooks;
+pub(crate) mod icons;
+pub(crate) mod notices;
 mod persist;
 mod platform;
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,15 +102,9 @@ mod script_dialog;
 mod state;
 mod tools;
 mod workflows;
-pub(crate) mod brand;
-pub(crate) mod colour_picker;
-pub(crate) mod credits_data;
-pub mod fonts;
-pub(crate) mod icons;
-pub(crate) mod notices;
 
-pub use app::settings;
 pub(crate) use app::same_file;
+pub use app::settings;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
 use canvas::crop;
 use canvas::image_pick;
@@ -461,11 +461,17 @@ pub struct PdfCraftApp {
     pub(crate) script_shown: Option<js_ui::ScriptShown>,
     /// The notices posted since the last pass, which `notices::show` hands to the toast service.
     pub(crate) posted_notices: Vec<craft::ui::notices::PostedNotice>,
+    /// The notice center that posts them and shows the cards.
+    pub(crate) notices: craft::ui::notices::NoticeCenter,
+    /// The changes to progress cards made since the last pass, which `notices::show` applies in order.
+    pub(crate) progress_requests: Vec<notices::ProgressRequest>,
     /// The progress card of each background job that shows one.
     pub(crate) progress_cards: std::collections::HashMap<crate::notices::ProgressKey, craft::ui::runtime::toast::ToastId>,
     pub password_prompt: Option<PasswordPrompt>,
     /// Whole-document text copies (#2639) reading their pages off the UI thread.
     pub(crate) text_copies: Queue<DocId, String>,
+    /// Reveal-in-file-manager calls, which can block on a slow mount; their failures are shown by `drain_reveals`.
+    pub(crate) reveal_jobs: Queue<std::path::PathBuf, Result<(), String>>,
     pub unlock_prompt: Option<UnlockPrompt>,
     /// Standard, full screen with the menu bar, or full screen.
     pub screen_mode: craft::ui::shell::ScreenMode,

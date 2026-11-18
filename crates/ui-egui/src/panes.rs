@@ -167,7 +167,7 @@ impl PdfCraftApp {
     /// here: new tabs go to the pane the user was working in, a pane left without tabs ends split
     /// view, the views of a document changed through another view catch up, and the active tab
     /// becomes its pane's latest.
-    pub(crate) fn settle_panes(&mut self) {
+    pub(crate) fn settle_panes(&mut self, ctx: &egui::Context) {
         let split = self.panes.split.is_some();
         let focus = if split { self.panes.focus } else { Place::Main };
         for v in &mut self.views {
@@ -185,7 +185,7 @@ impl PdfCraftApp {
                 self.unsplit();
             }
         }
-        self.sync_views();
+        self.sync_views(ctx);
         if let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) {
             self.panes.focus = v.pane.place;
             if v.pane.shown_seq != self.panes.top_seq || self.panes.top_seq == 0 {
@@ -197,7 +197,7 @@ impl PdfCraftApp {
 
     /// A document changed through one of its views (an edit, Undo, a reload): its other view
     /// starts afresh at the same place, as after a reload.
-    fn sync_views(&mut self) {
+    fn sync_views(&mut self, ctx: &egui::Context) {
         let mut seen = HashSet::new();
         for k in 0..self.views.len() {
             let Some(id) = self.views.get(k).map(|v| v.id) else { continue };
@@ -215,7 +215,7 @@ impl PdfCraftApp {
             let acting = self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).unwrap_or(k);
             for (j, v) in self.views.iter_mut().enumerate() {
                 if j != acting && v.id == id {
-                    v.follow_document(&doc.info);
+                    v.follow_document(ctx, &doc.info);
                 }
             }
         }
@@ -261,8 +261,8 @@ impl PdfCraftApp {
     /// Tab `index`'s right-click Split right (or Split down). The tab the main pane shows gets a
     /// second view in the second pane (the same document, twice); another tab moves there (two
     /// documents side by side). A tab of the second pane only turns the split.
-    pub fn split_tab(&mut self, index: usize, down: bool) {
-        self.settle_panes();
+    pub fn split_tab(&mut self, ctx: &egui::Context, index: usize, down: bool) {
+        self.settle_panes(ctx);
         let Some(place) = self.place_of(index) else { return };
         match place {
             Place::Second => {
@@ -305,12 +305,12 @@ impl PdfCraftApp {
     }
 
     /// View ▸ Split (⌘\): split the current document into two panes, or end split view.
-    pub fn toggle_split(&mut self) {
-        self.settle_panes();
+    pub fn toggle_split(&mut self, ctx: &egui::Context) {
+        self.settle_panes(ctx);
         if self.panes.split.is_some() {
             self.unsplit();
         } else if let Some(i) = self.active {
-            self.split_tab(i, false);
+            self.split_tab(ctx, i, false);
         }
     }
 
@@ -402,10 +402,10 @@ impl PdfCraftApp {
                 shown.push(i);
             }
         };
-        let main = if self.full_screen { self.active } else { self.pane_front(Place::Main) };
+        let main = if self.full_screen() { self.active } else { self.pane_front(Place::Main) };
         add(main);
         add(main.and_then(|i| crate::compare_ui::side_by_side(self, i)).map(|(old, _)| old));
-        if !self.full_screen && self.panes.split.is_some() {
+        if !self.full_screen() && self.panes.split.is_some() {
             add(self.pane_front(Place::Second));
         }
         shown
@@ -414,12 +414,12 @@ impl PdfCraftApp {
 
 /// Once a frame, before anything is drawn: the panes settle (and a quit asks about each document
 /// once).
-pub(crate) fn frame(app: &mut PdfCraftApp) {
+pub(crate) fn frame(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.close_guard.as_ref().is_some_and(|guard| guard.scope() == CloseScope::Quit) {
         app.one_tab_per_document();
     }
     app.drain_reveals();
-    app.settle_panes();
+    app.settle_panes(ctx);
 }
 
 /// The page area: the main pane's tab (Home or Combine files while it has none, a comparison's
@@ -428,44 +428,38 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     app.panes.drawing = Place::Main;
     let main = app.pane_front(Place::Main);
     let split = app.panes.split.and_then(|s| Some((s, app.pane_front(Place::Second)?)));
-    let (layout, count, mut at) = match split {
-        Some((s, _)) if s.down => (SplitLayout::TwoUpHorizontal, 2, SplitAt::lines(Vec::new(), vec![s.fraction])),
-        Some((s, _)) => (SplitLayout::TwoUpVertical, 2, SplitAt::lines(vec![s.fraction], Vec::new())),
-        None => (SplitLayout::Tile, 1, SplitAt::default()),
+    let (layout, mut at) = match split {
+        Some((s, _)) if s.down => (SplitLayout::TwoUpHorizontal, SplitAt::lines(Vec::new(), vec![s.fraction])),
+        Some((s, _)) => (SplitLayout::TwoUpVertical, SplitAt::lines(vec![s.fraction], Vec::new())),
+        None => (SplitLayout::Tile, SplitAt::default()),
     };
-    let shown = at.clone();
     let active = usize::from(app.active.and_then(|i| app.views.get(i)).is_some_and(|v| v.pane.place == Place::Second));
     // The drop rule reads the open views up front: the views closure below borrows the app.
     let open: HashSet<u64> = app.views.iter().map(|v| v.pane.key).collect();
     let views = SplitViews::new(tl!("Pages").to_string(), layout, Bind::bound(&mut at))
         .count(1)
         .active(active)
-        .takes_tabs::<StripTab>(|documents, _| !documents.is_empty() && documents.iter().all(|d| matches!(d, StripTab::View(key) if open.contains(key))))
-        .show(ui, |ui, body| {
-            let rects = shown.placed(layout, count, body.rect, body.env.direction().is_rtl());
-            for (pane, rect) in rects.iter().enumerate() {
-                let place = if pane == 0 { Place::Main } else { Place::Second };
-                let salt = if place == Place::Second { "second-pane" } else { "main-pane" };
-                // PLAN: framework gap F-14 (a per-pane body on `SplitViews`); the panes are placed by hand until it lands.
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect).id_salt(salt));
-                child.shrink_clip_rect(*rect);
-                if place == Place::Second {
-                    strip(app, &mut child, place);
-                }
-                let room = child.available_rect_before_wrap();
-                let mut body_ui = child.new_child(egui::UiBuilder::new().max_rect(room).id_salt("body"));
-                body_ui.shrink_clip_rect(room);
-                // The strip may have closed or moved a tab just now: look the pane's tab up again (a
-                // pane left empty ends split view next frame).
-                let front = if place == Place::Second { app.pane_front(place) } else { main.filter(|&i| i < app.views.len()) };
-                app.panes.drawing = place;
-                match (place, front) {
-                    (Place::Main, _) => main_pane(app, front, &mut body_ui),
-                    (Place::Second, Some(index)) => crate::canvas::document_area(app, index, &mut body_ui),
-                    (Place::Second, None) => {}
-                }
-                app.panes.drawing = Place::Main;
+        .takes_tabs::<StripTab>(|documents, _| {
+            !documents.is_empty() && documents.iter().all(|d| matches!(d, StripTab::View(key) if open.contains(key)))
+        })
+        .show_panes(ui, |ui, _, pane| {
+            let place = if pane.index == 0 { Place::Main } else { Place::Second };
+            if place == Place::Second {
+                strip(app, ui, place);
             }
+            let room = ui.available_rect_before_wrap();
+            let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(room).id_salt("body"));
+            body_ui.shrink_clip_rect(room);
+            // The strip may have closed or moved a tab just now: look the pane's tab up again (a
+            // pane left empty ends split view next frame).
+            let front = if place == Place::Second { app.pane_front(place) } else { main.filter(|&i| i < app.views.len()) };
+            app.panes.drawing = place;
+            match (place, front) {
+                (Place::Main, _) => main_pane(app, front, &mut body_ui),
+                (Place::Second, Some(index)) => crate::canvas::document_area(app, index, &mut body_ui),
+                (Place::Second, None) => {}
+            }
+            app.panes.drawing = Place::Main;
         });
     let output = views.output;
     // (While Home shows in the main pane, a click there stays on Home.)
@@ -491,7 +485,7 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         app.move_tab_to(index, place);
                     }
                 }
-                TabDropTarget::SplitEnd => app.split_tab(index, false),
+                TabDropTarget::SplitEnd => app.split_tab(ui.ctx(), index, false),
                 _ => {}
             }
         }

@@ -8,10 +8,10 @@
 //! (`commands::catalog`), fired once per click, whichever bar it came from.
 
 use craft::keymap::{Key, Mods};
-use craft::ui::runtime::commands::{FireSource, fire, resolve};
 use craft::menu::{
     Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, Labeled, Layout, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
 };
+use craft::ui::runtime::commands::{FireSource, fire, resolve};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 use pdfcraft_engine::commands::{self, Shortcut};
 
@@ -529,7 +529,7 @@ mod tests {
 
     fn app(docs: &[&str]) -> (PdfCraftApp, egui::Context) {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in docs {
             app.open_bytes(name, None, PDF.to_vec()).unwrap();
         }

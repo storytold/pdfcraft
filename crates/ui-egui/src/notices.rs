@@ -69,7 +69,6 @@ pub fn post(app: &mut PdfCraftApp, notice: PostedNotice) {
 /// Asks for the card of `key` to show `notice`: the first request posts it, later ones move the same card's fraction
 /// and message. A card has no timer and carries Cancel when `notice.cancellable`.
 pub fn set_progress(app: &mut PdfCraftApp, key: ProgressKey, notice: ProgressNotice) {
-    // PLAN: pdf-hub-w1 adds the field `progress_requests: Vec<notices::ProgressRequest>` beside `posted_notices`.
     app.progress_requests.push(ProgressRequest::Set(key, notice));
 }
 
@@ -187,7 +186,7 @@ mod tests {
     fn a_progress_card_is_one_per_key_and_its_cancel_reaches_its_job() {
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
             let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option("language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app
         });
         h.run_steps(2);

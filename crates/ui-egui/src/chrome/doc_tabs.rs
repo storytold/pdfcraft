@@ -3,6 +3,7 @@
 //! tabs; the Combine files tab sits last in the main strip and is never moved.
 
 use craft::platform::open::CAN_REVEAL;
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
 
@@ -66,9 +67,9 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
                 app.active = None;
                 app.combine_tab.focused = true;
             }
-            DocumentTabsEvent::CloseRequested(StripTab::View(key)) => app.tab_action(Action::Close(key)),
+            DocumentTabsEvent::CloseRequested(StripTab::View(key)) => app.tab_action(ui.ctx(), Action::Close(key)),
             DocumentTabsEvent::CloseRequested(StripTab::Combine) => app.close_combine_tab(),
-            DocumentTabsEvent::Reordered { documents, before } => {
+            DocumentTabsEvent::Reordered { documents, before, .. } => {
                 for document in documents {
                     let StripTab::View(key) = document else { continue };
                     let Some(from) = app.tab_with_key(key) else { continue };
@@ -133,6 +134,6 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
         app.panes.tab_menu = None;
     }
     if let Some(action) = chosen {
-        app.tab_action(action);
+        app.tab_action(ui.ctx(), action);
     }
 }
