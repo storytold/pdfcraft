@@ -563,17 +563,43 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
 }
 
 /// The content streams of the page `page`, in order: its `/Contents`, one stream or an array of
-/// them (ISO 32000-2 7.7.3.3, Table 31).
+/// them (ISO 32000-2 7.7.3.3, Table 31). A reference to an object that is only a reference to
+/// another stands for that one (7.3.10), so each is followed to the stream it ends at.
 fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
     let contents = match page.get(b"Contents") {
-        Some(Object::Ref(r)) => match &*doc.get(*r) {
-            Object::Array(a) => a.clone(),
-            _ => vec![Object::Ref(*r)],
-        },
+        Some(Object::Ref(r)) => {
+            let r = terminal_ref(doc, *r);
+            match &*doc.get(r) {
+                Object::Array(a) => a.clone(),
+                _ => vec![Object::Ref(r)],
+            }
+        }
         Some(Object::Array(a)) => a.clone(),
         _ => Vec::new(),
     };
-    contents.iter().filter_map(Object::as_ref).collect()
+    contents.iter().filter_map(Object::as_ref).map(|r| terminal_ref(doc, r)).collect()
+}
+
+/// How many objects that are only a reference to another [`terminal_ref`] follows.
+const MAX_ALIAS_CHAIN: usize = 32;
+
+/// The object `r` stands for: itself, or the end of the chain of objects that are only a reference
+/// to the next (ISO 32000-2 7.3.10), followed at most [`MAX_ALIAS_CHAIN`] steps, so a cycle ends.
+pub(crate) fn terminal_ref(doc: &Document, r: ObjRef) -> ObjRef {
+    let mut at = r;
+    for _ in 0..MAX_ALIAS_CHAIN {
+        match &*doc.get(at) {
+            Object::Ref(next) if *next != at => at = *next,
+            _ => break,
+        }
+    }
+    at
+}
+
+/// Whether the dictionary `dict` has the entry `key`: a null value, written so or through a
+/// reference, is the same as no entry (ISO 32000-2 7.3.9).
+pub(crate) fn present(doc: &Document, dict: &Dict, key: &[u8]) -> bool {
+    dict.get(key).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null))
 }
 
 /// The most content [`drawing_fonts`] decodes, all streams together. Past it, every font of a
@@ -2022,7 +2048,8 @@ fn check_stream(
     if filters.iter().any(|filter| filter == b"LZWDecode" || filter == b"LZW") {
         issue("6.1.7.2", "A stream uses LZW compression", None, None, false);
     }
-    if stream.dict.get(b"F").is_some() || stream.dict.get(b"FFilter").is_some() {
+    // An external file's name, its filters or their parameters (ISO 32000-2 7.3.8.2, Table 5).
+    if [b"F".as_slice(), b"FFilter", b"FDecodeParms"].iter().any(|key| present(doc, &stream.dict, key)) {
         issue("6.1.7.1", "A stream refers to an external file", None, None, false);
     }
     if subtype == Some(b"Image") {
