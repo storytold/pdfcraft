@@ -31,11 +31,10 @@ fn shown_with_picks() -> (Harness<'static, crate::PdfCraftApp>, Arc<ScriptedFile
     let (intake, _) = craft::platform::open::FileIntake::new(Wake::none());
     let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
     let watch = craft::platform::watch::FileWatch::new(Wake::none()).inline();
-    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
     let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, watch);
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
         let mut app = crate::PdfCraftApp::with_host(Arc::new(host), services);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app
     });
     h.run_steps(2);
@@ -88,7 +87,7 @@ fn no_changes_pdf() -> Vec<u8> {
 #[test]
 fn a_refused_text_box_is_put_back_whole() {
     let mut app = crate::PdfCraftApp::for_unit_tests();
-    app.set_option("language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("a.pdf", None, no_changes_pdf()).unwrap();
     let style = crate::content_ui::default_style();
     app.views[0].session.content.draft = Some(crate::content_ui::TextDraft::new(0, None, [20.0, 20.0, 120.0, 40.0], "Typed".into(), style));
@@ -164,7 +163,7 @@ fn moving_pages_cancels_an_in_progress_drawing() {
     assert_eq!(tool.drawing().len(), 2, "the drawing is under way");
 
     let mut app = crate::PdfCraftApp::for_unit_tests();
-    app.set_option("language", "en").unwrap();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("a.pdf", None, pdf).unwrap();
     app.views[0].session.comments.tool = tool;
     assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
@@ -209,7 +208,7 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     // 100 K text, open in its box.
     let open = || {
         let mut app = crate::PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
         let mut text = pdfcraft_engine::AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), ..Default::default() };
         text.set_ink(Some(pdfcraft_engine::TextInk::Cmyk([0.0, 0.0, 0.0, 1.0])));

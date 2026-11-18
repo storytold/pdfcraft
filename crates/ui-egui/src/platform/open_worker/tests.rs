@@ -3,21 +3,23 @@
 //! `run_next`. Pickers are held `ScriptedFiles` picks answered as a user would, and prompts are
 //! found on screen by their buttons.
 //!
-//! PLAN: the password dialog's labels ("Password", "Open", "Cancel"), the link prompt's "Allow" and
-//! the app's `intake` field (a `FileIntake`, pdf-hub-w1) are assumed.
+//! PLAN: the password dialog's labels ("Password", "Open", "Cancel") and the link prompt's "Allow"
+//! are assumed.
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use craft::automation::ControlRequest;
-use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
-use craft::platform::open::IntakeSender;
+use craft::automation::{ControlChannel, ControlRequest};
+use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles, Wake};
+use craft::platform::clipboard::{Clipboard, SystemClipboard};
+use craft::platform::open::{FileIntake, IntakeSender};
+use craft::platform::watch::FileWatch;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
-use crate::PdfCraftApp;
 use crate::canvas::PageDisplay;
+use crate::{AppServices, PdfCraftApp};
 
 fn fixture(pages: usize) -> Vec<u8> {
     let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
@@ -93,23 +95,23 @@ impl Rig {
         let jobs = Arc::new(ManualJobs::new());
         let files = Arc::new(ScriptedFiles::held());
         let (control, rx) = std::sync::mpsc::channel();
-        let sender_slot: Arc<Mutex<Option<IntakeSender>>> = Arc::new(Mutex::new(None));
-        let parts = Mutex::new(Some((rx, sender_slot.clone())));
+        let (intake, sender) = FileIntake::new(Wake::none());
+        let parts = Mutex::new(Some((rx, intake)));
         let (host_jobs, host_files) = (jobs.clone(), files.clone());
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_cc| {
-            let (rx, slot) = parts.lock().expect("setup slot").take().expect("built once");
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |cc| {
+            let (rx, intake) = parts.lock().expect("setup slot").take().expect("built once");
             let host =
                 Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs.clone()).files(host_files.clone()).build();
-            let mut app = PdfCraftApp::with_host(Arc::new(host));
-            *slot.lock().expect("sender slot") = Some(app.intake.sender());
-            app.set_option("language", "en").expect("language preference");
-            app.attach_control(rx, None);
+            let clipboard = Clipboard::new(SystemClipboard::new());
+            let services = AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
+            let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+            app.set_option(&cc.egui_ctx, "language", "en").expect("language preference");
+            app.attach_control(ControlChannel::new(rx), None);
             app.open_bytes("existing.pdf", None, fixture(3)).expect("existing document");
             app
         });
         h.run_steps(3);
-        let intake = sender_slot.lock().expect("sender slot").take().expect("the app was built");
-        Self { h, jobs, files, intake, control }
+        Self { h, jobs, files, intake: sender, control }
     }
 
     /// The app with no document open.
@@ -173,7 +175,8 @@ impl Rig {
 
     /// Picks the tool `command`, which asks for its file, and answers the picker with `file`.
     fn choose(&mut self, command: &str, file: &TempFile) {
-        self.h.state_mut().run_command(command);
+        let ctx = self.h.ctx.clone();
+        self.h.state_mut().run_command(&ctx, command);
         self.h.run_steps(2);
         assert!(self.files.answer(Picked::Paths(vec![file.0.clone()])).is_some(), "the picker is open");
         self.h.run_steps(2);
@@ -277,7 +280,8 @@ fn a_chosen_tool_survives_wrong_password_retry_and_runs_after_unlock() {
 #[test]
 fn cancelling_a_chosen_tools_picker_or_password_never_runs_it_on_another_document() {
     let mut rig = Rig::empty();
-    rig.h.state_mut().run_command("export.text");
+    let ctx = rig.h.ctx.clone();
+    rig.h.state_mut().run_command(&ctx, "export.text");
     rig.h.run_steps(2);
     assert!(rig.files.answer(Picked::Cancelled).is_some());
     rig.h.run_steps(2);
@@ -625,8 +629,9 @@ fn a_new_file_from_the_os_brings_the_window_forward_before_it_is_prepared() {
 fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
     let mut rig = Rig::empty();
     let file = TempFile::new("repeat", "pdf", &fixture(2));
-    rig.h.state_mut().open_path_then(&file.path(), Some("export.text"));
-    rig.h.state_mut().open_path_then(&file.path(), None);
+    let ctx = rig.h.ctx.clone();
+    rig.h.state_mut().open_path_then(&ctx, &file.path(), Some("export.text"));
+    rig.h.state_mut().open_path_then(&ctx, &file.path(), None);
     assert_eq!(rig.jobs.waiting(), 1, "the file opens once");
     rig.release();
     assert_eq!(rig.tabs(), 1);

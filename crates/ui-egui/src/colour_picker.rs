@@ -2,7 +2,7 @@
 
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult};
 use craft::theme::Srgba;
-use craft::ui::dialog::{DialogHost, DialogResult};
+use craft::ui::dialog::DialogHost;
 use craft::ui::runtime::requests::ColorRequest;
 
 use crate::PdfCraftApp;
@@ -42,10 +42,7 @@ impl ColourPicks {
     pub(crate) fn take_answers(&mut self, host: &mut DialogHost) -> Vec<(Then, Srgba)> {
         let mut answers = Vec::new();
         while let Some((result, key)) = host.take_keyed::<ColorPickerDialog>() {
-            let confirmed: Option<ColorPickerResult> = match result {
-                DialogResult::Ok(r) => Some(r),
-                DialogResult::Cancel => None,
-            };
+            let confirmed: Option<ColorPickerResult> = result.ok();
             let key = confirmed.as_ref().map(|r| r.key.clone()).or(key);
             let Some(at) = key.and_then(|key| self.pending.iter().position(|(k, _)| *k == key)) else { continue };
             let (_, then) = self.pending.remove(at);
@@ -60,7 +57,6 @@ impl ColourPicks {
 impl PdfCraftApp {
     /// Opens the colour picker for `request` on `host` and runs `then` with the colour when it is confirmed.
     /// The picker never closes the menu or popover that asked.
-    // PLAN: assumed fields `colour_picks: ColourPicks` and `dialogs: DialogHost` on PdfCraftApp (pdf-hub-w1)
     pub(crate) fn open_colour_picker(&mut self, host: PickerHost<'_>, request: ColorRequest, then: impl FnOnce(&mut PdfCraftApp, Srgba) + 'static) {
         let host = match host {
             PickerHost::App => &mut self.dialogs,
@@ -74,7 +70,6 @@ impl PdfCraftApp {
 /// here came through Other…, so each is remembered as a recent colour first.
 // PLAN: pdf-hub-w2 calls this without a context.
 pub(crate) fn colour_picker_pass(app: &mut PdfCraftApp) {
-    // PLAN: assumed field `recent_colours: RecentColours` on PdfCraftApp (pdf-hub-w1)
     for (then, color) in app.colour_picks.take_answers(&mut app.dialogs) {
         app.recent_colours.remember(to_rgb(color));
         then(app, color);

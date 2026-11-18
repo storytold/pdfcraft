@@ -254,10 +254,10 @@ fn every_language_is_registered_loads_its_catalog_and_persists() {
         if lang != Lang::EN {
             assert!(lang.catalog_texts().any(|text| !rows(text).is_empty()), "{}: its catalog holds no rows", info.code);
         }
-        let mut app = crate::PdfCraftApp::default();
-        app.set_option("language", info.code).unwrap();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
+        app.set_option(&egui::Context::default(), "language", info.code).unwrap();
         assert_eq!(app.language, info.code);
-        let mut restored = crate::PdfCraftApp::default();
+        let mut restored = crate::PdfCraftApp::for_unit_tests();
         restored.apply_settings(&app.settings_snapshot());
         assert_eq!(restored.language, info.code, "{}: the saved code is restored", info.code);
     }
@@ -404,27 +404,27 @@ fn command_ids_and_undo_phrases_come_from_pdfcraft_s_own_rows() {
     set_current(Lang::EN);
 }
 
-// PLAN: assumed `crate::settings::import_json(&str) -> (Settings, _)` and `PdfCraftApp::apply_settings(&Settings)` (pdf-shell-w9)
 #[test]
 fn language_persists_and_invalid_input_keeps_current_language() {
-    let mut app = crate::PdfCraftApp::default();
+    let ctx = egui::Context::default();
+    let mut app = crate::PdfCraftApp::for_unit_tests();
     assert_eq!(app.language, AUTO);
-    assert!(app.set_option("language", "xx").is_err());
+    assert!(app.set_option(&ctx, "language", "xx").is_err());
     // Settings written before the system-locale default (no key) follow the system.
-    let mut legacy = crate::PdfCraftApp::default();
+    let mut legacy = crate::PdfCraftApp::for_unit_tests();
     legacy.apply_settings(&crate::settings::import_json("{}").0);
     assert_eq!(legacy.language, AUTO);
     needs_catalogs!();
-    app.set_option("language", "JA").unwrap();
+    app.set_option(&ctx, "language", "JA").unwrap();
     assert_eq!(app.language, "ja");
-    assert!(app.set_option("language", "xx").is_err());
+    assert!(app.set_option(&ctx, "language", "xx").is_err());
     assert_eq!(app.language, "ja");
-    let mut restored = crate::PdfCraftApp::default();
+    let mut restored = crate::PdfCraftApp::for_unit_tests();
     restored.apply_settings(&app.settings_snapshot());
     assert_eq!(restored.language, "ja");
     restored.apply_settings(&crate::settings::import_json(r#"{"language":"xx"}"#).0);
     assert_eq!(restored.language, "ja");
-    app.set_option("language", AUTO).unwrap();
+    app.set_option(&ctx, "language", AUTO).unwrap();
     assert_eq!(app.language, AUTO);
 }
 

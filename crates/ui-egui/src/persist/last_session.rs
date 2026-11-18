@@ -29,9 +29,7 @@ impl PdfCraftApp {
     /// What to save as the last session: the files open when the quit began, once the app is
     /// really quitting (unsaved tabs close one by one before that), else the files open now.
     pub(crate) fn session_to_save(&self) -> Session {
-        // PLAN: assumed `CloseGuard::quitting(&self) -> bool` (pdf-shell-w15), read through `close_guard`
-        let quitting = self.close_guard.as_ref().is_some_and(|guard| guard.quitting());
-        self.session_keeper.to_save(quitting, self.open_session())
+        self.session_keeper.to_save(self.quitting(), self.open_session())
     }
 
     /// At startup, with the preference on: reopen the last session's files at the pages they
@@ -45,7 +43,11 @@ impl PdfCraftApp {
         let last = std::mem::take(&mut self.last_session);
         #[cfg(not(target_arch = "wasm32"))]
         if self.reopen_last_session {
-            let skip: Vec<String> = skip.iter().cloned().chain(self.recovered.iter().filter_map(|m| m.path.clone())).collect();
+            let skip: Vec<String> = skip
+                .iter()
+                .cloned()
+                .chain(self.recovered.iter().filter_map(|m| m.meta.original.as_ref().map(|p| p.to_string_lossy().into_owned())))
+                .collect();
             let is_open = |path: &str| {
                 self.views.iter().any(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).map(session::absolute).as_deref() == Some(path))
             };

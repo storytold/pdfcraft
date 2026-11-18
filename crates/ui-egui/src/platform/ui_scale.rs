@@ -106,14 +106,15 @@ mod tests {
             .with_pixels_per_point(2.0)
             .build_eframe(|_cc| crate::PdfCraftApp::for_unit_tests());
         h.run_steps(3);
-        assert_eq!(h.ctx.pixels_per_point(), 2.0, "Auto follows the display's scale");
-        h.state_mut().set_option("ui-scale", "100%").expect("a valid size");
+        let ctx = h.ctx.clone();
+        assert_eq!(ctx.pixels_per_point(), 2.0, "Auto follows the display's scale");
+        h.state_mut().set_option(&ctx, "ui-scale", "100%").expect("a valid size");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 1.0, "100% is one screen pixel per point");
-        h.state_mut().set_option("ui-scale", "150%").expect("a valid size");
+        h.state_mut().set_option(&ctx, "ui-scale", "150%").expect("a valid size");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 1.5);
-        assert!(h.state_mut().set_option("ui-scale", "5000").is_err());
+        assert!(h.state_mut().set_option(&ctx, "ui-scale", "5000").is_err());
         // The chosen size survives a restart; a hostile one in the settings follows the system.
         let saved = h.state().settings_snapshot();
         h.state_mut().apply_settings(&saved);
@@ -122,7 +123,7 @@ mod tests {
         h.state_mut().apply_settings(&crate::app::settings::import_json(r#"{"ui_scale":1e30}"#).0);
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 2.0, "a hostile saved size is no choice");
-        h.state_mut().set_option("ui-scale", "auto").expect("auto");
+        h.state_mut().set_option(&ctx, "ui-scale", "auto").expect("auto");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 2.0);
     }

@@ -1,5 +1,5 @@
 use craft::quit::{CloseAnswer, CloseGuard, CloseScope, GuardStep};
-use craft::ui::dialog::{DialogResult, UnsavedChangesDialog};
+use craft::ui::dialog::UnsavedChangesDialog;
 use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use craft::ui::shell::embed::CloseDecision;
 use pdfcraft_engine::DocId;
@@ -196,10 +196,7 @@ impl PdfCraftApp {
     /// frame with the dialogs' other results.
     pub(crate) fn close_guard_pass(&mut self, ctx: &egui::Context) {
         let Some(result) = self.dialogs.take::<UnsavedChangesDialog>() else { return };
-        let (answer, all) = match result {
-            DialogResult::Ok(a) => (a.answer, a.apply_to_all),
-            DialogResult::Cancel => (CloseAnswer::Cancel, false),
-        };
+        let (answer, all) = result.ok().map_or((CloseAnswer::Cancel, false), |a| (a.answer, a.apply_to_all));
         self.answer_close(answer, all);
         ctx.request_repaint();
     }

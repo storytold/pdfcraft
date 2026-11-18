@@ -197,7 +197,7 @@ impl PdfCraftApp {
             }
         });
         let recovered = store.as_ref().map(|s| s.leftovers()).unwrap_or_default();
-        let autosave = Autosave::new(store.is_some().then(|| std::time::Duration::from_secs(recovery::AUTOSAVE_SECS)));
+        let autosave = Autosave::new(store.is_some().then(|| std::time::Duration::from_secs_f64(recovery::AUTOSAVE_SECS)));
         #[cfg(not(target_arch = "wasm32"))]
         let updater = {
             let updater = craft::update::updater::Updater::new(&UPDATE_APP, pdfcraft_engine::build_info::version().to_string());
@@ -266,6 +266,7 @@ impl PdfCraftApp {
             full_screen_tool: None,
             comment_prefs: Default::default(),
             recent_colours: Default::default(),
+            colour_picks: Default::default(),
             hotbar: Default::default(),
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: craft::theme::ModeChoice::System,
@@ -688,7 +689,7 @@ impl PdfCraftApp {
                 view.cancel_pointer_gestures(ctx);
             }
         }
-        self.process_pending_edits();
+        self.process_pending_edits(ctx);
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
@@ -705,7 +706,7 @@ impl PdfCraftApp {
         if self.ocr_verify.awaiting_models.is_some() {
             workflows::ocr_verify::with_state(self, workflows::ocr_verify::OcrVerify::poll_models);
         }
-        self.settle_presign();
+        self.settle_presign(ctx);
         self.sync_titles(ctx);
     }
 
@@ -778,7 +779,7 @@ impl PdfCraftApp {
                 });
                 // FitWindow and CenterWindow, once the document just opened is laid out.
                 self.window_preferences_frame(&ctx);
-                self.process_pending_edits();
+                self.process_pending_edits(&ctx);
             }
         }
         // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
