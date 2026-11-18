@@ -20,9 +20,10 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   appearance streams (a check box's check mark is drawn there). It accepts a predefined
   non-Identity CJK CMap or an Adobe CJK character collection (`GB1`, `CNS1`, `Japan1`,
   `Korea1`, `KR`), including Identity-H/V. Unknown CMaps and foreign registries do not
-  establish that route, nor does ZapfDingbats' built-in encoding or a symbolic TrueType font's;
-  Symbol's built-in names do, as a Type 1 font. This is a font-level declaration check, not
-  validation of every ToUnicode entry or used glyph.
+  establish that route, nor does the built-in encoding of a Type 1 ZapfDingbats font (also
+  under an encoding dictionary that changes nothing) or of a symbolic TrueType font; Symbol's
+  built-in names do, as a Type 1 font. This is a font-level declaration check, not validation
+  of every ToUnicode entry or used glyph.
 - **Structure checks** read the structure tree through the role map; table regularity counts
   `ColSpan`/`RowSpan` attributes.
 - The report is a self-contained HTML page. Fixes that edit the document (language, title, tab

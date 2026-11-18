@@ -639,7 +639,7 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         None => (0..pages.len()).collect(),
     };
     let tagged = structure::has_struct_tree(doc);
-    let scan = content::Scan::run(doc, &pages, &page_list);
+    let scan = content::Scan::run(doc, &pages, &page_list, options.rules.contains(&Rule::CharacterEncoding));
     let mut tree_rules = structure::run(doc, &pages, &options.rules);
     let mut figure_bounds: Option<HashMap<pdfcraft_cos::ObjRef, (usize, [f64; 4])>> = None;
     let mut results = Vec::with_capacity(32);

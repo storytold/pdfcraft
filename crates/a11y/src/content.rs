@@ -30,10 +30,13 @@ pub(crate) struct Scan {
 const MAX_FORM_DEPTH: usize = 12;
 
 impl Scan {
-    pub fn run(doc: &Document, pages: &[Page], list: &[usize]) -> Scan {
+    /// Scan the pages in `list`; with `appearances`, also the fonts of their annotations'
+    /// appearance streams, which only the Character Encoding rule reads.
+    pub fn run(doc: &Document, pages: &[Page], list: &[usize], appearances: bool) -> Scan {
         let mut s = Scan::default();
-        // An appearance stream shared by several annotations, or pages, is read once.
-        let mut appearances_seen = HashSet::new();
+        // An appearance stream shared by several annotations, or pages, is read once: once per
+        // page when it has no resources of its own and so reads its fonts from each page's.
+        let mut appearances_seen: HashSet<(ObjRef, Option<usize>)> = HashSet::new();
         for &p in list {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
@@ -42,16 +45,28 @@ impl Scan {
             if budget.remaining() == 0 {
                 s.incomplete.insert(p);
             }
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, appearance: false };
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, appearance: false, cut: false };
             w.content(&data, &res, false, 0);
+            if !appearances {
+                continue;
+            }
             // Text an annotation shows is drawn by its appearance streams, whose fonts must map
             // to Unicode like any other (ISO 32000-2 §14.8.2.6; ISO 14289-1 7.21.7 names all
             // fonts): a check box's ZapfDingbats check mark is the common case. They have a
             // budget of their own, so they never cut the page content's reading short.
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget: DecodeBudget::page(), appearance: true };
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget: DecodeBudget::page(), appearance: true, cut: false };
             for r in appearance_streams(doc, &page.dict) {
-                if appearances_seen.insert(r) {
-                    w.appearance_stream(r, &res);
+                let own_resources = matches!(&*doc.get(r), Object::Stream(x) if x.dict.contains(b"Resources"));
+                let key = (r, (!own_resources).then_some(p));
+                if appearances_seen.contains(&key) {
+                    continue;
+                }
+                // Only a walk read to the end is kept: one cut short is read again where it
+                // appears next, with that page's budget.
+                w.cut = false;
+                w.appearance_stream(r, &res);
+                if !w.cut {
+                    appearances_seen.insert(key);
                 }
             }
         }
@@ -95,6 +110,8 @@ struct Walk<'a> {
     /// Walking annotation appearances: only their fonts are recorded, since what they paint is
     /// not page content (it is tagged through the annotation, not by marked content).
     appearance: bool,
+    /// The appearance stream being walked was read only in part.
+    cut: bool,
 }
 
 fn bdc_marks(doc: &Document, op: &pdfcraft_content::Op, props: &Dict) -> bool {
@@ -113,6 +130,7 @@ impl Walk<'_> {
 
     /// This page was read only in part: its content, or (walking appearances) its annotations'.
     fn cut_short(&mut self) {
+        self.cut = true;
         let pages = if self.appearance { &mut self.scan.incomplete_appearances } else { &mut self.scan.incomplete };
         pages.insert(self.page);
     }
@@ -122,6 +140,11 @@ impl Walk<'_> {
     fn appearance_stream(&mut self, r: ObjRef, res: &Dict) {
         let obj = self.doc.get(r);
         let Object::Stream(x) = &*obj else { return };
+        // An appearance stream is a form XObject (ISO 32000-2 §12.5.5). One that says it is
+        // something else, an image say, is not decoded as content.
+        if x.dict.name(b"Subtype").is_some_and(|s| s != b"Form") {
+            return;
+        }
         if !self.budget.enter_form() {
             self.cut_short();
             return;
@@ -204,6 +227,9 @@ impl Walk<'_> {
                             self.content(&data, &inner, inside, depth + 1);
                             self.forms.remove(&r);
                         }
+                        // An appearance's form past the depth limit may hold the fonts not read.
+                        // (A form already being walked is a cycle: nothing more to read there.)
+                        Some(b"Form") if self.appearance && depth >= MAX_FORM_DEPTH && !self.forms.contains(&r) => self.cut_short(),
                         _ => {}
                     }
                 }
@@ -533,24 +559,30 @@ fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
                 && matches!(ordering.as_deref(), Some(Object::String(s)) if matches!(s.bytes.as_slice(), b"Japan1" | b"GB1" | b"CNS1" | b"Korea1" | b"KR"))
         }
         Some(b"Type3") => enc.is_some(),
+        // An encoding dictionary with neither /BaseEncoding nor /Differences leaves the font's
+        // built-in encoding as it is (ISO 32000-2 §9.6.5.1, Table 112): as if there were none.
         subtype => match enc.as_deref() {
+            Some(Object::Dict(d)) if !d.contains(b"BaseEncoding") && !d.contains(b"Differences") => built_in_maps(doc, f, subtype),
             Some(Object::Name(_) | Object::Dict(_)) => true,
-            _ => {
-                // No encoding: the font's built-in one, which is standard unless it is symbolic.
-                let base = f.name(b"BaseFont").unwrap_or(b"");
-                // ZapfDingbats' built-in encoding names its glyphs a1 to a191 (ISO 32000-2
-                // Annex D.6), which no glyph list maps to Unicode, so it needs a ToUnicode map
-                // whatever its descriptor says (§9.10.2; ISO 14289-1 7.21.7). It is the font of
-                // a check box's check mark, usually without a descriptor at all.
-                let type1 = matches!(subtype, Some(b"Type1" | b"MMType1"));
-                if type1 && base == b"ZapfDingbats" {
-                    return false;
-                }
-                // Symbol's built-in names are those of Annex D.5, which ISO 14289-1 7.21.7 accepts
-                // for a Type 1 font. A symbolic TrueType font has no names to go by.
-                let flags = f.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.int(b"Flags"))).unwrap_or(32);
-                flags & 4 == 0 || (type1 && base == b"Symbol")
-            }
+            _ => built_in_maps(doc, f, subtype),
         },
     }
+}
+
+/// Whether simple font `f`, of `subtype`, maps to Unicode through its built-in encoding, which is
+/// standard unless the font is symbolic.
+fn built_in_maps(doc: &Document, f: &Dict, subtype: Option<&[u8]>) -> bool {
+    let base = f.name(b"BaseFont").unwrap_or(b"");
+    // ZapfDingbats' built-in encoding names its glyphs a1 to a191 (ISO 32000-2 Annex D.6), which
+    // no glyph list maps to Unicode, so as a Type 1 font it needs a ToUnicode map whatever its
+    // descriptor says (§9.10.2; ISO 14289-1 7.21.7). It is the font of a check box's check mark,
+    // usually without a descriptor at all.
+    let type1 = matches!(subtype, Some(b"Type1" | b"MMType1"));
+    if type1 && base == b"ZapfDingbats" {
+        return false;
+    }
+    // Symbol's built-in names are those of Annex D.5, which ISO 14289-1 7.21.7 accepts for a Type 1
+    // font. A symbolic TrueType font has no names to go by.
+    let flags = f.get(b"FontDescriptor").map(|d| doc.resolve(d)).and_then(|d| d.as_dict().and_then(|d| d.int(b"Flags"))).unwrap_or(32);
+    flags & 4 == 0 || (type1 && base == b"Symbol")
 }
