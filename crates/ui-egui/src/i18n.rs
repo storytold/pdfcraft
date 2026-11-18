@@ -34,7 +34,7 @@
 
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use craft_i18n::I18n;
 
@@ -42,14 +42,19 @@ include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs"));
 
 /// The embedded catalogs, offering exactly the languages in [`LANGUAGES`]. Built on first use; a
 /// locale is parsed on its first lookup.
-static I18N: LazyLock<I18n> = LazyLock::new(|| {
+static I18N: LazyLock<Arc<I18n>> = LazyLock::new(|| {
     let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
     let (i18n, problems) = I18n::new(CRAFT_I18N, &offered);
     for problem in problems {
         log::warn!("interface catalogs: {problem}");
     }
-    i18n
+    Arc::new(i18n)
 });
+
+/// The embedded catalogs, shared with the framework's host.
+pub fn shared() -> Arc<I18n> {
+    Arc::clone(&I18N)
+}
 
 /// The `language` preference value that follows the system locale.
 pub const AUTO: &str = "auto";
@@ -186,7 +191,7 @@ impl Lang {
     pub const EN: Lang = Lang { lang: craft_i18n::Lang::EN, catalogs: None };
 
     fn i18n(self) -> &'static I18n {
-        self.catalogs.unwrap_or_else(|| LazyLock::force(&I18N))
+        self.catalogs.unwrap_or_else(|| &**LazyLock::force(&I18N))
     }
 
     fn info(self) -> Option<&'static LangInfo> {
@@ -593,31 +598,9 @@ fn same_shape(translated: &str, english: &str) -> bool {
 }
 
 /// Fill `{name}` placeholders in one pass. Unknown placeholders are left as written, and inserted
-/// values are never read as templates again, so a file name containing `{n}` stays intact. Unlike
-/// the crate's `fmt` it adds no bidi isolates: the egui fork orders each run for display.
-pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some((before, after_open)) = rest.split_once('{') {
-        out.push_str(before);
-        let Some((name, after_close)) = after_open.split_once('}') else {
-            out.push('{');
-            out.push_str(after_open);
-            return out;
-        };
-        match args.iter().find(|(key, _)| *key == name) {
-            Some((_, value)) => out.push_str(value),
-            None => {
-                out.push('{');
-                out.push_str(name);
-                out.push('}');
-            }
-        }
-        rest = after_close;
-    }
-    out.push_str(rest);
-    out
-}
+/// values are never read as templates again. It adds no bidi isolates: the text path orders each
+/// run for display.
+pub use craft_i18n::fmt_plain as fmt;
 
 /// A generated history label (the action part of "Undo …") in the current language. Captured
 /// values (file and field names) are inserted as they are; unknown labels are looked up whole.
