@@ -141,6 +141,10 @@ pub enum OverflowError {
     SegmentCount,
     /// PdfCraft patch: a stream asks for more decoding work than it may.
     DecodingWork,
+    /// PdfCraft patch: a bitmap, gray-scale image or symbol dictionary is larger than the decoder
+    /// holds (see `bitmap::MAX_PIXELS`): one of its limits, where `BitmapDimension` is arithmetic
+    /// that overflows.
+    BitmapLimit,
 }
 
 impl fmt::Display for DecodeError {
@@ -171,6 +175,7 @@ impl fmt::Display for OverflowError {
             Self::RetainedBitmaps => write!(f, "the segments retain too many bitmaps"),
             Self::SegmentCount => write!(f, "too many segments or references in a stream"),
             Self::DecodingWork => write!(f, "a stream asks for too much decoding work"),
+            Self::BitmapLimit => write!(f, "a bitmap is larger than the decoder holds"),
         }
     }
 }
@@ -309,6 +314,59 @@ impl From<SymbolError> for DecodeError {
 impl From<OverflowError> for DecodeError {
     fn from(e: OverflowError) -> Self {
         Self::Overflow(e)
+    }
+}
+
+impl DecodeError {
+    /// PdfCraft patch: whether one of the decoder's limits refused the stream (on a bitmap's size,
+    /// a dictionary's symbols, a region's instances, the bitmaps retained, the segments or the
+    /// decoding work) rather than its data failing to decode. A file within the format can reach
+    /// these, so a caller can tell a refusal of its own from a damaged file. A size or count the
+    /// file damaged can read as past one of them, and is a limit here too: it can't be told from a
+    /// hostile one.
+    pub fn is_limit(&self) -> bool {
+        matches!(
+            self,
+            Self::Overflow(
+                OverflowError::BitmapLimit
+                    | OverflowError::GridDimension
+                    | OverflowError::SymbolCount
+                    | OverflowError::RetainedBitmaps
+                    | OverflowError::SegmentCount
+                    | OverflowError::DecodingWork
+            ) | Self::Symbol(SymbolError::TooManyInstances)
+        )
+    }
+}
+
+#[cfg(test)]
+mod pdfcraft_limit_tests {
+    use super::*;
+
+    /// PdfCraft patch: the decoder's own limits are limits, and arithmetic that overflows,
+    /// damage, is not.
+    #[test]
+    fn the_decoders_limits_are_limits_and_overflowing_arithmetic_is_not() {
+        let limits = [
+            DecodeError::Overflow(OverflowError::BitmapLimit),
+            DecodeError::Overflow(OverflowError::GridDimension),
+            DecodeError::Overflow(OverflowError::SymbolCount),
+            DecodeError::Overflow(OverflowError::RetainedBitmaps),
+            DecodeError::Overflow(OverflowError::SegmentCount),
+            DecodeError::Overflow(OverflowError::DecodingWork),
+            DecodeError::Symbol(SymbolError::TooManyInstances),
+        ];
+        for limit in limits {
+            assert!(limit.is_limit(), "{limit:?} is a limit");
+        }
+        let damage = [
+            DecodeError::Overflow(OverflowError::BitmapDimension),
+            DecodeError::Overflow(OverflowError::PlacementCoordinate),
+            DecodeError::Symbol(SymbolError::TooManySymbols),
+        ];
+        for damage in damage {
+            assert!(!damage.is_limit(), "{damage:?} is damage");
+        }
     }
 }
 

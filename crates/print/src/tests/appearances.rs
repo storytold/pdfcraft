@@ -56,6 +56,11 @@ fn render(bytes: Vec<u8>) -> RenderedPage {
 }
 
 fn render_page(bytes: Vec<u8>, index: usize) -> RenderedPage {
+    render_page_at_size(bytes, index, (100, 100))
+}
+
+/// Explicit raster dimensions expose `/UserUnit` and sheet scaling without a default-size render hiding them.
+fn render_page_at_size(bytes: Vec<u8>, index: usize, size: (u32, u32)) -> RenderedPage {
     let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
         page: index,
         kind: RequestKind::Pixels,
@@ -66,7 +71,7 @@ fn render_page(bytes: Vec<u8>, index: usize) -> RenderedPage {
     });
     assert_eq!(page.error, None);
     assert!(page.warnings.is_empty(), "{:?}", page.warnings);
-    assert_eq!((page.width, page.height), (100, 100));
+    assert_eq!((page.width, page.height), size);
     page
 }
 
@@ -79,10 +84,56 @@ fn saved(doc: &Document) -> Vec<u8> {
     write_full(doc, &SaveOptions::default()).unwrap()
 }
 
+/// Wrap a synthetic value in exactly `depth` standalone indirect objects.
+fn reference_chain(doc: &mut Document, mut value: Object, depth: usize) -> Object {
+    for _ in 0..depth {
+        value = Object::Ref(doc.add(value));
+    }
+    value
+}
+
 fn xobject(doc: &Document, owner: &Dict, name: &[u8]) -> ObjRef {
     let resources = doc.resolve(owner.get(b"Resources").unwrap());
     let objects = doc.resolve(resources.as_dict().unwrap().get(b"XObject").unwrap());
     objects.as_dict().unwrap().get(name).unwrap().as_ref().unwrap()
+}
+
+/// Existing Link artwork prints as document content only when its flags allow printing.
+#[test]
+fn printable_link_appearance_survives_vector_print() {
+    for flags in [0, 2, 4, 6, 5] {
+        for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+            let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+            doc.update_dict(annot, |d| {
+                d.set(b"Subtype".to_vec(), Object::name("Link"));
+                d.set(b"F".to_vec(), Object::Int(flags));
+            })
+            .unwrap();
+            let before = saved(&doc);
+            let expected = flags & 4 != 0 && flags & 2 == 0 && content != Content::FormFieldsOnly;
+            let printed = render(impose(&doc, &print_settings(content)).unwrap());
+            let color = if expected { [0, 255, 0, 255] } else { [255, 255, 255, 255] };
+            assert_eq!(pixel(&printed, 30, 70), color, "flags={flags}, content={content:?}");
+            let mut raster_source = doc.clone();
+            keep_printed(&mut raster_source, content);
+            let page = &pdfcraft_model::pages(&raster_source)[0];
+            let annots = raster_source.resolve(page.dict.get(b"Annots").unwrap());
+            assert_eq!(annots.as_array().unwrap().len(), usize::from(expected), "raster flags={flags}, content={content:?}");
+            assert_eq!(saved(&doc), before, "source remains unchanged");
+        }
+    }
+    for subtype in ["Link", "Popup"] {
+        let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+        doc.update_dict(annot, |d| {
+            d.set(b"Subtype".to_vec(), Object::name(subtype));
+            if subtype == "Link" {
+                d.remove(b"AP");
+            }
+        })
+        .unwrap();
+        let printed = render(impose(&doc, &print_settings(Content::DocumentAndMarkups)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "{subtype} must not acquire an appearance");
+    }
 }
 
 /// Printing keeps occupied page resource names and distinct annotation appearances intact,
@@ -147,6 +198,291 @@ fn annotation_appearances_do_not_replace_page_xobjects() {
     }
 }
 
+/// Existing field/comment artwork must survive vector printing when any Rect coordinate is indirect.
+#[test]
+fn indirect_annotation_rectangles_keep_their_printed_appearances() {
+    for (subtype, content) in [("Widget", Content::Document), ("Square", Content::DocumentAndMarkups)] {
+        for outer_indirect in [false, true] {
+            for reversed in [false, true] {
+                for mask in [0usize, 1, 0b1010, 0b1111] {
+                    let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+                    let values = if reversed { [50.0, 40.25, 10.0, 20.25] } else { [10.0, 20.25, 50.0, 40.25] };
+                    let coordinates = values.into_iter().enumerate().map(|(i, value)| {
+                        let value = if i % 2 == 0 { Object::Int(value as i64) } else { Object::Real(value) };
+                        if mask & (1 << i) != 0 { Object::Ref(doc.add(value)) } else { value }
+                    });
+                    let rect = Object::Array(coordinates.collect());
+                    let rect = if outer_indirect { Object::Ref(doc.add(rect)) } else { rect };
+                    doc.update_dict(annot, |d| {
+                        d.set(b"Subtype".to_vec(), Object::name(subtype));
+                        d.set(b"Rect".to_vec(), rect);
+                    })
+                    .unwrap();
+                    let before = saved(&doc);
+                    let source = render(before.clone());
+                    assert_eq!(pixel(&source, 30, 70), [0, 255, 0, 255], "source appearance");
+                    let printed = render(impose(&doc, &print_settings(content)).unwrap());
+                    assert_eq!(
+                        pixel(&printed, 30, 70),
+                        [0, 255, 0, 255],
+                        "{subtype}, outer_indirect={outer_indirect}, reversed={reversed}, mask={mask:04b}"
+                    );
+                    assert_eq!(printed.rgba, source.rgba, "reopened printed pixels match the source");
+                    assert_eq!(saved(&doc), before, "printing leaves the source objects unchanged");
+                }
+            }
+        }
+    }
+}
+
+/// State dictionaries select the same artwork for direct and indirect AS names, for both
+/// widgets and comments, without changing the document or the selected print content mode.
+#[test]
+fn indirect_annotation_states_keep_their_printed_appearances() {
+    for subtype in ["Widget", "Square"] {
+        for (state_name, color) in [("Yes", [0, 255, 0, 255]), ("Off", [255, 0, 0, 255])] {
+            for indirect_state in [false, true] {
+                for indirect_states in [false, true] {
+                    let (mut doc, on, annot) = widget_fixture(Some(Object::name("Form")), None);
+                    let off = doc.add(Object::Stream(Stream::flate(doc.get(on).as_dict().unwrap().clone(), b"/Ink cs 1 0 0 scn 0 0 20 10 re f")));
+                    let states = Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(on)), (b"Off".to_vec(), Object::Ref(off))]));
+                    let states = if indirect_states { Object::Ref(doc.add(states)) } else { states };
+                    let state = Object::name(state_name);
+                    let state = if indirect_state { Object::Ref(doc.add(state)) } else { state };
+                    doc.update_dict(annot, |d| {
+                        d.set(b"Subtype".to_vec(), Object::name(subtype));
+                        if subtype == "Widget" {
+                            d.set(b"FT".to_vec(), Object::name("Btn"));
+                            d.set(b"V".to_vec(), Object::name(state_name));
+                        } else {
+                            d.remove(b"FT");
+                        }
+                        d.set(b"AS".to_vec(), state);
+                        d.set(b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), states)])));
+                    })
+                    .unwrap();
+                    let doc = Document::open(Arc::new(saved(&doc))).unwrap();
+                    let before = saved(&doc);
+                    let source = render(before.clone());
+                    assert_eq!(pixel(&source, 30, 70), color, "the source selects its stated appearance");
+                    for content in [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly] {
+                        let shown = subtype == "Widget" || content == Content::DocumentAndMarkups;
+                        let printed = render(impose(&doc, &print_settings(content)).unwrap());
+                        assert_eq!(
+                            pixel(&printed, 30, 70),
+                            if shown { color } else { [255; 4] },
+                            "{subtype}, indirect_state={indirect_state}, indirect_states={indirect_states}, {content:?}"
+                        );
+                        assert_eq!(pixel(&printed, 4, 96), if content == Content::FormFieldsOnly { [255; 4] } else { [0, 0, 255, 255] });
+                        if shown && content != Content::FormFieldsOnly {
+                            assert_eq!(printed.rgba, source.rgba, "the saved/reopened print keeps all page and annotation pixels");
+                        }
+                    }
+                    assert_eq!(saved(&doc), before, "printing does not rewrite the source annotation or appearance state");
+                }
+            }
+        }
+    }
+}
+
+/// Standalone indirect objects can contain further references, including rectangle arrays,
+/// individual coordinates and AS names. Printing must match the equivalent direct values.
+#[test]
+fn chained_annotation_values_keep_their_printed_appearances() {
+    for subtype in ["Widget", "Square"] {
+        for (state_name, color) in [("Yes", [0, 255, 0, 255]), ("Off", [255, 0, 0, 255])] {
+            for (rect_depth, coordinate_depth, state_depth) in [(2, 0, 0), (0, 2, 0), (0, 0, 2), (2, 2, 2), (64, 64, 64)] {
+                let (mut doc, on, annot) = widget_fixture(Some(Object::name("Form")), None);
+                let off = doc.add(Object::Stream(Stream::flate(doc.get(on).as_dict().unwrap().clone(), b"/Ink cs 1 0 0 scn 0 0 20 10 re f")));
+                let values = [Object::Int(50), Object::Real(40.25), Object::Int(10), Object::Real(20.25)];
+                doc.update_dict(annot, |d| {
+                    d.set(b"Subtype".to_vec(), Object::name(subtype));
+                    d.set(b"Rect".to_vec(), Object::Array(values.to_vec()));
+                    d.set(b"AS".to_vec(), Object::name(state_name));
+                    d.set(
+                        b"AP".to_vec(),
+                        Object::Dict(Dict::from_iter([(
+                            b"N".to_vec(),
+                            Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(on)), (b"Off".to_vec(), Object::Ref(off))])),
+                        )])),
+                    );
+                })
+                .unwrap();
+                let modes = [Content::Document, Content::DocumentAndMarkups, Content::DocumentAndStamps, Content::FormFieldsOnly];
+                let controls: Vec<_> = modes.iter().map(|&content| render(impose(&doc, &print_settings(content)).unwrap())).collect();
+                // Mix direct, one-hop and chained integer/real coordinates in the same rectangle.
+                let coordinates = values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, value)| {
+                        reference_chain(
+                            &mut doc,
+                            value,
+                            if coordinate_depth == 0 || i == 0 {
+                                0
+                            } else if i == 2 {
+                                1
+                            } else {
+                                coordinate_depth
+                            },
+                        )
+                    })
+                    .collect();
+                let rect = reference_chain(&mut doc, Object::Array(coordinates), rect_depth);
+                let state = reference_chain(&mut doc, Object::name(state_name), state_depth);
+                doc.update_dict(annot, |d| {
+                    d.set(b"Rect".to_vec(), rect);
+                    d.set(b"AS".to_vec(), state);
+                })
+                .unwrap();
+                // ISO 32000-2 permits reference-to-reference objects outside object streams.
+                let options = SaveOptions { object_streams: false, ..SaveOptions::default() };
+                let doc = Document::open(Arc::new(write_full(&doc, &options).unwrap())).unwrap();
+                let before = write_full(&doc, &options).unwrap();
+                let state = doc.read_state();
+                let graph: Vec<_> = doc.scan_objects().collect();
+                for (&content, control) in modes.iter().zip(controls) {
+                    let printed = render(impose(&doc, &print_settings(content)).unwrap());
+                    let shown = subtype == "Widget" || content == Content::DocumentAndMarkups;
+                    assert_eq!(
+                        pixel(&printed, 30, 70),
+                        if shown { color } else { [255; 4] },
+                        "{subtype}, {state_name}, depths={rect_depth}/{coordinate_depth}/{state_depth}, {content:?}"
+                    );
+                    assert_eq!(printed.rgba, control.rgba, "chained values preserve the complete direct-control output");
+                }
+                assert!(state.matches(&doc), "printing preserves the source read state");
+                assert_eq!(doc.scan_objects().collect::<Vec<_>>(), graph, "printing preserves the source object graph");
+                assert_eq!(write_full(&doc, &options).unwrap(), before, "printing preserves standalone reference chains");
+            }
+        }
+    }
+}
+
+/// Cycles, missing targets and reference chains beyond the print reader's limit skip only
+/// the unusable annotation, retaining page content and leaving source values unchanged.
+#[test]
+fn invalid_annotation_reference_chains_are_skipped_when_printing() {
+    for property in ["rectangle", "coordinate", "state"] {
+        for kind in ["cycle", "unresolved", "too-deep"] {
+            let (mut doc, ap, annot) = widget_fixture(Some(Object::name("Form")), None);
+            let value = match kind {
+                "cycle" => {
+                    let first = doc.add(Object::Null);
+                    let second = doc.add(Object::Ref(first));
+                    doc.set(first, Object::Ref(second));
+                    Object::Ref(first)
+                }
+                "unresolved" => reference_chain(&mut doc, Object::Ref(ObjRef::new(999_999, 0)), 2),
+                "too-deep" => {
+                    let value = match property {
+                        "rectangle" => numbers(&[10.0, 20.0, 50.0, 40.0]),
+                        "coordinate" => Object::Int(40),
+                        "state" => Object::name("Yes"),
+                        _ => panic!("unknown property {property}"),
+                    };
+                    reference_chain(&mut doc, value, 65)
+                }
+                _ => panic!("unknown kind {kind}"),
+            };
+            doc.update_dict(annot, |d| match property {
+                "rectangle" => d.set(b"Rect".to_vec(), value),
+                "coordinate" => d.set(b"Rect".to_vec(), Object::Array(vec![10.into(), 20.into(), 50.into(), value])),
+                "state" => {
+                    d.set(b"AS".to_vec(), value);
+                    d.set(
+                        b"AP".to_vec(),
+                        Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(ap))])))])),
+                    );
+                }
+                _ => panic!("unknown property {property}"),
+            })
+            .unwrap();
+            let before = saved(&doc);
+            let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+            assert_eq!(pixel(&printed, 30, 70), [255; 4], "invalid {property} chain ({kind}) does not select artwork");
+            assert_eq!(pixel(&printed, 4, 96), [0, 0, 255, 255], "page content survives invalid {property} chain ({kind})");
+            assert_eq!(saved(&doc), before, "invalid {property} chain ({kind}) is not rewritten");
+        }
+    }
+}
+
+/// Malformed, missing and cyclic AS values do not select arbitrary appearance states, while
+/// a single normal appearance stream continues to work without a usable state name.
+#[test]
+fn invalid_annotation_states_do_not_select_an_appearance() {
+    for kind in ["absent", "null", "integer", "string", "missing-name", "unresolved", "cyclic"] {
+        let (mut doc, ap, annot) = widget_fixture(Some(Object::name("Form")), None);
+        let state = match kind {
+            "absent" => None,
+            "null" => Some(Object::Null),
+            "integer" => Some(Object::Int(1)),
+            "string" => Some(Object::String(pdfcraft_cos::PdfString::literal(b"Yes".to_vec()))),
+            "missing-name" => Some(Object::name("Missing")),
+            "unresolved" => Some(Object::Ref(ObjRef::new(999_999, 0))),
+            "cyclic" => {
+                let r = doc.add(Object::Null);
+                doc.set(r, Object::Ref(r));
+                Some(Object::Ref(r))
+            }
+            _ => panic!("unknown fixture kind {kind}"),
+        };
+        doc.update_dict(annot, |d| {
+            if let Some(state) = state {
+                d.set(b"AS".to_vec(), state);
+            }
+        })
+        .unwrap();
+        assert_eq!(appearance(&doc, doc.get(annot).as_dict().unwrap()), Some(ap), "a normal stream does not need AS: {kind}");
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [0, 255, 0, 255], "the normal stream still prints: {kind}");
+        doc.update_dict(annot, |d| {
+            d.set(
+                b"AP".to_vec(),
+                Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Dict(Dict::from_iter([(b"Yes".to_vec(), Object::Ref(ap))])))])),
+            );
+        })
+        .unwrap();
+        let before = saved(&doc);
+        assert!(appearance(&doc, doc.get(annot).as_dict().unwrap()).is_none(), "invalid state must not choose Yes: {kind}");
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert_eq!(pixel(&printed, 30, 70), [255; 4], "the invalid state is skipped: {kind}");
+        assert_eq!(pixel(&printed, 4, 96), [0, 0, 255, 255], "page artwork is retained: {kind}");
+        assert_eq!(saved(&doc), before, "invalid source data is not rewritten: {kind}");
+    }
+}
+
+/// Malformed Rect values must not become printable rectangles by dropping invalid entries.
+#[test]
+fn invalid_annotation_rectangles_are_skipped_when_printing() {
+    for invalid in [
+        Object::Null,
+        numbers(&[10.0, 20.0, 50.0]),
+        numbers(&[10.0, 20.0, 50.0, 40.0, 60.0]),
+        Object::Array(vec![10.into(), 20.into(), 50.into(), Object::Null]),
+        Object::Array(vec![10.into(), 20.into(), 50.into(), 40.into(), Object::Null]),
+        Object::Array(vec![10.into(), 20.into(), 50.into(), Object::Ref(ObjRef::new(999_999, 0))]),
+        numbers(&[f64::NAN, 20.0, 50.0, 40.0]),
+        numbers(&[10.0, f64::INFINITY, 50.0, 40.0]),
+        numbers(&[10.0, 20.0, f64::NEG_INFINITY, 40.0]),
+    ] {
+        for outer_indirect in [false, true] {
+            let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+            let rect = if outer_indirect { Object::Ref(doc.add(invalid.clone())) } else { invalid.clone() };
+            doc.update_dict(annot, |d| d.set(b"Rect".to_vec(), rect)).unwrap();
+            let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+            assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "invalid={invalid:?}, outer_indirect={outer_indirect}");
+            assert_eq!(pixel(&printed, 4, 96), [0, 0, 255, 255], "ordinary page content still prints");
+        }
+    }
+    let (mut doc, _, annot) = widget_fixture(Some(Object::name("Form")), None);
+    let cycle = doc.add(Object::Null);
+    doc.set(cycle, Object::Ref(cycle));
+    doc.update_dict(annot, |d| d.set(b"Rect".to_vec(), Object::Array(vec![10.into(), 20.into(), 50.into(), Object::Ref(cycle)]))).unwrap();
+    let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+    assert_eq!(pixel(&printed, 30, 70), [255, 255, 255, 255], "cyclic coordinate references are skipped");
+}
+
 #[test]
 fn missing_subtype_appearance_survives_vector_print() {
     let (control, _, _) = widget_fixture(Some(Object::name("Form")), None);
@@ -202,6 +538,98 @@ fn missing_subtype_appearance_survives_vector_print() {
     pdfcraft_cos::serialize(&Object::Dict(actual), &mut actual_bytes);
     pdfcraft_cos::serialize(&Object::Dict(expected), &mut expected_bytes);
     assert_eq!(actual_bytes, expected_bytes);
+}
+
+/// Appearance coordinates are independent of page units: a large BBox or Matrix can require
+/// placement coefficients far below four decimal places even on an ordinary 100-point page.
+#[test]
+fn annotation_placement_preserves_small_transform_coefficients() {
+    let (control, _, _) = widget_fixture(Some(Object::name("Form")), None);
+    let control = render(saved(&control));
+    for scale in [1.0, 4096.0, 75000.0] {
+        for scaled_matrix in [false, true] {
+            let (mut doc, ap, widget) = widget_fixture(Some(Object::name("Form")), None);
+            let mut form = doc.get(ap).as_dict().unwrap().clone();
+            let coordinates = if scaled_matrix { 1.0 } else { scale };
+            form.set(b"BBox".to_vec(), numbers(&[0.0, 0.0, 20.0 * coordinates, 10.0 * coordinates]));
+            if scaled_matrix {
+                form.set(b"Matrix".to_vec(), numbers(&[scale, 0.0, 0.0, scale, 7.0, -13.0]));
+            }
+            doc.set(
+                ap,
+                Object::Stream(Stream::flate(form, format!("/Ink cs 0 1 0 scn 0 0 {} {} re f", 20.0 * coordinates, 10.0 * coordinates).as_bytes())),
+            );
+            for (subtype, content) in [
+                ("Widget", Content::Document),
+                ("Widget", Content::FormFieldsOnly),
+                ("Square", Content::DocumentAndMarkups),
+                ("Stamp", Content::DocumentAndStamps),
+            ] {
+                doc.update_dict(widget, |d| d.set(b"Subtype".to_vec(), Object::name(subtype))).unwrap();
+                let before = saved(&doc);
+                let source = render(before.clone());
+                assert!(source.rgba == control.rgba, "equivalent source, scale={scale}, matrix={scaled_matrix}, {subtype}");
+                let printed = impose(&doc, &print_settings(content)).unwrap();
+                let reopened = Document::open(Arc::new(printed.clone())).unwrap();
+                assert_eq!(pdfcraft_model::pages(&reopened).len(), 1);
+                let printed = render(printed);
+                assert_eq!(pixel(&printed, 30, 70), [0, 255, 0, 255], "scale={scale}, matrix={scaled_matrix}, {subtype}");
+                if content != Content::FormFieldsOnly {
+                    assert!(printed.rgba == source.rgba, "scale={scale}, matrix={scaled_matrix}, {subtype}");
+                }
+                // Check the serialized placement too: sub-pixel translation rounding may be
+                // invisible at 72 dpi while still moving the appearance's physical corners.
+                let page = &pdfcraft_model::pages(&reopened)[0];
+                let page_form = reopened.get(xobject(&reopened, &page.dict, b"P0"));
+                let Object::Stream(page_form) = &*page_form else { panic!("page form") };
+                let parsed = pdfcraft_content::parse(&page_form.decoded().unwrap());
+                assert_eq!(parsed.skipped, 0);
+                let matrices: Vec<_> = parsed.ops.iter().filter(|op| op.is("cm")).collect();
+                assert_eq!(matrices.len(), 1);
+                let placement = Matrix(matrices[0].nums::<6>().unwrap());
+                let (x, y) = if scaled_matrix { (7.0, -13.0) } else { (0.0, 0.0) };
+                for ((x, y), expected) in [(placement.apply(x, y), (10.0, 20.0)), (placement.apply(x + 20.0 * scale, y + 10.0 * scale), (50.0, 40.0))]
+                {
+                    assert!((x - expected.0).abs() < 1e-10 && (y - expected.1).abs() < 1e-10, "corner ({x}, {y}) != {expected:?}");
+                }
+                assert_eq!(saved(&doc), before, "printing preserves the source");
+            }
+        }
+    }
+}
+
+/// Compare bad-geometry output with a no-annotation control to ensure page artwork remains visible.
+#[test]
+fn unusable_appearance_geometry_keeps_page_artwork() {
+    let (mut control, _, _) = widget_fixture(Some(Object::name("Form")), None);
+    let page = pdfcraft_model::pages(&control)[0].obj;
+    control
+        .update_dict(page, |d| {
+            d.remove(b"Annots");
+        })
+        .unwrap();
+    let control = render(saved(&control));
+    for (bbox, matrix) in [
+        (None, None),
+        (Some(numbers(&[0.0, 0.0, 20.0])), None),
+        (Some(numbers(&[0.0, 0.0, 0.0, 10.0])), None),
+        (Some(numbers(&[0.0, 0.0, 20.0, 0.0])), None),
+        (Some(numbers(&[0.0, 0.0, 20.0, 10.0])), Some([0.0; 6])),
+    ] {
+        let (mut doc, ap, _) = widget_fixture(Some(Object::name("Form")), matrix);
+        let mut form = doc.get(ap).as_dict().unwrap().clone();
+        match bbox {
+            Some(bbox) => form.set(b"BBox".to_vec(), bbox),
+            None => {
+                form.remove(b"BBox");
+            }
+        }
+        doc.set(ap, Object::Stream(Stream::flate(form, b"/Ink cs 0 1 0 scn 0 0 20 10 re f")));
+        let before = saved(&doc);
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert!(printed.rgba == control.rgba, "unusable appearance is omitted without losing page artwork");
+        assert_eq!(saved(&doc), before);
+    }
 }
 
 #[test]
@@ -392,4 +820,262 @@ fn shared_promotions_span_pages_without_merging_distinct_sources() {
             assert_eq!(resources.as_dict().unwrap().name(b"PrivateMarker"), Some(marker));
         }
     }
+}
+
+const CORNER_COLORS: [[u8; 4]; 4] = [[255, 0, 0, 255], [0, 0, 255, 255], [0, 255, 0, 255], [255, 255, 0, 255]];
+
+// Contributor-original, asymmetric 20 x 10 artwork: red/blue above green/yellow.
+/// Shift `/CropBox` and `/Rect` together so the colored, asymmetric artwork exposes origin and rotation errors.
+fn no_rotate_fixture(rotation: Object, origin: [f64; 2], subtype: &str, flags: i64) -> (Document, ObjRef, ObjRef) {
+    let (mut doc, ap, annotation) = widget_fixture(Some(Object::name("Form")), None);
+    let form = doc.get(ap).as_dict().unwrap().clone();
+    doc.set(
+        ap,
+        Object::Stream(Stream::flate(form, b"0 1 0 rg 0 0 20 10 re f 1 0 0 rg 0 5 10 5 re f 0 0 1 rg 10 5 10 5 re f 1 1 0 rg 10 0 10 5 re f")),
+    );
+    let [x, y] = origin;
+    doc.update_dict(annotation, |d| {
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        d.set(b"F".to_vec(), Object::Int(flags));
+        d.set(b"Rect".to_vec(), numbers(&[x + 40.0, y + 40.0, x + 60.0, y + 50.0]));
+    })
+    .unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        d.set(b"MediaBox".to_vec(), numbers(&[x - 20.0, y - 20.0, x + 120.0, y + 120.0]));
+        d.set(b"CropBox".to_vec(), numbers(&[x, y, x + 100.0, y + 100.0]));
+        d.set(b"Rotate".to_vec(), rotation);
+        d.remove(b"Contents");
+    })
+    .unwrap();
+    (doc, ap, annotation)
+}
+
+/// Colored quadrant samples distinguish every quarter-turn; white margins expose extent or anchor errors.
+fn assert_upright_corners(page: &RenderedPage, anchor: (usize, usize), scale: usize) {
+    let (x, y) = anchor;
+    for ((dx, dy), color) in [(5, 2), (15, 2), (5, 7), (15, 7)].into_iter().zip(CORNER_COLORS) {
+        assert_eq!(pixel(page, x + dx * scale, y + dy * scale), color, "upright corner at {anchor:?}, scale={scale}");
+    }
+    for (px, py) in [(x - 2, y + 5 * scale), (x + 22 * scale, y + 5 * scale), (x + 10 * scale, y - 2), (x + 10 * scale, y + 12 * scale)] {
+        assert_eq!(pixel(page, px, py), [255, 255, 255, 255], "outside the upright appearance at ({px},{py})");
+    }
+}
+
+/// Literal anchors and colors test pivot, orientation, and size without copying production math.
+/// Direct and indirect `Text` subtypes with `/F 4` exercise implicit `NoRotate` without `/F 16`.
+/// Unflagged non-`Text` cases retain the rotating control.
+#[test]
+fn vector_print_preserves_no_rotate_appearance_anchors() {
+    for (rotation, anchor, control) in [
+        (0, (40, 50), [(45, 52), (55, 52), (45, 57), (55, 57)]),
+        (90, (50, 40), [(47, 45), (47, 55), (42, 45), (42, 55)]),
+        (180, (60, 50), [(55, 47), (45, 47), (55, 42), (45, 42)]),
+        (270, (50, 60), [(52, 55), (52, 45), (57, 55), (57, 45)]),
+    ] {
+        for (subtype, reversed, indirect_subtype) in [
+            ("Widget", false, false),
+            ("Square", false, false),
+            ("Square", true, false),
+            ("Stamp", false, false),
+            ("Text", false, false),
+            ("Text", false, true),
+        ] {
+            for flags in [4, 20] {
+                let (mut doc, ap, annotation) = no_rotate_fixture(Object::Int(rotation), [0.0, 0.0], subtype, flags);
+                if indirect_subtype {
+                    let name = doc.add(Object::name(subtype));
+                    doc.update_dict(annotation, |d| d.set(b"Subtype".to_vec(), Object::Ref(name))).unwrap();
+                }
+                if reversed {
+                    doc.update_dict(annotation, |d| d.set(b"Rect".to_vec(), numbers(&[60.0, 50.0, 40.0, 40.0]))).unwrap();
+                }
+                let before = saved(&doc);
+                let original = doc.get(ap);
+                let settings = print_settings(Content::DocumentAndMarkups);
+                let first = impose(&doc, &settings).unwrap();
+                let reopened = Document::open(Arc::new(first.clone())).unwrap();
+                for bytes in [first, impose(&reopened, &settings).unwrap()] {
+                    let page = render(bytes);
+                    if flags == 20 || subtype == "Text" {
+                        assert_upright_corners(&page, anchor, 1);
+                    } else {
+                        for ((x, y), color) in control.into_iter().zip(CORNER_COLORS) {
+                            assert_eq!(pixel(&page, x, y), color, "control: rotation={rotation}, subtype={subtype}");
+                        }
+                    }
+                }
+                assert_eq!(doc.get(ap), original, "shared appearance bytes/dictionary stay unchanged");
+                assert_eq!(saved(&doc), before, "rotation={rotation}, subtype={subtype}, flags={flags}");
+            }
+        }
+    }
+}
+
+/// Compare output pixel-for-pixel with the source shifted to its `/Rect` anchor.
+/// This also verifies that the exposed page area remains white.
+fn assert_translated_upright_source(actual: &RenderedPage, source: &RenderedPage, anchor: (i32, i32)) {
+    let (dx, dy) = (anchor.0 - 40, anchor.1 - 50);
+    for y in 0..100i32 {
+        for x in 0..100i32 {
+            let (sx, sy) = (x - dx, y - dy);
+            let expected = if (0..100).contains(&sx) && (0..100).contains(&sy) { pixel(source, sx as usize, sy as usize) } else { &[255; 4] };
+            let actual = pixel(actual, x as usize, y as usize);
+            assert_eq!(actual, expected, "translated source at ({x},{y})");
+        }
+    }
+}
+
+/// Compare print output with a rotation-zero source under shifted `/BBox` and `/Matrix` transforms.
+/// This also covers inherited and normalized `/Rotate` values.
+#[test]
+fn no_rotate_keeps_appearance_matrix_and_shifted_inherited_page_geometry() {
+    for (rotation, inherited, origin, anchor) in
+        [(450, true, [-20.0, 30.0], (50, 40)), (-180, false, [15.0, -25.0], (60, 50)), (-90, true, [-20.0, 30.0], (50, 60))]
+    {
+        for (matrix, shifted_bbox) in
+            [([2.0, 0.0, 0.0, 3.0, 7.0, -11.0], true), ([1.0, 0.0, 1.0, 1.0, 7.0, -11.0], false), ([-1.0, 0.0, 0.0, 1.0, 27.0, -11.0], false)]
+        {
+            let (mut doc, ap, _) = no_rotate_fixture(Object::Int(rotation), origin, "Widget", 20);
+            doc.update_dict(ap, |d| {
+                d.set(b"Matrix".to_vec(), numbers(&matrix));
+                if shifted_bbox {
+                    d.set(b"BBox".to_vec(), numbers(&[5.0, -4.0, 25.0, 6.0]));
+                }
+            })
+            .unwrap();
+            if shifted_bbox {
+                let form = doc.get(ap).as_dict().unwrap().clone();
+                doc.set(
+                    ap,
+                    Object::Stream(Stream::flate(
+                        form,
+                        b"q 1 0 0 1 5 -4 cm 0 1 0 rg 0 0 20 10 re f 1 0 0 rg 0 5 10 5 re f 0 0 1 rg 10 5 10 5 re f 1 1 0 rg 10 0 10 5 re f Q",
+                    )),
+                );
+            }
+            let page = pdfcraft_model::pages(&doc)[0].obj;
+            if inherited {
+                let parent = doc.get(page).as_dict().unwrap().reference(b"Parent").unwrap();
+                let rotation = Object::Ref(doc.add(Object::Int(rotation)));
+                doc.update_dict(parent, |d| d.set(b"Rotate".to_vec(), rotation)).unwrap();
+                doc.update_dict(page, |d| {
+                    d.remove(b"Rotate");
+                })
+                .unwrap();
+            }
+            let mut upright = doc.clone();
+            upright.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(0))).unwrap();
+            let expected = render(saved(&upright));
+            // Establish that the reference contains real asymmetric artwork, rather than
+            // accepting two blank or uniformly colored renderings as equivalent.
+            for color in CORNER_COLORS {
+                assert!(expected.rgba.as_chunks::<4>().0.contains(&color));
+            }
+            let before = saved(&doc);
+            let original = doc.get(ap);
+            let settings = print_settings(Content::Document);
+            let printed = impose(&doc, &settings).unwrap();
+            let reopened = Document::open(Arc::new(printed.clone())).unwrap();
+            assert_translated_upright_source(&render(printed), &expected, anchor);
+            assert_translated_upright_source(&render(impose(&reopened, &settings).unwrap()), &expected, anchor);
+            assert_eq!(doc.get(ap), original);
+            assert_eq!(saved(&doc), before, "rotation={rotation}, inherited={inherited}, origin={origin:?}, matrix={matrix:?}");
+        }
+    }
+}
+
+/// Invalid `/Rotate` values normalize to zero while the eligible appearance remains upright.
+#[test]
+fn malformed_page_rotation_keeps_no_rotate_appearance_upright() {
+    for rotation in [Object::Int(135), Object::Int(-45), Object::Real(90.5), Object::name("QuarterTurn")] {
+        let (doc, _, _) = no_rotate_fixture(rotation.clone(), [-20.0, 30.0], "Widget", 20);
+        assert_eq!(pdfcraft_model::pages(&doc)[0].rotation(&doc), 0);
+        let before = saved(&doc);
+        let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+        assert_upright_corners(&printed, (40, 50), 1);
+        assert_eq!(saved(&doc), before, "malformed Rotate={rotation:?}");
+    }
+}
+
+/// `NoZoom` does not cancel print layout scaling across `UserUnit` and custom sheet sizes.
+#[test]
+fn no_rotate_keeps_user_units_and_sheet_scaling() {
+    let (mut doc, _, annotation) = no_rotate_fixture(Object::Int(90), [-20.0, 30.0], "Widget", 28);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"UserUnit".to_vec(), Object::Int(2))).unwrap();
+    // Resolve the same flags as the existing print path; NoZoom does not cancel print scale.
+    let flags = doc.add(Object::Int(28));
+    doc.update_dict(annotation, |d| d.set(b"F".to_vec(), Object::Ref(flags))).unwrap();
+    let before = saved(&doc);
+    for (paper, layout, size, anchor, scale) in [
+        ((200.0, 200.0), Layout::Size(SizeMode::Actual), (200, 200), (100, 80), 2),
+        ((100.0, 100.0), Layout::Size(SizeMode::Custom(50.0)), (100, 100), (50, 40), 1),
+    ] {
+        let settings = Settings { paper, layout, ..print_settings(Content::Document) };
+        let printed = render_page_at_size(impose(&doc, &settings).unwrap(), 0, size);
+        assert_upright_corners(&printed, anchor, scale);
+    }
+    assert_eq!(saved(&doc), before);
+}
+
+/// Counterrotating one use must not alter the shared stream or rotate its later unflagged use.
+#[test]
+fn no_rotate_is_per_invocation_when_appearances_are_shared() {
+    let (mut doc, ap, annotation) = no_rotate_fixture(Object::Int(90), [0.0, 0.0], "Widget", 20);
+    let mut control = doc.get(annotation).as_dict().unwrap().clone();
+    control.set(b"F".to_vec(), Object::Int(4));
+    control.set(b"Rect".to_vec(), numbers(&[10.0, 10.0, 30.0, 20.0]));
+    let control = doc.add(Object::Dict(control));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annotation), Object::Ref(control)]))).unwrap();
+    let before = saved(&doc);
+    let original = doc.get(ap);
+    let output = impose(&doc, &print_settings(Content::Document)).unwrap();
+    let reopened = Document::open(Arc::new(output.clone())).unwrap();
+    let rendered = render(output);
+    assert_upright_corners(&rendered, (50, 40), 1);
+    for ((x, y), color) in [(17, 15), (17, 25), (12, 15), (12, 25)].into_iter().zip(CORNER_COLORS) {
+        assert_eq!(pixel(&rendered, x, y), color, "unflagged use of the shared appearance");
+    }
+    let sheet = &pdfcraft_model::pages(&reopened)[0];
+    let form = reopened.get(xobject(&reopened, &sheet.dict, b"P0"));
+    assert_eq!(xobject(&reopened, form.as_dict().unwrap(), b"PCPrA0"), xobject(&reopened, form.as_dict().unwrap(), b"PCPrA1"));
+    assert_eq!(doc.get(ap), original);
+    assert_eq!(saved(&doc), before);
+}
+
+/// Refuse non-finite `NoRotate` placement without changing the source.
+/// Excluded and degenerate appearances retain their omission behavior.
+#[test]
+fn no_rotate_refuses_nonfinite_placement_and_still_skips_degenerate_appearances() {
+    for (rotation, rect) in [(90, [1e308, 0.0, 1.7e308, 1e308]), (180, [1e308, 0.0, 1.7e308, 1e308]), (270, [-1e308, 0.0, -0.3e308, 1e308])] {
+        for (subtype, flags) in [("Widget", 20), ("Text", 4)] {
+            let (mut doc, ap, annotation) = no_rotate_fixture(Object::Int(rotation), [0.0, 0.0], subtype, flags);
+            doc.update_dict(annotation, |d| d.set(b"Rect".to_vec(), numbers(&rect))).unwrap();
+            let before = saved(&doc);
+            let original = doc.get(ap);
+            assert!(
+                matches!(impose(&doc, &print_settings(Content::DocumentAndMarkups)), Err(PrintError::Invalid(_))),
+                "rotation={rotation}, subtype={subtype}, flags={flags}: unrepresentable placement"
+            );
+            assert_eq!(doc.get(ap), original);
+            assert_eq!(saved(&doc), before);
+            let mut excluded = doc.clone();
+            for flags in [16, 22] {
+                excluded.update_dict(annotation, |d| d.set(b"F".to_vec(), Object::Int(flags))).unwrap();
+                let printed = render(impose(&excluded, &print_settings(Content::DocumentAndMarkups)).unwrap());
+                assert!(printed.rgba.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255, 255, 255, 255]), "excluded malformed appearance");
+            }
+        }
+    }
+    let (mut doc, ap, _) = no_rotate_fixture(Object::Int(90), [0.0, 0.0], "Widget", 20);
+    doc.update_dict(ap, |d| d.set(b"BBox".to_vec(), numbers(&[0.0, 0.0, 0.0, 10.0]))).unwrap();
+    let before = saved(&doc);
+    let printed = render(impose(&doc, &print_settings(Content::Document)).unwrap());
+    assert!(
+        printed.rgba.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255, 255, 255, 255]),
+        "degenerate appearance keeps its existing omission behavior"
+    );
+    assert_eq!(saved(&doc), before);
 }
