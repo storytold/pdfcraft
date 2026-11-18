@@ -715,7 +715,8 @@ pub fn page_area_uses(doc: &Document, tpl: &Template) -> HashMap<String, usize> 
 }
 
 /// Lay the form out again from its template, data and overrides, replacing the pages and the
-/// generated fields (a script added a row or hid a subform).
+/// generated fields (a script added a row or hid a subform). The annotations the layout does not
+/// write (comments, markups, links added by hand) move to the new pages.
 pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> {
     let packets = crate::read_packets(doc)?.ok_or(XfaError::NotXfa)?;
     let data = parse_datasets(&packets.xdp);
@@ -736,7 +737,11 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
         .filter_map(Object::as_ref)
         .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(crate::pdf::SOM_KEY) || d.contains(crate::pdf::NODE_KEY)))
         .collect();
+    // Comments, markups and the links a user added are not the layout's: they go back on the new
+    // pages, each on the page it was on.
+    let carried = crate::pdf::take_annotations(doc);
     let written = crate::pdf::write_form(doc, &form)?;
+    let carried_warnings = crate::pdf::put_back_annotations(doc, carried)?;
     if !generated.is_empty()
         && let Some((acro_ref, mut acro)) = acroform(doc)
     {
@@ -782,6 +787,7 @@ pub fn rerender(doc: &mut Document, tpl: &Template) -> Result<Report, XfaError> 
     }
     let mut warnings = form.warnings;
     warnings.extend(written.warnings);
+    warnings.extend(carried_warnings);
     if written.usage_rights {
         warnings.push(crate::pdf::USAGE_RIGHTS_REMOVED.into());
     }

@@ -9368,6 +9368,109 @@ fn xfa_date_arithmetic_reads_the_date_as_its_display_picture_shows_it() {
     assert_eq!(value(&s, "to"), ["20261022"], "{:?}", out.errors);
 }
 
+/// A sticky note (`/Annots` entry, ISO 32000-2 §12.5.1, §12.5.6.4) with text `contents` on
+/// page `page`.
+fn add_note(s: &mut Session, id: DocId, page: usize, contents: &str) {
+    let shape = Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Comment };
+    let style = Style::default_for(&shape);
+    s.apply(id, Edit::AddAnnotation(NewAnnotation { page, style, shape, contents: contents.into(), author: "Reviewer".into() })).unwrap();
+}
+
+/// The pages (0-based) the comments with text `contents` are on, and whether each one's `/P`
+/// names the page whose `/Annots` lists it (Table 166).
+fn notes_on(s: &Session, id: DocId, contents: &str) -> Vec<(usize, bool)> {
+    let doc = s.get(id).unwrap();
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let pages = pdfcraft_model::pages(cos);
+    doc.info
+        .annotations
+        .iter()
+        .filter(|a| a.contents.as_deref() == Some(contents))
+        .map(|a| {
+            let page = pages.get(a.page).unwrap();
+            let entry = page.dict.get(b"Annots").map(|x| cos.resolve(x)).and_then(|x| x.as_array().cloned()).unwrap()[a.index].clone();
+            let p = cos.resolve(&entry).as_dict().and_then(|d| d.get(b"P").and_then(pdfcraft_cos::Object::as_ref));
+            (a.page, p == Some(page.obj))
+        })
+        .collect()
+}
+
+/// Importing data into a laid-out dynamic XFA form lays it out again, which writes new pages;
+/// the comments and the links a user added on the old pages are not the layout's to replace
+/// (§12.5.1: they belong to the page's `/Annots`) and go onto the new page with the same index.
+/// The form's own widgets are still generated again.
+#[test]
+fn importing_xfa_data_keeps_the_comments_and_links_on_its_pages() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())), None).unwrap();
+    add_note(&mut s, id, 0, "keep me");
+    let rect = [300.0, 300.0, 400.0, 320.0];
+    s.apply(id, Edit::AddLink { page: 0, rect, action: LinkAction::Uri("https://example.org/a".into()), style: LinkStyle::default() }).unwrap();
+    let qty = |s: &Session| s.get(id).unwrap().form.iter().find(|f| f.name == "qty").cloned().unwrap();
+    let widget = qty(&s).obj;
+    let data = "<form><page1><qty>3</qty><table><row><item>a</item><amount>10</amount></row></table></page1></form>";
+    s.apply(id, Edit::ImportData { name: "rows.xml".into(), bytes: Arc::new(data.as_bytes().to_vec()) }).unwrap();
+    assert_eq!(qty(&s).value, vec!["3".to_string()]);
+    assert_ne!(qty(&s).obj, widget, "the form's widgets are laid out again");
+    assert_eq!(notes_on(&s, id, "keep me"), [(0, true)], "the comment stays on its page");
+    let links: Vec<_> = s.get(id).unwrap().info.links.iter().filter(|l| l.page == 0 && (l.rect[0] - 300.0).abs() < 0.5).collect();
+    assert_eq!(links.len(), 1, "the link added by hand stays");
+    // Saved and opened again, it is still there.
+    let saved = s.save_bytes(id).unwrap();
+    let again = s.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(notes_on(&s, again, "keep me").len(), 1);
+}
+
+/// Data with fewer rows lays a form out to fewer pages. A comment on a page the new layout no
+/// longer has is not dropped: it goes to the last page, the nearest one left, and the move is
+/// said.
+#[test]
+fn an_xfa_import_that_removes_pages_moves_their_comments_to_the_last_page() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template())), None).unwrap();
+    let rows = |n: usize| -> String {
+        let rows: String = (0..n).map(|i| format!("<row><item>r{i}</item><amount>1</amount></row>")).collect();
+        format!("<form><page1><qty>3</qty><table>{rows}</table></page1></form>")
+    };
+    let import = |s: &mut Session, data: String| s.apply(id, Edit::ImportData { name: "rows.xml".into(), bytes: Arc::new(data.into_bytes()) });
+    import(&mut s, rows(80)).unwrap();
+    let pages = s.get(id).unwrap().info.pages.len();
+    assert!(pages >= 3, "{pages} pages");
+    add_note(&mut s, id, 0, "first page");
+    add_note(&mut s, id, pages - 1, "last page");
+    s.take_js_output(id);
+    import(&mut s, rows(1)).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 1);
+    assert_eq!(notes_on(&s, id, "first page"), [(0, true)]);
+    assert_eq!(notes_on(&s, id, "last page"), [(0, true)], "moved to the last page, not dropped");
+    let out = s.take_js_output(id);
+    let said = out.errors.iter().chain(&out.console).any(|w| w.contains("moved to its last page"));
+    assert!(said, "the move is said: {out:?}");
+}
+
+/// Typing into a growable XFA text field lays the form out again too, and a comment stays on its
+/// page.
+#[test]
+fn typing_that_lays_an_xfa_form_out_again_keeps_its_comments() {
+    let long: String = (0..150)
+        .map(|i| {
+            format!(
+                "Row{i:03} {}sample
+",
+                "sample ".repeat(8)
+            )
+        })
+        .collect();
+    let template = pdfcraft_xfa::fixtures::growable_text_template(false);
+    let mut s = Session::new();
+    let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    add_note(&mut s, id, 1, "second page");
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(long) }).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 3);
+    assert_eq!(notes_on(&s, id, "second page"), [(1, true)]);
+}
+
 #[test]
 fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
     let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();

@@ -12,9 +12,11 @@ use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widg
 use crate::model::Rect;
 use crate::text::{Face, Family, Span};
 
+mod comments;
 mod common;
 mod strip;
 
+pub(crate) use comments::{put_back as put_back_annotations, take as take_annotations};
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
 use common::{
