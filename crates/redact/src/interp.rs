@@ -9,8 +9,9 @@
 //! - images: fully covered → the `Do` is removed; partly covered → the covered pixels are
 //!   cleared in a copy of the image (or the image is removed when its codec can't be re-encoded);
 //!   inline images under a region are removed;
-//! - vectors: fully covered paths are removed; partly covered ones are clipped so nothing shows
-//!   inside the regions; shadings are clipped the same way;
+//! - vectors: a path a region reaches is cut down to what it paints outside the regions
+//!   ([`cut`]), or removed whole when that can't be done exactly; shadings are clipped so
+//!   nothing shows inside the regions;
 //! - form XObjects under a region are rewritten recursively into new objects (copy-on-write, so
 //!   other pages using the original are untouched).
 //!
@@ -26,6 +27,7 @@ use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ImageBudget, MAX_PAGE
 use crate::{RedactError, Report, image, page_streams, tags};
 use pdfcraft_fonts::pdf::Metrics;
 
+mod cut;
 mod layers;
 mod prune;
 
@@ -663,14 +665,29 @@ impl Walk {
     /// a hit test on it is conservative, and a horizontal or vertical line no longer has a
     /// zero-area box.
     fn stroke_box(&self, b: [f64; 4]) -> [f64; 4] {
+        let pad = self.stroke_pad();
+        [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
+    }
+
+    /// How far the current stroke reaches, in device space, for cutting it ([`cut::Reach`]).
+    fn stroke_reach(&self) -> cut::Reach {
+        let m = self.gs.ctm.0;
+        let scale = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]).sqrt();
+        let half = (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5);
+        let cap = if self.gs.line_cap == 2 { std::f64::consts::SQRT_2 } else { 1.0 };
+        let miter = (self.gs.line_join == 0).then(|| self.gs.miter_limit.max(1.0));
+        cut::Reach { all: self.stroke_pad(), line: half * cap, half, miter }
+    }
+
+    /// How far the current path's stroke reaches from its outline, in device space.
+    fn stroke_pad(&self) -> f64 {
         let m = self.gs.ctm.0;
         let scale = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]).sqrt();
         let joins = self.path.iter().filter(|op| matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y" | b"h" | b"re")).count() >= 2
             || self.path.iter().any(|op| op.op.as_slice() == b"re");
         let miter = if joins && self.gs.line_join == 0 { self.gs.miter_limit.max(1.0) } else { 1.0 };
         let reach = if self.gs.line_cap == 2 { miter.max(std::f64::consts::SQRT_2) } else { miter };
-        let pad = (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5) * reach;
-        [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
+        (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5) * reach
     }
 
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
@@ -679,6 +696,7 @@ impl Walk {
         // A `W`/`W*` makes the path as constructed the clip; the stroke expansion only describes
         // what the painting itself covers.
         let path_box = self.path_box.take();
+        let reach = if strokes { self.stroke_reach() } else { cut::Reach::default() };
         let bbox = path_box.map(|b| if strokes { self.stroke_box(b) } else { b });
         let body = std::mem::take(&mut self.path);
         let clips = std::mem::replace(&mut self.clip, false);
@@ -698,6 +716,27 @@ impl Walk {
         }
         let b = bbox.unwrap_or_default();
         piece.changed = true;
+        // Cut the path down to what it paints outside the marks when that can be done exactly
+        // (#7300); otherwise it goes whole. A clipping path's outline stays as the clip, so it
+        // is never cut; nor is a path painting with a pattern, whose cell (text and all) would
+        // stay in use and in the file: it goes whole, and the pattern with it once unused.
+        let o = op.op.as_slice();
+        let patterned = (matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") && self.gs.fill_pattern.is_some())
+            || (strokes && self.gs.stroke_pattern.is_some());
+        if !clips
+            && !patterned
+            && let Some(cut) = cut::cut(&body, o, &self.gs.ctm, scope.rects, reach)
+        {
+            uses_patterns(&mut self.out, &self.gs, cut.fills, cut.strokes);
+            piece.ops.extend(pending);
+            if cut.ops.is_empty() {
+                scope.report.paths_removed += 1;
+            } else {
+                scope.report.paths_cut += 1;
+                piece.ops.extend(cut.ops);
+            }
+            return;
+        }
         scope.report.paths_removed += 1;
         if scope.covered(path_box.unwrap_or(b)) && clips {
             // Everything this clip lets through is under a mark, so an empty clip hides the same

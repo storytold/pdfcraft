@@ -202,6 +202,9 @@ pub struct Report {
     /// `/JBIG2Globals` they shared with something this removed, so those globals leave the file.
     pub images_restored: usize,
     pub paths_removed: usize,
+    /// Paths a mark reached that keep what they paint outside the marks: rectangles and straight
+    /// segments cut around the marks, the rest of their shapes as written (#7300).
+    pub paths_cut: usize,
     pub paths_clipped: usize,
     pub forms_rewritten: usize,
     pub forms_removed: usize,

@@ -61,7 +61,11 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   filters, decoders and pixels alike) is refused
   and changes nothing: such an image can't be cleared, and removing it whole would take what no mark
   covers with it.
-- **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
+- **vectors**: a path a mark reaches is cut down to what it paints outside the marks:
+  rectangles and straight segments are cut around them (a stroke by the reach of its width,
+  caps and joins), and its shapes no mark reaches stay as written. What can't be cut exactly
+  (a filled curve, a filled shape under a rotation, a clipping path, a path painting with a
+  pattern) is removed whole; nothing of a path is kept behind a clip. Shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
