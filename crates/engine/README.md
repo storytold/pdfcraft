@@ -87,6 +87,10 @@ ShowPanel and SaveAs requests are ignored with a JavaScript console diagnostic; 
 alerts and other requests are retained. Explicit button and console scripts can still request
 printing (#4088).
 
+Command shortcuts are resolved with `CommandSpec::shortcut_for(mac)` before displaying or
+matching them. The Comments binding is Ctrl+M on Windows/Linux; macOS leaves Command+M
+available for the system Minimize action.
+
 ## Not done here
 
 - **Rendering is still borrowed.** `pdfcraft-render` wraps `hayro` and inspects through `lopdf`
