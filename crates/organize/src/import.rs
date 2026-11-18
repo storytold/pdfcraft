@@ -602,11 +602,8 @@ fn order_members(src: &Document, order: &Object) -> Vec<ObjRef> {
                     seen.insert(r, depth);
                     pending.extend(a.iter().rev().map(|x| (x.clone(), depth + 1)));
                 }
-                Object::Dict(_) => {
-                    if listed.insert(r) {
-                        found.push(r);
-                    }
-                }
+                // A group listed twice keeps its first place.
+                Object::Dict(_) if listed.insert(r) => found.push(r),
                 _ => {}
             },
             Object::Array(a) if depth < MAX_DEPTH => pending.extend(a.into_iter().rev().map(|x| (x, depth + 1))),
