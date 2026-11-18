@@ -967,6 +967,32 @@ fn cover_and_line_comparisons_are_bounded() {
     assert!(crate::audit(&doc, limits).expect("within the budget").is_empty());
 }
 
+/// A highlight is compared with the page once per quad, so it is charged once per quad: one
+/// annotation with a few hundred thousand `/QuadPoints` must not be checked for the price of one
+/// cover (review on #2408). 20 quads against 20 two-word lines are 800; the `/Rect` alone is 40.
+#[test]
+fn a_highlights_quads_count_against_the_comparison_bound() {
+    let mut content = Vec::new();
+    for i in 0..20 {
+        content.extend_from_slice(format!("BT /F1 12 Tf 72 {} Td (Line {i}) Tj ET\n", 700 - 14 * i).as_bytes());
+    }
+    let audit = |quads: usize, comparisons: usize| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(&content);
+        b.add(FONT);
+        let quads = "0 10 10 10 0 0 10 0 ".repeat(quads);
+        b.add(&format!("<< /Type /Annot /Subtype /Highlight /Rect [0 0 10 10] /C [0 0 0] /QuadPoints [{quads}] >>"));
+        crate::audit(&open(b.build()), crate::Limits { comparisons, covered_text: usize::MAX })
+    };
+    assert!(matches!(audit(20, 799), Err(crate::AuditError::TooManyComparisons)));
+    assert!(audit(20, 800).expect("within the budget").is_empty());
+    assert!(matches!(audit(0, 39), Err(crate::AuditError::TooManyComparisons)));
+    assert!(audit(0, 40).expect("within the budget").is_empty());
+}
+
 /// A run that draws no word still costs a comparison: the covered text walks every run of a
 /// covered line, so a word followed by many `( ) Tj` must not be checked for free (review on
 /// #4198).

@@ -136,7 +136,8 @@ pub fn audit_redactions(doc: &Document) -> Result<Vec<AuditFinding>, AuditError>
 #[derive(Clone, Copy)]
 struct Limits {
     /// Cover-against-line comparisons per page, counting a line once per word box it has (at
-    /// least once), since [`covers`] walks them.
+    /// least once), since [`covers`] walks them, and a cover once per area it paints (a
+    /// highlight's quads).
     comparisons: usize,
     /// Bytes of covered text the findings report.
     covered_text: usize,
@@ -153,7 +154,7 @@ impl Limits {
 struct Budget {
     limits: Limits,
     comparisons: usize,
-    /// What comparing one cover with every line of the current page costs.
+    /// What comparing one area of a cover with every line of the current page costs.
     page_cost: usize,
     covered_text: usize,
 }
@@ -170,7 +171,7 @@ impl Budget {
     /// The text `areas` hide in the `lines` that `hides` ([`covered_words`]), joined with single
     /// spaces, or `None` when they show no text. Without `copying` the text is empty and never
     /// assembled: one long line under many covers would otherwise be copied once per cover,
-    /// outside both bounds.
+    /// outside both bounds. Every area is compared with every line, so each one costs the page.
     fn hidden_text(
         &mut self,
         lines: &[TextLine],
@@ -178,7 +179,7 @@ impl Budget {
         areas: &[[f64; 4]],
         hides: impl Fn(&TextLine) -> bool,
     ) -> Result<Option<String>, AuditError> {
-        self.spend(self.page_cost)?;
+        self.spend(self.page_cost.saturating_mul(areas.len()))?;
         if !copying {
             let mut hidden = false;
             for line in lines.iter().filter(|l| hides(l)) {
@@ -437,8 +438,16 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<Annot>, AuditError> {
         let v = nums(b"Rect");
         if v.len() == 4 && v.iter().all(|x| x.is_finite()) {
             let rect = [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])];
-            let q = nums(b"QuadPoints");
-            let areas = if matches!(kind, Mark::Highlight(_)) && !q.is_empty() && q.len() % 8 == 0 && q.iter().all(|x| x.is_finite()) {
+            // Only a highlight paints quads, and only a whole number of them is read: the length
+            // is checked before any number is collected.
+            let quads = if matches!(kind, Mark::Highlight(_)) { dict.get(b"QuadPoints").map(|q| doc.resolve(q)) } else { None };
+            let q: Vec<f64> = quads
+                .as_ref()
+                .and_then(|q| q.as_array())
+                .filter(|arr| !arr.is_empty() && arr.len() % 8 == 0)
+                .and_then(|arr| arr.iter().map(|o| doc.resolve(o).as_f64()).collect())
+                .unwrap_or_default();
+            let areas = if !q.is_empty() && q.iter().all(|x| x.is_finite()) {
                 q.chunks(8)
                     .map(|c| {
                         [
