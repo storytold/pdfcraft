@@ -698,6 +698,14 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
             survivors.push(Object::Ref(top));
         }
     }
+    // And the trees whose widgets were all flattened, which neither reaches: they lose those
+    // widgets too, and are not listed, as no widget of theirs is left on a page.
+    let drawn_tops: Vec<ObjRef> = widgets.iter().filter_map(|w| field_top(doc, *w)).collect();
+    for top in drawn_tops {
+        if !known.contains_key(&top) {
+            keep(doc, top, widgets, on_page, &mut known, 0);
+        }
+    }
     if survivors.len() == fields.len() && widgets.is_empty() && adopted.is_empty() {
         return Ok(()); // only looked for fields on no page, and there were none
     }
@@ -715,7 +723,8 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
 /// Most `/Parent` links climbed from a widget to the top of its field tree.
 const MAX_PARENT_DEPTH: usize = 64;
 
-/// Each widget on the pages, with the top of its field tree (its topmost `/Parent`), in page order.
+/// Each widget on the pages, with the top of its field tree (see [`field_top`]), in page order.
+/// A widget whose climb does not reach a top is left out.
 fn widget_roots(doc: &Document) -> Vec<(ObjRef, ObjRef)> {
     let mut out = Vec::new();
     for page in page_list(doc) {
@@ -725,17 +734,35 @@ fn widget_roots(doc: &Document) -> Vec<(ObjRef, ObjRef)> {
             if d.name(b"Subtype") != Some(b"Widget") || !(d.contains(b"FT") || d.contains(b"T") || d.contains(b"Parent")) {
                 continue;
             }
-            let mut top = r;
-            let mut climbed = HashSet::from([r]);
-            while climbed.len() <= MAX_PARENT_DEPTH {
-                let Some(parent) = doc.get(top).as_dict().and_then(|d| d.reference(b"Parent")) else { break };
-                if !climbed.insert(parent) || doc.get(parent).as_dict().is_none() {
-                    break;
-                }
-                top = parent;
+            if let Some(top) = field_top(doc, r) {
+                out.push((r, top));
             }
-            out.push((r, top));
         }
     }
     out
+}
+
+/// The top of a field tree, climbed from `node` through `/Parent`: the first node with no
+/// `/Parent`. Each link counts only when the parent's `/Kids` lists the node climbed from (the
+/// parent is "the field whose Kids array includes this field", ISO 32000-2 §12.7.4.1, Table 226).
+/// `None` when the climb does not reach a top: a cycle, a link to something that is not a field
+/// dictionary or does not list the node, or more than [`MAX_PARENT_DEPTH`] links.
+fn field_top(doc: &Document, node: ObjRef) -> Option<ObjRef> {
+    let mut top = node;
+    let mut climbed = HashSet::from([node]);
+    for _ in 0..=MAX_PARENT_DEPTH {
+        let parent = match doc.get(top).as_dict()?.get(b"Parent") {
+            None | Some(Object::Null) => return Some(top),
+            Some(p) => p.as_ref()?,
+        };
+        if !climbed.insert(parent) {
+            return None;
+        }
+        let kids = doc.get(parent).as_dict()?.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())?;
+        if !kids.iter().any(|k| k.as_ref() == Some(top)) {
+            return None;
+        }
+        top = parent;
+    }
+    None
 }
