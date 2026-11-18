@@ -105,6 +105,13 @@ pub(super) fn notices(
         });
         return reload.then_some(Notice::Reload);
     }
+    if view.disk_reloaded {
+        notice_bar(ui, t, "rotate-cw", t.accent_text, tl!("This document changed on disk and was reloaded.").to_string(), |ui| {
+            if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                view.disk_reloaded = false;
+            }
+        });
+    }
     // A historical snapshot (View signed version / View revision): what it is, above the
     // signature and security bars, so the tab is never mistaken for the live document.
     if let Some(snap) = view.snapshot.as_ref() {
