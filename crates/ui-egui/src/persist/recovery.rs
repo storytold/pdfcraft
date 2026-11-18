@@ -14,12 +14,10 @@
 
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
 #[cfg(not(target_arch = "wasm32"))]
-use craft::platform::autosave::{AutosaveDoc, RecoveryEntry, RecoveryStore, SettingsMode, adopt_legacy_recovery, recovery_dir};
+use craft::platform::autosave::{AutosaveDoc, RecoveryEntry, SettingsMode, adopt_legacy_recovery, recovery_dir};
 use craft::ui::dialog::{DialogResult, RecoveredDocument, RecoveryAnswer, RecoveryDialog};
 
 use crate::PdfCraftApp;
@@ -46,11 +44,12 @@ pub fn default_dir() -> Option<PathBuf> {
 }
 
 /// The recovery folder of this machine, after moving what the old folder ([`default_dir`]) holds
-/// into it. The app's constructor gives the result to `enable_recovery` through its services.
+/// into it. The app's constructor takes it through its services.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn prepare_platform_recovery_dir() -> Option<PathBuf> {
-    let mode = if crate::settings::portable_dir().is_some() { SettingsMode::SelfContained } else { SettingsMode::Platform };
-    let dir = recovery_dir("PdfCraft", "pdfcraft", crate::settings::portable_dir(), mode, |k| std::env::var_os(k))?;
+    let portable = crate::settings::portable_dir();
+    let mode = if portable.is_some() { SettingsMode::SelfContained } else { SettingsMode::Platform };
+    let dir = recovery_dir("PdfCraft", "pdfcraft", portable.as_deref(), mode, |k| std::env::var_os(k))?;
     if let Some(legacy) = default_dir() {
         let _ = adopt_legacy_recovery(&legacy, &dir);
     }
@@ -76,23 +75,6 @@ pub fn default_dictionary_dir() -> Option<PathBuf> {
 }
 
 impl PdfCraftApp {
-    /// Turn on autosave into the recovery folder the app's services name, and look for documents a
-    /// previous session left behind.
-    pub fn enable_recovery(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // PLAN: assumed field `recovery_dir: Option<PathBuf>`, kept by `with_host` from its services (pdf-hub-w1, shared.md q171)
-            let Some(dir) = self.recovery_dir.clone() else { return };
-            match RecoveryStore::open(&dir) {
-                Ok(store) => {
-                    self.recovered = store.leftovers();
-                    self.recovery = Some(Arc::new(store));
-                }
-                Err(e) => log::warn!("recovery folder {} can't be used: {e}", dir.display()),
-            }
-        }
-    }
-
     /// Write snapshots of every document with unsaved changes now (a frame panicked, or a
     /// snapshot must replace an older one).
     pub fn autosave_now(&mut self) {
@@ -198,7 +180,7 @@ impl PdfCraftApp {
                     }
                 }
                 // Escape keeps the copy for the next launch and stops offering it in this run.
-                DialogResult::Cancel => self.skip_offer(),
+                _ => self.skip_offer(),
             }
             #[cfg(target_arch = "wasm32")]
             let _ = result;
@@ -315,10 +297,12 @@ impl PdfCraftApp {
 mod idle_tests {
     use super::*;
     use std::path::Path;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     use craft::host::{AppInfo, Host, ManualJobs, ScriptedFiles};
+    use craft::platform::autosave::RecoveryStore;
 
     pub(super) struct TestDir(PathBuf);
 
@@ -360,9 +344,7 @@ mod idle_tests {
         let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
         let watch = craft::platform::watch::FileWatch::new(wake.clone());
         let services = crate::AppServices::new(wake, clipboard, recovery.map(Path::to_path_buf), None, intake, watch);
-        let mut app = PdfCraftApp::with_host(Arc::new(host), services);
-        app.enable_recovery();
-        (app, files, jobs)
+        (PdfCraftApp::with_host(Arc::new(host), services), files, jobs)
     }
 
     /// The copies in `dir`.
@@ -517,7 +499,7 @@ mod sidecar_tests {
         }
 
         let (mut app, files, jobs) = app_in(Some(&folder));
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         assert_eq!(app.recovered.len(), 1);
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
         h.run_steps(4);

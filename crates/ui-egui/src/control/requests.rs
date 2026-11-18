@@ -21,14 +21,13 @@ pub(super) fn handle(app: &mut PdfCraftApp, ctx: &egui::Context, method: &str, p
             Err(e) => Reply::from_result(Err(e)),
         };
     }
-    // PLAN: assumed field `host: Arc<Host>` (pdf-hub-w1).
     if let Some(result) = pick_method(app.host.files(), method, p) {
         return Reply::from_result(result);
     }
     let str_param = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{method}: missing string parameter {k}"));
     let r: Result<Value, String> = (|| match method {
         "ui.state" => {
-            let mut state = app.state();
+            let mut state = app.state(ctx);
             // The viewport's facts are fresh in `logic`; the last UI pass's rectangle can be stale.
             if let Some(facts) = host.screenshot_facts(ViewportId::ROOT) {
                 let geometry = CaptureGeometry::from_facts(facts, None);
@@ -40,14 +39,14 @@ pub(super) fn handle(app: &mut PdfCraftApp, ctx: &egui::Context, method: &str, p
         "ui.commands" => Ok(app.commands()),
         "ui.panel" | "ui.dock.reset" => app.panel(method == "ui.dock.reset", p),
         "ui.command" if str_param("id")? == "ui.panel" => app.panel(false, p.get("params").unwrap_or(p)),
-        "ui.command" => app.command(str_param("id")?),
+        "ui.command" => app.command(ctx, str_param("id")?),
         "ui.set" => {
             let value = match p.get("value") {
                 Some(Value::String(s)) => s.clone(),
                 Some(v) => v.to_string(),
                 None => return Err("ui.set: missing parameter value".into()),
             };
-            app.set(str_param("key")?, &value)
+            app.set(ctx, str_param("key")?, &value)
         }
         "ui.open" => app.open(str_param("path")?),
         "ui.resize" => {

@@ -50,11 +50,12 @@ impl PdfCraftApp {
         let dirty: Vec<usize> = (0..self.views.len()).filter(|&i| self.has_unsaved_work(i)).collect();
         let can_save = dirty.iter().all(|&i| self.saves_in_place(i));
         match self.updater.run_with_save(&mut self.dialogs, dirty.is_empty(), can_save) {
-            Action::None => {}
             Action::OpenUrl(url) => self.open_url(&url),
             Action::Close => {
                 self.request_quit(ctx);
             }
+            // `None`, and any later action this app doesn't know: nothing to do this frame.
+            _ => {}
         }
         if self.updater.take_save_request() {
             let mut saved = true;
