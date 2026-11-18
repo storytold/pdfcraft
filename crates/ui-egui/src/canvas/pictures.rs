@@ -294,9 +294,16 @@ mod tests {
         let jobs = Arc::new(ManualJobs::new());
         let queue = jobs.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            // PLAN: assumed `AppInfo` built by literal and `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
             let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(queue.clone()).build();
-            let mut app = PdfCraftApp::with_host(Arc::new(host), crate::AppServices::new(Wake::none(), None, None, None, None, None));
+            let services = crate::AppServices::new(
+                Wake::none(),
+                craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+                None,
+                None,
+                craft::platform::open::FileIntake::new(Wake::none()).0,
+                craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+            );
+            let mut app = PdfCraftApp::with_host(Arc::new(host), services);
             let blank = app.session.create_blank(200.0, 300.0, 3).expect("a blank document");
             app.open_bytes("three.pdf", None, blank.as_ref().clone()).expect("opens");
             app
@@ -311,7 +318,8 @@ mod tests {
             let app = h.state();
             app.session.get(app.views[0].id).expect("the document").info.clone()
         };
-        h.state_mut().views[0].document_changed(&info);
+        let ctx = h.ctx.clone();
+        h.state_mut().views[0].document_changed(&ctx, &info);
         h.run_steps(1);
         let all = jobs.waiting();
         assert!(edited >= 1, "the edited page is rendered again");

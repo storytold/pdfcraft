@@ -348,7 +348,7 @@ impl DocView {
 
     /// The screen rectangle of glyph `glyph` on `page`, when the page is on screen.
     pub fn glyph_screen_rect(&self, page: usize, glyph: usize) -> Option<Rect> {
-        let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
+        let xf = self.page_xform(page)?;
         let g = self.session.texts.get(&page)?.glyphs.get(glyph)?;
         Some(xf.view_rect(g.rect))
     }
@@ -388,9 +388,9 @@ impl DocView {
 
     /// Select every page without navigating; shared by Organize and the Pages sidebar.
     pub fn select_all_pages(&mut self) -> bool {
-        self.selected = (0..self.page_count).collect();
-        self.select_anchor = (self.page_count > 0).then_some(self.current);
-        !self.selected.is_empty()
+        let anchor = (self.page_count > 0).then_some(self.view.current);
+        self.selected = Selection::new((0..self.page_count).collect(), anchor, anchor);
+        !self.selected.items.is_empty()
     }
 
     /// Select all words on the current page, or every page in Organize.
@@ -402,13 +402,13 @@ impl DocView {
         // a time, the page shown.
         // Like the page's, true once some text is selected: the pages whose text isn't read yet are
         // read when the selection is copied.
-        if self.continuous && self.page_count > 1 {
+        if self.continuous() && self.page_count > 1 {
             self.session.text.selection = None;
             self.session.all_text = true;
             return self.selected_text().is_some();
         }
         self.session.all_text = false;
-        let page = self.current;
+        let page = self.view.current;
         let Some(t) = self.session.texts.get(&page) else { return false };
         if t.glyphs.is_empty() {
             return false;

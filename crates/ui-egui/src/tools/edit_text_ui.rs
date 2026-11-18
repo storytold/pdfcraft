@@ -37,7 +37,7 @@ mod layout;
 
 pub(crate) use background::TextBackground;
 pub use image::{CropMode, ImageAction, ImageSelection};
-pub(crate) use image::{delete_picture, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
+pub(crate) use image::{PictureMenu, delete_picture, picture_controls, picture_menu, picture_parts, picture_press, user_to_screen};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
 use layout::{color32, editor_galley, editor_job, look_of, source_look};

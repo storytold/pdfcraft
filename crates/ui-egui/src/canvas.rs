@@ -676,14 +676,14 @@ impl DocView {
 }
 
 /// Acts on the notice bar button that was clicked.
-fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
+fn apply_notice(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, notice: Option<Notice>) {
     match notice {
         #[cfg(not(target_arch = "wasm32"))]
         Some(Notice::Reload) => app.reload_request = app.views.get(index).map(|view| view.id),
         #[cfg(target_arch = "wasm32")]
         Some(Notice::Reload) => {}
-        Some(Notice::Repairs) => app.open_properties(crate::PropsTab::Advanced),
-        Some(Notice::Security) => app.open_properties(crate::PropsTab::Security),
+        Some(Notice::Repairs) => app.open_properties(ctx, crate::PropsTab::Advanced),
+        Some(Notice::Security) => app.open_properties(ctx, crate::PropsTab::Security),
         Some(Notice::Unlock) => {
             if let Some(doc) = app.views.get(index).and_then(|view| app.session.get(view.id)) {
                 app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None));
@@ -696,9 +696,7 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
                 view.close_requested = true;
             }
         }
-        // PLAN: assumed `side_panels::set_panel_visible(app, panel: RightPanel, visible: bool)` (pdf-shell-w13,
-        // pdf-chrome-w13 name no panel type).
-        Some(Notice::Signatures) => crate::side_panels::set_panel_visible(app, RightPanel::Signatures, true),
+        Some(Notice::Signatures) => crate::side_panels::set_panel_visible(app, RightPanel::Signatures.into(), true),
         Some(Notice::FieldHighlights(on)) => app.highlight_fields = on,
         Some(Notice::Console) => crate::js_dialogs::open_console(app),
         // Back on in Preferences ▸ General.
@@ -752,7 +750,13 @@ pub(crate) fn follow_link(
 
 /// A Snapshot area's bar choice, a signature rectangle drawn, or an empty signature field clicked.
 /// Returns the tool to go on with.
-fn finish_sign_requests(app: &mut PdfCraftApp, index: usize, mut tool: QuickTool, area_choice: Option<crate::zoom_snap::AreaChoice>) -> QuickTool {
+fn finish_sign_requests(
+    app: &mut PdfCraftApp,
+    ctx: &egui::Context,
+    index: usize,
+    mut tool: QuickTool,
+    area_choice: Option<crate::zoom_snap::AreaChoice>,
+) -> QuickTool {
     // The copied area and its bar belong to Snapshot: another tool puts them away. The tool is
     // the app's, not the tab's, so every tab's area goes, not only the one on screen.
     if tool != QuickTool::Snapshot {
@@ -765,7 +769,7 @@ fn finish_sign_requests(app: &mut PdfCraftApp, index: usize, mut tool: QuickTool
     {
         match choice {
             crate::zoom_snap::AreaChoice::Print => app.open_print_area(page, area),
-            crate::zoom_snap::AreaChoice::Save => app.save_snapshot_image(index, page, area),
+            crate::zoom_snap::AreaChoice::Save => app.save_snapshot_image(ctx, index, page, area),
         }
     }
     // A signature rectangle was drawn, or an empty signature field clicked.
@@ -779,7 +783,7 @@ fn finish_sign_requests(app: &mut PdfCraftApp, index: usize, mut tool: QuickTool
         let signed = app.session.get(app.views[index].id).is_some_and(|d| d.signatures.iter().any(|s| s.field == field && s.signed));
         if signed {
             app.sig_open = Some(field);
-            crate::side_panels::set_panel_visible(app, RightPanel::Signatures, true);
+            crate::side_panels::set_panel_visible(app, RightPanel::Signatures.into(), true);
         } else {
             let page = app.views[index].view.current;
             app.start_signing(page, None, Some(field), None);
@@ -1139,7 +1143,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // The seam returns `None` for a tab that closes, has no pages or shows the Organize grid: no page view runs there,
     // and `PageViewOutput` cannot be built outside its crate.
     // The Search panel closed: its search moves to the find bar.
-    let search_open = app.right == Some(crate::RightPanel::Search);
+    let search_open = app.right() == Some(crate::RightPanel::Search);
     if let Some(f) = app.views.get_mut(index).and_then(|v| v.find.as_mut())
         && f.in_panel
         && !search_open
@@ -1169,7 +1173,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // PLAN: assumed `notices(view, doc, secured, repaired, lock_offer, banner, ui)`: pdf-canvas-w16 drops the tokens
     // argument and gives no other change.
     let notice = notices(view, doc, secured, repaired, lock_offer, crate::sign_ui::banner(&doc.signatures), ui);
-    apply_notice(app, index, notice);
+    apply_notice(app, ui.ctx(), index, notice);
     let doc = app.session.get(doc_id)?;
     let info = &doc.info;
     if info.pages.is_empty() {
@@ -1236,6 +1240,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         view.momentary_options = navigation;
     }
     let mut body_out = BodyOut::default();
+    let date_text = crate::date_text_for_pdf(&app.session);
     let DocView { view: state, session, momentary, revisions, reports, page_sizes, .. } = &mut *view;
     // PLAN: assumed app fields (pdf-hub-w1, pdf-forms-w5): `host_scope: HostScope`, `wake: Wake`, `fill_text_size`,
     // `fill_text_color`, `fill_text_border`, `fill_signature`, `fill_initials`, `fill_date_text`, `stamp_by_line`,
@@ -1257,13 +1262,17 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         host: &app.host_scope,
         wake: &app.wake,
         author: &app.comment_prefs.author,
-        date_text: &app.fill_date_text,
+        date_text: &date_text,
         fill: page_tools::FillPrefs {
             text_size: app.fill_text_size,
             text_color: app.fill_text_color,
-            text_border: app.fill_text_border,
-            signature: app.fill_signature.as_ref(),
-            initials: app.fill_initials.as_ref(),
+            text_border: crate::fill_sign::TextBorder {
+                width: app.fill_text_border,
+                color: app.fill_text_border_color,
+                shape: app.fill_text_border_shape,
+            },
+            signature: app.signature.as_ref(),
+            initials: app.initials.as_ref(),
         },
         by_line: &app.stamp_by_line,
         custom_stamp: app.custom_stamp_choice.as_ref().map(|(stamp, line)| (stamp, line.as_deref())),
@@ -1277,7 +1286,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         current: state.current,
         sizes: &page_sizes[..],
         tools,
-        animates: app.animation_effects.animates(app.motion.reduced),
+        animates: !app.animation_effects.reduced(None),
         present_at,
         preparing,
         calc_order,
@@ -1404,13 +1413,16 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
             doc,
             info,
             prefs: &app.comment_prefs,
-            rights: comments::MenuRights { allowed, can_paste: app.comment_clipboard.is_some(), can_modify },
+            rights: comments::MenuRights { allowed, can_modify },
             recent: &app.recent_colours,
             tool,
             preparing,
             form: &form,
             can_copy: doc.allows_copying(),
             can_paste_image,
+            can_paste_comments: app.comment_clipboard.is_some(),
+            jobs: app.host.jobs_shared(),
+            wake: &app.wake,
         },
     );
     let mut open_props: Option<(usize, usize)> = None;
@@ -1420,7 +1432,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         Some(comments::CanvasAction::Edit(e)) => app.views[index].session.pending_edit = Some(*e),
         Some(comments::CanvasAction::OpenComments) => {
             app.comments_panel_closed = false;
-            crate::side_panels::set_panel_visible(app, RightPanel::Comments, true);
+            crate::side_panels::set_panel_visible(app, RightPanel::Comments.into(), true);
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),
@@ -1432,13 +1444,13 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         app.notify_error(why);
     }
     if let Some((page, area)) = body_out.snapshot {
-        app.finish_marquee(index, (page, area));
+        app.finish_marquee(ui.ctx(), index, (page, area));
     }
     let remote_open = follow_link(app, index, clicked_link);
     if let Some((page, link)) = javascript_link {
         app.run_link_script(doc_id, page, link);
     }
-    let tool = finish_sign_requests(app, index, tool, body_out.area_choice);
+    let tool = finish_sign_requests(app, ui.ctx(), index, tool, body_out.area_choice);
     app.quick_tool = tool;
     let requests = FrameRequests {
         open_props,
@@ -1456,7 +1468,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         form,
         generation: app.session.get(doc_id).map_or(0, |d| d.edit_generation()),
     };
-    apply_frame_requests(app, index, requests);
+    apply_frame_requests(app, ui.ctx(), index, requests);
     Some(out)
 }
 
@@ -1484,7 +1496,7 @@ struct FrameRequests {
 
 /// Opens the dialogs and runs the app commands the frame asked for.
 #[allow(clippy::cognitive_complexity)]
-fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequests) {
+fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize, requests: FrameRequests) {
     let FrameRequests {
         open_props,
         field_props,
@@ -1505,7 +1517,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
         app.attach_file_comment(page, at);
     }
     if let Some((p, i)) = open_props {
-        app.open_comment_props(p, i);
+        app.open_comment_props(ctx, p, i);
     }
     if let Some(c) = recolour {
         app.colour_selected_comments(c);
@@ -1577,7 +1589,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
         }
         Some(crate::edit_text_ui::ImageAction::Redact(page, index)) => app.redact_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Link(page, index)) => app.link_page_image(page, index),
-        Some(crate::edit_text_ui::ImageAction::Recognize(page)) => app.recognize_text_on_page(page),
+        Some(crate::edit_text_ui::ImageAction::Recognize(page)) => app.recognize_text_on_page(ctx, page),
         Some(crate::edit_text_ui::ImageAction::AddComment(page, i)) => {
             if let Some(d) = app.session.get(app.views[index].id) {
                 let images = d.page_images(page);
@@ -1602,7 +1614,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
             if let Some(sel) = app.views[index].session.image_selection.clone() {
                 app.copy_page_image(sel.page, sel.index);
             } else if app.views[index].selected_text().is_some() || app.views[index].selection_waits_for_text().is_some() {
-                app.execute("edit.copy");
+                app.execute(ctx, "edit.copy");
             } else if let Some((page, at)) = app.views[index].session.comments.context_at
                 && let Some(doc) = app.session.get(app.views[index].id)
                 && let Some(image) = doc.page_image_at(page, at)
@@ -1671,7 +1683,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
             app.views[index].open_find();
         }
         Some(PageMenuAction::DocProperties) => {
-            app.open_properties(crate::PropsTab::Description);
+            app.open_properties(ctx, crate::PropsTab::Description);
         }
         None => {}
     }
@@ -1682,7 +1694,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
     }
     if open_boxes {
         // Set Page Boxes on the current page, with no draft written here.
-        app.open_page_boxes(true);
+        app.open_page_boxes(ctx, true);
     }
     if let Some((page, rect)) = open_table {
         let doc = app.views[index].id;
@@ -1700,14 +1712,14 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
         }
     }
     if let Some((name, identity, action)) = app.views[index].session.forms.button.take() {
-        run_button(app, index, &name, identity, action);
+        run_button(app, ctx, index, &name, identity, action);
     }
     if copy_selected {
-        app.execute("edit.copy");
+        app.execute(ctx, "edit.copy");
     }
     let copy_comments = std::mem::take(&mut app.views[index].session.comments.copy_request);
     if copy_comments {
-        app.execute("comment.copy");
+        app.execute(ctx, "comment.copy");
     }
     if let Some(at) = app.views[index].session.comments.paste_request.take() {
         app.paste_comments(index, None, Some(at));

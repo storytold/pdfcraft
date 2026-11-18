@@ -39,16 +39,17 @@ impl DocView {
     /// it is a plain `organize = false`.
     pub fn open_organize(&mut self) {
         self.organize = true;
-        if !self.selected.items.is_empty() && !self.selected.contains(&self.current) {
-            self.clear_page_selection(Some(self.current));
+        let current = self.view.current;
+        if !self.selected.items.is_empty() && !self.selected.contains(&current) {
+            self.clear_page_selection(Some(current));
         }
-        self.grid_reveal = Some(self.current);
+        self.grid_reveal = Some(current);
     }
 
     /// Pages an organize command acts on: the selection, or the current page.
     pub fn target_pages(&self) -> Vec<usize> {
         if self.selected.items.is_empty() {
-            vec![self.current]
+            vec![self.view.current]
         } else {
             let mut pages = self.selected.items.clone();
             pages.sort_unstable();
@@ -63,7 +64,7 @@ impl DocView {
         let first = items.first().copied();
         self.selected = Selection::new(items, first, first);
         if let Some(first) = first {
-            self.current = first;
+            self.view.current = first;
         }
     }
 
@@ -147,7 +148,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
     let targets = view.target_pages();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
     let label = match view.selected.items.len() {
-        0 => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(view.current + 1).to_string()), ("n", &n.to_string())]),
+        0 => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(view.view.current + 1).to_string()), ("n", &n.to_string())]),
         1 => tl!("1 page selected").to_string(),
         k => crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &k.to_string())]),
     };
@@ -194,7 +195,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         .into()
     };
     let middle = if cfg!(target_os = "linux") { MiddleButton::AutoScroll } else { MiddleButton::Pan };
-    let current = view.current;
+    let current = view.view.current;
     let reveal = view.grid_reveal.take();
     let id = organize_grid_id(view);
     // PLAN: assumed `PageThumbnails::invert_middle(bool)` beside `middle_button` (pdf-canvas-w6).

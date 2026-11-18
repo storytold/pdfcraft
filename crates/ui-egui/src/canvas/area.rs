@@ -174,7 +174,14 @@ pub(crate) fn sign_tab_on_page(field: Rect, page: Rect, label_width: f32) -> Opt
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
-pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identity: u64, action: pdfcraft_engine::form_scripts::ButtonAction) {
+pub(super) fn run_button(
+    app: &mut PdfCraftApp,
+    ctx: &egui::Context,
+    index: usize,
+    name: &str,
+    identity: u64,
+    action: pdfcraft_engine::form_scripts::ButtonAction,
+) {
     use pdfcraft_engine::form_scripts::ButtonAction as B;
     let pages = app.session.get(app.views[index].id).map_or(0, |d| d.info.pages.len());
     match action {
@@ -193,7 +200,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
             "Print" => app.open_print(),
             // What PdfCraft's XFA buttons use, and what a script's `execMenuItem("Save")`
             // does too: the Save As dialog, so a click never overwrites the file unasked.
-            "SaveAs" => app.run_command("file.save_as"),
+            "SaveAs" => app.run_command(ctx, "file.save_as"),
             "NextPage" => app.views[index].step_page(true),
             "PrevPage" => app.views[index].step_page(false),
             "FirstPage" => app.views[index].go_to_page(0),

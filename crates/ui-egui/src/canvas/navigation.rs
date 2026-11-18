@@ -2,6 +2,7 @@ use craft::behavior::kurbo::{Point, Rect};
 use craft::pages::Fit;
 use craft::pages::ui::view::GoTo;
 
+use super::selection::DocTexts;
 use super::{DestView, DocInfo, DocView, pos2};
 
 /// Screen points a page edge may show above the window's top and still be a rounding sliver, not
@@ -34,18 +35,17 @@ impl DocView {
             return None;
         }
         // Across pages, the corner is on the selection's first page.
-        // PLAN: assumed `self.text.selection: Option<TextSelection>` and
-        // `self.page_text_source(page) -> Option<impl PageTextSource>` (the page's `AppText` at view
-        // rotation 0) (pdf-canvas-w12).
+        // The page's text at view rotation 0: the bounds below are in view space, which View ▸ Rotate View leaves unturned.
+        let upright = DocTexts::new(&self.session.texts, &self.session.text_failed, 0, &self.page_sizes);
         if let Some(sel) = self.session.text.selection
             && let first = *sel.pages().start()
-            && let Some(source) = self.page_text_source(first)
+            && let Some(source) = upright.app(first)
             && let Some(p) = info.pages.get(first)
         {
             // The selection's bounds in view space, which View ▸ Rotate View leaves unturned: the
             // corner at the screen's top-left is a different one for each quarter turn.
             let [x0, y0, x1, y1] =
-                sel.rects_on(first, &source).iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, r| {
+                sel.rects_on(first, source).iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, r| {
                     [b[0].min(r.x0), b[1].min(r.y0), b[2].max(r.x1), b[3].max(r.y1)]
                 });
             let (x, y) = match self.view.rotation {
