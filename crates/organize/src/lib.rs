@@ -352,6 +352,7 @@ fn drop_destinations_to(doc: &mut Document, gone: &[ObjRef], keep: &[(ObjRef, Di
             page_annots(doc, *p)
                 .iter()
                 .filter_map(Object::as_ref)
+                .map(|a| final_ref(doc, a))
                 .filter(|a| doc.get(*a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Link"))),
         );
     }
@@ -526,13 +527,16 @@ fn prune_tree_node(doc: &Document, node: &mut Dict, gone: &[ObjRef], dead: &mut 
 /// Take widgets out of the form: out of their field's /Kids, or out of /AcroForm /Fields when
 /// they are fields themselves. A field left without kids goes too.
 fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), OrganizeError> {
-    let unlink = |list: Option<&Object>, w: ObjRef| -> Option<Vec<Object>> {
+    // An entry is the widget when its reference chain ends there (§7.3.10): the queued widget is
+    // where the page's /Annots entry ended, and /Fields or /Kids can list it through the chain.
+    let unlink = |doc: &Document, list: Option<&Object>, w: ObjRef| -> Option<Vec<Object>> {
         let list = list.and_then(Object::as_array)?;
-        list.iter().any(|o| o.as_ref() == Some(w)).then(|| list.iter().filter(|o| o.as_ref() != Some(w)).cloned().collect())
+        let is_w = |o: &Object| o.as_ref().is_some_and(|r| final_ref(doc, r) == w);
+        list.iter().any(is_w).then(|| list.iter().filter(|o| !is_w(o)).cloned().collect())
     };
     while let Some(w) = widgets.pop() {
         if let Some(parent) = doc.get(w).as_dict().and_then(|d| d.reference(b"Parent")) {
-            let kids = doc.get(parent).as_dict().and_then(|d| unlink(d.get(b"Kids").map(|k| doc.resolve(k)).as_deref(), w));
+            let kids = doc.get(parent).as_dict().and_then(|d| unlink(doc, d.get(b"Kids").map(|k| doc.resolve(k)).as_deref(), w));
             if let Some(kids) = kids {
                 if kids.is_empty() {
                     widgets.push(parent);
@@ -544,12 +548,12 @@ fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), Orga
         let Some(root) = doc.root() else { continue };
         match doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
             Some(Object::Ref(form)) => {
-                if let Some(fields) = doc.get(form).as_dict().and_then(|f| unlink(f.get(b"Fields").map(|x| doc.resolve(x)).as_deref(), w)) {
+                if let Some(fields) = doc.get(form).as_dict().and_then(|f| unlink(doc, f.get(b"Fields").map(|x| doc.resolve(x)).as_deref(), w)) {
                     doc.update_dict(form, |f| f.set(b"Fields".to_vec(), Object::Array(fields)))?;
                 }
             }
             Some(Object::Dict(mut form)) => {
-                if let Some(fields) = unlink(form.get(b"Fields").map(|x| doc.resolve(x)).as_deref(), w) {
+                if let Some(fields) = unlink(doc, form.get(b"Fields").map(|x| doc.resolve(x)).as_deref(), w) {
                     form.set(b"Fields".to_vec(), Object::Array(fields));
                     doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(form)))?;
                 }
