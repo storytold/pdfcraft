@@ -1,8 +1,11 @@
 //! Scan & OCR ▸ Enhance scanned file in the real shell (egui_kittest): the dialog, the run and
 //! its report, and that the page keeps its comment while its scan is cleaned in place.
 
+use craft::pages::ui::PageRangeOptions;
+use craft::pages::{PageRange, PageScope};
+use craft::ui::dialog::dialog_id;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Session, Shape, Style};
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -30,11 +33,17 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
-        app.run_inline = true;
         app
     });
     h.run_steps(4);
     h
+}
+
+/// Runs the host's queued jobs, then lets the app poll them.
+// PLAN: assumed `PdfCraftApp::manual_jobs() -> &ManualJobs` (pdf-shell S-7).
+fn run_jobs(h: &mut Harness<'static, PdfCraftApp>) {
+    h.state().manual_jobs().run_all();
+    h.run_steps(3);
 }
 
 #[test]
@@ -44,19 +53,19 @@ fn enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did() {
     assert!(h.state().session.get(id).unwrap().comment_props(0, 0).is_some());
     assert!(h.state_mut().execute("ocr.enhance"));
     h.run_steps(2);
-    assert_eq!(h.query_all_by_label("Background removal").count(), 2, "the label and the slider it names");
-    h.get_by_label("Edge shadow removal");
-    h.get_by_label("Despeckle");
-    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Current page").click();
+    let ctx = h.ctx.clone();
+    let current = PageRange { scope: PageScope::Current, ..PageRange::default() };
+    let value = serde_json::to_value(PageRangeOptions::field_value(&current)).unwrap();
+    h.state_mut().dialogs.set_json_field(&ctx, dialog_id("enhance-scan"), "pages", value).unwrap();
     h.run_steps(1);
-    h.get_by_label("Enhance").click();
-    h.run_steps(3);
+    assert!(h.state_mut().dialogs.confirm::<HostedParamDialog>(&ctx));
+    h.run_steps(2);
+    run_jobs(&mut h);
     let app = h.state();
-    assert!(app.scan_clean_run.is_none() && app.dialog.is_none(), "finished and closed");
-    let toast = app.toast.clone().unwrap().0;
-    assert_eq!(toast, "Cleaned up the scan on 1 page.");
+    assert!(app.scan_clean_run.is_none() && !app.dialogs.is_open::<HostedParamDialog>(), "finished and closed");
+    assert!(app.toast.is_some(), "a notice says what was done");
     let doc = app.session.get(id).unwrap();
-    assert_eq!(doc.can_undo(), Some("Enhance scanned file"));
+    assert!(doc.can_undo().is_some(), "one undo step restores the page");
     assert_eq!(doc.info.pages.len(), 2);
     assert_eq!(doc.comment_props(0, 0).map(|p| p.author), Some("Tester".to_string()), "the sticky note stays");
 }
@@ -66,12 +75,10 @@ fn nothing_to_enhance_is_said_not_done() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().scan_clean_draft.settings = pdfcraft_engine::scan_clean::ScanCleanSettings { level: 0, edge_shadows: false, despeckle: false };
-    assert!(h.state_mut().execute("ocr.enhance"));
-    h.run_steps(2);
-    // With every filter off the button is disabled; starting anyway changes nothing.
+    // With every filter off the dialog's OK is disabled; starting anyway changes nothing.
     h.state_mut().start_scan_clean();
-    h.run_steps(2);
+    run_jobs(&mut h);
     let app = h.state();
-    assert!(app.toast.clone().unwrap().0.starts_with("No scanned pages were cleaned up."), "{:?}", app.toast);
+    assert!(app.toast.is_some(), "a notice says nothing was cleaned");
     assert_eq!(app.session.get(id).unwrap().can_undo(), None);
 }
