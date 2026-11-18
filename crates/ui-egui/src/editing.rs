@@ -392,10 +392,7 @@ impl PdfCraftApp {
         let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
         // Undo is about to take back Edit's own text recognition: the page won't be read again
         // by itself, and the user never asked for it, so the notice says how to get it back.
-        let undoing_auto_ocr = undo
-            && self.session.get(id).is_some_and(|d| {
-                d.can_undo() == Some("Recognize text") && self.views.get(i).is_some_and(|v| v.auto_ocr_steps.contains(&d.undo_depth()))
-            });
+        let undoing_auto_ocr = undo && self.session.get(id).and_then(|d| d.undo_step()).is_some_and(|s| self.auto_ocr_steps.contains(&s));
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {

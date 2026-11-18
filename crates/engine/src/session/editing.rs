@@ -334,7 +334,7 @@ impl Session {
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label, previous, previous_keys, scope));
+        editor.undo.push((label, previous, previous_keys, scope, crate::HistoryStep::next()));
         if editor.undo.len() > MAX_UNDO {
             editor.undo.remove(0);
         }
@@ -346,7 +346,7 @@ impl Session {
             discard_edit_callbacks(&cx);
             // Roll back: the edit produced something we cannot display.
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((_, prev, keys, _)) = ed.undo.pop()
+                && let Some((_, prev, keys, ..)) = ed.undo.pop()
             {
                 ed.cos = prev;
                 ed.keys = keys;
@@ -387,19 +387,19 @@ impl Session {
     pub fn undo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToUndo)?;
-        let (label, prev, keys, scope) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
+        let (label, prev, keys, scope, step) = editor.undo.pop().ok_or(EditError::NothingToUndo)?;
         let current = std::mem::replace(&mut editor.cos, prev);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.redo.push((label.clone(), current, current_keys, scope));
+        editor.redo.push((label.clone(), current, current_keys, scope, step));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.redo.pop()
+                && let Some((label, current, current_keys, scope, step)) = ed.redo.pop()
             {
                 let prev = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.undo.push((label, prev, keys, scope));
+                ed.undo.push((label, prev, keys, scope, step));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
@@ -410,7 +410,7 @@ impl Session {
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         if let Some(editor) = doc.editor.as_ref()
-            && let Some((_, previous, _, _)) = editor.redo.last()
+            && let Some((_, previous, ..)) = editor.redo.last()
         {
             sync_script_history(doc, previous, &editor.cos);
         }
@@ -424,19 +424,19 @@ impl Session {
     pub fn redo(&mut self, id: DocId) -> Result<Label, EditError> {
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or(EditError::NothingToRedo)?;
-        let (label, next, keys, scope) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
+        let (label, next, keys, scope, step) = editor.redo.pop().ok_or(EditError::NothingToRedo)?;
         let current = std::mem::replace(&mut editor.cos, next);
         let current_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label.clone(), current, current_keys, scope));
+        editor.undo.push((label.clone(), current, current_keys, scope, step));
         Self::adopt_keys(doc);
         let refreshed = guard(|| Self::refresh_scoped(doc, scope)).unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             if let Some(ed) = doc.editor.as_mut()
-                && let Some((label, current, current_keys, scope)) = ed.undo.pop()
+                && let Some((label, current, current_keys, scope, step)) = ed.undo.pop()
             {
                 let next = std::mem::replace(&mut ed.cos, current);
                 let keys = std::mem::replace(&mut ed.keys, current_keys);
-                ed.redo.push((label, next, keys, scope));
+                ed.redo.push((label, next, keys, scope, step));
             }
             Self::adopt_keys(doc);
             if !matches!(guard(|| Self::refresh(doc)), Ok(Ok(()))) {
@@ -447,7 +447,7 @@ impl Session {
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         if let Some(editor) = doc.editor.as_ref()
-            && let Some((_, previous, _, _)) = editor.undo.last()
+            && let Some((_, previous, ..)) = editor.undo.last()
         {
             sync_script_history(doc, previous, &editor.cos);
         }

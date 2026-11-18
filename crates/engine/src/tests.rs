@@ -869,6 +869,39 @@ fn undo_and_redo_restore_exact_states() {
     assert_eq!(s.get(id).unwrap().info.pages.len(), 4);
 }
 
+/// A step keeps its identity while older steps are dropped past the undo limit and while it moves
+/// between Undo and Redo, unlike its depth in the history (#6655).
+#[test]
+fn a_history_step_keeps_its_identity() {
+    let (mut s, id) = session_with(1);
+    let title = |n: usize| Edit::SetInfo { key: "Title".into(), value: format!("T{n}") };
+    for n in 0..crate::history::MAX_UNDO - 1 {
+        s.apply(id, title(n)).unwrap();
+    }
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let doc = s.get(id).unwrap();
+    let (rotate, depth) = (doc.undo_step().unwrap(), doc.undo_depth());
+    assert_eq!(depth, crate::history::MAX_UNDO);
+    // The oldest step goes, so the rotation now sits one place lower.
+    s.apply(id, title(1000)).unwrap();
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.undo_depth(), depth - 1);
+    assert_eq!((doc.can_undo(), doc.undo_step()), (Some("Rotate page"), Some(rotate)));
+    assert!(doc.holds_step(rotate));
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().holds_step(rotate), "a step to redo is still in the history");
+    assert_ne!(s.get(id).unwrap().undo_step(), Some(rotate));
+    s.redo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().undo_step(), Some(rotate));
+    // The same edit again is another step.
+    s.undo(id).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_ne!(doc.undo_step(), Some(rotate));
+    assert!(!doc.holds_step(rotate), "a new edit drops the step it replaced");
+}
+
 #[test]
 fn failed_edit_changes_nothing() {
     let (mut s, id) = session_with(2);
