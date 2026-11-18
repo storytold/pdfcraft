@@ -24,7 +24,7 @@ use std::rc::Rc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
-use crate::{INHERITABLE, OrganizeError, pages_root, rebuild, walk};
+use crate::{INHERITABLE, OrganizeError, own_counts, pages_root, rebuild, walk};
 
 mod carry;
 mod combine;
@@ -321,7 +321,7 @@ fn import_pages_mapped(
             d.set(b"Resources".to_vec(), r);
         }
         for k in INHERITABLE {
-            if !d.contains(k)
+            if !own_counts(dst, &d, k)
                 && let Some(v) = inherited.get(k)
             {
                 let v = copier.copy_value(dst, v, None)?;
@@ -588,7 +588,7 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     };
     let bbox = rect(b"CropBox").or_else(|| rect(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
     let (w, h) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
-    let rotate = d.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
+    let rotate = pdfcraft_model::shown_rotation(src, &d);
     // Content: the page's streams, decoded and joined. Of a stream damaged partway, the copy draws
     // what decoded before the damage.
     let content = match own.get(b"Contents") {

@@ -168,6 +168,27 @@ fn showing_and_hiding_a_template_moves_its_own_page() {
     assert_eq!(templates(&hidden), [Template { name: "More".into(), hidden: true }]);
 }
 
+/// A template page whose own `/Rotate` the renderer can't read shows, in the page tree, the turn
+/// it inherits; hidden again, it keeps that turn as its own, and a copy spawned from it shows it.
+#[test]
+fn a_hidden_template_keeps_the_turn_it_inherited_over_its_own_unreadable_rotate() {
+    for value in ["null", "/invalid", "2147483880"] {
+        let mut bodies = form_bodies().map(String::from);
+        bodies[1] = bodies[1].replace(">>", "/Rotate 90 >>");
+        bodies[4] = bodies[4].replace("/Type /Template", &format!("/Type /Template /Rotate {value}"));
+        let mut doc = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>());
+        set_template_hidden(&mut doc, "More", false).unwrap();
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 90], "{value}");
+        set_template_hidden(&mut doc, "More", true).unwrap();
+        let page: Dict = doc.get(ObjRef::new(5, 0)).as_dict().cloned().unwrap();
+        assert_eq!(page.get(b"Rotate"), Some(&Object::Int(90)), "{value}");
+        assert_eq!(pdfcraft_model::shown_rotation(&doc, &page), 90, "{value}");
+        // A copy spawned from it shows that turn too.
+        assert_eq!(spawn_template(&mut doc, "More", 1, false).unwrap(), 1);
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 90], "spawned, {value}");
+    }
+}
+
 #[test]
 fn unknown_templates_and_the_last_page_are_refused() {
     let mut doc = form();

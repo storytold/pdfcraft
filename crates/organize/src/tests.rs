@@ -20,8 +20,9 @@ fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
 
 #[test]
 fn indirect_page_rotation_is_read_and_updated_from_its_effective_value() {
-    let large = i64::MAX - i64::MAX % 90;
-    for (current, degrees, expected) in [(270, 90, 0), (-90, 90, 0), (large, 90, 90), (90, -180, 270)] {
+    // A value past 32 bits is one the renderer can't read: see
+    // `pages_turn_from_the_turn_the_renderer_shows_them_with`.
+    for (current, degrees, expected) in [(270, 90, 0), (-90, 90, 0), (90, -180, 270)] {
         for level in 0..3 {
             let mut doc = open(fixture());
             let rotation = doc.add(Object::Int(current));
@@ -52,16 +53,151 @@ fn indirect_page_rotation_is_read_and_updated_from_its_effective_value() {
     }
 }
 
+/// A page's own `/Rotate` that can't be read (null, a name, a lost object) gives way to the
+/// turn it inherits (90 here), as the renderer shows the page; rotating turns it from there.
 #[test]
-fn malformed_indirect_rotations_keep_the_zero_fallback() {
+fn malformed_indirect_rotations_give_way_to_the_inherited_turn() {
     for value in [Object::Null, Object::name("invalid"), Object::Ref(ObjRef::new(99_999, 0))] {
         let mut doc = open(fixture());
         let rotation = doc.add(value);
         let page = pages(&doc).unwrap()[0].obj;
         doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Ref(rotation))).unwrap();
-        assert_eq!(page_rotation(&doc, 0).unwrap(), 0);
-        rotate_pages(&mut doc, &[0], 90).unwrap();
         assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+        rotate_pages(&mut doc, &[0], 90).unwrap();
+        assert_eq!(page_rotation(&doc, 0).unwrap(), 180);
+    }
+}
+
+/// The turn the renderer shows each page of `bytes` with.
+fn shown_turns(bytes: Vec<u8>) -> Vec<i64> {
+    use hayro_syntax::page::Rotation;
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    pdf.pages()
+        .iter()
+        .map(|p| match p.rotation() {
+            Rotation::None => 0,
+            Rotation::Horizontal => 90,
+            Rotation::Flipped => 180,
+            Rotation::FlippedHorizontal => 270,
+        })
+        .collect()
+}
+
+/// `/Rotate` values the renderer reads differently from an integer read: reals it truncates,
+/// numbers past 32 bits it ignores, and values that aren't numbers, which give way to the turn
+/// inherited. With a value not a quarter turn, a turn of 0.
+fn odd_rotations() -> [Object; 10] {
+    [
+        Object::Real(90.5),
+        Object::Real(-90.5),
+        Object::Int(2_147_483_880),
+        Object::Int(i64::MAX - i64::MAX % 90),
+        Object::Int(45),
+        Object::Real(1e10),
+        Object::Null,
+        Object::name("invalid"),
+        Object::Ref(ObjRef::new(99_999, 0)),
+        Object::Int(-2_147_483_648),
+    ]
+}
+
+/// Each page's turn is the one the renderer shows it with, whatever `/Rotate` it has or
+/// inherits, and rotating a page adds to that turn and leaves the others as they are.
+#[test]
+fn pages_turn_from_the_turn_the_renderer_shows_them_with() {
+    let mut rows = 0;
+    for value in odd_rotations() {
+        for indirect in [false, true] {
+            for level in 0..3 {
+                let mut doc = open(fixture());
+                let value = if indirect { Object::Ref(doc.add(value.clone())) } else { value.clone() };
+                let page = pages(&doc).unwrap()[0].obj;
+                let target = match level {
+                    0 => page,
+                    1 => doc.get(page).as_dict().unwrap().reference(b"Parent").unwrap(),
+                    _ => pages_root(&doc).unwrap(),
+                };
+                doc.update_dict(target, |d| d.set(b"Rotate".to_vec(), value.clone())).unwrap();
+                let at = format!("{value:?} at level {level}");
+                let before = shown_turns(write_full(&doc, &SaveOptions::default()).unwrap());
+                assert_eq!(page_rotations(&doc).unwrap(), before, "{at}");
+                for (i, turn) in before.iter().enumerate() {
+                    assert_eq!(page_rotation(&doc, i).unwrap(), *turn, "{at}, page {i}");
+                }
+                // The first page is 300 × 400; as a form it is turned upright as shown.
+                let (_, size) = crate::page_as_form(&mut Document::new_empty(), &doc, 0).unwrap();
+                assert_eq!(size, if before[0] % 180 == 0 { (300.0, 400.0) } else { (400.0, 300.0) }, "{at}");
+                rotate_pages(&mut doc, &[0], 90).unwrap();
+                for saved in [write_incremental(&doc, &SaveOptions::default()).unwrap(), write_full(&doc, &SaveOptions::default()).unwrap()] {
+                    let after = shown_turns(saved.clone());
+                    assert_eq!(after[0], (before[0] + 90) % 360, "{at}");
+                    assert_eq!(after[1..], before[1..], "{at}");
+                    assert_eq!(page_rotations(&open(saved)).unwrap(), after, "{at}");
+                }
+                rows += 1;
+            }
+        }
+    }
+    assert_eq!(rows, 60);
+}
+
+/// A page whose own `/Rotate` the renderer can't read shows the turn it inherits. Moved out
+/// from under its ancestors (the page tree rebuilt, the page copied, or put in place of
+/// another), it keeps showing that turn.
+#[test]
+fn a_page_moved_or_copied_keeps_the_turn_it_inherited_over_its_own_unreadable_rotate() {
+    for value in [Object::Null, Object::name("invalid"), Object::Ref(ObjRef::new(99_999, 0)), Object::Int(2_147_483_880)] {
+        let mut src = open(fixture());
+        let held = src.add(value.clone());
+        let page = pages(&src).unwrap()[0].obj;
+        src.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Ref(held))).unwrap();
+        let shown = |doc: &Document| shown_turns(write_full(doc, &SaveOptions::default()).unwrap());
+        assert_eq!(shown(&src), [90, 90, 90], "{value:?}");
+
+        // The tree rebuilt flat, its root's turn pushed down to the pages.
+        let mut doc = src.clone();
+        delete_pages(&mut doc, &[2]).unwrap();
+        assert_eq!(shown(&doc), [90, 90], "deleted, {value:?}");
+        let mut doc = src.clone();
+        move_pages(&mut doc, &[0], 2).unwrap();
+        assert_eq!(shown(&doc), [90, 90, 90], "moved, {value:?}");
+        let mut doc = src.clone();
+        reverse_pages(&mut doc, &[0, 1, 2]).unwrap();
+        assert_eq!(shown(&doc), [90, 90, 90], "reversed, {value:?}");
+        let mut doc = src.clone();
+        insert_blank_page(&mut doc, 0, 100.0, 100.0).unwrap();
+        assert_eq!(shown(&doc), [0, 90, 90, 90], "after a blank page, {value:?}");
+        // Into a document of their own.
+        assert_eq!(shown(&extract_pages(&src, &[0]).unwrap()), [90], "extracted, {value:?}");
+        assert_eq!(shown(&combine(&[("a", &src)]).unwrap()), [90, 90, 90], "combined, {value:?}");
+        // Copied within the document, and into another that has no turn.
+        let mut doc = src.clone();
+        duplicate_pages(&mut doc, &[0], None).unwrap();
+        assert_eq!(shown(&doc), [90, 90, 90, 90], "duplicated, {value:?}");
+        let mut doc = doc_a();
+        import_pages(&mut doc, &src, &[0], 0).unwrap();
+        assert_eq!(shown(&doc), [90, 0, 0, 0], "imported, {value:?}");
+        // In place of another page, in a document whose pages turn by 270.
+        let mut doc = open(fixture());
+        doc.update_dict(pages_root(&doc).unwrap(), |d| d.set(b"Rotate".to_vec(), Object::Int(270))).unwrap();
+        replace_pages(&mut doc, &[1], &src, &[0]).unwrap();
+        assert_eq!(shown(&doc), [270, 90, 270], "replaced, {value:?}");
+        // From a page that inherits no turn, the target takes none, and not the value the
+        // renderer can't read.
+        let mut lone = src.clone();
+        lone.update_dict(pages_root(&lone).unwrap(), |d| {
+            d.remove(b"Rotate");
+        })
+        .unwrap();
+        let mut doc = doc_a();
+        replace_pages(&mut doc, &[0], &lone, &[0]).unwrap();
+        let target = pages(&doc).unwrap()[0].obj;
+        assert_eq!(doc.get(target).as_dict().unwrap().get(b"Rotate"), None, "replaced, nothing inherited, {value:?}");
+        assert_eq!(shown(&doc), [0, 0, 0], "replaced, nothing inherited, {value:?}");
+        // Drawn as a form, turned upright as it is shown.
+        let mut dst = Document::new_empty();
+        let (_, size) = crate::page_as_form(&mut dst, &src, 0).unwrap();
+        assert_eq!(size, (400.0, 300.0), "as a form, {value:?}");
     }
 }
 
@@ -80,13 +216,17 @@ fn rotate_rejects_angles_that_are_not_multiples_of_90() {
 #[test]
 fn rotate_handles_large_quarter_turns() {
     let large = i64::MAX - i64::MAX % 90;
-    for (current, degrees, expected) in [(90, large, 90), (-90, -large, 270), (large, 90, 90), (-large, -90, 270), (180, large - 90, 90)] {
+    // A `/Rotate` past 32 bits is no value, as the renderer reads it: on the page, the page
+    // shows the root's 90; on the root, no turn.
+    for (current, degrees, own, inherited_expected) in
+        [(90, large, 90, 90), (-90, -large, 270, 270), (large, 90, 180, 90), (-large, -90, 0, 270), (180, large - 90, 90, 90)]
+    {
         for inherited in [false, true] {
             let mut doc = open(fixture());
             let target = if inherited { pages_root(&doc).unwrap() } else { pages(&doc).unwrap()[0].obj };
             doc.update_dict(target, |d| d.set(b"Rotate".to_vec(), Object::Int(current))).unwrap();
             rotate_pages(&mut doc, &[0], degrees).unwrap();
-            assert_eq!(page_rotation(&doc, 0).unwrap(), expected);
+            assert_eq!(page_rotation(&doc, 0).unwrap(), if inherited { inherited_expected } else { own });
         }
     }
 }

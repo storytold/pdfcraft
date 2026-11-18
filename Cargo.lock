@@ -4889,6 +4889,7 @@ dependencies = [
 name = "pdfcraft-model"
 version = "0.21.1"
 dependencies = [
+ "hayro-syntax",
  "pdfcraft-cos",
 ]
 
@@ -4946,6 +4947,7 @@ dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
  "pdfcraft-cos",
+ "pdfcraft-model",
  "pdfcraft-oracle",
  "thiserror 2.0.21",
 ]

@@ -14,8 +14,38 @@ pub const MAX_USER_UNIT: f64 = 75_000.0;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
     pub obj: ObjRef,
-    /// The page dictionary with inherited attributes filled in.
+    /// The page dictionary with inherited attributes filled in. A `/Rotate` of its own that
+    /// [`rotate_value`] can't read is replaced by the one it inherits, if any.
     pub dict: Dict,
+}
+
+/// A `/Rotate` value as the renderer reads it: an integer, or a real truncated toward zero,
+/// that fits in 32 bits. Anything else (null, a name, a number past 32 bits) is no value, and
+/// the page takes the one it inherits ([`overrides_inherited`]).
+pub fn rotate_value(doc: &Document, value: &Object) -> Option<i32> {
+    match &*doc.resolve(value) {
+        Object::Int(i) => i32::try_from(*i).ok(),
+        // `as` truncates toward zero and saturates (NaN gives 0), as the renderer's reading
+        // does; the value then has to fit in 32 bits.
+        Object::Real(r) => i32::try_from(*r as i64).ok(),
+        _ => None,
+    }
+}
+
+/// Whether `value`, a page tree node's own entry for the inheritable `key`, is what its pages
+/// take: any value, except a `/Rotate` that [`rotate_value`] can't read, under which they keep
+/// the rotation they inherit, as the renderer shows them (a null is no entry at all, ISO
+/// 32000-2 §7.3.9).
+pub fn overrides_inherited(doc: &Document, key: &[u8], value: &Object) -> bool {
+    key != b"Rotate" || rotate_value(doc, value).is_some()
+}
+
+/// The clockwise turn `dict`'s `/Rotate` shows: 0, 90, 180 or 270. A value that isn't a
+/// multiple of 90 (ISO 32000-2 §7.7.3.3 requires one), or that [`rotate_value`] can't read,
+/// counts as 0, as the renderer draws that page.
+pub fn shown_rotation(doc: &Document, dict: &Dict) -> i64 {
+    let r = dict.get(b"Rotate").and_then(|o| rotate_value(doc, o)).map_or(0, i64::from).rem_euclid(360);
+    if r % 90 == 0 { r } else { 0 }
 }
 
 /// The side, in points, at or below which a `/MediaBox` has no area and the page falls back to
@@ -49,11 +79,9 @@ impl Page {
         }
     }
 
-    /// Clockwise rotation when displayed: 0, 90, 180 or 270. A `/Rotate` that isn't a multiple
-    /// of 90 (ISO 32000-2 §7.7.3.3 requires one) counts as 0, as the renderer draws that page.
+    /// Clockwise rotation when displayed: 0, 90, 180 or 270, read as [`shown_rotation`] reads it.
     pub fn rotation(&self, doc: &Document) -> i64 {
-        let r = self.dict.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).rem_euclid(360);
-        if r % 90 == 0 { r } else { 0 }
+        shown_rotation(doc, &self.dict)
     }
 
     /// The size of the page's user-space unit in points (`/UserUnit`; it isn't inherited), read
@@ -195,7 +223,7 @@ impl Iterator for PageTree<'_> {
             let Some(d) = obj.as_dict() else { continue };
             let mut inherited = parent.inherited.clone();
             for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
-                if let Some(value) = d.get(key) {
+                if let Some(value) = d.get(key).filter(|v| overrides_inherited(self.doc, key, v)) {
                     *owner = Some((obj.clone(), weight(value, 0)));
                 }
             }
@@ -210,7 +238,7 @@ impl Iterator for PageTree<'_> {
             } else {
                 let mut dict = d.clone();
                 for (key, owner) in INHERITABLE.iter().zip(&inherited) {
-                    if !dict.contains(key)
+                    if !dict.get(key).is_some_and(|v| overrides_inherited(self.doc, key, v))
                         && let Some((owner, weight)) = owner
                         && let Some(value) = owner.as_dict().and_then(|d| d.get(key))
                     {
@@ -252,6 +280,11 @@ mod tests {
 
     /// A document whose objects 1, 2, … are `objs`, object 1 its catalog.
     fn doc_from(objs: &[String]) -> Document {
+        Document::open(Arc::new(file_from(objs))).unwrap()
+    }
+
+    /// The bytes of [`doc_from`]'s document.
+    fn file_from(objs: &[String]) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offs = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -264,7 +297,7 @@ mod tests {
             out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
-        Document::open(Arc::new(out)).unwrap()
+        out
     }
 
     /// A page with no `/MediaBox`, its own or inherited, is US Letter, the size the renderer
@@ -482,6 +515,102 @@ mod tests {
         }
         let d = doc(-90);
         assert_eq!(pages(&d)[0].rotation(&d), 270);
+    }
+
+    /// The turn the renderer shows `bytes`' pages with.
+    fn rendered_turns(bytes: Vec<u8>) -> Vec<i64> {
+        use hayro_syntax::page::Rotation;
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        pdf.pages()
+            .iter()
+            .map(|p| match p.rotation() {
+                Rotation::None => 0,
+                Rotation::Horizontal => 90,
+                Rotation::Flipped => 180,
+                Rotation::FlippedHorizontal => 270,
+            })
+            .collect()
+    }
+
+    /// A page's `/Rotate` is read as the renderer reads it, at every level of the page tree: an
+    /// integer, or a real truncated toward zero, that fits in 32 bits, through references; any
+    /// other value, a null included (ISO 32000-2 §7.3.9), gives way to the one the node
+    /// inherits. So the turn the model gives each page (and printing, flattening, new comments
+    /// and signing take from it) is the one it's shown with.
+    #[test]
+    fn a_pages_turn_is_read_at_every_level_as_the_renderer_reads_it() {
+        let values = [
+            "90",
+            "-90",
+            "450",
+            "45",
+            "90.0",
+            "90.5",
+            "-90.5",
+            "180.9",
+            "-0.5",
+            "10000000000.0",
+            "2147483647",
+            "2147483880",
+            "-2147483648",
+            "-2147483649",
+            "4294967386",
+            "null",
+            "/Ninety",
+            "(90)",
+            "[90]",
+            "true",
+            "99 0 R",
+            "6 0 R",
+            "7 0 R",
+            "8 0 R",
+        ];
+        // Objects 6 to 8: a turn by reference, a reference to a reference to one, and a null.
+        let held = ["180", "6 0 R", "null"];
+        let mut rows = 0;
+        for value in values {
+            // The value on the page with 90 inherited from the root; on the middle node with
+            // 270 from the root; on the root alone; and on the page with nothing inherited.
+            for (root, middle, page) in [("90", "", value), ("270", value, ""), (value, "", ""), ("", "", value)] {
+                let rotate = |v: &str| if v.is_empty() { String::new() } else { format!("/Rotate {v}") };
+                let mut objs = vec![
+                    "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                    format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] {} >>", rotate(root)),
+                    format!("<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 {} >>", rotate(middle)),
+                    format!("<< /Type /Page /Parent 3 0 R {} >>", rotate(page)),
+                    "<< /Type /Page /Parent 3 0 R >>".to_string(),
+                ];
+                objs.extend(held.map(String::from));
+                let d = doc_from(&objs);
+                let shown = rendered_turns(file_from(&objs));
+                assert_eq!(shown.len(), 2);
+                let model: Vec<i64> = pages(&d).iter().map(|p| p.rotation(&d)).collect();
+                assert_eq!(model, shown, "/Rotate {value} on root {root:?}, middle {middle:?}, page {page:?}");
+                rows += 1;
+            }
+        }
+        assert_eq!(rows, values.len() * 4);
+        // The loop covers each value at every level. These check the page's collected value for
+        // what the renderer reads differently from an integer read: a value it truncates, one
+        // past 32 bits, and one it can't read.
+        let turn = |root: &str, middle: &str, page: &str| {
+            let rotate = |v: &str| if v.is_empty() { String::new() } else { format!("/Rotate {v}") };
+            let d = doc_from(&[
+                "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {} >>", rotate(root)),
+                format!("<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 {} >>", rotate(middle)),
+                format!("<< /Type /Page /Parent 3 0 R {} >>", rotate(page)),
+            ]);
+            let p = &pages(&d)[0];
+            (p.rotation(&d), p.dict.get(b"Rotate").cloned())
+        };
+        assert_eq!(turn("", "", "90.5"), (90, Some(Object::Real(90.5))));
+        assert_eq!(turn("", "", "-90.5"), (270, Some(Object::Real(-90.5))));
+        assert_eq!(turn("90", "", "2147483880"), (90, Some(Object::Int(90))), "the page's own value past 32 bits gives way");
+        assert_eq!(turn("90", "", "null"), (90, Some(Object::Int(90))));
+        assert_eq!(turn("90", "/Ninety", ""), (90, Some(Object::Int(90))));
+        assert_eq!(turn("180", "null", "/Ninety"), (180, Some(Object::Int(180))));
+        assert_eq!(turn("", "null", "/Ninety"), (0, Some(Object::name("Ninety"))), "nothing to give way to");
     }
 
     /// Display space is in points: `/UserUnit 2` doubles it. As in Acrobat, the value isn't

@@ -428,11 +428,12 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
 
 /// `page` with what its own dictionary holds now, after an edit: re-reading this one page,
 /// where walking the whole page tree again for every flattened page would be quadratic.
-/// Inherited attributes stay as they were collected, under the page's own entries.
-fn refreshed(doc: &Document, page: &pdfcraft_model::Page) -> pdfcraft_model::Page {
+/// Inherited attributes stay as they were collected, under the page's own entries, as the page
+/// walk takes them ([`pdfcraft_model::overrides_inherited`]).
+pub(crate) fn refreshed(doc: &Document, page: &pdfcraft_model::Page) -> pdfcraft_model::Page {
     let mut dict = page.dict.clone();
     if let Some(own) = doc.get(page.obj).as_dict() {
-        for (k, v) in own.iter() {
+        for (k, v) in own.iter().filter(|(k, v)| pdfcraft_model::overrides_inherited(doc, k, v)) {
             dict.set(k.clone(), v.clone());
         }
     }
@@ -477,7 +478,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         let mut gone_inline: HashSet<usize> = HashSet::new();
         // Selected, but nothing was drawn for it: it stays, pop-up and reply handling included.
         let mut undrawn: HashSet<ObjRef> = HashSet::new();
-        let rotation = page.dict.get(b"Rotate").map(|r| doc.resolve(r)).and_then(|r| r.as_int()).unwrap_or(0);
+        let rotation = page.rotation(doc);
         // A viewer draws many comments from their dictionary even when the file stores no
         // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
         // flattening keeps a comment that still has ink on screen instead of deleting it.

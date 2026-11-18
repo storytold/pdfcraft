@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
-use crate::{INHERITABLE, OrganizeError, page_count, rebuild, walk};
+use crate::{OrganizeError, page_count, pushed_down, rebuild, walk};
 
 /// At most this many names are read from one tree: a form has a handful of templates.
 const MAX_NAMES: usize = 4096;
@@ -94,13 +94,10 @@ pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Resu
         }
         // Out of the tree, the page no longer inherits: it keeps what it showed with.
         let (_, inherited) = order.remove(at);
+        let pushed = pushed_down(doc, page, &inherited);
         doc.update_dict(page, |d| {
-            for k in INHERITABLE {
-                if !d.contains(k)
-                    && let Some(v) = inherited.get(k)
-                {
-                    d.set(k.to_vec(), v.clone());
-                }
+            for (k, v) in pushed {
+                d.set(k.to_vec(), v);
             }
             d.remove(b"Parent");
             d.set(b"Type".to_vec(), Object::name("Template"));

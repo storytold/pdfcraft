@@ -2722,8 +2722,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["page.rotate", "page.rotate_ccw"]
 tools = ["page_rotate"]
-evidence = ["crates/organize/src/tests.rs::rotate_repeated_indices_accumulate_from_the_current_page_value", "crates/organize/src/tests.rs::rotate_uses_inherited_rotation_and_round_trips", "crates/ui-egui/tests/it/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/it/editing.rs::organize_page_actions_rotate_only_the_named_page_and_undo", "crates/ui-egui/tests/it/editing.rs::organize_local_actions_respect_document_permissions", "crates/organize/src/tests.rs::indirect_page_rotation_is_read_and_updated_from_its_effective_value", "crates/organize/src/tests.rs::malformed_indirect_rotations_keep_the_zero_fallback"]
-notes = "Rotation queries and edits resolve direct and inherited indirect integer values; full and incremental save regressions preserve sibling rotations. Existing quarter-turn restrictions and malformed-value zero fallback remain."
+evidence = ["crates/organize/src/tests.rs::rotate_repeated_indices_accumulate_from_the_current_page_value", "crates/organize/src/tests.rs::rotate_uses_inherited_rotation_and_round_trips", "crates/ui-egui/tests/it/editing.rs::command_click_toggles_and_rotation_applies_to_selection", "crates/ui-egui/tests/it/editing.rs::organize_page_actions_rotate_only_the_named_page_and_undo", "crates/ui-egui/tests/it/editing.rs::organize_local_actions_respect_document_permissions", "crates/organize/src/tests.rs::indirect_page_rotation_is_read_and_updated_from_its_effective_value", "crates/organize/src/tests.rs::malformed_indirect_rotations_give_way_to_the_inherited_turn", "crates/organize/src/tests.rs::pages_turn_from_the_turn_the_renderer_shows_them_with"]
+notes = "Rotation queries and edits read /Rotate, direct, indirect or inherited, as the renderer shows the page: an integer, or a real truncated toward zero, that fits in 32 bits; any other value gives way to the turn inherited. Rotating adds the requested multiple of 90 to the turn shown; full and incremental saves preserve sibling rotations."
 
 [[feature]]
 id = "organize.rotate-filters"
@@ -3166,7 +3166,7 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/organize/src/tests.rs::inherited_attributes_travel_with_copied_pages"]
+evidence = ["crates/organize/src/tests.rs::inherited_attributes_travel_with_copied_pages", "crates/organize/src/tests.rs::a_page_moved_or_copied_keeps_the_turn_it_inherited_over_its_own_unreadable_rotate"]
 notes = ""
 
 [[feature]]

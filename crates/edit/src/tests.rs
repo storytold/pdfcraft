@@ -546,6 +546,55 @@ fn flattening_keeps_a_no_rotate_widget_upright_on_a_rotated_page() {
     }
 }
 
+/// The page's turn that flattening keeps a NoRotate widget upright against is the one the page
+/// is shown with: a real truncated, a value past 32 bits read as none, and a value of the
+/// page's own that can't be read giving way to the turn it inherits.
+#[test]
+fn flattening_turns_a_no_rotate_widget_by_the_turn_the_page_is_shown_with() {
+    let page = stream("", " ");
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 100 50] /Length 15 >>\nstream\n0 0 100 50 re f\nendstream";
+    let unturned = "q 1 0 0 1 100 500 cm /PCFl0 Do Q";
+    let quarter = "q 0 1 -1 0 150 550 cm /PCFl0 Do Q";
+    for (inherited, own, drawn) in [
+        ("", "/Rotate 90.5", quarter),
+        ("/Rotate 90", "/Rotate null", quarter),
+        ("/Rotate 90", "/Rotate /Ninety", quarter),
+        ("/Rotate 90", "/Rotate 2147483880", quarter),
+        ("", "/Rotate 2147483970", unturned),
+    ] {
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            &format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {inherited} >>"),
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] {own} /Resources << >> /Contents 5 0 R /Annots [4 0 R] >>"),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /Rect [100 500 200 550] /F 20 /AP << /N 6 0 R >> >>",
+            &page,
+            form,
+        ]);
+        assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+        let doc = reopen(&doc);
+        let s = streams(&doc, 0);
+        let flat = s.last().unwrap();
+        assert!(flat.contains(drawn), "{inherited} {own}: {flat}");
+    }
+}
+
+/// Re-read after an edit, a page keeps a `/Rotate` of its own that can't be read under the turn
+/// it inherits, as the page walk does, and takes one of its own that can.
+#[test]
+fn a_page_reread_after_an_edit_keeps_the_turn_it_inherited() {
+    for own in ["null", "/Ninety", "2147483880"] {
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /Rotate 90 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Rotate {own} >>"),
+        ]);
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        assert_eq!(crate::flatten::refreshed(&doc, &page).rotation(&doc), 90, "{own}");
+        doc.update_dict(page.obj, |d| d.set(b"Rotate".to_vec(), pdfcraft_cos::Object::Int(180))).unwrap();
+        assert_eq!(crate::flatten::refreshed(&doc, &page).rotation(&doc), 180, "{own}");
+    }
+}
+
 /// #1317: a cloudy square this builder cannot draw stays on the page. A solid square, a hidden
 /// cloudy square and a cloudy square that already has an appearance keep their previous results.
 #[test]
