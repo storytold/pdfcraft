@@ -4,7 +4,7 @@
 //! Every sentence a rule here can say is listed in [`crate::WORDINGS`], so interfaces can say it in
 //! their own language; a test in this crate keeps that list complete.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
@@ -299,34 +299,66 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
 /// Whether annotation `a`, of subtype `st`, is tagged: its /StructParent names, in the parent tree,
 /// the structure element that holds it, and that element is of the type that holds annotations of
 /// its kind (ISO 32000-2 §14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link,
-/// Annot for any other. `None` when the parent tree can't tell ([`ParentTree::element`]): the
-/// annotation is then not counted against the rule, which is left to a manual check.
-fn annotation_tagged(doc: &Document, tree: &ParentTree, role_map: &Dict, a: &Dict, st: &[u8]) -> Option<bool> {
+/// Annot for any other. An element of another type can't hold it, wherever its parents lead.
+/// `None` when the parent tree can't tell ([`ParentTree::entry`], [`ParentTree::in_hierarchy`]):
+/// the annotation is then not counted against the rule, which is left to a manual check.
+fn annotation_tagged(doc: &Document, tree: &ParentTree, roles: &mut Roles, a: &Dict, st: &[u8]) -> Option<bool> {
     let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return Some(false) };
-    let Some(element) = tree.element(doc, key)? else { return Some(false) };
+    let Some(element) = tree.entry(doc, key)? else { return Some(false) };
     let want: &[u8] = match st {
         b"Widget" => b"Form",
         b"Link" => b"Link",
         _ => b"Annot",
     };
-    Some(element.as_dict().and_then(|e| e.name(b"S")).is_some_and(|s| role_maps_to(doc, role_map, s, want)))
+    // The type may be given by reference (ISO 32000-2 §7.3.10).
+    let role = element.as_dict().and_then(|e| e.get(b"S")).and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec));
+    if !role.is_some_and(|s| roles.standard(doc, &s).is_some_and(|t| t == want)) {
+        return Some(false);
+    }
+    tree.in_hierarchy(doc, &element)
 }
 
-/// Whether structure type `s` is, or maps through `role_map` to, the standard type `want`. Every
-/// mapping is followed until a standard type, a type the map doesn't hold, or one already passed
-/// (a cycle, ISO 32000-2 §14.7.3): a long chain that ends in `want` still does.
-fn role_maps_to(doc: &Document, role_map: &Dict, s: &[u8], want: &[u8]) -> bool {
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut t = s.to_vec();
-    loop {
-        if crate::structure::is_standard(&t) {
-            return t == want;
+/// The standard type each structure type reaches through the tree root's /RoleMap, kept for one
+/// rule's annotations: the elements of many annotations share types, and a type on a chain
+/// reaches what the whole chain reaches, so each mapping is followed once.
+struct Roles<'a> {
+    role_map: &'a Dict,
+    /// Type → the standard type it reaches, or `None` for none.
+    known: HashMap<Vec<u8>, Option<Vec<u8>>>,
+}
+
+impl<'a> Roles<'a> {
+    fn new(role_map: &'a Dict) -> Self {
+        Roles { role_map, known: HashMap::new() }
+    }
+
+    /// The standard type `s` is, or maps to through the role map. Every mapping is followed until
+    /// a standard type, a type the map doesn't hold, or one already passed (a cycle, ISO 32000-2
+    /// §14.7.3): a long chain that ends in a standard type still reaches it.
+    fn standard(&mut self, doc: &Document, s: &[u8]) -> Option<Vec<u8>> {
+        let mut path: Vec<Vec<u8>> = Vec::new();
+        let mut seen: HashSet<Vec<u8>> = HashSet::new();
+        let mut t = s.to_vec();
+        let end = loop {
+            if crate::structure::is_standard(&t) {
+                break Some(t);
+            }
+            if let Some(known) = self.known.get(&t) {
+                break known.clone();
+            }
+            let next = self.role_map.get(&t).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec));
+            if !seen.insert(t.clone()) {
+                break None;
+            }
+            path.push(t);
+            let Some(next) = next else { break None };
+            t = next;
+        };
+        // Every type passed reaches the same end: the role map gives each type one mapping.
+        for t in path {
+            self.known.insert(t, end.clone());
         }
-        let Some(next) = role_map.get(&t).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)) else { return false };
-        if !seen.insert(t) {
-            return false;
-        }
-        t = next;
+        end
     }
 }
 
@@ -361,6 +393,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                 .and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o)))
                 .and_then(|o| o.as_dict().cloned())
                 .unwrap_or_default();
+            let mut roles = Roles::new(&role_map);
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
                 for (_, obj) in annots(page) {
@@ -373,7 +406,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                     };
                     let held = applies
                         && tagged
-                        && annotation_tagged(doc, &scan.tree, &role_map, a, st).unwrap_or_else(|| {
+                        && annotation_tagged(doc, &scan.tree, &mut roles, a, st).unwrap_or_else(|| {
                             undecided = true;
                             true
                         });
@@ -550,5 +583,33 @@ fn maps_to_unicode(doc: &Document, f: &Dict) -> bool {
                 flags & 4 == 0 || matches!(base, b"Symbol" | b"ZapfDingbats")
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_role_mapping_is_followed_once_for_a_rule() {
+        // A chain of 10,000 mappings to Link, as many links' elements might share: the first
+        // lookup follows it once and keeps every type on it, so later ones, from any point on the
+        // chain, look up one type. A chain that goes round reaches nothing, from any point on it.
+        let n = 10_000;
+        let mut map = Dict::new();
+        for i in 0..n {
+            let to = if i + 1 == n { b"Link".to_vec() } else { format!("R{}", i + 1).into_bytes() };
+            map.set(format!("R{i}").into_bytes(), Object::Name(to));
+        }
+        map.set(b"C0".to_vec(), Object::Name(b"C1".to_vec()));
+        map.set(b"C1".to_vec(), Object::Name(b"C0".to_vec()));
+        let doc = Document::new_empty();
+        let mut roles = Roles::new(&map);
+        assert_eq!(roles.standard(&doc, b"R0"), Some(b"Link".to_vec()));
+        assert_eq!(roles.known.len(), n);
+        assert_eq!(roles.standard(&doc, b"R5000"), Some(b"Link".to_vec()));
+        assert_eq!(roles.standard(&doc, b"C1"), None);
+        assert_eq!(roles.known.len(), n + 2);
+        assert_eq!(roles.standard(&doc, b"Span"), Some(b"Span".to_vec()));
     }
 }

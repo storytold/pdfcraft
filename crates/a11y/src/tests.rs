@@ -2115,3 +2115,29 @@ fn an_annotation_element_type_is_followed_through_every_mapping() {
     assert_eq!(link_rule(long), Status::Passed);
     assert_eq!(link_rule("/R0 /R1 /R1 /R0".into()), Status::Failed);
 }
+
+#[test]
+fn an_annotation_element_type_given_by_reference_is_read() {
+    // ISO 32000-2 §7.3.10: any value may be an indirect reference, the element's /S included.
+    let mut objs = good();
+    let at = objs.len() + 1;
+    objs[19] = format!("<< /S {at} 0 R /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+    objs.push("/Link".into());
+    let r = checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]);
+    assert_eq!(status(&r, Rule::TaggedAnnotations), Status::Passed, "{:?}", r.result(Rule::TaggedAnnotations));
+}
+
+#[test]
+fn an_annotation_element_of_the_wrong_type_fails_whatever_its_ancestry() {
+    // A Span can't hold a link (ISO 32000-2 Table 368) however far up its parents go; a Link whose
+    // parents run past the walk's limit is left to a manual check.
+    let link_owner = |s: &str| {
+        let mut objs = good();
+        let first = objs.len() + 1;
+        objs[19] = format!("<< /S /{s} /P {first} 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+        objs.extend((0..300).map(|i| format!("<< /S /Sect /P {} >>", if i == 299 { "6 0 R".to_string() } else { format!("{} 0 R", first + i + 1) })));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations)
+    };
+    assert_eq!(link_owner("Span"), Status::Failed);
+    assert_eq!(link_owner("Link"), Status::Manual);
+}

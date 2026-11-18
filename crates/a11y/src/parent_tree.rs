@@ -86,22 +86,21 @@ impl ParentTree {
         self.truncated && !self.entries.contains_key(&key)
     }
 
-    /// The structure element that entry `key` names for a content item that is an object (an
-    /// annotation's /StructParent): a dictionary with a structure type (/S). `None` when that is
-    /// not known: the entry may be in the part of a truncated tree not read, or the element's
-    /// parents go on past the ancestor limit.
-    pub fn element(&self, doc: &Document, key: i64) -> Option<Option<Arc<Object>>> {
+    /// What entry `key` names for a content item that is an object (an annotation's
+    /// /StructParent), resolved, before any check that it is a structure element: `Some(None)` for
+    /// no entry, and `None` when the entry may be in the part of a truncated tree not read.
+    pub fn entry(&self, doc: &Document, key: i64) -> Option<Option<Arc<Object>>> {
         if self.unread(key) {
             return None;
         }
-        let Some(e) = self.entries.get(&key).map(|v| doc.resolve(v)) else { return Some(None) };
-        Some(self.in_hierarchy(doc, &e)?.then_some(e))
+        Some(self.entries.get(&key).map(|v| doc.resolve(v)))
     }
 
     /// Whether marked content `mcid` of the content stream whose /StructParents is `key` belongs to
     /// a structure element: the entry's array names one at index `mcid`. `None` when that is not
-    /// known, as for [`ParentTree::element`]; an MCID no array has a slot for (a negative one) is
-    /// owned by nothing either way.
+    /// known: the entry may be in the part of a truncated tree not read, or the element's parents
+    /// go on past the ancestor limit. An MCID no array has a slot for (a negative one) is owned by
+    /// nothing either way.
     pub fn owns(&self, doc: &Document, key: i64, mcid: i64) -> Option<bool> {
         let Ok(at) = usize::try_from(mcid) else { return Some(false) };
         if self.unread(key) {
@@ -119,8 +118,9 @@ impl ParentTree {
     /// to the structure tree root. One without a parent, or whose parents end elsewhere (in a
     /// dictionary that is neither), or go round, is in no tree. `None` when the parents go on past
     /// [`MAX_ANCESTORS`] steps: the walk stopped before it could tell.
-    fn in_hierarchy(&self, doc: &Document, e: &Object) -> Option<bool> {
-        if !e.as_dict().is_some_and(|d| d.name(b"S").is_some()) {
+    pub fn in_hierarchy(&self, doc: &Document, e: &Object) -> Option<bool> {
+        // The type may be given by reference, as any value may (ISO 32000-2 §7.3.10).
+        if !e.as_dict().is_some_and(|d| d.get(b"S").is_some_and(|s| matches!(*doc.resolve(s), Object::Name(_)))) {
             return Some(false);
         }
         let mut seen: HashSet<ObjRef> = HashSet::new();
