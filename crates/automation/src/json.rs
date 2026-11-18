@@ -293,6 +293,8 @@ pub(crate) fn info(d: &Document) -> Value {
         "pdf_version": i.pdf_version,
         "file_size": i.file_size,
         "title": i.title, "author": i.author, "subject": i.subject, "keywords": i.keywords,
+        // The catalog's /Lang, null when unset; doc_initial_view sets it.
+        "language": i.language,
         // Custom document properties (Document Properties ▸ Custom): /Info entries beyond the
         // ones the spec names, set and cleared with doc_set_info.
         "custom": i.custom.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),

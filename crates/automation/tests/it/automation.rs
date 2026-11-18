@@ -304,6 +304,62 @@ fn doc_info_reports_the_open_destination() {
     assert!(ok(&mut a, "doc_info", json!({ "doc": doc }))["open_destination"].is_null());
 }
 
+/// `doc_info` reports the catalog's `/Lang` (#7733): a text string, direct or indirect, trimmed,
+/// and null when it is missing, blank, too long or not a string; it follows doc_initial_view and
+/// its undo.
+#[test]
+fn doc_info_reports_the_document_language() {
+    let dir = workdir("document-language");
+    let write = |name: &str, lang: &str| {
+        let objects = [
+            format!("<< /Type /Catalog /Pages 2 0 R {lang} >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>".into(),
+            "(it-IT)".into(),
+        ];
+        let mut bytes = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+        for o in offsets {
+            bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+        std::fs::write(dir.join(name), bytes).unwrap();
+    };
+    let mut a = auto(&dir);
+    let mut language = |name: &str, lang: &str| {
+        write(name, lang);
+        let doc = ok(&mut a, "doc_open", json!({ "path": name }))["doc"].as_u64().unwrap();
+        ok(&mut a, "doc_info", json!({ "doc": doc }))["language"].clone()
+    };
+    assert_eq!(language("de.pdf", "/Lang (de-DE)"), "de-DE");
+    assert_eq!(language("utf16.pdf", "/Lang <FEFF00660072002D00430041>"), "fr-CA");
+    assert_eq!(language("indirect.pdf", "/Lang 4 0 R"), "it-IT");
+    assert_eq!(language("padded.pdf", "/Lang ( en-US )"), "en-US");
+    let long = format!("/Lang ({})", "x".repeat(257));
+    for (name, lang) in [
+        ("none.pdf", ""),
+        ("empty.pdf", "/Lang ()"),
+        ("blank.pdf", "/Lang (   )"),
+        ("name.pdf", "/Lang /en"),
+        ("dangling.pdf", "/Lang 9 0 R"),
+        ("long.pdf", long.as_str()),
+    ] {
+        assert!(language(name, lang).is_null(), "{name}");
+    }
+    let doc = ok(&mut a, "doc_open", json!({ "path": "none.pdf" }))["doc"].as_u64().unwrap();
+    let info = |a: &mut Automation| ok(a, "doc_info", json!({ "doc": doc }))["language"].clone();
+    ok(&mut a, "doc_initial_view", json!({ "doc": doc, "language": "ja" }));
+    assert_eq!(info(&mut a), "ja");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert!(info(&mut a).is_null());
+}
+
 /// Page transitions through the tools: set on chosen pages, written to the file as `/Trans` and
 /// `/Dur`, removed again, bad values refused, and one undo step. (Read through `pdfcraft_cos`,
 /// so this does not lean on `doc_info` listing them.)
