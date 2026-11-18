@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 # The framework facade with the crates the UI uses (owed by pdf-hub-w1, which owns this manifest).
-craft = { workspace = true, features = ["ui", "draw", "pages", "print", "review", "dialogs", "docpath", "font-catalog", "window", "settings", "platform", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
+craft = { workspace = true, features = ["ui", "draw", "pages", "print", "review", "dialogs", "docpath", "font-catalog", "window", "settings", "platform", "atomic", "automation", "keymap", "menu", "quit", "web-host", "text", "text-font-picker", "font-manager", "platform-clipboard", "update", "theme-store", "imaging"] }
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
@@ -95,6 +95,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator", "RequestCache", "RequestInit", "Response", "Worker", "WorkerOptions", "WorkerType", "MessageEvent"] }
 
 [dev-dependencies]
+# The framework's test drivers (`craft::ui::testing`) for the kittest suites.
+craft = { workspace = true, features = ["ui-testing"] }
 craft-update = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 # A content stream that inflates past the renderer's limits, for the cut-content notice test.
