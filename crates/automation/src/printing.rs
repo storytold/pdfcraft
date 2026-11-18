@@ -401,6 +401,14 @@ impl Automation {
         if marks.is_some() && raster.is_some() {
             return Err(bad("printer marks print with the pages as they are: leave out as_image and color_management app"));
         }
+        // A document that allows only low-resolution printing is later forced to print as
+        // pictures in Session::print_pdf_marked. Refuse marks here, before Will Print runs
+        // and could change the document for a print that then fails.
+        if marks.is_some() && self.doc(a)?.permissions().is_some_and(|p| !p.print_high_quality()) {
+            return Err(bad(
+                "printer marks print with the pages as they are, not as pictures: a document that allows only low-resolution printing always prints as pictures",
+            ));
+        }
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         // Print a selected area: points from the top-left of the displayed page, as other tools
         // take rectangles; the print crate takes it y up.
