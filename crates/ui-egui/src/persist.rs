@@ -4,5 +4,3 @@ pub mod paper;
 pub(crate) mod recent_check;
 pub(super) mod recovery;
 pub mod units;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod window_state;
