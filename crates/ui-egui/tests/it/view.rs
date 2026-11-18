@@ -762,6 +762,79 @@ fn a_tiny_first_touchpad_sample_does_not_lock_the_axis() {
 }
 
 #[test]
+fn slow_touchpad_samples_add_up_to_pick_the_axis() {
+    // A slow vertical swipe whose samples are each under the axis threshold still locks to the
+    // vertical axis once they add up, so its sideways wobble does not drift the page (#2803).
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "500")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let before = rect(&h, 0).expect("page 1 on screen");
+    for _ in 0..30 {
+        h.event(touchpad(-1.0, -3.0, Modifiers::NONE));
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    let after = rect(&h, 0).expect("page 1 on screen");
+    let moved_y = before.min.y - after.min.y;
+    let moved_x = (after.min.x - before.min.x).abs();
+    assert!(moved_y > 80.0, "the swipe scrolls vertically: {moved_y}");
+    assert!(moved_x < 3.0, "at most the first sample's point moves it sideways: moved_x {moved_x}");
+}
+
+#[test]
+fn shift_turns_a_vertically_locked_swipe_sideways() {
+    // Shift asks for sideways panning even right after a vertical movement locked the axis (#2803).
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "500")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.event(touchpad(0.0, -100.0, Modifiers::NONE));
+    h.run_steps(1);
+    let before = rect(&h, 0).expect("page 1 on screen");
+    h.event(touchpad(0.0, -100.0, Modifiers::SHIFT));
+    h.run_steps(4);
+    let after = rect(&h, 0).expect("page 1 on screen");
+    let moved_x = before.min.x - after.min.x;
+    assert!(moved_x > 90.0, "Shift pans sideways: moved_x {moved_x}");
+}
+
+/// The touchpad glide is Wayland's: macOS sends its own momentum and the web none (#531).
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn the_glide_after_a_vertical_swipe_keeps_its_axis() {
+    // The lift ends the gesture, but the glide after it stays on the axis the swipe locked to,
+    // or the sideways wobble comes back as drift (#2803).
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "500")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let before = rect(&h, 0).expect("page 1 on screen");
+    let sample = |phase| egui::Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: egui::vec2(-5.0, -50.0),
+        phase,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    h.event(sample(TouchPhase::Start));
+    h.run_steps(1);
+    for _ in 0..6 {
+        h.event(sample(TouchPhase::Move));
+        h.run_steps(1);
+    }
+    h.event(wheel(MouseWheelUnit::Point, 0.0, TouchPhase::End));
+    h.run_steps(2);
+    let lifted = rect(&h, 0).expect("page 1 on screen");
+    assert!(before.min.y - lifted.min.y > 300.0, "the swipe scrolls vertically");
+    h.run_steps(20);
+    let after = rect(&h, 0).expect("page 1 on screen");
+    assert!(lifted.min.y - after.min.y > 50.0, "the page glides on after the lift");
+    let moved_x = (after.min.x - before.min.x).abs();
+    assert!(moved_x < 1.0, "neither the swipe nor its glide moves the page sideways: moved_x {moved_x}");
+}
+
+#[test]
 fn horizontal_scroll_works_when_zoomed_and_scrolling_horizontally() {
     // A sideways swipe still pans a page wider than the window (#2803).
     let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "500")]);

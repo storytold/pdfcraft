@@ -676,6 +676,8 @@ pub struct DocView {
     /// The axis the current touchpad gesture is locked to, and until when (#2803).
     scroll_axis: Option<ScrollAxis>,
     scroll_axis_until: f64,
+    /// How far the current gesture moved before it picked its axis.
+    scroll_axis_moved: Vec2,
     /// Touchpad momentum after the fingers lift (#531).
     fling: crate::fling::Fling,
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
@@ -1151,6 +1153,7 @@ impl DocView {
             wheel_boost_y: Default::default(),
             scroll_axis: None,
             scroll_axis_until: 0.0,
+            scroll_axis_moved: Vec2::ZERO,
             fling: Default::default(),
             auto_scroll: Default::default(),
             selected: BTreeSet::new(),
@@ -1366,6 +1369,7 @@ impl DocView {
         self.wheel_motion.reset();
         self.scroll_axis = None;
         self.scroll_axis_until = 0.0;
+        self.scroll_axis_moved = Vec2::ZERO;
     }
 }
 
@@ -2385,8 +2389,10 @@ const AXIS_LOCK_SECS: f64 = 0.15;
 const AXIS_LOCK_MIN: f32 = 4.0;
 
 /// Locks a precise (touchpad) gesture to one axis (#2803): while a swipe scrolls vertically, its
-/// sideways wobble is dropped, so the page does not drift. A new gesture, an end phase or a pause
-/// of [`AXIS_LOCK_SECS`] unlocks it. While the lock holds, the gesture cannot pan diagonally.
+/// sideways wobble is dropped, so the page does not drift. The axis is picked once the gesture has
+/// moved [`AXIS_LOCK_MIN`] in all, so slow samples add up. It holds through the glide after the
+/// lift, and a new gesture or a pause of [`AXIS_LOCK_SECS`] unlocks it. Shift turns it sideways.
+/// While the lock holds, the gesture cannot pan diagonally.
 fn lock_scroll_axis(view: &mut DocView, events: &[egui::Event], now: f64) {
     for event in events {
         let egui::Event::MouseWheel { unit, delta, modifiers, phase, source } = event else { continue };
@@ -2396,21 +2402,26 @@ fn lock_scroll_axis(view: &mut DocView, events: &[egui::Event], now: f64) {
         }
         if *phase == egui::TouchPhase::Start || now > view.scroll_axis_until {
             view.scroll_axis = None;
+            view.scroll_axis_moved = Vec2::ZERO;
         }
+        // The lift keeps the axis for the glide that follows it (`sideways_motion`).
         if matches!(phase, egui::TouchPhase::End | egui::TouchPhase::Cancel) {
-            view.scroll_axis = None;
-            view.scroll_axis_until = 0.0;
             continue;
         }
-        // Shift turns the wheel sideways, as `wheel_boost::accumulate` folds it.
+        // Shift turns the wheel sideways, as `wheel_boost::accumulate` folds it, and asks for
+        // sideways panning: it takes over a vertical lock.
         let delta = if modifiers.shift { vec2(delta.x + delta.y, 0.0) } else { *delta };
-        let (x, y) = (delta.x.abs(), delta.y.abs());
-        if view.scroll_axis.is_none() && x.max(y) >= AXIS_LOCK_MIN && x != y {
-            view.scroll_axis = Some(if y > x { ScrollAxis::Vertical } else { ScrollAxis::Horizontal });
+        if modifiers.shift && delta.x != 0.0 {
+            view.scroll_axis = Some(ScrollAxis::Horizontal);
         }
-        if view.scroll_axis.is_some() {
-            view.scroll_axis_until = now + AXIS_LOCK_SECS;
+        if view.scroll_axis.is_none() {
+            view.scroll_axis_moved += delta;
+            let (x, y) = (view.scroll_axis_moved.x.abs(), view.scroll_axis_moved.y.abs());
+            if x.max(y) >= AXIS_LOCK_MIN && x != y {
+                view.scroll_axis = Some(if y > x { ScrollAxis::Vertical } else { ScrollAxis::Horizontal });
+            }
         }
+        view.scroll_axis_until = now + AXIS_LOCK_SECS;
     }
 }
 
@@ -3275,11 +3286,12 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 }
 
 /// This frame's precise wheel, coarse wheel and glide motion, without the sideways part when the
-/// pages have nothing to scroll sideways, and without a sideways glide while a touchpad gesture is
-/// locked to the vertical axis (#2803).
+/// pages have nothing to scroll sideways, and with the glide kept to the axis its touchpad
+/// gesture was locked to (#2803).
 fn sideways_motion(view: &DocView, hscroll: bool, precise: Vec2, coarse: Vec2, glide: Vec2) -> (Vec2, Vec2, Vec2) {
     let keep_x = |v: Vec2, keep: bool| if keep { v } else { vec2(0.0, v.y) };
     let glide_x = hscroll && view.scroll_axis != Some(ScrollAxis::Vertical);
+    let glide = if view.scroll_axis == Some(ScrollAxis::Horizontal) { vec2(glide.x, 0.0) } else { glide };
     (keep_x(precise, hscroll), keep_x(coarse, hscroll), keep_x(glide, glide_x))
 }
 
