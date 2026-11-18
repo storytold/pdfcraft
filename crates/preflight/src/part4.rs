@@ -110,7 +110,8 @@ pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, na
             issue("6.3.3", "A {} annotation's normal appearance isn't an appearance stream", Some(name.to_owned()), page, false);
         }
     }
-    if subtype == Some(b"Widget") && dict.get(b"A").is_some() {
+    // A null action, or a reference to no object, is no entry (ISO 32000-2 7.3.9, 7.3.10).
+    if subtype == Some(b"Widget") && dict.get(b"A").is_some_and(|a| !matches!(&*doc.resolve(a), Object::Null)) {
         issue("6.4.1", "A widget annotation has an action (A)", None, page, false);
     }
 }
