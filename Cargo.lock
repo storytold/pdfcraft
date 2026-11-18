@@ -4640,6 +4640,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-geom",
  "pdfcraft-model",
+ "proptest",
  "thiserror 2.0.21",
 ]
 
