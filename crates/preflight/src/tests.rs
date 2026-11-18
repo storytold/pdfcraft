@@ -3016,3 +3016,25 @@ fn pdfa4_embedded_files_share_one_allowance() {
     assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 6);
     assert!(found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
 }
+
+/// An embedded file that decodes to more than [`part4::MAX_EMBEDDED_PDF`] isn't read, and is
+/// reported as not checked, not as a file that isn't PDF/A: its size is no fault of its data.
+#[test]
+fn pdfa4_an_embedded_file_too_large_to_read_is_unchecked() {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&vec![0; part4::MAX_EMBEDDED_PDF + (1 << 20)]).unwrap();
+    let packed = z.finish().unwrap();
+    let more = vec![embedded_stream("/Filter /FlateDecode", &packed), embedded_spec(4)];
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    let found = verify(&doc, Level::A4);
+    assert_eq!(found.iter().filter(|i| i.clause == "6.9" && i.pattern == part4::UNCHECKED).count(), 1, "{found:#?}");
+    assert!(!found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+
+    // Data that isn't a PDF is still one that isn't PDF/A.
+    let more = vec![embedded_stream("", b"not a PDF"), embedded_spec(4)];
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    let found = verify(&doc, Level::A4);
+    assert!(found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+    assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
