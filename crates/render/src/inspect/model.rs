@@ -279,14 +279,20 @@ pub enum DestView {
     /// `/XYZ left top zoom`: the point (left, top) at the window's upper-left corner, at `zoom`
     /// (1.0 = 100%; 0 or null keeps the current zoom).
     Xyz { left: Option<f32>, top: Option<f32>, zoom: Option<f32> },
-    /// `/Fit`, and `/FitB` (fit the page's content box; read as the whole page).
+    /// `/Fit`: fit the whole page in the window.
     Fit,
-    /// `/FitH top`, and `/FitBH`: fit the width, with `top` at the window's top edge.
+    /// `/FitH top`: fit the width, with `top` at the window's top edge.
     FitH { top: Option<f32> },
-    /// `/FitV left`, and `/FitBV`: fit the height, with `left` at the window's left edge.
+    /// `/FitV left`: fit the height, with `left` at the window's left edge.
     FitV { left: Option<f32> },
     /// `/FitR left bottom right top`: fit the rectangle `[x0, y0, x1, y1]` (normalized).
     FitR { rect: [f32; 4] },
+    /// `/FitB`: fit the page's bounding box in the window.
+    FitB,
+    /// `/FitBH top`: fit the bounding box's width, with `top` at the window's top edge.
+    FitBH { top: Option<f32> },
+    /// `/FitBV left`: fit the bounding box's height, with `left` at the window's left edge.
+    FitBV { left: Option<f32> },
 }
 
 impl DestView {
@@ -298,9 +304,12 @@ impl DestView {
         let n = |i: usize| operands.get(i).copied().flatten().filter(|v| v.is_finite());
         match kind {
             Some(b"XYZ") => Self::Xyz { left: n(0), top: n(1), zoom: n(2).filter(|z| *z > 0.0) },
-            Some(b"Fit" | b"FitB") => Self::Fit,
-            Some(b"FitH" | b"FitBH") => Self::FitH { top: n(0) },
-            Some(b"FitV" | b"FitBV") => Self::FitV { left: n(0) },
+            Some(b"Fit") => Self::Fit,
+            Some(b"FitB") => Self::FitB,
+            Some(b"FitH") => Self::FitH { top: n(0) },
+            Some(b"FitBH") => Self::FitBH { top: n(0) },
+            Some(b"FitV") => Self::FitV { left: n(0) },
+            Some(b"FitBV") => Self::FitBV { left: n(0) },
             Some(b"FitR") => match (n(0), n(1), n(2), n(3)) {
                 (Some(x0), Some(y0), Some(x1), Some(y1)) => Self::FitR { rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)] },
                 _ => Self::Top,

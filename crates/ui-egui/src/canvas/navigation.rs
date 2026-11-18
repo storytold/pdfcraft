@@ -173,16 +173,16 @@ impl DocView {
                 let [fx, fy] = point(left.or(kept_left), top.or(kept_top));
                 (fx, fy, corner)
             }
-            DestView::Fit => {
+            DestView::Fit | DestView::FitB => {
                 self.fit = Fit::Page;
                 return;
             }
-            DestView::FitH { top } => {
+            DestView::FitH { top } | DestView::FitBH { top } => {
                 self.fit = Fit::Width;
                 let [fx, fy] = point(None, top);
                 (fx, fy, corner)
             }
-            DestView::FitV { left } => {
+            DestView::FitV { left } | DestView::FitBV { left } => {
                 self.fit = Fit::Height;
                 let [fx, fy] = point(left, None);
                 (fx, fy, corner)
