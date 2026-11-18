@@ -227,24 +227,25 @@ fn deleting_a_page_drops_its_tagged_structure() {
     );
 }
 
-/// The deleted page's tags also leave when the tree reaches them another way: a kids array in an
-/// object of its own, a parent-tree key written as a reference, a kept element's `/Ref`. An
-/// element that stays loses a `/Pg` naming the deleted page.
+/// The deleted page's tags also leave when the tree reaches them another way: a kids array, an
+/// MCID, a parent-tree key or a page's `/StructParents` in an object of its own, a kept element's
+/// `/Ref`. An element that stays loses a `/Pg` naming the deleted page.
 #[test]
 fn deleting_a_page_drops_tags_the_tree_reaches_another_way() {
     let b: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
         "<< /Type /Page /Parent 2 0 R /StructParents 0 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /StructParents 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 10 0 R >>".into(),
         "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 11 0 R >>".into(),
         "<< /Type /StructElem /S /Document /P 5 0 R /K 9 0 R >>".into(),
         // Its /Pg is page 2, it has content on page 1 too, and it refers to the note.
         "<< /Type /StructElem /S /P /P 6 0 R /Pg 4 0 R /K [<< /Type /MCR /Pg 3 0 R /MCID 0 >> 1] /Ref [8 0 R] >>".into(),
-        "<< /Type /StructElem /S /Note /P 6 0 R /Pg 4 0 R /K 0 /ActualText (SECRET note) >>".into(),
+        "<< /Type /StructElem /S /Note /P 6 0 R /Pg 4 0 R /K 12 0 R /ActualText (SECRET note) >>".into(),
         "[7 0 R 8 0 R]".into(),
         "1".into(),
         "<< /Nums [0 [7 0 R] 10 0 R [8 0 R 7 0 R]] >>".into(),
+        "0".into(),
     ];
     let mut doc = open(build(&b, "/Root 1 0 R"));
     delete_pages(&mut doc, &[1]).unwrap();

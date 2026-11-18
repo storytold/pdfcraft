@@ -25,9 +25,11 @@ pub(crate) fn drop_structure_of(doc: &mut Document, gone: &[ObjRef]) -> Result<(
     let mut keys = HashSet::new();
     for r in &gone {
         let Some(page) = doc.get(*r).as_dict().cloned() else { continue };
-        keys.extend(page.int(b"StructParents"));
+        keys.extend(page.get(b"StructParents").and_then(|v| doc.resolve(v).as_int()));
         let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-        keys.extend(annots.iter().filter_map(|a| doc.resolve(a).as_dict().and_then(|d| d.int(b"StructParent"))));
+        keys.extend(
+            annots.iter().filter_map(|a| doc.resolve(a).as_dict().and_then(|d| d.get(b"StructParent").and_then(|v| doc.resolve(v).as_int()))),
+        );
     }
     let mut p = Pruner { gone: &gone, seen: HashSet::new(), dropped: HashSet::new(), nodes: HashSet::new() };
     if let Some(k) = tree.get(b"K") {
@@ -94,7 +96,7 @@ impl Pruner<'_> {
     fn kid(&mut self, doc: &mut Document, kid: &Object, page: Option<ObjRef>, depth: usize) -> Result<Option<Object>, OrganizeError> {
         check_depth(depth)?;
         let on_gone = |p: Option<ObjRef>| p.is_some_and(|p| self.gone.contains(&p));
-        if kid.as_int().is_some() {
+        if doc.resolve(kid).as_int().is_some() {
             return Ok((!on_gone(page)).then(|| kid.clone()));
         }
         let Some(d) = doc.resolve(kid).as_dict().cloned() else { return Ok(Some(kid.clone())) };
