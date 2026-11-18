@@ -33,7 +33,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions};
 
 use support::bytes;
 use support::fixture::{
-    ALL_SAVES, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, FLAG_READONLY, Save, annot_entries, blank, blank_with_indirect_annots, dict_of, name_of,
+    ALL_SAVES, FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, FLAG_READONLY, Save, annot_entries, blank, blank_with_indirect_annots, dict_of, name_of,
     num, nums, page_object_numbers, pdf, save_and_reopen, str_of,
 };
 
@@ -658,8 +658,9 @@ fn reply_threads_and_the_delete_cascade_survive_every_save_path() {
         assert_eq!(str_of(&reopened, &st, b"State").as_deref(), Some("Accepted"), "{path:?}");
         assert_eq!(str_of(&reopened, &st, b"StateModel").as_deref(), Some("Review"), "{path:?}");
         assert_eq!(str_of(&reopened, &st, b"Subj").as_deref(), Some("Status"), "{path:?}");
-        // Replies are printed but keep the icon flags of a comment; no Hidden bit here.
-        assert_eq!(st.int(b"F"), Some(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE), "{path:?}");
+        // Review-state records are hidden; ordinary text replies retain their visible comment flags.
+        assert_eq!(st.int(b"F"), Some(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE), "{path:?}");
+        assert_eq!(annot_at(&reopened, 0, 2, path).int(b"F"), Some(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE), "{path:?}: ordinary reply");
         let listed = summaries(&reopened);
         assert_eq!(listed.iter().filter(|s| s.in_reply_to.as_deref() == Some("p1")).count(), 2, "{path:?}: both replies name the parent's /NM");
         assert_eq!(listed.iter().filter(|s| s.state.as_deref() == Some("Accepted")).count(), 1, "{path:?}");
