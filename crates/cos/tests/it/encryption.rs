@@ -41,7 +41,7 @@ fn fixture_with(extra: &str) -> Vec<u8> {
 
 fn protect(alg: Algorithm, user: &str, owner: &str, permissions: i32) -> Vec<u8> {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: alg,
         user_password: user,
         owner_password: owner,
@@ -160,7 +160,7 @@ fn changing_and_removing_passwords() {
     let bytes = protect(Algorithm::Rc4_128, "old", "old-owner", -1);
     // Change: decrypt with the old handler, encrypt with the new one.
     let mut doc = Document::open_with_password(Arc::new(bytes), Some("old-owner")).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "new",
         owner_password: "new-owner",
@@ -188,7 +188,7 @@ fn changing_and_removing_passwords() {
 #[test]
 fn unencrypted_metadata_is_left_readable() {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "",
         owner_password: "o",
@@ -287,7 +287,7 @@ fn signature_contents_stay_unencrypted() {
             c.set(b"Test".to_vec(), Object::Array(vec![Object::Ref(sig), Object::Ref(untyped), Object::Ref(note)]))
         })
         .unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: alg,
             user_password: "",
             owner_password: "owner",
@@ -328,7 +328,7 @@ fn a_byte_range_does_not_exempt_an_annotation() {
         note.set(b"ByteRange".to_vec(), Object::Array(Vec::new()));
         let note = doc.add(Object::Dict(note));
         doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Ref(note))).unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -353,7 +353,7 @@ fn protecting_drops_inherited_crypt_filter_selectors() {
     for selector in [" /Filter /Crypt /DecodeParms << /Name /MyCF >>", " /Filter [/Crypt] /DecodeParms [<< /Name /Identity >>]", " /Filter /Crypt"] {
         let mut doc = Document::open(Arc::new(fixture_with(selector))).unwrap();
         assert_eq!(content(&doc), SECRET, "{selector}");
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -423,7 +423,7 @@ fn an_earlier_revision_opens_with_the_documents_own_credentials() {
         // Another file, encrypted with other keys: the document's key is no use, and it says so.
         let other = {
             let mut doc = Document::open(Arc::new(fixture())).unwrap();
-            doc.set_encryption(&NewEncryption {
+            doc.set_encryption_legacy(&NewEncryption {
                 algorithm: alg,
                 user_password: "user",
                 owner_password: "owner",
@@ -444,7 +444,7 @@ fn an_earlier_revision_opens_with_the_documents_own_credentials() {
 /// instead of as an indirect object.
 fn protect_inline(alg: Algorithm, user: &str, owner: &str) -> Vec<u8> {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: alg,
         user_password: user,
         owner_password: owner,
@@ -482,7 +482,7 @@ fn removing_an_inline_encrypt_dictionary_leaves_an_unencrypted_file() {
 #[test]
 fn a_stream_labelled_xref_is_encrypted_when_saved() {
     let mut doc = Document::open(Arc::new(fixture_with(" /Type /XRef"))).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "u",
         owner_password: "o",
@@ -566,7 +566,7 @@ fn holds(bytes: &[u8], text: &str) -> bool {
 #[test]
 fn an_edited_object_that_encrypt_names_is_encrypted() {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "",
         owner_password: "owner",
@@ -686,7 +686,7 @@ fn an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone() {
 #[test]
 fn protecting_drops_a_crypt_filter_selected_by_reference() {
     let protected = |doc: &mut Document| {
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -761,7 +761,7 @@ fn protecting_copies_no_large_object_into_every_stream() {
         streams.push(Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(by_filter, b"41>".to_vec())))));
     }
     doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Array(streams))).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -779,7 +779,7 @@ fn protecting_copies_no_large_object_into_every_stream() {
 #[test]
 fn a_file_identifier_of_many_references_is_two_strings() {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "",
         owner_password: "owner",
@@ -857,7 +857,7 @@ fn protecting_keeps_the_parameters_of_the_filter_before_a_crypt_filter() {
         let mut parms = pdfcraft_cos::Dict::new();
         parms.set(b"Name".to_vec(), Object::name("MyCF"));
         select(&mut doc, (Object::Array(filters), Object::Dict(parms)));
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -883,7 +883,7 @@ fn protecting_leaves_a_parameter_array_too_short_for_the_crypt_filter() {
         let short = Object::Array(vec![Object::Null]);
         let parms = if by_reference { Object::Ref(doc.add(short)) } else { short };
         select(&mut doc, (Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("Crypt")]), parms));
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: Algorithm::Aes256,
             user_password: "",
             owner_password: "owner",
@@ -930,7 +930,7 @@ fn a_stream_type_given_by_reference_picks_its_crypt_filter() {
     let Object::Stream(mut s) = doc.get(meta).as_ref().clone() else { panic!("no metadata stream") };
     s.dict.set(b"Type".to_vec(), Object::Ref(ty));
     doc.set(meta, Object::Stream(s));
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "",
         owner_password: "o",
@@ -992,7 +992,7 @@ fn a_signature_dictionary_is_known_in_every_form() {
     other.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0xAB, 0xCD], hex: true }));
     signatures.push(Object::Ref(doc.add(Object::Dict(other))));
     doc.update_dict(doc.root().unwrap(), |c| c.set(b"Test".to_vec(), Object::Array(signatures))).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes256,
         user_password: "",
         owner_password: "owner",
@@ -1021,7 +1021,7 @@ struct Classic {
 
 fn classic_file() -> Classic {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: Algorithm::Aes128,
         user_password: "",
         owner_password: "owner",
@@ -1256,7 +1256,7 @@ fn a_file_identifier_given_by_reference_is_read() {
 fn a_direct_encrypt_dictionary_keeps_what_it_refers_to() {
     for object_streams in [false, true] {
         let mut doc = Document::open(Arc::new(fixture())).unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: Algorithm::Aes128,
             user_password: "",
             owner_password: "owner",
