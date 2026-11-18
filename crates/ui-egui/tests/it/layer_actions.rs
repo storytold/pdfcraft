@@ -1,6 +1,8 @@
 //! Set-layer-visibility actions (`SetOCGState`) on links and push buttons show and hide layers,
 //! as the Layers panel does.
 
+use std::sync::Arc;
+
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -46,7 +48,9 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 
 fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        // PLAN: assumed `crate::support::test_app(Arc<Host>) -> PdfCraftApp`, the shared harness (pdf-chrome-w9, w9-1).
+        let host = Arc::new(craft::host::Host::builder(craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).build());
+        let mut app = crate::support::test_app(host);
         app.set_option("language", "en").unwrap();
         app.open_bytes("layers.pdf", None, pdf).unwrap();
         app.set_option("zoom", "150").unwrap();
@@ -123,7 +127,9 @@ fn layer_options_reset_to_initial_visibility() {
         app.set_option("panel", "layers").unwrap();
     });
     assert_eq!(shown(&h), layers(false, true));
-    h.get_by_label("Layer options").click();
+    // The Layers panel's menu holds the catalog command (`layers.reset_visibility`, L-87).
+    // PLAN: `DockWords::default()` is assumed to give the framework's English words (`panel_menu`).
+    h.get_by_label(craft::ui::docking::DockWords::default().panel_menu.as_str()).click();
     h.run_steps(2);
     h.get_by_label("Reset to Initial Visibility").click();
     h.run_steps(3);
