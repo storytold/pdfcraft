@@ -2,9 +2,11 @@
 //! its values from the XFA data; one whose template can't be read says that instead of silently
 //! showing a placeholder page.
 
+use craft::ui::runtime::{env::WindowKey, toast};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::PdfCraftApp;
+// PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `Console` (pdf-forms-w17)
+use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
 
 /// A one-page PDF with a proper xref; `acroform` is the catalog's /AcroForm (or empty), `extra`
 /// more catalog entries, `objects` extra objects numbered from 5.
@@ -243,8 +245,28 @@ fn messages_from_scripts_run_on_open_show_right_away() {
 const RUNAWAY: &str = "function f() { for (var j = 0; j &lt; 99999; j++) {} } for (var k = 0; k &lt; 5000; k++) f();";
 const SCRIPTS_OFF: &str = "This form's scripts are turned off because one ran too long";
 
-fn says_scripts_are_off(toast: &Option<(String, f64)>) -> bool {
-    toast.as_ref().is_some_and(|t| t.0.contains(SCRIPTS_OFF))
+/// The text of every notice card on screen: its title and its message.
+fn shown_notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    toast::cards(&h.ctx, &WindowKey::main())
+        .into_iter()
+        .flat_map(|card| {
+            let title = card.toast.title.as_ref().map(|t| t.as_str().to_owned());
+            title.into_iter().chain(std::iter::once(card.toast.message.as_str().to_owned()))
+        })
+        .collect()
+}
+
+/// Whether a notice card says the form's scripts are off.
+fn says_scripts_are_off(h: &Harness<'static, PdfCraftApp>) -> bool {
+    shown_notices(h).iter().any(|text| text.contains(SCRIPTS_OFF))
+}
+
+/// The user's close action on every notice card, then the passes that act on it.
+fn dismiss_notices(h: &mut Harness<'static, PdfCraftApp>) {
+    for card in toast::cards(&h.ctx, &WindowKey::main()) {
+        toast::dismiss(&h.ctx, card.id);
+    }
+    h.run_steps(2);
 }
 
 #[test]
@@ -254,14 +276,13 @@ fn a_form_whose_scripts_were_turned_off_at_open_says_so() {
     let id = h.state().views[0].id;
     assert!(h.state().session.get(id).unwrap().xfa_scripts_off(), "script console: {:?}", h.state().js_console.log);
     // A toast says so as it happens; the notice bar keeps saying so after the toast is gone.
-    assert!(says_scripts_are_off(&h.state().toast), "{:?}", h.state().toast);
-    h.state_mut().toast = None;
-    h.run_steps(2);
+    assert!(says_scripts_are_off(&h), "{:?}", shown_notices(&h));
+    dismiss_notices(&mut h);
     assert!(h.query_by_label_contains(SCRIPTS_OFF).is_some());
     // The bar leads to the console, where the script's error is.
     h.get_by_label("JavaScript Console").click();
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::JsConsole));
+    assert_eq!(h.state().js_dialog, Some(JsDialog::Console));
     assert!(h.state().js_console.log.iter().any(|l| l.contains("abandoned")), "{:?}", h.state().js_console.log);
 }
 
@@ -273,24 +294,23 @@ fn scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back() {
     // The form opens with its scripts on, and the user closes the notice bar.
     let id = h.state().views[0].id;
     assert!(!h.state().session.get(id).unwrap().xfa_scripts_off());
-    assert!(h.query_by_label_contains(SCRIPTS_OFF).is_none() && !says_scripts_are_off(&h.state().toast));
+    assert!(h.query_by_label_contains(SCRIPTS_OFF).is_none() && !says_scripts_are_off(&h));
     h.get_by_label("Dismiss").click();
     h.run_steps(2);
     assert!(h.state().views[0].notice_dismissed);
     // The button's script runs away: a toast says the scripts are off and the bar is back.
     click_field(&mut h, "hello");
     assert!(h.state().session.get(id).unwrap().xfa_scripts_off(), "script console: {:?}", h.state().js_console.log);
-    assert!(says_scripts_are_off(&h.state().toast), "{:?}", h.state().toast);
+    assert!(says_scripts_are_off(&h), "{:?}", shown_notices(&h));
     assert!(!h.state().views[0].notice_dismissed);
-    h.state_mut().toast = None;
-    h.run_steps(2);
+    dismiss_notices(&mut h);
     assert!(h.query_by_label_contains(SCRIPTS_OFF).is_some());
     // It is said once: closed again, the bar stays closed through what the user does next.
     h.get_by_label("Dismiss").click();
     h.run_steps(2);
     click_field(&mut h, "addRow");
     assert!(h.state().views[0].notice_dismissed);
-    assert!(!says_scripts_are_off(&h.state().toast), "{:?}", h.state().toast);
+    assert!(!says_scripts_are_off(&h), "{:?}", shown_notices(&h));
 }
 
 /// On an encrypted dynamic XFA form that allows filling, the notice bar shows the layout note and
