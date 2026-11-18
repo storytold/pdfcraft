@@ -312,9 +312,9 @@ with an error, and the annotation's own views, lighting and render modes are not
 
 ## Viewer navigation history
 
-A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through
-`pdfcraft-cli ui --control FILE command id=view.previous_view` and
-`pdfcraft-cli ui --control FILE command id=view.next_view`. `commands` reports whether each action
+A running PdfCraft instance launched with `--control PORT` exposes its per-tab history through
+`pdfcraft-cli ui --control PORT --control-token-file FILE command id=view.previous_view` and
+`pdfcraft-cli ui --control PORT --control-token-file FILE command id=view.next_view`. `commands` reports whether each action
 is enabled for the active document. These are the same actions as the rail buttons, View → Page
 navigation, and Ctrl+[ / Ctrl+] (⌘[ / ⌘] on macOS).
 

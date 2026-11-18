@@ -92,8 +92,8 @@ pdfcraft-cli run    --script steps.json [--root DIR] [--report]
 ",
     mcp_usage!(),
     "\
-pdfcraft-cli ui     --control FILE <method> [key=value …] [--out shot.png]
-                                                           drive a running app started with --control FILE
+pdfcraft-cli ui     --control PORT (--control-token-file FILE | --control-token TOKEN) <method> [key=value …] [--out shot.png]
+                                                           drive a running app started with --control PORT
 help and feedback: https://discord.gg/artcraft"
 );
 
