@@ -1,0 +1,255 @@
+use super::dates::{data_date_pattern, data_to_iso, iso_to_data, iso_to_pattern, pattern_to_iso};
+use super::path::{data_path, parse_datasets, som_to_path};
+use super::{DataPath, Dict, Document, ObjRef, Object, Template};
+
+/// What a field holds, for writing the datasets.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FieldData {
+    Text(String),
+    /// Checked or not.
+    Check(bool),
+    /// The selected button, if any: written from its on-state name (the data gets its item, see
+    /// `radio_dataset_value`), read as the data's item, which is its export value.
+    Radio(Option<String>),
+    /// Nothing to write (buttons, signatures).
+    None,
+}
+
+/// One field of the AcroForm, as the engine sees it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldDatum {
+    /// The terminal field dictionary (where `/PCSom` and `/PCItems` live).
+    pub obj: ObjRef,
+    /// The fully qualified field name (a static form's SOM path).
+    pub name: String,
+    pub data: FieldData,
+}
+
+pub(super) fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
+    d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()))
+}
+
+/// The SOM path of a field: its `/PCSom` when PdfCraft generated it, else its name.
+fn som_of(doc: &Document, f: &FieldDatum) -> String {
+    doc.get(f.obj).as_dict().and_then(|d| text_of(doc, d, crate::pdf::SOM_KEY)).unwrap_or_else(|| f.name.clone())
+}
+
+/// Each button of a radio group, in `/Kids` order: its (`/PCOn` item, on-state name, `/Opt`
+/// entry). A group without `/Kids` is its own one widget.
+fn radio_widgets(doc: &Document, f: &FieldDatum) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+    let Some(group) = doc.get(f.obj).as_dict().cloned() else { return Vec::new() };
+    let kids = group.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_else(|| vec![Object::Ref(f.obj)]);
+    // One export value per widget, as the field's `/Opt` lists them (an entry may be an
+    // `[export display]` pair, as a choice field's are).
+    let exports: Option<Vec<Option<String>>> = group
+        .get(b"Opt")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_array().cloned())
+        .map(|opt| {
+            opt.iter()
+                .map(|o| match &*doc.resolve(o) {
+                    Object::Array(pair) => pair.first().and_then(|e| doc.resolve(e).as_string().map(|s| s.to_text())),
+                    other => other.as_string().map(|s| s.to_text()),
+                })
+                .collect()
+        })
+        .filter(|opt: &Vec<Option<String>>| opt.len() == kids.len());
+    kids.iter()
+        .enumerate()
+        .filter_map(|(i, kid)| {
+            let widget = doc.resolve(kid).as_dict().cloned()?;
+            let original = text_of(doc, &widget, b"PCOn");
+            let state = widget
+                .get(b"AP")
+                .map(|ap| doc.resolve(ap))
+                .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
+                .and_then(|n| doc.resolve(&n).as_dict().cloned())
+                .and_then(|n| n.iter().map(|(k, _)| name_text(k)).find(|k| k != "Off"));
+            let export = exports.as_ref().and_then(|e| e.get(i).cloned().flatten());
+            Some((original, state, export))
+        })
+        .collect()
+}
+
+/// An on-state name's bytes in the spelling a radio group's AcroForm value has, so the two can
+/// be compared: UTF-8 names read as themselves, other bytes (Shift-JIS states) and `#` are
+/// written `#XX`, as in PDF name syntax. This is `pdfcraft_forms::name_text`, which this crate
+/// can't depend on; the value saving gets is read through it, and the state opening returns is
+/// written back through its inverse, `pdfcraft_forms::name_bytes`.
+/// The engine checks that the two spell names alike (`xfa_and_forms_spell_names_alike`).
+pub fn name_text(bytes: &[u8]) -> String {
+    let escape = |b: u8| format!("#{b:02X}");
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.replace('#', "#23"),
+        Err(_) => bytes.iter().map(|&b| if (0x21..=0x7e).contains(&b) && b != b'#' { char::from(b).to_string() } else { escape(b) }).collect(),
+    }
+}
+
+/// The datasets text for a radio group. The AcroForm value is an appearance-state name
+/// (`New York` is stored as `New_York`); `/PCOn` on the selected widget is the original item.
+/// Without it, a group with one `/Opt` entry per widget exports that entry: its state names may
+/// be positions (`/0`, `/1`; ISO 32000-2 Table 230), and the data holds the item (`1`, `2`).
+/// `sel` is the selected on-state name; with none selected the text is empty.
+/// [`radio_state_for_item`] reads it back.
+pub fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> String {
+    let Some(selected) = sel.as_deref().filter(|s| !s.is_empty() && *s != "Off") else {
+        return String::new();
+    };
+    let widgets = radio_widgets(doc, f);
+    // `sel` is an on-state name, so every widget's state is compared before any `/PCOn`: with
+    // states `/0` `/1` and items `1` `2`, the state `1` is the second widget, not the first
+    // one's item.
+    let by_state = widgets.iter().find(|(_, state, _)| state.as_deref() == Some(selected));
+    let by_item = || widgets.iter().find(|(original, _, _)| original.as_deref() == Some(selected));
+    match by_state.or_else(by_item) {
+        Some((original, _, export)) => original.clone().or_else(|| export.clone()).unwrap_or_else(|| selected.to_string()),
+        None => selected.to_string(),
+    }
+}
+
+/// The on-state name of the radio button whose item is `item` in the datasets, as
+/// [`radio_dataset_value`] writes it: the first button whose `/PCOn`, else its `/Opt` entry,
+/// else its on-state name, equals `item`. So a saved selection reopens on the same button even
+/// when one button's `/PCOn` equals another's `/Opt` entry. `None` when no button writes `item`
+/// (data from elsewhere); the caller then reads it as an export value or state name.
+pub fn radio_state_for_item(doc: &Document, f: &FieldDatum, item: &str) -> Option<String> {
+    radio_widgets(doc, f).into_iter().find_map(|(original, state, export)| {
+        let state = state?;
+        let written = original.or(export).unwrap_or_else(|| state.clone());
+        (written == item).then_some(state)
+    })
+}
+
+/// The on and off item values of a check box (`/PCItems`), or the widget's on state.
+fn items_of(doc: &Document, f: &FieldDatum) -> (String, String) {
+    let d = doc.get(f.obj);
+    let items: Vec<String> = d
+        .as_dict()
+        .and_then(|d| d.get(b"PCItems").map(|o| doc.resolve(o)))
+        .and_then(|a| a.as_array().map(|a| a.iter().filter_map(|x| x.as_string().map(|s| s.to_text())).collect()))
+        .unwrap_or_default();
+    let on = items.first().cloned().unwrap_or_else(|| "1".into());
+    let off = items.get(1).cloned().unwrap_or_default();
+    (on, off)
+}
+
+/// The Acrobat date pattern a field's format action names (`AFDate_FormatEx("yyyy-mm-dd")`).
+fn date_pattern_of(doc: &Document, f: &FieldDatum) -> Option<String> {
+    let d = doc.get(f.obj);
+    let aa = doc.resolve(d.as_dict()?.get(b"AA")?);
+    let fa = doc.resolve(aa.as_dict()?.get(b"F")?);
+    let js = text_of(doc, fa.as_dict()?, b"JS")?;
+    let i = js.find("AFDate_FormatEx(")?;
+    let rest = &js[i + "AFDate_FormatEx(".len()..];
+    let q = rest.find('"')?;
+    let body = &rest[q + 1..];
+    Some(body[..body.find('"')?].to_string())
+}
+
+/// A value to write: where (the field's SOM path, and the data path it binds to) and what.
+pub(super) struct Want {
+    pub(super) som: String,
+    pub(super) path: DataPath,
+    pub(super) text: String,
+    /// Create the node even for an empty value (an instance of a repeating subform).
+    pub(super) ensure: bool,
+}
+
+/// `tpl`, or the document's own template when none is given (parsed once).
+pub(super) fn with_template<T>(doc: &Document, tpl: Option<&Template>, f: impl FnOnce(Option<&Template>) -> T) -> T {
+    match tpl {
+        Some(t) => f(Some(t)),
+        None => {
+            let parsed = crate::script::template_of(doc).ok();
+            f(parsed.as_ref())
+        }
+    }
+}
+
+/// [`data_path`] when the template is known, else [`som_to_path`].
+pub(super) fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
+    match tpl {
+        Some(t) => data_path(t, som),
+        None => som_to_path(som),
+    }
+}
+
+/// The values the datasets should hold for `fields`, by data path: dates in each field's data
+/// picture (or ISO), check and radio states, choice values as saved.
+pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<Want> {
+    let mut out = Vec::new();
+    for f in fields {
+        let som = som_of(doc, f);
+        let path = path_of(tpl, &som);
+        if path.is_empty() {
+            continue;
+        }
+        let text = match &f.data {
+            FieldData::Text(t) => match date_pattern_of(doc, f) {
+                Some(p) => match pattern_to_iso(t, &p) {
+                    // The date goes into the data in the field's data picture, or as an ISO date.
+                    Some(iso) => iso_to_data(iso, data_date_pattern(tpl, &som).as_deref()),
+                    None => t.clone(),
+                },
+                None => t.clone(),
+            },
+            FieldData::Check(on) => {
+                let (on_item, off_item) = items_of(doc, f);
+                if *on { on_item } else { off_item }
+            }
+            FieldData::Radio(sel) => radio_dataset_value(doc, f, sel),
+            FieldData::None => continue,
+        };
+        out.push(Want { som, path, text, ensure: false });
+    }
+    out
+}
+
+/// The values the datasets hold for `fields`: `(field name, what it should hold)`, only for
+/// fields the data mentions.
+pub fn read_values(doc: &Document, fields: &[FieldDatum]) -> Vec<(String, FieldData)> {
+    read_values_with(doc, None, fields)
+}
+
+/// [`read_values`] with the form's parsed template when the caller has it; `None` parses the
+/// document's.
+pub fn read_values_with(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> Vec<(String, FieldData)> {
+    with_template(doc, tpl, |t| values_at(doc, t, fields))
+}
+
+/// The values the document's datasets hold for `fields`, read in each field's data picture and
+/// shown in its own pattern; only fields the data mentions.
+fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> Vec<(String, FieldData)> {
+    let Ok(Some(p)) = crate::read_packets(doc) else { return Vec::new() };
+    let Some(data) = parse_datasets(&p.xdp) else { return Vec::new() };
+    let mut out = Vec::new();
+    for f in fields {
+        let som = som_of(doc, f);
+        let path = path_of(tpl, &som);
+        let Some(text) = data.value_at(&path) else { continue };
+        let text = text.as_str();
+        let value = match &f.data {
+            FieldData::Text(_) => FieldData::Text(match date_pattern_of(doc, f) {
+                Some(pat) => iso_to_pattern(&data_to_iso(text, data_date_pattern(tpl, &som).as_deref()), &pat),
+                None => text.to_string(),
+            }),
+            FieldData::Check(_) => {
+                let (on, _) = items_of(doc, f);
+                FieldData::Check(is_on(text, &on))
+            }
+            FieldData::Radio(_) => FieldData::Radio((!text.trim().is_empty()).then(|| text.trim().to_string())),
+            FieldData::None => continue,
+        };
+        out.push((f.name.clone(), value));
+    }
+    out
+}
+
+/// Does a data value mean "checked" for a button whose on value is `on`?
+pub fn is_on(text: &str, on: &str) -> bool {
+    let t = text.trim();
+    if t == on {
+        return true;
+    }
+    !matches!(t.to_ascii_lowercase().as_str(), "" | "0" | "off" | "false" | "no") && on.trim().is_empty()
+}

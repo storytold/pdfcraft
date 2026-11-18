@@ -1,9 +1,10 @@
 //! Unicode embedding of an explicitly supplied, embeddable TrueType face. Font files are
 //! document inputs or the optional craft-fonts build input, never system-interface fallbacks.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use skrifa::{
     FontRef, MetadataProvider,
     instance::{LocationRef, Size},
@@ -53,19 +54,38 @@ pub fn validate_document_input(bytes: &[u8]) -> Result<(), String> {
         return Err("this font family is excluded by the project's asset policy".into());
     }
     let f = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    let attribution: String =
-        [StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER].into_iter().flat_map(|id| f.localized_strings(id)).map(|s| s.to_string()).collect();
-    if attribution.to_ascii_lowercase().contains("adobe") {
+    // An Adobe scan that could not finish fails closed, like a match.
+    if any_name_record(&f, &[StringId::COPYRIGHT_NOTICE, StringId::MANUFACTURER], |t| t.to_ascii_lowercase().contains("adobe")) != Some(false) {
         return Err("Adobe-authored font assets are excluded by the project's asset policy".into());
     }
-    let license: String = f.localized_strings(StringId::LICENSE_DESCRIPTION).map(|s| s.to_string()).collect();
-    if !["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"]
-        .iter()
-        .any(|l| license.contains(l))
-    {
+    let licences = ["SIL OPEN FONT", "SIL Open Font", "Apache License", "Ubuntu Font Licence", "Bitstream Vera", "MIT License"];
+    if any_name_record(&f, &[StringId::LICENSE_DESCRIPTION], |t| licences.iter().any(|l| t.contains(l))) != Some(true) {
         return Err("select an openly licensed font whose name table declares its licence (OFL, Apache, Ubuntu, Bitstream Vera or MIT)".into());
     }
     Ok(())
+}
+
+/// Name-table text one policy check reads in all.
+const MAX_NAME_BYTES: usize = 1 << 20;
+
+/// Whether `found` holds for any record of the name-table strings `ids`, read one at a time
+/// within [`MAX_NAME_BYTES`] in all: `Some(true)` for a match, `Some(false)` when every record was
+/// read and none matched, `None` when the allowance ran out first (a record that does not fit what
+/// is left is not searched). The table can point many records at one large string, so the records
+/// are never joined.
+fn any_name_record(font: &FontRef, ids: &[skrifa::string::StringId], found: impl Fn(&str) -> bool) -> Option<bool> {
+    let mut left = MAX_NAME_BYTES;
+    for s in ids.iter().flat_map(|id| font.localized_strings(*id)) {
+        let text = s.to_string();
+        if text.len() > left {
+            return None;
+        }
+        left -= text.len().max(1).min(left);
+        if found(&text) {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// Validate before allocating any PDF objects, so an invalid font cannot partly mutate a doc.
@@ -173,7 +193,8 @@ pub fn embed_mapping(
         return Err("the font family name is invalid".into());
     }
     let glyph_map = if cff { cid_encoding.as_bytes() } else { gids.as_slice() };
-    if let Some(resource) = same_resource(doc, fonts, &name, bytes, glyph_map, cmap.as_bytes()) {
+    let mut programs = ProgramMatch::new(bytes);
+    if let Some(resource) = same_resource(doc, fonts, &name, &mut programs, glyph_map, cmap.as_bytes()) {
         return Ok(resource);
     }
     let mut descriptor = Dict::new();
@@ -193,12 +214,7 @@ pub fn embed_mapping(
     );
     // Reuse the program another resource of this page already has, else one registered on another
     // page; source subset programs stay untouched.
-    let existing = written(doc, fonts).find(|w| w.has_program(doc, bytes)).map(|w| w.program).or_else(|| {
-        doc.scan_objects().take(8192).find_map(|(r, o)| match o.as_ref() {
-            Object::Stream(s) if is_program(doc, s, bytes) => Some(Object::Ref(r)),
-            _ => None,
-        })
-    });
+    let existing = existing_program(doc, fonts, &mut programs);
     let program = existing.unwrap_or_else(|| {
         let mut d = Dict::new();
         d.set(b"Length1".to_vec(), Object::Int(bytes.len() as i64));
@@ -246,12 +262,64 @@ pub fn embed_mapping(
     Ok(resource)
 }
 
-/// The decoded data of the stream `object` refers to.
-fn stream_data(doc: &Document, object: Option<&Object>) -> Option<Vec<u8>> {
-    match doc.resolve(object?).as_ref() {
-        Object::Stream(s) => s.decoded_within(17 << 20).ok(),
-        _ => None,
+/// Whether the stream `object` refers to decodes to `expected`.
+fn stream_is(doc: &Document, object: Option<&Object>, expected: &[u8]) -> bool {
+    object.is_some_and(|o| match doc.resolve(o).as_ref() {
+        Object::Stream(s) => s.decoded_within(expected.len()).is_ok_and(|d| d == expected),
+        _ => false,
+    })
+}
+
+/// Full programs one embedding decodes at most while looking for its own. A real match passes
+/// the cheap checks and decodes once; many candidates that pass them come from a hostile file.
+const MAX_PROGRAM_DECODES: usize = 16;
+
+/// Recognises the full program written for `bytes`: each candidate stream decodes at most once
+/// and within `bytes.len()`, and at most [`MAX_PROGRAM_DECODES`] decode in all.
+struct ProgramMatch<'a> {
+    bytes: &'a [u8],
+    known: HashMap<ObjRef, bool>,
+    decodes: usize,
+}
+
+impl<'a> ProgramMatch<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, known: HashMap::new(), decodes: 0 }
     }
+
+    /// Whether `r`, holding `object`, is the program.
+    fn is(&mut self, doc: &Document, r: ObjRef, object: &Object) -> bool {
+        if let Some(&known) = self.known.get(&r) {
+            return known;
+        }
+        let found = match object {
+            Object::Stream(s)
+                if s.dict.get(b"PCFullFont").is_some()
+                    && s.dict.get(b"Length1").and_then(|l| doc.resolve(l).as_int()) == i64::try_from(self.bytes.len()).ok()
+                    && self.decodes < MAX_PROGRAM_DECODES =>
+            {
+                self.decodes = self.decodes.saturating_add(1);
+                s.decoded_within(self.bytes.len()).is_ok_and(|data| data == self.bytes)
+            }
+            _ => false,
+        };
+        self.known.insert(r, found);
+        found
+    }
+
+    /// Whether the resource's program is this one.
+    fn written(&mut self, doc: &Document, w: &Written) -> bool {
+        w.program.as_ref().is_some_and(|r| self.is(doc, r, &doc.get(r)))
+    }
+}
+
+/// The program for `programs.bytes` that this page's `PCFull` resources, or else the first
+/// objects of the document, already have.
+fn existing_program(doc: &Document, fonts: &Dict, programs: &mut ProgramMatch) -> Option<Object> {
+    written(doc, fonts)
+        .find(|w| programs.written(doc, w))
+        .map(|w| w.program)
+        .or_else(|| doc.scan_objects().take(8192).find_map(|(r, o)| programs.is(doc, r, &o).then_some(Object::Ref(r))))
 }
 
 /// A `PCFull` resource that [`embed_mapping`] wrote.
@@ -261,21 +329,6 @@ struct Written {
     cid: Dict,
     /// The reference to its full program.
     program: Object,
-}
-
-impl Written {
-    /// Whether its program is `bytes`.
-    fn has_program(&self, doc: &Document, bytes: &[u8]) -> bool {
-        matches!(doc.resolve(&self.program).as_ref(), Object::Stream(s) if is_program(doc, s, bytes))
-    }
-}
-
-/// Whether `s` is a full program written for `bytes`, compressed or not. The length it was
-/// written with is compared before decoding.
-fn is_program(doc: &Document, s: &Stream, bytes: &[u8]) -> bool {
-    s.dict.get(b"PCFullFont").is_some()
-        && s.dict.get(b"Length1").and_then(|l| doc.resolve(l).as_int()) == i64::try_from(bytes.len()).ok()
-        && s.decoded_within(17 << 20).is_ok_and(|data| data == bytes)
 }
 
 /// The `PCFull` resources in `fonts`, in order.
@@ -291,14 +344,14 @@ fn written<'a>(doc: &'a Document, fonts: &'a Dict) -> impl Iterator<Item = Writt
 
 /// A resource in `fonts` that already is this embedding: the same font name, program, glyph map
 /// and Unicode map. Editing the same text again reuses it instead of adding another copy.
-fn same_resource(doc: &Document, fonts: &Dict, name: &str, bytes: &[u8], glyph_map: &[u8], unicode: &[u8]) -> Option<String> {
+fn same_resource(doc: &Document, fonts: &Dict, name: &str, programs: &mut ProgramMatch, glyph_map: &[u8], unicode: &[u8]) -> Option<String> {
     written(doc, fonts)
         .find(|w| {
             let glyphs = w.cid.get(b"CIDToGIDMap").or_else(|| w.top.get(b"Encoding"));
             w.top.name(b"BaseFont") == Some(name.as_bytes())
-                && stream_data(doc, w.top.get(b"ToUnicode")).is_some_and(|d| d == unicode)
-                && stream_data(doc, glyphs).is_some_and(|d| d == glyph_map)
-                && w.has_program(doc, bytes)
+                && stream_is(doc, w.top.get(b"ToUnicode"), unicode)
+                && stream_is(doc, glyphs, glyph_map)
+                && programs.written(doc, w)
         })
         .map(|w| w.resource)
 }
@@ -337,6 +390,17 @@ mod tests {
         embed(&mut doc, &mut second, bytes, "Inter").unwrap();
         assert_eq!(doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count(), 1);
         assert_eq!(face_key("ABCDEF+Droid-Sans-Fallback"), face_key("Droid Sans Fallback"));
+    }
+
+    #[test]
+    fn licence_policy_reads_name_records_one_at_a_time() {
+        use skrifa::string::StringId;
+        let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        assert!(validate_document_input(bytes).is_ok(), "an OFL font passes");
+        let face = FontRef::new(bytes).unwrap();
+        assert_eq!(any_name_record(&face, &[StringId::LICENSE_DESCRIPTION], |t| t.contains("SIL Open Font")), Some(true));
+        assert_eq!(any_name_record(&face, &[StringId::LICENSE_DESCRIPTION], |_| false), Some(false));
+        assert_eq!(any_name_record(&face, &[], |_| true), Some(false), "no ids, no records");
     }
 
     #[test]
@@ -383,6 +447,48 @@ mod tests {
         let medium = embed(&mut doc, &mut more, other, "Inter").unwrap();
         assert!(!fonts.contains(medium.as_bytes()), "{medium} is new");
         assert_eq!(programs(&doc), 2);
+    }
+
+    #[test]
+    fn the_program_search_decodes_each_candidate_once_and_few_in_all() {
+        let bytes = b"the program".as_slice();
+        let decoy = |doc: &mut Document| {
+            let mut d = Dict::new();
+            d.set(b"PCFullFont".to_vec(), Object::Bool(true));
+            d.set(b"Length1".to_vec(), Object::Int(bytes.len() as i64));
+            doc.add(Object::Stream(Stream::flate(d, &[0; 4096])))
+        };
+        let resource = |doc: &mut Document, program: ObjRef| {
+            let mut descriptor = Dict::new();
+            descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+            let mut cid = Dict::new();
+            cid.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+            let mut top = Dict::new();
+            top.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid)]));
+            doc.add(Object::Dict(top))
+        };
+        // 200 resources sharing one decoy program decode it once.
+        let mut doc = Document::new_empty();
+        let shared = decoy(&mut doc);
+        let mut fonts = Dict::new();
+        for i in 0..200 {
+            let r = resource(&mut doc, shared);
+            fonts.set(format!("PCFull{i}").into_bytes(), Object::Ref(r));
+        }
+        let mut programs = ProgramMatch::new(bytes);
+        assert_eq!(existing_program(&doc, &fonts, &mut programs), None);
+        assert_eq!(programs.decodes, 1);
+        // 100 distinct decoys decode a bounded number of times.
+        let mut doc = Document::new_empty();
+        let mut fonts = Dict::new();
+        for i in 0..100 {
+            let program = decoy(&mut doc);
+            let r = resource(&mut doc, program);
+            fonts.set(format!("PCFull{i}").into_bytes(), Object::Ref(r));
+        }
+        let mut programs = ProgramMatch::new(bytes);
+        assert_eq!(existing_program(&doc, &fonts, &mut programs), None);
+        assert_eq!(programs.decodes, MAX_PROGRAM_DECODES);
     }
 
     #[test]

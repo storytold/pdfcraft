@@ -17,31 +17,87 @@ impl ImageColorSpace {
     }
 }
 
+/// PdfCraft patch (47): the most pixels a codestream may decode to (2^28, the renderer's
+/// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
+/// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
+/// tens of gigabytes and abort the process (#5078).
+///
+/// It is checked against `Image::width()` x `height()` at full resolution: the SIZ image area,
+/// divided by a component subsampling (`XRsiz`, `YRsiz`) that every component shares, the size the
+/// decoder allocates each channel and component tile at. Components sampled differently leave the
+/// area undivided. So a 2x2-subsampled 32768 x 32768 area decodes to, and counts as, 2^28.
+const MAX_PIXELS: u64 = 1 << 28;
+
+/// Decode a JPEG 2000 image (JP2 file or raw codestream) for an image XObject described by
+/// `params`, refusing codestreams over [`MAX_PIXELS`]; `None` when it can't be decoded.
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
+    decode_with_pixel_limit(data, params, MAX_PIXELS)
+}
+
+/// [`decode`] with `max_pixels` in place of [`MAX_PIXELS`], so a test can exercise the
+/// full-resolution size check on a small image without an attacker-sized allocation.
+fn decode_with_pixel_limit(
+    data: &[u8],
+    params: &ImageDecodeParams,
+    max_pixels: u64,
+) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
-        resolve_palette_indices: false,
+        // PdfCraft patch: (#3179) with no /ColorSpace in the image dictionary the colours come from
+        // the JP2 header (ISO 32000-2 §7.4.9), so its palette (`pclr`) is applied here; with a
+        // /ColorSpace the header colour data is ignored, and an /Indexed space takes the raw indices.
+        // A /ColorSpace that does not resolve also leaves `num_components` unset: the header's
+        // colours are then the only ones there are, so the palette is applied too (raw indices
+        // would be drawn as gray).
+        resolve_palette_indices: params.num_components.is_none(),
         strict: false,
-        target_resolution: params.target_dimension,
+        // PdfCraft patch (review on #3884): `hayro-jpeg2000` 0.3.5 places a reduced resolution's
+        // samples using the image area's offset on the reference grid unscaled, so with an offset
+        // it leaves rows out or slices past a row (a panic); such an image is decoded at full size.
+        target_resolution: params
+            .target_dimension
+            .filter(|_| image_area_offset(data) == Some((0, 0))),
     };
 
     // PdfCraft patch (21): a JP2 colour specification naming an enumerated colour space the
     // decoder refuses (CIEJab, enum 19, in a veraPDF fixture; YCbCr, PhotoYCC, …) made the whole
     // image fail, so the page drew blank (#3306). Then it is decoded as if it had no colour
     // specification, as MuPDF and Poppler draw it: grey, RGB or CMYK by its component count.
+    //
+    // PdfCraft patch (47): the header is read at full resolution first, because
+    // `target_resolution` shrinks `width()` and `height()` but each tile's coefficients are still
+    // allocated at full size (review on #5086); see `MAX_PIXELS`.
+    let full_resolution = DecodeSettings {
+        target_resolution: None,
+        ..settings
+    };
     let repaired;
-    let image = match hayro_jpeg2000::Image::new(data, &settings) {
-        Ok(image) => image,
+    let (source, full) = match hayro_jpeg2000::Image::new(data, &full_resolution) {
+        Ok(image) => (data, image),
         Err(_) => {
             repaired = without_refused_enumerated_colour(data)?;
-            hayro_jpeg2000::Image::new(&repaired, &settings).ok()?
+            let image = hayro_jpeg2000::Image::new(&repaired, &full_resolution).ok()?;
+            (repaired.as_slice(), image)
         }
+    };
+    if u64::from(full.width()) * u64::from(full.height()) > max_pixels {
+        return None;
+    }
+    let image = match settings.target_resolution {
+        Some(_) => hayro_jpeg2000::Image::new(source, &settings).ok()?,
+        None => full,
     };
 
     let width = image.width();
     let height = image.height();
-    let bpc = params.bpc.unwrap_or(image.original_bit_depth());
+    // PdfCraft patch: (#3179) a resolved palette gives colours, decoded to 8 bits like every
+    // sample; the codestream's precision is that of the indices (1 bit, say), and rescaling the
+    // colours to it kept only 0 or 255 per channel (review on #3184).
+    let palette_resolved = settings.resolve_palette_indices && has_palette(data);
+    let bpc = params
+        .bpc
+        .unwrap_or(if palette_resolved { 8 } else { image.original_bit_depth() });
     let cs = match image.color_space() {
         ColorSpace::Gray => ImageColorSpace::Gray,
         ColorSpace::RGB => ImageColorSpace::Rgb,
@@ -96,6 +152,31 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
             height,
         }),
     })
+}
+
+/// PdfCraft patch: (#3179) whether JP2 file `data` has a palette box (`pclr`) in its header box
+/// (`jp2h`, ISO 15444-1 I.5.3.4). A raw codestream has none.
+fn has_palette(data: &[u8]) -> bool {
+    boxes(data)
+        .find(|&(kind, _, _)| kind == *b"jp2h")
+        .and_then(|(_, start, end)| data.get(start..end))
+        .is_some_and(|header| boxes(header).any(|(kind, _, _)| kind == *b"pclr"))
+}
+
+/// PdfCraft patch (review on #3884): the offset of the image area on the reference grid
+/// (`XOsiz`, `YOsiz`) in the SIZ marker segment (ISO 15444-1 A.5.1) of raw codestream or JP2 file
+/// `data`, whose codestream is the contents of its `jp2c` box (I.5.4). `None` when it can't be read.
+fn image_area_offset(data: &[u8]) -> Option<(u32, u32)> {
+    const SOC_SIZ: [u8; 4] = [0xff, 0x4f, 0xff, 0x51];
+    let codestream = if data.starts_with(&SOC_SIZ) {
+        data
+    } else {
+        let (_, start, end) = boxes(data).find(|&(kind, _, _)| kind == *b"jp2c")?;
+        data.get(start..end).filter(|c| c.starts_with(&SOC_SIZ))?
+    };
+    // After SOC and SIZ: Lsiz (2), Rsiz (2), Xsiz (4), Ysiz (4), XOsiz (4), YOsiz (4).
+    let read = |at: usize| Some(u32::from_be_bytes(codestream.get(at..at + 4)?.try_into().ok()?));
+    Some((read(16)?, read(20)?))
 }
 
 /// The enumerated colour spaces (`EnumCS`, ISO 15444-1 I.5.3.3 and 15444-2 M.11.7.2) the decoder
@@ -221,8 +302,9 @@ fn scale(
 
 #[cfg(test)]
 mod tests {
-    use super::{scale, without_refused_enumerated_colour};
+    use super::{decode, decode_with_pixel_limit, image_area_offset, scale, without_refused_enumerated_colour};
     use crate::bit_reader::{BitReader, bit_mask};
+    use crate::object::stream::{ImageColorSpace, ImageDecodeParams};
     use alloc::vec::Vec;
 
     #[test]
@@ -357,5 +439,238 @@ mod tests {
             data[at..at + 4].copy_from_slice(&bad.to_be_bytes());
             assert_eq!(without_refused_enumerated_colour(&data), None, "{bad:#x}");
         }
+    }
+
+    /// A 4x2 JP2 written for this test: one 8-bit component whose samples (0, 1) index a
+    /// two-entry sRGB palette (`pclr` + `cmap`): red, then blue. Rows: 0 1 0 1 / 1 0 1 0.
+    const PALETTE_JP2: &[u8] = &[
+        0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a, 0x00, 0x00, 0x00,
+        0x14, 0x66, 0x74, 0x79, 0x70, 0x6a, 0x70, 0x32, 0x20, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x70,
+        0x32, 0x20, 0x00, 0x00, 0x00, 0x55, 0x6a, 0x70, 0x32, 0x68, 0x00, 0x00, 0x00, 0x16, 0x69,
+        0x68, 0x64, 0x72, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x07, 0x07,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x63, 0x6f, 0x6c, 0x72, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x14, 0x70, 0x63, 0x6c, 0x72, 0x00, 0x02, 0x03, 0x07, 0x07,
+        0x07, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x14, 0x63, 0x6d, 0x61, 0x70,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00,
+        0x8c, 0x6a, 0x70, 0x32, 0x63, 0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x07, 0x01, 0x01, 0xff, 0x52, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x04, 0x04, 0x00, 0x01, 0xff, 0x5c, 0x00, 0x07, 0x40, 0x40, 0x48, 0x48, 0x50, 0xff, 0x64,
+        0x00, 0x25, 0x00, 0x01, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20,
+        0x4f, 0x70, 0x65, 0x6e, 0x4a, 0x50, 0x45, 0x47, 0x20, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f,
+        0x6e, 0x20, 0x32, 0x2e, 0x35, 0x2e, 0x34, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x17, 0x00, 0x01, 0xff, 0x93, 0xcf, 0xb4, 0x08, 0x08, 0x67, 0x90, 0x07, 0x41, 0x08,
+        0xff, 0xd9,
+    ];
+
+    /// #3179: with no `/ColorSpace` in the image dictionary, the JP2 palette gives the colours. The
+    /// raw indices (0 and 1) used to come back as a gray image, drawn as noise.
+    #[test]
+    fn jpx_palette_is_applied_without_a_color_space() {
+        let params = ImageDecodeParams {
+            width: 4,
+            height: 2,
+            ..ImageDecodeParams::default()
+        };
+        let result = decode(PALETTE_JP2, &params).unwrap();
+        let image = result.image_data.unwrap();
+        assert!(matches!(image.color_space, Some(ImageColorSpace::Rgb)));
+        let red = [255, 0, 0];
+        let blue = [0, 0, 255];
+        let expected: Vec<u8> = [red, blue, red, blue, blue, red, blue, red].concat();
+        assert_eq!(&*result.data, &expected[..]);
+    }
+
+    /// With an `/Indexed` colour space in the dictionary, the PDF supplies the palette, so the raw
+    /// indices are what the image holds.
+    #[test]
+    fn jpx_palette_indices_stay_raw_for_an_indexed_color_space() {
+        let params = ImageDecodeParams {
+            is_indexed: true,
+            num_components: Some(1),
+            width: 4,
+            height: 2,
+            ..ImageDecodeParams::default()
+        };
+        let result = decode(PALETTE_JP2, &params).unwrap();
+        assert_eq!(&*result.data, &[0, 1, 0, 1, 1, 0, 1, 0][..]);
+    }
+
+    /// A 1x1, 1-bit codestream (one empty packet, so its sample is the midpoint 1) as a JP2 file
+    /// whose header holds `extra` boxes after `ihdr` and `colr`.
+    fn one_bit_jp2(extra: &[u8]) -> Vec<u8> {
+        let jp2_box = |kind: &[u8], body: &[u8]| {
+            let mut b = ((8 + body.len()) as u32).to_be_bytes().to_vec();
+            b.extend_from_slice(kind);
+            b.extend_from_slice(body);
+            b
+        };
+        let mut codestream = alloc::vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0];
+        for value in [1_u32, 1, 0, 0, 1, 1, 0, 0] {
+            codestream.extend_from_slice(&value.to_be_bytes());
+        }
+        codestream.extend_from_slice(&[0, 1, 0, 1, 1]);
+        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+        codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 15, 0, 1, 0xff, 0x93, 0]);
+        codestream.extend_from_slice(&[0xff, 0xd9]);
+        let mut header = jp2_box(b"ihdr", &[0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 7, 0, 0]);
+        header.extend(jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 16]));
+        header.extend_from_slice(extra);
+        let mut out = alloc::vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+        out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+        out.extend(jp2_box(b"jp2h", &header));
+        out.extend(jp2_box(b"jp2c", &codestream));
+        out
+    }
+
+    /// Review on #3184: resolved palette colours are 8-bit samples whatever the indices'
+    /// precision; an image without a palette keeps its own (1 bit here).
+    #[test]
+    fn palette_colours_are_eight_bit_and_other_samples_keep_their_precision() {
+        let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
+        let bpc = |data: &[u8]| decode(data, &params).and_then(|r| r.image_data).map(|d| d.bits_per_component);
+        let mut palette = Vec::new();
+        for (kind, body) in [(&b"pclr"[..], &[0, 2, 3, 7, 7, 7, 255, 0, 0, 64, 128, 192][..]), (b"cmap", &[0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 2])] {
+            palette.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
+            palette.extend_from_slice(kind);
+            palette.extend_from_slice(body);
+        }
+        assert_eq!(bpc(&one_bit_jp2(&palette)), Some(8));
+        assert_eq!(bpc(&one_bit_jp2(&[])), Some(1));
+    }
+
+    /// A 4x4, one-component, 8-bit codestream whose image area starts at reference-grid point
+    /// (`x`, `y`): one tile from the grid origin, one decomposition level, reversible wavelet,
+    /// and an empty packet per resolution, so every sample is 128.
+    fn one_level_codestream(x: u32, y: u32) -> Vec<u8> {
+        let mut out = alloc::vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0]; // SOC, SIZ, Lsiz, Rsiz.
+        for value in [x + 4, y + 4, x, y, x + 4, y + 4, 0, 0] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&[0, 1, 7, 1, 1]); // One component: eight bits, no subsampling.
+        // COD: LRCP, one layer, no component transform, one decomposition level, 64x64
+        // codeblocks, reversible wavelet. QCD: no quantization, four subbands.
+        out.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 1, 4, 4, 0, 1]);
+        out.extend_from_slice(&[0xff, 0x5c, 0, 7, 0x40, 0x40, 0x48, 0x48, 0x50]);
+        // SOT for tile zero, one tile part of 16 bytes, SOD, two empty packets, EOC.
+        out.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 16, 0, 1, 0xff, 0x93, 0, 0]);
+        out.extend_from_slice(&[0xff, 0xd9]);
+        out
+    }
+
+    #[test]
+    fn image_area_offset_reads_raw_codestreams_and_jp2_files() {
+        assert_eq!(image_area_offset(&one_level_codestream(7, 3)), Some((7, 3)));
+        assert_eq!(image_area_offset(PALETTE_JP2), Some((0, 0)));
+        let raw = one_level_codestream(7, 3);
+        for cut in [0, 4, 19, 23] {
+            assert_eq!(image_area_offset(raw.get(..cut).unwrap()), None, "cut at {cut}");
+        }
+        assert_eq!(image_area_offset(&jp2(1, &[])), None, "a jp2c box too short for SIZ");
+    }
+
+    /// Review on #3884: `hayro-jpeg2000` 0.3.5 compares an image area's reference-grid offset
+    /// (`XOsiz`, `YOsiz`), unscaled, with the coordinates of a reduced resolution, so a hint that
+    /// skips a level left rows out (offset 7, 7: no reduced row was copied at all) or sliced past
+    /// the reduced row (offset 7, 0: a panic). With an offset the image is decoded at full size;
+    /// without one the hint still picks the reduced level.
+    #[test]
+    fn jpx_size_hint_is_dropped_only_for_an_offset_image_area() {
+        for (x, y, expected) in [(7, 0, 4), (0, 7, 4), (7, 7, 4), (0, 0, 2)] {
+            let params = ImageDecodeParams {
+                target_dimension: Some((2, 2)),
+                ..ImageDecodeParams::default()
+            };
+            let result = decode(&one_level_codestream(x, y), &params).unwrap();
+            let image = result.image_data.unwrap();
+            assert_eq!((image.width, image.height), (expected, expected), "offset ({x}, {y})");
+            assert_eq!(result.data.as_ref(), alloc::vec![128; (expected * expected) as usize], "offset ({x}, {y})");
+        }
+    }
+
+    /// `one_bit_jp2`'s file with the SIZ image and tile sizes set to `xsiz` x `ysiz` (one tile
+    /// covering the whole image, so the header still parses cheaply), a matching `ihdr`, and
+    /// `levels` wavelet decomposition levels in COD. With none, a target resolution can't shrink
+    /// the image (there is no lower resolution to decode); with some, a small target decodes it
+    /// up to 2^`levels` times smaller on each side.
+    fn jp2_with_size(xsiz: u32, ysiz: u32, levels: u8) -> Vec<u8> {
+        let jp2_box = |kind: &[u8], body: &[u8]| {
+            let mut b = ((8 + body.len()) as u32).to_be_bytes().to_vec();
+            b.extend_from_slice(kind);
+            b.extend_from_slice(body);
+            b
+        };
+        let mut codestream = alloc::vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0];
+        // Xsiz, Ysiz, XOsiz, YOsiz, XTsiz, YTsiz, XTOsiz, YTOsiz: one tile spans the whole image.
+        for value in [xsiz, ysiz, 0, 0, xsiz, ysiz, 0, 0] {
+            codestream.extend_from_slice(&value.to_be_bytes());
+        }
+        codestream.extend_from_slice(&[0, 1, 0, 1, 1]);
+        // COD: Scod, LRCP order, one layer, no MCT, `levels`, 64 x 64 code blocks, 5/3 wavelet.
+        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, levels, 4, 4, 0, 1]);
+        // QCD: no quantization, one exponent per subband (3 per level and the lowest band).
+        let subbands = 3 * usize::from(levels) + 1;
+        codestream.extend_from_slice(&[0xff, 0x5c, 0, (3 + subbands) as u8, 0x40]);
+        codestream.extend(core::iter::repeat_n(0x40, subbands));
+        // One tile part holding an empty packet (one zero byte) per resolution level.
+        let packets = usize::from(levels) + 1;
+        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]);
+        codestream.extend_from_slice(&((14 + packets) as u32).to_be_bytes());
+        codestream.extend_from_slice(&[0, 1, 0xff, 0x93]);
+        codestream.extend(core::iter::repeat_n(0, packets));
+        codestream.extend_from_slice(&[0xff, 0xd9]);
+        let mut ihdr = ysiz.to_be_bytes().to_vec();
+        ihdr.extend_from_slice(&xsiz.to_be_bytes());
+        ihdr.extend_from_slice(&[0, 1, 0, 7, 0, 0]);
+        let mut header = jp2_box(b"ihdr", &ihdr);
+        header.extend(jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 16]));
+        let mut out = alloc::vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+        out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+        out.extend(jp2_box(b"jp2h", &header));
+        out.extend(jp2_box(b"jp2c", &codestream));
+        out
+    }
+
+    /// #5078: a `/Width 1 /Height 1` image whose codestream SIZ declares more than 2^28 pixels
+    /// is refused before the decoder makes its full-resolution, infallible allocation (tens of
+    /// gigabytes from a tiny file, which aborts the process), with or without a small target
+    /// resolution, since a target shrinks the reported size but not the per-tile buffers: with
+    /// four decomposition levels a 1 x 1 target reports 4096 x 4096, under the cap. The same
+    /// builder at 1 x 1 decodes, so the `None` at 65536 x 65536 (2^32 pixels) is the cap and not
+    /// a parse error.
+    #[test]
+    fn a_codestream_over_the_pixel_cap_is_refused() {
+        let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
+        assert!(decode(&jp2_with_size(1, 1, 0), &params).is_some());
+        assert!(decode(&jp2_with_size(65536, 65536, 0), &params).is_none());
+        let small_target = ImageDecodeParams { target_dimension: Some((1, 1)), ..params };
+        assert!(decode(&jp2_with_size(65536, 65536, 4), &small_target).is_none());
+    }
+
+    /// The size check uses the full-resolution size, not the target's. With four decomposition
+    /// levels a 1x1 target decodes a 64x64 image at a reduced resolution under 1024 pixels; with
+    /// a 1024-pixel limit the same image at the same target is still refused, because its
+    /// full-resolution 4096 pixels are over it. (An image a target can't shrink, with no
+    /// decomposition levels or a JP2 palette like `PALETTE_JP2`, can't tell the two measurements
+    /// apart.) The small limit lets the unfixed check be seen failing without an attacker-sized
+    /// allocation.
+    #[test]
+    fn jpx_size_guard_uses_full_resolution_before_target_resolution() {
+        let image = jp2_with_size(64, 64, 4);
+        let small_target = ImageDecodeParams {
+            width: 1,
+            height: 1,
+            target_dimension: Some((1, 1)),
+            ..ImageDecodeParams::default()
+        };
+        let reduced = decode(&image, &small_target).expect("a 64x64 image decodes at a 1x1 target");
+        let size = reduced.image_data.as_ref().map(|d| (d.width, d.height));
+        assert!(
+            size.is_some_and(|(w, h)| u64::from(w) * u64::from(h) <= 1024),
+            "the target shrinks the image under the limit: {size:?}"
+        );
+        assert!(decode_with_pixel_limit(&image, &small_target, 1024).is_none());
     }
 }

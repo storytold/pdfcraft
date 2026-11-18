@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, ObjRef, Object};
 
 use crate::OrganizeError;
 
@@ -29,7 +29,7 @@ enum XKey {
 }
 
 /// Who owns the resources currently being walked, for the key drawn names are recorded under.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Owner {
     /// An indirect resources object (a page's, or a form XObject's own).
     Resources(ObjRef),
@@ -40,16 +40,25 @@ enum Owner {
 struct Pruner<'a> {
     doc: &'a Document,
     used: HashMap<XKey, HashSet<Vec<u8>>>,
-    /// Dictionaries whose drawn names can't be known for certain (undecodable content, nesting
-    /// past the depth limit, Type 3 glyphs drawing through them). They are left untouched:
-    /// pruning must never drop an XObject something still draws.
+    /// Dictionaries whose drawn names can't be known for certain (undecodable content, Type 3
+    /// glyphs drawing through them). They are left untouched: pruning must never drop an XObject
+    /// something still draws.
     unsure: HashSet<XKey>,
     /// An overlarge glyph-resource graph is not safe to prune at all.
     glyph_budget_exhausted: bool,
+    /// Nor is a file with forms nested past [`MAX_FORM_DEPTH`]: what the forms there draw isn't
+    /// read, and they may draw it through resources shared with content that was.
+    too_deep: bool,
     glyph_work_left: usize,
     glyph_seen: HashSet<ObjRef>,
     /// An indirect font's explicit resources have one owner regardless of which page uses it.
     glyph_fonts: HashSet<ObjRef>,
+    /// Forms already analysed, with the owner of the resources they drew against: drawing one
+    /// again records nothing new, and re-reading it on every `Do` is exponential in the nesting.
+    forms_seen: HashSet<(ObjRef, Owner)>,
+    /// Owners of resources that content not read whole drew against, whose every form was read
+    /// as drawn ([`Pruner::unread`]): once is enough.
+    partly_read: HashSet<Owner>,
 }
 
 impl Pruner<'_> {
@@ -182,7 +191,7 @@ impl Pruner<'_> {
             return;
         };
         if depth > MAX_FORM_DEPTH {
-            self.unsure.insert(key);
+            self.too_deep = true;
             return;
         }
         for op in pdfcraft_content::parse(data).ops {
@@ -191,55 +200,83 @@ impl Pruner<'_> {
             }
             let Some(name) = op.name(0) else { continue };
             self.used.entry(key).or_default().insert(name.to_vec());
-            let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { continue };
-            let Object::Stream(s) = &*self.doc.get(r) else { continue };
-            if s.dict.name(b"Subtype") != Some(b"Form") {
-                continue;
-            }
-            let (inner, inner_owner) = match s.dict.get(b"Resources") {
-                Some(res) => match res.as_ref() {
-                    Some(rr) => match self.doc.get(rr).as_dict().cloned() {
-                        Some(d) => (d, Owner::Resources(rr)),
-                        None => continue,
-                    },
-                    None => match self.doc.resolve(res).as_dict().cloned() {
-                        // The form carries its resources inline: filter them on the form itself.
-                        Some(d) => (d, Owner::Resources(r)),
-                        None => continue,
-                    },
+            self.form(&xobjects, name, resources, owner, depth);
+        }
+    }
+
+    /// For content that can't be read whole (damaged partway, or not decoding at all): what it
+    /// draws is unknown, so its `/XObject` dictionary is kept whole, and every form there is read
+    /// as drawn, which also reads every form the part before any damage draws. A form whose
+    /// resources are shared keeps what it draws from them too.
+    fn unread(&mut self, resources: &Dict, owner: Owner, depth: u8) {
+        self.protect_type3_resources(resources, owner);
+        let Some((xobjects, key)) = self.xobjects(resources, owner) else { return };
+        self.unsure.insert(key);
+        if depth > MAX_FORM_DEPTH {
+            self.too_deep = true;
+            return;
+        }
+        if !self.partly_read.insert(owner) {
+            return;
+        }
+        for (name, _) in xobjects.iter() {
+            self.form(&xobjects, name, resources, owner, depth);
+        }
+    }
+
+    /// Record what the XObject `name` of `xobjects` draws when it is a form, drawn from content
+    /// with `resources`.
+    fn form(&mut self, xobjects: &Dict, name: &[u8], resources: &Dict, owner: Owner, depth: u8) {
+        let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { return };
+        let Object::Stream(s) = &*self.doc.get(r) else { return };
+        // A `/Subtype` given by reference reads as no form here, as wherever the workspace tells
+        // forms from images (redaction, edit and Optimize among them): resolving it is a change
+        // across all of them.
+        if s.dict.name(b"Subtype") != Some(b"Form") {
+            return;
+        }
+        let (inner, inner_owner) = match s.dict.get(b"Resources") {
+            Some(res) => match res.as_ref() {
+                Some(rr) => match self.doc.get(rr).as_dict().cloned() {
+                    Some(d) => (d, Owner::Resources(rr)),
+                    None => return,
                 },
-                // A form without its own resources draws against the ones it was invoked with.
-                None => (resources.clone(), owner),
-            };
-            match s.decoded() {
-                Ok(data) => self.content(&data, &inner, inner_owner, depth + 1),
-                // What the form draws is unknown: keep everything it could reach.
-                Err(_) => {
-                    self.protect_type3_resources(&inner, inner_owner);
-                    self.distrust(&inner, inner_owner);
-                }
-            }
+                None => match self.doc.resolve(res).as_dict().cloned() {
+                    // The form carries its resources inline: filter them on the form itself.
+                    Some(d) => (d, Owner::Resources(r)),
+                    None => return,
+                },
+            },
+            // A form without its own resources draws against the ones it was invoked with.
+            None => (resources.clone(), owner),
+        };
+        if !self.forms_seen.insert((r, inner_owner)) {
+            return;
+        }
+        #[cfg(test)]
+        crate::work(1);
+        match DecodeBudget::new(usize::MAX, 0).decode_with_damage(self.doc, s, usize::MAX) {
+            Ok((data, false)) => self.content(&data, &inner, inner_owner, depth + 1),
+            Ok((_, true)) | Err(_) => self.unread(&inner, inner_owner, depth + 1),
         }
     }
 }
 
-/// The page's content, concatenated (`/Contents` may be one stream or an array). `None` when a
-/// stream can't be decoded: the page may draw names that can't be seen.
-fn content_bytes(doc: &Document, contents: &Object) -> Option<Vec<u8>> {
-    match &*doc.resolve(contents) {
-        Object::Stream(s) => s.decoded().ok(),
-        Object::Array(a) => {
-            let mut out = Vec::new();
-            for c in a {
-                if let Object::Stream(s) = &*doc.resolve(c) {
-                    out.extend(s.decoded().ok()?);
-                    out.push(b'\n');
-                }
-            }
-            Some(out)
-        }
-        _ => Some(Vec::new()),
+/// The page's content, concatenated (`/Contents` may be one stream or an array) with a space
+/// between pieces as the renderer joins them, decoded against one page's [`DecodeBudget`], and
+/// whether a stream is damaged partway (its part is then what decoded before the damage). An
+/// error when a stream can't be decoded or the budget runs out: the page may draw names that
+/// can't be seen.
+pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<(Vec<u8>, bool), CosError> {
+    let mut out = Vec::new();
+    let mut damaged = false;
+    for read in DecodeBudget::page().decode_contents_with_damage(doc, contents) {
+        let (data, partial) = read?;
+        damaged |= partial;
+        out.extend(data);
+        out.push(b' ');
     }
+    Ok((out, damaged))
 }
 
 /// The resources of a page (as `walk` reports them) with their owner.
@@ -311,9 +348,12 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         used: HashMap::new(),
         unsure: HashSet::new(),
         glyph_budget_exhausted: false,
+        too_deep: false,
         glyph_work_left: MAX_GLYPH_RESOURCE_WORK,
         glyph_seen: HashSet::new(),
         glyph_fonts: HashSet::new(),
+        forms_seen: HashSet::new(),
+        partly_read: HashSet::new(),
     };
     for (page, attrs) in &pages {
         let Some(res) = attrs.get(b"Resources") else { continue };
@@ -321,16 +361,13 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
         let Some(contents) = pd.get(b"Contents").cloned() else { continue };
         match content_bytes(pruner.doc, &contents) {
-            Some(data) if data.is_empty() => {}
-            Some(data) => pruner.content(&data, &res_dict, owner, 0),
-            None => {
-                pruner.protect_type3_resources(&res_dict, owner);
-                pruner.distrust(&res_dict, owner);
-            }
+            Ok((data, false)) if data.is_empty() => {}
+            Ok((data, false)) => pruner.content(&data, &res_dict, owner, 0),
+            Ok((_, true)) | Err(_) => pruner.unread(&res_dict, owner, 0),
         }
     }
-    let Pruner { used, unsure, glyph_budget_exhausted, .. } = pruner;
-    if glyph_budget_exhausted {
+    let Pruner { used, unsure, glyph_budget_exhausted, too_deep, .. } = pruner;
+    if glyph_budget_exhausted || too_deep {
         return Ok(0);
     }
     let mut removed = 0;

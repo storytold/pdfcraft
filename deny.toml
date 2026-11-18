@@ -19,6 +19,7 @@ allow = [
     "Unicode-3.0",
     "BSL-1.0",
     "CC0-1.0",
+    "IJG",
 ]
 
 [licenses.private]
@@ -34,7 +35,13 @@ unknown-registry = "deny"
 unknown-git = "deny"
 # Shared UI components and spooler; Cargo.toml pins the immutable revision. craft-print pins
 # storytold's winprint fork (Windows printing, #1107) to an immutable revision of its own.
-allow-git = ["https://github.com/storytold/craft-libs", "https://github.com/storytold/winprint.rs"]
+allow-git = [
+    "https://github.com/storytold/craft-libs",
+    "https://github.com/storytold/winprint.rs",
+    # The reviewed egui 0.37 and winit 0.30.13 fork revisions (immutable pins in Cargo.toml).
+    "https://github.com/storytold/egui",
+    "https://github.com/storytold/winit",
+]
 
 [advisories]
 yanked = "warn"
@@ -55,6 +62,11 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; Linux a11y stack via accesskit_unix" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; Linux a11y stack via accesskit_unix" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; Linux a11y stack via accesskit_unix" },
+    # chrono is unmaintained (no vulnerability, every version affected, no release to move to).
+    # The Rust house rules require time to go through chrono, and craft-libs (craft-pdf,
+    # craft-pkcs7, craft-mime, craft-update) depend on it, so a successor is chosen in
+    # craft-contrib's standards/house-rules-rust.md first. Revisit when that names one (#7647).
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; required by the Rust house rules and craft-libs (#7647)" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md

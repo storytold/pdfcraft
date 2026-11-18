@@ -1,0 +1,19 @@
+{
+  "name": "resize grown neighbor",
+  "content": "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 120, "y": 414}},
+    {"type": {"text": "Alpha first row.\nthis is another\nalpha test\nAlpha next row."}},
+    {"key": {"key": "Enter", "modifiers": ["command"]}},
+    {"expect_apart": {"text": "Neighbor stays.", "not": "Alpha"}},
+    {"drag_edge": {"contains": "Alpha next row", "dx": 160}},
+    {"expect_together": {"parts": ["Alpha first row.", "this is another", "alpha test", "Alpha next row."]}},
+    {"drag_edge": {"contains": "Alpha next row", "dx": -80}},
+    {"expect_together": {"parts": ["Alpha first row.", "this is another", "alpha test", "Alpha next row."]}},
+    {"expect_apart": {"text": "Neighbor stays.", "not": "Alpha"}},
+    {"click_page": {"x": 110, "y": 370}},
+    {"expect_editor": {"contains": "Neighbor stays.", "text": "Neighbor stays."}},
+    {"shot": {"name": "resize-grown-neighbor"}}
+  ]
+}
