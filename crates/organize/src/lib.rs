@@ -505,7 +505,8 @@ fn widest(a: Object, b: Object, least: bool) -> Object {
 /// names out of their parent's /Kids, and set every other node's /Limits to its least and
 /// greatest key (ISO 32000-2 §7.9.6, Table 36: /Limits is required in intermediate and leaf
 /// nodes, keys are compared byte by byte, and a node has /Kids or /Names). The root gets no
-/// /Limits; a root left with no kids gets an empty /Names. A node this walk can't read whole is
+/// /Limits; a root left with no kids gets an empty /Names, and a root with /Names as well as
+/// /Kids keeps both as they are. A node this walk can't read whole is
 /// left as it is, and so are the /Limits above it: a leaf whose /Names is not pairs of a string
 /// key and a value, a node at the depth limit, and every node of a cycle. Iterative, each
 /// indirect node visited once, nesting bounded. True when `root` changed.
@@ -577,7 +578,9 @@ fn tidy_tree(doc: &mut Document, root: &mut Dict) -> Result<bool, OrganizeError>
         }
     }
     let (left, _) = combine_spans(&root_kids, &span);
-    if left.len() == root_kids.len() {
+    // A root with both /Kids and /Names (Table 36 allows one) is left as it is: emptying its
+    // /Kids must not replace the names it still holds.
+    if root.get(b"Names").is_some() || left.len() == root_kids.len() {
         return Ok(false);
     }
     if left.is_empty() {

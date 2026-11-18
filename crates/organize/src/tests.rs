@@ -5119,6 +5119,21 @@ fn deleting_a_page_leaves_a_name_tree_leaf_that_is_not_pairs_as_it_is() {
     assert_eq!(kids_of(&doc, 5).len(), 2);
 }
 
+/// See [`deleting_a_page_tidies_name_trees_by_their_keys`]: a root with both /Kids and /Names
+/// (Table 36 allows one) keeps its /Names when its only kid is left empty, and its pair to a page
+/// that stays.
+#[test]
+fn deleting_a_page_keeps_the_names_of_a_root_that_also_has_kids() {
+    let r = |s: &str| s.to_string();
+    let nodes = [r("<< /Kids [6 0 R] /Names [(keep) [3 0 R /Fit]] >>"), r("<< /Limits [(x) (x)] /Names [(x) [4 0 R /Fit]] >>")];
+    let mut doc = open(dests_tree(&nodes));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    let root = doc.get(ObjRef::new(5, 0)).as_dict().cloned().unwrap();
+    let names = root.get(b"Names").and_then(Object::as_array).cloned().unwrap_or_default();
+    assert_eq!(names.first().and_then(Object::as_string).map(|k| k.to_text()), Some("keep".to_string()), "{root:?}");
+}
+
 /// Nodes the cleanup can't see whole stay as they are: a leaf at the depth limit (256 levels
 /// below the root) keeps its /Limits while one a level higher gets them fixed, and the nodes of a
 /// cycle keep their /Kids, though a kid of one is left empty.
