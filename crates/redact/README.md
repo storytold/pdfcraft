@@ -64,7 +64,7 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **vectors**: a path a mark reaches is cut down to what it paints outside the marks:
   rectangles and straight segments are cut around them (a stroke by the reach of its width,
   caps and joins), and its shapes no mark reaches stay as written. What can't be cut exactly
-  (a filled curve, a filled shape under a rotation, a dashed stroke, a fill and stroke under
+  (a filled curve, a filled shape under a rotation, a dashed stroke, a stroke under
   transparency, a path that paints and clips, a path painting with a pattern) is removed whole;
   nothing of a path is kept behind a clip. A clip that paints nothing (`W n`) stays as written.
   Shadings are clipped so

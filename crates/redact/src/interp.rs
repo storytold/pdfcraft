@@ -105,8 +105,8 @@ struct Gs {
     /// new subpaths would move its dashes (#7300).
     dashed: bool,
     /// ExtGState `/CA`, a `/BM` other than Normal and an `/SMask` other than `/None`: under any
-    /// of them a `B` composites its fill and stroke as one object, which separate `f` and `S`
-    /// don't (#7300). Each is set only by a dictionary that names it.
+    /// of them a stroke paints its crossings, and a `B` its fill and stroke, as one object, which
+    /// the several paints of a cut don't (#7300). Each is set only by a dictionary that names it.
     stroke_alpha: f64,
     blends: bool,
     soft_mask: bool,
@@ -775,14 +775,15 @@ impl Walk {
         // (#7300); otherwise it goes whole. A clipping path's outline stays as the clip, so it
         // is never cut; nor is a path painting with a pattern, whose cell (text and all) would
         // stay in use and in the file: it goes whole, and the pattern with it once unused. Nor is
-        // a path that fills and strokes under transparency: `B` composites its fill and stroke as
-        // one object (ISO 32000-2 §11.7.4.4), which the separate `f` and `S` it is cut into don't.
+        // a path stroked under transparency: one `S` paints where it crosses itself once, and `B`
+        // composites its fill and stroke as one object (ISO 32000-2 §11.7.4.4), which the several
+        // `S` and the separate `f` it is cut into don't. Fill pieces that overlap stay together.
         let o = op.op.as_slice();
         let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
         let patterned = (fills && self.gs.fill_pattern.is_some()) || (strokes && self.gs.stroke_pattern.is_some());
         if !clips
             && !patterned
-            && !(fills && strokes && (self.gs.stroke_alpha < 1.0 || self.gs.blends || self.gs.soft_mask))
+            && !(strokes && (self.gs.stroke_alpha < 1.0 || self.gs.blends || self.gs.soft_mask))
             && let Some(cut) = cut::cut(&body, o, &self.gs.ctm, scope.rects, reach)
         {
             uses_patterns(&mut self.out, &self.gs, cut.fills, cut.strokes);

@@ -5956,7 +5956,7 @@ status = "shipped"
 commands = ["redact.apply"]
 tools = ["redact_apply"]
 evidence = ["crates/redact/src/tests.rs::vectors_are_removed_or_cut_and_inline_images_go", "crates/redact/src/tests/cut_paths.rs::a_mark_over_one_cell_keeps_the_rest_of_the_table", "crates/redact/src/tests/cut_paths.rs::what_cannot_be_cut_exactly_still_goes_whole", "crates/redact/src/tests/cut_paths.rs::a_path_split_between_content_streams_is_cut_whole"]
-notes = "rectangles and straight segments cut around the marks, other shapes no mark reaches kept (#7300); filled curves, rotated fills, dashed strokes, transparent fill-and-strokes, paths that paint and clip, and patterned paths removed whole, never kept behind a clip (F-008); shadings clipped"
+notes = "rectangles and straight segments cut around the marks, other shapes no mark reaches kept (#7300); filled curves, rotated fills, dashed strokes, strokes under transparency, paths that paint and clip, and patterned paths removed whole, never kept behind a clip (F-008); shadings clipped"
 
 [[feature]]
 id = "protect.redact-annots-fields"

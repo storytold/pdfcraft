@@ -186,6 +186,8 @@ fn what_cannot_be_cut_exactly_still_goes_whole() {
         (b"q 1 -0.0000000009 0 1 0 0 cm 0 g -10000000 100 20000000 100 re f Q", "a rectangle so wide a near-axis CTM leans it into the mark"),
         (b"q /Half gs 4 w 0 g 100 100 100 100 re B Q", "a box filled and stroked half see-through"),
         (b"q /Multiply gs 4 w 0 g 100 100 100 100 re B Q", "a box filled and stroked with a blend mode"),
+        // A loop around the mark, crossing itself at (120, 120): one `S` paints the crossing once.
+        (b"q /Half gs 4 w 100 100 m 200 200 l 200 120 l 100 120 l S Q", "a self-crossing stroke half see-through"),
     ] {
         let mut doc = one_page(src, "/ExtGState << /Dash << /D [[6 4] 0] >> /Half << /CA 0.5 >> /Multiply << /BM /Multiply >> >>", vec![]);
         mark(&mut doc, 0, &[[130.0, 130.0, 160.0, 160.0]], "");
@@ -245,8 +247,13 @@ fn a_rectangle_under_a_grid_of_marks_goes_whole() {
 #[test]
 fn a_box_filled_and_stroked_opaque_again_is_cut() {
     let res = "/ExtGState << /Half << /CA 0.5 >> /Whole << /CA 1 >> >>";
-    let (r, _) = cut_doc(one_page(b"/Half gs /Whole gs 4 w 0 g 100 100 100 100 re B", res, vec![]), [130.0, 130.0, 160.0, 160.0]);
+    let (r, c) = cut_doc(one_page(b"/Half gs /Whole gs 4 w 0 g 100 100 100 100 re B", res, vec![]), [130.0, 130.0, 160.0, 160.0]);
     assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    // Its outline is clear of the mark: every side is still stroked, after the fill around it.
+    assert!(c.contains("100 100 100 29.9988 re\nf"), "the fill is cut: {c}");
+    for side in ["100 100 m\n200 100 l\nS", "200 100 m\n200 200 l\nS", "200 200 m\n100 200 l\nS", "100 200 m\n100 100 l\nS"] {
+        assert!(c.contains(side), "{side}: {c}");
+    }
 }
 
 /// Strips that meet write their shared edge once: rounded separately, origin and size left a
