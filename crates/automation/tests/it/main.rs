@@ -20,6 +20,7 @@ mod model_render;
 mod office;
 mod optimize_content_boundaries;
 mod page_actions;
+mod page_templates;
 mod pdfa4;
 mod portfolio_info;
 mod redact_after_stray_q_form;
