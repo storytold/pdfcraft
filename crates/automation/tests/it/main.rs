@@ -26,4 +26,5 @@ mod redact_text_after_q;
 mod render_warnings;
 mod text_copy;
 mod timesheet_compat;
+mod type1_subset;
 mod unreadable_objects;
