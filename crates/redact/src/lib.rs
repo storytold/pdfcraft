@@ -144,15 +144,29 @@ pub enum RedactError {
     Cos(#[from] pdfcraft_cos::CosError),
 }
 
+/// What a `DecodeBudget` said when it refused: a filter's message as it stands, another error as
+/// it displays.
+fn budget_detail(error: pdfcraft_cos::CosError) -> String {
+    match error {
+        pdfcraft_cos::CosError::Filter(detail) => detail,
+        other => other.to_string(),
+    }
+}
+
 impl RedactError {
     /// The refusal of content and forms that go past what one page may read, from what the page's
     /// `DecodeBudget` said.
     pub(crate) fn past_allowance(error: pdfcraft_cos::CosError) -> Self {
-        let detail = match error {
-            pdfcraft_cos::CosError::Filter(detail) => detail,
-            other => other.to_string(),
-        };
-        RedactError::Refused(format!("content and forms go past what one page may read ({detail})"))
+        RedactError::Refused(format!("content and forms go past what one page may read ({})", budget_detail(error)))
+    }
+
+    /// The refusal of the glyph programs the document's Type 3 fonts keep, which the cleanup
+    /// reads under one allowance the size of a page's, when together they go past it.
+    pub(crate) fn past_glyph_allowance(error: pdfcraft_cos::CosError) -> Self {
+        RedactError::Refused(format!(
+            "the glyph programs the document's Type 3 fonts keep go, together, past what one page may read ({})",
+            budget_detail(error)
+        ))
     }
 
     /// This error as met while cleaning page `page` (1-based): a refusal names the page.

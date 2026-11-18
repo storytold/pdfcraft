@@ -257,8 +257,9 @@ fn the_form_a_kept_type3_glyph_draws_is_walked_within_the_allowance_of_a_page() 
 }
 
 /// The kept glyph programs a Type 3 cleanup reads share one page's allowance: two compressed ones,
-/// each past half of it, refuse the redaction for the document, as the font's forms do. One that
-/// doesn't decode keeps its own error, and two small ones are the control.
+/// each past half of it, refuse the redaction for the document, as the font's forms do, with a
+/// reason that names them. One that doesn't decode keeps its own error, and two small ones are
+/// the control.
 #[test]
 fn kept_type3_glyph_programs_past_the_allowance_of_a_page_refuse_the_document() {
     enum Then {
@@ -289,7 +290,7 @@ fn kept_type3_glyph_programs_past_the_allowance_of_a_page_refuse_the_document() 
         let out = apply(&mut doc, None);
         match then {
             Then::PastTheAllowance => assert!(
-                matches!(&out, Err(RedactError::Refused(reason)) if reason.starts_with("content and forms go past what one page may read")),
+                matches!(&out, Err(RedactError::Refused(reason)) if reason.starts_with("the glyph programs the document's Type 3 fonts keep go, together, past what one page may read")),
                 "glyph programs of {size} bytes each: {out:?}"
             ),
             Then::DoesNotDecode => assert!(

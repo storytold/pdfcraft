@@ -883,7 +883,7 @@ fn clean_type3_font(
         let data = reads
             .budget
             .decode(&doc.with_direct_parms(s))
-            .map_err(|e| if reads.budget.refused() > refused { RedactError::past_allowance(e) } else { e.into() })?;
+            .map_err(|e| if reads.budget.refused() > refused { RedactError::past_glyph_allowance(e) } else { e.into() })?;
         let mut used = UsedInGlyphs::default();
         collect_used_resources_in_stream(&data, &mut used)?;
         used_in_glyphs.merge(&used);
