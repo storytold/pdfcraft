@@ -386,7 +386,7 @@ mod tests {
         let jp = add_type3_font(&mut doc, &mut fonts, &face, false, vec![glyph(1, 'あ')]);
         assert_eq!([he.as_str(), he1.as_str(), jp.as_str()], ["PCHe", "PCHe1", "PCJp"]);
         for name in [&he, &he1, &jp] {
-            let font = fonts.get(name.as_bytes()).and_then(Object::as_dict).cloned().unwrap_or_default();
+            let font = fonts.get(name.as_bytes()).and_then(|f| doc.dict(f)).unwrap_or_default();
             assert!(is_type3_fallback(&font), "{name} isn't recognized as a generated fallback font");
         }
         // Someone else's Type 3 font is not ours.
