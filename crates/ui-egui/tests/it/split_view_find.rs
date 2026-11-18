@@ -4,6 +4,7 @@
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
@@ -26,16 +27,15 @@ fn each_panes_find_input_has_its_own_id() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
     h.run_steps(4);
     assert_eq!(h.state().views.len(), 2);
-    let (first, second) = (h.state().views[0].find_input_id(), h.state().views[1].find_input_id());
-    assert_ne!(first, second, "one find field id per pane");
-
     // Find open in both panes, the second one asking for the focus last.
     h.state_mut().views[0].open_find();
     h.state_mut().views[1].open_find();
     h.run_steps(4);
-    let focused = h.ctx.memory(|m| m.focused());
-    assert_eq!(focused, Some(second), "the focus is in the pane that asked last");
-    assert!(!h.ctx.memory(|m| m.has_focus(first)), "the other pane's field does not share it");
+    assert_eq!(h.get_all_by_label("Find text").count(), 2, "one find field per pane");
+    let mut fields = h.get_all_by_label("Find text");
+    let (first, second) = (fields.next().unwrap(), fields.next().unwrap());
+    assert!(second.accesskit_node().is_focused(), "the focus is in the pane that asked last");
+    assert!(!first.accesskit_node().is_focused(), "the other pane's field does not share it");
 
     // Typing goes to one query only.
     h.event(egui::Event::Text("abc".into()));

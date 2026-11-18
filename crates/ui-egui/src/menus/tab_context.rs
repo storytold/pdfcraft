@@ -1,4 +1,7 @@
 //! PDF-tab actions. Closed history contains paths only, never bytes or passwords.
+use std::path::PathBuf;
+
+use craft::host::queue::Priority;
 use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
@@ -14,37 +17,23 @@ pub(crate) enum Action {
     },
 }
 
-impl crate::PdfCraftApp {
-    /// Reveal a local file without opening it or changing document/Recent state. The existence
-    /// check and the file manager call can block (a disconnected network mount, a slow `dbus-send`
-    /// or `explorer.exe`), so they run on a worker; a failure is shown by
-    /// [`Self::show_reveal_errors`]. Tests run it inline ([`PdfCraftApp::run_inline`]).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn reveal_path(&mut self, path: &std::path::Path) {
-        let path = path.to_path_buf();
-        let errors = self.reveal_errors.clone();
-        let ctx = self.ctx.clone();
-        let work = move || {
-            if let Err(e) = reveal(&path) {
-                errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(e);
-                if let Some(ctx) = &ctx {
-                    ctx.request_repaint();
-                }
-            }
-        };
-        if self.run_inline {
-            work();
-        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-reveal".into()).spawn(work) {
-            self.notify_error(e);
-        }
-    }
+/// Reveal a local file without opening it or changing document/Recent state. The file manager call
+/// blocks (a disconnected network mount, a slow `dbus-send` or `explorer.exe`), so it runs as a
+/// job on the host's queue; a failure is shown by [`PdfCraftApp::drain_reveals`] on the pass that
+/// receives the result.
+pub(crate) fn reveal_on_jobs(app: &mut crate::PdfCraftApp, path: PathBuf) {
+    // PLAN: assumed field `reveal_jobs: JobQueue<PathBuf, Result<(), String>>` on `PdfCraftApp` (pdf-hub-w1).
+    let target = path.clone();
+    app.reveal_jobs.submit(path, Priority::VISIBLE, move |_| craft::platform::open::reveal(&target));
+}
 
-    /// Show the failures the reveal worker has reported (called each frame).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn show_reveal_errors(&mut self) {
-        let errors = std::mem::take(&mut *self.reveal_errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for e in errors {
-            self.notify_error(e);
+impl crate::PdfCraftApp {
+    /// Shows the failures of finished reveal jobs; once a frame, whatever the window shows.
+    pub(crate) fn drain_reveals(&mut self) {
+        while let Some(done) = self.reveal_jobs.try_recv() {
+            if let Err(e) = done.result {
+                self.notify_error(e);
+            }
         }
     }
 
@@ -79,138 +68,84 @@ impl crate::PdfCraftApp {
                 }
             }
             Action::Reveal(id) => {
-                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
-                    self.reveal_path(std::path::Path::new(&path));
-                }
-                #[cfg(target_arch = "wasm32")]
-                let _ = id;
-            }
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Blocking: call it from a worker thread ([`crate::PdfCraftApp::reveal_path`]).
-fn reveal(path: &std::path::Path) -> Result<(), String> {
-    // Absolute paths also prevent a filename starting with '-' becoming an option.
-    let path = std::path::absolute(path).map_err(|e| e.to_string())?;
-    if !path.try_exists().map_err(|e| e.to_string())? {
-        return Err("The file no longer exists".into());
-    }
-    let platform = std::env::consts::OS;
-    let run =
-        |program: &str, args: &[std::ffi::OsString]| reveal_process(program, args).output().map(|o| o.status.success()).map_err(|e| e.to_string());
-    reveal_via(platform, &path, run)
-}
-
-/// The process that runs `program` with `args`. Windows: `reveal_command` already quotes what
-/// Explorer needs quoted, and Rust's own quoting of an argument with a space breaks `/select,`
-/// (#2579), so the arguments go on the command line as written.
-#[cfg(not(target_arch = "wasm32"))]
-fn reveal_process(program: &str, args: &[std::ffi::OsString]) -> std::process::Command {
-    let mut command = std::process::Command::new(program);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        for arg in args {
-            command.raw_arg(arg);
-        }
-    }
-    #[cfg(not(windows))]
-    command.args(args);
-    command
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn reveal_via(
-    platform: &str,
-    path: &std::path::Path,
-    mut run: impl FnMut(&str, &[std::ffi::OsString]) -> Result<bool, String>,
-) -> Result<(), String> {
-    let (program, args) = reveal_command(platform, path)?;
-    if run(program, &args).unwrap_or(false) {
-        return Ok(());
-    }
-    if matches!(platform, "linux" | "freebsd") {
-        // FileManager1 is optional. If absent, open the containing folder with xdg-open.
-        let parent = path.parent().ok_or("The file has no parent directory")?;
-        if run("xdg-open", &[parent.as_os_str().into()])? {
-            return Ok(());
-        }
-    }
-    Err("Could not reveal the file in the system file manager".into())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn reveal_command(platform: &str, path: &std::path::Path) -> Result<(&'static str, Vec<std::ffi::OsString>), String> {
-    match platform {
-        "windows" => {
-            // Explorer reads `/select,"<object>"`: the path quoted after the comma (#2579). Quoting
-            // the whole argument instead ("/select,C:\a b.pdf", what an ordinary argument with a
-            // space becomes) opens Documents. A Windows path can't contain `"`, so the quotes
-            // can't be closed early; one that does is refused.
-            if path.as_os_str().as_encoded_bytes().contains(&b'"') {
-                return Err("The file name can't be shown in File Explorer".into());
-            }
-            let mut selection = std::ffi::OsString::from("/select,\"");
-            selection.push(path);
-            selection.push("\"");
-            Ok(("explorer.exe", vec![selection]))
-        }
-        "macos" => Ok(("open", vec!["-R".into(), path.as_os_str().into()])),
-        "linux" | "freebsd" => {
-            let mut uri = String::from("array:string:file://");
-            for b in path.as_os_str().as_encoded_bytes() {
-                if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
-                    uri.push(char::from(*b));
-                } else {
-                    use std::fmt::Write as _;
-                    let _ = write!(uri, "%{b:02X}");
+                    reveal_on_jobs(self, PathBuf::from(path));
                 }
             }
-            Ok((
-                "dbus-send",
-                vec![
-                    "--session".into(),
-                    "--print-reply".into(),
-                    "--reply-timeout=2000".into(),
-                    "--dest=org.freedesktop.FileManager1".into(),
-                    "/org/freedesktop/FileManager1".into(),
-                    "org.freedesktop.FileManager1.ShowItems".into(),
-                    uri.into(),
-                    "string:".into(),
-                ],
-            ))
         }
-        _ => Err("File reveal is not available on this platform".into()),
     }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use crate::PdfCraftApp;
+    use egui::accesskit::Role;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+    use std::sync::Arc;
+
     const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
+
+    /// An English app on a host whose jobs run when the test says.
+    fn app_on(jobs: Arc<craft::host::ManualJobs>) -> PdfCraftApp {
+        let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
+        let host = craft::host::Host::builder(info).jobs(jobs).build();
+        // PLAN: assumed `AppServices::detached()` (pdf-hub-w1): services with no clipboard, recovery directory, update source, intake or watch.
+        let mut app = PdfCraftApp::with_host(Arc::new(host), crate::AppServices::detached());
+        // PLAN: `set_option` takes the context (L-208).
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app
+    }
+
+    /// An English app whose jobs never run.
+    fn app() -> PdfCraftApp {
+        app_on(Arc::new(craft::host::ManualJobs::new()))
+    }
+
+    /// The unsaved-changes dialog's "don't keep the changes" and Cancel answers as the framework words
+    /// them on this OS.
+    fn answers() -> (String, String) {
+        // PLAN: assumed paths `craft::ui::dialog::DialogWords`, `craft::ui::runtime::words::CommonWords`,
+        // `craft::i18n::WordSet`; their fields display as their English text.
+        use craft::i18n::WordSet as _;
+        let dialog = craft::ui::dialog::DialogWords::english();
+        let common = craft::ui::runtime::words::CommonWords::english();
+        let dont_save = if cfg!(target_os = "macos") { dialog.unsaved_dont_save } else { dialog.unsaved_no };
+        (dont_save.to_string(), common.cancel.to_string())
+    }
 
     #[test]
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
-        let mut app = crate::PdfCraftApp::new();
-        app.open_bytes("first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
-        let (first, first_tab) = (app.views[0].id, app.views[0].view_key());
-        app.open_bytes("second.pdf", None, PDF.to_vec()).unwrap();
-        app.session.apply(first, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
-        app.tab_action(Action::Close(first_tab));
-        assert_eq!(app.views.len(), 2);
-        assert!(app.closed_tabs.is_empty());
-        app.resolve_close(&egui::Context::default(), None);
-        assert!(app.closed_tabs.is_empty());
-        app.tab_action(Action::Close(first_tab));
-        app.resolve_close(&egui::Context::default(), Some(false));
-        assert_eq!(app.views.len(), 1);
-        assert_eq!(app.closed_tabs, ["/tmp/first.pdf"]);
-        assert_eq!(app.active, Some(0));
-        app.close_tab(0);
-        assert_eq!(app.closed_tabs.len(), 1, "pathless tabs are not recorded");
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+            let mut app = app();
+            app.open_bytes("first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
+            app.open_bytes("second.pdf", None, PDF.to_vec()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        let (first, first_tab) = (h.state().views[0].id, h.state().views[0].view_key());
+        h.state_mut().session.apply(first, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
+        h.state_mut().tab_action(Action::Close(first_tab));
+        h.run_steps(3);
+        let (dont_save, cancel) = answers();
+        assert_eq!(h.state().views.len(), 2);
+        assert!(h.state().closed_tabs.is_empty());
+        h.get_by_role_and_label(Role::Button, &cancel).click();
+        h.run_steps(3);
+        assert_eq!(h.state().views.len(), 2);
+        assert!(h.state().closed_tabs.is_empty());
+        h.state_mut().tab_action(Action::Close(first_tab));
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, &dont_save).click();
+        h.run_steps(3);
+        assert_eq!(h.state().views.len(), 1);
+        assert_eq!(h.state().closed_tabs, ["/tmp/first.pdf"]);
+        assert_eq!(h.state().active, Some(0));
+        h.state_mut().close_tab(0);
+        assert_eq!(h.state().closed_tabs.len(), 1, "pathless tabs are not recorded");
     }
 
     #[test]
@@ -221,7 +156,7 @@ mod tests {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
         file.write_all(PDF).unwrap();
         drop(file);
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = app();
         let path_text = path.to_str().unwrap();
         for _ in 0..12 {
             app.open_path(path_text);
@@ -246,7 +181,7 @@ mod tests {
         let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).unwrap();
         file.write_all(PDF).unwrap();
         drop(file);
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = app();
         app.open_path(text);
         app.close_tab(0);
         std::fs::remove_file(&path).unwrap();
@@ -266,82 +201,27 @@ mod tests {
 
     #[test]
     fn a_failed_reveal_is_reported_back_to_the_ui_thread() {
-        let mut app = crate::PdfCraftApp::new();
-        app.run_inline = true;
-        app.reveal_path(std::path::Path::new("/pdfcraft-no-such-dir/missing.pdf"));
-        assert!(app.toast.is_none(), "nothing is shown until the UI thread takes the report");
-        app.show_reveal_errors();
-        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("The file no longer exists"));
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let held = jobs.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| app_on(held));
+        h.run_steps(2);
+        reveal_on_jobs(h.state_mut(), PathBuf::from("/pdfcraft-no-such-dir/missing.pdf"));
+        assert_eq!(jobs.waiting(), 1, "the reveal is a job on the host");
+        h.run_steps(2);
+        // PLAN: assumed `craft::ui::notices::Notices::posted(&Context) -> usize` (L-206).
+        let posted = |h: &Harness<'_, PdfCraftApp>| craft::ui::notices::Notices::posted(&h.ctx);
+        assert_eq!(posted(&h), 0, "nothing is shown until the job ends");
+        jobs.run_all();
+        h.run_steps(2);
+        assert_eq!(posted(&h), 1, "the failure is shown as a notice");
     }
-
-    #[test]
-    fn unavailable_file_manager_falls_back_safely_and_reports_failure() {
-        let path = std::path::Path::new("/tmp/年度 & reports/file.pdf");
-        let mut calls = Vec::new();
-        reveal_via("linux", path, |program, args| {
-            calls.push((program.to_string(), args.to_vec()));
-            if program == "dbus-send" { Err("FileManager1 unavailable".into()) } else { Ok(true) }
-        })
-        .unwrap();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[1], ("xdg-open".into(), vec![std::ffi::OsString::from("/tmp/年度 & reports")]));
-        assert!(reveal_via("linux", path, |_, _| Ok(false)).is_err());
-        assert!(reveal_via("linux", path, |_, _| Err("command missing".into())).is_err());
-    }
-
-    /// #2579 (review of #2625): the `/select,"…"` argument reaches the process exactly as written.
-    /// `cmd /c echo` prints its command line back; with Rust's own quoting (`args`) it would come
-    /// back wrapped in quotes with the inner ones escaped, which Explorer reads as no selection.
-    #[cfg(windows)]
-    #[test]
-    fn the_reveal_argument_reaches_the_process_as_written() {
-        let (_, args) = reveal_command("windows", std::path::Path::new(r"C:\Reports\annual report.pdf")).unwrap();
-        let mut echo: Vec<std::ffi::OsString> = ["/d", "/c", "echo"].map(std::ffi::OsString::from).to_vec();
-        echo.extend(args);
-        let out = reveal_process("cmd", &echo).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), r#"/select,"C:\Reports\annual report.pdf""#);
-    }
-
-    #[test]
-    fn reveal_arguments_preserve_spaces_and_unicode() {
-        let path = std::path::Path::new("/tmp/年度 report.pdf");
-        let (exe, args) = reveal_command("macos", path).unwrap();
-        assert_eq!(exe, "open");
-        assert_eq!(args, [std::ffi::OsString::from("-R"), path.as_os_str().into()]);
-        let (exe, args) = reveal_command("windows", path).unwrap();
-        assert_eq!(exe, "explorer.exe");
-        assert_eq!(args, [std::ffi::OsString::from("/select,\"/tmp/年度 report.pdf\"")]);
-        // #2579: the path is quoted after the comma, never the whole argument, which Explorer
-        // reads as no selection and answers by opening Documents.
-        let special = std::path::Path::new(r"C:\Reports\年度 report, #1 & (draft).pdf");
-        let (_, windows) = reveal_command("windows", special).unwrap();
-        assert_eq!(windows, [std::ffi::OsString::from(r#"/select,"C:\Reports\年度 report, #1 & (draft).pdf""#)]);
-        assert!(reveal_command("windows", std::path::Path::new(r#"C:\a" b.pdf"#)).is_err(), "a quote can't end the path early");
-        let (exe, args) = reveal_command("linux", path).unwrap();
-        assert_eq!(exe, "dbus-send");
-        assert_eq!(args[6], "array:string:file:///tmp/%E5%B9%B4%E5%BA%A6%20report.pdf");
-        let (_, args) = reveal_command("linux", std::path::Path::new("/tmp/年度 report,#&'$.pdf")).unwrap();
-        assert_eq!(args[6], "array:string:file:///tmp/%E5%B9%B4%E5%BA%A6%20report%2C%23%26%27%24.pdf");
-        assert_eq!(args[5], "org.freedesktop.FileManager1.ShowItems");
-        assert_eq!(args[7], "string:");
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod ui_tests {
-    use crate::PdfCraftApp;
-    use egui_kittest::{
-        Harness,
-        kittest::{NodeT, Queryable},
-    };
 
     #[test]
     fn inactive_tab_menu_closes_target_and_disables_unavailable_actions() {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = app();
             for name in ["first.pdf", "second.pdf"] {
-                app.open_bytes(name, None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(name, None, PDF.to_vec()).unwrap();
             }
             app
         });

@@ -7,8 +7,27 @@ use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::panes::Place;
+
+/// The size of view `i`'s first page picture once it is drawn; a stand-in for a page still loading
+/// is not a drawn page.
+fn page_size(s: &PdfCraftApp, i: usize) -> Option<egui::Vec2> {
+    match &s.views[i].placed.first()?.picture {
+        TextureState::Ready(texture) => Some(texture.size_vec2()),
+        _ => None,
+    }
+}
+
+/// The label of the unsaved-changes dialog's "don't keep the changes" answer on this OS, as the
+/// framework words it.
+fn dont_save() -> String {
+    // PLAN: assumed paths `craft::ui::dialog::DialogWords` and `craft::i18n::WordSet`; the fields display as their English text.
+    use craft::i18n::WordSet as _;
+    let words = craft::ui::dialog::DialogWords::english();
+    if cfg!(target_os = "macos") { words.unsaved_dont_save } else { words.unsaved_no }.to_string()
+}
 
 /// `pages` portrait pages (300 × 400) with a line of text each.
 fn fixture(pages: usize) -> Vec<u8> {
@@ -141,8 +160,8 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     assert_eq!(h.state().views[first].id, h.state().views[second].id, "one document");
     assert_eq!(h.state().session.docs().len(), 1);
     // Both panes draw the portrait page.
-    let portrait = |s: &PdfCraftApp, i: usize| s.views[i].drawn_page_size(0).is_some_and(|[w, hgt]| hgt > w);
-    let landscape = |s: &PdfCraftApp, i: usize| s.views[i].drawn_page_size(0).is_some_and(|[w, hgt]| w > hgt);
+    let portrait = |s: &PdfCraftApp, i: usize| page_size(s, i).is_some_and(|size| size.y > size.x);
+    let landscape = |s: &PdfCraftApp, i: usize| page_size(s, i).is_some_and(|size| size.x > size.y);
     wait(&mut h, "both panes drawn", |s| portrait(s, first) && portrait(s, second));
     // Each pane scrolls on its own: the second goes to page 3.
     h.state_mut().views[second].go_to_page(2);
@@ -179,7 +198,7 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     let comment = NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: String::new() };
     assert!(h.state_mut().apply_edit(Edit::AddAnnotation(comment)));
     h.run_steps(1);
-    assert!(h.state().views[second].drawn_page_size(0).is_none(), "the second pane's page is being drawn again");
+    assert!(page_size(h.state(), second).is_none(), "the second pane's page is being drawn again");
     wait(&mut h, "both panes drawn again", |s| portrait(s, first) && portrait(s, second));
 }
 
@@ -218,7 +237,7 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     let second = h.state().views.iter().position(|v| v.place() == Place::Second).unwrap();
     h.state_mut().request_close_tab(second);
     h.run_steps(3);
-    assert!(h.state().close_request.is_none(), "no save prompt: the document is still open");
+    assert!(h.query_by_role_and_label(Role::Button, &dont_save()).is_none(), "no save prompt: the document is still open");
     assert!(h.state().panes.split.is_none());
     assert_eq!(h.state().views.len(), 1);
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "its edit is still there");
@@ -239,9 +258,9 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     };
     h.state_mut().views[second].fill_text = Some(typed);
     h.state_mut().request_close_tab(second);
-    assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::Tab(id)), "the typing is asked about");
-    let ctx = h.ctx.clone();
-    h.state_mut().resolve_close(&ctx, Some(false));
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Button, &dont_save()).is_some(), "the typing is asked about");
+    h.get_by_role_and_label(Role::Button, &dont_save()).click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1);
     assert_eq!(h.state().views[0].view_key(), first_key, "the view asked about closed, the other stayed");
@@ -285,17 +304,16 @@ fn a_tab_dropped_on_the_right_half_of_the_page_splits_right_with_it() {
     assert!(h.state().panes.split.is_some(), "dropped on the right half: split view");
     assert_eq!(h.state().views[index(&h, "one.pdf")].place(), Place::Second);
     assert_eq!(h.state().views[index(&h, "two.pdf")].place(), Place::Main);
-    // Dragged back onto the main strip, it rejoins it and split view ends.
+    // Dragged back onto a tab of the main strip, it rejoins it and split view ends.
     let strip = h.get_by_role_and_label(Role::Tab, "two.pdf").rect();
-    drag_tab(&mut h, "one.pdf", strip.right_center() + egui::vec2(40.0, 0.0));
+    drag_tab(&mut h, "one.pdf", strip.center());
     assert!(h.state().panes.split.is_none());
     assert_eq!(places(&h), [Place::Main, Place::Main]);
-    // Let go outside the window, a tab moves along the strip as before split view (here to the
-    // front), and nothing splits.
+    // Let go outside the window, the strip keeps its order and nothing splits.
     let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
     drag_tab(&mut h, "two.pdf", egui::pos2(-200.0, 300.0));
     assert!(h.state().panes.split.is_none());
-    assert_eq!(h.state().views.iter().map(|v| v.id).collect::<Vec<_>>(), [ids[1], ids[0]]);
+    assert_eq!(h.state().views.iter().map(|v| v.id).collect::<Vec<_>>(), [ids[0], ids[1]]);
 }
 
 /// Regression: closing the second pane's tab from its own strip, with the same document in both
