@@ -321,6 +321,53 @@ fn actual_text_across_several_lines_replaces_all_of_them() {
     assert!(mixed[2] > 68.0 && mixed[1] < 85.0, "{mixed:?}");
 }
 
+/// A superscript on the replacement's first line (text rise, ISO 32000-2 §9.3.7) stays in its
+/// box, and so do the glyphs after it; so do the first line's glyphs drawn after a run on the
+/// next line, which stays out.
+#[test]
+fn actual_text_boxes_keep_superscripts_and_glyphs_drawn_after_another_line() {
+    let sup = "/F1 20 Tf 1 0 0 1 20 200 Tm (ab) Tj /F1 8 Tf 12 Ts (2) Tj /F1 20 Tf 0 Ts (cd) Tj";
+    let back = "/F1 20 Tf 1 0 0 1 20 200 Tm (ab) Tj 1 0 0 1 20 160 Tm (xy) Tj 1 0 0 1 60 200 Tm (ef) Tj";
+    let pages = [
+        format!("BT /Span <</ActualText (Sup)>> BDC {sup} EMC ET"),
+        format!("BT {sup} ET"),
+        format!("BT /Span <</ActualText (Back)>> BDC {back} EMC ET"),
+        format!("BT {back} ET"),
+    ];
+    let pdf = marked_pages(&pages.iter().map(String::as_str).collect::<Vec<_>>());
+    let boxed = |page: usize, text: &str| {
+        let t = marked_text(&pdf, page);
+        assert_eq!(t.plain_text(), text);
+        t.glyphs.iter().find(|g| g.text == text).map(|g| g.rect).unwrap()
+    };
+    let glyph = |page: usize, text: &str| marked_text(&pdf, page).glyphs.iter().find(|g| g.text == text).map(|g| g.rect).unwrap();
+    let (sup_box, two, d) = (boxed(0, "Sup"), glyph(1, "2"), glyph(1, "d"));
+    assert!((sup_box[1] - two[1]).abs() < 0.01, "up to the superscript's top: {sup_box:?}, 2 at {two:?}");
+    assert!((sup_box[2] - d[2]).abs() < 0.01, "on to the end of the line: {sup_box:?}, d at {d:?}");
+    let (back_box, f, y) = (boxed(2, "Back"), glyph(3, "f"), glyph(3, "y"));
+    assert!((back_box[2] - f[2]).abs() < 0.01, "the first line's last run is in: {back_box:?}, f at {f:?}");
+    assert!(back_box[3] < y[1], "the next line stays out: {back_box:?}, y at {y:?}");
+}
+
+/// A vertical glyph is as wide across its column as its horizontal width, centred on the column
+/// (ISO 32000-2 §9.7.4.3), so its place across the column is the middle, whatever its width: a
+/// glyph three times as wide in the next column, 18 units away on either side, stays out of the
+/// first column's replacement box.
+#[test]
+fn actual_text_in_a_vertical_column_keeps_the_next_column_out() {
+    for next in [82, 118] {
+        let text = vertical_latin(
+            &[(36, 500), (37, 1500)],
+            None,
+            &format!("/Span <</ActualText (Q)>> BDC BT /F1 20 Tf 1 0 0 1 100 340 Tm <0024> Tj 1 0 0 1 {next} 340 Tm <0025> Tj ET EMC"),
+        );
+        assert_eq!(text.plain_text(), "Q", "{next}");
+        let q = text.glyphs.iter().find(|g| g.text == "Q").map(|g| g.rect).unwrap();
+        // The first glyph is 20 × 0.5 = 10 wide, centred on x = 100.
+        assert!(q[0] > 94.9 && q[2] < 105.1, "next column at {next}: {q:?}");
+    }
+}
+
 #[test]
 fn actual_text_over_painted_paths_reads_where_they_are_painted() {
     // Words drawn as outlines (a face that can't be embedded) carry their text in /ActualText
