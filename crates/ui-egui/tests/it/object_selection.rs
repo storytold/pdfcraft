@@ -5,6 +5,8 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::{AddedText, Edit, EditableObject};
 use pdfcraft_ui_egui::PdfCraftApp;
 
+use crate::editing::{Copies, clipboard_app, copied_text};
+
 fn fixture(clipping: bool) -> Vec<u8> {
     fixture_with_background(clipping, false)
 }
@@ -55,8 +57,15 @@ fn harness_with(clipping: bool) -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_document(clipping: bool, background: bool) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+    harness_copying(clipping, background).0
+}
+
+/// The harness with the clipboard its app copies to: each copy's flavours are recorded in the list.
+fn harness_copying(clipping: bool, background: bool) -> (Harness<'static, PdfCraftApp>, Copies) {
+    let copies = Copies::default();
+    let sink = copies.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        let mut app = clipboard_app(&cc.egui_ctx, &sink);
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option("language", "en").unwrap();
         app.open_bytes("group.pdf", None, fixture_with_background(clipping, background)).unwrap();
@@ -74,7 +83,7 @@ fn harness_document(clipping: bool, background: bool) -> Harness<'static, PdfCra
         app
     });
     crate::support::settle(&mut h);
-    h
+    (h, copies)
 }
 
 fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
@@ -520,6 +529,13 @@ fn keys(h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers, key: Key) {
     h.run_steps(4);
 }
 
+/// The paste chord: the platform answers the request with the text of the latest copy.
+fn paste(h: &mut Harness<'static, PdfCraftApp>, copies: &Copies) {
+    h.key_press_modifiers(Modifiers::COMMAND, Key::V);
+    h.event(egui::Event::Paste(copied_text(copies).unwrap_or_default()));
+    h.run_steps(4);
+}
+
 /// âŒ˜A in Edit a PDF selects every object on the page, as Acrobat does: paragraphs, artwork and
 /// added content. The arrow keys then move them all and Delete removes them all, each as one step.
 #[test]
@@ -559,14 +575,13 @@ fn command_a_in_an_open_paragraph_selects_its_text_not_the_objects() {
 /// and right, selected; a paste into another document draws them there; a cut is one step.
 #[test]
 fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_document() {
-    let mut h = harness();
-    h.state_mut().system_clipboard = false;
+    let (mut h, copies) = harness_copying(false, false);
     let unchanged = can_undo(&h, 0);
     keys(&mut h, Modifiers::COMMAND, Key::A);
     keys(&mut h, Modifiers::COMMAND, Key::C);
     assert_eq!(can_undo(&h, 0), unchanged, "a copy changes nothing");
     assert!(h.state().object_clipboard.is_some());
-    keys(&mut h, Modifiers::COMMAND, Key::V);
+    paste(&mut h, &copies);
     assert_eq!(can_undo(&h, 0).as_deref(), Some("Paste"));
     let pasted = texts(&h, 0);
     for text in ["Group headline", "Keep here", "Added note"] {
@@ -583,7 +598,7 @@ fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_documen
     assert_eq!(other, 1);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::EditText;
     h.run_steps(2);
-    keys(&mut h, Modifiers::COMMAND, Key::V);
+    paste(&mut h, &copies);
     assert_eq!(can_undo(&h, other).as_deref(), Some("Paste"));
     let there = texts(&h, other);
     assert!(["Group headline", "Keep here", "Added note"].iter().all(|t| there.iter().any(|x| x.contains(t))), "{there:?}");
@@ -593,7 +608,7 @@ fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_documen
     keys(&mut h, Modifiers::COMMAND, Key::X);
     assert!(texts(&h, other).is_empty(), "{:?}", texts(&h, other));
     assert_eq!(can_undo(&h, other).as_deref(), Some("Delete content"));
-    keys(&mut h, Modifiers::COMMAND, Key::V);
+    paste(&mut h, &copies);
     assert!(texts(&h, other).iter().any(|t| t.contains("Added note")));
 }
 
@@ -601,8 +616,7 @@ fn objects_copy_cut_and_paste_with_the_keys_on_the_page_and_into_another_documen
 /// paste only while it still holds the text their copy put there.
 #[test]
 fn a_newer_copy_elsewhere_wins_over_the_copied_objects() {
-    let mut h = harness();
-    h.state_mut().system_clipboard = false;
+    let (mut h, _copies) = harness_copying(false, false);
     keys(&mut h, Modifiers::COMMAND, Key::A);
     keys(&mut h, Modifiers::COMMAND, Key::C);
     let copied = h.state().object_clipboard.as_ref().unwrap().clip().text();
@@ -621,8 +635,7 @@ fn a_newer_copy_elsewhere_wins_over_the_copied_objects() {
 /// objects were.
 #[test]
 fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page() {
-    let mut h = harness();
-    h.state_mut().system_clipboard = false;
+    let (mut h, _copies) = harness_copying(false, false);
     keys(&mut h, Modifiers::COMMAND, Key::A);
     keys(&mut h, Modifiers::COMMAND, Key::C);
     assert!(h.state().object_clipboard.is_some(), "the objects are copied, so Edit ▸ Paste is on");

@@ -5,7 +5,7 @@ use egui_kittest::{
     kittest::{NodeT, Queryable},
 };
 use pdfcraft_engine::{AddedContent, AddedImage, Edit};
-use pdfcraft_ui_egui::{Clip, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 fn fixture(rotation: u16, cropped: bool, shared: bool) -> Vec<u8> {
     fixture_at(rotation, cropped, shared, false)
@@ -40,16 +40,22 @@ fn fixture_at(rotation: u16, cropped: bool, shared: bool, collision: bool) -> Ve
 }
 
 fn harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+    let copies = crate::editing::Copies::default();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |cc| {
+        let mut app = crate::editing::clipboard_app(&cc.egui_ctx, &copies);
         app.set_option("language", "en").unwrap();
-        app.system_clipboard = false;
         app.open_bytes("ownership.pdf", None, bytes.clone()).unwrap();
-        app.clipboard_override = Some(Clip::Image { width: 40, height: 20, rgba: [0, 0, 255, 255].repeat(800) });
         app
     });
     h.run_steps(4);
     h
+}
+
+/// Answers the paste the app asked the platform for with a 40×20 blue image.
+fn deliver_image(h: &mut Harness<'static, PdfCraftApp>) {
+    h.step();
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([40, 20], egui::Color32::BLUE))));
+    h.run_steps(3);
 }
 
 fn point(h: &Harness<'static, PdfCraftApp>, user: [f64; 2]) -> Pos2 {
@@ -77,7 +83,7 @@ fn reopened(app: &mut PdfCraftApp) -> PdfCraftApp {
     saved
 }
 
-fn check_placement(rotation: u16, cropped: bool, view_rotation: u16, shared: bool, existing_added: bool, collision: bool) {
+fn check_placement(case: &str, rotation: u16, cropped: bool, view_rotation: u16, shared: bool, existing_added: bool, collision: bool) {
     let mut h = harness(fixture_at(rotation, cropped, shared, collision));
     if existing_added {
         let mut png = Vec::new();
@@ -95,7 +101,7 @@ fn check_placement(rotation: u16, cropped: bool, view_rotation: u16, shared: boo
     let at = if cropped { [250.0, 400.0] } else { [210.0, 80.0] };
     right_click(&mut h, at);
     h.get_by_label_contains("Paste").click();
-    h.run_steps(3);
+    deliver_image(&mut h);
     let doc = h.state().session.get(id).unwrap();
     let inserted = doc
         .added()
@@ -107,9 +113,9 @@ fn check_placement(rotation: u16, cropped: bool, view_rotation: u16, shared: boo
         .expect("a new image XObject was inserted");
     assert!(!originals.contains(&inserted), "embedding must allocate a fresh image identity");
     let selected = &doc.page_images(0)[h.state().views[0].image_selection.as_ref().unwrap().index];
-    assert_eq!(selected.object, Some(inserted), "the visible selection must name the inserted XObject");
+    assert_eq!(selected.object, Some(inserted), "{case}: the visible selection must name the inserted XObject");
     let center = [(selected.rect[0] + selected.rect[2]) * 0.5, (selected.rect[1] + selected.rect[3]) * 0.5];
-    assert!((center[0] - at[0]).abs() < 0.001 && (center[1] - at[1]).abs() < 0.001, "rotation={rotation}, crop={cropped}: {center:?} vs {at:?}");
+    assert!((center[0] - at[0]).abs() < 0.001 && (center[1] - at[1]).abs() < 0.001, "{case}: rotation={rotation}, crop={cropped}: {center:?} vs {at:?}");
     let saved = reopened(h.state_mut());
     let placed = saved.session.get(saved.views[0].id).unwrap().page_images(0).into_iter().find(|image| image.object == Some(inserted)).unwrap();
     assert!(((placed.rect[0] + placed.rect[2]) * 0.5 - at[0]).abs() < 0.001);
@@ -118,9 +124,9 @@ fn check_placement(rotation: u16, cropped: bool, view_rotation: u16, shared: boo
     h.run_steps(3);
     let saved = reopened(h.state_mut());
     let doc = saved.session.get(saved.views[0].id).unwrap();
-    assert_eq!(doc.added().len(), usize::from(existing_added));
+    assert_eq!(doc.added().len(), usize::from(existing_added), "{case}");
     let remaining = doc.page_images(0);
-    assert_eq!(remaining.len(), originals.len());
+    assert_eq!(remaining.len(), originals.len(), "{case}");
     assert!(remaining.iter().any(|image| image.name == "Red"));
     if shared {
         assert!(remaining.iter().any(|image| image.name == "RedAgain"));
@@ -128,46 +134,23 @@ fn check_placement(rotation: u16, cropped: bool, view_rotation: u16, shared: boo
 }
 
 #[test]
-fn context_paste_ordinary_page_control() {
-    check_placement(0, false, 0, false, false, false);
-}
-#[test]
-fn context_paste_rotate90_places_and_selects_inserted_image() {
-    check_placement(90, false, 0, false, false, false);
-}
-#[test]
-fn context_paste_rotate180_places_and_selects_inserted_image() {
-    check_placement(180, false, 0, false, false, false);
-}
-#[test]
-fn context_paste_rotate270_places_and_selects_inserted_image() {
-    check_placement(270, false, 0, false, false, false);
-}
-#[test]
-fn context_paste_crop_offset_places_and_selects_inserted_image() {
-    check_placement(0, true, 0, false, false, false);
-}
-#[test]
-fn context_paste_rotated_crop_places_and_selects_inserted_image() {
-    check_placement(90, true, 0, false, false, false);
-}
-#[test]
-fn context_paste_view_rotation_control() {
-    check_placement(0, false, 90, false, false, false);
-}
-#[test]
-fn context_paste_shared_original_xobject_control() {
-    check_placement(90, false, 0, true, false, false);
-}
-
-#[test]
-fn context_paste_with_existing_added_image_control() {
-    check_placement(90, false, 0, false, true, false);
-}
-
-#[test]
-fn context_paste_identity_ignores_original_at_display_rectangle() {
-    check_placement(90, false, 0, false, false, true);
+fn context_paste_places_and_selects_the_inserted_image() {
+    // (case, rotation, cropped, view_rotation, shared, existing_added, collision)
+    let cases: [(&str, u16, bool, u16, bool, bool, bool); 10] = [
+        ("ordinary page", 0, false, 0, false, false, false),
+        ("page rotation 90", 90, false, 0, false, false, false),
+        ("page rotation 180", 180, false, 0, false, false, false),
+        ("page rotation 270", 270, false, 0, false, false, false),
+        ("crop offset", 0, true, 0, false, false, false),
+        ("rotated crop", 90, true, 0, false, false, false),
+        ("view rotation 90", 0, false, 90, false, false, false),
+        ("shared original XObject", 90, false, 0, true, false, false),
+        ("existing added image", 90, false, 0, false, true, false),
+        ("original at the display rectangle", 90, false, 0, false, false, true),
+    ];
+    for (case, rotation, cropped, view_rotation, shared, existing_added, collision) in cases {
+        check_placement(case, rotation, cropped, view_rotation, shared, existing_added, collision);
+    }
 }
 
 fn check_delete_owner(original: bool, shared_added: bool) {
