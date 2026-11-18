@@ -1368,12 +1368,10 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let view = &mut app.views[index];
     // The in-place editors and comment windows over the pages, in their old order, mapped through this pass's
     // placement.
-    let session = &mut view.session;
-    // PLAN: assumed the comments A-4 shapes `composer(ui, session, info, prefs)` and `note_popups(ui, session, info,
-    // prefs, hidden, allowed)` (note 18 names `composer(ui, view, info, prefs)` and `note_popups(ui, ..)`).
-    if let Some(e) = crate::comments::composer(ui, session, info, &app.comment_prefs) {
-        session.pending_edit = Some(e);
+    if let Some(e) = crate::comments::composer(ui, view, info, &app.comment_prefs) {
+        view.session.pending_edit = Some(e);
     }
+    let session = &mut view.session;
     if let Some(e) = crate::comments::note_popups(ui, session, info, &app.comment_prefs, doc.comments_hidden(), allowed) {
         // A click on the composer's Post also takes the focus from a pop-up's box, saving what
         // was typed there: both edits land in this pass, so both are kept, in one batch.
