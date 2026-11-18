@@ -320,11 +320,16 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
 pub fn figures(doc: &Document) -> Vec<Figure> {
     let Some(root) = tree_root(doc) else { return Vec::new() };
     let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    figures_where(doc, |d| d.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
+}
+
+/// The structure elements `is_figure` accepts, as [`Figure`]s with their place, in document order.
+pub(crate) fn figures_where(doc: &Document, is_figure: impl Fn(&Dict) -> bool) -> Vec<Figure> {
     let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let figures: Vec<(Element, Option<usize>)> = elements(doc)
         .into_iter()
-        .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
+        .filter(|e| is_figure(&e.dict))
         .map(|e| {
             let page = e.page.and_then(|p| index.get(&p).copied());
             (e, page)

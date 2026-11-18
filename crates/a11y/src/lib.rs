@@ -668,7 +668,9 @@ pub fn check(doc: &Document, options: &Options) -> Report {
         };
         if rule.category() == Category::AlternateText && findings.iter().any(|f| f.object.is_some()) {
             let bounds = figure_bounds.get_or_insert_with(|| {
-                figures(doc)
+                // The figures as the structure rules found them: through /RoleMapNS too.
+                let role_map = structure::root_role_map(doc);
+                alt::figures_where(doc, |d| d.name(b"S").is_some_and(|s| structure::standard_type(doc, &role_map, d, s).0 == b"Figure"))
                     .into_iter()
                     .filter_map(|figure| {
                         let (page, bbox) = (figure.page?, figure.bbox?);

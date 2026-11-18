@@ -1947,12 +1947,15 @@ fn types_in_a_namespace_are_role_mapped_through_its_role_map() {
     let list = format!("<< /S /ol {x} /K [ << /S /li {x} /K [ << /S /Lbl {ssn} /K 0 >> << /S /LBody {ssn} /K 1 >> ] >> ] >>");
     let table =
         format!("<< /S /table {x} /A << /O /Table /Summary (s) >> /K [ << /S /tr {x} /K [ << /S /td {x} /K 2 >> << /S /TD {ssn} /K 4 >> ] >> ] >>");
-    let doc = namespaced_doc(&format!("{list} {table} << /S /img {x} /K 3 >>"));
+    // A `td` outside any row is a TD, so it is found: the cell rule sees the mapping.
+    let doc = namespaced_doc(&format!("{list} {table} << /S /img {x} /K 3 >> << /S /td {x} /K 5 >>"));
     let rules = [Rule::LblLBody, Rule::ListItems, Rule::TableCells, Rule::TableRows, Rule::FiguresAltText];
     let r = checked(&doc, &rules);
-    for rule in [Rule::LblLBody, Rule::ListItems, Rule::TableCells, Rule::TableRows] {
+    for rule in [Rule::LblLBody, Rule::ListItems, Rule::TableRows] {
         assert_eq!(status(&r, rule), Status::Passed, "{rule:?}: {:?}", r.result(rule));
     }
+    let cells = &r.result(Rule::TableCells).unwrap().findings;
+    assert_eq!(cells.iter().map(|f| f.message.as_str()).collect::<Vec<_>>(), ["TD element: not in a TR"]);
     // The img is a Figure, so its missing alternate text is found.
     let figures = &r.result(Rule::FiguresAltText).unwrap().findings;
     assert_eq!(figures.iter().map(|f| f.message.as_str()).collect::<Vec<_>>(), ["Figure element: no alternate text"]);
@@ -1963,15 +1966,129 @@ fn a_pdf_2_label_may_label_more_than_a_list_item() {
     // ISO 32000-2 Table 368: in the PDF 2.0 namespace Lbl also labels a form field, a heading or a
     // key. The PDF 1.7 Lbl (the default namespace, or the 1.7 namespace named) and any LBody still
     // belong in a list item.
+    // Objects 6 to 8 are the PDF 2.0, default-namespace and named PDF 1.7 labels; 9 is the body.
     let doc = structure_doc(&[
-        "<< /S /Document /K [ << /S /Form /K [ << /S /Lbl /NS 4 0 R /K 0 >> ] >> << /S /Form /K [ << /S /Lbl /K 1 >> ] >>          << /S /Form /K [ << /S /Lbl /NS 5 0 R /K 2 >> ] >> << /S /Div /K [ << /S /LBody /NS 4 0 R /K 3 >> ] >> ] >>"
-            .into(),
+        "<< /S /Document /K [ << /S /Form /K [6 0 R] >> << /S /Form /K [7 0 R] >> << /S /Form /K [8 0 R] >> << /S /Div /K [9 0 R] >> ] >>".into(),
         "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
         "<< /Type /Namespace /NS (http://iso.org/pdf/ssn) >>".into(),
+        "<< /S /Lbl /NS 4 0 R /K 0 >>".into(),
+        "<< /S /Lbl /K 1 >>".into(),
+        "<< /S /Lbl /NS 5 0 R /K 2 >>".into(),
+        "<< /S /LBody /NS 4 0 R /K 3 >>".into(),
     ]);
     let r = checked(&doc, &[Rule::LblLBody]);
-    let found: Vec<&str> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.message.as_str()).collect();
-    assert_eq!(found, ["Lbl element: not in an LI (list item)", "Lbl element: not in an LI (list item)", "LBody element: not in an LI (list item)"]);
+    let found: Vec<(Option<u32>, &str)> =
+        r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| (f.object.map(|o| o.num), f.message.as_str())).collect();
+    assert_eq!(
+        found,
+        [
+            (Some(7), "Lbl element: not in an LI (list item)"),
+            (Some(8), "Lbl element: not in an LI (list item)"),
+            (Some(9), "LBody element: not in an LI (list item)")
+        ]
+    );
+}
+
+#[test]
+fn a_standard_namespace_named_by_its_utf16_text_string_is_recognised() {
+    // ISO 32000-2 Table 356: a namespace's /NS is a text string, so the PDF 2.0 namespace name may
+    // be written in UTF-16BE. A Lbl in it labels a form field.
+    let utf16: String = "http://iso.org/pdf2/ssn".encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Form /K [ << /S /Lbl /NS 4 0 R /K 0 >> ] >> ] >>".into(),
+        format!("<< /Type /Namespace /NS <FEFF{utf16}> >>"),
+    ]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_type_is_standard_only_in_a_namespace_that_defines_it() {
+    // ISO 32000-2 Annex M: Title is a standard type of the PDF 2.0 namespace, not of the PDF 1.7
+    // one. A PDF 1.7 Title mapped to the PDF 2.0 H1 is that H1, so the H2 after it is in order; a
+    // PDF 2.0 Title is a Title already, and its role map is not read, so the H2 comes first.
+    let heading_doc = |ns: &str| {
+        structure_doc(&[
+            "<< /S /Document /K [ << /S /Title /NS 4 0 R /K 0 >> << /S /H2 /K 1 >> ] >>".into(),
+            format!("<< /Type /Namespace /NS ({ns}) /RoleMapNS << /Title [/H1 5 0 R] >> >>"),
+            "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        ])
+    };
+    let r = checked(&heading_doc("http://iso.org/pdf/ssn"), &[Rule::HeadingNesting]);
+    assert_eq!(status(&r, Rule::HeadingNesting), Status::Passed, "{:?}", r.result(Rule::HeadingNesting));
+    let r = checked(&heading_doc("http://iso.org/pdf2/ssn"), &[Rule::HeadingNesting]);
+    assert_eq!(status(&r, Rule::HeadingNesting), Status::Failed, "{:?}", r.result(Rule::HeadingNesting));
+}
+
+#[test]
+fn the_type_after_the_last_mapping_allowed_is_classified() {
+    // Twelve mappings lead `a0` to the PDF 2.0 Lbl, which labels a form field; thirteen would
+    // lead `b0` to an LBody outside a list item, but the walk stops before the thirteenth.
+    let chain = |p: &str, to: &str, len: usize| {
+        (0..len)
+            .map(|i| if i + 1 == len { format!("/{p}{i} [/{to} 5 0 R]") } else { format!("/{p}{i} [/{p}{} 4 0 R]", i + 1) })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /Form /K [ << /S /a0 /NS 4 0 R /K 0 >> ] >> << /S /Div /K [ << /S /b0 /NS 4 0 R /K 1 >> ] >> ] >>".into(),
+        format!("<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << {} {} >> >>", chain("a", "Lbl", 12), chain("b", "LBody", 13)),
+        "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_role_map_pair_without_its_namespace_maps_nowhere() {
+    // ISO 32000-2 Table 356: an array value is a type and an indirect reference to the namespace it
+    // is in. `[/Figure]` names no namespace, so `img` stays an unknown type, not a Figure.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /img /NS 4 0 R /K 0 >> ] >>".into(),
+        "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img [/Figure] >> >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert!(r.result(Rule::FiguresAltText).unwrap().findings.is_empty(), "{:?}", r.result(Rule::FiguresAltText));
+}
+
+#[test]
+fn a_namespace_that_is_a_stream_leaves_the_element_in_the_default_namespace() {
+    // ISO 32000-2 Table 355: /NS refers to a namespace dictionary. A stream is not one, so the
+    // element is read through the tree root's /RoleMap, which makes CustomItem a list item.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /CustomItem /LI >> >>".into(),
+            "<< /S /Document /K [ << /S /L /K [ << /S /CustomItem /NS 4 0 R /K [ << /S /Lbl /K 0 >> ] >> ] >> ] >>".into(),
+            "<< /Type /Namespace /NS (http://example.com/x) /Length 0 >>\nstream\n\nendstream".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_namespaced_figure_finding_has_its_bounds() {
+    // The checker finds an `img` mapped to Figure through /RoleMapNS, and locates it on its page
+    // as it does a Figure reached through /RoleMap.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/img << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /img /NS 9 0 R /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Nums [0 [7 0 R]] >>".into(),
+            "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img /Figure >> >>".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let finding = &r.result(Rule::FiguresAltText).unwrap().findings[0];
+    assert_eq!((finding.object.map(|o| o.num), finding.page, finding.bbox), (Some(7), Some(0), Some([10.0, 150.0, 50.0, 170.0])));
 }
 
 #[test]
