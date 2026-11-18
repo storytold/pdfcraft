@@ -4,6 +4,7 @@ use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, TextReplacement,
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_forms::{NewField, add_field, fields, set_value};
 
+use super::common::walk_xfdf;
 use super::xfdf::PDFCRAFT_NS;
 use super::*;
 
@@ -2761,4 +2762,30 @@ fn xfdf_charges_split_text_before_copying_values() {
 fn merge_csv_keeps_first_repeated_value() {
     let rows = vec![("Name".into(), vec!["first".into()]), ("Name".into(), vec!["second".into()])];
     assert_eq!(merge_csv(&[rows]), "Name\nfirst\n");
+}
+
+#[test]
+fn shared_xfdf_fields_match_retained_reader() -> Result<(), Box<dyn std::error::Error>> {
+    // Independent retained app walker remains used by annotation imports.
+    for xml in [
+        "<xfdf/>",
+        "<xfdf><fields><field name='parent'><field name='child'><value>a<!--split-->b</value><value>c</value></field></field><field name='empty'/><field name='rich'><value-richtext>skip</value-richtext></field><field name='parent.child'><value>last</value></field></fields></xfdf>",
+        "<x:xfdf xmlns:x='urn:xfdf'><x:fields><x:field name='n'><x:value>v</x:value></x:field></x:fields></x:xfdf>",
+    ] {
+        let root = parse_form_xml(xml)?;
+        let mut expected = Vec::new();
+        if let Some(fields) = root.child(craft_xml::Local("fields")) {
+            walk_xfdf(fields, "", &mut expected, 0, &mut 0)?;
+        }
+        assert_eq!(data_values(xml.as_bytes())?, expected);
+    }
+    assert!(matches!(data_values(b"<other/>"), Err(DataError::UnknownFormat)));
+    assert!(matches!(data_values(b"<xfdf a='1' a='2'/>"), Err(DataError::UnknownFormat)));
+    let deep = format!("<xfdf><fields>{}{}</fields></xfdf>", "<field name='n'>".repeat(65), "</field>".repeat(65));
+    assert!(matches!(data_values(deep.as_bytes()), Err(DataError::Malformed(_))));
+    assert_eq!(
+        data_values(b"\xef\xbb\xbf <xfdf><fields><field name='n'><value>\xff</value></field></fields></xfdf>")?,
+        vec![("n".into(), vec!["\u{fffd}".into()])]
+    );
+    Ok(())
 }
