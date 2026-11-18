@@ -263,6 +263,27 @@ pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
 }
 
+/// The turn that keeps an annotation with the NoRotate flag upright on a page shown turned
+/// `rotation` degrees clockwise (ISO 32000-2 §12.5.3): as far counterclockwise about the upper-left
+/// corner of `rect` (normalized), which stays where it is on the page. The renderer, flattening and
+/// printing turn it so.
+pub(crate) fn upright_turn(rotation: i64, rect: [f64; 4]) -> pdfcraft_content::Matrix {
+    let (cos, sin) = match rotation.rem_euclid(360) {
+        90 => (0.0, 1.0),
+        180 => (-1.0, 0.0),
+        270 => (0.0, -1.0),
+        _ => return pdfcraft_content::Matrix::IDENTITY,
+    };
+    let (x, y) = (rect[0], rect[3]);
+    pdfcraft_content::Matrix([cos, sin, -sin, cos, x - (cos * x - sin * y), y - (sin * x + cos * y)])
+}
+
+/// Whether the renderer turns `d` on a turned page: the NoRotate flag, read as it reads `/F`,
+/// except on form fields and links, which it leaves in `/Rect` (their click targets).
+pub(crate) fn turned_by_renderer(doc: &Document, d: &Dict) -> bool {
+    pdfcraft_annot::drawn_upright(doc, d) && !matches!(subtype(doc, d).as_deref(), Some(b"Widget" | b"Link"))
+}
+
 /// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
 /// (a mark on another page, say) is left alone.
 fn named_popup(doc: &Document, d: &Dict) -> Option<ObjRef> {
@@ -987,6 +1008,7 @@ fn remove_page_annotations(
     let mut removed: Vec<ObjRef> = Vec::new();
     // Entries written in place that go, by position in `/Annots`.
     let mut inline_gone = vec![false; annots.len()];
+    let rotation = page.rotation(doc);
     for (i, a) in annots.iter().enumerate() {
         let obj = doc.resolve(a);
         let Some(d) = obj.as_dict() else { continue };
@@ -1004,7 +1026,17 @@ fn remove_page_annotations(
         if kind == b"Popup" {
             continue;
         }
-        if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
+        // Where it is drawn: in its `/Rect`, and with the NoRotate flag on a turned page, turned
+        // about the rectangle's upper-left corner, where the renderer draws it. A form field or a
+        // link with the flag counts turned too: the renderer leaves it in `/Rect`, but flattening
+        // turns it, and ISO 32000-2 §12.5.3 makes no exception for it. So does a text note without
+        // the flag, which printing turns.
+        let upright = pdfcraft_annot::drawn_upright(doc, d) || kind == b"Text";
+        let drawn = rect_of(doc, d.get(b"Rect")).map(|b| {
+            let turned = if upright { upright_turn(rotation, b).bbox(b) } else { b };
+            [b, turned]
+        });
+        if drawn.is_some_and(|boxes| boxes.iter().any(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, *b, 0.0)))) {
             match r {
                 Some(r) => removed.push(r),
                 None => inline_gone[i] = true,

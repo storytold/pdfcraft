@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use pdfcraft_content::{Matrix, contains, overlaps, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
-use super::extract::{appearance_matrix, bbox_of, matrix_of, page_content, res_dict};
+use super::extract::{bbox_of, drawn_appearance_matrix, matrix_of, page_content, res_dict};
 use super::util::{Ctx, image_codec};
 use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS};
 
@@ -69,6 +69,7 @@ impl Geo<'_> {
     /// output means what it paints can't be vouched for.
     fn appearances(&mut self, page: &Dict, res: &Dict) {
         let doc = self.doc;
+        let rotation = pdfcraft_model::rotation(doc, page);
         for a in crate::annots_of(doc, page) {
             // A direct dictionary has no reference of its own; it is checked like an indirect
             // one (what its appearance paints does not depend on how it is stored).
@@ -105,7 +106,7 @@ impl Geo<'_> {
                     if data.is_empty() {
                         continue;
                     }
-                    let Some(ctm) = rect.as_ref().and_then(|r| appearance_matrix(doc, &st, r)) else {
+                    let Some(ctm) = rect.as_ref().and_then(|r| drawn_appearance_matrix(doc, &d, &st, r, rotation)) else {
                         self.unverifiable("an annotation appearance can't be placed, so what it paints can't be checked");
                         continue;
                     };

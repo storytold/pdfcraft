@@ -217,7 +217,7 @@ pub(crate) fn annotation_flags(doc: &Document, d: &Dict) -> i64 {
 
 /// Whether the renderer keeps the annotation upright on a turned page: the NoRotate flag, with
 /// `/F` read as the renderer reads it (a real truncated, a value that isn't a `u32` no flags).
-pub(crate) fn drawn_upright(doc: &Document, d: &Dict) -> bool {
+pub fn drawn_upright(doc: &Document, d: &Dict) -> bool {
     let f = match d.get(b"F").map(|f| doc.resolve(f)).as_deref() {
         Some(Object::Int(i)) => *i,
         Some(Object::Real(r)) => *r as i64,

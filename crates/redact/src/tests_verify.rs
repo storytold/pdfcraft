@@ -1580,3 +1580,92 @@ fn page_content(doc: &Document) -> String {
     let (_, data) = page_streams(doc, &p.dict, 0).unwrap();
     data.iter().map(|d| String::from_utf8_lossy(d).into_owned()).collect::<Vec<_>>().join("\n")
 }
+
+/// A page turned `rotate` degrees with "Public" at the top, and object 7, an annotation of
+/// `subtype` with flags `flags` (20 is Print and NoRotate) whose appearance (object 8) shows
+/// NOTETEXT or, with `paint`, fills a box; the page lists it when `listed`. Its `/Rect` is
+/// [100 100 160 120]: a reader keeping it upright turns it about (100, 120), its upper-left
+/// corner, into the box [`TURNED`] gives for the turn.
+fn turned_page(subtype: &str, rotate: i64, flags: i64, paint: bool, listed: bool) -> Document {
+    let content: &[u8] = if paint { b"0 0 1 rg 0 0 60 20 re f" } else { b"BT /F1 10 Tf 2 5 Td (NOTETEXT) Tj ET" };
+    let ap = stream("/Type /XObject /Subtype /Form /BBox [0 0 60 20] /Resources << /Font << /F1 5 0 R >> >>", content);
+    let annot = format!("<< /Type /Annot /Subtype /{subtype} /Rect [100 100 160 120] /F {flags} /DA (/F1 10 Tf 0 g) /AP << /N 8 0 R >> >>");
+    let page = format!("/Rotate {rotate}{}", if listed { " /Annots [7 0 R]" } else { "" });
+    open(build_with(b"BT /F1 10 Tf 10 250 Td (Public) Tj ET", Spec { page: &page, extra: vec![annot.into_bytes(), ap], ..Spec::default() }))
+}
+
+/// A mark inside the box the annotation of [`turned_page`] is drawn in when kept upright on a page
+/// turned 90, 180 or 270 degrees, clear of its `/Rect`.
+const TURNED: [(i64, [f64; 4]); 3] = [(90, [104.0, 130.0, 118.0, 170.0]), (180, [45.0, 122.0, 95.0, 138.0]), (270, [82.0, 65.0, 98.0, 115.0])];
+
+/// How many of the glyphs the renderer draws on page 1 of `bytes` have their centre inside `region`.
+fn drawn_inside(bytes: Vec<u8>, region: [f64; 4]) -> usize {
+    let doc = open(bytes.clone());
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let (to_user, (_, h)) = (pdfcraft_content::Matrix(page.view_matrix(&doc)), page.display_size(&doc));
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let text = r.filtered_text(0, pdfcraft_render::text::TextFilter::default()).unwrap();
+    text.glyphs
+        .iter()
+        .filter(|g| {
+            let (x, y) = to_user.apply(f64::from(g.rect[0] + g.rect[2]) / 2.0, h - f64::from(g.rect[1] + g.rect[3]) / 2.0);
+            x >= region[0] && x <= region[2] && y >= region[1] && y <= region[3]
+        })
+        .count()
+}
+
+/// An annotation with the NoRotate flag on a turned page is drawn turned about its `/Rect`'s
+/// upper-left corner (ISO 32000-2 §12.5.3), here over the mark while its `/Rect` misses it:
+/// applying removes it, and nothing of it is then drawn under the mark. Without the flag, or on a
+/// page that isn't turned, it is drawn in its `/Rect` and stays. A link with the flag goes too:
+/// the renderer leaves it in `/Rect`, but flattening turns it. So does a text note without the
+/// flag, which printing turns.
+#[test]
+fn an_annotation_kept_upright_on_a_turned_page_goes_where_it_is_drawn_under_a_mark() {
+    let mut rows: Vec<(&str, i64, i64, [f64; 4], usize)> = TURNED.iter().map(|&(rotate, mark)| ("FreeText", rotate, 20, mark, 1)).collect();
+    rows.extend([
+        ("FreeText", 90, 4, TURNED[0].1, 0),
+        ("FreeText", 0, 20, TURNED[0].1, 0),
+        ("Link", 90, 20, TURNED[0].1, 1),
+        ("Text", 90, 4, TURNED[0].1, 1),
+    ]);
+    for (subtype, rotate, flags, region, removed) in rows {
+        let row = format!("/{subtype}, /Rotate {rotate}, /F {flags}");
+        let mut doc = turned_page(subtype, rotate, flags, false, true);
+        let before = drawn_inside(write_full(&doc, &SaveOptions::default()).unwrap(), region);
+        assert_eq!(before > 0, subtype == "FreeText" && removed == 1, "{row}: drawn under the mark before: {before}");
+        mark(&mut doc, &[region]);
+        let (result, proof) = run(&mut doc);
+        assert_eq!(result.unwrap().annotations, removed, "{row}");
+        assert!(proof.passed(), "{row}: {}", proof.to_text());
+        assert_eq!(drawn_inside(write_full(&doc, &SaveOptions::default()).unwrap(), region), 0, "{row}: drawn under the mark after");
+    }
+}
+
+/// The proof places an annotation's appearance where the renderer draws it: kept upright on a
+/// turned page, it is placed turned about its `/Rect`'s upper-left corner, so its text, or what it
+/// paints, over a region fails the proof though its `/Rect` misses the region; without the flag it
+/// is placed in its `/Rect` and passes. A link the renderer leaves in its `/Rect` is placed there.
+#[test]
+fn the_proof_places_an_annotation_kept_upright_on_a_turned_page_where_it_is_drawn() {
+    let in_rect = [130.0, 102.0, 155.0, 118.0];
+    for paint in [false, true] {
+        for (subtype, flags, region, passes) in
+            [("FreeText", 20, TURNED[0].1, false), ("FreeText", 4, TURNED[0].1, true), ("Link", 20, in_rect, false)]
+        {
+            let row = format!("/{subtype}, /F {flags}, paint {paint}");
+            let mut doc = turned_page(subtype, 90, flags, paint, false);
+            mark(&mut doc, &[region]);
+            let mut snap = Snapshot::capture(&doc, None).unwrap();
+            applied(&mut doc, &mut snap).unwrap();
+            // An apply that kept it: the annotation is listed again.
+            let page = pdfcraft_model::pages(&doc)[0].obj;
+            doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))]))).unwrap();
+            let proof = snap.prove(&doc, None, &ProofOptions::default());
+            assert_eq!(proof.passed(), passes, "{row}: {}", proof.to_text());
+            if !passes {
+                assert_eq!(proof.entries[0].status, Status::Failed, "{row}");
+            }
+        }
+    }
+}

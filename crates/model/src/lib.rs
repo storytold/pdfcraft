@@ -52,8 +52,7 @@ impl Page {
     /// Clockwise rotation when displayed: 0, 90, 180 or 270. A `/Rotate` that isn't a multiple
     /// of 90 (ISO 32000-2 §7.7.3.3 requires one) counts as 0, as the renderer draws that page.
     pub fn rotation(&self, doc: &Document) -> i64 {
-        let r = self.dict.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).rem_euclid(360);
-        if r % 90 == 0 { r } else { 0 }
+        rotation(doc, &self.dict)
     }
 
     /// The size of the page's user-space unit in points (`/UserUnit`; it isn't inherited), read
@@ -91,6 +90,13 @@ pub fn view_matrix_for(rotation: i64, crop: [f64; 4]) -> [f64; 6] {
         270 => [0.0, -1.0, 1.0, 0.0, x0, y1],
         _ => [1.0, 0.0, 0.0, 1.0, x0, y0],
     }
+}
+
+/// [`Page::rotation`] of a page dictionary with its inherited attributes filled in, as
+/// [`Page::dict`] has them.
+pub fn rotation(doc: &Document, page: &Dict) -> i64 {
+    let r = page.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).rem_euclid(360);
+    if r % 90 == 0 { r } else { 0 }
 }
 
 /// Leaf pages in document order, with inherited attributes resolved. Cycles and absurdly deep

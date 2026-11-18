@@ -39,7 +39,8 @@ pub use info::{PopupInfo, Props, Summary, is_comment_subtype, is_group_subordina
 use lookup::{ANNOTS_ENTRIES_COPIED, PageWalk, annot_dict, annot_ref};
 use lookup::{annots, page_ref};
 pub use lookup::{
-    has_visible_fill_sign, is_fill_sign, isolate_annotation, isolate_annotations, page_refs, picture_rotation, set_annots, signature_image,
+    drawn_upright, has_visible_fill_sign, is_fill_sign, isolate_annotation, isolate_annotations, page_refs, picture_rotation, set_annots,
+    signature_image,
 };
 pub use model3d::{Model3d, Model3dKind, model_3d, model_3d_annotations};
 pub(crate) use modify::n;
