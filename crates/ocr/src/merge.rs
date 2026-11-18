@@ -100,13 +100,57 @@ fn higher(a: Option<f32>, b: Option<f32>) -> bool {
     }
 }
 
+fn rect_area(r: &[f32; 4]) -> f64 {
+    if !r.iter().all(|v| v.is_finite()) {
+        return 0.0;
+    }
+    ((r[2] - r[0]).max(0.0) as f64) * ((r[3] - r[1]).max(0.0) as f64)
+}
+
+/// Fraction of `inner` covered by `outer` (0..=1), or `0.0` if either rectangle is non-finite.
+fn containment(outer: &[f32; 4], inner: &[f32; 4]) -> f64 {
+    if !outer.iter().all(|v| v.is_finite()) || !inner.iter().all(|v| v.is_finite()) {
+        return 0.0;
+    }
+    let total = rect_area(inner);
+    if !total.is_finite() || total <= 0.0 {
+        return 0.0;
+    }
+    let l = outer[0].max(inner[0]);
+    let t = outer[1].max(inner[1]);
+    let r = outer[2].min(inner[2]);
+    let b = outer[3].min(inner[3]);
+    if !(r > l && b > t) {
+        return 0.0;
+    }
+    let inter = (r - l) as f64 * (b - t) as f64;
+    (inter / total).min(1.0)
+}
+
+fn union_rect(rects: impl Iterator<Item = [f32; 4]>) -> Option<[f32; 4]> {
+    let mut acc: Option<[f32; 4]> = None;
+    for r in rects {
+        if !r.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        acc = Some(match acc {
+            None => r,
+            Some(a) => [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])],
+        });
+    }
+    acc
+}
+
 /// Merge the two engines' readings. Primary words keep their order and lines; a word is
 /// replaced by its overlapping secondary (IoU >= 0.5) only when that secondary is more
-/// confident, and either way the merged word's [`Word::source`] is `"ROVER"`. Secondary words
-/// no primary claimed are appended, in their own reading order and lines, under their own
-/// engine's name (`secondary_id`). Known limit: over [`ROVER_MAX_COMPARISONS`] comparisons
-/// (word counts multiplied) the primary reading is kept as is, unmerged; the strategy runner
-/// names that skip in a note.
+/// confident, and either way the merged word's [`Word::source`] is `"ROVER"`. When a primary
+/// line holds a single whole-line word (such as PP-OCRv4 Chinese) and the secondary split that
+/// line into word-level boxes inside it, those covered words reconcile at the line unit so they
+/// neither duplicate the line nor replace a full line with one word. Secondary words no primary
+/// claimed are appended, in their own reading order and lines, under their own engine's name
+/// (`secondary_id`). Known limit: over [`ROVER_MAX_COMPARISONS`] comparisons (word counts
+/// multiplied) the primary reading is kept as is, unmerged; the strategy runner names that skip
+/// in a note.
 pub fn rover_merge(primary: Vec<Line>, secondary: Vec<Line>, secondary_id: &str) -> Vec<Line> {
     if over_cap(&primary, &secondary) {
         return primary; // over the comparison cap: the primary stands alone
@@ -116,6 +160,49 @@ pub fn rover_merge(primary: Vec<Line>, secondary: Vec<Line>, secondary_id: &str)
     // own lines so the unclaimed ones can be appended in order.
     let mut unused: Vec<Vec<Option<Word>>> = secondary.into_iter().map(|l| l.words.into_iter().map(Some).collect()).collect();
     for line in &mut primary {
+        if line.words.len() == 1 {
+            let line_rect = line.words[0].rect;
+            let best_one = unused
+                .iter()
+                .enumerate()
+                .flat_map(|(li, words)| words.iter().enumerate().filter_map(move |(wi, s)| s.as_ref().map(|w| (li, wi, iou(&line_rect, &w.rect)))))
+                .filter(|(_, _, score)| *score >= 0.5)
+                .max_by(|a, b| a.2.total_cmp(&b.2));
+            if best_one.is_none() {
+                let covered_coords: Vec<(usize, usize)> = unused
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(li, words)| {
+                        words
+                            .iter()
+                            .enumerate()
+                            .filter_map(move |(wi, s)| s.as_ref().filter(|w| containment(&line_rect, &w.rect) >= 0.5).map(|_| (li, wi)))
+                    })
+                    .collect();
+                if !covered_coords.is_empty() {
+                    let mut claimed = Vec::with_capacity(covered_coords.len());
+                    for (li, wi) in covered_coords {
+                        if let Some(w) = unused.get_mut(li).and_then(|l| l.get_mut(wi)).and_then(Option::take) {
+                            claimed.push(w);
+                        }
+                    }
+                    let u_iou = union_rect(claimed.iter().map(|w| w.rect)).map_or(0.0, |u| iou(&line_rect, &u));
+                    let sec_conf = {
+                        let (sum, n) = claimed.iter().filter_map(|w| w.confidence).fold((0.0f64, 0usize), |(s, n), c| (s + c as f64, n + 1));
+                        (n > 0).then_some((sum / n as f64) as f32)
+                    };
+                    if u_iou >= 0.5 && higher(sec_conf, line.words[0].confidence) {
+                        for w in &mut claimed {
+                            w.source = "ROVER".into();
+                        }
+                        line.words = claimed;
+                    } else {
+                        line.words[0].source = "ROVER".into();
+                    }
+                    continue;
+                }
+            }
+        }
         for word in &mut line.words {
             // The best-overlapping unused secondary word, if any beats IoU 0.5.
             let mut best: Option<(f64, usize, usize)> = None;
@@ -141,12 +228,18 @@ pub fn rover_merge(primary: Vec<Line>, secondary: Vec<Line>, secondary_id: &str)
         }
     }
     // Append the secondary words nothing claimed, line by line, under their engine's name
-    // (`secondary_id` backfills words that name no source of their own).
+    // (`secondary_id` backfills words that name no source of their own), skipping whole-line
+    // secondary words that already match multiple word-level primary words on the same line.
     let mut merged = primary;
     for line in unused {
         let words: Vec<Word> = line
             .into_iter()
             .flatten()
+            .filter(|w| {
+                let covered_primary: Vec<[f32; 4]> =
+                    merged.iter().flat_map(|pl| &pl.words).filter(|pw| containment(&w.rect, &pw.rect) >= 0.5).map(|pw| pw.rect).collect();
+                !(covered_primary.len() >= 2 && union_rect(covered_primary.into_iter()).is_some_and(|u| iou(&w.rect, &u) >= 0.5))
+            })
             .map(|mut w| {
                 if w.source.is_empty() {
                     w.source = secondary_id.into();
@@ -579,5 +672,56 @@ mod tests {
         failing_primary.fail = true;
         let r = recognize_with_strategy(&failing_primary, Some(&secondary), MergeStrategy::RoverVote, &image(), &RecognizeOptions::default());
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn rover_reconciles_whole_line_chinese_primary_against_split_secondary_words() {
+        // Weak secondary (< 70) against unknown-confidence primary keeps the whole line without
+        // appending duplicate split words underneath.
+        let primary_line = vec![Line { words: vec![Word::new("中文文本 2026 Hello", [0.0, 0.0, 200.0, 20.0], "ocrs")] }];
+        let split_secondary = vec![Line {
+            words: vec![
+                Word::new("中文", [0.0, 0.0, 50.0, 20.0], "tesseract").with_confidence(55.0),
+                Word::new("文本", [52.0, 0.0, 100.0, 20.0], "tesseract").with_confidence(60.0),
+                Word::new("2026", [105.0, 0.0, 145.0, 20.0], "tesseract").with_confidence(60.0),
+                Word::new("Hello", [150.0, 0.0, 200.0, 20.0], "tesseract").with_confidence(60.0),
+            ],
+        }];
+        let kept = rover_merge(primary_line.clone(), split_secondary, "tesseract");
+        assert_eq!(kept.len(), 1, "split secondary words must not append as a duplicate line");
+        assert_eq!(kept[0].words.len(), 1);
+        assert_eq!((kept[0].words[0].text.as_str(), kept[0].words[0].source.as_str()), ("中文文本 2026 Hello", "ROVER"));
+
+        // Confident secondary (>= 70) spanning the whole line replaces the whole-line primary
+        // with all split words intact and without appending duplicates.
+        let strong_secondary = vec![Line {
+            words: vec![
+                Word::new("中文", [0.0, 0.0, 50.0, 20.0], "tesseract").with_confidence(90.0),
+                Word::new("文本", [52.0, 0.0, 100.0, 20.0], "tesseract").with_confidence(92.0),
+                Word::new("2026", [105.0, 0.0, 145.0, 20.0], "tesseract").with_confidence(94.0),
+                Word::new("Hello", [150.0, 0.0, 200.0, 20.0], "tesseract").with_confidence(95.0),
+            ],
+        }];
+        let replaced = rover_merge(primary_line, strong_secondary, "tesseract");
+        assert_eq!(replaced.len(), 1);
+        let texts: Vec<&str> = replaced[0].words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["中文", "文本", "2026", "Hello"]);
+        assert!(replaced[0].words.iter().all(|w| w.source == "ROVER"));
+    }
+
+    #[test]
+    fn rover_skips_unclaimed_whole_line_secondary_covering_primary_words() {
+        let primary_words = vec![Line {
+            words: vec![
+                Word::new("中文", [0.0, 0.0, 50.0, 20.0], "tesseract").with_confidence(92.0),
+                Word::new("文本", [52.0, 0.0, 100.0, 20.0], "tesseract").with_confidence(94.0),
+                Word::new("Hello", [105.0, 0.0, 200.0, 20.0], "tesseract").with_confidence(96.0),
+            ],
+        }];
+        let whole_line_secondary = vec![Line { words: vec![Word::new("中文文本 Hello", [0.0, 0.0, 200.0, 20.0], "ocrs")] }];
+        let merged = rover_merge(primary_words, whole_line_secondary, "ocrs");
+        assert_eq!(merged.len(), 1, "unclaimed whole-line secondary must not append as a duplicate line");
+        let texts: Vec<&str> = merged[0].words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["中文", "文本", "Hello"]);
     }
 }

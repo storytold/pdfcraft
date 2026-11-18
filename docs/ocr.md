@@ -28,12 +28,16 @@ SHA-256 hashes, and leaves them outside Git. English needs `text-detection.onnx`
 and `chinese-keys.txt`. Sources, versions, hashes and licences are in
 [ATTRIBUTION.toml](../ATTRIBUTION.toml).
 
-For an installed desktop app, put those files in a directory and launch with
-`PDFCRAFT_MODELS` pointing to its absolute path. Alternatively, place `models/` beside
-the executable, or in `PdfCraft.app/Contents/Resources/` on macOS. The source tree's
-`assets/models/` is the final fallback for development builds. Model availability is
-checked separately for each language; installing English alone does not enable Chinese.
-Current release installers do not automatically include these model files.
+Desktop release installers bundle these models into the package's `models/`
+directory via `cargo xtask models`; source builds require `cargo xtask models`
+(or setting `PDFCRAFT_MODELS`), and browser builds download only the English
+pair on first use. For an installed desktop app, you can override them by
+putting those files in a directory and launching with `PDFCRAFT_MODELS`
+pointing to its absolute path. Alternatively, place `models/` beside the
+executable, or in `PdfCraft.app/Contents/Resources/` on macOS. The source
+tree's `assets/models/` is the final fallback for development builds. Model
+availability is checked separately for each language; installing English alone
+does not enable Chinese.
 
 Recognition runs entirely on the CPU in Rust, using RTen. English uses ocrs;
 Chinese uses the Apache-2.0 PP-OCRv4 mobile recognition model converted to ONNX by RapidAI,
@@ -46,11 +50,14 @@ its `chi_sim` pack. No language pack ships with PdfCraft.
 
 ## Automation
 
-`ocr_recognize`, `ocr_recognize_files`, `ocr_words` and the review tools accept
-`"language": "zh"`. `ocr_status` lists each language with an `available` flag for the built-in
-models and an `engines` list (ocrs, tesseract) with each engine's own availability. The legacy
-top-level `available` flag continues to report English availability. For example, after
-`doc_open` returns document 1:
+`ocr_recognize`, `ocr_recognize_files`, `ocr_words` and `doc_batch` (when `steps`
+includes `"ocr"`) accept `"language": "zh"`. For OCR Verify automation, pass a
+per-language dictionary path (`ocr-dictionary-<language>.txt`) to `ocr_dictionary`,
+and pass the retained handle from `ocr_words` (`retain_review: true`) to
+`ocr_review_apply`. `ocr_status` lists each language with an `available` flag
+for the built-in models and an `engines` list (ocrs, tesseract) with each
+engine's own availability. The top-level `available` flag continues to report
+English availability. For example, after `doc_open` returns document 1:
 
 ```json
 {"tool":"ocr_recognize","args":{"doc":1,"language":"zh","pages":[1]}}

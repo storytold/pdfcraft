@@ -912,9 +912,10 @@ mod tests {
             return;
         };
         assert_eq!(rec.id(), "ocrs");
-        assert!(rec.languages().iter().any(|(c, n)| c == "en" && n == "English"), "{:?}", rec.languages());
+        assert_eq!(rec.languages(), vec![("en".to_string(), "English".to_string())]);
         let (w, h, px) = test_image::hello();
         let image = OcrImage::new(w, h, px).unwrap();
+        assert!(rec.recognize(&image, &RecognizeOptions { language: "zh".into() }).is_err());
         let lines = rec.recognize(&image, &RecognizeOptions::default()).unwrap();
         let words: Vec<&Word> = lines.iter().flat_map(|l| &l.words).collect();
         assert!(!words.is_empty());

@@ -210,6 +210,8 @@ pub struct OcrRun {
     /// The dialog promised an editable document: the result goes to the OCR Verify screen
     /// (whose Accept produces the editable document), not to an invisible layer.
     pub editable: bool,
+    /// Language requested for this run, forwarded into OCR Verify for dictionaries and re-reads.
+    pub language: String,
     /// The web build reads the pages in Web Workers, pumped by [`PdfCraftApp::poll_ocr`].
     #[cfg(target_arch = "wasm32")]
     pub web: Option<crate::ocr_web::Pages>,
@@ -380,9 +382,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             });
         });
     keep_asking_while_probing(ui.ctx());
-    // The web build has no model files: it downloads the models the first time they're needed.
+    // The web build downloads only the English model pair when first needed.
     #[cfg(target_arch = "wasm32")]
-    let downloading = d.engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
+    let downloading = d.engine != EngineChoice::Tesseract
+        && d.language == "en"
+        && pdfcraft_engine::ocr::engine_unavailable_reason_for(EngineChoice::Ocrs, "en").is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let downloading = false;
     #[cfg(target_arch = "wasm32")]
@@ -449,8 +453,12 @@ impl PdfCraftApp {
             return;
         }
         #[cfg(target_arch = "wasm32")]
-        if self.web_models_missing(self.ocr_draft.engine) {
-            return;
+        {
+            let engine = self.ocr_draft.engine;
+            let language = self.ocr_draft.language.clone();
+            if self.web_models_missing(engine, &language) {
+                return;
+            }
         }
         let d = &self.ocr_draft;
         let pages: Vec<usize> = match d.pages {
@@ -490,13 +498,16 @@ impl PdfCraftApp {
     }
 
     /// Edit found a scan but no engine can read it. The page is set aside until one can (rather
-    /// than judged again every frame), and the web build starts downloading the models, as
+    /// than judged again every frame), and the web build starts downloading the English models, as
     /// Recognize Text does. After a failed download it doesn't try again by itself: Recognize
-    /// Text does, and the page is read once the models are in.
+    /// Text does, and the page is read once the models are in. A change in engine or language
+    /// re-evaluates the page immediately.
     fn await_ocr_models(&mut self, scan: &ScanToRead) {
-        self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
+        self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, (scan.generation, self.ocr_draft.engine, self.ocr_draft.language.clone()));
         #[cfg(target_arch = "wasm32")]
-        if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
+        if self.ocr_draft.engine != EngineChoice::Tesseract
+            && self.ocr_draft.language == "en"
+            && crate::ocr_web::state() == crate::ocr_web::State::NotStarted
             && let Some(ctx) = self.ctx.clone()
         {
             crate::ocr_web::start(ctx);
@@ -542,7 +553,10 @@ impl PdfCraftApp {
         // every frame (listing its images parses the page).
         let generation = document.edit_generation();
         if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation)
-            || self.views[view].auto_ocr_awaiting_models.get(&page) == Some(&generation)
+            || self.views[view]
+                .auto_ocr_awaiting_models
+                .get(&page)
+                .is_some_and(|(g, e, l)| *g == generation && *e == self.ocr_draft.engine && l == &self.ocr_draft.language)
         {
             return None;
         }
@@ -573,8 +587,15 @@ impl PdfCraftApp {
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         #[cfg(target_arch = "wasm32")]
         {
+            if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason_for(settings.engine, &settings.language) {
+                if !automatic {
+                    self.notify_error(why);
+                }
+                return;
+            }
+            let language = settings.language;
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
-            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, web });
+            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, language, web });
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -594,6 +615,7 @@ impl PdfCraftApp {
         auto: Option<AutoOcr>,
         editable: bool,
     ) {
+        let language = settings.language.clone();
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
@@ -618,7 +640,7 @@ impl PdfCraftApp {
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
-        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
+        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, language });
         self.poll_ocr();
     }
 
@@ -689,8 +711,12 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             // The files wait for the models rather than having to be chosen again.
-            if self.web_models_missing(settings.engine) {
+            if self.web_models_missing(settings.engine, &settings.language) {
                 self.ocr_web_waiting = Some((files, settings));
+                return;
+            }
+            if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason_for(settings.engine, &settings.language) {
+                self.notify_error(why);
                 return;
             }
             self.start_web_batch(files, settings);
@@ -724,10 +750,16 @@ impl PdfCraftApp {
     #[cfg(target_arch = "wasm32")]
     fn start_waiting_web_batch(&mut self) {
         let Some((_, settings)) = &self.ocr_web_waiting else { return };
-        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_none() {
+        if pdfcraft_engine::ocr::engine_unavailable_reason_for(settings.engine, &settings.language).is_none() {
             if let Some((files, settings)) = self.ocr_web_waiting.take() {
                 self.start_web_batch(files, settings);
             }
+            return;
+        }
+        if settings.language != "en" || settings.engine == EngineChoice::Tesseract {
+            let reason = pdfcraft_engine::ocr::engine_unavailable_reason_for(settings.engine, &settings.language).unwrap_or_default();
+            self.ocr_web_waiting = None;
+            self.notify(failed(&reason));
             return;
         }
         match crate::ocr_web::state() {
@@ -803,11 +835,13 @@ impl PdfCraftApp {
         }
     }
 
-    /// The web build downloads the models the first time they're needed: while `engine` can't
-    /// run for want of them, start (or retry) the download, say so and return `true`.
+    /// The web build downloads the English models the first time they're needed: while `engine`
+    /// can't run in English for want of them, start (or retry) the download, say so and return
+    /// `true`. Other languages and Tesseract cannot be satisfied by the web download and return
+    /// `false` so callers report why immediately.
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn web_models_missing(&mut self, engine: EngineChoice) -> bool {
-        if pdfcraft_engine::ocr::engine_unavailable_reason(engine).is_none() {
+    pub(crate) fn web_models_missing(&mut self, engine: EngineChoice, language: &str) -> bool {
+        if engine == EngineChoice::Tesseract || language != "en" || pdfcraft_engine::ocr::engine_unavailable_reason_for(engine, language).is_none() {
             return false;
         }
         if crate::ocr_web::state() != crate::ocr_web::State::Loading
@@ -898,7 +932,8 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
+        let (doc, progress, auto, guard, editable, language) =
+            (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable, run.language.clone());
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -958,7 +993,7 @@ impl PdfCraftApp {
         // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
         // editable document (a NEW file) the choice promises.
         if editable && !automatic {
-            self.ocr_verify.load(doc, guard, found);
+            self.ocr_verify.load_with_language(doc, guard, found, &language);
             self.ocr_verify.open = true;
             self.notify_tr("Review the recognition, then Accept to write the editable document");
             return;
@@ -1207,6 +1242,7 @@ mod tests {
                 guard,
                 automatic: automatic.then_some(AutoOcr { page: 0, generation }),
                 editable: false,
+                language: "en".into(),
             }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
@@ -1256,7 +1292,8 @@ mod tests {
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
+        app.ocr_run =
+            Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false, language: "en".into() });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
@@ -1296,7 +1333,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "en".into() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -1503,7 +1540,7 @@ mod tests {
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "en".into() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
@@ -1539,7 +1576,7 @@ mod tests {
         };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, language: "en".into() });
         app.poll_ocr();
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.contains("3 characters had no font"), "{toast}");
@@ -1566,11 +1603,30 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true, language: "zh".into() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
+        assert_eq!(app.ocr_verify.dictionary_language, "zh");
+    }
+
+    #[test]
+    fn awaiting_ocr_models_rechecks_scan_when_draft_language_changes() {
+        let mut app = app_with(scan());
+        app.left_open = true;
+        app.left = crate::LeftPanel::Tool("edit");
+        let (view, doc) = app.active_ids().unwrap();
+        let generation = app.session.get(doc).unwrap().edit_generation();
+
+        app.ocr_draft.language = "zh".into();
+        let scan = app.scan_to_read().expect("initial scan detected");
+        app.await_ocr_models(&scan);
+        assert!(app.scan_to_read().is_none(), "held while draft stays zh at same generation");
+
+        app.ocr_draft.language = "en".into();
+        let rechecked = app.scan_to_read().expect("switching draft language re-evaluates the scan");
+        assert_eq!((rechecked.view, rechecked.page, rechecked.generation), (view, 0, generation));
     }
 }
