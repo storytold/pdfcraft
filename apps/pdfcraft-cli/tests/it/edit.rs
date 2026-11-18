@@ -358,7 +358,11 @@ fn a_page_tree_is_not_rebuilt_when_the_reader_shows_other_pages() {
     let output = tmp("scan-disagrees", "out.pdf");
     let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--delete", "2"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "pdfcraft-cli: the document's page tree lists no pages: the file is damaged\n");
+    // Refused before the deletion runs: the 3 pages shown are not the 0 the page tree leads to.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "pdfcraft-cli: this document's page tree is damaged: it shows 3 page(s), but its page tree leads to 0, so this change could act on another page than the one picked or leave pages out (nothing was changed)\n"
+    );
     assert!(!output.exists(), "no page may be deleted");
 }
 
