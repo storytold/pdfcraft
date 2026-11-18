@@ -1567,6 +1567,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xfa"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=1a0d5d607859a2e529851482de09b8e53aaeec3e#1a0d5d607859a2e529851482de09b8e53aaeec3e"
+dependencies = [
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1a0d5d607859a2e529851482de09b8e53aaeec3e)",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=1a0d5d607859a2e529851482de09b8e53aaeec3e#1a0d5d607859a2e529851482de09b8e53aaeec3e"
+dependencies = [
+ "quick-xml 0.41.0",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-xml"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
@@ -5171,6 +5189,7 @@ version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
+ "craft-xfa",
  "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "pdfcraft-cos",
  "pdfcraft-fonts",
