@@ -46,6 +46,7 @@ fn sample_page() -> Page {
             rotation: 0.0,
         }],
         background: None,
+        rules: Vec::new(),
     }
 }
 
@@ -174,6 +175,7 @@ fn pptx_package_parts_are_complete_and_consistent() {
         ],
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     };
     let bytes = pptx(&[sample_page(), table_page], "Two");
     let parts = entries(&bytes);
@@ -278,7 +280,7 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
             rotation: 0.0,
         })
         .collect();
-    let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, background: None };
+    let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, background: None, rules: Vec::new() };
     let bytes = pptx(&[p], "Hostile");
     let slide = part(&bytes, "ppt/slides/slide1.xml");
     assert!(slide.contains("Title") && slide.contains("<p:pic>"), "the slide is still written");
@@ -360,6 +362,7 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
         ],
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     };
     let bytes = pptx(&[p], "Table Check");
     let slide_xml = part(&bytes, "ppt/slides/slide1.xml");
@@ -376,9 +379,18 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
 fn pptx_opens_in_libreoffice() {
     let p = sample_page();
     let bytes = pptx(&[p], "LibreOffice Check");
-    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::create_dir_all(&dir);
+    // A new folder of our own, never one left (or planted) at a guessable name.
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}-{nanos:x}", std::process::id()));
+    // Only Unix sets a mode on it, so elsewhere `made` is never changed.
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut made = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        made.mode(0o700);
+    }
+    made.create(&dir).expect("a fresh test folder");
     let pptx_path = dir.join("test.pptx");
     std::fs::write(&pptx_path, &bytes).unwrap();
 

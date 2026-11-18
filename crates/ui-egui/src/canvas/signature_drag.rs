@@ -402,8 +402,7 @@ mod tests {
         let doc = session.get(id).expect("open");
         let index = doc.info.annotations.iter().find(|a| a.subtype == "Sound").expect("listed").index;
         let ctx = egui::Context::default();
-        let mut cv = CommentView::default();
-        cv.gesture = Some(Gesture::Move { page: 0, index, from: pos2(0.0, 0.0) });
+        let mut cv = CommentView { gesture: Some(Gesture::Move { page: 0, index, from: pos2(0.0, 0.0) }), ..CommentView::default() };
         let mut drag = SignatureDrag::default();
         let key = Some((doc.edit_generation(), 0, index));
         drag.prepare_move(&ctx, doc, &cv, None, false, 1.0);

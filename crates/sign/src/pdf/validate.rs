@@ -1,6 +1,7 @@
 use super::changes::classify_changes;
 use super::listing::{DigestCache, list, nums, sig_fields, text};
-use super::types::{Detail, Fill, Modification, Status, TrustStore};
+use super::locks::{Locked, locked_fields};
+use super::types::{Detail, Fill, Modification, Status, TrustStore, kind};
 use super::{
     Certificate, Dict, DigestAlg, Document, HashSet, ObjRef, Object, SignError, SignatureInfo, SignedData, Time, build_chain, build_chain_noted,
 };
@@ -21,12 +22,17 @@ struct VerifiedSignature<'a> {
     unverified_time: Option<Time>,
 }
 
+/// Most signature fields whose locks are compared for a signature that is not listed under any of
+/// the fields ending its signed revision; past it the locks are left undecided. Each costs a walk of
+/// the form, and a real revision ends with one signature.
+const MAX_UNBOUND_CANDIDATES: usize = 4;
+
 /// Validate one signature dictionary.
 pub fn validate(doc: &Document, bytes: &[u8], trust: &TrustStore, field: &str) -> Option<SignatureInfo> {
     list(doc, bytes, trust).into_iter().find(|s| s.field == field)
 }
 
-fn unhex(s: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn unhex(s: &[u8]) -> Option<Vec<u8>> {
     let digits: Vec<u8> = s.iter().copied().filter(|c| !c.is_ascii_whitespace()).collect();
     let val = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
     digits.chunks(2).map(|p| Some(val(p[0])? << 4 | p.get(1).map_or(Some(0), |c| val(*c))?)).collect()
@@ -38,9 +44,9 @@ pub(super) fn is_doc_timestamp(d: &Dict) -> bool {
     d.name(b"SubFilter") == Some(b"ETSI.RFC3161") && matches!(d.name(b"Type"), Some(b"DocTimeStamp" | b"Sig"))
 }
 
-/// The DocMDP permission level (`/P`, 1–3) of signature value `v`, or `None` for an approval
-/// signature.
-fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
+/// The DocMDP permission level (`/P`, 1 to 3) that signature value `v` asks for in its `/Reference`,
+/// or `None` when it asks for none.
+fn docmdp_reference(doc: &Document, v: &Dict) -> Option<u8> {
     v.get(b"Reference")
         .map(|r| doc.resolve(r))
         .and_then(|r| r.as_array().cloned())
@@ -49,6 +55,31 @@ fn docmdp(doc: &Document, v: &Dict) -> Option<u8> {
         .filter_map(|r| doc.resolve(&r).as_dict().cloned())
         .find(|r| r.name(b"TransformMethod") == Some(b"DocMDP"))
         .map(|r| r.get(b"TransformParams").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().and_then(|p| p.int(b"P"))).unwrap_or(2).clamp(1, 3) as u8)
+}
+
+/// Whether the catalog's `/Perms /DocMDP` in `doc` is the signature dictionary `v`.
+fn names_certification(doc: &Document, v: &Dict) -> bool {
+    let Some(root) = doc.root() else { return false };
+    let catalog = doc.get(root);
+    let Some(perms) = catalog.as_dict().and_then(|c| c.get(b"Perms")).map(|p| doc.resolve(p)) else { return false };
+    let Some(named) = perms.as_dict().and_then(|p| p.get(b"DocMDP")).map(|d| doc.resolve(d)) else { return false };
+    named.as_dict() == Some(v)
+}
+
+/// Set `info.certify` from `doc`, the revision signature value `v` covers. A document has at most
+/// one certification, the signature its catalog's `/Perms /DocMDP` names (ISO 32000-2, 12.8.2.2),
+/// so a DocMDP reference in any other signature dictionary does not choose the permissions later
+/// changes are judged by. Such a signature is checked as an approval signature, with a note.
+fn set_certification(doc: &Document, v: &Dict, info: &mut SignatureInfo) {
+    let asked = docmdp_reference(doc, v);
+    info.certify = asked.filter(|_| names_certification(doc, v));
+    let note = Detail::plain(
+        "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.",
+    );
+    info.details.retain(|d| *d != note);
+    if asked.is_some() && info.certify.is_none() {
+        info.details.push(note);
+    }
 }
 
 pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, info: &mut SignatureInfo, cache: &DigestCache) {
@@ -68,7 +99,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
     info.contact = text(doc, v, b"ContactInfo");
     info.sub_filter = v.name(b"SubFilter").map(|s| String::from_utf8_lossy(s).into_owned());
     info.signer = text(doc, v, b"Name");
-    info.certify = docmdp(doc, v);
+    set_certification(doc, v, info);
     let invalid = |info: &mut SignatureInfo, why: Detail| {
         info.status = Status::Invalid;
         info.details.push(why);
@@ -240,21 +271,59 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     let revocation = check_dss_revocation(doc, signer.as_ref(), &at, info);
     let revoked = revocation == DssRevocation::Revoked;
     // Changes after signing.
+    let mut locks = Locked::Kept;
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
     } else {
-        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788). This
-        // signature is the one whose byte range ends that revision.
+        // The permissions are the signed revision's: a later one can rewrite `/P` (#1788) or the
+        // catalog's `/Perms`. This signature is the one whose byte range ends that revision. A
+        // revision that holds no such signature does not say which permissions apply, so what
+        // came after it is judged as when the revision cannot be read: not permitted.
         let old = cache.revision(doc, bytes, covered);
-        if let Some(old) = &old
-            && let Some(v) = sig_fields(old)
-                .iter()
-                .filter_map(|f| f.signature(old))
-                .find(|v| nums(old, v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64))
-        {
-            info.certify = docmdp(old, &v);
+        // Every field of the signed revision whose signature ends it; the one this signature is
+        // listed under, when it is there, is the one it was made in.
+        let mut ending: Vec<_> = old
+            .as_ref()
+            .map(|old| {
+                sig_fields(old)
+                    .into_iter()
+                    .filter_map(|f| {
+                        let v = f.signature(old)?;
+                        nums(old, &v, b"ByteRange").is_some_and(|b| b.len() == 4 && b[2] + b[3] == covered as f64).then_some((f, v))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let bound = ending.iter().position(|(f, _)| f.name == info.field);
+        let candidates = match bound {
+            Some(i) => vec![ending.swap_remove(i)],
+            None => std::mem::take(&mut ending),
+        };
+        match (old, candidates.first()) {
+            (Some(old), Some((field, v))) => {
+                set_certification(&old, v, info);
+                // The fields this signature locks, as the signed revision has them, against the
+                // document now (#6757). Its locks are its own field's: when that field is not
+                // among those ending the revision, any of them could be it, so a lock on any of
+                // them leaves the check undecided rather than borrowing another field's. Each
+                // candidate costs a walk of the form, so past a few the check is undecided too.
+                locks = match bound {
+                    Some(_) => locked_fields(doc, &old, field, v),
+                    None if candidates.len() > MAX_UNBOUND_CANDIDATES => Locked::Unchecked,
+                    None if candidates.iter().any(|(f, v)| locked_fields(doc, &old, f, v) != Locked::Kept) => Locked::Unchecked,
+                    None => Locked::Kept,
+                };
+                match classify_changes(doc, Some(old), info.certify) {
+                    Modification::Allowed(_) if locks == Locked::Changed => Modification::Disallowed(vec![kind::LOCKED_FIELD]),
+                    Modification::Disallowed(mut kinds) if locks == Locked::Changed => {
+                        kinds.push(kind::LOCKED_FIELD);
+                        Modification::Disallowed(kinds)
+                    }
+                    m => m,
+                }
+            }
+            _ => classify_changes(doc, None, info.certify),
         }
-        classify_changes(doc, old, info.certify)
     };
     let mut problems = false;
     // The changes are handed over as the words they are, not stitched into the sentence, so an
@@ -274,6 +343,18 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
             info.details.push(said);
             problems = true;
         }
+    }
+    // A lock that could not be read or compared proves nothing either way: the changes may touch
+    // a field it locks, so the signature is not Valid.
+    if locks == Locked::Unchecked && !problems {
+        info.details.push(Detail::of(
+            "The signature could not be checked ({}).",
+            Fill::Reason("the fields this signature locks could not all be compared with the signed version".into()),
+        ));
+        if !revoked {
+            info.status = Status::Unknown;
+        }
+        problems = true;
     }
     if revocation == DssRevocation::Incomplete {
         if !problems {
@@ -340,7 +421,11 @@ pub(crate) const MAX_DSS_BYTES: usize = 64 << 20;
 pub(crate) struct DssEvidence<'a> {
     doc: &'a Document,
     items: std::vec::IntoIter<Object>,
-    seen: HashSet<ObjRef>,
+    /// Object numbers read: `Document::get` resolves a reference by number, so `5 0 R` and `5 1 R`
+    /// are one stream.
+    seen: HashSet<u32>,
+    /// Full references already tried, resolved or not.
+    tried: HashSet<ObjRef>,
     taken: usize,
     left: usize,
     /// A cap stopped the array being read in full.
@@ -350,7 +435,7 @@ pub(crate) struct DssEvidence<'a> {
 impl<'a> DssEvidence<'a> {
     pub(crate) fn new(doc: &'a Document, dss: &Dict, key: &[u8]) -> Self {
         let items = dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
-        DssEvidence { doc, items: items.into_iter(), seen: HashSet::new(), taken: 0, left: MAX_DSS_BYTES, cut: false }
+        DssEvidence { doc, items: items.into_iter(), seen: HashSet::new(), tried: HashSet::new(), taken: 0, left: MAX_DSS_BYTES, cut: false }
     }
 }
 
@@ -364,11 +449,21 @@ impl Iterator for DssEvidence<'_> {
         // Repeats are skipped before the caps count anything, so repeating one stream cannot use
         // them up; the scan of the array itself is bounded by the parser's cap on array length.
         for item in self.items.by_ref() {
-            if item.as_ref().is_some_and(|r| !self.seen.insert(r)) {
+            // Resolved first: a reference to a generation the slot doesn't hold reads as null and
+            // must not make a later, valid reference to the same object number a repeat.
+            // A repeat is skipped before anything is resolved: a long chain of repeats costs no
+            // lookups. The number is recorded only once the reference gave a stream.
+            // Each full reference is tried once, so one that never reaches a stream (a cycle) costs
+            // its lookups once, however often it is listed; `seen` keeps object numbers apart so a
+            // dead generation can't hide a live one.
+            if item.as_ref().is_some_and(|r| self.seen.contains(&r.num) || !self.tried.insert(r)) {
                 continue;
             }
             let o = self.doc.resolve(&item);
             let Object::Stream(s) = o.as_ref() else { continue };
+            if let Some(r) = item.as_ref() {
+                self.seen.insert(r.num);
+            }
             if self.taken >= MAX_DSS_ENTRIES {
                 self.cut = true;
                 return None;

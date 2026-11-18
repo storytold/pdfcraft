@@ -109,6 +109,12 @@ pub enum Dialog {
     Split,
     /// Pages ▸ Number pages… (page labels).
     NumberPages,
+    /// Print production ▸ Add printer marks.
+    PrinterMarks,
+    /// Print production ▸ Convert colours.
+    ConvertColours,
+    /// Print production ▸ Fix hairlines.
+    FixHairlines,
     /// Organize pages ▸ Page properties (the tab order of the selected pages).
     PageProps,
     /// Protect Using Password.
@@ -125,6 +131,8 @@ pub enum Dialog {
     Signature,
     /// Comment Properties.
     CommentProps,
+    /// Edit the description of an embedded document attachment.
+    AttachmentDescription,
     /// Replace Pages (after choosing the file).
     ReplacePages,
     /// Prepare a form ▸ Field Properties.
@@ -142,6 +150,9 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
+    /// first? (#2149)
+    LockSignatures,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.
@@ -166,6 +177,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ Enhance scanned file.
+    EnhanceScan,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -231,6 +244,14 @@ pub struct PagePropsDraft {
     pub tab_order: Option<pdfcraft_engine::TabOrder>,
 }
 
+/// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentClip {
+    pub xfdf: String,
+    /// How many comments (replies not counted) were copied.
+    pub count: usize,
+}
+
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
 #[derive(Clone, Debug)]
 pub struct PageClip {
@@ -250,9 +271,11 @@ pub(crate) enum CopyPage {
 }
 
 /// What a whole-document copy needs, taken from the view on the UI thread: each page's text
-/// layer as far as it was read, and the document to read the others from.
+/// layer as far as it was read, and the document to read the others from. A copy of a text
+/// selection across pages whose pages are not all read yet is one too, limited to its `span`.
 pub(crate) struct DocumentCopyJob {
     pub(crate) pages: Vec<CopyPage>,
+    span: Option<crate::canvas::TextSpan>,
     bytes: std::sync::Arc<Vec<u8>>,
     password: Option<std::sync::Arc<str>>,
 }
@@ -266,7 +289,20 @@ impl DocumentCopyJob {
                 None => CopyPage::ToRead,
             })
             .collect();
-        DocumentCopyJob { pages, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+        DocumentCopyJob { pages, span: None, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+    }
+
+    /// A copy of the reading-order text `span` covers: its pages as [`Self::of`] takes them, every
+    /// other page skipped.
+    pub(crate) fn of_selection(v: &DocView, doc: &pdfcraft_engine::Document, span: crate::canvas::TextSpan) -> DocumentCopyJob {
+        let mut job = DocumentCopyJob::of(v, doc);
+        for (page, p) in job.pages.iter_mut().enumerate() {
+            if page < span.start.0 || page > span.end.0 {
+                *p = CopyPage::Skip;
+            }
+        }
+        job.span = Some(span);
+        job
     }
 
     /// The document's text in page order, a page per line run. Each page read here is let go
@@ -283,12 +319,18 @@ impl DocumentCopyJob {
                 out.push_str(&text);
             }
         };
+        // The glyphs taken from `page`: all of them, or the part a selection covers.
+        let span = self.span;
+        let part = |page: usize, t: &pdfcraft_render::PageText| match span {
+            Some(span) => span.on(page, t.glyphs.len()).map(|r| t.text_of(r)).unwrap_or_default(),
+            None => t.text_of(0..t.glyphs.len()),
+        };
         for (page, p) in self.pages.into_iter().enumerate() {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
             match p {
-                CopyPage::Read(t) => push(t.text_of(0..t.glyphs.len())),
+                CopyPage::Read(t) => push(part(page, &t)),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -303,7 +345,7 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(t.text_of(0..t.glyphs.len()));
+                        push(part(page, &t));
                     }
                 }
                 CopyPage::Skip => {}
@@ -335,13 +377,19 @@ pub struct PasswordPrompt {
     pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
+impl Drop for PasswordPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct OpenRequest {
     pub(crate) name: String,
     pub(crate) path: Option<String>,
     pub(crate) stamp: Option<file_watch::Stamp>,
     pub(crate) input: open_worker::Input,
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<zeroize::Zeroizing<String>>,
     pub(crate) activate: bool,
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<RecoveryMeta>,
@@ -359,7 +407,14 @@ pub struct UnlockPrompt {
     pub then: Option<&'static str>,
 }
 
+impl Drop for UnlockPrompt {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.input);
+    }
+}
+
 impl UnlockPrompt {
+    /// Ask for document `doc`'s permissions password, then run command `then`, if any.
     pub(crate) fn new(doc: &pdfcraft_engine::Document, then: Option<&'static str>) -> Self {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }

@@ -12,11 +12,12 @@ use pdfcraft_cos::{SaveOptions, write_full};
 use crate::{DocId, EditError, Hidden, OptimizeReport, Session, guard, optimize};
 
 /// Where an optimization is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptimizeStage {
-    /// Removing the user data chosen under Discard User Data.
-    #[default]
+    /// Removing the user data chosen under Discard User Data, if any was.
     Discarding,
+    /// Reading what the pages draw: `done` of `total` read.
+    Reading { done: usize, total: usize },
     /// Merging the fragments of a page picture into one image.
     Fragments,
     /// About to process image `done` (0-based) of `total`.
@@ -29,14 +30,21 @@ pub enum OptimizeStage {
     Writing,
 }
 
+impl Default for OptimizeStage {
+    fn default() -> Self {
+        OptimizeStage::Reading { done: 0, total: 0 }
+    }
+}
+
 impl OptimizeStage {
-    /// How far along the whole run is, from 0 to 1. Images take most of the time; the rest are
-    /// small fixed steps.
+    /// How far along the whole run is, from 0 to 1, weighed by where the time goes: reading pages
+    /// and pictures. The rest are small fixed steps.
     pub fn fraction(self) -> f32 {
+        let part = |done: usize, total: usize| if total == 0 { 1.0 } else { done.min(total) as f32 / total as f32 };
         match self {
-            OptimizeStage::Discarding => 0.0,
-            OptimizeStage::Fragments => 0.03,
-            OptimizeStage::Images { done, total } => 0.05 + 0.75 * if total == 0 { 1.0 } else { done.min(total) as f32 / total as f32 },
+            OptimizeStage::Discarding | OptimizeStage::Fragments => 0.0,
+            OptimizeStage::Reading { done, total } => 0.25 * if total == 0 { 0.0 } else { part(done, total) },
+            OptimizeStage::Images { done, total } => 0.25 + 0.55 * part(done, total),
             OptimizeStage::CleaningUp => 0.8,
             OptimizeStage::Merging => 0.85,
             OptimizeStage::Writing => 0.9,
@@ -91,10 +99,28 @@ impl OptimizeJob {
         pdfcraft_forms::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         pdfcraft_xfa::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         let mut step = |stage| if progress(stage) { Ok(()) } else { Err(EditError::Cancelled) };
-        step(OptimizeStage::Discarding)?;
-        let discarded = if discard.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard)? };
+        let discarded = if discard.is_empty() {
+            Vec::new()
+        } else {
+            step(OptimizeStage::Discarding)?;
+            // Every ticked category, as `remove_hidden` decides between them: with form fields
+            // ticked, discarding hidden text also takes the hidden text the flattened appearances
+            // bring onto the page, which no scan before flattening counts. It refuses when its scan
+            // counts every one as 0, which would end the whole optimization, and may have changed
+            // the copy by then (an empty outline root goes with bookmarks), so the copy from before
+            // is kept instead: nothing is discarded.
+            let before = cos.clone();
+            match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
+                Err(pdfcraft_redact::RedactError::NothingToApply) => {
+                    cos = before;
+                    Vec::new()
+                }
+                r => r?,
+            }
+        };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {
+                optimize::Stage::Reading { done, total } => OptimizeStage::Reading { done, total },
                 optimize::Stage::Fragments => OptimizeStage::Fragments,
                 optimize::Stage::Images { done, total } => OptimizeStage::Images { done, total },
                 optimize::Stage::CleanUp => OptimizeStage::CleaningUp,
