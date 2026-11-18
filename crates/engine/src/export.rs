@@ -88,6 +88,13 @@ pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Res
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 
+/// The backdrop each of `pages` (0-based) paints, in the same order, read from the document state `src` carries, so a
+/// dialog can check pages on a worker thread.
+pub fn page_backdrops(src: &ExportSource, pages: &[usize]) -> Result<Vec<Option<pdfcraft_edit::Backdrop>>, String> {
+    let doc = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
+    Ok(pdfcraft_edit::page_backdrops(&doc, pages))
+}
+
 /// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
 /// The page number has leading zeros for as many digits as the document's `page_count` has, so the
 /// files sort in page order (#2208): page 7 of 120 is `Page_007`.
