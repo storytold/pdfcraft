@@ -10,6 +10,10 @@ use crate::{OrganizeError, check, walk};
 /// effect).
 pub const TRANSITION_STYLES: [&str; 12] = ["Split", "Blinds", "Box", "Wipe", "Dissolve", "Glitter", "R", "Fly", "Push", "Cover", "Uncover", "Fade"];
 
+/// The styles PDF 1.5 added (ISO 32000-1 table 162). A page given one raises a file that declares
+/// an earlier version to 1.5.
+const PDF_1_5_STYLES: [&str; 5] = ["Fly", "Push", "Cover", "Uncover", "Fade"];
+
 /// The directions `/Di` allows, in degrees.
 pub const TRANSITION_DIRECTIONS: [u16; 5] = [0, 90, 180, 270, 315];
 
@@ -94,6 +98,28 @@ pub fn set_transition(doc: &mut Document, pages: &[usize], spec: &TransitionSpec
                 }
             }
         })?;
+    }
+    if !pages.is_empty() && spec.transition.as_ref().is_some_and(|t| PDF_1_5_STYLES.contains(&t.style.as_str())) {
+        at_least_version(doc, "1.5")?;
+    }
+    Ok(())
+}
+
+/// Whether the header or the catalog `/Version` says `min` or later (§7.7.2).
+fn at_least(doc: &Document, min: &str) -> bool {
+    let reached = |v: &[u8]| v.len() >= 3 && v >= min.as_bytes();
+    let catalog = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|c| c.get(b"Version").cloned()));
+    let catalog = catalog.and_then(|v| doc.resolve(&v).as_name().map(<[u8]>::to_vec));
+    reached(doc.version().as_bytes()) || catalog.as_deref().is_some_and(reached)
+}
+
+/// A document whose header and catalog `/Version` both say less than `min` gets `/Version min` in
+/// its catalog. The later of the two applies (§7.7.2), so an in-place save that keeps the header
+/// still declares the version its content needs.
+fn at_least_version(doc: &mut Document, min: &str) -> Result<(), OrganizeError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    if !at_least(doc, min) {
+        doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name(min)))?;
     }
     Ok(())
 }
