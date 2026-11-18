@@ -314,7 +314,8 @@ pub(crate) fn page(doc: &Document, page: &Dict, index: usize, profiles: &mut Pro
 const MAX_CONFIGURATIONS: usize = 4096;
 
 /// 6.10: each optional content configuration (`/D` and those in `/Configs`, ISO 32000-2 8.11.4.2)
-/// has a `/Name`, and no two have the same one. A `/Configs` longer than [`MAX_CONFIGURATIONS`] is
+/// has a `/Name`, and no two have the same one. A name is a text string (Table 99), so two are the
+/// same when they decode to the same text (7.9.2.2), however each is encoded. A `/Configs` longer than [`MAX_CONFIGURATIONS`] is
 /// reported as not checked in full: what its other configurations hold isn't known, so the file
 /// doesn't pass.
 fn optional_content_names(doc: &Document, properties: &Dict, issue: &mut Report<'_>) {
@@ -338,7 +339,7 @@ fn optional_content_names(doc: &Document, properties: &Dict, issue: &mut Report<
     for configuration in &configurations {
         let configuration = doc.resolve(configuration);
         let Some(configuration) = configuration.as_dict() else { continue };
-        match configuration.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().map(|s| s.bytes.clone())) {
+        match configuration.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().map(pdfcraft_cos::PdfString::to_text)) {
             Some(name) => repeated |= !names.insert(name),
             None => unnamed = true,
         }
@@ -410,23 +411,28 @@ fn packet(bytes: &[u8], object: Option<pdfcraft_cos::ObjRef>, issue: &mut Report
     }
 }
 
-/// Where the packet's `xpacket` header (ISO 16684-1 7.3.2) starts in `text`: the first `<?xpacket`
-/// processing instruction that isn't inside a comment (XML 1.0 2.5), whose text is no markup.
+/// Where the packet's `xpacket` header (ISO 16684-1 7.3.2) starts in `text`: the first processing
+/// instruction whose target is `xpacket` (XML 1.0 2.6), outside comments (2.5). The text is read
+/// once, front to back: a comment is skipped to its `-->` and another processing instruction to
+/// its `?>`, whatever either holds, and one that never ends hides everything after it.
 fn packet_header(text: &str) -> Option<usize> {
-    let mut at = 0;
+    let mut at: usize = 0;
     loop {
-        let rest = text.get(at..)?;
-        let header = rest.find("<?xpacket");
-        let comment = rest.find("<!--");
-        match (header, comment) {
-            (Some(h), Some(c)) if c < h => {
-                // Past the comment's end; one that never ends hides everything after it.
-                let open = at.checked_add(c)?.checked_add(4)?;
-                let end = text.get(open..)?.find("-->")?;
-                at = open.checked_add(end)?.checked_add(3)?;
+        let open = at.checked_add(text.get(at..)?.find('<')?)?;
+        let rest = text.get(open..)?;
+        if rest.starts_with("<!--") {
+            let body = open.checked_add(4)?;
+            at = body.checked_add(text.get(body..)?.find("-->")?)?.checked_add(3)?;
+        } else if let Some(instruction) = rest.strip_prefix("<?") {
+            // The target is the name up to white space or the instruction's end (2.6, `PITarget`).
+            let target = instruction.split(|c: char| c.is_ascii_whitespace() || c == '?').next().unwrap_or_default();
+            if target == "xpacket" {
+                return Some(open);
             }
-            (Some(h), _) => return at.checked_add(h),
-            (None, _) => return None,
+            let body = open.checked_add(2)?;
+            at = body.checked_add(text.get(body..)?.find("?>")?)?.checked_add(2)?;
+        } else {
+            at = open.checked_add(1)?;
         }
     }
 }
@@ -486,7 +492,8 @@ pub(crate) fn component_metadata(doc: &Document, catalog: &Dict, objs: &[(pdfcra
 /// real ICC profiles stay well under it.
 const MAX_ICC_HEADER_READ: usize = 16 << 20;
 
-/// How many output intents [`output_intents`] reads.
+/// How many output intents [`output_intents`] reads; past it, the others are reported as not
+/// checked.
 const MAX_INTENTS: usize = 4096;
 
 /// What the start of an ICC profile stream holds, as [`Profiles`] reads it.
@@ -538,8 +545,9 @@ impl Profiles {
 }
 
 /// Whether the ICC profile `data` holds all it says it does: its 128-byte header and tag count,
-/// at least the profile size its header gives (ICC.1 7.2.2), and every tag's data within that size
-/// (7.3.1 to 7.3.5: a count, then an offset and size per tag). A profile cut short isn't one.
+/// at least the profile size its header gives (ICC.1 7.2.2), and every tag's data after the tag
+/// table and within that size (7.3.1 to 7.3.5: a count, then an offset and size per tag; 7.1: the
+/// tag data follows the table). A profile cut short isn't one.
 fn icc_extent_fits(data: &[u8]) -> bool {
     let word = |at: usize| data.get(at..at.saturating_add(4)).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
     let (Some(size), Some(count)) = (word(0), word(128)) else { return false };
@@ -548,13 +556,16 @@ fn icc_extent_fits(data: &[u8]) -> bool {
         return false;
     }
     // Each tag's entry is 12 bytes after the count; the table has to fit in the profile first.
-    if count.checked_mul(12).and_then(|n| n.checked_add(132)).is_none_or(|end| end > size) {
+    let Some(table_end) = count.checked_mul(12).and_then(|n| n.checked_add(132)).filter(|end| *end <= size) else {
         return false;
-    }
+    };
     (0..count).all(|i| {
         let entry = 132usize.saturating_add(i.saturating_mul(12));
         match (word(entry.saturating_add(4)), word(entry.saturating_add(8))) {
-            (Some(offset), Some(len)) => usize::try_from(u64::from(offset).saturating_add(u64::from(len))).is_ok_and(|end| end <= size),
+            (Some(offset), Some(len)) => {
+                usize::try_from(offset).is_ok_and(|start| start >= table_end)
+                    && usize::try_from(u64::from(offset).saturating_add(u64::from(len))).is_ok_and(|end| end <= size)
+            }
             _ => false,
         }
     })
@@ -599,10 +610,16 @@ fn output_intents(doc: &Document, holder: &Dict, page: Option<usize>, headers: &
     if profiles.len().saturating_add(direct) > 1 {
         issue("6.2.3", "The output intents have different destination profiles", None, page, false);
     }
+    // What the intents past the limit hold isn't known, so the file doesn't pass.
+    if list.len() > MAX_INTENTS {
+        issue("6.2.3", "Some output intents weren't checked: there are more of them than one verification reads", None, page, false);
+    }
 }
 
-/// 6.1.3: nothing follows the last end-of-file marker but an end-of-line (ISO 32000-2 7.5.5). A
-/// document its next save rewrites is judged by that save, which ends the file itself.
+/// 6.1.3: nothing follows the last end-of-file marker but an end-of-line (ISO 32000-2 7.5.5), and
+/// there is one: a file whose last line isn't one, and that has none at the start of a line before
+/// it, is reported too. A document its next save rewrites is judged by that save, which ends the
+/// file itself.
 fn end_of_file(doc: &Document, issue: &mut Report<'_>) {
     if doc.full_save_required() || doc.encryption_changed() {
         return;
@@ -616,6 +633,7 @@ fn end_of_file(doc: &Document, issue: &mut Report<'_>) {
         .find(|(at, w)| *w == b"%%EOF" && (*at == 0 || matches!(data.get(at.saturating_sub(1)), Some(b'\r' | b'\n'))))
         .map(|(at, _)| at)
     else {
+        issue("6.1.3", "The file has no end-of-file marker (%%EOF) on a line of its own", None, None, false);
         return;
     };
     let after = data.get(end.saturating_add(5)..).unwrap_or_default();
@@ -826,12 +844,24 @@ fn read_embedded(doc: &Document, s: &pdfcraft_cos::Stream) -> Option<Option<Vec<
 }
 
 /// `s` with its `/Filter`, a reference or an array holding references, made direct, so the stream
-/// decodes with the filters it names (ISO 32000-2 7.3.8.2, Table 5).
-fn with_direct_filters<'s>(doc: &Document, s: &'s pdfcraft_cos::Stream) -> std::borrow::Cow<'s, pdfcraft_cos::Stream> {
+/// decodes with the filters it names (ISO 32000-2 7.3.8.2, Table 5). Only names are copied: a
+/// filter that resolves to anything else, or more filters than a decoder takes, leaves `s` as it
+/// is, for the decoder to reject, so a large object named many times is never copied.
+pub(crate) fn with_direct_filters<'s>(doc: &Document, s: &'s pdfcraft_cos::Stream) -> std::borrow::Cow<'s, pdfcraft_cos::Stream> {
     let Some(filter) = s.dict.get(b"Filter") else { return std::borrow::Cow::Borrowed(s) };
+    let name = |f: &Object| match &*doc.resolve(f) {
+        Object::Name(n) => Some(Object::Name(n.clone())),
+        _ => None,
+    };
     let direct = match &*doc.resolve(filter) {
-        Object::Array(list) => Object::Array(list.iter().map(|f| (*doc.resolve(f)).clone()).collect()),
-        other => other.clone(),
+        // A chain longer than the decoders take (`/Crypt` counted besides) is rejected as it is.
+        Object::Array(list) if list.len() > pdfcraft_filters::MAX_CHAIN.saturating_add(1) => return std::borrow::Cow::Borrowed(s),
+        Object::Array(list) => match list.iter().map(name).collect::<Option<Vec<_>>>() {
+            Some(names) => Object::Array(names),
+            None => return std::borrow::Cow::Borrowed(s),
+        },
+        Object::Name(n) => Object::Name(n.clone()),
+        _ => return std::borrow::Cow::Borrowed(s),
     };
     if &direct == filter {
         return std::borrow::Cow::Borrowed(s);
@@ -901,7 +931,38 @@ pub(crate) fn page_place(doc: &Document, page: &Dict, document: Option<Option<i6
     let group = page.get(b"Group").map(|g| doc.resolve(g));
     let group = group.as_deref().and_then(Object::as_dict).filter(|g| g.name(b"S") == Some(b"Transparency"));
     let blend = group.and_then(|g| g.get(b"CS")).and_then(|cs| cie_components(doc, cs, profiles));
-    Place { intent: plain_intent(crate::pdfa_intent_profile_in(doc, page).or(document)), blend }
+    Place { intent: plain_intent(intent_components(doc, page, profiles).or(document)), blend }
+}
+
+/// The PDF/A output intent of `holder`, the catalog or a page, as 6.2.4.3 reads it: `None` when
+/// `holder` has none, else the components of its destination profile. They are taken from the ICC
+/// header's data colour space (ICC.1 7.2.6), as [`output_intents`] classes the profile, so a
+/// profile counts as what it is whatever its `/N` says; from `/N` only when the profile is too
+/// large to read the header of; and are unknown (`Some(None)`) for a profile that is no stream,
+/// can't be read, or is of another colour space.
+pub(crate) fn intent_components(doc: &Document, holder: &Dict, profiles: &mut Profiles) -> Option<Option<i64>> {
+    let list = holder.get(b"OutputIntents").map(|o| doc.resolve(o))?;
+    list.as_array()?.iter().find_map(|intent| {
+        let intent = doc.resolve(intent);
+        let intent = intent.as_dict()?;
+        if intent.name(b"S") != Some(b"GTS_PDFA1") {
+            return None;
+        }
+        let profile = intent.get(b"DestOutputProfile")?;
+        Some(match profiles.header(doc, profile) {
+            Some(ProfileHeader::Read(header)) => match header.get(16..20) {
+                Some(b"GRAY") => Some(1),
+                Some(b"RGB ") => Some(3),
+                Some(b"CMYK") => Some(4),
+                _ => None,
+            },
+            Some(ProfileHeader::TooLarge) => match &*doc.resolve(profile) {
+                Object::Stream(s) => s.dict.int(b"N"),
+                _ => None,
+            },
+            Some(ProfileHeader::Broken) | None => None,
+        })
+    })
 }
 
 /// The output intent `intent` as 6.2.4.3 tells intents apart: none, an RGB (3) or a CMYK (4) one,
