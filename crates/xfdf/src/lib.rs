@@ -27,7 +27,7 @@ mod xfdf;
 
 #[cfg(test)]
 use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
-use common::{check_form_xml_depth, el_text, esc, parse_form_xml, walk_xfdf, xml_name};
+use common::{check_form_xml_depth, el_text, esc, parse_form_xml, xml_name};
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
@@ -183,18 +183,10 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             })
             .collect());
     }
-    let text = String::from_utf8_lossy(bytes);
-    let t = text.trim_start_matches('\u{feff}').trim_start();
-    check_form_xml_depth(t)?;
-    let root = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
-    if root.local() != "xfdf" {
-        return Err(DataError::UnknownFormat);
-    }
-    let mut values = Vec::new();
-    if let Some(fields) = root.child(craft_xml::Local("fields")) {
-        walk_xfdf(fields, "", &mut values, 0, &mut 0)?;
-    }
-    Ok(values)
+    craft_xfdf::read_fields(bytes).map_err(|error| match error {
+        craft_xfdf::Error::UnknownFormat => DataError::UnknownFormat,
+        craft_xfdf::Error::Malformed(message) => DataError::Malformed(message),
+    })
 }
 
 /// Merge Data Files into Spreadsheet: one CSV row per file, one column per field name (in the
