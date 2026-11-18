@@ -2189,4 +2189,19 @@ fn win_ansi_unused_codes_read_as_bullets() {
     assert_eq!(read(vec![], &[0x7F]), [""], "nor in StandardEncoding");
     // The writer keeps the bullet's own code.
     assert_eq!(crate::win_ansi_byte('•'), Some(0x95));
+    // So does typing a bullet into the font: the aliases are only read, never written.
+    let mut doc = Document::new_empty();
+    let f = font(
+        &mut doc,
+        vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica")), ("Encoding", Object::name("WinAnsiEncoding"))],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.decode(b"\x7f\x95"), "••");
+    assert_eq!(m.encode("•").as_deref(), Some(&b"\x95"[..]), "a typed bullet is written as 0x95");
+    // `/Differences` naming the bullet at 0x7F make it a code the font gives the bullet, as before.
+    let mut enc = Dict::new();
+    enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x7F), Object::name("bullet")]));
+    let f = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica")), ("Encoding", Object::Dict(enc))]);
+    assert_eq!(Metrics::from_dict(&doc, &f).encode("•").as_deref(), Some(&b"\x7f"[..]));
 }
