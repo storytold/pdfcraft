@@ -4,8 +4,10 @@
 //!
 //! - Leading zeros stay text ("00123", "0123": codes, not quantities).
 //! - More than 15 significant digits stay text (card and account numbers: Excel keeps 15).
-//! - Plain numbers, thousands groups of three, a decimal point: a number, its decimals and
-//!   grouping kept in the format.
+//! - Plain numbers, thousands groups of three, a decimal mark: a number, its decimals and
+//!   grouping kept in the format. Which of `.` and `,` is the decimal mark comes from the
+//!   document's language ([`Separators`]); without one, a single `.` or `,` followed by exactly
+//!   three digits (`1.234`, `1,234`: a thousand and more, or just over one?) stays text.
 //! - Amounts: `$`, `€`, `£` before or after the number, with or without a space; negatives with a
 //!   minus in front, in parentheses, or with a trailing minus - a number with a format that shows
 //!   the same text.
@@ -33,7 +35,56 @@ pub enum Value {
 /// The most significant digits Excel keeps.
 const EXCEL_DIGITS: usize = 15;
 
+/// How a document writes its numbers: which of `.` and `,` is the decimal mark (the other groups
+/// thousands). From its language with [`Separators::for_language`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Separators {
+    /// No language, or one whose numbers could be written either way: a number that reads
+    /// differently with each stays text.
+    #[default]
+    Unknown,
+    /// `1,234.5`: English, Chinese, Japanese, Korean, Hebrew, Spanish in the Americas north of the
+    /// equator, ...
+    DecimalPoint,
+    /// `1.234,5`: German, French, Spanish, Italian, Portuguese, Dutch, Russian, Polish, ...
+    DecimalComma,
+}
+
+impl Separators {
+    /// The separators a BCP 47 language tag (`/Lang`, "de-DE", "en") writes numbers with. A
+    /// region where the usual one isn't the rule (Switzerland groups with an apostrophe, South
+    /// Africa writes a decimal comma in English) reads as [`Separators::Unknown`], as does a
+    /// language this doesn't list, or Latin America as a whole (`419`).
+    pub fn for_language(tag: Option<&str>) -> Self {
+        let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return Self::Unknown };
+        let mut parts = tag.split(['-', '_']);
+        let lang = parts.next().unwrap_or("").to_ascii_lowercase();
+        // The region: two letters or three digits after the language (and any script).
+        let region = parts.find(|p| p.len() == 2 || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit()))).map(str::to_ascii_uppercase);
+        let region = region.as_deref();
+        // Latin America as a whole (419) holds both: Mexico's decimal point, Argentina's comma.
+        if matches!(region, Some("CH" | "LI" | "419")) {
+            return Self::Unknown;
+        }
+        match lang.as_str() {
+            "en" if region == Some("ZA") => Self::Unknown,
+            "en" | "zh" | "ja" | "ko" | "he" | "th" | "hi" | "ms" | "fil" | "tl" | "ga" | "cy" | "mt" | "sw" => Self::DecimalPoint,
+            "es" if matches!(region, Some("MX" | "US" | "PR" | "DO" | "GT" | "HN" | "NI" | "PA" | "SV")) => Self::DecimalPoint,
+            "de" | "fr" | "es" | "it" | "pt" | "nl" | "ru" | "pl" | "cs" | "sk" | "sl" | "hr" | "sr" | "bs" | "bg" | "uk" | "be" | "ro" | "hu"
+            | "tr" | "el" | "da" | "nb" | "nn" | "no" | "sv" | "fi" | "et" | "lv" | "lt" | "is" | "ca" | "gl" | "eu" | "id" | "vi" | "az" | "kk"
+            | "ka" | "hy" | "mk" | "sq" => Self::DecimalComma,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// [`classify_in`] for a document whose language isn't known.
 pub fn classify(text: &str) -> Value {
+    classify_in(text, Separators::Unknown)
+}
+
+/// What `text` is, in a document that writes its numbers with `separators`.
+pub fn classify_in(text: &str, separators: Separators) -> Value {
     let t = text.trim();
     if t.is_empty() || t.len() > 64 {
         return Value::Text;
@@ -41,16 +92,24 @@ pub fn classify(text: &str) -> Value {
     if let Some(v) = date(t) {
         return v;
     }
-    amount(t).unwrap_or(Value::Text)
+    amount(t, separators).unwrap_or(Value::Text)
 }
 
-/// A number written with an optional thousands grouping and decimal point: (value, decimals,
-/// grouped). None for leading zeros, more than 15 significant digits, or anything else.
-fn bare_number(s: &str) -> Option<(f64, usize, bool)> {
+/// A number written with an optional thousands grouping and decimal mark: (value, decimals,
+/// grouped). None for leading zeros, more than 15 significant digits, a number `separators`
+/// leave two ways to read, or anything else.
+fn bare_number(s: &str, separators: Separators) -> Option<(f64, usize, bool)> {
     if s.is_empty() || !s.starts_with(|c: char| c.is_ascii_digit()) {
         return None;
     }
-    let (int, frac) = match s.split_once('.') {
+    let (point, group) = match separators {
+        Separators::DecimalComma => (',', '.'),
+        Separators::DecimalPoint | Separators::Unknown => ('.', ','),
+    };
+    if separators == Separators::Unknown && two_ways(s) {
+        return None;
+    }
+    let (int, frac) = match s.split_once(point) {
         Some((i, f)) => (i, Some(f)),
         None => (s, None),
     };
@@ -59,15 +118,15 @@ fn bare_number(s: &str) -> Option<(f64, usize, bool)> {
     {
         return None;
     }
-    if !int.chars().all(|c| c.is_ascii_digit() || c == ',') {
+    if !int.chars().all(|c| c.is_ascii_digit() || c == group) {
         return None;
     }
-    let groups: Vec<&str> = int.split(',').collect();
+    let groups: Vec<&str> = int.split(group).collect();
     let grouped = groups.len() > 1;
     if grouped && (groups[0].is_empty() || groups[0].len() > 3 || groups[1..].iter().any(|g| g.len() != 3)) {
         return None;
     }
-    let digits: String = int.chars().filter(|c| *c != ',').collect();
+    let digits: String = int.chars().filter(|c| *c != group).collect();
     // A code, not a quantity: "00123", "0123" (a lone "0", and "0.5", are numbers).
     if digits.len() > 1 && digits.starts_with('0') {
         return None;
@@ -83,6 +142,15 @@ fn bare_number(s: &str) -> Option<(f64, usize, bool)> {
     };
     let value: f64 = plain.parse().ok().filter(|v: &f64| v.is_finite())?;
     Some((value, frac.map_or(0, str::len), grouped))
+}
+
+/// Whether `s` reads as a different number with a decimal point than with a decimal comma: one
+/// `.` or `,`, one to three digits before it (not a leading zero) and exactly three after.
+fn two_ways(s: &str) -> bool {
+    let mut marks = s.match_indices(['.', ',']);
+    let (Some((i, _)), None) = (marks.next(), marks.next()) else { return false };
+    let (int, frac) = (&s[..i], &s[i + 1..]);
+    (1..=3).contains(&int.len()) && !int.starts_with('0') && frac.len() == 3 && int.chars().chain(frac.chars()).all(|c| c.is_ascii_digit())
 }
 
 /// The number part of a format: `0`, `0.00`, `#,##0.00`.
@@ -103,7 +171,7 @@ fn literal(s: &str) -> String {
 const SYMBOLS: [char; 3] = ['$', '€', '£'];
 
 /// Numbers, amounts and percentages, with their negatives.
-fn amount(t: &str) -> Option<Value> {
+fn amount(t: &str, separators: Separators) -> Option<Value> {
     // How a negative is written: a leading minus (Excel's own way with a one-part format),
     // parentheses, or a trailing minus.
     #[derive(PartialEq)]
@@ -151,7 +219,7 @@ fn amount(t: &str) -> Option<Value> {
     } else {
         (String::new(), body, String::new())
     };
-    let (mut value, decimals, grouped) = bare_number(number)?;
+    let (mut value, decimals, grouped) = bare_number(number, separators)?;
     let core = number_format(decimals, grouped);
     let positive = match percent {
         Some(space) => {
@@ -318,6 +386,67 @@ mod tests {
         assert_eq!(num("1,000.00-"), (-1000.0, "#,##0.00;#,##0.00-".into()));
         for t in ["$", "$$5", "US$5", "5$5", "$-5.00", "( 5 )", "(5"] {
             assert_eq!(classify(t), Value::Text, "{t:?}");
+        }
+    }
+
+    fn num_in(t: &str, separators: Separators) -> (f64, String) {
+        match classify_in(t, separators) {
+            Value::Number { value, format } => (value, format),
+            other => panic!("{t:?} is {other:?} with {separators:?}"),
+        }
+    }
+
+    #[test]
+    fn a_number_that_reads_two_ways_follows_the_documents_language_or_stays_text() {
+        use Separators::{DecimalComma, DecimalPoint, Unknown};
+        // Without a language, one separator and exactly three digits could be either.
+        for t in ["1.234", "1.234 €", "1,234", "€1,234", "(1.234)", "1,234%"] {
+            assert_eq!(classify_in(t, Unknown), Value::Text, "{t:?}");
+        }
+        // Only one reading, whatever the language: two groups, both marks, other digit counts.
+        assert_eq!(num_in("1,234,567", Unknown), (1_234_567.0, "#,##0".into()));
+        assert_eq!(num_in("1,234.56", Unknown), (1234.56, "#,##0.00".into()));
+        assert_eq!(num_in("0.125", Unknown), (0.125, "0.000".into()), "a leading zero groups nothing");
+        assert_eq!(num_in("12.50 €", Unknown), (12.5, "0.00\" €\"".into()));
+        // German (or French): "." groups thousands and "," is the decimal mark.
+        assert_eq!(num_in("1.234", DecimalComma), (1234.0, "#,##0".into()));
+        assert_eq!(num_in("1.234 €", DecimalComma), (1234.0, "#,##0\" €\"".into()));
+        assert_eq!(num_in("1,234", DecimalComma), (1.234, "0.000".into()));
+        assert_eq!(num_in("12,50 €", DecimalComma), (12.5, "0.00\" €\"".into()));
+        assert_eq!(num_in("1.234,56 €", DecimalComma), (1234.56, "#,##0.00\" €\"".into()));
+        assert_eq!(num_in("12,5 %", DecimalComma), (0.125, "0.0\" \"%".into()));
+        assert_eq!(classify_in("1,234.56", DecimalComma), Value::Text, "English grouping on a German page");
+        // English: as before.
+        assert_eq!(num_in("1.234", DecimalPoint), (1.234, "0.000".into()));
+        assert_eq!(num_in("1,234", DecimalPoint), (1234.0, "#,##0".into()));
+        assert_eq!(classify_in("12,50 €", DecimalPoint), Value::Text);
+        assert_eq!(classify_in("1.234,56 €", DecimalPoint), Value::Text);
+    }
+
+    #[test]
+    fn the_language_tag_says_which_mark_is_the_decimal_one() {
+        use Separators::{DecimalComma, DecimalPoint, Unknown};
+        for (tag, want) in [
+            (Some("de-DE"), DecimalComma),
+            (Some("fr"), DecimalComma),
+            (Some("es-ES"), DecimalComma),
+            (Some("pt_BR"), DecimalComma),
+            (Some("sr-Latn-RS"), DecimalComma),
+            (Some("en-US"), DecimalPoint),
+            (Some("EN"), DecimalPoint),
+            (Some("zh-Hant-TW"), DecimalPoint),
+            (Some("es-MX"), DecimalPoint),
+            (Some("es-PR"), DecimalPoint),
+            (Some("es-419"), Unknown),
+            (Some("es-AR"), DecimalComma),
+            (Some("de-CH"), Unknown),
+            (Some("fr-CH"), Unknown),
+            (Some("en-ZA"), Unknown),
+            (Some("x-klingon"), Unknown),
+            (Some(" "), Unknown),
+            (None, Unknown),
+        ] {
+            assert_eq!(Separators::for_language(tag), want, "{tag:?}");
         }
     }
 

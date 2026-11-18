@@ -364,11 +364,12 @@ impl crate::Document {
         let (pages, truncated_pages) =
             self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Xlsx | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
-        // Word and HTML name the document's language (`/Lang`), so spelling is checked in it.
+        // Word and HTML name the document's language (`/Lang`), so spelling is checked in it;
+        // Excel reads its numbers by it (`1.234`: a thousand and more, or just over one).
         let language = self.initial_view().language;
         let bytes = match format {
             OfficeFormat::Docx => pdfcraft_export::docx_with_language(&pages, &title, language.as_deref()),
-            OfficeFormat::Xlsx => pdfcraft_export::xlsx(&pages, &title, XlsxSheets::default()),
+            OfficeFormat::Xlsx => pdfcraft_export::xlsx_with_language(&pages, &title, XlsxSheets::default(), language.as_deref()),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
@@ -391,6 +392,8 @@ impl crate::Document {
         // Only the chosen pages are read.
         let (all, truncated_pages) = self.export_selected_pages_checked(false, 0, pages);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
-        OfficeExport { bytes: pdfcraft_export::xlsx(&all, &title, sheets), truncated_pages }
+        // Numbers are read in the document's language (`/Lang`).
+        let language = self.initial_view().language;
+        OfficeExport { bytes: pdfcraft_export::xlsx_with_language(&all, &title, sheets, language.as_deref()), truncated_pages }
     }
 }

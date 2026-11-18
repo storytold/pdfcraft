@@ -16,7 +16,7 @@ mod xlsx;
 mod zip;
 
 pub use pptx::pptx;
-pub use xlsx::{XlsxSheets, xlsx};
+pub use xlsx::{XlsxSheets, xlsx, xlsx_with_language};
 pub use zip::Zip;
 
 mod as_docx;

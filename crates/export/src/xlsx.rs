@@ -107,17 +107,24 @@ impl XlsxStyles {
 /// a sheet per page ("Page N"). A detected table becomes rows of cells (a cell that spans columns
 /// is merged across them); a paragraph becomes a row with its text in the first column; in
 /// reading order. Size, bold, italic, colour and family are kept; images are left out (a
-/// spreadsheet is for the figures). Each cell's text is read by [`cells::classify`]: numbers,
+/// spreadsheet is for the figures). Each cell's text is read by [`cells::classify_in`]: numbers,
 /// amounts, percentages and unambiguous dates become values Excel computes with, shown exactly as
 /// on the page; everything else stays text. Excel's limits hold: a sheet that would pass its last
 /// row continues on a new one, columns past the last are left out, a cell keeps its first 32,767
 /// characters, and characters XML can't hold are dropped.
 pub fn xlsx(pages: &[Page], title: &str, layout: XlsxSheets) -> Vec<u8> {
-    xlsx_bounded(pages, title, layout, XLSX_MAX_ROWS, XLSX_MAX_COLS)
+    xlsx_with_language(pages, title, layout, None)
 }
 
-/// [`xlsx`] within `max_rows` and `max_cols` (Excel's own limits; smaller ones in tests).
-fn xlsx_bounded(pages: &[Page], title: &str, layout: XlsxSheets, max_rows: usize, max_cols: usize) -> Vec<u8> {
+/// [`xlsx`] for a document in `language` (a BCP 47 tag, the PDF's `/Lang`), which says whether
+/// `1.234` is a thousand and more or just over one ([`cells::Separators::for_language`]).
+pub fn xlsx_with_language(pages: &[Page], title: &str, layout: XlsxSheets, language: Option<&str>) -> Vec<u8> {
+    xlsx_bounded(pages, title, layout, cells::Separators::for_language(language), XLSX_MAX_ROWS, XLSX_MAX_COLS)
+}
+
+/// [`xlsx_with_language`] within `max_rows` and `max_cols` (Excel's own limits; smaller ones in
+/// tests).
+fn xlsx_bounded(pages: &[Page], title: &str, layout: XlsxSheets, separators: cells::Separators, max_rows: usize, max_cols: usize) -> Vec<u8> {
     struct Sheet {
         name: String,
         rows: Vec<String>,
@@ -140,7 +147,7 @@ fn xlsx_bounded(pages: &[Page], title: &str, layout: XlsxSheets, max_rows: usize
     let mut sheet = new_sheet(&base, &mut names);
     let cell = |styles: &mut XlsxStyles, col: usize, row: usize, font: usize, text: &str| -> String {
         let r = format!("{}{row}", col_name(col));
-        match cells::classify(text) {
+        match cells::classify_in(text, separators) {
             cells::Value::Number { value, format } => format!("<c r=\"{r}\" s=\"{}\"><v>{value}</v></c>", styles.style(font, &format)),
             cells::Value::Date { serial, format } => format!("<c r=\"{r}\" s=\"{}\"><v>{serial}</v></c>", styles.style(font, &format)),
             cells::Value::Text => {
@@ -423,13 +430,13 @@ mod tests {
     fn xlsx_stays_within_excels_limits() {
         // Three rows and two columns a sheet (Excel's own are 1,048,576 and 16,384): the table's
         // third column is left out, and what doesn't fit goes on on a second sheet.
-        let x = xlsx_bounded(&[table_page()], "Report", XlsxSheets::WholeDocument, 3, 2);
+        let x = xlsx_bounded(&[table_page()], "Report", XlsxSheets::WholeDocument, cells::Separators::Unknown, 3, 2);
         let wb = part(&x, "xl/workbook.xml");
         assert!(wb.contains("name=\"Report\"") && wb.contains("name=\"Report (2)\""), "{wb}");
         let s1 = part(&x, "xl/worksheets/sheet1.xml");
         assert!(!s1.contains("<c r=\"C"), "no third column: {s1}");
         // A table taller than a whole sheet keeps its first rows, and nothing panics.
-        let _ = xlsx_bounded(&[table_page(), table_page()], "Report", XlsxSheets::PerPage, 1, 1);
+        let _ = xlsx_bounded(&[table_page(), table_page()], "Report", XlsxSheets::PerPage, cells::Separators::Unknown, 1, 1);
     }
 
     #[test]

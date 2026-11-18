@@ -7786,6 +7786,38 @@ fn office_exports_take_the_documents_language() {
     assert!(String::from_utf8(d.export_office(compare::OfficeFormat::HtmlSimple)).unwrap().contains("<html>\n"));
 }
 
+/// Excel reads a page's numbers in the document's language (`/Lang`): `1.234` is a thousand and
+/// more on a German page, just over one on an English one, and stays text when no language says.
+#[test]
+fn the_excel_export_reads_numbers_in_the_documents_language() {
+    let pdf = |catalog: &str| {
+        pdfcraft_testkit::Pdf::new()
+            .obj(catalog)
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>")
+            .stream("", b"BT /F1 12 Tf 20 200 Td (1.234) Tj ET")
+            .build()
+    };
+    let mut s = Session::new();
+    for (name, catalog, language) in [
+        ("de.pdf", "<< /Type /Catalog /Pages 2 0 R /Lang (de-DE) >>", Some("de-DE")),
+        ("en.pdf", "<< /Type /Catalog /Pages 2 0 R /Lang (en-US) >>", Some("en-US")),
+        ("plain.pdf", "<< /Type /Catalog /Pages 2 0 R >>", None),
+    ] {
+        let id = s.open(name, None, Arc::new(pdf(catalog)), None).unwrap();
+        let d = s.get(id).unwrap();
+        let title = name.trim_end_matches(".pdf");
+        let want = pdfcraft_export::xlsx_with_language(&d.export_pages(), title, pdfcraft_export::XlsxSheets::default(), language);
+        assert!(d.export_office(compare::OfficeFormat::Xlsx) == want, "{name}: Export to Office");
+        assert!(d.export_xlsx(pdfcraft_export::XlsxSheets::default(), None) == want, "{name}: Export to Excel");
+    }
+    let page = pdfcraft_export::cells::classify_in;
+    let reads = |tag| page("1.234", pdfcraft_export::cells::Separators::for_language(tag));
+    assert_eq!(reads(Some("de-DE")), pdfcraft_export::cells::Value::Number { value: 1234.0, format: "#,##0".into() });
+    assert_eq!(reads(Some("en-US")), pdfcraft_export::cells::Value::Number { value: 1.234, format: "0.000".into() });
+    assert_eq!(reads(None), pdfcraft_export::cells::Value::Text);
+}
+
 #[test]
 fn exporting_office_files_keeps_images() {
     let mut s = Session::new();
