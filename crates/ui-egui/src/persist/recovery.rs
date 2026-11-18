@@ -371,7 +371,8 @@ impl PdfCraftApp {
 
     /// Whether `doc` holds content of a PDF opened or unlocked with a non-empty password: it is
     /// one (opened with its open password, or its permissions password entered), or it is kept out
-    /// of autosave for holding such content.
+    /// of autosave for holding such content. It follows the document as it is now: after Remove
+    /// Security, the user's choice, it no longer counts, as its own snapshot is then plain too.
     pub(crate) fn holds_protected_content(&self, doc: pdfcraft_engine::DocId) -> bool {
         self.no_autosave.contains(&doc)
             || self.session.get(doc).is_some_and(|d| {
@@ -380,8 +381,8 @@ impl PdfCraftApp {
             })
     }
 
-    /// `doc` now holds content of `source` (an attachment of it, pages pasted from it): if that is
-    /// protected content, `doc` is not autosaved from now on.
+    /// `doc` now holds content of `source` (an attachment of it): if that is protected content,
+    /// `doc` is not autosaved from now on.
     pub(crate) fn takes_content_from(&mut self, doc: pdfcraft_engine::DocId, source: pdfcraft_engine::DocId) {
         if self.holds_protected_content(source) {
             self.no_autosave.insert(doc);

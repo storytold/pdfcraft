@@ -764,7 +764,7 @@ pub struct PdfCraftApp {
     recovered_paths: std::collections::HashSet<DocId>,
     /// Documents that hold content of a PDF opened or unlocked with a non-empty password but aren't
     /// encrypted (Extract pages, Summarize comments, Combine, its attachments, pages pasted from it):
-    /// autosave leaves them out.
+    /// autosave leaves them out. The mark stays until the document closes; Undo doesn't clear it.
     no_autosave: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,

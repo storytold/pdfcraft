@@ -768,7 +768,8 @@ impl PdfCraftApp {
             self.notify_tr("A document needs at least one page: copy instead");
             return;
         }
-        self.page_clipboard = Some(crate::PageClip { from: id, name: doc.name.clone(), bytes: doc.bytes.clone(), pages: pages.clone() });
+        let protected = self.holds_protected_content(id);
+        self.page_clipboard = Some(crate::PageClip { from: id, name: doc.name.clone(), bytes: doc.bytes.clone(), pages: pages.clone(), protected });
         if cut {
             self.apply_edit(Edit::DeletePages { pages: pages.clone() });
         }
@@ -801,8 +802,8 @@ impl PdfCraftApp {
             field_conflicts,
         }) {
             self.views[i].select_pages(&(at..at + count).collect::<Vec<_>>());
-            if let Some(id) = self.views.get(i).map(|v| v.id) {
-                self.takes_content_from(id, clip.from);
+            if let Some(id) = self.views.get(i).map(|v| v.id).filter(|_| clip.protected) {
+                self.no_autosave.insert(id);
             }
         }
     }

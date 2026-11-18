@@ -260,6 +260,9 @@ pub struct PageClip {
     pub name: String,
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub pages: Vec<usize>,
+    /// The pages hold content of a PDF opened or unlocked with a password, read when copied (its
+    /// tab may be closed by the paste): the document they are pasted into is not autosaved.
+    pub protected: bool,
 }
 
 /// One page of a whole-document copy: its text as read for display, to read, or not to try
