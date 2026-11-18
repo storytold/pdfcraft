@@ -1,10 +1,10 @@
+use super::latin::{LatinFallback, draw_latin};
 use super::layout::{
     Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family, Ink};
 use super::{
-    Content, Dict, Document, EditError, GlyphError, GlyphOutline, Object, PdfString, ShapedScript, align_code, literal, matrix_number, n,
-    shaped_glyph, win_ansi,
+    Content, Dict, Document, EditError, GlyphError, GlyphOutline, Object, PdfString, ShapedScript, align_code, matrix_number, n, shaped_glyph,
 };
 use pdfcraft_fonts::shaped_text::{self, ShapedFonts};
 
@@ -71,6 +71,7 @@ pub(super) fn draw_laid_shaped(
             ShapedScript::Thai => thai_error(e, &c.text),
             ShapedScript::Latin => EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &c.text)),
         })?;
+    let fallback = LatinFallback::prepare(doc, t, taken, fonts)?;
     out.extend(format!("BT {}\n", t.fill_op()).bytes());
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
@@ -89,9 +90,7 @@ pub(super) fn draw_laid_shaped(
         for piece in pieces {
             match piece {
                 Piece::Latin(s) => {
-                    out.extend(format!("/{latin} {} Tf {} Tw 1 0 0 1 {} {} Tm ", n(t.size), n(tw), n(pen), n(y)).bytes());
-                    out.extend(literal(&win_ansi(s)));
-                    out.extend_from_slice(b" Tj\n");
+                    draw_latin(out, t, &latin, fallback.as_ref(), s, [pen, y], tw)?;
                     current = None;
                     pen += latin_width(t, s) + tw * s.matches(' ').count() as f64;
                 }
@@ -143,6 +142,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 out.extend_from_slice(b"Q\n");
                 return Ok((out, res));
             }
+            let fallback = LatinFallback::prepare(doc, t, taken, &mut fonts)?;
             res.set(b"Font".to_vec(), Object::Dict(fonts));
             let r = text_rect(t);
             out.extend(format!("BT /{name} {} Tf {}\n", n(t.size), t.fill_op()).bytes());
@@ -157,9 +157,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
                 // Justified: word spacing makes every line of a paragraph but its last fill the box.
                 let (x, tw) = placed(t, r, &paragraphs, i, w, line.matches(' ').count(), false);
-                out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
-                out.extend(literal(&win_ansi(line)));
-                out.extend_from_slice(b" Tj\n");
+                draw_latin(&mut out, t, &name, fallback.as_ref(), line, [x, y], tw)?;
             }
             out.extend_from_slice(b"ET\n");
         }

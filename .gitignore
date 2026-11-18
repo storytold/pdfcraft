@@ -1,5 +1,8 @@
 *~
 plan/
+# The OCR planner is production source, not the local notebook.
+!/crates/fonts/src/plan/
+!/crates/fonts/src/plan/*.rs
 /target
 /dist
 /corpus

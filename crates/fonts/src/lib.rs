@@ -13,6 +13,7 @@ mod craft;
 pub mod embedding;
 mod encodings;
 pub mod fallback;
+pub mod latin_text;
 pub mod pdf;
 pub mod plan;
 mod script;
@@ -60,6 +61,11 @@ pub fn cjk_width(s: &str, size: f64) -> f64 {
 
 /// Approximate advance of `s` in Inter Regular at `size` points.
 pub fn inter_width(s: &str, size: f64) -> f64 {
+    if latin_text::required(s)
+        && let Ok(plan) = latin_text::plan(s, false)
+    {
+        return plan.advance * size;
+    }
     use skrifa::MetadataProvider as _;
     let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return helvetica_width(s, size) };
     let loc = skrifa::instance::LocationRef::default();
@@ -68,6 +74,70 @@ pub fn inter_width(s: &str, size: f64) -> f64 {
     let charmap = font.charmap();
     let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
     s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
+}
+
+/// The bundled Inter face's ascent and (negative) descent per unit of font size.
+/// Layout that embeds this face must reserve its accents and descenders, not Helvetica's.
+pub fn inter_vertical_metrics() -> (f64, f64) {
+    use skrifa::MetadataProvider as _;
+    let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return (0.9, -0.25) };
+    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let scale = 1.0 / f64::from(m.units_per_em.max(1));
+    (f64::from(m.ascent) * scale, f64::from(m.descent) * scale)
+}
+
+/// The first character neither the standard fonts nor the bundled Latin document face can draw.
+/// This is for mixed page text: encodable characters retain their requested standard face,
+/// while extended Latin (including Turkish), Greek and Cyrillic may use the licensed Inter face.
+/// Combining marks still require a shaped cluster: painting one at the pen after its base
+/// would misplace it, even when Inter has a standalone glyph. Scalar-only consumers such as
+/// editable OCR must retain this guard; shaped writers use [`shaped_text::first_unsupported`].
+pub fn first_non_win_ansi_or_latin(s: &str, bold: bool) -> Option<char> {
+    use skrifa::MetadataProvider as _;
+    first_non_win_ansi(s)?;
+    let faces = document_latin_fonts(bold);
+    let face = faces.first().and_then(|face| skrifa::FontRef::new(face.bytes).ok());
+    s.chars().find(|c| {
+        let combining = matches!(u32::from(*c), 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F);
+        !win_ansi_encodable(*c) && (c.is_control() || combining || face.as_ref().is_none_or(|f| f.charmap().map(*c).is_none_or(|g| g.to_u32() == 0)))
+    })
+}
+
+/// Advance widths for the same mixed standard/Inter runs that added page text writes.
+/// Encodable text keeps the exact standard-14 metrics, including its requested italic style.
+pub fn standard_with_latin_fallback_width(s: &str, size: f64, standard: Std14, bold: bool) -> f64 {
+    use skrifa::MetadataProvider as _;
+    if first_non_win_ansi(s).is_none() {
+        return standard.text_width(s, size);
+    }
+    let faces = document_latin_fonts(bold);
+    let Some(face) = faces.first().and_then(|face| skrifa::FontRef::new(face.bytes).ok()) else {
+        return standard.text_width(s, size);
+    };
+    let location = skrifa::instance::LocationRef::default();
+    let scale = size / f64::from(face.metrics(skrifa::instance::Size::unscaled(), location).units_per_em.max(1));
+    let advances = face.glyph_metrics(skrifa::instance::Size::unscaled(), location);
+    let charmap = face.charmap();
+    let mut buffer = [0; 4];
+    latin_text::clusters(s)
+        .map(|cluster| {
+            if latin_text::required(cluster)
+                && let Ok(plan) = latin_text::plan(cluster, bold)
+            {
+                return plan.advance * size;
+            }
+            cluster
+                .chars()
+                .map(|c| {
+                    if win_ansi_encodable(c) {
+                        standard.text_width(c.encode_utf8(&mut buffer), size)
+                    } else {
+                        charmap.map(c).and_then(|glyph| advances.advance_width(glyph)).map_or(0.0, |width| f64::from(width) * scale)
+                    }
+                })
+                .sum::<f64>()
+        })
+        .sum()
 }
 
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
@@ -126,7 +196,7 @@ pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) 
                 lines.push(std::mem::take(&mut line));
             }
             line_width = 0.0;
-            // Broken between characters, but never before a Thai mark: it stays on its letter.
+            // Break only between clusters so a mark stays on its letter.
             let mut start = 0;
             let mut units = Vec::new();
             for (i, ch) in word.char_indices().skip(1) {
@@ -507,5 +577,24 @@ mod tests {
         assert!(measured.get() <= 4 * text.len(), "{} bytes measured", measured.get());
         let narrow = wrap_with(&text, 10.0, 100.0, helvetica_width);
         assert!(narrow.iter().all(|l| helvetica_width(l, 10.0) <= 100.0), "{narrow:?}");
+    }
+
+    #[test]
+    fn wrapping_never_separates_a_latin_base_from_its_marks() {
+        let text = "g\u{306}I\u{307}s\u{327}u\u{308}";
+        let lines = wrap_with(text, 12.0, 1.0, inter_width);
+        assert_eq!(lines, ["g\u{306}", "I\u{307}", "s\u{327}", "u\u{308}"]);
+        assert_eq!(lines.concat(), text);
+    }
+
+    #[test]
+    fn mixed_standard_width_uses_inter_for_the_complete_marked_cluster() {
+        for standard in [Std14::Helvetica, Std14::TimesRoman, Std14::Courier] {
+            let size = 12.0;
+            let actual = standard_with_latin_fallback_width("Ag\u{306}Z", size, standard, false);
+            let expected = standard.text_width("AZ", size) + inter_width("ğ", size);
+            assert!((actual - expected).abs() < 1e-8, "{standard:?}: {actual} vs {expected}");
+            assert_eq!(standard_with_latin_fallback_width("Café", size, standard, false), standard.text_width("Café", size));
+        }
     }
 }

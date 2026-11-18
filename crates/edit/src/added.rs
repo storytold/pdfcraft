@@ -15,6 +15,7 @@ use unicode_bidi::{Level, ParagraphBidiInfo};
 use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
 
 mod draw;
+mod latin;
 mod layout;
 mod store;
 mod types;

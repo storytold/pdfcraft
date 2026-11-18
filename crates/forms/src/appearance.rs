@@ -199,11 +199,17 @@ impl TextBox {
         // The font can change once, from the form's own to Helvetica, at the first inserted
         // character the form's font can't show: each side of that point is searched on its own.
         let n = inserted.len();
-        let kept = match self.font_switch(prefix, inserted, suffix) {
+        let mut kept = match self.font_switch(prefix, inserted, suffix) {
             Some(t) => longest(0, t.saturating_sub(1)).into_iter().chain(longest(t, n)).max(),
             None => longest(0, n),
         }
         .unwrap_or(0);
+        while let Some(next) = inserted.get(kept)
+            && kept > 0
+            && shaped_text::joins_previous(*next)
+        {
+            kept -= 1;
+        }
         (with(kept), p + kept)
     }
 
@@ -341,7 +347,7 @@ impl FontText {
                 let mut held = std::collections::HashSet::new();
                 s.chars()
                     .map(|c| if c == '\t' { ' ' } else { c })
-                    .find(|c| !held.contains(c) && !(metrics.encode(c.encode_utf8(&mut [0; 4])).is_some() && held.insert(*c)))
+                    .find(|c| !(held.contains(c) || metrics.encode(c.encode_utf8(&mut [0; 4])).is_some() && held.insert(*c)))
             }
             Self::Unicode(cmap) => cmap.first_unencodable(s),
         }
@@ -863,7 +869,18 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     };
     // How far a line's ink reaches below and above its baseline (em), where Thai stacks or
     // descenders reach past the form font's (Helvetica's) -0.207 and 0.718; `None` otherwise.
-    let thai_ink = |line: &str| thai.then(|| shaped_text::thai_reach(line)).flatten().map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)]);
+    let extra_ink = |line: &str| {
+        let thai_reach = thai.then(|| shaped_text::thai_reach(line)).flatten();
+        let latin_reach = if latin && pdfcraft_fonts::latin_text::required(line) {
+            pdfcraft_fonts::latin_text::plan(line, false).ok().map(|plan| [plan.bounds[1], plan.bounds[3]])
+        } else if latin && line.chars().any(shaped_text::latin_fallback) {
+            let (ascent, descent) = pdfcraft_fonts::inter_vertical_metrics();
+            Some([descent, ascent])
+        } else {
+            None
+        };
+        thai_reach.into_iter().chain(latin_reach).reduce(|[a, b], [c, d]| [a.min(c), b.max(d)]).map(|[lo, hi]| [lo.min(-0.207), hi.max(0.718)])
+    };
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -915,14 +932,14 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 }
                 let lines = wrap_with(&text, size, inner_w, width_of);
                 // The first line hangs from the top by its ascent: higher for stacked Thai marks.
-                let mut y = height - pad - size * lines.first().and_then(|l| thai_ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
+                let mut y = height - pad - size * lines.first().and_then(|l| extra_ink(l)).map_or(0.85, |[_, hi]| hi.max(0.85));
                 // The lines whose descent stays inside the border; the rest are cut off.
                 let mut room = 0;
                 for line in &lines {
                     if y < -size {
                         break;
                     }
-                    let descent = thai_ink(line).map_or(0.207, |[lo, _]| -lo);
+                    let descent = extra_ink(line).map_or(0.207, |[lo, _]| -lo);
                     if y - descent * size >= bw - 0.01 {
                         room += 1;
                     }
@@ -945,7 +962,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                 }
                 // Centre Helvetica's ascent (0.718) and descent (0.207) vertically, or the reach of
                 // Thai stacks and descenders, which an automatic size also keeps inside the padding.
-                let reach = thai_ink(&text);
+                let reach = extra_ink(&text);
                 if let Some([lo, hi]) = reach
                     && da.size == 0.0
                 {
@@ -964,9 +981,8 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
                     let cells = f.max_len.unwrap_or(1).max(1);
                     let cell = width / cells as f64;
                     c.push_str(&comb_dividers(doc, &wd, width, height, cells));
-                    for (i, ch) in text.chars().take(cells).enumerate() {
-                        let s = ch.to_string();
-                        show(cell * i as f64 + (cell - width_of(&s, size)) / 2.0, y, &s);
+                    for (i, cluster) in pdfcraft_fonts::latin_text::clusters(&text).take(cells).enumerate() {
+                        show(cell * i as f64 + (cell - width_of(cluster, size)) / 2.0, y, cluster);
                     }
                 } else {
                     let tw = width_of(&text.replace(['\n', '\r'], " "), size);

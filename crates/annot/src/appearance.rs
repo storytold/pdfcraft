@@ -26,7 +26,7 @@ pub fn text_width(text: &str, size: f64) -> f64 {
 
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
+    shaped_text::fallback_width(text, size, true, true, |s, size| face.text_width(s, size))
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -38,7 +38,14 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 /// and below the last (0.3), or further where Thai stacked marks or descenders reach, so the box
 /// is sized to their ink and doesn't clip them.
 fn reach(lines: &[String]) -> [f64; 2] {
-    let ink = |line: Option<&String>| line.and_then(|l| shaped_text::thai_reach(l));
+    let ink = |line: Option<&String>| {
+        let line = line?;
+        let thai = shaped_text::thai_reach(line);
+        let latin = pdfcraft_fonts::latin_text::required(line)
+            .then(|| pdfcraft_fonts::latin_text::plan(line, false).ok().map(|plan| [plan.bounds[1], plan.bounds[3]]))
+            .flatten();
+        thai.into_iter().chain(latin).reduce(|[a, b], [c, d]| [a.min(c), b.max(d)])
+    };
     [ink(lines.first()).map_or(0.9, |r| r[1].max(0.9)), ink(lines.last()).map_or(0.3, |r| (-r[0]).max(0.3))]
 }
 
@@ -1563,7 +1570,14 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     ));
     let mut out = c.into_bytes();
     let lines = pdfcraft_fonts::wrap_with(&text, size, width, |s, size| text_width_in(face, s, size));
-    let mut y = rect[3] - pad - size * reach(&lines)[0];
+    let first = lines.first().map_or("", String::as_str);
+    let thai_top = shaped_text::thai_reach(first).map_or(0.9, |[_, hi]| hi.max(0.9));
+    let mut y = rect[3] - pad - size * thai_top;
+    if pdfcraft_fonts::latin_text::required(first)
+        && let Ok(plan) = pdfcraft_fonts::latin_text::plan(first, false)
+    {
+        y = y.min(rect[3] - size * plan.bounds[3]);
+    }
     if round {
         y -= ((rect[3] - rect[1] - 2.0 * pad - text_lines_height(&lines, size)) / 2.0).max(0.0);
     }
@@ -1571,7 +1585,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     // streams `apply_appearance` stores in the document); the rest, and Thai it can't draw (as
     // `?`, which `undrawable_text` reports), in the box's standard face.
     let mut fonts = font_resources(face);
-    let (pieces, shaped) = shaped_text::appearance_lines(&lines, &mut fonts);
+    let (pieces, shaped) = shaped_text::fallback_appearance_lines(&lines, true, true, &mut fonts);
     let mut current = None;
     for pieces in &pieces {
         if y < rect[1] - size {

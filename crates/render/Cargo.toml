@@ -31,6 +31,7 @@ url = "2.5"
 # Tells combining marks (bidi class NSM: general categories Mn and Me) in extracted text; the
 # version pdfcraft-fonts already uses.
 unicode-bidi = "0.3"
+unicode-normalization = "=0.1.25"
 
 # lopdf (bootstrap) draws random bytes for encryption; on the web they come from the browser.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -102,6 +102,23 @@ pub fn find_in_text(text: &str, needle: &str, case_sensitive: bool, whole_words:
     search::find_in_text(text, needle, case_sensitive, whole_words, limit)
 }
 
+/// Explicit matching rules. General preserves the existing language-neutral search.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchLanguage {
+    #[default]
+    General,
+    /// Turkish case pairs and canonical equivalence, without changing source text.
+    Turkish,
+}
+
+/// Matching options shared by the viewer and headless tools.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    pub case_sensitive: bool,
+    pub whole_words: bool,
+    pub language: SearchLanguage,
+}
+
 /// The text of one page, in content order, with line structure.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PageText {
@@ -160,6 +177,14 @@ impl PageText {
     /// Search with Acrobat's find options, returning at most `limit` glyph ranges.
     pub fn find_opts_limited(&self, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
         search::find(self, needle, case_sensitive, whole_words, limit)
+    }
+
+    /// Search with explicitly selected language rules, retaining original glyph ranges.
+    pub fn find_with_options(&self, needle: &str, options: FindOptions, limit: usize) -> Vec<std::ops::Range<usize>> {
+        match options.language {
+            SearchLanguage::General => search::find(self, needle, options.case_sensitive, options.whole_words, limit),
+            SearchLanguage::Turkish => search::find_turkish(self, needle, options.case_sensitive, options.whole_words, limit),
+        }
     }
 
     /// Glyph ranges of the matches a character matcher finds in the page text (words and lines

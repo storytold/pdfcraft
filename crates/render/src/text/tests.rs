@@ -1,5 +1,7 @@
 use super::*;
 
+mod turkish_search;
+
 fn em_box(text: &str, x0: f32, y0: f32, x1: f32, y1: f32) -> TextGlyph {
     TextGlyph { text: text.into(), rect: [x0, y0, x1, y1], quad: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], direction: [1.0, 0.0] }
 }
@@ -1612,6 +1614,25 @@ fn ligature_characters_read_as_their_letters() {
     // Only those seven: other compatibility characters stay as they are.
     assert_eq!(ligature_letters("\u{FB13}\u{FF21}\u{2460}é".into()), "\u{FB13}\u{FF21}\u{2460}é");
     assert_eq!(ligature_letters(String::new()), "");
+}
+
+/// OCR boxes stay axis-aligned on a mildly tilted scan. A complete line's box is much
+/// taller than any one character, so adjacent lines' boxes overlap even though their
+/// centres are separated by a normal line advance.
+#[test]
+fn tilted_ocr_lines_do_not_skip_an_intervening_line_when_forming_blocks() {
+    let mut glyphs = Vec::new();
+    let mut expected = Vec::new();
+    for (row, ch) in ['A', 'B', 'C', 'D'].into_iter().enumerate() {
+        let text = ch.to_string().repeat(40);
+        expected.push(text.clone());
+        for (column, ch) in text.chars().enumerate() {
+            let x = 20.0 + column as f32 * 8.0;
+            let y = 40.0 + row as f32 * 18.0 - column as f32 * 8.0 * 0.0524;
+            glyphs.push(em_box(&ch.to_string(), x, y, x + 8.0, y + 10.0));
+        }
+    }
+    assert_eq!(layout(glyphs).plain_text(), expected.join("\n"));
 }
 
 /// Lays out one-word lines, each `(text, x, y)`, 10 pt high: 14 pt apart is a line in a paragraph, 24 pt a
