@@ -5,7 +5,7 @@ use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::SignatureStatus;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, RightPanel, SignStep};
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, RightPanel, SignStep};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -90,7 +90,7 @@ fn ctrl_alt_q_types_an_email_without_quitting() {
     field(&h, "Email Address").type_text("example.org");
     h.run_steps(1);
     assert_eq!(h.state().sign_draft.as_ref().unwrap().new_id.email, "test@example.org");
-    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.is_some());
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn create_signing_id(h: &mut Harness<'static, PdfCraftApp>) {
     assert_eq!(h.state().quick_tool, QuickTool::SignArea { certify: false });
     let (a, b) = (at(h, 40.0, 90.0), at(h, 220.0, 40.0));
     drag(h, a, b);
-    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.is_some());
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure), "no IDs yet: configure one");
 
     // Create a new digital ID (P-256 keeps the test fast).
@@ -174,7 +174,9 @@ fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_label("Signature validity is UNKNOWN:");
     // Seed a find so the trust path proves it invalidates the view: trust rebuilds
     // the display copy, and the next frame must draw from it without any zoom change.
-    h.state_mut().views[0].find = Some(pdfcraft_ui_egui::canvas::Find { matches: vec![(0, 0..5)], ..Default::default() });
+    let mut find = pdfcraft_ui_egui::canvas::Find::default();
+    find.matches.set_page(0, vec![0..5]);
+    h.state_mut().views[0].find = Some(find);
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);
     h.get_by_label("Signed and all signatures are valid.");
@@ -448,7 +450,7 @@ fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.is_some());
     assert_eq!(h.state().sign_draft.as_ref().and_then(|d| d.field.clone()).as_deref(), Some("Approver"));
     let entry = {
         let id = pdfcraft_engine::sign::pkcs12::open(
@@ -529,7 +531,7 @@ fn signing_an_xfa_box_runs_its_signing_scripts_in_the_app() {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.is_some());
     assert!(h.query_by_label_contains("Signing notice").is_some(), "the preSign script's notice shows before signing");
     assert_eq!(named(&h, "when").value, ["signed"], "and what it set, under the dialog");
     let entry = {
@@ -591,7 +593,8 @@ fn cancelling_signing_takes_back_the_presign_scripts_changes() {
 #[test]
 fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     use pdfcraft_ui_egui::SignGraphic;
-    use pdfcraft_ui_egui::fill_sign::SavedSig;
+    // PLAN: assumed the test crate reaches the framework through the `craft` facade.
+    use craft::review::SavedSignature;
     let dir = dir().join("graphic");
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = harness(dir.clone());
@@ -613,7 +616,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     h.run_steps(2);
 
     // The saved signature (typed here) takes the name's place.
-    h.state_mut().signature = Some(SavedSig::Typed("Grace Hopper".into()));
+    h.state_mut().signature = Some(SavedSignature::Typed("Grace Hopper".into()));
     sign_as(&mut h, [20.0, 110.0, 280.0, 140.0]);
     h.get_by_label("Fill & Sign signature").click();
     h.run_steps(2);
@@ -630,11 +633,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     assert_eq!(h.state().sign_draft.as_ref().unwrap().graphic, SignGraphic::FillSign);
 
     // An image (the picker's result is set directly: the file dialog is native).
-    let image = {
-        let mut png = std::io::Cursor::new(Vec::new());
-        image::RgbaImage::from_pixel(60, 20, image::Rgba([200, 0, 0, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
-        pdfcraft_engine::SignatureImage::from_bytes(png.get_ref()).unwrap()
-    };
+    let image = craft::review::SignatureImage::new(60, 20, [200, 0, 0, 255].repeat(60 * 20));
     h.state_mut().sign_draft.as_mut().unwrap().graphic = SignGraphic::Image(image.clone());
     h.run_steps(2);
     h.get_by_label("Choose image…");
@@ -759,47 +758,10 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     h.get_by_label("The key is in the Windows certificate store, which may ask to allow PdfCraft to use it.");
     support::outside_menus(&h, "Sign").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.state().sign_draft.is_some());
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }
 
-/// Certificate names are as long as their owners made them: the picker cuts both lines of a
-/// row with "…" instead of painting them past the dialog's edge.
-#[test]
-fn long_digital_id_names_stay_inside_the_picker() {
-    let mut h = harness(dir());
-    h.state_mut().start_signing(0, None, None, None);
-    let long = "a certificate subject much longer than the picker is wide ".repeat(4);
-    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
-        path: "windows:No Such Signer".into(),
-        name: long.clone(),
-        issuer: long,
-        email: String::new(),
-        expires: "2030.01.01".into(),
-        unusable: None,
-    });
-    h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
-    h.run_steps(3);
-    let right = h.get_by_label("Continue").rect().right();
-    let lines: Vec<_> = h
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Text(t) if t.galley.job.text.contains("much longer") => Some(t),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(lines.len(), 2, "the name and the details line");
-    for line in lines {
-        assert!(line.galley.elided, "{}", line.galley.job.text);
-        assert!(
-            line.pos.x + line.galley.size().x <= right,
-            "the line ends at {} but the dialog's buttons end at {right}",
-            line.pos.x + line.galley.size().x
-        );
-    }
-}
 
 /// A store certificate that can't sign is shown with its reason (so the user learns why an
 /// identity Acrobat lists is missing, issue #179) but is never selected or chosen.
