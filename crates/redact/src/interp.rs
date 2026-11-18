@@ -514,6 +514,8 @@ struct Walk {
     stack: Vec<(Gs, Matrix, Matrix)>,
     tm: Matrix,
     tlm: Matrix,
+    /// How far widened gaps have moved the text on this line from where it was, in points.
+    shift: f64,
     fonts_res: Dict,
     ext_gstates: Dict,
     xobjects: Dict,
@@ -541,6 +543,7 @@ impl Walk {
             stack: Vec::new(),
             tm: Matrix::IDENTITY,
             tlm: Matrix::IDENTITY,
+            shift: 0.0,
             fonts_res: res_dict(doc, resources, b"Font"),
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
@@ -778,6 +781,10 @@ impl Walk {
         // The operand immediately before the operator, as the renderer reads it: surplus operands
         // before it must not move where glyphs are placed (`1 50 Ts` raises text by 50, not 1).
         let last = op.nums::<1>().map(|[v]| v);
+        // A new line starts where its operator puts it, whatever gaps moved the last one.
+        if matches!(op.op.as_slice(), b"BT" | b"Td" | b"TD" | b"Tm" | b"T*") {
+            self.shift = 0.0;
+        }
         match op.op.as_slice() {
             b"BT" => {
                 self.tm = Matrix::IDENTITY;
@@ -833,6 +840,7 @@ impl Walk {
         if matches!(o, b"'" | b"\"") {
             self.tlm = Matrix::translate(0.0, -self.gs.leading).then(&self.tlm);
             self.tm = self.tlm;
+            self.shift = 0.0;
         }
         let items: Vec<Object> = match o {
             // A surplus array (`[(A)] [(B)] TJ`) is malformed, but the operator still
@@ -861,7 +869,7 @@ impl Walk {
         {
             self.out.dropped_codes = true;
         }
-        let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &mut self.shift, &items);
         if removed == 0 {
             return Some(op);
         }
@@ -985,7 +993,7 @@ fn clean_replacements(
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
 /// items with the glyphs under a region replaced by displacements, and how many were removed.
 /// In apply mode the runs removed under each region are also handed to `scope.removed`.
-fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, shift: &mut f64, items: &[Object]) -> (Vec<Object>, usize) {
     let f = &gs.font;
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
@@ -1118,7 +1126,7 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
         }
     }
     if scope.whole_point_gaps {
-        widen_to_whole_points(&mut out, &gaps, size * gs.scale, &tm.then(&gs.ctm));
+        widen_to_whole_points(&mut out, &gaps, size * gs.scale, &tm.then(&gs.ctm), shift);
     }
     (out, removed)
 }
@@ -1126,9 +1134,10 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
 /// Widen the `TJ` numbers at `at` (indexes in `items`) to whole points of default user space.
 /// The removed glyphs' exact advance, with the font's widths, narrows down what the text was. A
 /// number n moves the text back n / 1000 times `size` (the font size times `Th`), and `m` (the text
-/// matrix then the CTM) scales that. Rounding the distance up moves the text after the gap less
-/// than a point further, and only away from the mark, whichever way the gap runs.
-fn widen_to_whole_points(items: &mut [Object], at: &[usize], size: f64, m: &Matrix) {
+/// matrix then the CTM) scales that. `shift` is how far the gaps before them on the line moved
+/// the text: each distance is rounded, up or (backwards) down, net of it, so the text after every
+/// gap lands less than a point from where it was, away from the mark, however many gaps there are.
+fn widen_to_whole_points(items: &mut [Object], at: &[usize], size: f64, m: &Matrix, shift: &mut f64) {
     let [a, b, ..] = m.0;
     // A negative size or `Th` mirrors the text and its gaps alike: a unit is as long either way.
     let unit = size.abs() * a.hypot(b) / 1000.0;
@@ -1139,10 +1148,12 @@ fn widen_to_whole_points(items: &mut [Object], at: &[usize], size: f64, m: &Matr
         if let Some(item) = items.get_mut(i)
             && let Some(v) = item.as_f64()
         {
-            // The tolerance keeps a gap that is already whole points where it is.
-            let points = v * unit;
-            let wider = points.signum() * (points.abs() - 1e-6).ceil() / unit;
+            // How far the gap moves the text on, in points. The tolerance keeps a whole one as it is.
+            let exact = -v * unit;
+            let whole = if exact >= 0.0 { (exact - *shift - 1e-6).ceil() } else { (exact - *shift + 1e-6).floor() };
+            let wider = -whole / unit;
             if wider.is_finite() {
+                *shift += whole - exact;
                 *item = num(wider);
             }
         }

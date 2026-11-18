@@ -824,6 +824,25 @@ fn a_removal_that_adds_no_space_leaves_the_number_before_it() {
     assert!(c.contains("[(A) -55] TJ"), "{c}");
 }
 
+/// Several gaps on one line, in one text operator or in several: each is whole points, and every
+/// surviving glyph ends up less than a point from where it was, never back towards a mark.
+#[test]
+fn the_shift_of_several_gaps_on_a_line_stays_under_a_point() {
+    for body in [&b"BT /F1 7 Tf 20 250 Td (ABCDEF) Tj ET"[..], b"BT /F1 7 Tf 20 250 Td (AB) Tj (CD) Tj (EF) Tj ET"] {
+        let mut doc = one_page(body, "", vec![]);
+        // A, C and E run from x 20, 27 and 34, 3.5 pt each; the marks lie inside them.
+        mark(&mut doc, 0, &[[21.0, 245.0, 22.5, 260.0], [28.0, 245.0, 29.5, 260.0], [35.0, 245.0, 36.5, 260.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 3);
+        let (mut moved, mut exact) = (0.0, 0.0);
+        for n in tj_numbers(&content(&doc, 0)) {
+            moved -= n * 7.0 / 1000.0;
+            exact += 3.5;
+            assert!((moved - f64::round(moved)).abs() < 1e-3 && (0.0..1.0).contains(&(moved - exact)), "{moved} pt for {exact}");
+        }
+        assert_eq!(exact, 10.5, "three gaps");
+    }
+}
+
 /// Two marks close together on one line: widening the first gap would move the text between them
 /// under the second mark, so that apply keeps the exact gaps and still removes both.
 #[test]
