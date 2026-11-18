@@ -128,25 +128,26 @@ pub(crate) fn check(doc: &Document) -> Findings {
         // when the object is a stream, else past its value and any comments after it, so `endobj`
         // in a string, name or comment isn't taken for it.
         let layout = match &*doc.get(ObjRef::new(num, doc.generation(num))) {
-            Object::Stream(s) => stream_layout(doc, data, body, end, s.raw.len()),
+            Object::Stream(s) => stream_layout(doc, num, data, body, end, s.raw.len()),
             _ => None,
         };
-        let stream = layout.is_some();
-        let from = match layout {
-            Some(layout) => {
-                if !layout.keyword_eol {
-                    note(&mut out.after_stream);
-                }
-                if !layout.length_matches {
+        if let Some(layout) = &layout {
+            if !layout.keyword_eol {
+                note(&mut out.after_stream);
+            }
+            if let Some(found) = &layout.endstream {
+                if !found.length_matches {
                     note(&mut out.length);
                 }
-                if !layout.eol_before_endstream {
+                if !found.eol_before {
                     note(&mut out.before_endstream);
                 }
-                past_space(data, layout.endstream.saturating_add(b"endstream".len()), end)
             }
-            None => past_value(data, body, end).unwrap_or(body),
-        };
+        }
+        // Without `endstream`, the object is read as any other.
+        let past_endstream = layout.and_then(|l| l.endstream).map(|e| past_space(data, e.at.saturating_add(b"endstream".len()), end));
+        let stream = past_endstream.is_some();
+        let from = past_endstream.unwrap_or_else(|| past_value(data, body, end).unwrap_or(body));
         // A value written up against `endobj` (`1.0endobj`, `/Nendobj`) is one token with it (7.2.3),
         // so no `endobj` follows the value: the first one after the header is then the object's,
         // with no end-of-line marker before it.
@@ -193,20 +194,27 @@ fn past_space(data: &[u8], at: usize, end: usize) -> usize {
 struct StreamLayout {
     /// The `stream` keyword is followed by CR LF or by LF alone.
     keyword_eol: bool,
-    /// `/Length` gives the bytes from just past that end-of-line marker to the one before
-    /// `endstream`.
-    length_matches: bool,
-    /// `endstream` is preceded by an end-of-line marker.
-    eol_before_endstream: bool,
-    /// Where `endstream` is.
-    endstream: usize,
+    /// What the stream's `endstream` says, `None` when there is none to find: the keyword is still
+    /// judged then, but what depends on where the data ends isn't known.
+    endstream: Option<Endstream>,
 }
 
-/// How the stream whose object body starts at `body` is laid out, read from the file's bytes up to
-/// `end`, the next object. `raw_len` is how long the document reads its data to be, which finds
-/// `endstream` when `/Length` doesn't. `None` when the dictionary, the `stream` keyword or
-/// `endstream` isn't there to read.
-fn stream_layout(doc: &Document, data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<StreamLayout> {
+/// Where a stream's `endstream` is, and how the data before it is written.
+struct Endstream {
+    /// `/Length` gives the bytes from just past the end-of-line marker after `stream` to the one
+    /// before `endstream`.
+    length_matches: bool,
+    /// `endstream` is preceded by an end-of-line marker.
+    eol_before: bool,
+    /// Where `endstream` is.
+    at: usize,
+}
+
+/// How the stream object `num`, whose body starts at `body`, is laid out, read from the file's
+/// bytes up to `end`, the next object. `raw_len` is how long the document reads its data to be,
+/// which finds `endstream` when `/Length` doesn't. `None` when the dictionary or the `stream`
+/// keyword isn't there to read.
+fn stream_layout(doc: &Document, num: u32, data: &[u8], body: usize, end: usize, raw_len: usize) -> Option<StreamLayout> {
     // The dictionary as written: the document's own copy has `/Length` set to what it read.
     let mut lx = Lexer::new(data.get(..end)?, body);
     let Ok(Object::Dict(dict)) = lx.object() else { return None };
@@ -224,13 +232,27 @@ fn stream_layout(doc: &Document, data: &[u8], body: usize, end: usize, raw_len: 
         (Some(b'\r'), _) => (marker.saturating_add(1), false),
         _ => (keyword_end, false),
     };
-    let declared = match dict.get(b"Length") {
-        Some(Object::Int(n)) => Some(*n),
-        Some(Object::Ref(r)) => match &*doc.get(*r) {
-            Object::Int(n) => Some(*n),
-            _ => None,
-        },
-        _ => None,
+    let (declared, raw_len) = match dict.get(b"Length") {
+        Some(Object::Int(n)) => (Some(*n), raw_len),
+        // An unsaved edit of the object an indirect `/Length` refers to isn't in the bytes judged:
+        // the length, and the data the document reads with it, are then those of the file.
+        Some(Object::Ref(r)) if doc.is_edited(r.num) => {
+            let mut saved = doc.scan_original_objects_subset(vec![num, r.num]);
+            let raw_len = match saved.next() {
+                Some((_, Ok(o))) => match &*o {
+                    Object::Stream(s) => s.raw.len(),
+                    _ => raw_len,
+                },
+                _ => raw_len,
+            };
+            let declared = match saved.next() {
+                Some((at, Ok(o))) if at.generation == r.generation => int(&o),
+                _ => None,
+            };
+            (declared, raw_len)
+        }
+        Some(Object::Ref(r)) => (int(&doc.get(*r)), raw_len),
+        _ => (None, raw_len),
     };
     // Where `/Length` puts the end of the data, when an end-of-line marker and `endstream`, or
     // `endstream` alone, follow it there; and how long that marker is.
@@ -244,21 +266,27 @@ fn stream_layout(doc: &Document, data: &[u8], body: usize, end: usize, raw_len: 
         let e = p.saturating_add(eol);
         endstream_at(data, e).then_some((e, eol))
     });
-    let (endstream, length_matches) = match by_length {
+    let found = match by_length {
         // `endstream` right at the end of the data: `/Length` counted the marker before it, if
         // there is one, unless the data is empty and that marker is the one after `stream`.
-        Some((e, 0)) => (e, e == start || !is_eol(e.checked_sub(1).and_then(|p| data.get(p)))),
-        Some((e, _)) => (e, true),
-        None => {
-            // The search starts past the data: data its /Length gives may end in the bytes
-            // `endstream`, and data the reader recovered ends before the end-of-line marker
-            // ahead of `endstream`.
-            let past = start.saturating_add(raw_len);
-            (find_endstream(data, past.min(end), end)?, false)
-        }
+        Some((e, 0)) => Some((e, e == start || !is_eol(e.checked_sub(1).and_then(|p| data.get(p))))),
+        Some((e, _)) => Some((e, true)),
+        // The search starts past the data: data its /Length gives may end in the bytes
+        // `endstream`, and data the reader recovered ends before the end-of-line marker ahead of
+        // `endstream`.
+        None => find_endstream(data, start.saturating_add(raw_len).min(end), end).map(|e| (e, false)),
     };
-    let eol_before_endstream = is_eol(endstream.checked_sub(1).and_then(|p| data.get(p)));
-    Some(StreamLayout { keyword_eol, length_matches, eol_before_endstream, endstream })
+    let endstream =
+        found.map(|(at, length_matches)| Endstream { length_matches, eol_before: is_eol(at.checked_sub(1).and_then(|p| data.get(p))), at });
+    Some(StreamLayout { keyword_eol, endstream })
+}
+
+/// An integer object's value: a length written as a real isn't one (ISO 32000-2 7.3.8.2, Table 5).
+fn int(o: &Object) -> Option<i64> {
+    match o {
+        Object::Int(n) => Some(*n),
+        _ => None,
+    }
 }
 
 /// Whether a whole `endstream` token starts at `at`: `endstreamer` is stream data (7.2.3).

@@ -2573,3 +2573,34 @@ fn streams_are_written_as_pdfa_asks_clause_6_1_7_1() {
         none
     );
 }
+
+/// The bytes judged are the file's: an unsaved edit of only the object an indirect `/Length`
+/// refers to changes neither the length read nor where the data is taken to end.
+#[test]
+fn an_edited_indirect_length_is_read_from_the_file_clause_6_1_7_1() {
+    let file = |saved: i64, edited: i64| {
+        let length = format!("5 0 obj\n{saved}\nendobj");
+        let mut doc = laid_out(&[
+            ("\n", CATALOG),
+            ("\n", PAGES),
+            ("\n", PAGE),
+            ("\n", "4 0 obj\n<< /Length 5 0 R >>\nstream\nHELLO\nendstream\nendobj"),
+            ("\n", &length),
+        ]);
+        doc.set(ObjRef::new(5, 0), Object::Int(edited));
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.7.1").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert!(file(5, 4).is_empty());
+    assert!(file(5, 99).is_empty());
+    // A wrong /Length in the file is still wrong when the edit would make it right.
+    assert_eq!(file(4, 5), ["The Length of stream object 4 doesn't match the bytes of its data"]);
+}
+
+/// A stream with no `endstream` to find still has its `stream` keyword judged; what depends on
+/// where its data ends isn't reported.
+#[test]
+fn a_stream_without_endstream_still_has_its_keyword_judged_clause_6_1_7_1() {
+    let one = |data: &str| stream_syntax(&[&format!("4 0 obj\n{data}\nendobj")]);
+    assert_eq!(one("<< /Length 5 >>\nstream\rHELLO"), ["The stream keyword of object 4 isn't followed by CR LF or by LF alone"]);
+    assert_eq!(one("<< /Length 5 >>\nstream\nHELLO"), Vec::<String>::new());
+}
