@@ -1260,6 +1260,83 @@ fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
     }
 }
 
+/// #6822: Greek typed into a field whose font (Helvetica, WinAnsi) can't hold it is stored as typed
+/// (a UTF-16BE text string) and drawn from the bundled Inter face, beside the field's font, rather
+/// than as `?`: nothing is marked and other viewers aren't asked to redraw. Latin beside it stays
+/// in the field's font, and text WinAnsi holds is drawn in it alone, as before.
+#[test]
+fn greek_a_field_font_cannot_hold_is_drawn_from_the_bundled_face() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greek) /DA (/Helv 10 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (mixed) /Ff 4096 /DA (/Helv 10 Tf 0 g) /Rect [50 600 350 660] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (western) /DA (/Helv 10 Tf 0 g) /Rect [50 500 250 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let greek = "Γειά σου";
+    let mixed = "Name: Γειά\nσου ok";
+    let western = "Café (±)";
+    set_value(&mut doc, "greek", &FieldValue::Text(greek.into())).unwrap();
+    set_value(&mut doc, "mixed", &FieldValue::Text(mixed.into())).unwrap();
+    set_value(&mut doc, "western", &FieldValue::Text(western.into())).unwrap();
+    let doc = reopen(&doc);
+    // The values, as typed: /V is UTF-16BE behind its byte order mark.
+    for (name, typed) in [("greek", greek), ("mixed", mixed), ("western", western)] {
+        let all = fields(&doc);
+        let f = field(&all, name);
+        assert_eq!(f.value, [typed]);
+        let v = doc.get(f.obj).as_dict().unwrap().get(b"V").unwrap().as_string().unwrap().bytes.clone();
+        let utf16: Vec<u8> = [0xFE, 0xFF].into_iter().chain(typed.encode_utf16().flat_map(u16::to_be_bytes)).collect();
+        assert_eq!(v, utf16, "{name}");
+    }
+    assert!(undrawn_fields(&doc).is_empty(), "{:?}", undrawn_fields(&doc));
+    assert!(!need_appearances(&doc), "no viewer needs to redraw what is drawn");
+    // The normal appearance's content and its font resources.
+    let drawn = |name: &str| {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&wd), None, "{name}");
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap().clone();
+        (s.decoded().unwrap(), fonts)
+    };
+    fn has(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+    for name in ["greek", "mixed"] {
+        let (ap, fonts) = drawn(name);
+        assert!(!ap.contains(&b'?'), "{name}: {}", String::from_utf8_lossy(&ap));
+        let (key, font) = fonts.iter().find(|(k, _)| k.starts_with(b"PCLa")).expect("a font from the bundled face");
+        assert!(has(&ap, &[&b"/"[..], key.as_slice(), &b" "[..]].concat()), "{name} shows it");
+        let font = font.as_dict().unwrap();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+        assert!(cmap.contains("<03C3>") && cmap.contains("<03BF>") && cmap.contains("<03C5>"), "σου copies as typed: {cmap}");
+    }
+    let (greek_ap, _) = drawn("greek");
+    assert!(has(&greek_ap, b"( ) Tj"), "the space between the words is Helvetica's");
+    let (mixed_ap, _) = drawn("mixed");
+    assert!(has(&mixed_ap, b"(Name: ) Tj") && has(&mixed_ap, b"( ok) Tj"), "{}", String::from_utf8_lossy(&mixed_ap));
+    // Text WinAnsi holds: Helvetica alone, with the bytes it always had.
+    let (ap, fonts) = drawn("western");
+    assert_eq!(fonts.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), [b"Helv".to_vec()]);
+    let shown = [pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(western)), b" Tj".to_vec()].concat();
+    assert!(has(&ap, &shown), "{}", String::from_utf8_lossy(&ap));
+    // A character the bundled face lacks is still drawn as `?` and reported, beside drawn Greek.
+    let mut doc = doc;
+    set_value(&mut doc, "greek", &FieldValue::Text("Γειά 北".into())).unwrap();
+    assert_eq!(undrawn_fields(&doc), [("greek".to_string(), '北')]);
+    assert!(need_appearances(&doc));
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
