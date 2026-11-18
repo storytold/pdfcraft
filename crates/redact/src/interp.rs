@@ -1790,34 +1790,36 @@ fn xobject(
             scope.report.forms_rewritten += 1;
             Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
-        // No `/Subtype`, or one the redactor does not read: what it draws is unknown, so a
-        // placement under a mark fails closed. Apply removes it, as it does a form it cannot read,
-        // and verification counts it as what may remain. Its place is the unit square an image
-        // fills or, when it has a `/BBox`, the box a form would draw in: either one under a mark
-        // counts. Both are read as the proof reads a form's, entries by reference included; a
-        // `/Matrix` or `/BBox` that is present but malformed leaves its place unknown, so it counts
-        // as under a mark rather than as outside every one.
-        _ => {
-            let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
-            let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
-                (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
-                _ => true,
-            };
-            if !scope.hits(unit) && !framed {
-                return None;
-            }
-            if scope.mode == Mode::Verify {
-                out.residue += 1;
-                return None;
-            }
-            scope.report.forms_removed += 1;
-            // Any text it held was never read, so the metadata check can't know what went with it.
-            scope.removed_cut = true;
-            out.replaced.push(name);
-            out.doomed.push(r);
-            Some(None)
-        }
+        _ => unread_xobject(doc, scope, s, gs, name, r, out),
     }
+}
+
+/// `Do` of an XObject with no `/Subtype`, or one the redactor does not read: what it draws is
+/// unknown, so a placement under a mark fails closed. Apply removes it, as it does a form it cannot
+/// read, and verification counts it as what may remain. Its place is the unit square an image fills
+/// or, when it has a `/BBox`, the box a form would draw in: either one under a mark counts. Both
+/// are read as the proof reads a form's, entries by reference included; a `/Matrix` or `/BBox`
+/// that is present but malformed leaves its place unknown, so it counts as under a mark rather
+/// than as outside every one.
+fn unread_xobject(doc: &Document, scope: &mut Scope<'_>, s: &Stream, gs: &Gs, name: Vec<u8>, r: ObjRef, out: &mut Output) -> Option<Option<Op>> {
+    let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+    let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+        (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
+        _ => true,
+    };
+    if !scope.hits(unit) && !framed {
+        return None;
+    }
+    if scope.mode == Mode::Verify {
+        out.residue += 1;
+        return None;
+    }
+    scope.report.forms_removed += 1;
+    // Any text it held was never read, so the metadata check can't know what went with it.
+    scope.removed_cut = true;
+    out.replaced.push(name);
+    out.doomed.push(r);
+    Some(None)
 }
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
