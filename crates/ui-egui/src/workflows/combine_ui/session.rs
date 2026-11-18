@@ -465,6 +465,9 @@ impl PdfCraftApp {
                 self.notify_fmt("Couldn't read {name}: {e}", &[("name", &names), ("e", &errors)]);
             }
             if !incoming.is_empty() {
+                // Files handed over by the file manager keep the order they arrived in (the
+                // combined document follows it), not the sort a person last picked in the list.
+                self.combine_tab.sort = None;
                 self.stage_combine_with(incoming);
             }
         }
