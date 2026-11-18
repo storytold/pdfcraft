@@ -98,6 +98,7 @@ mod text_select;
 mod theme;
 mod theme_button;
 mod trust_signer;
+mod turkish_input;
 mod ui;
 mod updates;
 mod view;

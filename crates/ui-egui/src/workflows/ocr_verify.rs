@@ -21,6 +21,8 @@ use pdfcraft_engine::ocr::{
 };
 use pdfcraft_engine::{DocId, Session};
 
+mod word_candidates;
+
 use super::ocr_ui;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -278,6 +280,9 @@ pub struct OcrVerify {
     /// The mode the screen was last drawn in (`None` while it is closed): switching to another
     /// puts the screen away.
     pub(crate) shown_in: Option<crate::state::Mode>,
+    /// Full recognition settings captured before the original worker starts.
+    captured_settings: Option<OcrSettings>,
+    word_proposals: word_candidates::Proposals,
 }
 
 fn dictionary_path(dir: &std::path::Path, language: &str) -> Result<PathBuf, String> {
@@ -325,6 +330,8 @@ impl Default for OcrVerify {
             preview: None,
             preview_failed: None,
             shown_in: None,
+            captured_settings: None,
+            word_proposals: Default::default(),
         }
     }
 }
@@ -333,6 +340,8 @@ impl OcrVerify {
     /// Begin a review of `found` for `doc`: ReviewReady even when nothing was found (the
     /// status then says so), with the guard remembered for Accept.
     pub fn load(&mut self, doc: DocId, guard: OcrGuard, found: Vec<OcrPage>) {
+        self.invalidate_word_candidates();
+        self.captured_settings = None;
         self.doc = Some(doc);
         self.guard = Some(guard);
         self.pages = found;
@@ -484,11 +493,12 @@ impl OcrVerify {
         if text.trim().is_empty() {
             return self.set_removed(key, true);
         }
-        let Some(w) = self.page_mut(key.0).and_then(|p| p.words.get_mut(key.1)) else { return false };
-        let before = w.text.clone();
-        if before == text {
+        if self.text_of(key) == Some(text) {
             return false;
         }
+        self.invalidate_word_candidates();
+        let Some(w) = self.page_mut(key.0).and_then(|p| p.words.get_mut(key.1)) else { return false };
+        let before = w.text.clone();
         w.text = text.to_string();
         self.review.history.push(Op::Corrected { key, before, after: text.to_string() });
         true
@@ -500,6 +510,7 @@ impl OcrVerify {
         if !self.in_review() || self.word(key).is_none() || self.is_removed(key) == removed {
             return false;
         }
+        self.invalidate_word_candidates();
         if removed {
             self.review.removed.insert(key);
             self.review.history.push(Op::Removed { key });
@@ -612,6 +623,8 @@ impl OcrVerify {
             return false;
         }
         let Some(op) = self.review.history.pop() else { return false };
+        let selected_before = self.selected.and_then(|key| self.text_of(key)).map(str::to_owned);
+        self.invalidate_word_candidates();
         match op {
             Op::Corrected { key, before, .. } => {
                 if let Some(w) = self.page_mut(key.0).and_then(|p| p.words.get_mut(key.1)) {
@@ -658,6 +671,12 @@ impl OcrVerify {
                 }
                 self.restore_page_keys(page, keys);
             }
+        }
+        let selected_after = self.selected.and_then(|key| self.text_of(key));
+        // Keep the editor in sync with restored text without discarding a draft for an
+        // unrelated metadata undo (or the early-return no-op/error paths above).
+        if selected_after != selected_before.as_deref() {
+            self.correction = selected_after.unwrap_or_default().to_owned();
         }
         true
     }
@@ -708,6 +727,7 @@ impl OcrVerify {
     /// live words on the page is a typed failure; a stale session is refused with its reason
     /// (edits kept).
     pub fn accept_page(&mut self, session: &mut Session, page: usize) -> Result<usize, String> {
+        self.invalidate_word_candidates();
         if !self.in_review() {
             return Ok(0);
         }
@@ -743,6 +763,7 @@ impl OcrVerify {
     /// Reject ONE page ("Reject entire page"): clear its words (undoable within the panel),
     /// drop the selection if it was there.
     pub fn reject_page(&mut self, page: usize) -> bool {
+        self.invalidate_word_candidates();
         if !self.in_review() {
             return false;
         }
@@ -763,6 +784,7 @@ impl OcrVerify {
     /// page's review marks belonged to the old words (they are kept by position), so they are
     /// cleared with them and come back with the undo.
     pub fn replace_page_words(&mut self, page: usize, words: Vec<PlacedWord>) -> bool {
+        self.invalidate_word_candidates();
         if !self.in_review() || self.page(page).is_none() {
             return false;
         }
@@ -807,6 +829,9 @@ impl OcrVerify {
 
     /// Select a word and show its page.
     pub fn select(&mut self, key: (usize, usize)) {
+        if self.selected != Some(key) {
+            self.invalidate_word_candidates();
+        }
         self.selected = Some(key);
         self.current = key.0;
         self.correction = self.text_of(key).unwrap_or_default().to_string();
@@ -894,13 +919,24 @@ impl OcrVerify {
         if !self.can_reject() {
             return false;
         }
-        *self = OcrVerify { open: self.open, dictionary_dir: self.dictionary_dir.take(), ..Default::default() };
+        self.invalidate_word_candidates();
+        let word_proposals = std::mem::take(&mut self.word_proposals);
+        *self = OcrVerify { open: self.open, dictionary_dir: self.dictionary_dir.take(), word_proposals, ..Default::default() };
         true
     }
 
     /// The state after a successful accept (or a saved editable copy): the review is done.
     pub(crate) fn finish(&mut self) {
-        *self = OcrVerify { open: self.open, phase: Phase::Idle, doc: self.doc, dictionary_dir: self.dictionary_dir.take(), ..Default::default() };
+        self.invalidate_word_candidates();
+        let word_proposals = std::mem::take(&mut self.word_proposals);
+        *self = OcrVerify {
+            open: self.open,
+            phase: Phase::Idle,
+            doc: self.doc,
+            dictionary_dir: self.dictionary_dir.take(),
+            word_proposals,
+            ..Default::default()
+        };
     }
 
     /// Ask the running recognition to stop. The pages already read are kept; the rest of the
@@ -917,7 +953,7 @@ impl OcrVerify {
     }
 
     pub fn can_run(&self) -> bool {
-        matches!(self.phase, Phase::Idle | Phase::ReviewReady | Phase::RecoverableError)
+        matches!(self.phase, Phase::Idle | Phase::ReviewReady | Phase::RecoverableError) && !self.word_proposals.is_running()
     }
 
     /// Start re-reading a whole page (`region` `None`) or a drawn region on a WORKER THREAD:
@@ -926,9 +962,10 @@ impl OcrVerify {
     /// process for Tesseract) happen off it, with the status line and a Cancel while they run.
     /// The reading is applied by [`Self::poll_reread`] when it lands.
     pub fn start_reread(&mut self, app: &mut PdfCraftApp, page: usize, region: Option<[f32; 4]>) {
-        if self.phase != Phase::ReviewReady || self.reread.is_some() {
+        if self.phase != Phase::ReviewReady || self.reread.is_some() || self.word_proposals.is_running() {
             return; // one re-read at a time, and never under a run
         }
+        self.invalidate_word_candidates();
         let Some(doc) = self.doc else { return };
         let settings = self.reread_settings(&app.ocr_draft);
         #[cfg(target_arch = "wasm32")]
@@ -959,6 +996,9 @@ impl OcrVerify {
             let scale = job.render_scale(page);
             job.settings.region = Some([region[0] * scale, region[1] * scale, region[2] * scale, region[3] * scale]);
         }
+        // A partial re-read can mix recognition profiles within one page. Disable word
+        // proposals until a new full captured review rather than guessing their profile.
+        self.captured_settings = None;
         let is_region = region.is_some();
         let progress = Arc::new(Mutex::new(RereadProgress::default()));
         self.message = if is_region { tl!("Re-reading the region…").to_string() } else { tl!("Re-reading the page…").to_string() };
@@ -1050,6 +1090,7 @@ impl OcrVerify {
     /// reading, and so does a refusal — a document changed since the review began no longer
     /// matches the page the words were read from. Called every frame while a re-read is out.
     pub(crate) fn poll_reread(&mut self, app: &mut PdfCraftApp) {
+        self.poll_word_candidates(app);
         if self.phase != Phase::ReviewReady {
             return;
         }
@@ -1113,6 +1154,7 @@ impl OcrVerify {
     /// the panel, and the first NEW word is selected. An empty reading was refused before the
     /// run, so `words` is never empty here.
     fn replace_region_words(&mut self, session: &Session, page: usize, region_view: [f32; 4], words: Vec<PlacedWord>) -> Result<(), String> {
+        self.invalidate_word_candidates();
         let Some(doc) = self.doc else { return Ok(()) };
         let Some(info) = session.get(doc).and_then(|d| d.info.pages.get(page)) else { return Err("the page is gone".into()) };
         // The rectangle in user space (a bbox of its mapped corners) decides which old words
@@ -1162,6 +1204,7 @@ impl OcrVerify {
     /// Store a finished run's pages (the worker's result) and move to ReviewReady. A cancel is
     /// honest: the pages already read are kept, and the status says the rest was not read.
     pub fn finished(&mut self, found: Vec<OcrPage>, cancelled: bool) {
+        self.invalidate_word_candidates();
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let found_words: usize = found.iter().map(|p| p.words.len()).sum();
         self.pages = found;
@@ -1199,7 +1242,7 @@ impl OcrVerify {
         if !self.can_run() || self.phase == Phase::Running {
             return;
         }
-        if self.reread.is_some() {
+        if self.reread.is_some() || self.word_proposals.is_running() {
             return; // the page re-read in flight replaces these words; one worker at a time
         }
         // A review of another document stays until it is accepted or rejected: a run here would
@@ -1230,6 +1273,8 @@ impl OcrVerify {
         let guard = job.guard.clone();
         // The source pane shows the first page this run reads (the current page, for that scope).
         let first = job.pages.first().copied().unwrap_or(0);
+        self.invalidate_word_candidates();
+        self.captured_settings = Some(job.settings.clone());
         let progress = Arc::new(Mutex::new(ocr_ui::OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         let work = move || {
@@ -1337,6 +1382,9 @@ struct Intents {
     set_removed: Option<bool>,
     set_word_verified: Option<bool>,
     dictionary_add: bool,
+    word_candidates: bool,
+    cancel_word_candidates: bool,
+    apply_word_candidate: Option<usize>,
 }
 
 /// Band colours: High green, Medium yellow, Low red (the fill at ~20% opacity, the outline
@@ -1351,6 +1399,7 @@ fn band_color(band: ConfidenceBand) -> egui::Color32 {
 
 /// The OCR Verify screen (Scan & OCR ▸ Correct recognized text), in the document area.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    with_state(app, OcrVerify::poll_word_candidates);
     use egui::{Key, Modifiers};
     follow_active_document(app);
     let ctx = ui.ctx().clone();
@@ -1449,7 +1498,6 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     let v = &app.ocr_verify;
     let d = &mut app.ocr_draft;
     let review = v.phase == Phase::ReviewReady;
-    let run_enabled = v.can_run() && v.reread.is_none();
     let accept_enabled = review && v.word_count() + v.review.applied_pages.len() > 0;
 
     // Row 1: the settings (each written back into the persisted draft).
@@ -1459,7 +1507,8 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
                 ui.selectable_value(&mut d.language, (*code).to_string(), *name);
             }
         });
-        engine_combo(ui, &mut d.engine, &mut d.strategy);
+        engine_combo(ui, d);
+        ocr_ui::model_profile_combo(ui, d, "ocr-verify-model-profile", 180.0);
         strategy_combo(ui, &mut d.strategy);
         output_combo(ui, &mut d.output_mode);
         for (flag, label, why) in [
@@ -1471,6 +1520,13 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
             ui.add(crate::widgets::checkbox(flag, label)).on_hover_text(format!("{label} \u{2014} {why}"));
         }
     });
+
+    let why = d.unavailable_reason();
+    ocr_ui::keep_asking_while_probing(ui.ctx());
+    let run_enabled = v.can_run() && v.reread.is_none() && why.is_none();
+    if let Some(why) = &why {
+        ui.label(egui::RichText::new(ocr_ui::preflight_message(why)).small());
+    }
 
     // Row 2: scope and actions.
     ui.add_space(4.0);
@@ -1558,16 +1614,17 @@ fn strategy_label(strategy: MergeStrategy) -> &'static str {
 /// says why (a tooltip names the missing models or program). The choice feeds the next run.
 /// Choosing Automatic while the strategy is "Primary only" (which would never run the second
 /// engine) moves the strategy to Automatic's own default, Confidence weighted.
-fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut MergeStrategy) {
+fn engine_combo(ui: &mut egui::Ui, draft: &mut ocr_ui::OcrDraft) {
     ocr_ui::keep_asking_while_probing(ui.ctx());
-    craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(*engine)).show_ui(ui, |ui| {
+    craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(draft.engine)).show_ui(ui, |ui| {
         for (choice, label) in [(EngineChoice::Auto, tl!("Automatic")), (EngineChoice::Ocrs, "ocrs"), (EngineChoice::Tesseract, "Tesseract")] {
-            let why = pdfcraft_engine::ocr::engine_unavailable_reason(choice);
-            let resp = ui.add_enabled(why.is_none(), egui::Button::selectable(*engine == choice, label));
+            let settings = OcrSettings { engine: choice, ..draft.settings() };
+            let why = pdfcraft_engine::ocr::settings_unavailable_reason(&settings);
+            let resp = ui.add_enabled(why.is_none(), egui::Button::selectable(draft.engine == choice, label));
             let clicked = resp.clicked();
             match why {
                 Some(reason) => {
-                    resp.on_disabled_hover_text(crate::i18n::t(&reason));
+                    resp.on_disabled_hover_text(ocr_ui::preflight_message(&reason));
                 }
                 None => {
                     resp.on_hover_text(match choice {
@@ -1578,9 +1635,9 @@ fn engine_combo(ui: &mut egui::Ui, engine: &mut EngineChoice, strategy: &mut Mer
                 }
             }
             if clicked {
-                *engine = choice;
-                if choice == EngineChoice::Auto && *strategy == MergeStrategy::PrimaryOnly {
-                    *strategy = choice.default_strategy();
+                draft.engine = choice;
+                if choice == EngineChoice::Auto && draft.strategy == MergeStrategy::PrimaryOnly {
+                    draft.strategy = choice.default_strategy();
                 }
             }
         }
@@ -1787,14 +1844,20 @@ fn source_pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, n: &mut Int
             .map(|(wi, _)| (pg.page, wi));
     }
     resp.context_menu(|ui| {
-        let rereading = app.ocr_verify.reread.is_some();
-        if ui.add_enabled(review && !rereading && app.ocr_verify.region.is_some(), egui::Button::new(tl!("Re-OCR this region"))).clicked() {
+        let rereading = app.ocr_verify.reread.is_some() || app.ocr_verify.word_proposals.is_running();
+        let why = pdfcraft_engine::ocr::settings_unavailable_reason(&app.ocr_verify.reread_settings(&app.ocr_draft));
+        let can_reread = review && !rereading && why.is_none();
+        ocr_ui::keep_asking_while_probing(ui.ctx());
+        if ui.add_enabled(can_reread && app.ocr_verify.region.is_some(), egui::Button::new(tl!("Re-OCR this region"))).clicked() {
             n.reocr_region = true;
             ui.close();
         }
-        if ui.add_enabled(review && !rereading, egui::Button::new(tl!("Re-OCR entire page"))).clicked() {
+        if ui.add_enabled(can_reread, egui::Button::new(tl!("Re-OCR entire page"))).clicked() {
             n.reocr_page = true;
             ui.close();
+        }
+        if let Some(why) = why {
+            ui.label(egui::RichText::new(ocr_ui::preflight_message(&why)).small());
         }
         ui.separator();
         if ui.add_enabled(review, egui::Button::new(tl!("Accept entire page"))).clicked() {
@@ -2004,10 +2067,14 @@ fn inspector(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, n: &mut Inten
             n.undo = true;
         }
     });
+    if app.ocr_verify.correction != correction {
+        app.ocr_verify.invalidate_word_candidates();
+    }
     app.ocr_verify.correction = correction;
     if commit {
         n.correct = Some(app.ocr_verify.correction.clone());
     }
+    word_candidates::inspector(app, ui, t, n);
     // Suggestions: dictionary words and this page's own words within edit distance 2.
     let (word_text, page_words) = {
         let v = &app.ocr_verify;
@@ -2075,9 +2142,13 @@ pub(crate) fn with_state(app: &mut PdfCraftApp, f: impl FnOnce(&mut OcrVerify, &
 fn apply(app: &mut PdfCraftApp, n: Intents) {
     with_state(app, |v, app| {
         if n.exit {
+            v.invalidate_word_candidates();
             v.open = false;
         }
         if let Some(p) = n.select_page {
+            if v.current != p {
+                v.invalidate_word_candidates();
+            }
             v.current = p;
             if v.selected.is_some_and(|k| k.0 != p) {
                 v.selected = None;
@@ -2122,6 +2193,7 @@ fn apply(app: &mut PdfCraftApp, n: Intents) {
             let language = v.dictionary_language.clone();
             v.add_to_dictionary(&word, &language);
         }
+        v.apply_word_candidate_intents(app, n.cancel_word_candidates, n.word_candidates, n.apply_word_candidate);
         if n.reocr_page {
             let page = v.current;
             v.start_reread(app, page, None);
@@ -2293,6 +2365,36 @@ mod tests {
         pub(super) static PREVIEW_RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         /// [`ensure_preview`]'s render fails, as a page the renderer refuses does.
         pub(super) static FAIL_RENDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Verify has its own Run button, but must make the same settings-aware decision as the
+    /// Recognize Text dialog without silently changing the chosen built-in engine.
+    #[test]
+    fn turkish_ocrs_verify_disables_run_and_keeps_the_explicit_engine() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.ocr_draft.language = "tr".into();
+        app.ocr_draft.engine = EngineChoice::Ocrs;
+        let mut fonts = false;
+        // The existing toolbar has unnamed combo/spin controls. This regression still
+        // checks the Run button's accessible enabled state, without claiming an a11y audit.
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1400.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                toolbar(app, ui, &mut Intents::default());
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("the ocrs engine does not support Turkish; choose Tesseract or Automatic with Turkish (tur) language data installed");
+        assert!(h.get_by_label("Run OCR").accesskit_node().is_disabled());
+        assert_eq!(h.state().ocr_draft.engine, EngineChoice::Ocrs);
     }
 
     /// A word box that sits where a real placed word would (high on the page, reading left
@@ -3057,6 +3159,26 @@ mod tests {
         assert_eq!(settings.language, "ja");
         assert_eq!(settings.dpi, draft.settings().dpi);
         assert!(dictionary_path(std::path::Path::new("prefs"), "../outside").is_err());
+    }
+
+    #[test]
+    fn rereading_retains_the_selected_model_profile_and_rejects_an_incompatible_captured_language() {
+        let mut session = Session::new();
+        let (_, mut verify) = loaded(&mut session, &[Some(40.0)]);
+        let draft = super::ocr_ui::OcrDraft {
+            language: "tr".into(),
+            engine: EngineChoice::Auto,
+            model_profile: pdfcraft_engine::ocr::ModelProfile::TurkishExtended,
+            ..Default::default()
+        };
+        verify.dictionary_language = "tr".into();
+        let settings = verify.reread_settings(&draft);
+        assert_eq!(settings.model_profile, draft.model_profile);
+        assert!(pdfcraft_engine::ocr::validate_model_profile(&settings).is_ok());
+        verify.dictionary_language = "en".into();
+        let settings = verify.reread_settings(&draft);
+        assert_eq!(settings.model_profile, draft.model_profile, "re-read never silently downgrades");
+        assert!(pdfcraft_engine::ocr::validate_model_profile(&settings).is_err());
     }
 
     #[test]

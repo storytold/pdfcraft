@@ -1704,6 +1704,23 @@ fn the_field_editor_sizes_auto_size_text_as_the_page_does() {
     assert!((screen("tall", full) - tall as f32 * full).abs() < 0.01, "a 100 pt field at 100%: {}", screen("tall", full));
     assert_eq!(screen("huge", full), pdfcraft_ui_egui::forms_ui::MAX_SCREEN_FONT, "past the screen-font bound");
     assert_eq!(screen("huge", 0.5), ((400.0 - 6.0) / 1.15) as f32 * 0.5, "below it at 50%");
+    // The UI uses Inter while typing: its accented capitals extend beyond Helvetica's
+    // cap height even when the original /DA still names Helvetica.
+    let f = field("tall");
+    let size = pdfcraft_ui_egui::forms_ui::field_text_size(&painter, &f, &f.widgets[0], "Ğ");
+    let (ascent, descent) = pdfcraft_fonts::inter_vertical_metrics();
+    assert!(f64::from(size) * (ascent - descent) <= 94.01, "the editing font must leave its accented capital inside the field");
+    let mut wide = f.widgets[0].clone();
+    wide.rect[2] = wide.rect[0] + 1100.0;
+    for text in ["Ğ", "G\u{306}", "I\u{307} S\u{327} U\u{308}", "ç Ç ğ Ğ ı I i İ ö Ö ş Ş ü Ü â Â î Î û Û"] {
+        let size = pdfcraft_ui_egui::forms_ui::field_text_size(&painter, &f, &wide, text);
+        let galley = painter.layout_no_wrap(text.into(), egui::FontId::proportional(size), egui::Color32::BLACK);
+        assert!(galley.size().y <= 94.01, "the actual editor line must fit its padded box: {}", galley.size().y);
+    }
+    let stacked = format!("a{}", "\u{301}".repeat(8));
+    let size = pdfcraft_ui_egui::forms_ui::field_text_size(&painter, &f, &wide, &stacked);
+    let ink = pdfcraft_fonts::latin_text::plan(&stacked, false).unwrap().bounds;
+    assert!(f64::from(size) * (ink[3] - ink[1]) <= 94.01, "marks above the nominal font ascent must fit the field too");
 }
 
 /// Where a mode bar tab is, by its label.

@@ -24,6 +24,8 @@ pub struct Find {
     /// Find options (Acrobat's: case-sensitive, whole words only).
     pub case_sensitive: bool,
     pub whole_words: bool,
+    /// Explicit Turkish pairs and canonical equivalence; general matching stays the default.
+    pub turkish: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
     /// Find and replace (in Edit text mode): the Replace row shows, with what replaces a match.
@@ -45,6 +47,20 @@ pub(super) enum Follow {
 }
 
 impl Find {
+    fn options(&self) -> pdfcraft_render::text::FindOptions {
+        use pdfcraft_render::text::{FindOptions, SearchLanguage};
+        FindOptions {
+            case_sensitive: self.case_sensitive,
+            whole_words: self.whole_words,
+            language: if self.turkish { SearchLanguage::Turkish } else { SearchLanguage::General },
+        }
+    }
+
+    pub(crate) fn turkish_label() -> &'static str {
+        // Keep the native language name even in builds without the optional catalogs.
+        crate::i18n::Lang::from_code("tr").map_or("Türkçe", |lang| lang.name())
+    }
+
     /// The first match at or after `page`, or the first match when none follows (the search
     /// wraps round the document).
     pub(super) fn first_at_or_after(&self, page: usize) -> Option<usize> {
@@ -121,7 +137,7 @@ impl DocView {
         pages.sort();
         for &p in &pages {
             if let Some(text) = self.texts.get(&p) {
-                f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (p, r)));
+                f.matches.extend(text.find_with_options(&f.case_query, f.options(), usize::MAX).into_iter().map(|r| (p, r)));
             }
         }
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
@@ -146,7 +162,7 @@ impl DocView {
         // this arrival must not pull them back; the choice then becomes theirs to keep.
         let follow = f.follow_page(self.current);
         f.matches.retain(|(p, _)| *p != page);
-        f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (page, r)));
+        f.matches.extend(text.find_with_options(&f.case_query, f.options(), usize::MAX).into_iter().map(|r| (page, r)));
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
         if let Follow::Active(from) = follow {
             f.current = f.first_at_or_after(from);
@@ -343,11 +359,13 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                                 find.focus_replace = find.replacing;
                             }
                         }
-                        let opts = icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words, tl!("Find options"));
+                        let opts =
+                            icons::button(ui, "settings-2", 26.0, find.case_sensitive || find.whole_words || find.turkish, tl!("Find options"));
                         egui::Popup::menu(&opts).show(|ui| {
                             let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
                             let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-                            if a || b {
+                            let c = ui.add(widgets::checkbox(&mut find.turkish, Find::turkish_label())).changed();
+                            if a || b || c {
                                 // Search again with the new options.
                                 find.case_query.clear();
                             }
@@ -371,22 +389,34 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                             }
                             let searched = !find.case_query.trim().is_empty();
                             // Enter in the field replaces the highlighted match, as the button does.
-                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && find.current.is_some() {
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && find.current.is_some() && !find.turkish {
                                 replace = Some(false);
                                 r.request_focus();
                             }
                             if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                 close = true;
                             }
-                            ui.add_enabled_ui(find.current.is_some(), |ui| {
+                            ui.add_enabled_ui(find.current.is_some() && !find.turkish, |ui| {
                                 if crate::widgets::pill_button(ui, tl!("Replace"), false).clicked() {
                                     replace = Some(false);
                                 }
+                            })
+                            .response
+                            .on_disabled_hover_text(if find.turkish {
+                                tl!("Turn off Turkish matching to replace text")
+                            } else {
+                                ""
                             });
-                            ui.add_enabled_ui(searched, |ui| {
+                            ui.add_enabled_ui(searched && !find.turkish, |ui| {
                                 if crate::widgets::pill_button(ui, tl!("Replace all"), true).clicked() {
                                     replace = Some(true);
                                 }
+                            })
+                            .response
+                            .on_disabled_hover_text(if find.turkish {
+                                tl!("Turn off Turkish matching to replace text")
+                            } else {
+                                ""
                             });
                         });
                     }

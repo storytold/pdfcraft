@@ -923,11 +923,17 @@ mod tests {
     fn text_applying_would_refuse_is_caught_in_the_dialog() {
         let mut d = MarksDraft::default();
         d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>>".into();
-        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('С'), "#2013: refused before OK, not after");
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None, "the bundled face now covers Cyrillic");
+        d.hf.text[5] = "日本語".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('日'), "#2013: refused before OK, not after");
         d.hf.text[5] = "Page <<1>> of <<n>> — café".into();
         assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
         d.wm.text = "ΑΠΟΡΡΗΤΟ".into();
-        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('Α'));
+        assert_eq!(undrawable(MarkKind::Watermark, &d), None, "the bundled face now covers Greek");
+        d.wm.text = "I\u{307}".into();
+        assert_eq!(undrawable(MarkKind::Watermark, &d), None, "the NFD cluster has a positioned appearance");
+        d.wm.text = "I\u{1ab0}".into();
+        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('\u{1ab0}'));
         d.use_file = true;
         assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
         assert_eq!(undrawable(MarkKind::Background, &d), None);

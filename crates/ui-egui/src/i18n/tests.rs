@@ -842,6 +842,124 @@ fn turkish_is_registered_and_persists() {
     assert_eq!(restored.language, "tr");
 }
 
+/// This acceptance regression deliberately requires real embedded Turkish catalogs. An
+/// English-only build or an old catalog must fail instead of silently skipping these labels.
+#[test]
+#[ignore = "requires the optional updated craft-i18n build input; root acceptance runs this explicitly with --ignored"]
+fn turkish_ocr_model_profile_labels_use_the_embedded_catalog() {
+    assert!(catalogs_embedded(), "OCR profile translation acceptance requires CRAFT_I18N_DIR with the updated Turkish catalog");
+    let turkish = Lang::from_code("tr").expect("Turkish must be registered");
+    let embedded_rows = rows(app_catalog("tr"));
+    assert!(!embedded_rows.is_empty(), "the embedded Turkish PdfCraft catalog is required");
+    let profile_ui = include_str!("../workflows/ocr_ui.rs");
+    let edges = |s: &str| (s.len() - s.trim_start().len(), s.len() - s.trim_end().len());
+    for (source, expected) in [
+        ("Model profile", "Model profili"),
+        ("Turkish extended alphabet", "Genişletilmiş Türkçe alfabesi"),
+        (
+            "Experimental Turkish alphabet: review recognized words before applying them. Requires Tesseract and the profile's installed models.",
+            "Deneysel Türkçe alfabesi: tanınan sözcükleri uygulamadan önce gözden geçirin. Tesseract ve profilin gerektirdiği modeller yüklü olmalıdır.",
+        ),
+    ] {
+        let literal = format!("\"{source}\"");
+        assert!(profile_ui.contains(literal.as_str()), "the catalog key must match the OCR control verbatim: {source:?}");
+        let matches: Vec<&str> =
+            embedded_rows.iter().filter(|(context, key, _)| context.is_empty() && key == source).map(|(_, _, text)| text.as_str()).collect();
+        assert_eq!(matches, vec![expected], "exactly one plain Turkish PdfCraft row is required for {source:?}");
+        let translated = tr(turkish, source);
+        assert_ne!(translated, source, "OCR profile text must not fall back to English: {source:?}");
+        assert_eq!(translated, expected, "the actual embedded lookup must preserve the Turkish meaning");
+        assert!(same_shape(translated, source), "placeholders and trailing ellipsis must match: {source:?}");
+        assert_eq!(edges(translated), edges(source), "edge whitespace must match: {source:?}");
+        assert_eq!(translated.lines().count(), source.lines().count(), "line layout must match: {source:?}");
+        assert!(!translated.contains('\t') && !translated.contains('\r'), "labels must not contain extra field or line delimiters");
+    }
+}
+
+/// The exact word-suggestion wording reviewed for the Turkish build input. Keep the format
+/// row too: its Turkish text equals English, so equality alone cannot prove it was embedded.
+const TURKISH_WORD_SUGGESTION_ROWS: [(&str, &str); 17] = [
+    ("the document is no longer open", "belge artık açık değil"),
+    ("the recognition review is unavailable", "tanıma incelemesi kullanılamıyor"),
+    ("select a word to inspect it", "incelemek için bir sözcük seçin"),
+    ("the selected word is gone; choose another", "seçilen sözcük artık yok; başka bir sözcük seçin"),
+    ("the original recognition settings are unavailable; run OCR again", "özgün tanıma ayarları kullanılamıyor; OCR işlemini yeniden çalıştırın"),
+    ("the selected word no longer belongs to this review", "seçilen sözcük artık bu incelemeye ait değil"),
+    ("Word suggestions require the desktop recognizer", "Sözcük önerileri için masaüstü tanıma motoru gerekir"),
+    ("the document could not be read", "belge okunamadı"),
+    ("the word suggestion worker could not be read; the words are unchanged", "sözcük önerisi işleminin sonucu okunamadı; sözcükler değiştirilmedi"),
+    ("the word re-read found no suggestions; the words are unchanged", "sözcük yeniden okundu ancak öneri bulunamadı; sözcükler değiştirilmedi"),
+    (
+        "the word re-read returned invalid suggestions; the words are unchanged",
+        "sözcüğün yeniden okunması geçersiz öneriler döndürdü; sözcükler değiştirilmedi",
+    ),
+    ("the selected word changed; request suggestions again", "seçilen sözcük değişti; yeniden öneri isteyin"),
+    ("A word re-read is still running", "Bir sözcüğün yeniden okunması hâlâ sürüyor"),
+    (
+        "Read only this word again. Suggestions do not change its text until you choose Apply.",
+        "Yalnızca bu sözcüğü yeniden okuyun. Uygula seçeneğini seçene kadar öneriler sözcüğün metnini değiştirmez.",
+    ),
+    ("Confidence for this suggestion", "Bu önerinin güven puanı"),
+    ("{label} · {source} · {confidence}", "{label} · {source} · {confidence}"),
+    (
+        "Confidence for this word crop only; the original word confidence is unchanged. Border: {padding} px.",
+        "Güven puanı yalnızca bu sözcük kırpmasına aittir; özgün sözcüğün güven puanı değişmez. Kenar boşluğu: {padding} piksel.",
+    ),
+];
+
+/// No fixture catalog or runtime TSV reads: this checks the actual build-time embedded input.
+#[test]
+#[ignore = "requires the optional updated craft-i18n build input; root acceptance runs this explicitly with --ignored"]
+fn turkish_word_suggestion_labels_use_the_embedded_catalog() {
+    assert!(catalogs_embedded(), "word-suggestion acceptance requires CRAFT_I18N_DIR with the updated Turkish catalog");
+    let turkish = Lang::from_code("tr").expect("Turkish must be registered");
+    let embedded_rows = rows(app_catalog("tr"));
+    let mut labels = String::new();
+    for (source, expected) in TURKISH_WORD_SUGGESTION_ROWS {
+        let matches: Vec<&str> =
+            embedded_rows.iter().filter(|(context, key, _)| context.is_empty() && key == source).map(|(_, _, text)| text.as_str()).collect();
+        assert_eq!(matches, vec![expected], "exactly one reviewed Turkish PdfCraft row is required for {source:?}");
+        assert!(has(turkish, source), "a missing row must not pass via English fallback: {source:?}");
+        assert_eq!(tr(turkish, source), expected, "the real embedded lookup must return the reviewed Turkish text");
+        assert!(same_shape(expected, source), "format placeholders must match: {source:?}");
+        assert_eq!(tr(Lang::EN, source), source);
+        assert!(!has(Lang::EN, source), "English remains the untranslated source");
+        labels.push_str(tr(turkish, source));
+    }
+    use egui::epaint::text::{Fonts, TextOptions};
+    let mut fonts = Fonts::new(TextOptions::default(), crate::theme::font_definitions());
+    for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+        assert!(fonts.has_glyphs(&id, &labels), "{id:?} lacks a Turkish word-suggestion label glyph");
+    }
+}
+
+#[test]
+#[ignore = "requires the optional updated craft-i18n build input; root acceptance runs this explicitly with --ignored"]
+fn turkish_word_suggestion_formats_preserve_unicode_and_literal_placeholders() {
+    assert!(catalogs_embedded(), "word-suggestion formatting requires the real embedded Turkish catalog");
+    let turkish = Lang::from_code("tr").expect("Turkish must be registered");
+    let summary = "{label} · {source} · {confidence}";
+    let crop = "Confidence for this word crop only; the original word confidence is unchanged. Border: {padding} px.";
+    assert!(has(turkish, summary), "the unchanged format row must really be embedded");
+    assert!(has(turkish, crop), "English fallback must not pass this acceptance");
+    let label = "I\u{307}c\u{327}g\u{306} ı ŞĞÜÖÇ îûâ {source} {padding}";
+    let source = "Türkçe-{confidence}-{label}.pdf";
+    let confidence = "%99,5 {padding}";
+    let args = [("label", label), ("source", source), ("confidence", confidence), ("padding", "8")];
+    let expected = "I\u{307}c\u{327}g\u{306} ı ŞĞÜÖÇ îûâ {source} {padding} · Türkçe-{confidence}-{label}.pdf · %99,5 {padding}";
+    assert_eq!(fmt(tr(turkish, summary), &args), expected, "inserted Unicode and braces must be preserved verbatim");
+    assert_eq!(fmt(tr(Lang::EN, summary), &args), expected);
+    let padding = "8 I\u{307}c\u{327} {label} {padding}";
+    assert_eq!(
+        fmt(tr(turkish, crop), &[("padding", padding), ("label", "must not replace user text")]),
+        "Güven puanı yalnızca bu sözcük kırpmasına aittir; özgün sözcüğün güven puanı değişmez. Kenar boşluğu: 8 I\u{307}c\u{327} {label} {padding} piksel."
+    );
+    assert_eq!(
+        fmt(tr(Lang::EN, crop), &[("padding", padding)]),
+        "Confidence for this word crop only; the original word confidence is unchanged. Border: 8 I\u{307}c\u{327} {label} {padding} px."
+    );
+}
+
 /// The code joins some labels with a space at either end, so these catalogs (PdfCraft's rows in
 /// craft-i18n) keep exactly the source's, and write … rather than three dots.
 #[test]
