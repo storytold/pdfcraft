@@ -4775,6 +4775,41 @@ fn optimize_discarding_an_empty_category_still_runs() {
     }
 }
 
+/// "Discard all comments, forms and multimedia" (the comments category in Optimize) discarded
+/// only the comments: the form, its field values and the multimedia stayed, and a file without
+/// comments kept everything. Fields are discarded, not flattened, also from the structure tree.
+#[test]
+fn discarding_comments_forms_and_multimedia_takes_all_three() {
+    for note in ["", " 6 0 R"] {
+        let pdf = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /XFA (form) >> /Names << /Renditions << /Names [(clip) 7 0 R] >> >> /StructTreeRoot 8 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>")
+            .obj(format!("<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R{note}] >>"))
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (salary) /V (FIELDVALUE) /Rect [20 20 120 40] /P 3 0 R >>")
+            .obj("<< /Type /Annot /Subtype /Screen /T (clip) /Rect [20 60 120 120] /P 3 0 R >>")
+            .obj("<< /Type /Annot /Subtype /Text /Contents (a note) /Rect [20 200 40 220] /P 3 0 R >>")
+            .obj("<< /Type /Rendition /S /MR /N (clip) >>")
+            .obj("<< /Type /StructTreeRoot /K 9 0 R >>")
+            .obj("<< /Type /StructElem /S /Form /P 8 0 R /Pg 3 0 R /K [<< /Type /OBJR /Obj 4 0 R >> << /Type /OBJR /Obj 5 0 R >>] >>")
+            .build();
+        let mut s = Session::new();
+        let id = s.open("form.pdf", None, Arc::new(pdf), None).unwrap();
+        let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Comments]).unwrap();
+        let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+        let left: Vec<String> = saved
+            .scan_objects()
+            .filter_map(|(_, o)| o.as_dict().cloned())
+            .filter(|d| {
+                [&b"AcroForm"[..], b"FT", b"Renditions", b"Annots"].iter().any(|k| d.contains(k))
+                    || matches!(d.name(b"Type"), Some(b"Annot" | b"Rendition"))
+            })
+            .map(|d| String::from_utf8_lossy(d.name(b"Subtype").or(d.name(b"Type")).unwrap_or_default()).into_owned())
+            .collect();
+        assert!(left.is_empty(), "with{} a comment, still in the file: {left:?}", if note.is_empty() { "out" } else { "" });
+        assert_eq!(report.discarded, vec![(crate::Hidden::Comments, 2 + usize::from(!note.is_empty()))]);
+    }
+}
+
 #[test]
 fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
     use crate::optimizer::OptimizeStage;
