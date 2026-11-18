@@ -2416,9 +2416,11 @@ mod tests {
             ..Default::default()
         });
         let (a, b) = (gpu.recognize(&shot.rgba, shot.width, shot.height).unwrap(), cpu.recognize(&shot.rgba, shot.width, shot.height).unwrap());
-        // A GPU that failed during the page is retried on the CPU, which would make both readings
-        // the CPU's and this comparison empty: the backend must still be the GPU afterwards.
-        assert!(gpu.backend().starts_with("GPU"), "the page was not read on the GPU: {}", gpu.backend());
+        // A page the GPU refused or failed on is read on the CPU, which would make both readings
+        // the CPU's and this comparison empty. The backend alone doesn't show a page that fell
+        // back while the GPU stayed usable, so check that the GPU read this one page.
+        assert_eq!((gpu.pages_on_gpu(), cpu.pages_on_gpu()), (1, 0), "the page was not read on the GPU: {}", gpu.backend());
+        assert!(gpu.backend().starts_with("GPU"), "the GPU failed: {}", gpu.backend());
         assert_eq!(a.iter().map(|l| l.text()).collect::<Vec<_>>(), b.iter().map(|l| l.text()).collect::<Vec<_>>());
         for (la, lb) in a.iter().zip(&b) {
             for (wa, wb) in la.words.iter().zip(&lb.words) {

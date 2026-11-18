@@ -140,6 +140,10 @@ pub struct Ocr {
     /// Why the GPU is not used, when it was asked for.
     #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
     gpu_refused: Option<String>,
+    /// Pages the GPU read. A page it refused, or that it failed on, is read on the CPU and not
+    /// counted, so a caller can tell which path read a page ([`Self::pages_on_gpu`]).
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    on_gpu: std::sync::atomic::AtomicUsize,
 }
 
 impl Ocr {
@@ -198,7 +202,7 @@ impl Ocr {
             } else {
                 (None, None)
             };
-            Ok(Ocr { engine, detector_input, gpu, gpu_refused })
+            Ok(Ocr { engine, detector_input, gpu, gpu_refused, on_gpu: std::sync::atomic::AtomicUsize::new(0) })
         }
         #[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
         {
@@ -223,6 +227,20 @@ impl Ocr {
             }
         }
         "CPU".into()
+    }
+
+    /// How many pages the GPU has read so far: one more after each [`Self::recognize`] it
+    /// answered, none for a page read on the CPU (no GPU, a page beyond its limits, or a GPU
+    /// that failed). Always 0 without the `gpu` feature.
+    pub fn pages_on_gpu(&self) -> usize {
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+        {
+            self.on_gpu.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        #[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+        {
+            0
+        }
     }
 
     /// Load the models found by [`Models::find`].
@@ -255,7 +273,10 @@ impl Ocr {
             let rgb3: std::borrow::Cow<[u8]> =
                 if rgb.len() == w * h { rgb.iter().flat_map(|&v| [v, v, v]).collect::<Vec<u8>>().into() } else { rgb.as_ref().into() };
             match g.recognize(&self.engine, &rgb3, w, h) {
-                Ok(lines) => return Ok(lines),
+                Ok(lines) => {
+                    self.on_gpu.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(lines);
+                }
                 Err(super::gpu::Refused::Page(e)) => log::info!("reading this page on the CPU: {e}"),
                 Err(super::gpu::Refused::Gpu(e)) => {
                     log::warn!("text recognition on the GPU failed, using the CPU from now on: {e}");
