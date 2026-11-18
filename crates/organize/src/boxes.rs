@@ -48,7 +48,8 @@ pub enum BoxSpec {
     Remove,
     /// An absolute rectangle in default user space.
     Rect([f64; 4]),
-    /// Margins inward from the media box: left, bottom, right, top (points).
+    /// Margins inward from the media box: left, bottom, right, top (default user-space units of the
+    /// unrotated page; points only on a page without `/UserUnit`).
     Margins([f64; 4]),
 }
 
