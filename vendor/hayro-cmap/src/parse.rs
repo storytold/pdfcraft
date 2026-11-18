@@ -7,7 +7,7 @@ use hayro_postscript::{Object, Scanner};
 #[cfg(feature = "embed-cmaps")]
 use crate::bcmap;
 use crate::{
-    BfRange, CMap, CMapName, CharacterCollection, CidFamily, CidRange, CodespaceRange,
+    BfPiece, BfRange, CMap, CMapName, CharacterCollection, CidFamily, CidRange, CodespaceRange,
     MAX_NESTING_DEPTH, Metadata, PartitionedRanges, Range, WritingMode,
 };
 
@@ -175,14 +175,16 @@ pub(crate) fn parse_inner<'a>(
     }
 
 
-    // PdfCraft patch (5): overlapping mappings become disjoint, the later declaration winning,
-    // so the binary search below finds every code.
-    let mut bf_entries = disjoint(bf_entries);
+    // PdfCraft patch (5): where mappings overlap, the lookup searches disjoint pieces of them
+    // instead (the later declaration winning), and the entries keep their declaration order.
+    let bf_pieces = disjoint(&bf_entries);
 
     // Since we will use binary search for finding the correct entry, sort now.
     ranges.sort();
     notdef_ranges.sort();
-    bf_entries.sort_by(|a, b| a.range.start.cmp(&b.range.start));
+    if bf_pieces.is_empty() {
+        bf_entries.sort_by(|a, b| a.range.start.cmp(&b.range.start));
+    }
 
     // See PDFJS-3323, which has an invalid CIDSystemInfo entry.
     // We ignore it if it's invalid.
@@ -222,6 +224,7 @@ pub(crate) fn parse_inner<'a>(
         cid_ranges: ranges,
         notdef_ranges,
         bf_entries,
+        bf_pieces,
         base,
     })
 }
@@ -493,13 +496,15 @@ fn name_matches(obj: &Object<'_>, expected: &str) -> bool {
     matches!(obj, Object::Name(name) if !name.is_literal() && name.as_str() == Some(expected))
 }
 
-/// PdfCraft patch (5): `bfchar`/`bfrange` mappings (in declaration order) rewritten so that no
-/// two overlap, each code keeping the mapping declared last, as pdf.js, poppler and
-/// `pdfcraft-fonts` read them. The lookup binary-searches mappings sorted by their first code,
-/// which only works when they are disjoint: in a ToUnicode map with overlapping ranges (calibre
-/// writes them) the search could step past every range holding a code, and the text of `g` and
-/// `x` was lost on copy (#6740). Disjoint mappings come back unchanged.
-pub(crate) fn disjoint(entries: Vec<BfRange>) -> Vec<BfRange> {
+/// PdfCraft patch (5): the stretches of codes covered by `bfchar`/`bfrange` mappings (in
+/// declaration order), sorted and disjoint, each owned by the mapping declared last over it, as
+/// pdf.js, poppler and `pdfcraft-fonts` read them. The lookup binary-searches by first code,
+/// which only works when what it searches is disjoint: in a ToUnicode map with overlapping
+/// ranges (calibre writes them) the search could step past every range holding a code, and the
+/// text of `g` and `x` was lost on copy (#6740). The mappings themselves are left as declared, so
+/// a code's text is still counted from its own mapping's first code, and each piece costs a few
+/// words however long the destination. Empty when no two mappings overlap.
+pub(crate) fn disjoint(entries: &[BfRange]) -> Vec<BfPiece> {
     let mut order: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].range.start <= entries[i].range.end).collect();
     order.sort_by_key(|&i| (entries[i].range.start, i));
     let mut reach: Option<u32> = None;
@@ -510,7 +515,7 @@ pub(crate) fn disjoint(entries: Vec<BfRange>) -> Vec<BfRange> {
         hit
     });
     if !overlap {
-        return entries;
+        return Vec::new();
     }
     // The codes where some mapping starts or stops, and between each two the mapping that owns
     // that stretch: of those covering it, the one declared last (the largest index).
@@ -519,7 +524,7 @@ pub(crate) fn disjoint(entries: Vec<BfRange>) -> Vec<BfRange> {
     edges.dedup();
     let mut live = BinaryHeap::new();
     let mut next = order.iter().peekable();
-    let mut out: Vec<(usize, u32, u32)> = Vec::new();
+    let mut out: Vec<BfPiece> = Vec::new();
     for pair in edges.windows(2) {
         let (Ok(lo), Ok(hi)) = (u32::try_from(pair[0]), u32::try_from(pair[1] - 1)) else { continue };
         while let Some(&&i) = next.peek().filter(|&&&i| entries[i].range.start <= lo) {
@@ -531,21 +536,9 @@ pub(crate) fn disjoint(entries: Vec<BfRange>) -> Vec<BfRange> {
         }
         let Some(&owner) = live.peek() else { continue };
         match out.last_mut() {
-            Some((o, _, end)) if *o == owner && end.checked_add(1) == Some(lo) => *end = hi,
-            _ => out.push((owner, lo, hi)),
+            Some(last) if last.entry == owner && last.range.end.checked_add(1) == Some(lo) => last.range.end = hi,
+            _ => out.push(BfPiece { range: Range { start: lo, end: hi }, entry: owner }),
         }
     }
-    out.into_iter()
-        .filter_map(|(i, lo, hi)| {
-            let e = &entries[i];
-            // A piece starting `k` codes into its mapping starts `k` units on, as the lookup counts.
-            let offset = u16::try_from(lo - e.range.start).ok()?;
-            let mut dst_base = e.dst_base.clone();
-            if offset > 0 {
-                let last = dst_base.last_mut()?;
-                *last = last.checked_add(offset)?;
-            }
-            Some(BfRange { range: Range { start: lo, end: hi }, dst_base, code_len: e.code_len })
-        })
-        .collect()
+    out
 }

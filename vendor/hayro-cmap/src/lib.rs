@@ -366,6 +366,10 @@ pub struct CMap {
     cid_ranges: PartitionedRanges,
     notdef_ranges: PartitionedRanges,
     bf_entries: Vec<BfRange>,
+    /// PdfCraft patch (5): where `bf_entries` overlap, the disjoint stretches of codes, sorted,
+    /// each naming the entry declared last over it; `bf_entries` then stays in declaration
+    /// order. Empty when no two entries overlap (`bf_entries` is then sorted and searched).
+    bf_pieces: Vec<BfPiece>,
     base: Option<Box<Self>>,
 }
 
@@ -418,6 +422,7 @@ impl CMap {
             },
             notdef_ranges: PartitionedRanges::new(),
             bf_entries: Vec::new(),
+            bf_pieces: Vec::new(),
             base: None,
         }
     }
@@ -477,7 +482,7 @@ impl CMap {
     /// bytes (`<00fe>` is a two-byte code, not the one-byte `<fe>`), or doesn't record its length.
     /// Used where no codespace range gives the code its length.
     fn bf_code_has_length(&self, code: u32, byte_len: u8) -> bool {
-        find_in_ranges(&self.bf_entries, code)
+        self.find_bf(code)
             .is_some_and(|entry| entry.code_len == 0 || entry.code_len == byte_len)
     }
 
@@ -516,8 +521,18 @@ impl CMap {
         self.lookup_bf_string_inner(code, true)
     }
 
+    /// PdfCraft patch (5): this level's `bfchar`/`bfrange` entry for `code`: of the entries
+    /// covering it, the one declared last.
+    fn find_bf(&self, code: u32) -> Option<&BfRange> {
+        if self.bf_pieces.is_empty() {
+            find_in_ranges(&self.bf_entries, code)
+        } else {
+            self.bf_entries.get(find_in_ranges(&self.bf_pieces, code)?.entry)
+        }
+    }
+
     fn lookup_bf_string_inner(&self, code: u32, recurse: bool) -> Option<BfString> {
-        if let Some(entry) = find_in_ranges(&self.bf_entries, code) {
+        if let Some(entry) = self.find_bf(code) {
             let offset = u16::try_from(code - entry.range.start).ok()?;
 
             fn decode_utf16(units: &[u16]) -> Option<BfString> {
@@ -638,6 +653,20 @@ pub(crate) struct BfRange {
 }
 
 impl HasRange for BfRange {
+    fn range(&self) -> &Range {
+        &self.range
+    }
+}
+
+/// PdfCraft patch (5): a stretch of codes owned by one `bf_entries` entry (by index), the
+/// entry's own range and destination left as declared.
+#[derive(Debug, Clone)]
+pub(crate) struct BfPiece {
+    pub(crate) range: Range,
+    pub(crate) entry: usize,
+}
+
+impl HasRange for BfPiece {
     fn range(&self) -> &Range {
         &self.range
     }
@@ -1502,6 +1531,36 @@ endbfchar
         let text: Vec<_> = (0x41..=0x47).map(|code| cmap.lookup_bf_string(code)).collect();
         let want = [Some('a'), Some('Z'), Some('c'), Some('1'), Some('X'), Some('3'), None];
         assert_eq!(text, want.map(|c| c.map(BfString::Char)).to_vec());
+    }
+
+    /// PdfCraft patch test (5): a code whose own (split) mapping can't give it text has none:
+    /// the `usecmap` base is not asked, as before the mappings were split.
+    #[test]
+    fn a_split_mapping_past_ffff_does_not_fall_back_to_the_base() {
+        let base = b"1 begincodespacerange <0000> <FFFF> endcodespacerange\n1 beginbfchar <0043> <0063> endbfchar";
+        let child = b"/Base usecmap\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n\
+                      1 beginbfrange <0041> <0043> <FFFE> endbfrange\n1 beginbfchar <0042> <0062> endbfchar";
+        let cmap = CMap::parse(child, |name| (name.to_bytes() == b"Base").then_some(base.as_slice())).unwrap();
+
+        assert_eq!(cmap.lookup_bf_string(0x41), Some(BfString::Char('\u{FFFE}')));
+        assert_eq!(cmap.lookup_bf_string(0x42), Some(BfString::Char('b')));
+        assert_eq!(cmap.lookup_bf_string(0x43), None);
+    }
+
+    /// PdfCraft patch test (5): splitting a mapping doesn't copy its destination, however many
+    /// pieces later mappings cut it into.
+    #[test]
+    fn split_mappings_share_their_destination() {
+        let dst: String = "0061".repeat(200);
+        let chars: String = (0..100).map(|i| format!("<{:04X}> <0062>\n", 2 * i + 1)).collect();
+        let data = format!("1 beginbfrange\n<0000> <00FF> <{dst}>\nendbfrange\n100 beginbfchar\n{chars}endbfchar");
+        let cmap = parse_with_preamble(data.as_bytes());
+
+        assert_eq!(cmap.bf_pieces.len(), 201);
+        assert_eq!(cmap.bf_entries.iter().map(|e| e.dst_base.len()).sum::<usize>(), 200 + 100);
+        assert_eq!(cmap.lookup_bf_string(0x01), Some(BfString::Char('b')));
+        let Some(BfString::String(s)) = cmap.lookup_bf_string(0x04) else { panic!() };
+        assert_eq!((s.len(), s.chars().last()), (200, Some('e')));
     }
 
     #[test]
