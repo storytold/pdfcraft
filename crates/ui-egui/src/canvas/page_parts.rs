@@ -1,0 +1,407 @@
+//! What lies on the pages that a press can take: one part per thing a page module offers (a comment, a link, a
+//! form field's widget, added content), all registered in the one [`PageParts`] canvas control, so the framework's
+//! hit priority ranks them against each other and the press machine holds each press to its release. The tool host
+//! shown after it takes every press no part took.
+
+use craft::behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, PartKey, PartRef, PressPhase, Sense};
+use craft::keymap::Mods;
+use craft::ui::contract::{
+    Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PartsCx, Pointer as _, Props as _, Role, TooltipAt, TooltipSpec,
+};
+use craft::ui::runtime::commands::FireSource;
+use craft::ui::runtime::env::Label;
+use craft::ui::runtime::focus::KeyUse;
+use craft::ui::style::{ComponentStyle, StyleCx};
+use egui::{Rect, Response, Vec2};
+
+/// What a part on the pages is: the page module that offered it reads its own presses by it. Each variant names its
+/// thing by the numbers the module keeps it by, never by its place in the part list, so a press held across passes
+/// keeps naming the same thing while the list changes under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Owner {
+    /// A comment (or a Fill & Sign mark), by its `/Annots` index on its page.
+    Comment { index: usize },
+    /// A link, by its index in its page's `/Annots`.
+    Link { index: usize },
+    /// A web or email address written as plain page text (#4207), by its index among the page's.
+    TextLink { index: usize },
+    /// A form field's widget, by the field's index in the form and the widget's in the field.
+    Field { field: usize, widget: usize },
+    /// Prepare Form: a field's widget, to select and move.
+    PrepareField { field: usize, widget: usize },
+    /// Edit text: a paragraph, by its index among the page's.
+    Paragraph { block: usize },
+    /// Edit text: a picture, by its index among the page's.
+    Picture { index: usize },
+    /// Edit text: the objects selected together.
+    Objects,
+    /// Edit text: the frame band of the paragraph open for typing, by the paragraph's index.
+    Frame { block: usize },
+    /// Added text or a picture placed on the page, by its index among the page's.
+    Added { index: usize },
+    /// The sign tab on an empty signature field a click would sign, by the field's index in the form.
+    SignTab { field: usize },
+}
+
+const COMMENT: PartKey = PartKey::new("comment");
+const LINK: PartKey = PartKey::new("link");
+const TEXT_LINK: PartKey = PartKey::new("text_link");
+const FIELD: PartKey = PartKey::new("field");
+const PREPARE_FIELD: PartKey = PartKey::new("prepare_field");
+const PARAGRAPH: PartKey = PartKey::new("paragraph");
+const PICTURE: PartKey = PartKey::new("picture");
+const OBJECTS: PartKey = PartKey::new("objects");
+const FRAME: PartKey = PartKey::new("frame");
+const ADDED: PartKey = PartKey::new("added");
+const SIGN_TAB: PartKey = PartKey::new("sign_tab");
+
+/// `high` in the upper 32 bits of a part index and `low` in the lower; `None` when either does not fit, so no two
+/// things ever share an index.
+fn pack(high: usize, low: usize) -> Option<u64> {
+    let (high, low) = (u32::try_from(high).ok()?, u32::try_from(low).ok()?);
+    Some((u64::from(high) << 32) | u64::from(low))
+}
+
+/// The two halves [`pack`] put in `index`.
+fn unpack(index: u64) -> Option<(usize, usize)> {
+    let high = usize::try_from(index >> 32).ok()?;
+    let low = usize::try_from(index & u64::from(u32::MAX)).ok()?;
+    Some((high, low))
+}
+
+impl Owner {
+    /// The part this owner registers as on `page`. Its key is the variant's; its index packs the page in the upper 32
+    /// bits and the variant's own number in the lower, except a field widget's, which is `field << 32 | widget` (a
+    /// widget lies on one page, so the pair alone names it). `None` when a number does not fit in 32 bits: that part
+    /// is not registered.
+    pub(crate) fn part_ref(self, page: usize) -> Option<PartRef> {
+        let (key, index) = match self {
+            Owner::Comment { index } => (COMMENT, pack(page, index)?),
+            Owner::Link { index } => (LINK, pack(page, index)?),
+            Owner::TextLink { index } => (TEXT_LINK, pack(page, index)?),
+            Owner::Field { field, widget } => (FIELD, pack(field, widget)?),
+            Owner::PrepareField { field, widget } => (PREPARE_FIELD, pack(field, widget)?),
+            Owner::Paragraph { block } => (PARAGRAPH, pack(page, block)?),
+            Owner::Picture { index } => (PICTURE, pack(page, index)?),
+            Owner::Objects => (OBJECTS, pack(page, 0)?),
+            Owner::Frame { block } => (FRAME, pack(page, block)?),
+            Owner::Added { index } => (ADDED, pack(page, index)?),
+            Owner::SignTab { field } => (SIGN_TAB, pack(page, field)?),
+        };
+        Some(key.at(index))
+    }
+
+    /// The owner `part` names, with its page where the index carries one ([`part_ref`](Self::part_ref)): `None` for
+    /// a field widget's page, which its part does not hold. `None` for a part that is no page part.
+    // PLAN: decisions.md gives `Option<(Owner, usize)>`, but a field widget's index is `field << 32 | widget` by the same decision and holds no page, so the page is optional.
+    pub(crate) fn from_part(part: PartRef) -> Option<(Owner, Option<usize>)> {
+        let (high, low) = unpack(part.index?)?;
+        let paged = |owner: Owner| Some((owner, Some(high)));
+        match part.key {
+            COMMENT => paged(Owner::Comment { index: low }),
+            LINK => paged(Owner::Link { index: low }),
+            TEXT_LINK => paged(Owner::TextLink { index: low }),
+            FIELD => Some((Owner::Field { field: high, widget: low }, None)),
+            PREPARE_FIELD => Some((Owner::PrepareField { field: high, widget: low }, None)),
+            PARAGRAPH => paged(Owner::Paragraph { block: low }),
+            PICTURE => paged(Owner::Picture { index: low }),
+            OBJECTS => paged(Owner::Objects),
+            FRAME => paged(Owner::Frame { block: low }),
+            ADDED => paged(Owner::Added { index: low }),
+            SIGN_TAB => paged(Owner::SignTab { field: low }),
+            _ => None,
+        }
+    }
+}
+
+/// The families of page parts, lowest first: the one table that says which outranks which where parts overlap.
+/// Families that take a press while a tool is active outrank the page's own text and pictures; handles and the open
+/// editor outrank everything on the page body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PageLayer {
+    /// Edit text's pictures.
+    Picture,
+    /// Edit text's paragraphs.
+    Text,
+    /// Links and text links.
+    Link,
+    /// Comments and Fill & Sign marks.
+    Comment,
+    /// Form fields' widgets and the sign tabs over them.
+    Field,
+    /// What a tool placed and moves: added content, Prepare's fields, the objects selected together.
+    Placed,
+    /// Handles on what is selected, and the frame band of the paragraph open for typing.
+    Handle,
+    /// The open editor's own parts.
+    Editor,
+}
+
+impl PageLayer {
+    /// The layer's rank in the framework's hit resolution: a higher `(level, sub)` wins where parts overlap.
+    pub(crate) fn priority(self) -> HitPriority {
+        let (level, sub) = match self {
+            PageLayer::Picture => (HitLevel::Body, 0),
+            PageLayer::Text => (HitLevel::Body, 1),
+            PageLayer::Link => (HitLevel::Body, 2),
+            PageLayer::Comment => (HitLevel::Body, 3),
+            PageLayer::Field => (HitLevel::Body, 4),
+            PageLayer::Placed => (HitLevel::Body, 5),
+            PageLayer::Handle => (HitLevel::Handle, 0),
+            PageLayer::Editor => (HitLevel::Handle, 1),
+        };
+        HitPriority::new(level, sub)
+    }
+}
+
+/// One thing on a page a press can take: its owner, its page, its shape in screen points and its layer, with what
+/// the pointer shows over it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PagePart {
+    /// What the part is.
+    pub(crate) owner: Owner,
+    /// The page it lies on.
+    pub(crate) page: usize,
+    /// Its shape, in the screen points of the page body.
+    pub(crate) shape: HitShape,
+    /// Its family, which ranks it against overlapping parts.
+    pub(crate) layer: PageLayer,
+    cursor: Option<CursorIcon>,
+    tip: Option<String>,
+    passes_drag: bool,
+    focusable: bool,
+}
+
+impl PagePart {
+    /// `owner` on `page`, hit by `shape`, ranked by `layer`. It takes clicks, drags and secondary clicks, and shows the
+    /// default cursor and no tip.
+    pub(crate) fn new(owner: Owner, page: usize, shape: impl Into<HitShape>, layer: PageLayer) -> Self {
+        PagePart { owner, page, shape: shape.into(), layer, cursor: None, tip: None, passes_drag: false, focusable: false }
+    }
+
+    /// The cursor over the part.
+    #[must_use]
+    pub(crate) fn cursor(mut self, cursor: CursorIcon) -> Self {
+        self.cursor = Some(cursor);
+        self
+    }
+
+    /// The tip shown beside the pointer over the part.
+    #[must_use]
+    pub(crate) fn tip(mut self, tip: impl Into<String>) -> Self {
+        self.tip = Some(tip.into());
+        self
+    }
+
+    /// The part only clicks: a drag that starts on it goes to what lies below (text markup selects the text under it,
+    /// a link with the Link tool lets a new link be drawn over it).
+    #[must_use]
+    pub(crate) fn passes_drag(mut self) -> Self {
+        self.passes_drag = true;
+        self
+    }
+
+    /// The part is a Tab stop, in the order the parts are given (a form's fields in the PDF's tab order).
+    #[must_use]
+    pub(crate) fn focusable(mut self) -> Self {
+        self.focusable = true;
+        self
+    }
+
+    /// What the part senses: a click, a secondary click and a drag of its own, or a click that passes its drag on.
+    fn sense(&self) -> Sense {
+        let drag = if self.passes_drag { Sense::PASSES_DRAG } else { Sense::DRAG };
+        Sense::CLICK | Sense::CONTEXT_CLICK | drag
+    }
+}
+
+/// A press on a page part in this pass, as the press machine reports it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PagePress {
+    /// What was pressed.
+    pub(crate) owner: Owner,
+    /// The page it lies on.
+    pub(crate) page: usize,
+    /// The press's phase in this pass, in screen points; a click's count is its start's `clicks`.
+    pub(crate) phase: PressPhase,
+    /// The modifiers held: readers test `cmd` (Cmd on macOS, Ctrl elsewhere) and `shift`.
+    pub(crate) mods: Mods,
+}
+
+/// The style of the page parts: they paint nothing.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+pub(crate) struct PagePartsStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// What the page parts report this pass.
+#[derive(Debug)]
+pub(crate) struct PagePartsOutput {
+    /// The control's response.
+    pub(crate) response: Response,
+    /// The press on a part, in the phase this pass reports.
+    pub(crate) press: Option<PagePress>,
+    /// A key the focused part was given: a form field's toggle, its arrows, Enter or typed text.
+    pub(crate) key: Option<(Owner, Intent)>,
+    /// The part under the pointer this pass.
+    pub(crate) hovered: Option<Owner>,
+    /// The part focus arrived on this pass (Tab, a focus request or a click): a form field opens on it.
+    pub(crate) focused: Option<(Owner, usize)>,
+}
+
+impl Outcome for PagePartsOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// The parts of the pages, in paint order: each family appends its own after what it paints over, so where parts of
+/// one layer overlap the one drawn on top takes the press. A canvas control that paints nothing: show it first in the
+/// page body, before the tool host, over the body's rect.
+#[derive(Component)]
+#[component(canvas_control, sample = PageParts::sample)]
+pub(crate) struct PageParts<'a> {
+    #[common]
+    common: Common,
+    parts: &'a [PagePart],
+    focus: Option<Owner>,
+    report: Report,
+}
+
+/// What `update` read, for `finish`.
+#[derive(Debug, Default)]
+struct Report {
+    press: Option<PagePress>,
+    key: Option<(Owner, Intent)>,
+    hovered: Option<Owner>,
+    focused: Option<(Owner, usize)>,
+}
+
+impl<'a> PageParts<'a> {
+    /// The parts `parts`, given in paint order.
+    pub(crate) fn new(parts: &'a [PagePart]) -> Self {
+        PageParts { common: Common::new(), parts, focus: None, report: Report::default() }.label(Label::from(tl!("Page content")))
+    }
+
+    /// Moves the focus to `owner`'s part in this pass, when it is a Tab stop and the pages hold the focus or were just
+    /// pressed. A request: send it in the one pass that asks, never every pass.
+    #[must_use]
+    pub(crate) fn focus(mut self, owner: Option<Owner>) -> Self {
+        self.focus = owner;
+        self
+    }
+
+    /// No parts, for the component suite.
+    fn sample() -> Self {
+        PageParts::new(&[])
+    }
+
+    /// The part `part` names, among this pass's parts.
+    fn part_named(&self, part: PartRef) -> Option<&PagePart> {
+        let (owner, page) = Owner::from_part(part)?;
+        self.parts.iter().find(|p| p.owner == owner && page.is_none_or(|page| p.page == page))
+    }
+
+    /// The key the focused part was given this pass: an activation by the keyboard, Enter, an arrow or typed text, the
+    /// first of them; a field reads one key per pass.
+    fn field_key(cx: &mut Cx<'_, Self>, part: PartRef) -> Option<Intent> {
+        if cx.part_activated(part) == Some(FireSource::Key) {
+            return Some(Intent::Activate);
+        }
+        let intents = cx.intents();
+        if intents.take(Intent::Submit) {
+            return Some(Intent::Submit);
+        }
+        if let Some((mv, mods)) = intents.take_move() {
+            return Some(Intent::Move(mv, mods));
+        }
+        intents.take_text().map(Intent::Text)
+    }
+}
+
+impl Component for PageParts<'_> {
+    const ROLE: Role = Role::GROUP;
+    const OVERLAYS: bool = false;
+    const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_moves();
+    type Style = PagePartsStyle;
+    type Output = PagePartsOutput;
+
+    fn style(_: &StyleCx<'_>, _: PagePartsStyleKey) -> PagePartsStyle {
+        PagePartsStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    /// One part per page part, in the order given, each with that order as its stacking order. A family gives one
+    /// shape per owner and page; a second shape of the same owner on the same page is not registered, so one press
+    /// never names two parts.
+    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        let mut declared: Vec<PartRef> = Vec::with_capacity(self.parts.len());
+        for (order, part) in self.parts.iter().enumerate() {
+            let Some(at) = part.owner.part_ref(part.page) else { continue };
+            let Ok(order) = u32::try_from(order) else { break };
+            if declared.contains(&at) {
+                continue;
+            }
+            declared.push(at);
+            let mut builder = cx.part(at, part.shape.clone()).sense(part.sense()).priority(part.layer.priority()).stacking(order);
+            if let Some(cursor) = part.cursor {
+                builder = builder.cursor(cursor);
+            }
+            if let Some(tip) = &part.tip {
+                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer));
+            }
+            if part.focusable {
+                builder.focusable();
+            } else {
+                builder.pointer_only("the comments, links and fields panels and the selected object's commands reach page content");
+            }
+        }
+    }
+
+    /// Reads the press, the hover, the focused part's key and the focus that arrived. The press machine reports a
+    /// press's phases one per pass, so a second pass of a frame reads only its own phase.
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let pressed = self.parts.iter().filter_map(|part| part.owner.part_ref(part.page)).any(|at| {
+            cx.part_if_declared(at).is_some_and(|result| result.press.phase.is_press())
+        });
+        if let Some(owner) = self.focus
+            && (cx.is_focused() || pressed)
+            && let Some(at) = self.parts.iter().filter(|part| part.focusable && part.owner == owner).find_map(|part| part.owner.part_ref(part.page))
+        {
+            cx.focus_part(at);
+        }
+        for part in self.parts {
+            let Some(at) = part.owner.part_ref(part.page) else { continue };
+            let Some(result) = cx.part_if_declared(at) else { continue };
+            let (press, hovered) = (result.press, result.hovered);
+            if hovered && self.report.hovered.is_none() {
+                self.report.hovered = Some(part.owner);
+            }
+            if press.phase.is_press() && self.report.press.is_none() {
+                self.report.press = Some(PagePress { owner: part.owner, page: part.page, phase: press.phase, mods: press.mods });
+            }
+        }
+        if let Some(active) = cx.active_part()
+            && let Some(owner) = self.part_named(active).filter(|part| part.focusable).map(|part| part.owner)
+            && let Some(intent) = Self::field_key(cx, active)
+        {
+            self.report.key = Some((owner, intent));
+        }
+        if let Some(arrived) = cx.focus_arrived() {
+            self.report.focused = self.part_named(arrived).map(|part| (part.owner, part.page));
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> PagePartsOutput {
+        let Report { press, key, hovered, focused } = self.report;
+        PagePartsOutput { response: cx.response.clone(), press, key, hovered, focused }
+    }
+}
+
+
