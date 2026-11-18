@@ -38,7 +38,11 @@ pub(crate) enum Scope {
 /// Edits during which field scripts run.
 pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
-        Edit::SetFieldValue { .. } | Edit::ApplyScriptChanges { .. } | Edit::SetFieldScript { .. } | Edit::SetCalculationOrder { .. } => true,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::SetFieldScript { .. }
+        | Edit::SetCalculationOrder { .. } => true,
         Edit::Batch { edits, .. } => edits.iter().any(uses_scripts),
         _ => false,
     }
@@ -77,7 +81,11 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. } => Scope::Form,
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }

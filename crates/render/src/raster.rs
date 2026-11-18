@@ -68,6 +68,15 @@ pub struct RenderConfig {
     pub layers: Arc<Vec<(i32, i32, bool)>>,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
     pub hide_comments: bool,
+    /// Annotations shown or hidden for viewing in place of their Hidden and NoView flags (object
+    /// number, generation, shown): fields a document's page actions and timers showed or hid
+    /// (an animation's frames). Display only; the document never changes.
+    pub annotations: Arc<Vec<(i32, i32, bool)>>,
+    /// Annotations drawn with a form XObject as their normal appearance (object number and
+    /// generation of the annotation, then of the form): push buttons a document's page actions
+    /// and timers gave another icon (`buttonSetIcon`, an animation's frames). Display only; the
+    /// document never changes.
+    pub appearances: Arc<Vec<(i32, i32, i32, i32)>>,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
     /// Tiled requests remain available for pages that exceed those caps. Both modes refuse
     /// a raster whose rounded integer dimensions exceed the final pixel-allocation budget.
@@ -118,6 +127,8 @@ impl RenderConfig {
             ocg_overrides: self.layers.clone(),
             view_auto_state: !self.for_print,
             hide_comments: self.hide_comments,
+            annotation_overrides: self.annotations.clone(),
+            appearance_overrides: self.appearances.clone(),
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
@@ -377,7 +388,8 @@ fn render_page<'a>(
 ) -> Result<Output, (String, bool)> {
     // Print previews share the viewer pool, but must use the output font policy and the layers
     // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
-    // settings. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
+    // settings, except what a document's scripts show while it is read (`annotations`,
+    // `appearances`), which never prints. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
     // font resolver, so the viewer cache could supply an installed face even after changing the
     // resolver (and a cached missing font from print preview could blank the viewer on switching
     // back); nothing drawn with the viewer's layers is reused either.
@@ -385,10 +397,13 @@ fn render_page<'a>(
     let print_cache;
     let print = req.tag & PRINT_TAG != 0;
     let print_layers = config.print_layers.as_ref().filter(|_| print);
-    let (settings, cache) = if (config.system_fonts && print) || print_layers.is_some() {
+    let live = !settings.annotation_overrides.is_empty() || !settings.appearance_overrides.is_empty();
+    let (settings, cache) = if print && (config.system_fonts || print_layers.is_some() || live) {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
             ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
+            annotation_overrides: Arc::default(),
+            appearance_overrides: Arc::default(),
             ..settings.clone()
         };
         print_cache = RenderCache::new();
