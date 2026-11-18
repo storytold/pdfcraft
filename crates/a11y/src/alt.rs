@@ -29,6 +29,8 @@ pub enum AltError {
     Damaged,
     #[error("the figure's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
     ContentElsewhere,
+    #[error("the figure has child structure elements, which would leave the tag tree with it, so nothing was changed")]
+    HasChildren,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -159,10 +161,10 @@ fn on_page(m: &Dict, page: Option<ObjRef>) -> bool {
 /// content of `page`: in a form XObject (/Stm) or on another page (ISO 32000-2 Table 357).
 fn holds_content_elsewhere(doc: &Document, d: &Dict, page: Option<ObjRef>) -> bool {
     let elsewhere = |o: &Object| matches!(&*doc.resolve(o), Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && !on_page(m, page));
-    match d.get(b"K") {
-        Some(Object::Array(a)) => a.iter().any(elsewhere),
-        Some(o) => elsewhere(o),
-        None => false,
+    let Some(k) = d.get(b"K").map(|k| doc.resolve(k)) else { return false };
+    match &*k {
+        Object::Array(a) => a.iter().any(elsewhere),
+        o => elsewhere(o),
     }
 }
 
@@ -179,10 +181,11 @@ fn mcids_where(doc: &Document, d: &Dict, keep: impl Fn(&Dict) -> bool) -> Vec<i6
         }
         _ => {}
     };
-    match d.get(b"K") {
-        Some(Object::Array(a)) => a.iter().for_each(&mut push),
-        Some(o) => push(o),
-        None => {}
+    // /K may be an indirect reference to the array of kids, the same kids as an inline array.
+    let Some(k) = d.get(b"K").map(|k| doc.resolve(k)) else { return out };
+    match &*k {
+        Object::Array(a) => a.iter().for_each(&mut push),
+        o => push(o),
     }
     out
 }
@@ -559,6 +562,22 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     if holds_content_elsewhere(doc, &d, pg) {
         return Err(AltError::ContentElsewhere);
     }
+    // Its child elements (a Caption, say) would leave the tree with it.
+    if has_child_structure(doc, &d) {
+        return Err(AltError::HasChildren);
+    }
+    // Its parent's kids without it, worked out before anything changes. /K may be an indirect
+    // reference to the array, which is the same kids as an inline one.
+    let parent = d.get(b"P").and_then(Object::as_ref);
+    let unlinked = parent.and_then(|parent| {
+        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned())?;
+        let keep = |o: &Object| o.as_ref() != Some(obj);
+        match (&kids, &*doc.resolve(&kids)) {
+            (Object::Ref(r), _) if *r == obj => Some((parent, Object::Array(Vec::new()))),
+            (_, Object::Array(a)) => Some((parent, Object::Array(a.iter().filter(|o| keep(o)).cloned().collect()))),
+            _ => None,
+        }
+    });
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
@@ -573,17 +592,8 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
         }
     }
     // Out of its parent's kids.
-    if let Some(parent) = d.get(b"P").and_then(Object::as_ref) {
-        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned());
-        let keep = |o: &Object| o.as_ref() != Some(obj);
-        let new = match kids {
-            Some(Object::Array(a)) => Some(Object::Array(a.into_iter().filter(keep).collect())),
-            Some(Object::Ref(r)) if r == obj => Some(Object::Array(Vec::new())),
-            _ => None,
-        };
-        if let Some(k) = new {
-            doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
-        }
+    if let Some((parent, k)) = unlinked {
+        doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
     }
     Ok(())
 }

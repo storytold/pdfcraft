@@ -9314,8 +9314,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.alt_text"]
 tools = ["accessibility_figures", "accessibility_set_alt"]
-evidence = ["crates/a11y/src/tests.rs::figures_are_listed_with_their_alt_text_and_place", "crates/a11y/src/tests.rs::setting_alt_text_and_marking_decorative", "crates/ui-egui/tests/it/accessibility.rs::setting_alternate_text_figure_by_figure", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools"]
-notes = "Set Alternate Text dialog: each tagged figure (role map honoured) with a preview of where it is drawn, its alternate text, Decorative figure (content becomes /Artifact, element leaves the tags and parent tree), Previous/Next, Save & Close as one undo step"
+evidence = ["crates/a11y/src/tests.rs::figures_are_listed_with_their_alt_text_and_place", "crates/a11y/src/tests.rs::setting_alt_text_and_marking_decorative", "crates/ui-egui/tests/it/accessibility.rs::setting_alternate_text_figure_by_figure", "crates/automation/tests/it/automation.rs::accessibility_check_report_and_fixes_through_tools", "crates/a11y/src/tests.rs::a_figure_with_child_elements_is_not_marked_decorative"]
+notes = "Set Alternate Text dialog: each tagged figure (role map honoured) with a preview of where it is drawn, its alternate text, Decorative figure (content becomes /Artifact, element leaves the tags and parent tree; refused, with nothing changed, for a figure with child elements or with content in a form XObject or on another page), Previous/Next, Save & Close as one undo step"
 
 [[feature]]
 id = "a11y.alt-text-suggestions"

@@ -464,8 +464,14 @@ impl Walker<'_> {
             return;
         }
         let target = self.doc.get(r);
-        if target.as_dict().is_some() {
-            self.dict(&Loc { owner: target, path: Vec::new() }, depth, page, Some(r), v);
+        match &*target {
+            Object::Dict(_) => self.dict(&Loc { owner: target, path: Vec::new() }, depth, page, Some(r), v),
+            // An indirect array of kids is the same kids as an inline one.
+            Object::Array(items) if !items.is_empty() => {
+                let len = items.len();
+                self.tasks.push(Task::Items { loc: Loc { owner: target, path: Vec::new() }, next: 0, len, depth: depth + 1, page });
+            }
+            _ => {}
         }
     }
 
