@@ -292,22 +292,24 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
     // annotations its /Annots lists (ISO 32000-2 §7.7.3.3, Table 31), so the field stays among
     // the form's fields (§12.7.3, Table 224). An annotation a kept page lists whose /P named a
     // deleted page names the first kept page that lists it instead (§12.5.2, Table 166).
+    // Entries and /P are compared where their reference chains end (§7.3.10), so one annotation
+    // listed directly on one page and through a chain on another is the same annotation.
     let gone_set: std::collections::HashSet<ObjRef> = gone.iter().copied().collect();
     let mut shown_on: std::collections::HashMap<ObjRef, ObjRef> = std::collections::HashMap::new();
     for (p, _) in &keep {
-        for a in page_annots(doc, *p).iter().filter_map(Object::as_ref) {
+        for a in page_annots(doc, *p).iter().filter_map(Object::as_ref).map(|a| final_ref(doc, a)) {
             shown_on.entry(a).or_insert(*p);
         }
     }
     for (&a, &page) in &shown_on {
-        if doc.get(a).as_dict().and_then(|d| d.reference(b"P")).is_some_and(|p| gone_set.contains(&p)) {
+        if doc.get(a).as_dict().and_then(|d| d.reference(b"P")).is_some_and(|p| gone_set.contains(&final_ref(doc, p))) {
             doc.update_dict(a, |d| d.set(b"P".to_vec(), Object::Ref(page)))?;
         }
     }
     let mut widgets = Vec::new();
     let mut queued = std::collections::HashSet::new();
     for r in &gone {
-        for a in page_annots(doc, *r).iter().filter_map(Object::as_ref) {
+        for a in page_annots(doc, *r).iter().filter_map(Object::as_ref).map(|a| final_ref(doc, a)) {
             let widget = doc.get(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"));
             if widget && !shown_on.contains_key(&a) && queued.insert(a) {
                 widgets.push(a);
@@ -320,6 +322,18 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
         doc.free(r);
     }
     Ok(())
+}
+
+/// Where a reference to a reference (`9 0 obj 6 0 R endobj`, ISO 32000-2 §7.3.10) ends, within a
+/// few steps (a cycle stops there).
+fn final_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..8 {
+        match *doc.get(r) {
+            Object::Ref(next) => r = next,
+            _ => break,
+        }
+    }
+    r
 }
 
 /// The entries of a page's /Annots array (empty when it has none or it is not an array).

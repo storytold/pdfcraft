@@ -4992,16 +4992,17 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
 #[test]
 fn deleting_pages_keeps_a_widget_a_kept_page_still_lists() {
     let b: Vec<String> = vec![
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /SigFlags 3 >> >>".into(), // 1
-        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(), // 2
-        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                         // 3
-        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                         // 4
-        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),                         // 5
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /SigFlags 3 >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                               // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 8 0 R] >>".into(),                               // 4
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),                               // 5
         "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /F 132 /Rect [0 0 0 0] /P 3 0 R >>".into(), // 6
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (only_last) /Rect [10 10 90 30] /P 5 0 R >>".into(), // 7
-        "<< /Type /Annot /Subtype /Text /Contents (note) /Rect [10 40 30 60] /P 3 0 R >>".into(), // 8
+        "<< /Type /Annot /Subtype /Text /Contents (note) /Rect [10 40 30 60] /P 3 0 R >>".into(),     // 8
     ];
     let mut doc = open(build(&b, "/Root 1 0 R"));
+    assert_eq!(form_field_names(&doc), ["Signature1", "only_last"]);
     delete_pages(&mut doc, &[0, 2]).unwrap();
     let doc = save_and_reopen(&doc);
     assert_eq!(form_field_names(&doc), ["Signature1"], "the shared widget stays; the last page's own field goes");
@@ -5018,4 +5019,31 @@ fn deleting_pages_keeps_a_widget_a_kept_page_still_lists() {
     assert_eq!(form_field_names(&doc), ["Signature1"]);
     let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
     assert_eq!(widget.reference(b"P"), Some(ObjRef::new(3, 0)));
+}
+
+/// The same with reference chains (ISO 32000-2 §7.3.10): the kept page lists the signature
+/// widget through `9 0 R` (whose body is `6 0 R`) while the deleted page lists it directly, and
+/// its /P reaches the deleted page through `10 0 R`. The widget stays, its /P moves to the kept
+/// page, and the deleted page's own field still goes.
+#[test]
+fn deleting_pages_follows_reference_chains_to_annotations_and_pages() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /SigFlags 3 >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R] >>".into(),                                     // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),                               // 4
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                                     // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /F 132 /Rect [0 0 0 0] /P 10 0 R >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (only_gone) /Rect [10 10 90 30] /P 4 0 R >>".into(), // 7
+        "<< /Type /Annot /Subtype /Text /Contents (unused) /Rect [10 40 30 60] >>".into(),            // 8
+        "6 0 R".into(),                                                                               // 9
+        "4 0 R".into(),                                                                               // 10
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    assert_eq!(form_field_names(&doc), ["Signature1", "only_gone"]);
+    delete_pages(&mut doc, &[1]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(form_field_names(&doc), ["Signature1"], "the chained widget stays; the deleted page's own field goes");
+    let widget = doc.get(ObjRef::new(6, 0)).as_dict().cloned().unwrap();
+    assert_eq!(widget.reference(b"P"), Some(ObjRef::new(3, 0)), "/P reached the deleted page through a chain");
 }
