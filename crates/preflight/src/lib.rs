@@ -454,20 +454,25 @@ fn type3_procs_within(
     }
 }
 
+/// The streams of the page dictionary `page`'s `/Contents`, in order.
+fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    let contents = match page.get(b"Contents") {
+        Some(Object::Ref(r)) => match &*doc.get(*r) {
+            Object::Array(a) => a.clone(),
+            _ => vec![Object::Ref(*r)],
+        },
+        Some(Object::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    contents.iter().filter_map(Object::as_ref).collect()
+}
+
 /// The content streams that only a reference identifies, their dictionaries saying nothing: the
 /// pages' `/Contents` and Type 3 glyph procedures.
 fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut out = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        let contents = match p.dict.get(b"Contents") {
-            Some(Object::Ref(r)) => match &*doc.get(*r) {
-                Object::Array(a) => a.clone(),
-                _ => vec![Object::Ref(*r)],
-            },
-            Some(Object::Array(a)) => a.clone(),
-            _ => Vec::new(),
-        };
-        out.extend(contents.iter().filter_map(Object::as_ref));
+        out.extend(page_contents(doc, &p.dict));
     }
     let mut read = std::collections::HashSet::new();
     for (_, o) in objs {
@@ -695,6 +700,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     check_transparency(doc, &pages, &mut issue);
     let drawing = drawing_fonts(doc, &objs);
+    let drawn = embed::Drawn::read(doc, &objs, &drawing);
+    // Each font the document draws with, and whether [`convert`] can embed a substitute for it.
+    let drawing: std::collections::HashMap<ObjRef, bool> =
+        drawing.into_iter().map(|r| (r, doc.get(r).as_dict().is_some_and(|d| embed::plan(doc, r, d, &drawn).is_some()))).collect();
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
@@ -1101,13 +1110,13 @@ fn check_objects(
     doc: &Document,
     level: Level,
     objects: &[(ObjRef, std::sync::Arc<Object>)],
-    drawing: &std::collections::HashSet<ObjRef>,
+    drawing: &std::collections::HashMap<ObjRef, bool>,
     page_of: &impl Fn(ObjRef) -> Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, d, o, drawing.contains(r), page_of(*r), issue);
+        check_one_object(doc, level, d, o, drawing.get(r).copied(), page_of(*r), issue);
     }
     for (i, p) in pdfcraft_model::pages(doc).into_iter().enumerate() {
         if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
@@ -1115,7 +1124,7 @@ fn check_objects(
         {
             for entry in a {
                 if let Object::Dict(d) = entry {
-                    check_one_object(doc, level, d, entry, false, Some(i), issue);
+                    check_one_object(doc, level, d, entry, None, Some(i), issue);
                 }
             }
         }
@@ -1128,7 +1137,8 @@ fn check_one_object(
     level: Level,
     dict: &Dict,
     object: &Object,
-    draws: bool,
+    // `Some` for a font the document draws with, saying whether [`convert`] can embed it.
+    draws: Option<bool>,
     page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
@@ -1146,8 +1156,10 @@ fn check_one_object(
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
     // A Type 0 font's descendant is checked through it.
-    if draws && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some()) {
-        check_font(doc, dict, issue);
+    if let Some(fixable) = draws
+        && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some())
+    {
+        check_font(doc, dict, fixable, issue);
     }
     if let Object::Stream(stream) = object {
         check_stream(doc, stream, subtype, issue);
@@ -1266,12 +1278,12 @@ fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'stati
     }
 }
 
-fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+/// Report the font dictionary `d` if it isn't embedded: `fixable` when [`convert`] can embed a
+/// substitute for it.
+fn check_font(doc: &Document, d: &Dict, fixable: bool, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
     if d.name(b"Subtype") == Some(b"Type3") || font_embedded(doc, d) {
         return;
     }
-    // A font that isn't embedded is fixable when [`convert`] can embed a substitute for it.
-    let fixable = embed::plan(doc, d).is_some();
     // A font the document doesn't name gets a sentence of its own, rather than the word for
     // "a font" put where a name goes, which read badly even in English.
     match d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()) {
@@ -1532,13 +1544,17 @@ fn convert_direct_page_annots(
 /// them with (#7658). Only fonts that draw are checked, so only those are embedded. What it did,
 /// as a line for the report.
 fn embed_standard_fonts(doc: &mut Document) -> Result<Option<String>, pdfcraft_cos::CosError> {
-    let mut fonts: Vec<ObjRef> = drawing_fonts(doc, &objects(doc)).into_iter().collect();
+    let objs = objects(doc);
+    let drawing = drawing_fonts(doc, &objs);
+    // Embedding a font changes no content, so what the fonts draw is read once, beforehand.
+    let drawn = embed::Drawn::read(doc, &objs, &drawing);
+    let mut fonts: Vec<ObjRef> = drawing.into_iter().collect();
     fonts.sort_by_key(|r| (r.num, r.generation));
     let mut embedded = Vec::new();
     let mut programs = embed::Programs::new();
     for r in fonts {
         let font = doc.get(r);
-        let Some(plan) = font.as_dict().and_then(|d| embed::plan(doc, d)) else { continue };
+        let Some(plan) = font.as_dict().and_then(|d| embed::plan(doc, r, d, &drawn)) else { continue };
         let name = font.as_dict().and_then(|d| d.name(b"BaseFont")).map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default();
         embed::embed(doc, r, plan, &mut programs)?;
         if !embedded.contains(&name) {

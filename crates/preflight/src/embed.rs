@@ -14,13 +14,14 @@
 //! program holds. Symbol and ZapfDingbats are left alone, since their substitutes' encodings and
 //! advances don't match the standard ones, and so are TrueType and composite fonts.
 //!
-//! A name that reads as an alias isn't always the standard face (`Helvetica-Narrow`), so a font
-//! that gives `/Widths` is embedded only if each is the substitute's advance or the standard
-//! metric (see [`plan`]). Where a file gives the standard metric for one of the few glyphs the
-//! substitute differs on, the text after that glyph moves by the difference.
+//! Writing the substitute's widths must not move any text, so a font is embedded only if every
+//! code it draws ([`Drawn`], read from the content) is laid out now with the substitute's advance,
+//! and every other width it gives is the substitute's or the standard metric (see [`plan`]). That
+//! leaves alone a font that draws one of the few glyphs the substitute differs on, and a font
+//! whose name reads as an alias of a standard face but isn't it (`Helvetica-Narrow`).
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 use pdfcraft_fonts::{Std14, Std14Match};
@@ -149,28 +150,39 @@ impl OutlinePen for Extent {
 /// writes and still count as the same: generators round widths, or write them as reals.
 const WIDTH_TOLERANCE: f64 = 1.0;
 
-/// The substitute to embed into the font dictionary `font`, if it is a simple standard-14 Latin
-/// text font with no program of its own, under an encoding the substitute covers, and with no
-/// `/Widths` of its own that embedding would change.
-///
-/// The name alone doesn't say the font is the standard face: `Helvetica-Narrow` and
-/// `Helvetica-Condensed` read as aliases of Helvetica, but their widths are 15–22% narrower, and
-/// writing Helvetica's would spread every line set in them. So each width the document gives,
-/// for a code its encoding maps to a glyph, must be the substitute's advance or the standard
-/// face's own metric for that character (a file giving the standard metric for the euro sign,
-/// where the substitute's differs, still names the standard font).
-pub(crate) fn plan(doc: &Document, font: &Dict) -> Option<Embedding> {
+/// The standard face of the font dictionary `font`, if it is a simple standard-14 Latin text font
+/// with no program of its own: one [`plan`] may find a substitute for.
+fn candidate(doc: &Document, font: &Dict) -> Option<Std14> {
     if font.name(b"Subtype") != Some(b"Type1") || crate::font_embedded(doc, font) {
         return None;
     }
     let base_font = String::from_utf8_lossy(font.name(b"BaseFont")?).into_owned();
-    let face = match Std14::recognise(&base_font)? {
-        (Std14::Symbol | Std14::ZapfDingbats, _) | (_, Std14Match::FamilyHint) => return None,
-        (face, Std14Match::Alias) => face,
-    };
+    match Std14::recognise(&base_font)? {
+        (Std14::Symbol | Std14::ZapfDingbats, _) | (_, Std14Match::FamilyHint) => None,
+        (face, Std14Match::Alias) => Some(face),
+    }
+}
+
+/// The substitute to embed into the font dictionary `font` (object `r`), if it is a simple
+/// standard-14 Latin text font with no program of its own, under an encoding the substitute
+/// covers, and embedding it moves no glyph the font draws.
+///
+/// Embedding writes `/Widths` from the substitute (6.2.11.5), so a glyph would move wherever the
+/// width it is laid out with now (the font's own `/Widths`, or with none the standard metric)
+/// differs from the substitute's advance.
+/// - Each code the font draws (`drawn`) must have that width be the substitute's advance. The
+///   substitutes differ from the standard metrics on a few glyphs (the euro sign, `@` in some
+///   faces, guillemets), so a page that draws one of those with the standard width keeps its
+///   font unembedded rather than have the rest of the line move.
+/// - Each other width the font gives must be the substitute's advance or the standard metric.
+///   The name alone doesn't say the font is the standard face: `Helvetica-Narrow` and
+///   `Helvetica-Condensed` read as aliases of Helvetica, but their widths are 15–22% narrower.
+pub(crate) fn plan(doc: &Document, r: ObjRef, font: &Dict, drawn: &Drawn) -> Option<Embedding> {
+    let face = candidate(doc, font)?;
     let encoding = FontEncoding::read(doc, font)?;
     let given = given_widths(doc, font)?;
     let metrics = substitute(face)?;
+    let close = |a: f64, b: f64| (a - b).abs() <= WIDTH_TOLERANCE;
     let mut widths = Vec::with_capacity(256);
     for code in 0..=u8::MAX {
         let (advance, ch) = match encoding.differences.get(&code) {
@@ -184,33 +196,190 @@ pub(crate) fn plan(doc: &Document, font: &Dict) -> Option<Embedding> {
                 (ch.and_then(|c| metrics.by_char.get(&c).copied()), ch)
             }
         };
-        if let (Some(w), Some(a)) = (given.get(usize::from(code)).copied().flatten(), advance) {
-            let close = |v: f64| (w - v).abs() <= WIDTH_TOLERANCE;
-            let standard = ch.and_then(pdfcraft_fonts::win_ansi_byte).map(|b| face.width(b)).filter(|&s| s != 0.0);
-            if !close(a) && !standard.is_some_and(close) {
+        let standard = ch.and_then(pdfcraft_fonts::win_ansi_byte).map(|b| face.width(b)).filter(|&s| s != 0.0);
+        let own = given.as_ref().map(|g| g.get(usize::from(code)).copied().unwrap_or(0.0));
+        if drawn.draws(r, code) {
+            let now = if given.is_some() { own } else { standard };
+            if !matches!((now, advance), (Some(n), Some(a)) if close(n, a)) {
                 return None;
             }
+        } else if let (Some(w), Some(a)) = (own.filter(|&w| w != 0.0), advance)
+            && !close(w, a)
+            && !standard.is_some_and(|s| close(w, s))
+        {
+            return None;
         }
         widths.push(advance.unwrap_or(metrics.notdef));
     }
     Some(Embedding { face, widths, metrics })
 }
 
-/// The width `font`'s `/Widths` gives each code 0–255: `None` for a code it gives none or zero
-/// for (generators write zero for codes a page doesn't use). `None` overall if `/Widths` is there
-/// but can't be read, so a font whose widths can't be compared isn't embedded.
-fn given_widths(doc: &Document, font: &Dict) -> Option<Vec<Option<f64>>> {
-    let mut given = vec![None; 256];
-    let Some(list) = font.get(b"Widths").map(|w| doc.resolve(w)) else { return Some(given) };
+/// The width `font`'s `/Widths` gives each code 0–255, zero for a code it gives none for, or
+/// `Some(None)` if it has no `/Widths`. `None` if `/Widths` is there but can't be read, so a font
+/// whose widths can't be compared isn't embedded.
+fn given_widths(doc: &Document, font: &Dict) -> Option<Option<Vec<f64>>> {
+    let Some(list) = font.get(b"Widths").map(|w| doc.resolve(w)) else { return Some(None) };
     let Object::Int(first) = *doc.resolve(font.get(b"FirstChar")?) else { return None };
+    let mut given = vec![0.0; 256];
     for (i, w) in list.as_array()?.iter().take(256).enumerate() {
         let w = doc.resolve(w).as_f64()?;
         let code = i64::try_from(i).ok().and_then(|i| first.checked_add(i)).and_then(|c| usize::try_from(c).ok());
         if let Some(slot) = code.and_then(|c| given.get_mut(c)) {
-            *slot = Some(w).filter(|&w| w != 0.0);
+            *slot = w;
         }
     }
-    Some(given)
+    Some(Some(given))
+}
+
+/// How many bytes of content [`Drawn::read`] decodes before it stops and counts every code drawn.
+const MAX_DRAWN_DECODED: usize = 1 << 30;
+
+/// How deeply `q` nests before further saved states are counted rather than kept.
+const MAX_SAVED_STATES: usize = 1024;
+
+/// Fonts by the name a resource dictionary gives them: the font dictionary a reference ends at,
+/// or none for a font written in place (never a candidate, since only referenced ones are).
+type ResourceFonts = HashMap<Vec<u8>, Vec<ObjRef>>;
+
+/// The codes each font draws, from the document's content: its pages, and its form XObjects
+/// (appearance streams among them), tiling patterns and Type 3 glyphs.
+pub(crate) struct Drawn {
+    codes: HashMap<ObjRef, [bool; 256]>,
+    /// Whether `codes` is the whole story. Not if a content stream couldn't be read, text was
+    /// shown with a font its content doesn't name (a form XObject using its caller's font), or
+    /// a graphics state sets a font (`/ExtGState /Font`, which `Tf` doesn't show): then any font
+    /// may draw any code.
+    known: bool,
+}
+
+impl Drawn {
+    /// Read the codes the fonts draw. The content is read only when one of `fonts` (those the
+    /// document draws with) could be embedded, since most documents embed theirs.
+    pub(crate) fn read(doc: &Document, objs: &[(ObjRef, Arc<Object>)], fonts: &HashSet<ObjRef>) -> Self {
+        let mut drawn = Self { codes: HashMap::new(), known: true };
+        if !fonts.iter().any(|&r| doc.get(r).as_dict().is_some_and(|f| candidate(doc, f).is_some())) {
+            return drawn;
+        }
+        let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_DRAWN_DECODED, usize::MAX);
+        // Every font any resource dictionary names, for content with no resources of its own (a
+        // Type 3 glyph, or a form XObject that uses its page's).
+        let mut every = ResourceFonts::new();
+        for (_, o) in objs {
+            if let Some(res) = crate::dict_of(o).and_then(|d| d.get(b"Resources")) {
+                for (name, refs) in drawn.fonts(doc, res) {
+                    every.entry(name).or_default().extend(refs);
+                }
+            }
+        }
+        let mut pages_content = HashSet::new();
+        for page in pdfcraft_model::pages(doc) {
+            let fonts = page.dict.get(b"Resources").map(|res| drawn.fonts(doc, res)).unwrap_or_default();
+            // A page's content may be split between its streams anywhere, so they're read as one.
+            let mut data = Vec::new();
+            for r in crate::page_contents(doc, &page.dict) {
+                pages_content.insert(r);
+                if let Object::Stream(s) = &*doc.get(r) {
+                    match budget.decode(s) {
+                        Ok(d) => {
+                            data.extend(d);
+                            data.push(b'\n');
+                        }
+                        Err(_) => drawn.known = false,
+                    }
+                }
+            }
+            drawn.scan(&data, &fonts);
+        }
+        let referenced = crate::referenced_content(doc, objs);
+        for (r, o) in objs {
+            let Object::Stream(s) = &**o else { continue };
+            if pages_content.contains(r) || !(referenced.contains(r) || crate::is_content(&s.dict)) {
+                continue;
+            }
+            let own = s.dict.get(b"Resources").map(|res| drawn.fonts(doc, res));
+            match budget.decode(s) {
+                Ok(data) => drawn.scan(&data, own.as_ref().unwrap_or(&every)),
+                Err(_) => drawn.known = false,
+            }
+        }
+        drawn
+    }
+
+    /// Whether the font dictionary `font` may draw `code`.
+    fn draws(&self, font: ObjRef, code: u8) -> bool {
+        !self.known || self.codes.get(&font).and_then(|c| c.get(usize::from(code))).copied().unwrap_or(false)
+    }
+
+    /// The fonts the resource dictionary `res` names.
+    fn fonts(&mut self, doc: &Document, res: &Object) -> ResourceFonts {
+        let mut out = ResourceFonts::new();
+        let res = doc.resolve(res);
+        let Some(res) = res.as_dict() else { return out };
+        if let Some(fonts) = res.get(b"Font").map(|f| doc.resolve(f))
+            && let Some(fonts) = fonts.as_dict()
+        {
+            for (name, f) in fonts.iter() {
+                out.insert(name.clone(), f.as_ref().map(|r| vec![crate::font_object(doc, r)]).unwrap_or_default());
+            }
+        }
+        if let Some(states) = res.get(b"ExtGState").map(|g| doc.resolve(g))
+            && let Some(states) = states.as_dict()
+            && states.iter().any(|(_, s)| doc.resolve(s).as_dict().is_some_and(|s| s.get(b"Font").is_some()))
+        {
+            self.known = false;
+        }
+        out
+    }
+
+    /// Record the codes the content `data` shows, with the fonts `fonts` names.
+    fn scan(&mut self, data: &[u8], fonts: &ResourceFonts) {
+        // The fonts `Tf` last chose, or `None` before any (or for a name `fonts` doesn't hold).
+        let mut font: Option<&[ObjRef]> = None;
+        let mut saved = Vec::new();
+        let mut deeper = 0usize;
+        for op in pdfcraft_content::ops(data) {
+            let shown: Vec<&Object> = match op.op.as_slice() {
+                b"q" => {
+                    if saved.len() < MAX_SAVED_STATES {
+                        saved.push(font);
+                    } else {
+                        deeper = deeper.saturating_add(1);
+                    }
+                    continue;
+                }
+                b"Q" => {
+                    if deeper > 0 {
+                        deeper -= 1;
+                    } else if let Some(f) = saved.pop() {
+                        font = f;
+                    }
+                    continue;
+                }
+                b"Tf" => {
+                    font = op.name(0).and_then(|n| fonts.get(n)).map(Vec::as_slice);
+                    continue;
+                }
+                b"Tj" | b"'" => op.operands.first().into_iter().collect(),
+                b"\"" => op.operands.get(2).into_iter().collect(),
+                b"TJ" => op.operands.first().and_then(Object::as_array).map(|a| a.iter().collect()).unwrap_or_default(),
+                _ => continue,
+            };
+            let Some(refs) = font else {
+                self.known = false;
+                continue;
+            };
+            for s in shown.iter().filter_map(|o| o.as_string()) {
+                for &r in refs {
+                    let codes = self.codes.entry(r).or_insert([false; 256]);
+                    for &b in &s.bytes {
+                        if let Some(c) = codes.get_mut(usize::from(b)) {
+                            *c = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Read the substitute `program`; `None` if it can't be read, or a glyph has no advance.

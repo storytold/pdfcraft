@@ -140,7 +140,7 @@ fn embedded_font(doc: &Document, r: u32) -> (Vec<u8>, Vec<f64>, Dict) {
 /// with widths taken from that program; one convert can't embed is still reported, not fixable.
 #[test]
 fn convert_embeds_the_standard_fonts_a_document_does_not() {
-    let content = "BT /F1 12 Tf (Hi) Tj /F2 12 Tf (Hi) Tj /F3 12 Tf <80> Tj /F4 12 Tf (Hi) Tj /F5 12 Tf (a) Tj /F6 12 Tf (A) Tj ET";
+    let content = "BT /F1 12 Tf (Hi) Tj /F2 12 Tf (Hi) Tj /F3 12 Tf (A) Tj /F4 12 Tf (Hi) Tj /F5 12 Tf (a) Tj /F6 12 Tf (A) Tj ET";
     let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
     let mut doc = build(
         &[
@@ -198,7 +198,8 @@ fn convert_embeds_the_standard_fonts_a_document_does_not() {
     assert!(fd.get(b"CharSet").is_none());
     assert!(doc.get(ObjRef::new(10, 0)).as_dict().unwrap().get(b"FontFile3").is_none());
     // Times-Roman's €, through /Differences, is the substitute's own: 722, where the standard
-    // metrics say 500. The widths follow the program, as PDF/A asks (6.2.11.5).
+    // metrics say 500. The widths follow the program, as PDF/A asks (6.2.11.5); the page draws no
+    // €, so no text moves.
     let (_, widths, _) = embedded_font(&doc, 7);
     assert_eq!(widths[128], 722.0);
     assert_eq!(widths[255], 500.0, "ÿ; the /z after it would be code 256 and names nothing");
@@ -235,8 +236,9 @@ fn a_font_whose_own_widths_are_not_the_standard_ones_is_not_embedded() {
         font("Times-Roman", &widths(Std14::TimesRoman, 1.0, Some((b'e', 520.0)))),
         // Widths that can't be read can't be compared.
         font("Times-Bold", "/FirstChar 32 /Widths [250 (x)]"),
-        // The standard metrics, € (556, where the substitute's is 667) and zeros for unused codes
-        // included, are Helvetica's and Times-Italic's own, so they're embedded.
+        // The standard metrics, € (556, where the substitute's is 667, but the page draws none)
+        // and zeros for unused codes included, are Helvetica's and Times-Italic's own, so they're
+        // embedded.
         font("Helvetica", &widths(Std14::Helvetica, 1.0, None)),
         font("Times-Italic", &widths(Std14::TimesItalic, 1.0, Some((b'Q', 0.0)))),
     ];
@@ -278,6 +280,63 @@ fn a_font_whose_own_widths_are_not_the_standard_ones_is_not_embedded() {
     }
     let (_, widths, _) = embedded_font(&doc, 9);
     assert_eq!(widths[128], 667.0, "Helvetica's € is the substitute's, as PDF/A asks (6.2.11.5)");
+}
+
+/// #7663 review: a font with no `/Widths` is laid out with the standard metrics, and the
+/// substitutes' advances differ from those for a few glyphs (`@` in Helvetica-Oblique, 1015
+/// against 1116; € in Times-Roman and Times-BoldItalic, 500 against 722 and 667). Embedding
+/// writes the substitute's widths, so the text after such a glyph moved (on page 2 of
+/// PDFBOX-816's `TaxReturn-1.pdf`, after an `@`). A font that draws one is now left unembedded;
+/// one that could draw it, but doesn't, is embedded.
+#[test]
+fn a_font_that_draws_a_glyph_the_substitute_widens_is_not_embedded() {
+    // The form XObject's /F1 is Times-BoldItalic, not the page's Times-Bold: names are read per
+    // resource dictionary.
+    let page = "BT /F1 12 Tf 10 100 Td (ab) Tj /F2 12 Tf 0 20 Td (a@b) Tj /F3 12 Tf 0 20 Td [(a) -20 <80>] TJ ET /Fm0 Do";
+    let form = "BT /F1 12 Tf 10 10 Td <80> Tj ET";
+    let page_stream = format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len());
+    let form_stream = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /Font << /F1 9 0 R >> >> /Length {} >>\nstream\n{form}\nendstream",
+        form.len()
+    );
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> /XObject << /Fm0 8 0 R >> >> >>",
+            page_stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+            form_stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic /Encoding /WinAnsiEncoding >>",
+        ],
+        "",
+    );
+    let fonts = |issues: &[Issue]| -> Vec<(String, bool)> {
+        let mut f: Vec<_> = issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect();
+        f.sort();
+        f
+    };
+    let left: Vec<(String, bool)> =
+        ["Helvetica-Oblique", "Times-BoldItalic", "Times-Roman"].iter().map(|n| (format!("The font {n} isn't embedded"), false)).collect();
+    let mut want = left.clone();
+    want.push(("The font Times-Bold isn't embedded".to_string(), true));
+    want.sort();
+    assert_eq!(fonts(&verify(&doc, Level::A2b)), want);
+
+    let render = |doc: &Document| {
+        let bytes = pdfcraft_cos::write_full(doc, &Default::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), Default::default());
+        r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() }).rgba
+    };
+    let before = render(&doc);
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Times-Bold".to_string()), "{:?}", r.fixed);
+    assert_eq!(fonts(&r.remaining), left);
+    let (_, widths, _) = embedded_font(&doc, 5);
+    assert_eq!(widths[128], 722.0, "Times-Bold could draw a €, but doesn't");
+    assert!(render(&doc) == before, "the page changed when its fonts were embedded");
 }
 
 #[test]
