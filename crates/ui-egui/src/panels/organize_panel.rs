@@ -92,8 +92,8 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let Some(view) = app.views.get_mut(index) else { return };
 
     caption_row(ui, tl!("Pages selected"), true);
-    let current = view.current;
-    let selected: Vec<usize> = view.selected.iter().copied().collect();
+    let current = view.current();
+    let selected: Vec<usize> = view.selected.items.clone();
     let entries = page_menu(info, n);
     let picked = PageRangeField::new(tl!("Pages selected").to_owned(), &selected, n, current).menu(&entries).show(ui).picked;
     if let Some(pages) = picked {
@@ -176,7 +176,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     match act {
         Some(Act::Edit(edit)) => view.session.pending_edit = Some(*edit),
         Some(Act::View(action)) => view.pending_action = Some(action),
-        Some(Act::Command(command)) => app.run_command(command),
+        Some(Act::Command(command)) => app.run_command(ui.ctx(), command),
         None => {}
     }
 }

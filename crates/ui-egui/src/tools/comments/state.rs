@@ -128,6 +128,8 @@ pub struct CommentView {
     pub paste: Option<PastePlacement>,
     /// Copy the selected comments (set by the menus; the app has the clipboard).
     pub copy_request: bool,
+    /// Text for the clipboard, set by the Comments panel's Copy Text; the side panel's pass puts it there.
+    pub copy_text_request: Option<String>,
     /// Paste the copied comments onto this page, centred at this user-space point (set by the
     /// page's menu, which knows where it was opened).
     pub paste_request: Option<(usize, [f64; 2])>,

@@ -23,7 +23,7 @@ pub(super) fn tools_menu(_app: &PdfCraftApp) -> Vec<PanelRow> {
 pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let mut result = PanelResult::default();
     let Some((index, id)) = app.active_ids() else { return result };
-    let modal = app.dialog.is_some() || app.palette_open;
+    let modal = app.modal_open() || app.palette_open;
     let Some(doc) = app.session.get(id) else { return result };
     let editable = doc.allows_assembly() && doc.read_only_reason.is_none() && !modal;
     let count = doc.info.pages.len();
@@ -32,8 +32,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let source = crate::canvas::pictures::DocPages::new(&app.session, id);
     let before = view.thumbnail_zoom();
     let mut zoom = f64::from(before);
-    let current = view.current;
-    // PLAN: assumed `DocView::selected: Selection<usize>` (pdf-canvas-w8, S-9).
+    let current = view.current();
     let output = PageThumbnails::new(tl!("Pages"), &source, &mut view.selected, current, DataColor::new(egui::Color32::WHITE))
         .editable(editable)
         .size(&mut zoom)
@@ -66,7 +65,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 }
                 let to = mv.to;
                 view.select_pages(&(to..to + pages.len()).collect::<Vec<_>>());
-                view.current = moved_page(mv, current, count);
+                view.view.current = moved_page(mv, current, count);
                 result.edit = Some(pdfcraft_engine::Edit::MovePages { pages, to });
             }
             ThumbnailEvent::Delete(_) => {
@@ -86,7 +85,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 view.pending_action = Some(crate::canvas::ViewAction::Extract);
             }
             if MenuItem::new(tl!("Split document…")).show(ui).ran {
-                if view.selected.is_empty() {
+                if view.selected.items.is_empty() {
                     view.select_pages(&[page]);
                 }
                 view.pending_action = Some(crate::canvas::ViewAction::SplitBeforeSelected);
@@ -133,7 +132,7 @@ fn delete_pages(view: &mut crate::DocView, n: usize) -> Option<pdfcraft_engine::
     // run lands where it was (or the last page, when the deletion ran to the end).
     let current = view.current();
     let before = pages.iter().filter(|p| **p < current).count();
-    view.current = current.saturating_sub(before).min(n.saturating_sub(pages.len() + 1));
+    view.view.current = current.saturating_sub(before).min(n.saturating_sub(pages.len() + 1));
     view.clear_page_selection(None);
     Some(pdfcraft_engine::Edit::DeletePages { pages })
 }

@@ -253,6 +253,6 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) 
         }
     }
     if let Some(cmd) = run {
-        app.run_command(cmd);
+        app.run_command(ui.ctx(), cmd);
     }
 }

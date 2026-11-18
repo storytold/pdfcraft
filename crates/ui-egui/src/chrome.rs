@@ -13,8 +13,8 @@ use craft::ui::shell::{AppShell, Slot, Title, TitleBar};
 use crate::panes::Place;
 use crate::{PdfCraftApp, side_panels};
 
-mod mode_bar;
 pub(crate) mod doc_tabs;
+mod mode_bar;
 pub(crate) mod view_rail;
 
 /// Compose the window: title bar, mode bar, view rail and the dock, whose document panel holds the

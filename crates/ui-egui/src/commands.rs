@@ -105,14 +105,17 @@ impl PdfCraftApp {
                 use crate::canvas::Fit;
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     match id {
-                        "view.zoom.actual_size" => v.set_zoom(1.0),
-                        "view.zoom.page_level" => v.set_fit(Fit::Page),
-                        "view.zoom.fit_width" => v.set_fit(Fit::Width),
-                        "view.zoom.fit_height" => v.set_fit(Fit::Height),
-                        "view.zoom.in" => v.zoom_step(true),
-                        "view.zoom.out" => v.zoom_step(false),
-                        "view.rotate.cw" => v.rotate_view(true),
-                        _ => v.rotate_view(false),
+                        "view.zoom.actual_size" => {
+                            v.view.fit = Fit::None;
+                            v.view.zoom = 1.0;
+                        }
+                        "view.zoom.page_level" => v.view.fit = Fit::Page,
+                        "view.zoom.fit_width" => v.view.fit = Fit::Width,
+                        "view.zoom.fit_height" => v.view.fit = Fit::Height,
+                        "view.zoom.in" => v.view.zoom_step(true),
+                        "view.zoom.out" => v.view.zoom_step(false),
+                        "view.rotate.cw" => v.view.rotation = (v.view.rotation + 90) % 360,
+                        _ => v.view.rotation = (v.view.rotation + 270) % 360,
                     }
                 }
             }
@@ -120,7 +123,7 @@ impl PdfCraftApp {
                 use crate::canvas::Fit;
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     let fit = if v.view.fit == Fit::Page { Fit::Width } else { Fit::Page };
-                    v.set_fit(fit);
+                    v.view.fit = fit;
                 }
             }
             "view.first_page" | "view.last_page" | "view.next_page" | "view.previous_page" => {
@@ -232,7 +235,7 @@ impl PdfCraftApp {
                 }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
-                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.session.comments.selected.is_some()),
+                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.session.comments.primary().is_some()),
                 "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
@@ -354,8 +357,8 @@ impl PdfCraftApp {
             }
             "protect.unlock" => self.request_unlock(None),
             "protect.password" => self.open_protect(),
-            "prepress.convert_colors" => self.open_convert_colours(),
-            "prepress.hairlines" => self.open_fix_hairlines(),
+            "prepress.convert_colors" => self.open_convert_colours(ctx),
+            "prepress.hairlines" => self.open_fix_hairlines(ctx),
             "protect.remove" => {
                 if self.apply_edit(Edit::RemoveProtection) {
                     self.notify_tr("Security will be removed when you save");
@@ -379,7 +382,7 @@ impl PdfCraftApp {
             "create.file" => self.open_dialog(),
             "create.multiple" => self.create_multiple_dialog(),
             "create.multiple_separate" => self.create_multiple_separate_dialog(),
-            "create.images" => self.create_from_images_dialog(),
+            "create.images" => self.create_from_images_dialog(ctx),
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
             "help.shortcuts" => self.open_shortcuts(ctx),
@@ -412,7 +415,7 @@ impl PdfCraftApp {
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
-                if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get_mut(i))) {
+                if let Some(view) = active.and_then(|i| self.views.get_mut(i)) {
                     // The page box in the toolbar (chrome.rs); select its label so typing replaces it.
                     let id = view.page_input_id();
                     if !ctx.memory(|m| m.has_focus(id))
@@ -422,10 +425,10 @@ impl PdfCraftApp {
                         view.page_input = view.current_page_label(doc.info.pages.get(view.current()).map(|p| p.label.as_str()));
                     }
                     ctx.memory_mut(|m| m.request_focus(id));
-                    let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+                    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
                     let len = view.page_input.chars().count();
                     state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
-                    state.store(&ctx, id);
+                    state.store(ctx, id);
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
@@ -466,13 +469,10 @@ impl PdfCraftApp {
             }
             "view.full_screen" => {
                 let on = !self.full_screen();
-                match self.ctx.clone() {
-                    Some(ctx) => self.set_full_screen(&ctx, on),
-                    None => self.apply_full_screen(on),
-                }
+                self.set_full_screen(on);
             }
             "view.read_mode" => self.switch_mode(if self.mode == Mode::Read { Mode::AllTools } else { Mode::Read }, false),
-            "view.split" => self.toggle_split(),
+            "view.split" => self.toggle_split(ctx),
             crate::viewer_prefs::TOGGLE => self.toggle_interface(),
             "view.previous_view" | "view.next_view" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
@@ -502,7 +502,7 @@ impl PdfCraftApp {
     fn run_page_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>, targets: Vec<usize>) -> Option<bool> {
         match id {
             "page.combine" => self.open_combine_tab(),
-            "page.number" => self.open_number_pages(),
+            "page.number" => self.open_number_pages(ctx),
             "page.properties" => {
                 if let Some(i) = active
                     && let Some(doc) = self.session.get(self.views[i].id)
@@ -513,7 +513,7 @@ impl PdfCraftApp {
                     let first = theirs.next().flatten();
                     let before = if theirs.all(|o| o == first) { first } else { None };
                     let generation = doc.edit_generation();
-                    let draft = crate::PagePropsDraft { doc: self.views[i].id, generation, pages, before, tab_order: before };
+                    let draft = crate::PagePropsDraft { doc: self.views[i].id, generation, pages, before };
                     self.open_page_props(ctx, draft);
                 }
             }
@@ -568,8 +568,8 @@ impl PdfCraftApp {
                 self.notify_tr("Drag a rectangle on a page to crop it; double-click a page for Set Page Boxes");
             }
             "page.boxes" => self.open_page_boxes(ctx, false),
-            "page.extract" => self.open_extract(),
-            "page.rotate_dialog" => self.open_rotate(),
+            "page.extract" => self.open_extract(ctx),
+            "page.rotate_dialog" => self.open_rotate(ctx),
             "page.split" => self.open_split(ctx, false),
             _ => return None,
         }
@@ -592,7 +592,7 @@ impl PdfCraftApp {
                 self.comment_prefs.group_tool[tool.group()] = tool;
                 self.quick_tool = crate::QuickTool::Comment(tool);
                 // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
-                if self.right.is_none() && !self.comments_panel_closed {
+                if self.right().is_none() && !self.comments_panel_closed {
                     self.choose_right_panel(Some(RightPanel::Comments));
                 }
                 // A text selection made before picking a markup tool is marked right away, on
@@ -647,7 +647,7 @@ impl PdfCraftApp {
                 self.marks_draft.focused_box = 5;
                 self.open_marks(ctx, pdfcraft_engine::MarkKind::HeaderFooter, false);
             }
-            "prepress.marks" => self.open_printer_marks(),
+            "prepress.marks" => self.open_printer_marks(ctx),
             "edit.header_footer.remove" | "edit.watermark.remove" | "edit.background.remove" | "prepress.marks.remove" => {
                 use pdfcraft_engine::MarkKind as K;
                 let kind = match id {
@@ -705,8 +705,8 @@ impl PdfCraftApp {
                 self.notify_tr("Drag a rectangle around the area to copy");
             }
             "edit.copy" => {
-                if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
-                    return Some(self.copy_selected_text(i, &ctx));
+                if let Some(i) = active {
+                    return Some(self.copy_selected_text(i));
                 }
                 return Some(false);
             }
@@ -816,7 +816,7 @@ impl PdfCraftApp {
             "form.detect" => self.detect_fields(),
             "form.field.properties" => {
                 if let Some((name, w)) = active.and_then(|i| self.views[i].session.prepare.selected.clone()) {
-                    self.open_field_props(&name, w);
+                    crate::prepare::dialog::open(self, &name, w, crate::prepare::FieldTab::General);
                 }
             }
             field if crate::prepare::FieldTool::from_command(field).is_some() => {
@@ -855,7 +855,7 @@ impl PdfCraftApp {
 
     fn run_secure_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "a11y.check" => self.start_accessibility_check(),
+            "a11y.check" => self.start_accessibility_check(ctx),
             "a11y.find_untagged" => self.find_untagged_content(),
             // PLAN: assumed `js_dialogs::{open_console, open_document_scripts}(&mut PdfCraftApp)` at `crate::js_dialogs` (pdf-forms-w17); the latter starts a fresh draft.
             "tools.js_console" => crate::js_dialogs::open_console(self),
