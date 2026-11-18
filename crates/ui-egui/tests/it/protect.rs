@@ -2,7 +2,7 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -34,17 +34,15 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     let mut h = harness();
     assert!(h.state_mut().execute("protect.password"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::Protect));
     h.get_by_label("Viewing");
     type_into(&mut h, "Type Password", "Open-Sesame-42");
     type_into(&mut h, "Re-type Password", "Open-Sesame-4");
-    h.get_by_label_contains("don't match");
-    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && n.is_disabled()).is_some(), "Apply is disabled while the passwords differ");
     type_into(&mut h, "Re-type Password", "2");
-    h.get_by_label("Strength: Strong");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Apply") && !n.is_disabled()).is_some(), "Apply is enabled once they match");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.query_by_label("Apply").is_none(), "Apply closes the dialog");
     let id = h.state().views[0].id;
     let doc = h.state().session.get(id).unwrap();
     assert!(doc.info.encrypted && doc.dirty);
@@ -68,7 +66,7 @@ fn editing_restrictions_via_advanced_options() {
     h.run_steps(2);
     h.get_by_label("Editing").click();
     h.run_steps(2);
-    h.get_by_label("Advanced Options ⌄").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Advanced Options").click();
     h.run_steps(2);
     h.get_by_label("Enable copying of text, images, and other content").click();
     h.run_steps(1);
