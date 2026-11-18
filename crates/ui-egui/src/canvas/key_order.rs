@@ -105,7 +105,7 @@ fn arrows(view: &mut DocView, cx: &KeyCx<'_>) {
 /// 3. a picture's crop mode, the camera;
 /// 4. a selection, the newest first;
 /// 5. a comment or Fill & Sign tool, which goes back to Select;
-/// 6. the Find bar.
+/// 6. the Find bar (not a search the Search panel shows in full screen).
 ///
 /// Full screen's own Escape stays in `app/keys.rs`, ahead of these, for now (#5325).
 fn escape(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
@@ -117,7 +117,7 @@ fn escape(view: &mut DocView, cx: &KeyCx<'_>, tool: &mut QuickTool) {
     if editor_open(view) || press_held(view, ctx) || measuring(view, cx.tool) {
         return;
     }
-    let taken = cancel_drawing(view) || leave_mode(view, cx) || deselect(view, cx) || drop_tool(tool) || view.find.take().is_some();
+    let taken = cancel_drawing(view) || leave_mode(view, cx) || deselect(view, cx) || drop_tool(tool) || close_find(view);
     if taken {
         keys.take(ctx, egui::Key::Escape);
     }
@@ -258,6 +258,13 @@ fn deselect(view: &mut DocView, cx: &KeyCx<'_>) -> bool {
         }
     }
     false
+}
+
+/// The find bar closes. Full screen hides the Search panel, so a search shown there isn't on the
+/// page: it stays for when the panel is back (#5302).
+fn close_find(view: &mut DocView) -> bool {
+    let on_page = view.presentation.is_none() || view.find.as_ref().is_some_and(|f| !f.in_panel);
+    on_page && view.find.take().is_some()
 }
 
 /// A comment tool or a Fill & Sign one goes back to Select: its Text tool would otherwise open a
