@@ -1,0 +1,18 @@
+//! The app window at desktop size shows a document's pages: a debug-build assert on the first
+//! frame is invisible to a component trial, so the whole app runs here.
+
+use egui_kittest::Harness;
+use pdfcraft_ui_egui::PdfCraftApp;
+
+#[test]
+fn a_document_tab_shows_its_pages_for_a_few_frames() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("pages.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.run_steps(5);
+    assert!(!h.state().views[0].visible_page_rects().is_empty(), "the pages are placed on screen");
+}
