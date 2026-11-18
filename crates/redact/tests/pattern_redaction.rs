@@ -378,10 +378,20 @@ fn pattern_plain_nested_form_control_still_applies() {
 }
 
 #[test]
-fn pattern_unused_and_annotation_appearance_resources_are_checked() {
+fn a_pattern_painted_only_away_from_the_mark_or_in_a_kept_appearance_is_not_refused() {
+    // Nothing the mark reaches is painted with a pattern, so the cell showed nothing under it:
+    // the page is redacted and the cell stays as it was (#7696). The same cell painted under the
+    // mark is refused by every other test here.
+    let kept = |mut doc: Document| {
+        keep_pattern_in_use(&mut doc, 0);
+        mark(&mut doc, 0);
+        apply(&mut doc, None).unwrap();
+        assert!(marks(&doc).is_empty());
+        assert!(has_decoded_secret(saved(&doc)), "a cell no mark reached stays as it was");
+    };
     let mut unused = fixture(CELL, false, false, false);
     unused.set(ObjRef::new(5, 0), Object::Stream(Stream::from_raw(Dict::new(), b"0 0 20 20 re f".to_vec())));
-    assert_refused(unused, PatternProblem::Content);
+    kept(unused);
 
     let mut appearance = fixture(CELL, false, false, false);
     let page = pdfcraft_model::pages(&appearance)[0].clone();
@@ -410,8 +420,21 @@ fn pattern_unused_and_annotation_appearance_resources_are_checked() {
             dict.remove(b"Subtype");
         })
         .unwrap();
-    assert_refused(implicit, PatternProblem::Content);
-    assert_refused(appearance, PatternProblem::Content);
+    // The stamp, at (300, 200), is away from the mark and stays with its appearance.
+    kept(implicit);
+    kept(appearance.clone());
+    // Under the mark it is removed, and what its appearance painted with can't be told: the
+    // pattern another paint keeps in the page's resources is refused as before.
+    let mut under = fixture(CELL, false, false, false);
+    under.set(ObjRef::new(5, 0), Object::Stream(Stream::from_raw(Dict::new(), b"0 0 20 20 re f".to_vec())));
+    let stamp = under.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Annot")),
+        (b"Subtype".to_vec(), Object::name("Stamp")),
+        (b"Rect".to_vec(), Object::Array(vec![30.into(), 105.into(), 215.into(), 150.into()])),
+    ])));
+    let page = pdfcraft_model::pages(&under)[0].clone();
+    under.update_dict(page.obj, |dict| dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(stamp)]))).unwrap();
+    assert_refused(under, PatternProblem::Content);
 }
 
 #[test]
