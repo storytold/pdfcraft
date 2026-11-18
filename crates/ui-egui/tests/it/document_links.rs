@@ -228,11 +228,11 @@ fn a_web_bookmark_asks_first_like_a_link() {
     let mut h = bookmark_harness(None);
     click_bookmark(&mut h, "Website");
     assert_eq!(h.state().pending_link, pending(BOOKMARK_URL, LinkOrigin::Link));
-    assert_eq!(h.state().last_opened_url, None, "nothing opens before the user answers");
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "nothing opens before the user answers");
     assert_eq!(h.state().views[0].current, 0);
     h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert_eq!((h.state().pending_link.clone(), h.state().last_opened_url.clone()), (None, None));
+    assert!(support::step_collecting_urls(&mut h, 3).is_empty());
+    assert_eq!(h.state().pending_link, None);
 
     click_bookmark(&mut h, "Appendix");
     assert_eq!(h.state().views[0].current, 2);
@@ -275,22 +275,25 @@ fn bookmarks_go_through_the_link_policy() {
         ("Missing", "/Dest (nowhere)".into()),
         ("Absolute", format!("/A << /S /GoToR /F ({file}) /D [0 /Fit] >>")),
     ]);
-    let mut h = bookmark_harness_with(None, pdf);
     for (title, notice) in [
         ("Script", Some("This PDF uses the unsupported JavaScript action.")),
         ("Program", Some("This PDF uses the unsupported Launch action.")),
         ("Missing", None),
     ] {
-        h.state_mut().toast = None;
+        // A fresh app per row: each row's notice is its own.
+        let mut h = bookmark_harness_with(None, pdf.clone());
         click_bookmark(&mut h, title);
+        assert_eq!(support::shown_notice(&h).as_deref(), notice, "{title}");
+        let opened = support::step_collecting_urls(&mut h, 2);
         let s = h.state();
-        assert_eq!(s.toast.as_ref().map(|t| t.0.as_str()), notice, "{title}");
-        assert_eq!((&s.pending_link, &s.last_opened_url, s.views.len(), s.views[0].current), (&None, &None, 1, 0), "{title}: nothing opened");
+        assert_eq!((&s.pending_link, s.views.len(), s.views[0].current), (&None, 1, 0), "{title}: nothing opened");
+        assert!(opened.is_empty(), "{title}: no address opened: {opened:?}");
     }
+    let mut h = bookmark_harness_with(None, pdf);
     click_bookmark(&mut h, "Absolute");
     assert_eq!(h.state().pending_remote_link.as_ref().map(|p| p.path.clone()), Some(target));
     assert_eq!(h.state().views.len(), 1);
-    assert!(h.state().toast.is_none(), "the file is not touched before consent");
+    assert!(support::shown_notice(&h).is_none(), "the file is not touched before consent");
 }
 
 #[test]
@@ -299,11 +302,10 @@ fn a_link_asks_first_and_opens_when_allowed() {
     let mut h = harness();
     click_link(&mut h);
     assert_eq!(h.state().pending_link, pending(LINK_URL, LinkOrigin::Link));
-    assert_eq!(h.state().last_opened_url, None, "nothing opens before the user answers");
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "nothing opens before the user answers");
     h.get_by_label("example.org");
     h.get_by_label("Open link").click();
-    h.run_steps(3);
-    assert_eq!(h.state().last_opened_url.as_deref(), Some(LINK_URL));
+    assert_eq!(support::step_collecting_urls(&mut h, 3), [LINK_URL]);
     assert_eq!(h.state().pending_link, None);
 }
 
@@ -320,7 +322,7 @@ fn a_local_gotor_link_opens_in_a_tab_and_applies_its_destination() {
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().active, Some(1));
     assert_eq!(h.state().views[1].current, 1, "the remote page destination is applied");
-    assert_eq!(h.state().last_opened_url, None, "no URL or external launcher is involved");
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "no URL or external launcher is involved");
 }
 
 /// Three 300×400 pages whose catalog /Dests names `there` (page 3) and `here` (page 2).
@@ -359,14 +361,15 @@ fn a_gotor_link_to_a_named_destination_opens_at_its_page() {
         click_remote_link(&mut h);
         // The name is looked up off the UI thread, so the tab may open before it moves there.
         support::wait_until(&mut h, "remote document at its destination", |app| app.views.len() == 2 && app.views[1].current == page);
-        assert_eq!(h.state().toast, None, "{destination}: applied, so nothing to warn about");
+        assert!(support::shown_notice(&h).is_none(), "{destination}: applied, so nothing to warn about");
     }
     // A name the target doesn't define opens it at its first page, with the warning.
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "/elsewhere");
     click_remote_link(&mut h);
-    support::wait_until(&mut h, "remote document and the warning", |app| app.views.len() == 2 && app.toast.is_some());
+    assert!(support::step_until(&mut h, |h| h.state().views.len() == 2 && support::shown_notice(h).is_some()), "remote document and the warning");
     assert_eq!(h.state().views[1].current, 0);
-    assert!(h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("named destination was not applied")), "{:?}", h.state().toast);
+    let notice = support::shown_notice(&h);
+    assert!(notice.as_deref().is_some_and(|text| text.contains("named destination was not applied")), "{notice:?}");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -420,9 +423,9 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
     for target in targets {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), target, "[0 /Fit]");
         click_remote_link(&mut h);
-        support::wait_until(&mut h, "relative invalid target refusal", |app| app.toast.is_some());
+        assert!(support::step_until(&mut h, |h| support::shown_notice(h).is_some()), "relative invalid target refusal");
         assert_eq!(h.state().views.len(), 1, "{target} opens no tab");
-        let toast = &h.state().toast.as_ref().unwrap().0;
+        let toast = support::shown_notice(&h).unwrap().to_string();
         assert!(toast.contains("not a regular file"), "{target}: {toast}");
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -435,7 +438,7 @@ fn an_in_memory_source_does_not_resolve_a_relative_gotor_against_cwd() {
     let mut h = remote_harness(None, "target.pdf", "[0 /Fit]");
     click_remote_link(&mut h);
     assert_eq!(h.state().views.len(), 1);
-    let toast = &h.state().toast.as_ref().unwrap().0;
+    let toast = support::shown_notice(&h).unwrap().to_string();
     assert!(toast.contains("relative link needs a source document path"), "{toast}");
 }
 
@@ -445,10 +448,10 @@ fn unsupported_launch_action_is_reported_without_claiming_javascript() {
     let mut h = harness();
     click_link_at(&mut h, 230.0);
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     assert_eq!(h.state().views.len(), 1);
     assert_eq!(h.state().views[0].current, 0);
-    let toast = h.state().toast.clone().expect("the unsupported action is reported").0;
+    let toast = support::shown_notice(&h).expect("the unsupported action is reported").to_string();
     assert_eq!(toast, "This PDF uses the unsupported Launch action.");
 }
 
@@ -459,9 +462,8 @@ fn cancel_opens_nothing() {
     click_link(&mut h);
     assert!(h.state().pending_link.is_some());
     h.get_by_label("Cancel").click();
-    h.run_steps(3);
+    assert!(support::step_collecting_urls(&mut h, 3).is_empty());
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
 }
 
 #[test]
@@ -471,9 +473,8 @@ fn escape_cancels() {
     click_link(&mut h);
     assert!(h.state().pending_link.is_some());
     h.key_press(egui::Key::Escape);
-    h.run_steps(3);
+    assert!(support::step_collecting_urls(&mut h, 3).is_empty());
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
 }
 
 #[test]
@@ -482,7 +483,7 @@ fn a_button_uri_action_asks_first() {
     let mut h = harness();
     click_field(&mut h, "web");
     assert_eq!(h.state().pending_link, pending(BUTTON_URL, LinkOrigin::Button));
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
 }
 
 #[test]
@@ -490,10 +491,13 @@ fn a_button_script_cannot_open_a_local_program() {
     let _gpu = gpu();
     let mut h = harness();
     click_field(&mut h, "sneaky");
-    support::wait_until(&mut h, "script link refusal", |app| app.pending_link.is_some() || app.toast.is_some());
+    assert!(
+        support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()),
+        "script link refusal"
+    );
     assert_eq!(h.state().pending_link, None, "a file: address is never offered");
-    assert_eq!(h.state().last_opened_url, None);
-    let toast = h.state().toast.clone().expect("the user is told").0;
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
+    let toast = support::shown_notice(&h).expect("the user is told").to_string();
     assert!(toast.contains("“file:” address"), "{toast}");
 }
 
@@ -506,7 +510,7 @@ fn a_script_asks_first_and_only_once() {
     h.state_mut().run_button_script(id, "web", script);
     support::wait_until(&mut h, "script link request", |app| app.pending_link.is_some());
     assert_eq!(h.state().pending_link, pending("https://example.org/?q=first", LinkOrigin::Script), "one dialog, for the first request");
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
 }
 
 #[test]
@@ -527,10 +531,14 @@ fn a_script_cannot_open_other_kinds_of_address() {
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
         h.state_mut().run_button_script(id, "web", &script);
-        support::wait_until(&mut h, "script link decision", |app| app.pending_link.is_some() || app.toast.is_some());
+        assert!(
+            support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()),
+            "script link decision"
+        );
         assert_eq!(h.state().pending_link, None, "{url}");
-        assert_eq!(h.state().last_opened_url, None, "{url}");
-        assert!(h.state().toast.clone().is_some_and(|t| t.0.contains("won't open")), "{url}: {:?}", h.state().toast);
+        assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "{url}");
+        let notice = support::shown_notice(&h);
+        assert!(notice.as_deref().is_some_and(|t| t.contains("won't open")), "{url}: {notice:?}");
     }
 }
 
@@ -542,10 +550,13 @@ fn an_email_link_cannot_attach_a_local_file() {
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
         h.state_mut().run_button_script(id, "web", &script);
-        support::wait_until(&mut h, "script link decision", |app| app.pending_link.is_some() || app.toast.is_some());
+        assert!(
+            support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()),
+            "script link decision"
+        );
         assert_eq!(h.state().pending_link, None, "{url}");
-        assert_eq!(h.state().last_opened_url, None, "{url}");
-        let toast = h.state().toast.clone().expect("the user is told").0;
+        assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "{url}");
+        let toast = support::shown_notice(&h).expect("the user is told").to_string();
         assert!(toast.contains("attach or insert a file"), "{url}: {toast}");
     }
 }
@@ -608,7 +619,7 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     h.get_by_label("Allow");
     assert_eq!(h.state().views.len(), 1);
     assert_eq!(h.state().session.docs().len(), 1);
-    assert!(h.state().toast.is_none(), "the nonexistent target is not accessed before consent");
+    assert!(support::shown_notice(&h).is_none(), "the nonexistent target is not accessed before consent");
     assert!(h.state().password_prompt.is_none());
     // The target only appears AFTER the confirmation is displayed.
     let target_bytes = linked_pages(2, None);
@@ -627,7 +638,7 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     assert_eq!(target_doc.path.as_deref(), Some(file));
     assert_eq!(target_doc.bytes.as_slice(), target_bytes.as_slice());
     assert!(!h.state().session.get(source).unwrap().dirty);
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -657,7 +668,7 @@ fn cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing() 
         assert_eq!(doc.bytes, before);
         assert!(!doc.dirty);
         assert!(doc.can_undo().is_none());
-        assert!(h.state().toast.is_none());
+        assert!(support::shown_notice(&h).is_none());
         assert!(h.state().password_prompt.is_none());
     }
 }
@@ -692,14 +703,15 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
         let before = h.state().session.get(source).unwrap().bytes.clone();
         click_remote_link(&mut h);
         assert!(h.state().pending_remote_link.is_some());
-        assert!(h.state().toast.is_none(), "{name} isn't checked before consent");
+        assert!(support::shown_notice(&h).is_none(), "{name} isn't checked before consent");
         h.get_by_label("Allow").click();
-        support::wait_until(&mut h, "approved invalid target refusal", |app| {
-            app.toast.as_ref().is_some_and(|(message, _)| message.starts_with(expected_error))
-        });
+        assert!(
+            support::step_until(&mut h, |h| support::shown_notice(h).is_some_and(|message| message.starts_with(expected_error))),
+            "approved invalid target refusal"
+        );
         assert!(h.state().pending_remote_link.is_none());
         assert_eq!(h.state().views.len(), 1, "{name}");
-        assert!(h.state().toast.is_some(), "{name} is refused after consent");
+        assert!(support::shown_notice(&h).is_some(), "{name} is refused after consent");
         assert_eq!(h.state().session.docs().len(), 1);
         assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(source));
         assert_eq!(h.state().views[0].current, 0);
@@ -708,7 +720,7 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
         assert!(!doc.dirty);
         assert!(doc.can_undo().is_none());
         assert!(h.state().password_prompt.is_none());
-        assert!(h.state().last_opened_url.is_none());
+        assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -763,7 +775,7 @@ fn closing_the_source_invalidates_pending_absolute_gotor_consent() {
     assert!(h.state().views.is_empty());
     assert!(h.state().session.docs().is_empty());
     assert!(h.state().pending_remote_link.is_none());
-    assert!(h.state().toast.is_none());
+    assert!(support::shown_notice(&h).is_none());
 }
 
 fn overlapping_annotation_fixture(subtype: &str, internal: bool) -> Vec<u8> {
@@ -828,11 +840,10 @@ fn highlighted_link_still_requires_confirmation() {
     let mut h = overlapping_annotation_harness(overlapping_annotation_fixture("Highlight", false));
     click_link(&mut h);
     assert_eq!(h.state().pending_link, pending(LINK_URL, LinkOrigin::Link));
-    assert_eq!(h.state().last_opened_url, None);
-    assert_eq!(h.state().views[0].comments.selected, None);
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
+    assert!(h.state().views[0].comments.selection().is_empty());
     h.get_by_label("Open link").click();
-    h.run_steps(3);
-    assert_eq!(h.state().last_opened_url.as_deref(), Some(LINK_URL));
+    assert_eq!(support::step_collecting_urls(&mut h, 3), [LINK_URL]);
     assert_eq!(h.state().pending_link, None);
     h.run_steps(3);
     assert_eq!(h.state().pending_link, None, "approval must not create another prompt");
@@ -850,9 +861,8 @@ fn highlighted_link_cancel_and_escape_do_not_open_url() {
         } else {
             h.get_by_label("Cancel").click();
         }
-        h.run_steps(3);
+        assert!(support::step_collecting_urls(&mut h, 3).is_empty());
         assert_eq!(h.state().pending_link, None);
-        assert_eq!(h.state().last_opened_url, None);
     }
 }
 
@@ -868,7 +878,7 @@ fn highlighted_internal_link_navigates_after_save_and_reopen() {
     click_link(&mut h);
     assert_eq!(h.state().views[0].current, 1);
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 3).is_empty());
 }
 
 #[test]
@@ -878,9 +888,9 @@ fn highlight_outside_link_remains_selectable() {
     let rect = h.state().views[0].page_screen_rect(0).unwrap();
     let at = egui::pos2(rect.min.x + rect.width() * (60.0 / 300.0), rect.min.y + rect.height() * (1.0 - 325.0 / 400.0));
     click_at(&mut h, at);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)));
+    assert_eq!(h.state().views[0].comments.selection(), [(0, 1)]);
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 2).is_empty());
 }
 
 #[test]
@@ -889,9 +899,9 @@ fn other_annotations_over_links_keep_select_click() {
     for subtype in ["Text", "Square"] {
         let mut h = overlapping_annotation_harness(overlapping_annotation_fixture(subtype, false));
         click_link(&mut h);
-        assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "{subtype}");
+        assert_eq!(h.state().views[0].comments.selection(), [(0, 1)], "{subtype}");
         assert_eq!(h.state().pending_link, None, "{subtype}");
-        assert_eq!(h.state().last_opened_url, None, "{subtype}");
+        assert!(support::step_collecting_urls(&mut h, 2).is_empty(), "{subtype}");
     }
 }
 
@@ -901,11 +911,10 @@ fn form_widget_keeps_priority_over_highlighted_link() {
     let mut h = overlapping_annotation_harness(overlapping_annotation_fixture_with_form("Highlight", false, true));
     click_link(&mut h);
     assert_eq!(h.state().pending_link, pending(BUTTON_URL, LinkOrigin::Button));
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     h.get_by_label("Cancel").click();
-    h.run_steps(3);
+    assert!(support::step_collecting_urls(&mut h, 3).is_empty());
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
 }
 
 /// A comment's gesture keeps the page's input until its button is up: a press held through it and
@@ -916,16 +925,19 @@ fn active_comment_gesture_keeps_highlighted_link_click() {
     let _gpu = gpu();
     let mut h = overlapping_annotation_harness(overlapping_annotation_fixture("Highlight", false));
     let r = h.state().views[0].page_screen_rect(0).unwrap();
-    let at = egui::pos2(r.min.x + r.width() * 0.5, r.min.y + r.height() * (1.0 - 325.0 / 400.0));
-    h.hover_at(at);
+    // The link spans x 100..250 of the 300-unit page and the highlight x 30..200: the drag starts and ends inside both, far
+    // past the press slop (40 units at 150 %).
+    let along = |x: f32| egui::pos2(r.min.x + r.width() * (x / 300.0), r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    let (from, to) = (along(150.0), along(190.0));
+    h.hover_at(from);
     h.run_steps(2);
-    h.drag_at(at);
+    h.drag_at(from);
     h.run_steps(1);
-    h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 1, from: at });
-    h.drop_at(at);
-    h.run_steps(4);
+    h.hover_at(to);
+    h.run_steps(2);
+    h.drop_at(to);
+    assert!(support::step_collecting_urls(&mut h, 4).is_empty());
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
 }
 
 #[test]
@@ -940,9 +952,9 @@ fn highlighted_link_context_click_selects_comment_without_opening_url() {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
     }
     h.run_steps(3);
-    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)));
+    assert_eq!(h.state().views[0].comments.selection(), [(0, 1)]);
     assert_eq!(h.state().pending_link, None);
-    assert_eq!(h.state().last_opened_url, None);
+    assert!(support::step_collecting_urls(&mut h, 2).is_empty());
 }
 
 #[test]
@@ -952,11 +964,10 @@ fn highlighted_link_can_be_requested_again_after_cancel() {
     for _ in 0..2 {
         click_link(&mut h);
         assert_eq!(h.state().pending_link, pending(LINK_URL, LinkOrigin::Link));
-        assert_eq!(h.state().last_opened_url, None);
+        assert!(support::step_collecting_urls(&mut h, 1).is_empty());
         h.get_by_label("Cancel").click();
-        h.run_steps(120);
+        assert!(support::step_collecting_urls(&mut h, 120).is_empty());
         assert_eq!(h.state().pending_link, None);
-        assert_eq!(h.state().last_opened_url, None);
     }
 }
 
@@ -1030,7 +1041,7 @@ fn addresses_written_in_the_page_text_open_like_links() {
     ] {
         assert!(click_text_until_pending(&mut h, y), "a click on the line at {y} asked to open nothing");
         assert_eq!(h.state().pending_link, pending(url, LinkOrigin::Link), "line at {y}");
-        assert_eq!(h.state().last_opened_url, None, "nothing opens before the user answers");
+        assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "nothing opens before the user answers");
         h.get_by_label("Cancel").click();
         h.run_steps(4);
         assert_eq!(h.state().pending_link, None);
