@@ -179,6 +179,20 @@ mod tests {
         list.iter().filter(|o| matches!(&*doc.resolve(o), Object::Stream(_))).count()
     }
 
+    /// The decoded content of the streams `list` names, in order.
+    fn content(doc: &Document, list: &[Object]) -> String {
+        list.iter()
+            .filter_map(|o| match &*doc.resolve(o) {
+                Object::Stream(st) => st.decoded().ok().map(|d| String::from_utf8_lossy(&d).into_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+    }
+
     fn watermark() -> Edit {
         Edit::AddWatermark { pages: vec![0], settings: Watermark { text: "DRAFT".into(), ..Watermark::default() }, file: None, replace: false }
     }
@@ -200,8 +214,11 @@ mod tests {
                 let doc = Document::open_with_password(bytes.clone(), None).unwrap();
                 let [first, second] = <[Vec<Object>; 2]>::try_from(lists(&bytes)).unwrap();
                 assert!(!first.is_empty() && streams(&doc, &first) == first.len(), "xref {xref}: page 1 lists {first:?}");
-                // Both original streams are still drawn.
-                assert!(streams(&doc, &first) > 2, "xref {xref}: {first:?}");
+                // Both original paint streams are still drawn, blue before red.
+                let painted = content(&doc, &first);
+                let blue = painted.find("0 0 1 rg 10 10 50 50 re f");
+                let red = painted.find("1 0 0 rg 100 100 50 50 re f");
+                assert!(blue.zip(red).is_some_and(|(b, r)| b < r), "xref {xref}: {painted}");
                 assert_eq!(second.len(), 2, "xref {xref}: page 2 untouched: {second:?}");
             }
             s.undo(id).unwrap();

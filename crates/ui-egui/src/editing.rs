@@ -168,6 +168,29 @@ fn form_edit_pages(
     (changed_pages, unbaked)
 }
 
+/// What an edit said ([`pdfcraft_engine::EditNotice`]), every notice on a line of its own in the
+/// UI language, or `None` when it said nothing. One toast shows them all: a second `notify`
+/// would replace the first.
+pub(crate) fn edit_notices_message(notices: &[pdfcraft_engine::EditNotice]) -> Option<String> {
+    use pdfcraft_engine::EditNotice;
+    let lines: Vec<String> = notices
+        .iter()
+        .map(|n| match n {
+            EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
+            EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+            EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+            EditNotice::ContentsLeftOut { pages, entries } => crate::marks_ui::contents_left_out_message(pages, *entries),
+            EditNotice::RedactionIdentification(id) => crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string()),
+        })
+        .collect();
+    (!lines.is_empty()).then(|| {
+        lines.join(
+            "
+",
+        )
+    })
+}
+
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
@@ -284,16 +307,8 @@ impl PdfCraftApp {
                 // own backdrop stays off, or places applied redactions left holding the removed text
                 // (the Apply redactions dialog then says it after its count): said, not silent.
                 // Before the scripts' output, so an alert they raise still shows.
-                if let Some(n) = self.session.get(id).and_then(|d| d.edit_notices.first()).cloned() {
-                    self.notify(match &n {
-                        pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
-                        pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::dialogs::still_holding_note(e).unwrap_or_else(|| n.to_string()),
-                        pdfcraft_engine::EditNotice::ContentsLeftOut { .. } => n.to_string(),
-                        pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
-                            crate::dialogs::identification_note(id).unwrap_or_else(|| n.to_string())
-                        }
-                    });
+                if let Some(message) = self.session.get(id).and_then(|d| edit_notices_message(&d.edit_notices)) {
+                    self.notify(message);
                 }
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
@@ -1093,25 +1108,30 @@ impl PdfCraftApp {
     }
 
     /// When the preference is on, bake Fill & Sign marks before the bytes are written.
-    /// Returns false when the document is not allowed to change (nothing is written).
-    fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    /// Returns `None` when the document is not allowed to change (nothing is written), else what
+    /// the bake said ([`edit_notices_message`]), for the save's own message to carry: a toast
+    /// shown here would be replaced by it.
+    fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> Option<Option<String>> {
         if !self.flatten_fill_sign_on_save {
-            return true;
+            return Some(None);
         }
         let before = self.session.get(id).map(|d| d.edit_generation());
         if let Err(e) = self.session.apply(id, Edit::FlattenFillSign) {
             self.notify_error(e);
-            return false;
+            return None;
         }
         let after = self.session.get(id).map(|d| d.edit_generation());
-        if before != after
-            && let Some(doc) = self.session.get(id)
+        if before == after {
+            return Some(None);
+        }
+        let said = self.session.get(id).and_then(|d| edit_notices_message(&d.edit_notices));
+        if let Some(doc) = self.session.get(id)
             && let Some(view) = self.asking_tab(id).and_then(|i| self.views.get_mut(i))
         {
             // The tab in use: `sync_views` brings any other tab of the document up to date.
             view.document_changed(&doc.info);
         }
-        true
+        Some(said)
     }
 
     /// Whether tab `index` has work that isn't saved: edits, or form typing not committed yet.
@@ -1818,5 +1838,31 @@ mod attention_tests {
         app.close_and_continue(&ctx, 0, CloseRequest::Quit);
         assert_eq!(app.close_request, Some(CloseRequest::Tab(c)), "the newer question stands");
         assert!(attend(&mut app, &ctx, false).is_empty(), "the user has seen it");
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use pdfcraft_engine::EditNotice;
+
+    /// An edit that says two things shows both, each on its own line, in the order said: the
+    /// backdrops a Remove background left off, and the content-list entries it left out.
+    #[test]
+    fn every_notice_of_an_edit_is_shown() {
+        assert_eq!(super::edit_notices_message(&[]), None);
+        let said = super::edit_notices_message(&[
+            EditNotice::BackdropsLeftOff { pages: vec![1] },
+            EditNotice::ContentsLeftOut { pages: vec![0, 1, 2], entries: 4 },
+        ])
+        .unwrap();
+        let lines: Vec<&str> = said.lines().collect();
+        assert_eq!(lines.len(), 2, "{said}");
+        assert!(lines[0].starts_with("Page 2 changed after the background was added"), "{said}");
+        assert_eq!(
+            lines[1],
+            "4 entries in the content lists of pages 1-3 named no content stream (objects missing from the file, or not streams) and were left out. They drew nothing."
+        );
+        let one = super::edit_notices_message(&[EditNotice::ContentsLeftOut { pages: vec![4], entries: 1 }]).unwrap();
+        assert!(one.starts_with("1 entry in the content list of page 5 named no content stream"), "{one}");
     }
 }

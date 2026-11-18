@@ -1562,6 +1562,51 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Baking Fill & Sign on save rewrites the page's content list. On a damaged page whose list
+/// names an object the file doesn't contain, the entry left out is said with the save's own
+/// message, not hidden under it.
+#[test]
+fn saving_with_fill_and_sign_baked_says_what_the_content_list_left_out() {
+    use pdfcraft_engine::{Edit, FillMark, NewAnnotation, Shape, Style};
+    let dir = std::env::temp_dir().join(format!("pdfcraft-fill-flatten-left-out-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // No cross-reference table: the file is read from its object headers, and object 90 is
+    // nowhere in it.
+    let pdf = b"%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents [4 0 R 90 0 R] >>
+endobj
+4 0 obj
+<< /Length 25 >> stream
+0 0 1 rg 10 10 50 50 re f
+endstream
+endobj
+trailer << /Root 1 0 R >>
+%%EOF
+";
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("damaged.pdf", None, pdf.to_vec()).unwrap();
+    let id = app.views[0].id;
+    let shape = Shape::Mark { rect: [100.0, 100.0, 116.0, 116.0], mark: FillMark::Check };
+    let style = Style::default_for(&shape);
+    app.session.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: String::new(), author: "Ada".into() })).unwrap();
+    app.flatten_fill_sign_on_save = true;
+    let out = dir.join("out.pdf");
+    app.save_override = Some(out.to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::InPlace));
+    let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    assert!(toast.starts_with("Saved"), "{toast}");
+    assert!(toast.contains("1 entry in the content list of page 1 named no content stream"), "{toast}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #299: drawn and typed signatures and initials are upright as displayed on pages with
 /// `/Rotate` 90, 180 and 270, anchored at the displayed point, exactly as on an unturned page.
 #[test]

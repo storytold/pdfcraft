@@ -125,9 +125,9 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = path;
-            if !self.flatten_fill_sign_for_save(id) {
+            let Some(baked) = self.flatten_fill_sign_for_save(id) else {
                 return false;
-            }
+            };
             self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillSave);
             let bytes = match self.session.save_bytes(id) {
                 Ok(b) => b,
@@ -157,9 +157,13 @@ impl PdfCraftApp {
                         // later downloads are named after the redacted copy too.
                         view.redactions_downloaded = view.redactions_applied;
                     }
-                    // The host reports where the file went (and any failure) itself.
+                    // The host reports where the file went (and any failure) itself. What
+                    // baking Fill & Sign said is shown with it, not replaced.
                     if !to_host {
                         self.notify_fmt("Downloaded {name}", &[("name", &name)]);
+                    }
+                    if let Some(baked) = baked {
+                        self.notify_after_toast(baked);
                     }
                     after(self);
                     true
@@ -277,9 +281,12 @@ impl PdfCraftApp {
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget) -> bool {
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
-        if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
+        if !self.commit_typing_in(id) {
             return false;
         }
+        let Some(baked) = self.flatten_fill_sign_for_save(id) else {
+            return false;
+        };
         let recovered = self.recovered_paths.contains(&id);
         let Some((name, full)) = self.session.get(id).map(|d| {
             // Save As to another file and a recovered document are clean copies, without earlier
@@ -327,6 +334,10 @@ impl PdfCraftApp {
                     view.saved_redactions_cut_off = false;
                 }
                 self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                // What baking Fill & Sign said, after the save's own message rather than under it.
+                if let Some(baked) = baked {
+                    self.notify_after_toast(baked);
+                }
                 #[cfg(target_os = "macos")]
                 crate::macos_association::repair(std::path::Path::new(dest));
                 true

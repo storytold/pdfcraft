@@ -471,6 +471,19 @@ impl PdfCraftApp {
         self.toast_script = None;
     }
 
+    /// Add `msg` to the toast on a line of its own, after what it shows now, or show it alone
+    /// when it shows nothing.
+    pub(crate) fn notify_after_toast(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        match self.toast.as_ref().map(|(shown, _)| shown.clone()) {
+            Some(shown) => self.notify(format!(
+                "{shown}
+{msg}"
+            )),
+            None => self.notify(msg),
+        }
+    }
+
     /// Notify with a static message in the UI language.
     pub fn notify_tr(&mut self, text: &str) {
         self.notify(tl!(text).to_string());
