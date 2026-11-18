@@ -3798,7 +3798,7 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     let model = pdfcraft_model::pages(&cos);
     let marks: Vec<_> = pdfcraft_redact::marks(&cos).into_iter().filter_map(|m| model.get(m.page).map(|p| (p.obj, m))).collect();
     let refused = |cos: &pdfcraft_cos::Document| {
-        let shown = shown_under_redactions(cos, &marks, &[], None);
+        let shown = shown_under_redactions(cos, cos, &marks, &[], None);
         matches!(shown, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0)
     };
     assert!(refused(&cos));
@@ -3807,6 +3807,65 @@ fn the_renderer_check_refuses_text_still_shown_under_a_mark() {
     let contents = page.dict.get(b"Contents").cloned().unwrap();
     cos.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Array(vec![contents]))).unwrap();
     assert!(refused(&cos), "the labelled input stream was not checked");
+}
+
+/// A page 300 points square drawing `body` with `resources`, objects 6 on from `extra`, and a
+/// redaction mark over `mark` with no fill, so only what the page itself draws can be under it.
+fn page_with_mark(resources: &str, body: &str, extra: &[String], mark: [f64; 4]) -> Vec<u8> {
+    let [x0, y0, x1, y1] = mark;
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /Resources << {resources} >> /Contents 4 0 R /Annots [5 0 R] >>"),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        format!("<< /Type /Annot /Subtype /Redact /Rect [{x0} {y0} {x1} {y1}] >>"),
+    ];
+    objs.extend_from_slice(extra);
+    pdf_of(&objs)
+}
+
+/// Paint redaction and the text layer place away from where the page draws it: a Type 3 glyph
+/// whose procedure paints 100 points above its box, and a letter whose outline is stroked 40
+/// points wide. Neither letter's box is under the mark over that paint, but the page as drawn
+/// still has it there: the apply is refused and the document is left as it was.
+#[test]
+fn ink_left_under_a_mark_refuses_the_apply() {
+    let glyph = "100 0 d0 0 1000 100 100 re f";
+    let type3 = [
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a 7 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len()),
+    ];
+    let helvetica = ["<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()];
+    let pages = [
+        page_with_mark("/Font << /T3 6 0 R >>", "BT /T3 10 Tf 20 100 Td (a) Tj ET", &type3, [10.0, 190.0, 60.0, 220.0]),
+        page_with_mark("/Font << /F1 6 0 R >>", "40 w BT 1 Tr /F1 10 Tf 20 100 Td (I) Tj ET", &helvetica, [10.0, 115.0, 60.0, 145.0]),
+    ];
+    let refused = pages.map(|page| {
+        let mut s = Session::new();
+        let id = s.open("ink.pdf", None, Arc::new(page), None).unwrap();
+        let applied = s.apply(id, Edit::ApplyRedactions { pages: None });
+        matches!(applied, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(1)))) && !s.get(id).unwrap().dirty
+    });
+    assert_eq!(refused, [true, true], "an apply went through with ink under the mark (Type 3 glyph, stroked outline)");
+}
+
+/// The drawn-page check passes an ordinary apply: an image partly under the mark (its covered
+/// pixels cleared, which draws them black), words under it, and a line just above it whose
+/// descenders reach into it.
+#[test]
+fn an_ordinary_apply_passes_the_drawn_page_check() {
+    let image = format!(
+        "<< /Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 201 >>\nstream\n{}>\nendstream",
+        "80".repeat(100)
+    );
+    let extra = [image, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()];
+    let body = "q 200 0 0 200 20 20 cm /Im1 Do Q BT /F1 12 Tf 110 150 Td (Hidden words) Tj 0 132 Td (Typography kept) Tj ET";
+    let page = page_with_mark("/XObject << /Im1 6 0 R >> /Font << /F1 7 0 R >>", body, &extra, [100.0, 100.0, 280.0, 280.0]);
+    let mut s = Session::new();
+    let id = s.open("ordinary.pdf", None, Arc::new(page), None).unwrap();
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let text = page_texts(&s, id).concat();
+    assert!(!text.contains("Hidden") && text.contains("Typography kept"), "{text}");
 }
 
 /// Inline image data `7FEI 1 0 0 1 200 0 cm` holds an `EI` the renderer ends the image at, so it

@@ -963,7 +963,7 @@ pub(crate) fn recovered_render_password(cos: &pdfcraft_cos::Document) -> Option<
     cos.security().and_then(|s| s.recovered_user_password()).map(|user| renderer_password(&user))
 }
 
-/// Fails when the renderer still draws text under an applied redaction mark.
+/// Fails when the renderer still draws text, or anything else, under an applied redaction mark.
 ///
 /// Redaction decides what lies under a mark from the positions its own interpreter computes, and
 /// its verify pass reuses them. Where they differ from the renderer's (a standard font without
@@ -974,7 +974,15 @@ pub(crate) fn recovered_render_password(cos: &pdfcraft_cos::Document) -> Option<
 /// write it, without the marks' own `overlays` (the box and its label are drawn on purpose), its
 /// text is extracted, and a glyph still mostly inside a mark fails the edit: the caller keeps
 /// the document as it was.
+///
+/// The text layer places a glyph by its box, as redaction does, but its paint can lie elsewhere
+/// (a Type 3 glyph procedure drawing away from its box, an outline stroked wide). So each marked
+/// page is also drawn on a transparent page, and the inner part of every mark ([`mark_interior`])
+/// must stay empty. The images the apply made from partly covered ones (the object numbers
+/// `before`, the document it ran on, doesn't have) still paint their cleared pixels: they are
+/// drawn as nothing here.
 pub(crate) fn shown_under_redactions(
+    before: &pdfcraft_cos::Document,
     after: &pdfcraft_cos::Document,
     marks: &[(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)],
     overlays: &[pdfcraft_cos::ObjRef],
@@ -1012,6 +1020,17 @@ pub(crate) fn shown_under_redactions(
         let kept: Vec<Object> = list.into_iter().filter(|o| !o.as_ref().is_some_and(|r| overlays.contains(&r))).collect();
         shown.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept))).map_err(|e| EditError::Write(e.to_string()))?;
     }
+    let old: std::collections::HashSet<u32> = before.object_numbers().into_iter().collect();
+    for num in after.object_numbers().into_iter().filter(|n| !old.contains(n)) {
+        let r = pdfcraft_cos::ObjRef::new(num, 0);
+        let image = match &*after.get(r) {
+            Object::Stream(s) => s.dict.get(b"Subtype").is_some_and(|t| after.resolve(t).as_name() == Some(b"Image".as_slice())),
+            _ => false,
+        };
+        if image {
+            shown.set(r, Object::Stream(blank_image()));
+        }
+    }
     let bytes = Arc::new(write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?);
     // Page geometry comes from the document as it is now written: a page moved earlier in the batch
     // brings its own size and rotation with it.
@@ -1023,7 +1042,7 @@ pub(crate) fn shown_under_redactions(
         return Err(RedactError::AmbiguousPages.into());
     }
     let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
-    let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
+    let mut renderer = pdfcraft_render::PageRenderer::new(bytes.clone(), config);
     let mut residue = 0;
     for &pi in &marked {
         let request = pdfcraft_render::RenderRequest { page: pi, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() };
@@ -1047,5 +1066,57 @@ pub(crate) fn shown_under_redactions(
     if residue > 0 {
         return Err(RedactError::Residue(residue).into());
     }
+    let config = RenderConfig { password: password.map(Arc::from), transparent: true, ..Default::default() };
+    let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
+    for &pi in &marked {
+        let inner: Vec<[f64; 4]> = rects_of.get(&pi).into_iter().flatten().filter_map(|r| mark_interior(*r)).collect();
+        let (Some(info), false) = (pages.get(pi), inner.is_empty()) else { continue };
+        // Two pixels a point, the longer side at most 4096 pixels.
+        let scale = 2.0_f32.min(4096.0 / info.width.max(info.height).max(1.0));
+        let drawn = renderer.render(pdfcraft_render::RenderRequest { page: pi, scale, ..Default::default() });
+        if drawn.error.is_some() || drawn.width == 0 || drawn.height == 0 {
+            return Err(RedactError::Unreadable(pi + 1).into());
+        }
+        let (w, h) = (drawn.width as usize, drawn.height as usize);
+        let (sx, sy) = (drawn.width as f32 / info.width.max(1e-3), drawn.height as f32 / info.height.max(1e-3));
+        for r in inner {
+            let (a, b) = (info.user_to_view(r[0] as f32, r[1] as f32), info.user_to_view(r[2] as f32, r[3] as f32));
+            // The whole pixels inside it (a cast saturates, NaN to 0).
+            let x0 = ((a[0].min(b[0]) * sx).ceil().max(0.0) as usize).min(w);
+            let x1 = ((a[0].max(b[0]) * sx).floor().max(0.0) as usize).min(w);
+            let y0 = ((a[1].min(b[1]) * sy).ceil().max(0.0) as usize).min(h);
+            let y1 = ((a[1].max(b[1]) * sy).floor().max(0.0) as usize).min(h);
+            // Coverage above 16 of 255 counts as drawn.
+            if (y0..y1).any(|y| (x0..x1).any(|x| drawn.rgba.get((y * w + x) * 4 + 3).is_some_and(|alpha| *alpha > 16))) {
+                residue += 1;
+            }
+        }
+    }
+    if residue > 0 {
+        return Err(RedactError::Residue(residue).into());
+    }
     Ok(())
+}
+
+/// The inner part of a mark (`r`, normalized user space) that must be drawn empty: a quarter of
+/// its smaller side in from each edge, at least 3 and at most 12 points. Redaction keeps a glyph
+/// that is less than a fifth under a mark, a glyph's paint can pass its box (an accent, an italic
+/// overhang), and anti-aliasing blurs every edge. `None` for a mark too small to have one.
+fn mark_interior(r: [f64; 4]) -> Option<[f64; 4]> {
+    let edge = ((r[2] - r[0]).min(r[3] - r[1]) / 4.0).clamp(3.0, 12.0);
+    let i = [r[0] + edge, r[1] + edge, r[2] - edge, r[3] - edge];
+    (i[2] > i[0] && i[3] > i[1]).then_some(i)
+}
+
+/// A one-pixel stencil mask that paints nothing.
+fn blank_image() -> pdfcraft_cos::Stream {
+    use pdfcraft_cos::Object;
+    let mut d = pdfcraft_cos::Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(1));
+    d.set(b"Height".to_vec(), Object::Int(1));
+    d.set(b"ImageMask".to_vec(), Object::Bool(true));
+    // Under the default /Decode [0 1], a sample of 1 leaves the page as it is.
+    pdfcraft_cos::Stream::flate(d, &[0xFF])
 }
