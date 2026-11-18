@@ -3336,7 +3336,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // to the window under the pointer, focused or not, and it scrolls (#6326, #7120, #6775) and
     // zooms (#3736) that window there.
     let hover_input = unobstructed && ui.is_enabled();
-    // The other gestures need focus: an unfocused window must not act on a click-through.
+    // Pinch zoom reads it too. Keyboard focus is added for presentation clicks (a click-through
+    // must not turn a page), the touchpad glide and a text selection's own scrolling.
     let navigation_enabled = hover_input && ui.input(|i| i.focused);
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, hover_input);
