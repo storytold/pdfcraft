@@ -3468,8 +3468,18 @@ fn a_text_field_that_outgrows_a_page_continues_on_the_next_as_text() {
     let long: String = (0..150).map(|i| format!("Line {i} of the notes.\n")).collect();
     let form = layout_xml(&wrapped_form(&format!("<form><body><notes>{long}</notes><after>end</after></body></form>"))).unwrap();
     assert!(form.pages.len() >= 3, "{} pages", form.pages.len());
-    assert!(form.warnings.iter().any(|w| w.starts_with("notes: its text is longer than a page")), "{:?}", form.warnings);
-    // Every line is there, in order, inside the content area of its page; no widget holds it.
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    // The field stays one that can be filled (XFA 3.3 pp. 290–291): its widget, on the page it
+    // starts on and down to that page's break, holds the whole value and draws none of it.
+    let notes: Vec<(usize, &Widget)> =
+        form.pages.iter().enumerate().flat_map(|(i, p)| widgets(p).into_iter().filter(|w| w.name == "notes").map(move |w| (i, w))).collect();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let (page, w) = notes[0];
+    assert!(w.page_text && w.value.as_deref() == Some(long.trim()), "{w:?}");
+    assert!(w.rect.bottom() <= 36.0 + 720.0 + 0.01, "the widget ends at its page's break: {:?}", w.rect);
+    let first_line = form.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Item::Text(s) if s.text == "Line 0 of the notes.")));
+    assert_eq!(Some(page), first_line);
+    // Every line is there, in order, inside the content area of its page, drawn by the page.
     let mut lines = Vec::new();
     for (i, p) in form.pages.iter().enumerate() {
         for it in &p.items {
@@ -3480,7 +3490,6 @@ fn a_text_field_that_outgrows_a_page_continues_on_the_next_as_text() {
                 lines.push(s.text.clone());
             }
         }
-        assert!(widgets(p).iter().all(|w| w.name != "notes"));
     }
     assert_eq!(lines, (0..150).map(|i| format!("Line {i} of the notes.")).collect::<Vec<_>>());
     // What follows comes after the last line, on the last page.

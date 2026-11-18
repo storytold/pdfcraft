@@ -102,13 +102,16 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    /// The SOM path of the empty widget drawn on the last page since item `first`, when the page
+    /// The SOM path of the empty widget drawn on the last page since item `first`, or of one whose
+    /// text the page draws ([`Widget::page_text`](super::items::Widget::page_text)), when the page
     /// break at `bottom` leaves room above it for a line of its text: only then is the field split.
-    /// A value can't run on from one widget into the next piece, and a field with no line on this
-    /// page moves on whole.
+    /// A value in a widget can't run on from it into the next piece, and a field with no line on
+    /// this page moves on whole.
     fn splittable_widget_since(&self, first: usize, bottom: f64) -> Option<String> {
         self.pages.last()?.items.get(first..)?.iter().find_map(|item| match item {
-            Item::Widget(w) => (w.value.as_deref().is_none_or(|v| v.trim().is_empty()) && w.rect.y + split_line(w) <= bottom).then(|| w.som.clone()),
+            Item::Widget(w) => {
+                ((w.page_text || w.value.as_deref().is_none_or(|v| v.trim().is_empty())) && w.rect.y + split_line(w) <= bottom).then(|| w.som.clone())
+            }
             _ => None,
         })
     }
@@ -150,11 +153,13 @@ impl Layouter<'_> {
             }
         }
         // The empty field being split: its widget is no solid item, so the break may go through it.
+        // Nor is the widget of a field whose text the page draws, whose lines decide the breaks,
+        // even when the field moves on whole first (no room for a line of it here).
         let (som, field) = match &self.splitting {
             Some(s) => (Some(s.som.clone()), Some(s.rect)),
             None => (None, None),
         };
-        let loose = |item: &Item| matches!((item, &som), (Item::Widget(w), Some(som)) if w.som == *som);
+        let loose = |item: &Item| matches!(item, Item::Widget(w) if w.page_text || som.as_ref().is_some_and(|som| w.som == *som));
         let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
         let origin_x = self.cursor().0.x;
         // An item's place on the current page is its drawn place moved by (dx, -shift).
