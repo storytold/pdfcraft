@@ -6181,17 +6181,104 @@ fn retyping_right_to_left_keeps_explicit_centered_quadding() {
     assert!(rc.contains("text-align:center") && !rc.contains("text-align:right"), "{rc}");
 }
 
+/// Text the Arabic and Hebrew writer draws: its rich text breaks where the drawing does, at
+/// CR, LF and a CRLF pair (once), empty paragraphs kept.
 #[test]
 fn rich_text_cr_crlf_and_lf_break_paragraphs_once_and_keep_empty_paragraphs() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
     let mut annotation = Dict::new();
-    annotation.set(b"Contents".to_vec(), PdfString::text("One\rTwo\r\nThree\n\nFour\r"));
+    annotation.set(b"Contents".to_vec(), PdfString::text("\u{5d0}\rTwo\r\nThree\n\nFour\r"));
     super::modify::rich_text(&mut annotation);
     let rc = text(&annotation, b"RC");
-    let paragraphs =
-        "<p dir=\"ltr\">One</p><p dir=\"ltr\">Two</p><p dir=\"ltr\">Three</p><p dir=\"ltr\"></p><p dir=\"ltr\">Four</p><p dir=\"ltr\"></p>";
+    let paragraphs = "<p dir=\"rtl\" style=\"text-align:right\">\u{5d0}</p><p dir=\"ltr\">Two</p><p dir=\"ltr\">Three</p><p dir=\"ltr\"></p><p dir=\"ltr\">Four</p><p dir=\"ltr\"></p>";
     assert!(rc.contains(paragraphs), "{rc}");
     assert_eq!(rc.matches("<p ").count(), 6, "a CRLF pair breaks once, while empty paragraphs remain");
     assert!(!rc.contains('\r'), "rich text must not contain an unconverted carriage return: {rc}");
+}
+
+/// Text without Arabic or Hebrew keeps the rich text it had before this writer existed, byte
+/// for byte: paragraphs at LF alone, a trailing CR dropped, each `<p dir="ltr">`.
+#[test]
+fn rich_text_of_other_text_is_what_it_was() {
+    for contents in
+        ["One\rTwo\r\nThree\n\nFour\r", "a\rb", "a\r\r\nb", "ABC\u{2029}DEF", "\u{200f}Hello", "\u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35}\nHi"]
+    {
+        let mut annotation = Dict::new();
+        annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+        super::modify::rich_text(&mut annotation);
+        let rc = text(&annotation, b"RC");
+        let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+        let before: String = contents.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect();
+        assert!(rc.contains(&format!(">{before}</body>")), "{contents:?}: {rc}");
+    }
+}
+
+/// A box of text without Arabic or Hebrew is as tall as it was: 1.2 em a row. The Arabic and
+/// Hebrew writer's ink height is for its own text only (Thai keeps `fit_thai_ink`).
+#[test]
+fn the_height_of_other_text_is_what_it_was() {
+    for contents in [
+        "Hello",
+        "one two three four five six seven",
+        "a\nb\n\nc",
+        "\u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35} \u{e17}\u{e35}\u{e48}\u{e19}\u{e35}\u{e48}",
+    ] {
+        for (size, width) in [(12.0, 60.0), (20.0, 300.0)] {
+            let rows = appearance::wrap(contents, size, width).len().max(1);
+            assert_eq!(appearance::text_height(contents, size, width), rows as f64 * size * 1.2, "{contents:?} at {size} pt, {width} wide");
+        }
+    }
+}
+
+/// A Thai text box is saved as it was: the Arabic and Hebrew writer's font streams are made
+/// indirect objects, and nothing else in the appearance's fonts is touched.
+#[test]
+fn thai_text_box_fonts_are_stored_as_they_were() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+    annotation.contents = "\u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35} Hi".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("thai")).unwrap();
+    let d = list(&doc, 0)[index].clone();
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).unwrap();
+    let ap = doc.get(n);
+    let Object::Stream(stream) = &*ap else { panic!("AP is not a stream") };
+    let fonts = stream.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap();
+    let thai = fonts.iter().find_map(|(name, font)| name.starts_with(b"PCTh").then(|| doc.resolve(font))).expect("a Thai font");
+    let descriptor = thai.as_dict().and_then(|font| font.get(b"FontDescriptor")).expect("it has a descriptor");
+    assert!(matches!(descriptor, Object::Dict(_)), "the descriptor stays where the Thai writer put it: {descriptor:?}");
+}
+
+/// Text without Arabic or Hebrew kept behind a reference: the redraw that falls back to the
+/// dictionary as stored is the one it was. Only text the Arabic and Hebrew writer draws is
+/// carried into that fallback, where it must be refused rather than drawn as none.
+#[test]
+fn the_stored_dictionary_fallback_is_unchanged_for_other_text() {
+    let drawn = |contents: &str| {
+        let hex: String = contents.encode_utf16().map(|u| format!("{u:04X}")).collect();
+        let annot = "<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [40 600 300 700] /CL [50 610 80 640 120 650] /RD [80 0 0 0] /BE 5 0 R /DA (0 g /Helv 12 Tf) /Contents 6 0 R >>";
+        let text = format!("<FEFF{hex}>");
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+            b"<< /S /C /I 1 >>",
+            text.as_bytes(),
+        ]);
+        let (_, r) = annot_ref(&mut doc, 0, 0).unwrap();
+        set_appearance(&mut doc, r).unwrap();
+        ap_content(&doc, &list(&doc, 0)[0])
+    };
+    let latin = drawn("Hello");
+    assert!(latin.contains("() Tj") && !latin.contains("(Hello)"), "as before: the fallback reads no text through the reference: {latin}");
+    if pdfcraft_fonts::document_hebrew_font(false).is_some() {
+        assert!(drawn("\u{5e9}\u{5dc}\u{5d5}\u{5dd}").contains("/PCShaped0 "), "Hebrew is carried into the fallback and drawn");
+    }
 }
 
 #[test]

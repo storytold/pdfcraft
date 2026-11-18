@@ -11,6 +11,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, Std14, literal, shaped_glyph, win_ansi};
 
+/// The resource names of the fonts this writer makes begin with this.
+const SHAPED_FONT: &str = "PCShaped";
+
 /// Direction marks affect ordering, but have no visible glyph.
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
@@ -411,14 +414,16 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
     out
 }
 
-/// Promote the streams of our generated Type 3 font templates to indirect objects. This is
-/// deliberately limited to known generated font resources, never a recursive PDF walk.
+/// Promote the streams of the Type 3 font templates [`draw`] returns to indirect objects. This is
+/// limited to those fonts, by the names [`draw`] gives them: never a recursive PDF walk, and
+/// never another writer's fonts (Thai's keep the form their own writer stores them in).
 pub fn materialize_fonts(doc: &mut Document, fonts: &Dict) -> Dict {
     fonts
         .iter()
         .map(|(name, value)| {
             let mut value = value.clone();
             if let Object::Dict(ref mut font) = value
+                && name.starts_with(SHAPED_FONT.as_bytes())
                 && font.name(b"Subtype") == Some(b"Type3")
             {
                 if let Some(Object::Dict(procs)) = font.get(b"CharProcs") {
@@ -558,7 +563,7 @@ fn draw_positioned(lines: &[Line], size: f64, positions: &[[f64; 2]], color: [f6
         }
     }
     for (i, chunk) in chunks.iter().enumerate() {
-        fonts.set(format!("PCShaped{i}").into_bytes(), Object::Dict(type3(chunk, &outlines)));
+        fonts.set(format!("{SHAPED_FONT}{i}").into_bytes(), Object::Dict(type3(chunk, &outlines)));
     }
     let mut out = format!("BT\n{} {} {} rg\n", n(color[0]), n(color[1]), n(color[2])).into_bytes();
     for (line, [x, y]) in lines.iter().zip(positions) {
@@ -576,7 +581,7 @@ fn draw_positioned(lines: &[Line], size: f64, positions: &[[f64; 2]], color: [f6
                 Piece::Shaped(cs) => {
                     for c in cs {
                         let Some((font, code)) = indices.get(&key(c)).copied() else { continue };
-                        out.extend(format!("/PCShaped{font} {} Tf 1 0 0 1 {} {} Tm ", n(size), n(pen), n(*y)).bytes());
+                        out.extend(format!("/{SHAPED_FONT}{font} {} Tf 1 0 0 1 {} {} Tm ", n(size), n(pen), n(*y)).bytes());
                         out.extend(literal(&[code]));
                         out.extend_from_slice(b" Tj\n");
                         pen += c.advance * size;
@@ -874,6 +879,24 @@ mod tests {
         let narrow = Std14::Helvetica.text_width("ii", 12.0);
         let lines = wrap("ii\u{00ad}\u{00ad}ii", 12.0, narrow).unwrap();
         assert!(lines.iter().all(|line| line.width <= narrow + 1e-6), "{lines:?}");
+    }
+
+    #[test]
+    fn separator_controls_inside_a_paragraph_are_kept_and_laid_out() {
+        if crate::document_hebrew_font(false).is_none() {
+            return;
+        }
+        // NEL and the information separators are paragraph separators to UAX #9, but not places
+        // this writer starts a paragraph at: they stay in the line's text, without ink.
+        for control in ['\u{0085}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{001f}', '\u{000b}', '\u{000c}'] {
+            let text = format!("\u{5d0}{control}\u{5d1} 123{control}abc");
+            let lines = wrap(&text, 12.0, 1000.0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), text, "U+{:04X}", control as u32);
+            assert!(lines.iter().all(|l| l.width.is_finite()), "U+{:04X}", control as u32);
+            let narrow = wrap(&text, 12.0, 14.0).unwrap();
+            assert_eq!(narrow.iter().map(|l| l.text.as_str()).collect::<String>(), text, "U+{:04X}", control as u32);
+            draw(&lines, 12.0, [0.0, 0.0, 1000.0, 100.0], 0, [0.0; 3]).unwrap();
+        }
     }
 
     #[test]

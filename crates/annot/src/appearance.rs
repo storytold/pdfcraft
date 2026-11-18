@@ -67,11 +67,13 @@ pub fn shaped_width(text: &str, size: f64) -> Option<f64> {
     shaped_lines(text, size, f64::MAX).map(|lines| lines.iter().map(|line| line.width).fold(0.0, f64::max))
 }
 
-/// The height a text box's text takes `width` wide, as its appearance draws it: Arabic and
-/// Hebrew wrapped at their shaped advances, each line as tall as its marks reach. Any other
-/// text, and text past the shaping limits, is [`text_lines_height`] of [`wrap`].
+/// The height a text box's text takes `width` wide, for sizing a new box: Arabic and Hebrew
+/// wrapped at their shaped advances, each line as tall as its marks reach. Any other text, and
+/// text past the shaping limits, takes 1.2 em for each row of [`wrap`], as it always did (a
+/// Thai box is then grown to its ink where it is created).
 pub fn text_height(text: &str, size: f64, width: f64) -> f64 {
-    shaped_lines(text, size, width).map_or_else(|| text_lines_height(&wrap(text, size, width), size), |lines| appearance_text::height(&lines, size))
+    shaped_lines(text, size, width)
+        .map_or_else(|| wrap(text, size, width).len().max(1) as f64 * size * 1.2, |lines| appearance_text::height(&lines, size))
 }
 
 /// The width of the widest line and the height of the lines of a text box's text wrapped `width`

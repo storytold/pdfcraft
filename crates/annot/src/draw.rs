@@ -116,14 +116,23 @@ fn build_appearance(doc: &Document, d: &Dict, direct: &Dict, page: Option<[f64; 
     let mut stream = match appearance::build_on_page(doc, direct, page) {
         Some(stream) => stream,
         None if !std::ptr::eq(direct, d) => {
-            // The text is what the drawing shows, wherever it is kept: a `/Contents` behind a
-            // reference stays the text drawn, so text the builder refused is refused here too
-            // instead of being drawn as none.
-            let mut stored = d.clone();
-            if let Some(contents) = direct.get(b"Contents") {
-                stored.set(b"Contents".to_vec(), contents.clone());
+            // Text the Arabic and Hebrew writer draws stays the text drawn when `/Contents` is
+            // behind a reference: where that writer refused it, it is refused here too, instead
+            // of being drawn as none over the appearance the comment had. Any other text is read
+            // from the dictionary as stored, as it always was.
+            let shaped = direct
+                .get(b"Contents")
+                .and_then(Object::as_string)
+                .map(PdfString::to_text)
+                .is_some_and(|text| pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text));
+            match direct.get(b"Contents").filter(|_| shaped) {
+                Some(contents) => {
+                    let mut stored = d.clone();
+                    stored.set(b"Contents".to_vec(), contents.clone());
+                    appearance::build_on_page(doc, &stored, page)?
+                }
+                None => appearance::build_on_page(doc, d, page)?,
             }
-            appearance::build_on_page(doc, &stored, page)?
         }
         None => return None,
     };

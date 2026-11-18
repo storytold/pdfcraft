@@ -89,20 +89,23 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
         _ => "left",
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
-    // The paragraphs the drawing has. Text the Arabic and Hebrew writer draws ends a paragraph
-    // at U+2029 too, and its right-to-left paragraphs say so; any other text is drawn as it
-    // always was, on the rows CR and LF give it, left to right.
+    // Text the Arabic and Hebrew writer draws has the paragraphs that writer gives it (CR, LF, a
+    // CRLF pair once, U+2029), each with its own direction. Any other text has the rich text
+    // it always had.
     let shaped = pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text);
-    let body: String = text
-        .replace("\r\n", "\n")
-        .split(|c| matches!(c, '\r' | '\n') || (shaped && c == '\u{2029}'))
-        .map(|line| {
-            let rtl = shaped && pdfcraft_fonts::appearance_text::paragraph_rtl(line);
-            let direction = if rtl { "rtl" } else { "ltr" };
-            let paragraph_style = if q == 0 && rtl { " style=\"text-align:right\"" } else { "" };
-            format!("<p dir=\"{direction}\"{paragraph_style}>{}</p>", esc(line))
-        })
-        .collect();
+    let body: String = if shaped {
+        text.replace("\r\n", "\n")
+            .split(['\r', '\n', '\u{2029}'])
+            .map(|line| {
+                let rtl = pdfcraft_fonts::appearance_text::paragraph_rtl(line);
+                let direction = if rtl { "rtl" } else { "ltr" };
+                let paragraph_style = if q == 0 && rtl { " style=\"text-align:right\"" } else { "" };
+                format!("<p dir=\"{direction}\"{paragraph_style}>{}</p>", esc(line))
+            })
+            .collect()
+    } else {
+        text.split('\n').map(|line| format!("<p dir=\"ltr\">{}</p>", esc(line.trim_end_matches('\r')))).collect()
+    };
     let style = format!(
         "font-size:{}pt;text-align:{align};color:{hex};font-weight:{weight};font-style:{slant};font-family:{family};font-stretch:normal",
         n(size)
