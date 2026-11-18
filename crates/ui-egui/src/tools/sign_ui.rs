@@ -272,7 +272,7 @@ impl PdfCraftApp {
 
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID, after a
     /// dynamic form's preSign scripts for the field.
-    pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
+    pub fn start_signing(&mut self, ctx: &egui::Context, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
         let mut draft = SignDraft::new(page, rect, field.clone(), certify, &self.digital_ids);
         draft.graphic = match &self.sign_graphic {
@@ -289,16 +289,16 @@ impl PdfCraftApp {
         if let Some(f) = &field
             && let Some((_, doc)) = self.active_ids()
         {
-            self.run_presign(doc, f);
+            self.run_presign(ctx, doc, f);
         }
     }
 
     /// Run signature field `field`'s preSign scripts in document `doc` and keep the step pending.
-    fn run_presign(&mut self, doc: pdfcraft_engine::DocId, field: &str) {
+    fn run_presign(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId, field: &str) {
         match self.session.run_sign_event(doc, field, pdfcraft_engine::js::SignEvent::Before) {
             Ok(true) => {
                 self.presign = self.session.get(doc).map(|d| (doc, d.undo_depth()));
-                self.refresh_view_of(doc);
+                self.refresh_view_of(ctx, doc);
                 let out = self.session.take_js_output(doc);
                 self.handle_js(doc, out);
             }
@@ -310,7 +310,7 @@ impl PdfCraftApp {
     /// Take back a pending preSign step once signing has ended without a signature: the Sign
     /// dialog closed and no save picker is open for it. Only a step still the last one is taken
     /// back. Called every frame.
-    pub(crate) fn settle_presign(&mut self) {
+    pub(crate) fn settle_presign(&mut self, ctx: &egui::Context) {
         let Some((doc, depth)) = self.presign else { return };
         if self.picks_pending() {
             return;
@@ -320,16 +320,16 @@ impl PdfCraftApp {
         }
         self.presign = None;
         if self.session.get(doc).is_some_and(|d| d.undo_depth() == depth) && self.session.undo(doc).is_ok() {
-            self.refresh_view_of(doc);
+            self.refresh_view_of(ctx, doc);
         }
     }
 
     /// Show document `doc`'s changed form in its view.
-    fn refresh_view_of(&mut self, doc: pdfcraft_engine::DocId) {
+    fn refresh_view_of(&mut self, ctx: &egui::Context, doc: pdfcraft_engine::DocId) {
         if let Some(i) = self.views.iter().position(|v| v.id == doc)
             && let Some(info) = self.session.get(doc).map(|d| d.info.clone())
         {
-            self.views[i].document_changed(&info);
+            self.views[i].document_changed(ctx, &info);
         }
     }
 
@@ -402,9 +402,14 @@ impl PdfCraftApp {
         true
     }
 
-    /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data
-    /// (or in `export_dir_override`). Returns its list index.
+    /// Configure New Digital ID ▸ Create: a self-signed ID saved as a .p12 next to the app data.
+    /// Returns its list index.
     fn create_digital_id(&mut self) -> Result<usize, String> {
+        self.create_digital_id_in(id_dir())
+    }
+
+    /// [`Self::create_digital_id`], saving into `dir` (`None`: there is no folder to save in).
+    fn create_digital_id_in(&mut self, dir: Option<PathBuf>) -> Result<usize, String> {
         let (path, cert) = {
             let Some(d) = self.sign_draft.as_ref().map(|d| &d.new_id) else { return Err("nothing to create".into()) };
             if d.name.trim().is_empty() {
@@ -431,11 +436,7 @@ impl PdfCraftApp {
             let cert = Certificate::self_signed(&dn, &key, sign::Time::from_unix(now), 5, &serial).map_err(|e| e.to_string())?;
             let id = DigitalId { key, certificate: cert.clone(), chain: Vec::new(), friendly_name: Some(d.name.trim().to_string()) };
             let p12 = sign::pkcs12::write(&id, &d.password).map_err(|e| e.to_string())?;
-            let dir = match &self.export_dir_override {
-                Some(p) => Some(PathBuf::from(p)),
-                None => id_dir(),
-            }
-            .ok_or("There is no folder to save the digital ID in.")?;
+            let dir = dir.ok_or("There is no folder to save the digital ID in.")?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let stem: String = d.name.trim().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
             let path = save_new_id_file(&dir, &stem, &p12).map_err(|e| e.to_string())?;
@@ -542,7 +543,7 @@ impl PdfCraftApp {
             if let Some(view) = app.views.iter_mut().find(|v| v.id == doc_id) {
                 view.invalidate_content();
             }
-            app.right = Some(crate::RightPanel::Signatures);
+            app.set_right(Some(crate::RightPanel::Signatures));
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
             app.handle_js(doc_id, said);
             if let Some(e) = after {
@@ -550,27 +551,22 @@ impl PdfCraftApp {
             }
             Ok(())
         };
-        match self.save_override.clone() {
-            Some(p) => sign_and_save(self, PathBuf::from(p)),
-            None => {
-                // The signature's page, rectangle and field refer to the document as it is now:
-                // the pick is dropped (with a notice) if it is edited or switched away from
-                // meanwhile. An error after the pick arrives as a notice.
-                let mut request = PickRequest::save(FilePurpose::SignedCopy.key()).file_name(format!("{stem}_signed.pdf")).filter("PDF", &["pdf"]);
-                if let Some(parent) = folder.as_deref().and_then(|p| std::path::Path::new(p).parent()) {
-                    request = request.default_directory(parent);
-                }
-                // PLAN: assumed `pick_file(PickRequest, Option<target of doc_id>, FnOnce(&mut Self, PathBuf))` (pdf-shell-w14); the target is the document id.
-                self.pick_file(request, Some(doc_id), move |app: &mut Self, path: PathBuf| {
-                    if let Err(e) = sign_and_save(app, path)
-                        && !e.is_empty()
-                    {
-                        app.notify(e);
-                    }
-                });
-                Ok(())
-            }
+        // The signature's page, rectangle and field refer to the document as it is now:
+        // the pick is dropped (with a notice) if it is edited or switched away from
+        // meanwhile. An error after the pick arrives as a notice.
+        let mut request = PickRequest::save(FilePurpose::SignedCopy.key()).file_name(format!("{stem}_signed.pdf")).filter("PDF", &["pdf"]);
+        if let Some(parent) = folder.as_deref().and_then(|p| std::path::Path::new(p).parent()) {
+            request = request.default_directory(parent);
         }
+        let target = self.pick_target(Some(doc_id));
+        self.pick_first(request, target, move |app: &mut Self, path: PathBuf| {
+            if let Err(e) = sign_and_save(app, path)
+                && !e.is_empty()
+            {
+                app.notify(e);
+            }
+        });
+        Ok(())
     }
 
     /// The saved signature or image `g` stands for (`None`: the name).
@@ -678,8 +674,8 @@ impl PdfCraftApp {
                 // The reading-colours preference is app-wide: the newly opened revision starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
                 let Some(doc) = self.session.get(new) else { return };
-                let mut view = DocView::new(new, &doc.info, self.view_defaults);
-                if self.full_screen {
+                let mut view = DocView::new(new, &doc.info, self.view_defaults, self.highlight_fields);
+                if self.full_screen() {
                     view.enter_presentation();
                 }
                 view.snapshot = Some(Snapshot { kind: SnapshotKind::Revision, revision: n, from });
@@ -730,8 +726,8 @@ impl PdfCraftApp {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
                 let Some(doc) = self.session.get(new) else { return };
-                let mut view = DocView::new(new, &doc.info, self.view_defaults);
-                if self.full_screen {
+                let mut view = DocView::new(new, &doc.info, self.view_defaults, self.highlight_fields);
+                if self.full_screen() {
                     view.enter_presentation();
                 }
                 view.snapshot = Some(Snapshot { kind: SnapshotKind::SignedVersion, revision, from });
@@ -761,7 +757,6 @@ mod tests {
     /// does. Returns where it was saved.
     fn create_in(dir: &std::path::Path) -> Result<PathBuf, String> {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.export_dir_override = Some(dir.to_string_lossy().into_owned());
         let mut draft = SignDraft::new(0, None, None, None, &[]);
         // P-256 keeps the test fast.
         let key = KEY_ALGORITHMS.iter().position(|k| k.1 == "p256").unwrap();
@@ -770,25 +765,31 @@ mod tests {
         draft.new_id.password = "secret12".into();
         draft.new_id.confirm = "secret12".into();
         app.sign_draft = Some(draft);
-        let i = app.create_digital_id()?;
+        let i = app.create_digital_id_in(Some(dir.to_path_buf()))?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
     }
 
     #[test]
     fn an_exported_certificate_is_written_inside_the_chosen_folder() {
-        let dir = scratch();
-        let out = dir.join("out");
-        std::fs::create_dir_all(&out).unwrap();
+        use craft::host::{AppInfo, Host, Picked, ScriptedFiles, Wake};
+        use craft::platform::clipboard::{Clipboard, EventClipboard};
+        use craft::platform::open::FileIntake;
+        use craft::platform::watch::FileWatch;
+        use std::sync::Arc;
+
+        let out = PathBuf::from("/scripted/out");
+        let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));
+        let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files.clone()).build();
+        let (intake, _) = FileIntake::new(Wake::none());
+        let clipboard = Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
+        let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
+        let mut app = PdfCraftApp::with_host(Arc::new(host), services);
         let key = PrivateKey::generate_p256().unwrap();
         let cert = Certificate::self_signed(&Name::build("../x", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
-        let mut app = PdfCraftApp::for_unit_tests();
-        app.export_dir_override = Some(out.to_string_lossy().into_owned());
         app.export_certificate(&cert);
-        let written: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert_eq!(written, vec![std::ffi::OsString::from("out")]);
-        let pem = std::fs::read_to_string(out.join(".._x.cer")).unwrap();
+        app.process_picks();
+        let pem = String::from_utf8(files.file(&out.join(".._x.cer")).unwrap()).unwrap();
         assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"), "{pem}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -913,7 +914,7 @@ mod tests {
         assert!(app.remove_digital_id(1));
         assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(0));
         let mut fresh = PdfCraftApp::for_unit_tests();
-        fresh.restore(&app.persist());
+        fresh.apply_settings(&app.settings_snapshot());
         assert!(fresh.digital_ids.is_empty(), "the removal survives a restart: {:?}", fresh.digital_ids);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1020,9 +1021,9 @@ mod tests {
     fn dismissing_or_stepping_back_in_the_sign_dialog_clears_passwords() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_| {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
             let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option("language", "en").unwrap();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
             app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
             let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
             draft.step = SignStep::SignAs;
@@ -1063,7 +1064,14 @@ mod tests {
         // Importing a digital ID file and signing work by borrowing the draft in place.
         let dir = scratch();
         let saved = create_in(&dir).unwrap();
-        let mut import_app = PdfCraftApp::for_unit_tests();
+        let out_pdf = dir.join("signed.pdf");
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out_pdf.clone()])]));
+        let host = craft::host::Host::builder(craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build();
+        let (intake, _) = craft::platform::open::FileIntake::new(craft::host::Wake::none());
+        let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
+        let watch = craft::platform::watch::FileWatch::new(craft::host::Wake::none()).inline();
+        let services = crate::AppServices::new(craft::host::Wake::none(), clipboard, None, None, intake, watch);
+        let mut import_app = PdfCraftApp::with_host(std::sync::Arc::new(host), services);
         let mut import_draft = SignDraft::new(0, None, None, None, &[]);
         import_draft.new_id.create = false;
         import_draft.new_id.file = saved.to_string_lossy().into_owned();
@@ -1074,13 +1082,12 @@ mod tests {
 
         let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 200.0, 1).unwrap();
         import_app.open_bytes("unsigned.pdf", None, bytes.as_ref().clone()).unwrap();
-        let out_pdf = dir.join("signed.pdf");
-        import_app.save_override = Some(out_pdf.to_string_lossy().into_owned());
         let mut sign_draft = SignDraft::new(0, None, None, None, &import_app.digital_ids);
         sign_draft.step = SignStep::SignAs;
         sign_draft.password = "secret12".into();
         import_app.sign_draft = Some(sign_draft);
         assert_eq!(import_app.finish_signing(), Ok(()));
+        import_app.process_picks();
         assert!(out_pdf.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

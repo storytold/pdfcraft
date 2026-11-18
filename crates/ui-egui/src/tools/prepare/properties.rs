@@ -60,7 +60,7 @@ impl FlagBit {
 
 /// A check box; whether the user changed it.
 pub(super) fn check(ui: &mut egui::Ui, label: &str, value: &mut bool, enabled: bool) -> bool {
-    Checkbox::new(Bind::bound(&mut *value)).label(label).enabled(enabled).show(ui).events.committed().is_some()
+    Checkbox::new(Bind::bound(&mut *value)).label(label.to_owned()).enabled(enabled).show(ui).events.committed().is_some()
 }
 
 /// A check box for a `/Ff` bit.
@@ -75,21 +75,21 @@ fn flag_box(ui: &mut egui::Ui, d: &mut FieldDraft, bit: u32, inverted: bool, lab
 /// A labelled one-line text field.
 pub(super) fn text_row(ui: &mut egui::Ui, salt: &'static str, label: &str, value: &mut String) {
     Field::new(label).id_salt(salt).show(ui, |ui, _| {
-        TextField::new(label, Bind::bound(&mut *value)).show(ui);
+        TextField::new(label.to_owned(), Bind::bound(&mut *value)).show(ui);
     });
 }
 
 /// A labelled multi-line field for script text: monospaced, and Tab types a tab.
 pub(super) fn code_row(ui: &mut egui::Ui, salt: &'static str, label: &str, value: &mut String, lines: usize) {
     Field::new(label).id_salt(salt).show(ui, |ui, _| {
-        TextField::new(label, Bind::bound(&mut *value)).lines(lines).mono().tab_inserts(true).show(ui);
+        TextField::new(label.to_owned(), Bind::bound(&mut *value)).lines(lines).mono().tab_inserts(true).show(ui);
     });
 }
 
 /// A labelled choice among `entries`.
 pub(super) fn select_row<T: Value>(ui: &mut egui::Ui, salt: &'static str, label: &str, value: &mut T, entries: &[Entry<T>]) {
     Field::new(label).id_salt(salt).show(ui, |ui, _| {
-        Select::new(label, Bind::bound(&mut *value), entries).show(ui);
+        Select::new(label.to_owned(), Bind::bound(&mut *value), entries).show(ui);
     });
 }
 
@@ -105,9 +105,9 @@ pub(super) fn number_row(
 ) {
     let mut shown = Some(*value);
     Field::new(label).id_salt(salt).show(ui, |ui, _| {
-        let mut field = NumberField::new(label, Bind::bound(&mut shown)).range(range);
+        let mut field = NumberField::new(label.to_owned(), Bind::bound(&mut shown)).range(range.clone());
         if let Some(unit) = unit {
-            field = field.unit(unit);
+            field = field.unit(unit.to_owned());
         }
         field.enabled(enabled).show(ui);
     });

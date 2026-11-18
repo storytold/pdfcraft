@@ -689,7 +689,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.apply_edit(Edit::SetCalculationOrder { names });
         }
         Some(Act::Undo) => {
-            app.execute("edit.undo");
+            app.execute(ui.ctx(), "edit.undo");
         }
         Some(Act::EditFormula(name)) => {
             if let Some(view) = app.views.get_mut(index) {

@@ -10,7 +10,7 @@ use craft::review::ui::signature::paint_signature;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, SelectMode, Show, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::{Picture, PictureSize, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::{Row, Stack};
@@ -222,7 +222,7 @@ fn run(app: &mut PdfCraftApp, step: SignStep, picked: Option<usize>, asked: Aske
 /// The error line of the draft.
 fn error(ui: &mut egui::Ui, error: &Option<String>) {
     if let Some(e) = error.as_ref().filter(|e| !e.is_empty()) {
-        Notice::new(Tone::Bad, tl!(e)).show(ui);
+        Notice::new(Tone::Bad, tl!(e).to_owned()).show(ui);
     }
 }
 

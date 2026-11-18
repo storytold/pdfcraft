@@ -13,7 +13,7 @@ use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIM
 use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageBoxDrag, PageXform};
+use crate::canvas::{DocView, PageBoxDrag, PageSession, PageXform};
 
 pub(crate) mod dialog;
 mod draft;
@@ -269,10 +269,10 @@ fn place_tab_badge(widget: Rect, page: Rect, size: egui::Vec2, placed: &[Rect]) 
 /// A right-click on widget `widget` of field `field` (the top hit there): the field is selected,
 /// so the menu acts on it. Part of a selection of several, it becomes the anchor the others line
 /// up with. Not while a gesture runs: the release acts on the selection the gesture began with.
-pub(crate) fn context(form: &[FormField], field: usize, widget: usize, view: &mut DocView) {
+pub(crate) fn context(form: &[FormField], field: usize, widget: usize, session: &mut PageSession) {
     let Some(f) = form.get(field) else { return };
     let key = (f.name.clone(), widget);
-    let prep = &mut view.session.prepare;
+    let prep = &mut session.prepare;
     if !matches!(prep.gesture, Gesture::Idle) {
         return;
     }
@@ -386,10 +386,10 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 /// clear the selection. Each selection is one widget, so selecting one radio button of a group,
 /// or one copy of a duplicated field, deletes only that one, as in Acrobat (#4609); a field's
 /// last widget takes the field with it.
-pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
-    let first = view.session.prepare.selected.take()?;
+pub(crate) fn delete_selected(session: &mut PageSession) -> Option<Edit> {
+    let first = session.prepare.selected.take()?;
     let mut picked = vec![first];
-    for w in std::mem::take(&mut view.session.prepare.also) {
+    for w in std::mem::take(&mut session.prepare.also) {
         if !picked.contains(&w) {
             picked.push(w);
         }
@@ -406,30 +406,30 @@ pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
 /// Select every widget on the current page.
 pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
     let mut selected =
-        form.iter().flat_map(|f| f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(view.current)).map(|(wi, _)| (f.name.clone(), wi)));
+        form.iter().flat_map(|f| f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(view.current())).map(|(wi, _)| (f.name.clone(), wi)));
     view.session.prepare.selected = selected.next();
     view.session.prepare.also = selected.collect();
 }
 
 /// After an Add field edit: select the new field (the form's last).
-pub(crate) fn after_refresh(view: &mut DocView, form: &[FormField]) {
-    view.session.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
-    if let Some(n) = view.session.prepare.select_added.take() {
+pub(crate) fn after_refresh(session: &mut PageSession, form: &[FormField]) {
+    session.prepare.also.retain(|(name, wi)| form.iter().any(|f| &f.name == name && *wi < f.widgets.len()));
+    if let Some(n) = session.prepare.select_added.take() {
         if form.len() > n
             && let Some(f) = form.last()
         {
-            view.session.prepare.selected = Some((f.name.clone(), 0));
-        } else if let Some((name, _)) = &view.session.prepare.selected
+            session.prepare.selected = Some((f.name.clone(), 0));
+        } else if let Some((name, _)) = &session.prepare.selected
             && let Some(f) = form.iter().find(|f| &f.name == name)
         {
             // A radio button joined the selected group: select the new button.
-            view.session.prepare.selected = Some((f.name.clone(), f.widgets.len().saturating_sub(1)));
+            session.prepare.selected = Some((f.name.clone(), f.widgets.len().saturating_sub(1)));
         }
     }
-    if let Some((name, wi)) = &view.session.prepare.selected
+    if let Some((name, wi)) = &session.prepare.selected
         && !form.iter().any(|f| &f.name == name && *wi < f.widgets.len())
     {
-        view.session.prepare.selected = None;
+        session.prepare.selected = None;
     }
 }
 

@@ -8,71 +8,85 @@ use craft::behavior::kurbo::{Point, Rect as KRect};
 use craft::behavior::press::{PointerButton, PressPhase};
 use craft::behavior::{CancelReason, Cursor, CursorIcon, EditEvent, Input, Metrics};
 use craft::draw::ui::transform::TransformBox;
+use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props, Role};
+use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props, Role, Show as _};
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
 use craft::ui::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, vec2};
 use pdfcraft_engine::{Edit, FieldProps, FormField};
+use pdfcraft_render::DocInfo;
 
 use super::{FieldTool, Gesture, PrepareView, delete_selected, place_tab_badge, screen_rect, table_rect, to_user, user_rect};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
-use crate::canvas::{DocView, PageBoxDrag, PageXform};
+use crate::canvas::{PageBoxDrag, PageSession, PageXform};
 
 /// A drag under this many screen pixels either way is a click, which places the default size.
 const CLICK_SIZE: f32 = 4.0;
 
-/// The page position, transform and the page's info for `page`, or `None` while it is not laid out.
-// PLAN: assumed `DocView::info(&self) -> &DocInfo` and `DocView::page_xform(page)` (pdf-canvas-w8); canvas-w8's
-// written body has neither (it passes `info`, `pages` and `rotation` from its pass and calls
-// `page_parts(out, session, form, info, pages, rotation)`, `field_press(session, form, press)`): the lead pins one shape.
-fn geometry(view: &DocView, page: usize) -> Option<PageXform> {
-    view.page_xform(page)
+/// The transforms of the pages placed this pass, with the view's `rotation` and the page sizes of `info`.
+fn transforms(pages: &[PlacedPage], info: &DocInfo, rotation: u16) -> Vec<(usize, PageXform)> {
+    pages
+        .iter()
+        .map(|placed| {
+            let size = info.pages.get(placed.page).map_or((1.0, 1.0), |p| (p.width, p.height));
+            (placed.page, PageXform::of(placed, rotation, size))
+        })
+        .collect()
 }
 
-/// One part per widget on `page`, for the pages' router: a press on a field selects it, a drag of it
+/// The transform of `page` among `xforms`.
+fn transform_of(xforms: &[(usize, PageXform)], page: usize) -> Option<PageXform> {
+    xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
+}
+
+/// One part per widget on the placed `pages`, for the pages' router: a press on a field selects it, a drag of it
 /// moves it. The caller asks only while preparing with no field tool armed, because a field tool draws
 /// anywhere and fields are then not pressable.
-pub(crate) fn page_parts(form: &[FormField], page: usize, view: &DocView) -> Vec<PagePart> {
-    let Some(xf) = geometry(view, page) else { return Vec::new() };
-    let info = view.info();
-    let mut parts = Vec::new();
-    for (field, f) in form.iter().enumerate() {
-        for (widget, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
-            let rect = screen_rect(&xf, info, page, w.rect);
-            parts.push(PagePart::new(Owner::PrepareField { field, widget }, page, rect, PageLayer::Placed).cursor(CursorIcon::Move).passes_drag());
+// The parts read nothing from the session; the page body hands it over so every owner's `page_parts` has one shape.
+pub(crate) fn page_parts(out: &mut Vec<PagePart>, _session: &PageSession, form: &[FormField], info: &DocInfo, pages: &[PlacedPage], rotation: u16) {
+    for (page, xf) in transforms(pages, info, rotation) {
+        for (field, f) in form.iter().enumerate() {
+            for (widget, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
+                let rect = screen_rect(&xf, info, page, w.rect);
+                out.push(PagePart::new(Owner::PrepareField { field, widget }, page, rect, PageLayer::Placed).cursor(CursorIcon::Move).passes_drag());
+            }
         }
     }
-    parts
 }
 
 /// A press on a field part: a click selects it (Shift or ⌘ toggles it in the selection), a double
 /// click opens Field Properties, a secondary press selects it for the field menu. A drag that follows
 /// goes to [`PrepareTool`].
-pub(crate) fn field_press(press: &PagePress, view: &mut DocView, form: &[FormField]) {
+pub(crate) fn field_press(session: &mut PageSession, form: &[FormField], press: &PagePress) {
     let Owner::PrepareField { field, widget } = press.owner else { return };
     let PressPhase::Down { start, .. } = press.phase else { return };
     let Some(f) = form.get(field) else { return };
     match start.button {
-        PointerButton::Secondary => super::context(form, field, widget, view),
+        PointerButton::Secondary => super::context(form, field, widget, session),
         PointerButton::Primary => {
             let extend = press.mods.shift || press.mods.cmd;
-            view.session.prepare.select((f.name.clone(), widget), extend);
+            session.prepare.select((f.name.clone(), widget), extend);
             // The `Down` of a second primary press: the one double press, as `PressState::double_pressed` reads it.
             if start.clicks >= 2 && !extend {
-                view.session.prepare.outcome.properties = true;
+                session.prepare.outcome.properties = true;
             }
         }
         _ => {}
     }
 }
 
-/// The screen rect of widget `key` and its page.
-fn widget_rect(view: &DocView, form: &[FormField], key: &(String, usize)) -> Option<(usize, Rect)> {
+/// The widget `key` names, and the page it is on.
+fn widget_of<'f>(form: &'f [FormField], key: &(String, usize)) -> Option<(usize, &'f pdfcraft_engine::FormWidget)> {
     let w = form.iter().find(|f| f.name == key.0)?.widgets.get(key.1)?;
-    let page = w.page?;
-    let xf = geometry(view, page)?;
-    Some((page, screen_rect(&xf, view.info(), page, w.rect)))
+    Some((w.page?, w))
+}
+
+/// The screen rect of widget `key` and its page.
+fn widget_rect(xforms: &[(usize, PageXform)], info: &DocInfo, form: &[FormField], key: &(String, usize)) -> Option<(usize, Rect)> {
+    let (page, w) = widget_of(form, key)?;
+    let xf = transform_of(xforms, page)?;
+    Some((page, screen_rect(&xf, info, page, w.rect)))
 }
 
 fn kurbo_rect(r: Rect) -> KRect {
@@ -90,24 +104,33 @@ pub(crate) struct PrepareTool<'a> {
     tool: Option<FieldTool>,
     allowed: bool,
     form: &'a [FormField],
-    view: &'a mut DocView,
+    session: &'a mut PageSession,
+    info: &'a DocInfo,
+    /// The transforms of the pages placed this pass.
+    xforms: &'a [(usize, PageXform)],
 }
 
 impl<'a> PrepareTool<'a> {
     /// The tool for this pass. `allowed` is false while a table window is open (nothing is drawn or
     /// moved then).
-    pub(crate) fn new(tool: Option<FieldTool>, allowed: bool, form: &'a [FormField], view: &'a mut DocView) -> Self {
-        Self { tool, allowed, form, view }
+    pub(crate) fn new(
+        tool: Option<FieldTool>,
+        allowed: bool,
+        form: &'a [FormField],
+        session: &'a mut PageSession,
+        info: &'a DocInfo,
+        xforms: &'a [(usize, PageXform)],
+    ) -> Self {
+        Self { tool, allowed, form, session, info, xforms }
     }
 
     /// Every widget key and screen rect on every shown page.
     fn all_widgets(&self) -> Vec<((String, usize), Rect)> {
         let mut out = Vec::new();
-        for placed in &self.view.placed {
-            let Some(xf) = geometry(self.view, placed.page) else { continue };
+        for (page, xf) in self.xforms {
             for f in self.form {
-                for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(placed.page)) {
-                    out.push(((f.name.clone(), wi), screen_rect(&xf, self.view.info(), placed.page, w.rect)));
+                for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(*page)) {
+                    out.push(((f.name.clone(), wi), screen_rect(xf, self.info, *page, w.rect)));
                 }
             }
         }
@@ -118,27 +141,27 @@ impl<'a> PrepareTool<'a> {
         let Some(tool) = self.tool else { return };
         // PLAN: assumed `PageBoxDrag::release(min: f32) -> Option<(usize, Rect)>` (pdf-canvas-w18 note 7)
         let Some((page, rect)) = drag.release(CLICK_SIZE) else { return };
-        let Some(xf) = geometry(self.view, page) else { return };
+        let Some(xf) = transform_of(self.xforms, page) else { return };
         let click = rect.width() < CLICK_SIZE || rect.height() < CLICK_SIZE;
         if tool == FieldTool::TextTable {
             let area = if click { Rect::from_min_size(origin, Vec2::ZERO) } else { rect };
-            self.view.prepare.outcome.table = Some((page, table_rect(&xf, area)));
-            self.view.prepare.outcome.placed = true;
+            self.session.prepare.outcome.table = Some((page, table_rect(&xf, area)));
+            self.session.prepare.outcome.placed = true;
             return;
         }
         let user = if click {
             // A click: the default size, top-left at the pointer.
-            let at = to_user(&xf, self.view.info(), page, origin);
+            let at = to_user(&xf, self.info, page, origin);
             let (w, h) = tool.default_size();
             [at[0], at[1] - h, at[0] + w, at[1]]
         } else {
-            user_rect(&xf, self.view.info(), page, rect)
+            user_rect(&xf, self.info, page, rect)
         };
-        let join = self.view.prepare.selected.as_ref().and_then(|(n, _)| self.form.iter().find(|f| &f.name == n));
+        let join = self.session.prepare.selected.as_ref().and_then(|(n, _)| self.form.iter().find(|f| &f.name == n));
         let kind = tool.new_field(join);
-        self.view.prepare.select_added = Some(self.form.len());
-        self.view.pending_edit = Some(Edit::AddField { page, rect: user, kind, name: None });
-        self.view.prepare.outcome.placed = true;
+        self.session.prepare.select_added = Some(self.form.len());
+        self.session.pending_edit = Some(Edit::AddField { page, rect: user, kind, name: None });
+        self.session.prepare.outcome.placed = true;
     }
 
     fn finish_move(&mut self, page: usize, offset: craft::behavior::kurbo::Vec2, widget: (String, usize)) {
@@ -146,19 +169,19 @@ impl<'a> PrepareTool<'a> {
         if offset.hypot() < 1.0 {
             return;
         }
-        let Some((_, rect)) = widget_rect(self.view, self.form, &widget) else { return };
-        let Some(xf) = geometry(self.view, page) else { return };
+        let Some((_, rect)) = widget_rect(self.xforms, self.info, self.form, &widget) else { return };
+        let Some(xf) = transform_of(self.xforms, page) else { return };
         let moved = rect.translate(vec2(offset.x as f32, offset.y as f32));
-        let user = user_rect(&xf, self.view.info(), page, moved);
+        let user = user_rect(&xf, self.info, page, moved);
         let (name, wi) = widget;
-        self.view.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
+        self.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
     }
 
     fn finish_marquee(&mut self, marquee: MarqueeSelect<(String, usize)>) {
         let hits = self.all_widgets().into_iter().filter(|(_, r)| r.intersects(marquee.rect())).collect::<Vec<_>>();
         let mut items = marquee.selection(hits).into_iter();
-        self.view.prepare.selected = items.next();
-        self.view.prepare.also = items.collect();
+        self.session.prepare.selected = items.next();
+        self.session.prepare.also = items.collect();
     }
 }
 
@@ -167,39 +190,31 @@ impl CanvasTool for PrepareTool<'_> {
         if !self.allowed || pointer.button != PointerButton::Primary {
             return ToolAction::Ignored;
         }
-        let Some(placed) = self.view.session.placed.iter().find(|p| p.rect.contains(pointer.pos)).cloned() else { return ToolAction::Ignored };
+        let Some(placed) = self.session.placed.iter().find(|p| p.rect.contains(pointer.pos)).cloned() else { return ToolAction::Ignored };
         if self.tool.is_some() {
             let mut drag = PageBoxDrag::default();
             drag.press(&placed, pointer.pos);
-            self.view.session.prepare.gesture = Gesture::Draw { drag, origin: pointer.pos };
+            self.session.prepare.gesture = Gesture::Draw { drag, origin: pointer.pos };
             return ToolAction::Claimed;
         }
         // A drag that began on a field part moves the field the part's press selected.
-        let on_selected = self
-            .view
-            .session
-            .prepare
-            .selected
-            .clone()
-            .filter(|key| widget_rect(self.view, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos)));
+        let on_selected = self.session.prepare.selected.clone().filter(|key| {
+            widget_rect(self.xforms, self.info, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos))
+        });
         if let Some(widget) = on_selected {
             let slop = f64::from(cx.slop);
             let gesture = MoveGesture::press(&ConstrainStyle::new(slop, slop), point(pointer.pos), pointer.mods, Directions::Four);
-            self.view.session.prepare.gesture = Gesture::Move { page: placed.page, gesture, widget };
+            self.session.prepare.gesture = Gesture::Move { page: placed.page, gesture, widget };
             return ToolAction::Claimed;
         }
         let extend = pointer.mods.shift || pointer.mods.cmd;
-        let base = if extend {
-            self.view.session.prepare.selected.iter().chain(self.view.session.prepare.also.iter()).cloned().collect()
-        } else {
-            Vec::new()
-        };
-        self.view.session.prepare.gesture = Gesture::Marquee(MarqueeSelect::begin(pointer.pos, pointer.mods, base));
+        let base = if extend { self.session.prepare.selected.iter().chain(self.session.prepare.also.iter()).cloned().collect() } else { Vec::new() };
+        self.session.prepare.gesture = Gesture::Marquee(MarqueeSelect::begin(pointer.pos, pointer.mods, base));
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        match &mut self.view.session.prepare.gesture {
+        match &mut self.session.prepare.gesture {
             Gesture::Draw { drag, .. } => drag.drag(pointer.pos),
             Gesture::Marquee(marquee) => marquee.update(pointer.pos),
             Gesture::Move { gesture, .. } => {
@@ -210,7 +225,7 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        match std::mem::take(&mut self.view.session.prepare.gesture) {
+        match std::mem::take(&mut self.session.prepare.gesture) {
             Gesture::Idle => {}
             Gesture::Draw { mut drag, origin } => {
                 drag.drag(pointer.pos);
@@ -228,26 +243,26 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
-        if let Gesture::Marquee(marquee) = std::mem::take(&mut self.view.session.prepare.gesture) {
+        if let Gesture::Marquee(marquee) = std::mem::take(&mut self.session.prepare.gesture) {
             let mut before = marquee.cancel().into_iter();
-            self.view.session.prepare.selected = before.next();
-            self.view.session.prepare.also = before.collect();
+            self.session.prepare.selected = before.next();
+            self.session.prepare.also = before.collect();
         }
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.view.session.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.session.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         match key {
-            ToolKey::Delete { .. } if self.view.session.prepare.selected.is_some() => {
-                self.view.session.pending_edit = delete_selected(self.view);
+            ToolKey::Delete { .. } if self.session.prepare.selected.is_some() => {
+                self.session.pending_edit = delete_selected(self.session);
                 true
             }
-            ToolKey::Cancel if self.view.session.prepare.selected.is_some() => {
-                self.view.session.prepare.selected = None;
-                self.view.session.prepare.also.clear();
+            ToolKey::Cancel if self.session.prepare.selected.is_some() => {
+                self.session.prepare.selected = None;
+                self.session.prepare.also.clear();
                 true
             }
             _ => false,
@@ -255,7 +270,7 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn paint(&self, _draw: &Draw<'_>, cx: &ToolContext<'_>) {
-        match &self.view.session.prepare.gesture {
+        match &self.session.prepare.gesture {
             Gesture::Draw { drag, .. } => drag.paint(cx),
             Gesture::Marquee(marquee) => {
                 let r = marquee.rect();
@@ -277,15 +292,14 @@ impl CanvasTool for PrepareTool<'_> {
 /// The corner handles of the anchor field, as a Free Transform box that only resizes: no rotating,
 /// skewing or distorting, and a press inside is the field part's. A corner drag's `Commit` and an
 /// arrow nudge's `Set` each become one field edit; Escape with no drag clears the selection.
-// PLAN: the box's state is in the canvas's document space; assumed that is screen space on the page body
-// (pdf-canvas-w8), as the sheet's `selection_box(ui, view, form, page)` gives no view.
-pub(crate) fn selection_box(ui: &mut Ui, view: &mut DocView, form: &[FormField], page: usize) {
-    let Some(key) = view.session.prepare.selected.clone() else { return };
-    let Some((widget_page, rect)) = widget_rect(view, form, &key) else { return };
+// PLAN: the box's state is in the canvas's document space; assumed that is screen space on the page body (pdf-canvas-w8).
+pub(crate) fn selection_box(ui: &mut Ui, session: &mut PageSession, form: &[FormField], info: &DocInfo, xforms: &[(usize, PageXform)], page: usize) {
+    let Some(key) = session.prepare.selected.clone() else { return };
+    let Some((widget_page, rect)) = widget_rect(xforms, info, form, &key) else { return };
     if widget_page != page {
         return;
     }
-    let Some(xf) = geometry(view, page) else { return };
+    let Some(xf) = transform_of(xforms, page) else { return };
     let rules = BoxRules::default()
         .with_scale(ScaleRule::Free)
         .with_allow(BoxAllow::new(false, false, false).with_warp(false))
@@ -309,14 +323,14 @@ pub(crate) fn selection_box(ui: &mut Ui, view: &mut DocView, form: &[FormField],
             hi = Point::new(hi.x.max(p.x), hi.y.max(p.y));
         }
         let screen = Rect::from_min_max(Pos2::new(lo.x as f32, lo.y as f32), Pos2::new(hi.x as f32, hi.y as f32));
-        edit = Some(user_rect(&xf, view.info(), page, screen));
+        edit = Some(user_rect(&xf, info, page, screen));
     }
     if let Some(user) = edit {
         let (name, wi) = key;
-        view.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
+        session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
     } else if shown.discard {
-        view.session.prepare.selected = None;
-        view.session.prepare.also.clear();
+        session.prepare.selected = None;
+        session.prepare.also.clear();
     }
 }
 
@@ -340,11 +354,17 @@ pub(crate) struct PrepareOverlay {
 }
 
 impl PrepareOverlay {
-    /// The overlay of `page`, from the form, the tab order and the view's selection and gesture.
-    pub(crate) fn new(form: &[FormField], tab_order: &[(usize, usize)], view: &DocView, page: usize) -> Option<Self> {
-        let xf = geometry(view, page)?;
-        let info = view.info();
-        let prep: &PrepareView = &view.session.prepare;
+    /// The overlay of `page`, from the form, the tab order and the session's selection and gesture.
+    pub(crate) fn new(
+        form: &[FormField],
+        tab_order: &[(usize, usize)],
+        session: &PageSession,
+        info: &DocInfo,
+        xforms: &[(usize, PageXform)],
+        page: usize,
+    ) -> Option<Self> {
+        let xf = transform_of(xforms, page)?;
+        let prep: &PrepareView = &session.prepare;
         let moving = match &prep.gesture {
             Gesture::Move { page: p, gesture, widget } if *p == page => {
                 let d = gesture.value().delta;

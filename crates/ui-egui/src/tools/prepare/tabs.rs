@@ -56,11 +56,11 @@ const EDIT: TrailingPart = TrailingPart::new(1);
 /// value they belong to; the group's value is written back when another is chosen.
 fn radios<T: Value + Copy>(ui: &mut egui::Ui, name: &str, value: &mut T, options: &[(T, &str)], mut after: impl FnMut(&mut egui::Ui, T)) {
     let shown = *value;
-    RadioGroup::new(name, Bind::bound(value)).show(ui, |ui, _| {
+    RadioGroup::new(name.to_owned(), Bind::bound(value)).show(ui, |ui, _| {
         Stack::new().show(ui, |ui, cx| {
             for (at, (option, label)) in options.iter().enumerate() {
                 let side = SideLabel::new().layout(FieldLayout::After);
-                cx.labelled(ui, at, Label::from(*label), side, Radio::new(*option));
+                cx.labelled(ui, at, Label::from((*label).to_owned()), side, Radio::new(*option));
                 if *option == shown {
                     after(ui, *option);
                 }
@@ -71,7 +71,7 @@ fn radios<T: Value + Copy>(ui: &mut egui::Ui, name: &str, value: &mut T, options
 
 /// A choice among the `names`, numbered from 0, over `value`.
 fn index_row<T: Value + Copy + TryFrom<usize> + Into<usize>>(ui: &mut egui::Ui, salt: &'static str, label: &str, value: &mut T, names: &[&str]) {
-    let entries: Vec<Entry<usize>> = names.iter().enumerate().map(|(i, name)| Entry::new(i, *name)).collect();
+    let entries: Vec<Entry<usize>> = names.iter().enumerate().map(|(i, name)| Entry::new(i, (*name).to_owned())).collect();
     let mut shown: usize = (*value).into();
     select_row(ui, salt, label, &mut shown, &entries);
     if let Ok(v) = T::try_from(shown) {
@@ -236,7 +236,7 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
                 d.new_action.text.clear();
                 d.editing = None;
             }
-            Err(e) => note(ui, tl!(&e)),
+            Err(e) => note(ui, tl!(&e).to_owned()),
         }
     }
     if discard {
@@ -387,7 +387,7 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
         let start = js.get(..js.floor_char_boundary(MAX_EDITED_SCRIPT)).unwrap_or_default().to_string();
         Field::new(label).id_salt("calc-script").show(ui, |ui, _| {
             // A given value takes no edit: what is typed is not kept.
-            TextField::new(label, Bind::given(start)).lines(6).mono().show(ui);
+            TextField::new(label, Bind::given(start.clone())).lines(6).mono().show(ui);
         });
         note(ui, note_text);
         return;

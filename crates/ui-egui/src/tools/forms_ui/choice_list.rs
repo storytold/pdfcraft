@@ -54,7 +54,7 @@ pub(super) fn choice_list(ui: &mut egui::Ui, field: &FormField, rect: Rect, zoom
     let source = Names(&names);
     let shown =
         PopupList::new(tl!("Options"), Bind::bound(&mut *open)).overlay(|overlay| overlay.opener_anchor(Anchor::Rect(rect))).show(ui, |ui, _| {
-            List::<usize>::options(field.name.as_str())
+            List::<usize>::options(field.name.clone())
                 .document_rows(DocumentRows::new(FontRef::proportional(), size, align))
                 .show_items(ui, &source, &mut |key, _| ListRow::new(names.get(*key).copied().unwrap_or("")).option())
                 .events

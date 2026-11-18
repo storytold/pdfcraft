@@ -14,12 +14,13 @@ const LEAST_SIDE: f32 = 8.0;
 
 /// Drags a signature rectangle on one page. The rectangle of a finished drag is taken with
 /// [`SignAreaTool::finished`], in user space of its page.
-// PLAN: pdf-canvas-w9 (`canvas/page_tools.rs:322`) calls `SignAreaTool::new(certify)`; it passes `cx.pages` and `cx.info` as well.
 pub(crate) struct SignAreaTool<'a> {
     drag: PageBoxDrag,
     /// Certify (DocMDP) rather than sign: names the command that takes the same numbers.
     certify: bool,
     placed: &'a [PlacedPage],
+    /// The view's rotation, in degrees clockwise.
+    rotation: u16,
     info: &'a DocInfo,
     drawn: Option<(usize, [f64; 4])>,
 }
@@ -27,8 +28,8 @@ pub(crate) struct SignAreaTool<'a> {
 impl<'a> SignAreaTool<'a> {
     /// A tool over the placed pages that draws the area for a certification when `certify`, for a
     /// signature otherwise.
-    pub(crate) fn new(certify: bool, placed: &'a [PlacedPage], info: &'a DocInfo) -> Self {
-        Self { drag: PageBoxDrag::default(), certify, placed, info, drawn: None }
+    pub(crate) fn new(certify: bool, placed: &'a [PlacedPage], rotation: u16, info: &'a DocInfo) -> Self {
+        Self { drag: PageBoxDrag::default(), certify, placed, rotation, info, drawn: None }
     }
 
     /// The (page, user-space rectangle) a drag finished with since the last call, once.
@@ -42,8 +43,9 @@ impl<'a> SignAreaTool<'a> {
 
     /// A screen point of `placed` in the page's user space.
     fn to_user(&self, placed: &PlacedPage, p: Pos2) -> Option<[f64; 2]> {
-        let (vx, vy) = PageXform::of(placed, self.info).screen_to_view(p);
-        let u = self.info.pages.get(placed.page)?.view_to_user(vx, vy);
+        let page = self.info.pages.get(placed.page)?;
+        let (vx, vy) = PageXform::of(placed, self.rotation, (page.width, page.height)).screen_to_view(p);
+        let u = page.view_to_user(vx, vy);
         Some([f64::from(u[0]), f64::from(u[1])])
     }
 }

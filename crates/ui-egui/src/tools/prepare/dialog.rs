@@ -102,7 +102,7 @@ pub(crate) fn finish(app: &mut PdfCraftApp) {
     let (field, widget, typed) = (dialog.draft.field.clone(), dialog.draft.widget, dialog.draft.name.trim().to_string());
     if let Some(request) = request {
         let key = request.key.clone();
-        app.open_colour_picker(&mut app.dialogs, request, move |app, colour: Srgba| {
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, colour: Srgba| {
             if let Some(dialog) = app.dialogs.get_mut::<FieldPropsDialog>() {
                 dialog.set_colour(&key, crate::comments::colours::to_rgb(colour));
             }
