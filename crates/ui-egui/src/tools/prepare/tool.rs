@@ -9,10 +9,10 @@ use craft::behavior::press::{PointerButton, PressPhase};
 use craft::behavior::{CancelReason, Cursor, CursorIcon, EditEvent, Input, Metrics};
 use craft::draw::ui::transform::TransformBox;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props, Role, Ui};
+use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props, Role};
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
 use craft::ui::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2, vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, vec2};
 use pdfcraft_engine::{Edit, FieldProps, FormField};
 
 use super::{FieldTool, Gesture, PrepareView, delete_selected, place_tab_badge, screen_rect, table_rect, to_user, user_rect};
@@ -175,9 +175,12 @@ impl CanvasTool for PrepareTool<'_> {
             return ToolAction::Claimed;
         }
         // A drag that began on a field part moves the field the part's press selected.
-        let on_selected = self.view.prepare.selected.clone().filter(|key| {
-            widget_rect(self.view, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos))
-        });
+        let on_selected = self
+            .view
+            .prepare
+            .selected
+            .clone()
+            .filter(|key| widget_rect(self.view, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos)));
         if let Some(widget) = on_selected {
             let slop = f64::from(cx.slop);
             let gesture = MoveGesture::press(&ConstrainStyle::new(slop, slop), point(pointer.pos), pointer.mods, Directions::Four);

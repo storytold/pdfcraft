@@ -2,6 +2,7 @@
 //! it ends), a press on free page space draws a box that becomes one mark.
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
+use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 use egui::Pos2;
@@ -9,8 +10,9 @@ use pdfcraft_engine::rect_quad;
 use pdfcraft_render::DocInfo;
 
 use crate::QuickTool;
-use crate::canvas::{DocView, PageBoxDrag, PageSelectTool, PlacedPage, ToolMarks};
 use crate::canvas::PageXform;
+use crate::canvas::page_select::PageSelectTool;
+use crate::canvas::{DocView, PageBoxDrag, ToolMarks};
 
 /// The smallest box, in screen points on each side, that counts as a mark.
 const LEAST_BOX: f32 = 3.0;
@@ -48,7 +50,16 @@ impl<'a> RedactTool<'a> {
     /// The tool over the placed pages, with the select tool that runs text selections and the
     /// test of whether a screen point is over text (the same one the I-beam uses).
     pub(crate) fn new(select: PageSelectTool<'a>, placed: &'a [PlacedPage], info: &'a DocInfo, over_text: impl Fn(Pos2) -> bool + 'a) -> Self {
-        Self { select, drag: PageBoxDrag::default(), placed, info, over_text: Box::new(over_text), gesture: Gesture::Idle, text_page: None, finished: None }
+        Self {
+            select,
+            drag: PageBoxDrag::default(),
+            placed,
+            info,
+            over_text: Box::new(over_text),
+            gesture: Gesture::Idle,
+            text_page: None,
+            finished: None,
+        }
     }
 
     /// After the host ran: hands a finished gesture to the view as a pending redaction, or as a

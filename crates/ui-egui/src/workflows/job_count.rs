@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use craft::host::Cancel;
+use craft::host::queue::Cancel;
 
 /// Items done and total of a running job, and its cancel request. The job calls [`set`](Self::set)
 /// as it goes (and wakes the app, since the queue's own wake fires only when a job finishes); the
@@ -47,5 +47,3 @@ impl JobCount {
         self.cancel.is_cancelled()
     }
 }
-
-

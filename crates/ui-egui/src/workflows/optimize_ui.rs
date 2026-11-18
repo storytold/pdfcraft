@@ -15,15 +15,18 @@ use craft::ui::display::Text;
 use craft::ui::list::ListRow;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamTab, SharedRows};
 use craft::ui::table::Table;
-use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, Preset, QUALITIES, Settings, SpaceCategory, SpaceUse};
+use pdfcraft_engine::optimize::{
+    Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, Preset, QUALITIES, Settings, SpaceCategory, SpaceUse,
+};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
 // PLAN: assumed `crate::JobCount` (pdf-print-ocr-w6), `crate::notices::{ProgressKey, ProgressNotice, set_progress, end_progress}` (pdf-chrome-w19),
 // `crate::dialogs::host::{open, open_over}(app, dialog[, parent])` (pdf-hub-w2) and the facade paths above (`craft::ui::patterns::form_dialogs`, `craft::ui::table`,
 // `craft::ui::display::Text::show`, `Table::show_items(..).response`).
+use super::job_count::JobCount;
+use crate::PdfCraftApp;
 use crate::notices::{self, ProgressKey, ProgressNotice};
-use crate::{JobCount, PdfCraftApp};
 
 /// The dialog's key; its answer is read back by [`pass`].
 pub(crate) const OPTIMIZE_KEY: &str = "optimize";
@@ -76,7 +79,12 @@ struct Toggle {
 }
 
 static TOGGLES: [Toggle; 20] = [
-    Toggle { tab: 1, key: "linksactionsscripts", label: "Discard all links, actions and JavaScript", effect: Effect::Discard(Hidden::LinksActionsScripts) },
+    Toggle {
+        tab: 1,
+        key: "linksactionsscripts",
+        label: "Discard all links, actions and JavaScript",
+        effect: Effect::Discard(Hidden::LinksActionsScripts),
+    },
     Toggle {
         tab: 1,
         key: "discard_alternate_images",
@@ -451,8 +459,11 @@ fn audit_lines(rows: &[SpaceUse]) -> Vec<AuditLine> {
         .filter(|r| r.bytes > 0)
         .map(|r| {
             // "Patterns" also names the redaction search patterns ("模式"); the audit's PDF graphics objects need their own key.
-            let description =
-                if r.category == SpaceCategory::Patterns { tl!("Patterns (graphics objects)").to_string() } else { tl!(r.category.label()).to_string() };
+            let description = if r.category == SpaceCategory::Patterns {
+                tl!("Patterns (graphics objects)").to_string()
+            } else {
+                tl!(r.category.label()).to_string()
+            };
             AuditLine { description, bytes: r.bytes.to_string(), percentage: format!("{:.2}%", r.percent) }
         })
         .collect();
@@ -526,7 +537,6 @@ pub(crate) fn open_space_audit(app: &mut PdfCraftApp, ctx: &egui::Context, from_
         ParamDialog::new(key, tl!("Space Audit"), vec![audit_row(rows.clone())]).read_only(true).values(Bind::bound(fields))
     });
     if from_optimizer {
-
         crate::dialogs::host::open_over(app, dialog.instance(AUDIT_INSTANCE), dialog_id(OPTIMIZE_KEY));
     } else {
         crate::dialogs::host::open(app, dialog);

@@ -20,8 +20,9 @@ use craft::ui::text::TextField;
 use egui::Ui;
 use pdfcraft_engine::actions::{Action, Step, builtin};
 
+use super::job_count::JobCount;
+use crate::PdfCraftApp;
 use crate::notices::{self, ProgressKey, ProgressNotice};
-use crate::{JobCount, PdfCraftApp};
 
 /// What a finished run reports: its summary, in the UI's language.
 pub struct ActionOutcome {
@@ -260,7 +261,6 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         self.run_action_into(action, files, PathBuf::new());
         #[cfg(not(target_arch = "wasm32"))]
-
         self.pick_first(PickRequest::folder("action.results").title(tl!("Choose a folder for the results")), None, move |app, dir| {
             app.run_action_into(action, files, dir)
         });

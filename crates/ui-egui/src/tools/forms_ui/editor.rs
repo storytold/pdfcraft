@@ -206,9 +206,7 @@ struct FieldHost<'a> {
 impl FieldHost<'_> {
     /// Run `read` on the layout of the draft as it is and the canvas view.
     fn with<R>(&mut self, read: impl FnOnce(&FieldLayout, &CanvasView) -> R) -> R {
-        let laid = self
-            .laid
-            .get_or_insert_with(|| FieldLayout::build(&self.ctx, self.field, self.widget, self.geo, self.text.as_str(), self.caret));
+        let laid = self.laid.get_or_insert_with(|| FieldLayout::build(&self.ctx, self.field, self.widget, self.geo, self.text.as_str(), self.caret));
         read(laid, &self.view)
     }
 
@@ -223,10 +221,10 @@ impl TextEditorHost for FieldHost<'_> {
         self.text
     }
 
-    fn replace(&mut self, range: Range<usize>, text: &str, _kind: EditKind) -> bool {
+    fn replace(&mut self, range: Range<usize>, text: &str, _kind: EditKind) -> Option<usize> {
         let len = self.text.chars().count();
         if range.start > range.end || range.end > len {
-            return false;
+            return None;
         }
         let byte = |s: &str, at: usize| s.char_indices().nth(at).map_or(s.len(), |(b, _)| b);
         // The framework drops a refused replace whole, so a paste keeps the part that fits here.
@@ -241,12 +239,13 @@ impl TextEditorHost for FieldHost<'_> {
             after = room.fitted_edit(&before, &after).0;
         }
         if after == before && insert.chars().count() < text.chars().count() {
-            return false;
+            return None;
         }
-        // PLAN: framework gap F-13: the editor puts the caret after the whole `text` it gave, so a trimmed insert leaves it past the kept part.
+        // The editor puts the caret after the chars kept, not after the whole `text` it gave.
+        let kept = after.chars().count().saturating_sub(len - range.len()).min(text.chars().count());
         *self.text = after;
         self.laid = None;
-        true
+        Some(kept)
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
@@ -266,10 +265,7 @@ impl TextEditorHost for FieldHost<'_> {
 
     fn underline_segments(&mut self, range: Range<usize>) -> Vec<[Point; 2]> {
         self.with(|laid, view| {
-            laid.quads(range)
-                .into_iter()
-                .map(|[_, _, right, left]| [Self::doc(laid, view, left), Self::doc(laid, view, right)])
-                .collect()
+            laid.quads(range).into_iter().map(|[_, _, right, left]| [Self::doc(laid, view, left), Self::doc(laid, view, right)]).collect()
         })
     }
 
@@ -366,13 +362,10 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, d
     let types = f.kind == FormFieldKind::Text || (combo && editable_combo(f));
     let mut ended = None;
     if types {
-        let room = (f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL))
-            .then(|| doc.field_text_box(&focus.name, widget))
-            .flatten();
+        let room = (f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL)).then(|| doc.field_text_box(&focus.name, widget)).flatten();
         let Some(focus) = view.forms.focus.as_mut() else { return };
         let Focus { text, selection, .. } = focus;
-        let mut host =
-            FieldHost { ctx: ui.ctx().clone(), view: body.view, field: f, widget: w, geo, room, text, caret: selection.caret, laid: None };
+        let mut host = FieldHost { ctx: ui.ctx().clone(), view: body.view, field: f, widget: w, geo, room, text, caret: selection.caret, laid: None };
         // PLAN: paints through an egui `Painter` with black text, as pdf-forms-w7's `paint_page` does; both move to the `Draw` tokens and the field's `/DA` colour together.
         let painter = ui.painter_at(rect.intersect(body.rect));
         painter.rect_filled(rect, CornerRadius::ZERO, PAPER);
@@ -405,4 +398,3 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, d
         commit(view, form);
     }
 }
-

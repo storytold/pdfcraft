@@ -3,16 +3,16 @@
 use std::ops::Range;
 
 use craft::behavior::kurbo::Point;
-use craft::text::ui::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection}; // PLAN: assumed facade path craft::text
-use craft::ui::contract::{Bind, Show as _}; // PLAN: assumed
+use craft::pages::ui::PageBody;
+use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
+use craft::ui::contract::{Bind, Show as _};
 use egui::{Color32, FontId, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::{BorderShape, Edit};
 use pdfcraft_render::DocInfo;
 
 use super::{TypedLook, typed_with};
 
-// PLAN: assumed `PageBody` (pdf-canvas-w4) and `PageSession { fill_text, fill_selection, .. }` (L-171) under `crate::canvas`.
-use crate::canvas::{PageBody, PageSession};
+use crate::canvas::PageSession;
 
 /// Line height over font size, as the typewriter annotation lays its text out.
 const LINE: f32 = 1.2;
@@ -81,11 +81,7 @@ impl TypeBoxHost<'_> {
         let ranges = self.line_ranges();
         let Some(range) = ranges.get(line.min(ranges.len().saturating_sub(1))).cloned() else { return 0 };
         let columns = self.columns(range.clone());
-        let at = columns
-            .iter()
-            .enumerate()
-            .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))
-            .map_or(0, |(i, _)| i);
+        let at = columns.iter().enumerate().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map_or(0, |(i, _)| i);
         range.start + at
     }
 
@@ -118,12 +114,12 @@ impl TextEditorHost for TypeBoxHost<'_> {
         self.text
     }
 
-    fn replace(&mut self, range: Range<usize>, text: &str, _kind: EditKind) -> bool {
+    fn replace(&mut self, range: Range<usize>, text: &str, _kind: EditKind) -> Option<usize> {
         let count = self.text.chars().count();
         let (start, end) = (range.start.min(count), range.end.clamp(range.start.min(count), count));
         let (a, b) = (self.byte_of(start), self.byte_of(end));
         self.text.replace_range(a..b, text);
-        true
+        Some(text.chars().count())
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {

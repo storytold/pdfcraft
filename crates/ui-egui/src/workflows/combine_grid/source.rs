@@ -32,7 +32,6 @@ pub(super) fn thumbnails(ctx: &egui::Context) -> Thumbnails<CombineKey> {
     Thumbnails::<CombineKey>::in_context(ctx, SALT, ThumbnailOptions::new().max_side(MAX_SIDE))
 }
 
-
 /// Page `page`'s size in points when it is one a picture can be drawn at.
 pub(super) fn page_size(sizes: &[(f32, f32)], page: usize) -> Option<(f32, f32)> {
     sizes.get(page).copied().filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0)
@@ -122,7 +121,14 @@ impl OpenDocuments {
 }
 
 /// The job that renders `page` of `bytes` at `scale` pixels per point.
-pub(super) fn page_job(documents: Arc<Mutex<OpenDocuments>>, bytes: Arc<Vec<u8>>, auth: u64, password: Option<Arc<str>>, page: usize, scale: f32) -> ThumbJob {
+pub(super) fn page_job(
+    documents: Arc<Mutex<OpenDocuments>>,
+    bytes: Arc<Vec<u8>>,
+    auth: u64,
+    password: Option<Arc<str>>,
+    page: usize,
+    scale: f32,
+) -> ThumbJob {
     Box::new(move |cancel| render_page(&documents, &bytes, auth, password, page, scale, cancel))
 }
 
@@ -137,9 +143,8 @@ fn render_page(
     cancel: &Cancel,
 ) -> Result<LoadedPicture, LoadFailure> {
     let source = Arc::as_ptr(bytes) as usize;
-    let pool = lock(documents).take_or_open(source, auth, Instant::now(), || {
-        RenderPool::new(bytes.clone(), 1, thumbnail_config(password)).without_replacements()
-    });
+    let pool = lock(documents)
+        .take_or_open(source, auth, Instant::now(), || RenderPool::new(bytes.clone(), 1, thumbnail_config(password)).without_replacements());
     pool.set_queue(vec![RenderRequest { page, scale, tag: 1, ..Default::default() }]);
     // Poll the pool: its worker is the one that can be given up on (the watchdog answers an error),
     // so a page that never finishes holds no queue lane for good. A pool without threads renders

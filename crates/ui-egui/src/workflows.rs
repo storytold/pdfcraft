@@ -7,6 +7,7 @@ pub(super) mod create_multiple_ui;
 pub(super) mod create_ui;
 pub(super) mod export_ui;
 pub(super) mod files;
+pub(crate) mod job_count;
 pub(super) mod js_dialogs;
 pub(super) mod js_ui;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -20,4 +21,4 @@ pub(super) mod print_paper;
 pub(super) mod print_ui;
 pub(super) mod scan_clean_ui;
 pub(super) mod web_print;
-pub(crate) mod job_count;
+pub(crate) use job_count::JobCount;

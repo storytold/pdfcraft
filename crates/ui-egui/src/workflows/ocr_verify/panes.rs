@@ -4,16 +4,16 @@
 use std::borrow::Cow;
 
 use craft::behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
+use craft::theme::TypeRole;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::display::{Picture, Shade, Text};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow, ThumbAspect};
-use craft::ui::patterns::Inspector;
+use craft::ui::patterns::panels::Inspector;
 use craft::ui::primitives::textures::TextureState;
 use craft::ui::text::{RunWord, TextField, WordRun, WordState};
-use craft::theme::TypeRole;
 use egui::Rect;
 use pdfcraft_engine::ocr::{OcrPage, is_suspect};
 
@@ -50,10 +50,10 @@ impl ItemSource<usize> for PageRows<'_> {}
 pub(super) fn pages(app: &PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     let v = &app.ocr_verify;
     let rows = PageRows(&v.pages);
-    let out = List::<usize>::new(tl!("Pages"))
-        .select(SelectMode::Single)
-        .selection(Bind::given(Selection::single(v.current)))
-        .show_items(ui, &rows, &mut |key, _| {
+    let out = List::<usize>::new(tl!("Pages")).select(SelectMode::Single).selection(Bind::given(Selection::single(v.current))).show_items(
+        ui,
+        &rows,
+        &mut |key, _| {
             let Some(pg) = v.pages.iter().find(|pg| pg.page == *key) else { return ListRow::spacer() };
             let live = pg.words.iter().filter(|w| !w.text.trim().is_empty()).count();
             let suspects = pg.words.iter().filter(|w| !w.text.trim().is_empty() && is_suspect(w.confidence)).count();
@@ -65,12 +65,9 @@ pub(super) fn pages(app: &PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
                 String::new()
             };
             let row = ListRow::new(format!("{} {}{} · {live}", tl!("Page"), pg.page + 1, marked));
-            if suspects > 0 {
-                row.detail(crate::i18n::fmt(tl!("{n} word(s) to review"), &[("n", &suspects.to_string())]))
-            } else {
-                row
-            }
-        });
+            if suspects > 0 { row.detail(crate::i18n::fmt(tl!("{n} word(s) to review"), &[("n", &suspects.to_string())])) } else { row }
+        },
+    );
     for event in out.events {
         if let CollectionEvent::Selection(change) = event {
             match change {
@@ -178,7 +175,8 @@ pub(super) fn inspector(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intent
         }
         Text::new(readout.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
         // Enter commits; an empty commit removes the word, and the box never moves.
-        let field = TextField::new(tl!("Corrected text"), Bind::bound(correction)).placeholder(tl!("Corrected text (Enter commits)")).submits().show(ui);
+        let field =
+            TextField::new(tl!("Corrected text"), Bind::bound(correction)).placeholder(tl!("Corrected text (Enter commits)")).submits().show(ui);
         submitted |= field.submitted;
         Row::new().show(ui, |ui, _| {
             if Button::new(tl!("Remove")).show(ui).clicked() {
