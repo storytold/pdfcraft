@@ -581,8 +581,10 @@ pub(super) fn extgstate_font(
 /// with. A pattern's cell is a content stream of its own which this pass does not enter, so a
 /// pattern whose only painting was redacted would otherwise keep its drawing -- text included --
 /// in the saved file (#3647). The `scn` that selected it stays in the content, so the name stays
-/// too: it now names an empty tiling pattern ([`empty_pattern`]), one object shared by every name
-/// this call empties. A name the content uses must be in the resources (ISO 32000-2 7.8.3; for
+/// too: it now names an empty tiling pattern ([`empty_pattern`]) of the original's `/PaintType`,
+/// since an `scn` selecting an uncoloured pattern (`/PaintType 2`) also gives colour components
+/// (ISO 32000-2 8.7.3.3); names of the same `/PaintType` share one stand-in. A name selected more
+/// than once is emptied, and counted, once. A name the content uses must be in the resources (ISO 32000-2 7.8.3; for
 /// PDF/A, ISO 19005-2 and -4 6.2.2), and nothing surviving paints with it, so what the page shows
 /// is the same. A pattern some surviving paint still uses, or one the scope never saw, is left
 /// alone.
@@ -594,9 +596,12 @@ pub(super) fn extgstate_font(
 pub(crate) fn prune_patterns(doc: &mut Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
     let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
     let mut dropped = 0;
-    let mut empty: Option<ObjRef> = None;
+    // One stand-in per /PaintType: coloured (1) and uncoloured (2).
+    let (mut coloured, mut uncoloured_stand_in): (Option<ObjRef>, Option<ObjRef>) = (None, None);
+    let mut emptied: HashSet<&[u8]> = HashSet::new();
     for n in seen {
         if !painted.contains(n)
+            && emptied.insert(n.as_slice())
             && let Some(value) = pat.get(n)
         {
             // Every object along the reference chain: a name can lead to a reference-valued
@@ -610,7 +615,10 @@ pub(crate) fn prune_patterns(doc: &mut Document, res: &mut Dict, seen: &[Vec<u8>
                     _ => None,
                 };
             }
-            let stand_in = *empty.get_or_insert_with(|| doc.add(Object::Stream(empty_pattern())));
+            // A shading pattern has no /PaintType and is selected like a coloured one.
+            let uncoloured = doc.resolve(value).as_dict().and_then(|d| d.int(b"PaintType")) == Some(2);
+            let slot = if uncoloured { &mut uncoloured_stand_in } else { &mut coloured };
+            let stand_in = *slot.get_or_insert_with(|| doc.add(Object::Stream(empty_pattern(if uncoloured { 2 } else { 1 }))));
             pat.set(n.clone(), Object::Ref(stand_in));
             dropped += 1;
         }
@@ -621,13 +629,13 @@ pub(crate) fn prune_patterns(doc: &mut Document, res: &mut Dict, seen: &[Vec<u8>
     dropped
 }
 
-/// A coloured tiling pattern whose cell draws nothing and uses no resources, colours or fonts:
-/// what an emptied pattern name points to.
-fn empty_pattern() -> pdfcraft_cos::Stream {
+/// A tiling pattern of `paint_type` (1 coloured, 2 uncoloured) whose cell draws nothing and uses
+/// no resources, colours or fonts: what an emptied pattern name points to.
+fn empty_pattern(paint_type: i64) -> pdfcraft_cos::Stream {
     let dict = Dict::from_iter([
         (b"Type".to_vec(), Object::Name(b"Pattern".to_vec())),
         (b"PatternType".to_vec(), Object::Int(1)),
-        (b"PaintType".to_vec(), Object::Int(1)),
+        (b"PaintType".to_vec(), Object::Int(paint_type)),
         (b"TilingType".to_vec(), Object::Int(1)),
         (b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(1), Object::Int(1)])),
         (b"XStep".to_vec(), Object::Int(1)),
