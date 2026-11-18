@@ -5025,3 +5025,48 @@ fn a_recovered_page_takes_inherited_boxes_over_unusable_own_ones() {
     assert_eq!(boxes[1][0], [0.0, 0.0, 400.0, 300.0]);
     assert_eq!(boxes[1][1], [10.0, 10.0, 290.0, 190.0]);
 }
+
+/// A recovered page keeps an own `/MediaBox` the renderer reads although it has a fifth number:
+/// the renderer takes the first four, so the page is shown 400 × 300, not with its parent's box.
+#[test]
+fn a_recovered_page_keeps_an_own_box_with_extra_numbers() {
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [2 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300 0] /Contents 4 0 R >>".to_string(),
+        body("One"),
+    ];
+    let mut doc = open(build(&bodies, "/Root 1 0 R"));
+    assert_eq!(recover_page_tree(&mut doc).unwrap(), 1);
+    let page = doc.get(pages(&doc).unwrap()[0].obj).as_dict().cloned().unwrap();
+    let media: Vec<f64> = page.get(b"MediaBox").and_then(|m| m.as_array()).unwrap().iter().filter_map(|x| x.as_f64()).collect();
+    assert_eq!(media, [0.0, 0.0, 400.0, 300.0, 0.0]);
+}
+
+/// A recovered page takes the nearest box and rotation through `/Parent` that the renderer reads:
+/// a nearer node's `/MediaBox (bad)` and `/Rotate /Ninety` are passed over for the farther node's
+/// values, as are the page's own unreadable ones. A readable nearer value still wins.
+#[test]
+fn a_recovered_page_passes_over_unreadable_inherited_values() {
+    let bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [2 0 R] /Count 1 /MediaBox [0 0 300 200] /Rotate 90 >>".to_string(),
+        "<< /Type /Pages /Parent 2 0 R /Kids [] /Count 0 /MediaBox (bad) /Rotate /Ninety >>".to_string(),
+        "<< /Type /Pages /Parent 2 0 R /Kids [] /Count 0 /MediaBox [0 0 100 50] /Rotate 180 >>".to_string(),
+        "<< /Type /Page /Parent 3 0 R /Contents 8 0 R >>".to_string(),
+        "<< /Type /Page /Parent 3 0 R /MediaBox (own) /Rotate /Own /Contents 9 0 R >>".to_string(),
+        "<< /Type /Page /Parent 4 0 R /Contents 10 0 R >>".to_string(),
+        body("One"),
+        body("Two"),
+        body("Three"),
+    ];
+    let mut doc = open(build(&bodies, "/Root 1 0 R"));
+    assert_eq!(recover_page_tree(&mut doc).unwrap(), 3);
+    let boxes = page_boxes(&doc).unwrap();
+    assert_eq!(boxes[0][0], [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
+    assert_eq!(boxes[1][0], [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(page_rotation(&doc, 1).unwrap(), 90);
+    assert_eq!(boxes[2][0], [0.0, 0.0, 100.0, 50.0]);
+    assert_eq!(page_rotation(&doc, 2).unwrap(), 180);
+}
