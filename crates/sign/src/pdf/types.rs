@@ -187,7 +187,7 @@ pub const WORDINGS: &[&str] = &[
     // What came after the signature.
     "This document has not been modified since this signature was applied.",
     "The document has been modified since this signature was applied, but the changes are permitted ({}).",
-    "Data was added to the file since this signature was applied, but it changes nothing in the document.",
+    "Data was added to the file since this signature was applied, but no change to the document was found.",
     "The document has been altered since this signature was applied in ways it does not permit ({}).",
     // Who signed, and when.
     "The signer's certificate was not valid at the time of signing.",
@@ -222,7 +222,7 @@ pub const WORDINGS: &[&str] = &[
     "The timestamp authority's certificate is not issued for time stamping.",
     "This document has not been modified since this timestamp was applied.",
     "The document has been modified since this timestamp was applied, but the changes are permitted ({}).",
-    "Data was added to the file since this timestamp was applied, but it changes nothing in the document.",
+    "Data was added to the file since this timestamp was applied, but no change to the document was found.",
     "The document has been altered since this timestamp was applied in ways it does not permit ({}).",
     "The timestamp token is valid and its authority is trusted.",
     "The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.",

@@ -134,10 +134,64 @@ fn bytes_after_the_signed_revision_that_change_nothing_name_no_empty_list() {
     let s = approval(&bytes);
     assert_eq!(s.modification, Modification::Allowed(Vec::new()));
     assert!(
-        s.details.iter().any(|d| d.message == "Data was added to the file since this signature was applied, but it changes nothing in the document."),
+        s.details
+            .iter()
+            .any(|d| d.message == "Data was added to the file since this signature was applied, but no change to the document was found."),
         "{:?}",
         s.details
     );
+    no_empty_brackets(&s);
+}
+
+/// An update that adds only an object no signed object held can still change what a signed page
+/// shows: a reference to an object that doesn't exist reads as null (ISO 32000-2 §7.3.10), so
+/// adding the object a signed page's `/CropBox` already names crops the page while no signed
+/// object changes. The detail says the check found no change, never that the data changes nothing.
+#[test]
+fn an_added_object_a_signed_page_already_names_is_not_said_to_change_nothing() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let opts = SignOptions { field: Some("Approval".into()), date: "D:20261115120000Z".into(), ..SignOptions::default() };
+    let unsigned = write_pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /CropBox 99 0 R /Contents 4 0 R /Annots [5 0 R] >>",
+        "<< /Length 0 >>
+stream
+
+endstream",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+    ]);
+    let mut bytes = pdfcraft_sign::sign(&open(&unsigned), &id, &opts).unwrap();
+    let prev = {
+        let at = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+        std::str::from_utf8(&bytes[at + 9..]).unwrap().split_whitespace().next().unwrap().parse::<usize>().unwrap()
+    };
+    let object = bytes.len() + 1;
+    bytes.extend_from_slice(
+        b"
+99 0 obj
+[0 0 100 100]
+endobj
+",
+    );
+    let xref = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "xref
+99 1
+{object:010} 00000 n 
+trailer
+<< /Size 100 /Root 1 0 R /Prev {prev} >>
+startxref
+{xref}
+%%EOF
+"
+        )
+        .as_bytes(),
+    );
+    let s = approval(&bytes);
+    assert!(s.signed, "{:?}", s.details);
+    assert!(!s.details.iter().any(|d| d.message.contains("changes nothing")), "{:?} {:?}", s.modification, s.details);
     no_empty_brackets(&s);
 }
 
