@@ -10460,3 +10460,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "misc.plugins"
+title = "Plug-ins: install, manage and run sandboxed plug-ins"
+area = "N"
+tier = "P2"
+milestone = "M14"
+status = "partial"
+commands = []
+tools = ["plugin_list", "plugin_install", "plugin_update", "plugin_remove", "plugin_run", "plugin_catalog_list", "plugin_catalog_add"]
+evidence = ["crates/automation/tests/it/plugins.rs::a_write_plugin_runs_real_tools_as_one_undo_step", "crates/automation/tests/it/plugins.rs::a_read_plugin_that_edits_is_refused_and_the_document_is_unchanged", "crates/automation/tests/it/plugins.rs::refused_tools_files_and_other_documents_are_refused", "crates/automation/tests/it/plugins.rs::a_plugin_that_traps_or_runs_out_of_fuel_leaves_the_document_unchanged", "crates/automation/tests/it/plugins.rs::plugins_install_list_and_remove_through_the_store", "crates/engine/src/session/marks.rs::edits_after_a_mark_fold_into_one_undo_step", "crates/engine/src/session/marks.rs::restoring_a_mark_puts_the_document_and_its_history_back"]
+notes = "Not Acrobat's C plug-in SDK (a non-goal): the shared Craft WebAssembly plug-in runtime (craft-plugin, RFC-0046). Install from a file, a GitHub release or a catalog behind a confirmation (permissions, kind, source, SHA-256, not in any catalog); Plug-ins menu and window with a parameter form; one undo step per run, rolled back when it fails; an allowlist of tools pinned to the run's document (no files, other documents, undo history, JavaScript, signing, printing or applying redactions). See docs/plugins.md. Missing: plug-in panels, plug-ins in the web build, downloads from pdfcraft-cli (files and file:// catalogs only), folder-level JavaScript."

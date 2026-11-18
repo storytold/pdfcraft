@@ -171,6 +171,13 @@ impl Automation {
                 let label = self.session.redo(id).map_err(failed)?.to_string();
                 json!({ "redone": label, "document": summary(self.doc(&a)?) })
             }
+            "plugin_list" => self.plugin_list(),
+            "plugin_install" => self.plugin_install(&a)?,
+            "plugin_update" => self.plugin_update(&a)?,
+            "plugin_remove" => self.plugin_remove(&a)?,
+            "plugin_run" => self.plugin_run(&a)?,
+            "plugin_catalog_list" => self.plugin_catalog_list(&a)?,
+            "plugin_catalog_add" => self.plugin_catalog_add(&a)?,
             "command_list" => self.command_list(&a)?,
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,

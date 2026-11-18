@@ -30,6 +30,7 @@ pub mod mcp;
 mod measure;
 mod model3d;
 mod model_render;
+pub mod plugins;
 mod print_colour;
 mod printing;
 mod reading;
@@ -104,6 +105,8 @@ pub struct Automation {
     next_ocr_review: u64,
     /// What object_copy copied, for object_paste into any open document.
     objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// Installed plug-ins, their settings and catalogs (RFC-0046, [`plugins`]).
+    plugins: plugins::Runtime,
 }
 
 impl Default for Automation {
@@ -125,7 +128,20 @@ impl Automation {
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
             objects_clipboard: None,
+            plugins: plugins::Runtime::default(),
         }
+    }
+
+    /// A tool set over `session`, an interface's own: it runs the same tools on the documents
+    /// that interface shows ([`Automation::into_session`] gives it back). The desktop app runs
+    /// plug-ins this way.
+    pub fn from_session(session: Session) -> Self {
+        Self { session, ..Self::new() }
+    }
+
+    /// The session, given back (see [`Automation::from_session`]).
+    pub fn into_session(self) -> Session {
+        self.session
     }
 
     /// Confine every path the tools read or write to `root` (relative paths resolve inside it).

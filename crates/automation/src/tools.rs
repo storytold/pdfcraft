@@ -1813,6 +1813,34 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .destructive()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("plugin_list", "List plug-ins", "The installed plug-ins (RFC-0046) PdfCraft runs: each one's manifest (id, name, version, commands and their params, permissions), kind, SHA-256 and source; plug-in folders that couldn't be read or are for another app; the catalogs added; whether plug-ins are kept in the user's Plug-ins folder (else for this session only) and whether they can be downloaded.")
+            .ro()
+            .with(schema(json!({}), &[])),
+        t("plugin_install", "Install a plug-in", "Install a .craftplugin bundle from one of: `path` (a file, relative to --root when set), `data` (the bundle as base64, with an optional `name`), `repo` (a GitHub release: owner/repo or owner/repo@tag; it must publish the bundle's SHA-256) or `catalog` (an index.json URL) with `id` and optional `version`. With review: true nothing is installed: the answer is what an install confirmation shows (permissions, kind, source, SHA-256, inCatalog: false when no catalog in use lists a repository, what it replaces) and the bundle is kept; install it by repeating the call with review left out and `sha256` set to the reviewed one. A plug-in already installed with the same id is replaced; its settings stay.")
+            .with(schema(json!({
+                "path": path_arg(), "data": {"type":"string","description":"The bundle, base64."}, "name": {"type":"string","maxLength":200,"description":"A name to remember a `data` bundle by."},
+                "repo": {"type":"string","description":"owner/repo or owner/repo@tag."}, "catalog": {"type":"string","description":"A catalog's index.json URL (https:// on GitHub, or file://)."},
+                "id": {"type":"string","description":"The catalog package's id."}, "version": {"type":"string","description":"A catalog release (default: the newest for this PdfCraft)."},
+                "review": {"type":"boolean","description":"Check and describe the bundle without installing it."},
+                "sha256": {"type":"string","description":"The SHA-256 a review returned: the install fails unless the bundle is that one."}
+            }), &[])),
+        t("plugin_update", "Check a plug-in for an update", "Whether plug-in `id` has a newer release where it came from (its catalog or GitHub repository; a plug-in installed from a file has none). When it has, the release is downloaded and reviewed as plugin_install with review: true does (`review`, including permissionsChanged), and `install` holds the plugin_install arguments that install it (add the review's sha256). Nothing is installed.")
+            .ro()
+            .with(schema(json!({"id": {"type":"string"}}), &["id"])),
+        t("plugin_remove", "Remove a plug-in", "Remove installed plug-in `id` and its settings.")
+            .destructive()
+            .with(schema(json!({"id": {"type":"string"}}), &["id"])),
+        t("plugin_run", "Run a plug-in", "Run plug-in `id`'s `command` (default: its first) with `params` (checked against the manifest's params) on document `doc` (default: the only open one). The plug-in calls tools as this tool table runs them, pinned to that document, only those PdfCraft allows plug-ins (no files, other documents, undo history, JavaScript, signing or printing) and its manifest asks for; one with read access can't change the document. The whole run is one undo step named after the plug-in; a run that fails leaves the document and its undo history as they were. `selection` is the 1-based pages the plug-in is told are selected; `fuel` lowers its instruction budget. Returns its output, notes, log lines and the document's summary.")
+            .with(schema(json!({
+                "id": {"type":"string"}, "command": {"type":"string"}, "params": {"type":"object"}, "doc": doc(),
+                "selection": {"type":"array","items":{"type":"integer","minimum":1},"description":"1-based selected pages."},
+                "fuel": {"type":"integer","minimum":1,"description":"Instruction budget (at most the default, 1,000,000,000)."}
+            }), &["id"])),
+        t("plugin_catalog_list", "List a plug-in catalog", "The packages of the plug-in catalogs added (or of `url` alone) that this PdfCraft can run, with their newest release for it and the version installed here. Catalogs that can't be read are reported in `warnings`.")
+            .ro()
+            .with(schema(json!({"url": {"type":"string","description":"A catalog's index.json URL."}}), &[])),
+        t("plugin_catalog_add", "Add a plug-in catalog", "Remember a plug-in catalog (an index.json URL: https:// on GitHub's hosts, or file:// when paths aren't confined) for plugin_catalog_list and for telling whether a repository's plug-in is listed.")
+            .with(schema(json!({"url": {"type":"string"}}), &["url"])),
         t("edit_undo", "Undo", "Undo the last edit of a document.").cmd("edit.undo").with(schema(json!({ "doc": doc() }), &["doc"])),
         t("edit_redo", "Redo", "Redo the last undone edit of a document.").cmd("edit.redo").with(schema(json!({ "doc": doc() }), &["doc"])),
         t("command_list", "List commands", "Every registered PdfCraft command with its menu, shortcut, whether it is enabled now, and the tool that automates it.")

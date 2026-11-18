@@ -20,6 +20,10 @@ serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
 base64 = { version = "0.23", optional = true }
+# Plug-ins (RFC-0046): the sandbox and store; PdfCraft's side is `src/plugins.rs`.
+craft-plugin = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
 
 
 [features]
@@ -28,6 +32,8 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+# Plug-in modules for the tests, written as WebAssembly text.
+wat = "1.261"
 # Synthetic printer profiles for the app-managed print colour tests.
 craft-cms = { workspace = true }
 craft-image-codecs = { workspace = true }

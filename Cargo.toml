@@ -50,6 +50,9 @@ craft-docx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0
 craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-opc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+# The shared WebAssembly plug-in runtime (RFC-0046): sandbox, manifest, permissions, bundles, the
+# per-user store, catalogs and GitHub releases. Pinned to the fork commit the upstream PR re-pins.
+craft-plugin = { git = "https://github.com/Dasemu/craft-libs", version = "0.1.0", rev = "93428fbe5d11b735365fa87068a9e1fc85fb3550" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.21.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.21.0" }
