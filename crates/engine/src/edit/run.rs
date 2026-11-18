@@ -581,7 +581,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, top: None })
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, left: None, top: None })
                 .collect();
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
@@ -1125,7 +1125,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 encrypt_metadata: p.encrypt_metadata,
                 seed,
             };
-            doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            // RC4-40 and RC4-128 are refused by `set_encryption` (RFC 7465); the legacy
+            // entry point is only for a file that must stay readable by a reader without AES.
+            if params.algorithm.is_legacy() {
+                doc.set_encryption_legacy(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            } else {
+                doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            }
         }
         Edit::RemoveProtection => {
             if doc.output_handler().is_none() {
