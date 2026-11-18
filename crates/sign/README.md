@@ -57,7 +57,9 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
 
 - **Cards and USB tokens (PKCS #11).** `pkcs11` loads the card issuer's own middleware at run
   time — bit4id's `libbit4xpki.so` for an Italian CNS, `libcie-pkcs11.so` for a CIE, OpenSC or a
-  PIV vendor's module — and signs through `ExternalKey`, so the key never leaves the card. A
+  PIV vendor's module — and signs through `ExternalKey`, so the key never leaves the card. An
+  Italian CIE is contactless-only, so the middleware needs a PC/SC contactless reader: a contact
+  reader such as the ACR38U never sees the card. A
   module is loaded only when the caller names it (`modules`, the chosen paths, or
   `PDFCRAFT_PKCS11_MODULES`): the paths found on a machine are candidates, because loading a
   PKCS #11 library runs its code in this process. The token's signature is verified against the
