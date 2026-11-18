@@ -116,7 +116,7 @@ fn action_row(key: &str, label: &str, lead: Option<String>, actions: Vec<(String
                     }
                 }
             })
-            .response
+            .output
     }))
 }
 
@@ -210,7 +210,7 @@ fn custom_row(file_listed: usize, editable: bool, listed: Vec<(String, String)>)
         if custom_pairs(fields).as_ref() != Some(&props) {
             fields.set("custom", custom_json(&props));
         }
-        shown.response
+        shown.output
     })
     .companions(["custom.name", "custom.value", "custom.unlisted"])
     .opens_with(custom_json(&listed));
