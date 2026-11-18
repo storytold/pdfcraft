@@ -1930,24 +1930,36 @@ fn type1_program(encoding: &str) -> String {
 
 /// A page showing `content` with fonts /F1 (object 5) and /F2 (object 7): symbolic Type 1 fonts
 /// without /Encoding or /ToUnicode whose embedded programs (objects 6 and 9) have the built-in
-/// encodings `first` and `second`; a form XObject /X (object 8) shows `(+)` in the font in effect.
+/// encodings `first` and `second`; a form XObject /X (object 8) shows `(+)` in the font in effect,
+/// and /Y (object 12) sets F2 and shows `(-)`. /G1 (object 13) is an ExtGState that sets F1.
 fn symbolic_type1_doc(content: &str, first: &str, second: &str) -> Document {
-    let font = |name: &str, descriptor: u32| format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FontDescriptor {descriptor} 0 R >>");
+    symbolic_type1_doc_with(&stream(content), first, second, "")
+}
+
+/// [`symbolic_type1_doc`] with the page's content stream object written out as `contents`, and
+/// `extra` added to F1's font dictionary.
+fn symbolic_type1_doc_with(contents: &str, first: &str, second: &str, extra: &str) -> Document {
+    let font = |name: &str, descriptor: u32, extra: &str| {
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FontDescriptor {descriptor} 0 R {extra}>>")
+    };
     let descriptor = |file: u32| format!("<< /Type /FontDescriptor /FontName /Test-Math /Flags 4 /FontFile {file} 0 R >>");
     pdf(
         &[
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> /XObject << /X 8 0 R >> >> >>"
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> \
+             /XObject << /X 8 0 R /Y 12 0 R >> /ExtGState << /G1 13 0 R >> >> >>"
                 .into(),
-            stream(content),
-            font("ABCDEF+Test-Math", 10),
+            contents.into(),
+            font("ABCDEF+Test-Math", 10, extra),
             type1_program(first),
-            font("GHIJKL+Other-Math", 11),
+            font("GHIJKL+Other-Math", 11, ""),
             "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 13 >>\nstream\nBT (+) Tj ET\nendstream".into(),
             type1_program(second),
             descriptor(6),
             descriptor(9),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 22 >>\nstream\nBT /F2 12 Tf (-) Tj ET\nendstream".into(),
+            "<< /Type /ExtGState /Font [5 0 R 12] >>".into(),
         ],
         "",
     )
@@ -1975,6 +1987,11 @@ fn a_symbolic_type1_font_maps_through_its_built_in_glyph_names() {
         // A form XObject shows its `+` in the font set where it is drawn, and restores none.
         ("BT /F2 12 Tf ET /X Do", Some("GHIJKL+Other-Math")),
         ("BT /F1 12 Tf ET /X Do BT /F2 12 Tf (-) Tj ET", None),
+        // A form that sets F2 shows its `-` in F2; after it the page's F1 is back for the `+`.
+        ("BT /F1 12 Tf ET /Y Do BT (+) Tj ET", None),
+        // An ExtGState's /Font sets the font as Tf does (ISO 32000-2 Table 57).
+        ("BT /F2 12 Tf /G1 gs (+) Tj ET", None),
+        ("BT /G1 gs <CA> Tj ET", Some("ABCDEF+Test-Math")),
     ];
     for (content, unmapped) in cases {
         let r = checked(&symbolic_type1_doc(content, math, other), &[Rule::CharacterEncoding]);
@@ -1988,6 +2005,82 @@ fn a_symbolic_type1_font_maps_through_its_built_in_glyph_names() {
     // nor has a font whose program isn't embedded.
     let standard = checked(&symbolic_type1_doc("BT /F1 12 Tf (A) Tj ET", "/Encoding StandardEncoding def", other), &[Rule::CharacterEncoding]);
     assert_eq!(status(&standard, Rule::CharacterEncoding), Status::Passed);
+    // StandardEncoding names no glyph for code 0 (ISO 32000-2 Annex D.2).
+    let standard = checked(&symbolic_type1_doc("BT /F1 12 Tf <00> Tj ET", "/Encoding StandardEncoding def", other), &[Rule::CharacterEncoding]);
+    assert_eq!(status(&standard, Rule::CharacterEncoding), Status::Failed);
     let none = checked(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", "/CharStrings 1 dict", other), &[Rule::CharacterEncoding]);
     assert_eq!(status(&none, Rule::CharacterEncoding), Status::Failed);
+}
+
+#[test]
+fn built_in_glyph_names_are_read_from_the_program_code_only() {
+    // A comment or a string in the clear text is not code (PostScript Language Reference 3.2.2 to
+    // 3.2.4), and an encoding not closed by `def` within the clear text read is not taken: the
+    // assignment that would undo `plus` may lie past it.
+    let other = "/Encoding 256 array\ndup 43 /geqslant put\nreadonly def";
+    let commented = "/Encoding 256 array\ndup 43 /.notdef put % dup 43 /plus put\n(dup 43 /plus put) pop\nreadonly def";
+    let cut = format!("/Encoding 256 array\ndup 43 /plus put\n{}\ndup 43 /.notdef put\nreadonly def", " ".repeat(300 << 10));
+    let closed = "/Encoding 256 array\ndup 43 /plus put % a comment ( with a parenthesis\nreadonly def";
+    for (program, expected) in [(commented, Status::Failed), (cut.as_str(), Status::Failed), (closed, Status::Passed)] {
+        let r = checked(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", program, other), &[Rule::CharacterEncoding]);
+        assert_eq!(status(&r, Rule::CharacterEncoding), expected, "{program:.80}");
+    }
+    // ISO 32000-2 §7.3.7: an /Encoding of null is no /Encoding.
+    let math = "/Encoding 256 array\ndup 43 /plus put\nreadonly def";
+    let r = checked(&symbolic_type1_doc_with(&stream("BT /F1 12 Tf (+) Tj ET"), math, other, "/Encoding null "), &[Rule::CharacterEncoding]);
+    assert_eq!(status(&r, Rule::CharacterEncoding), Status::Passed);
+}
+
+#[test]
+fn shown_codes_are_trusted_only_where_the_page_text_was_read_in_full() {
+    // A font is judged by the codes it shows only if the scan read all of its text, with the right
+    // font. Otherwise it is reported as when its built-in names are not read.
+    let math = "/Encoding 256 array\ndup 43 /plus put\ndup 45 /minus put\nreadonly def";
+    let other = "/Encoding 256 array\ndup 43 /geqslant put\ndup 45 /uni2212 put\nreadonly def";
+    let found = |doc: &Document| -> Vec<String> {
+        checked(doc, &[Rule::CharacterEncoding]).result(Rule::CharacterEncoding).unwrap().findings.iter().map(|f| f.message.clone()).collect()
+    };
+    let f1 = "Font ABCDEF+Test-Math on page 1 doesn't map its characters to Unicode";
+    let f2 = "Font GHIJKL+Other-Math on page 1 doesn't map its characters to Unicode";
+    // Read in full, `+` in F1 passes.
+    assert!(found(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", math, other)).is_empty());
+    // A content stream that stops at damage: what follows it is unread.
+    let hex: String = b"BT /F1 12 Tf (+) Tj ET".iter().map(|b| format!("{b:02X}")).collect();
+    let data = format!("{hex}zz{}>", "20".repeat(4));
+    let damaged = format!("<< /Filter /ASCIIHexDecode /Length {} >>\nstream\n{data}\nendstream", data.len());
+    assert_eq!(found(&symbolic_type1_doc_with(&damaged, math, other, "")), [f1]);
+    // A form nested past the limit, holding text of its own, is not read.
+    let mut forms = String::new();
+    let mut objects: Vec<String> = Vec::new();
+    for i in 0..13 {
+        let inner = if i == 12 { "BT /F1 12 Tf <CA> Tj ET".to_string() } else { format!("/N{} Do", i + 1) };
+        objects.push(format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /N{} {} 0 R >> /Font << /F1 3 0 R >> >> /Length {} >>\nstream\n{inner}\nendstream",
+            i + 1,
+            i + 6,
+            inner.len()
+        ));
+        forms.push_str(&format!("/N{i} {} 0 R ", i + 5));
+    }
+    let page = "BT /F1 12 Tf (+) Tj ET /N0 Do";
+    let mut bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Test-Math /FontDescriptor 19 0 R >>".to_string(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 18 0 R /Resources << /Font << /F1 3 0 R >> /XObject << {forms}>> >> >>"
+        ),
+    ];
+    bodies.extend(objects);
+    bodies.push(stream(page));
+    bodies.push("<< /Type /FontDescriptor /FontName /Test-Math /Flags 4 /FontFile 20 0 R >>".into());
+    bodies.push(type1_program(math));
+    assert_eq!(found(&pdf(&bodies, "")), [f1]);
+    // Past 4096 open saves, a `Q` closes a save that kept nothing, not the 4096th: the `+` after it
+    // is shown in F2, which names it geqslant.
+    let deep = format!("BT /F1 12 Tf {} /F2 12 Tf q Q (+) Tj ET", "q ".repeat(4096));
+    assert_eq!(found(&symbolic_type1_doc(&deep, math, other)), [f2]);
+    // A font set inside those saves can't be restored, so the codes are not trusted.
+    let lost = format!("BT /F1 12 Tf {} q /F2 12 Tf Q (+) Tj ET", "q ".repeat(4096));
+    assert_eq!(found(&symbolic_type1_doc(&lost, math, other)), [f1, f2]);
 }

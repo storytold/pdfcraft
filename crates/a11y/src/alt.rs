@@ -177,13 +177,26 @@ pub(crate) fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
 /// The page's content streams, decoded against `budget` and joined with a space. Streams that
 /// don't decode, or arrive after the budget is spent, are left out.
 pub(crate) fn page_content_within(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Vec<u8> {
-    let Some(c) = page.get(b"Contents") else { return Vec::new() };
+    page_content_with_damage(doc, page, budget).0
+}
+
+/// [`page_content_within`], also saying whether part of the page wasn't read for a reason other
+/// than the spent budget: a stream stopped at damage, or didn't decode.
+pub(crate) fn page_content_with_damage(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> (Vec<u8>, bool) {
+    let Some(c) = page.get(b"Contents") else { return (Vec::new(), false) };
     let mut out = Vec::new();
-    for data in budget.decode_contents(doc, c).into_iter().flatten() {
-        out.extend_from_slice(&data);
-        out.push(b' ');
+    let mut damaged = false;
+    for read in budget.decode_contents_with_damage(doc, c) {
+        match read {
+            Ok((data, stopped)) => {
+                damaged |= stopped;
+                out.extend_from_slice(&data);
+                out.push(b' ');
+            }
+            Err(_) => damaged |= !budget.exhausted(),
+        }
     }
-    out
+    (out, damaged)
 }
 
 fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {

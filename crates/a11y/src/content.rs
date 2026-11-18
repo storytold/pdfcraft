@@ -24,12 +24,18 @@ pub(crate) struct Scan {
     pub codes: HashMap<ObjRef, [u64; 4]>,
     /// Pages read only in part: content or forms past the page's decode budget are missing.
     pub incomplete: BTreeSet<usize>,
+    /// Pages whose text the scan may not have read in full, or may have given the wrong font: a
+    /// content stream or form that stopped at damage or didn't decode, a form past the nesting
+    /// limit, or a font set where the `q` limit can't restore it. [`codes`](Scan::codes) is then
+    /// not the whole story, so no font is judged by the codes it shows.
+    pub partial_text: BTreeSet<usize>,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
 
-/// `q` saves nested deeper than this keep no font of their own to restore: `Q` then leaves the
-/// current one.
+/// `q` saves nested deeper than this keep no font of their own to restore. Their `Q`s are counted
+/// so they don't take the saves kept below them; a font set inside them makes the page's text
+/// partial ([`Scan::partial_text`]).
 const MAX_SAVES: usize = 4096;
 
 impl Scan {
@@ -39,9 +45,12 @@ impl Scan {
             let Some(page) = pages.get(p) else { continue };
             let res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
             let mut budget = DecodeBudget::page();
-            let data = crate::alt::page_content_within(doc, &page.dict, &mut budget);
+            let (data, damaged) = crate::alt::page_content_with_damage(doc, &page.dict, &mut budget);
             if budget.remaining() == 0 {
                 s.incomplete.insert(p);
+            }
+            if damaged {
+                s.partial_text.insert(p);
             }
             let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, font: None };
             w.content(&data, &res, false, 0);
@@ -94,20 +103,44 @@ impl Walk<'_> {
         }
     }
 
+    /// Makes `font` the current font, as `Tf` does and an ExtGState's /Font entry does through `gs`.
+    /// `over`: `q` saves past [`MAX_SAVES`] are open, so no `Q` can bring back the font this
+    /// replaces.
+    fn set_font(&mut self, font: Option<ObjRef>, over: usize) {
+        if let Some(r) = font {
+            self.scan.fonts.entry(self.page).or_default().insert(r);
+        }
+        if over > 0 {
+            self.scan.partial_text.insert(self.page);
+        }
+        self.font = font;
+    }
+
     /// Walk a content stream; `covered`: already inside tagged or artifact content.
     fn content(&mut self, data: &[u8], res: &Dict, covered: bool, depth: usize) {
         let (fonts, xobjects, props) = (self.sub(res, b"Font"), self.sub(res, b"XObject"), self.sub(res, b"Properties"));
+        let states = self.sub(res, b"ExtGState");
         // Marked-content stack: whether each level is tagged or an artifact.
         let mut stack: Vec<bool> = Vec::new();
         let mut untagged = 0;
         let mut saved: Vec<Option<ObjRef>> = Vec::new();
+        // `q` saves past MAX_SAVES still open: their `Q`s restore nothing kept.
+        let mut over = 0usize;
         // One operator at a time: the walk keeps counts, never the stream's operators.
         for op in pdfcraft_content::ops(data) {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
-                b"q" if saved.len() < MAX_SAVES => saved.push(self.font),
+                b"q" => {
+                    if saved.len() < MAX_SAVES {
+                        saved.push(self.font);
+                    } else {
+                        over = over.saturating_add(1);
+                    }
+                }
                 b"Q" => {
-                    if let Some(font) = saved.pop() {
+                    if over > 0 {
+                        over -= 1;
+                    } else if let Some(font) = saved.pop() {
                         self.font = font;
                     }
                 }
@@ -123,10 +156,34 @@ impl Walk<'_> {
                 }
                 b"Tf" => {
                     let font = op.name(0).and_then(|n| fonts.get(n)).and_then(Object::as_ref);
-                    if let Some(r) = font {
-                        self.scan.fonts.entry(self.page).or_default().insert(r);
+                    self.set_font(font, over);
+                }
+                b"gs" => {
+                    // An ExtGState's /Font entry, an array of the font and its size, sets the font
+                    // as Tf does (ISO 32000-2 §8.4.5, Table 57). Without one the font stays.
+                    // A direct dictionary is read in place, so many `gs` don't copy it many times.
+                    let doc = self.doc;
+                    let font = op.name(0).and_then(|n| states.get(n)).and_then(|g| {
+                        let held;
+                        let g = if let Object::Ref(_) = g {
+                            held = doc.resolve(g);
+                            &*held
+                        } else {
+                            g
+                        };
+                        let entry = g.as_dict()?.get(b"Font")?;
+                        let held;
+                        let entry = if let Object::Ref(_) = entry {
+                            held = doc.resolve(entry);
+                            &*held
+                        } else {
+                            entry
+                        };
+                        entry.as_array().map(|a| a.first().and_then(Object::as_ref))
+                    });
+                    if let Some(font) = font {
+                        self.set_font(font, over);
                     }
-                    self.font = font;
                 }
                 b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh" => untagged += usize::from(!inside),
                 b"BI" => {
@@ -142,16 +199,27 @@ impl Walk<'_> {
                             self.scan.has_images = true;
                             untagged += usize::from(!inside);
                         }
-                        Some(b"Form") if depth < MAX_FORM_DEPTH && !self.forms.contains(&r) => {
+                        // Text in a form nested past the limit is not read.
+                        Some(b"Form") if depth >= MAX_FORM_DEPTH && !self.forms.contains(&r) => {
+                            self.scan.partial_text.insert(self.page);
+                        }
+                        Some(b"Form") if !self.forms.contains(&r) => {
                             if !self.budget.enter_form() {
                                 self.scan.incomplete.insert(self.page);
                                 continue;
                             }
-                            let data = match self.budget.decode(x) {
-                                Ok(data) => data,
+                            let data = match self.budget.decode_with_damage(self.doc, x, usize::MAX) {
+                                Ok((data, damaged)) => {
+                                    if damaged {
+                                        self.scan.partial_text.insert(self.page);
+                                    }
+                                    data
+                                }
                                 Err(_) => {
                                     if self.budget.exhausted() {
                                         self.scan.incomplete.insert(self.page);
+                                    } else {
+                                        self.scan.partial_text.insert(self.page);
                                     }
                                     continue;
                                 }
@@ -363,12 +431,14 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
             let mut seen = HashSet::new();
             // What the embedded font programs read here may decode, all together.
             let mut programs = DecodeBudget::new(MAX_FONT_PROGRAMS, 0);
+            // A font passes on the codes its text shows only when the scan read all of that text.
+            let codes_known = scan.incomplete.is_empty() && scan.partial_text.is_empty();
             for (p, fonts) in &scan.fonts {
                 for r in fonts {
                     if seen.insert(*r)
                         && let Some(f) = doc.get(*r).as_dict()
                         && !maps_to_unicode(doc, f)
-                        && !built_in_names_map(doc, f, scan.codes.get(r), &mut programs)
+                        && !(codes_known && built_in_names_map(doc, f, scan.codes.get(r), &mut programs))
                     {
                         // A font with no name gets its own whole sentence, so another language can
                         // word that rather than translate a parenthesis. The name itself is the
@@ -451,25 +521,24 @@ const MAX_CLEAR_TEXT: usize = 256 << 10;
 /// counts when [`pdfcraft_fonts::pdf::glyph_text`] reads it. A program that can't be read, or
 /// codes without a name, leave the font without a route.
 fn built_in_names_map(doc: &Document, f: &Dict, codes: Option<&[u64; 4]>, budget: &mut DecodeBudget) -> bool {
-    if !matches!(f.name(b"Subtype"), Some(b"Type1" | b"MMType1")) || f.contains(b"Encoding") {
+    // An /Encoding of null is no /Encoding (ISO 32000-2 §7.3.7).
+    let encoding = f.get(b"Encoding").map(|e| doc.resolve(e));
+    if !matches!(f.name(b"Subtype"), Some(b"Type1" | b"MMType1")) || encoding.is_some_and(|e| !matches!(*e, Object::Null)) {
         return false;
     }
     let descriptor = f.get(b"FontDescriptor").map(|d| doc.resolve(d));
     let program = descriptor.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"FontFile")).map(|x| doc.resolve(x));
     let Some(Object::Stream(program)) = program.as_deref() else { return false };
     let Ok(data) = budget.decode_within(program, MAX_FONT_PROGRAM) else { return false };
-    let names = match built_in_encoding(&data) {
-        Some(BuiltIn::Standard) => return true,
-        Some(BuiltIn::Names(names)) => names,
-        None => return false,
-    };
+    let Some(encoding) = built_in_encoding(&data) else { return false };
     let Some(codes) = codes else { return true };
-    (0..=u8::MAX).filter(|&c| codes.get(usize::from(c >> 6)).is_some_and(|w| w & (1 << (c & 63)) != 0)).all(|c| {
-        names
+    (0..=u8::MAX).filter(|&c| codes.get(usize::from(c >> 6)).is_some_and(|w| w & (1 << (c & 63)) != 0)).all(|c| match &encoding {
+        BuiltIn::Standard => pdfcraft_fonts::pdf::standard_encoding_char(c).is_some(),
+        BuiltIn::Names(names) => names
             .get(usize::from(c))
             .and_then(|n| n.as_deref())
             .and_then(|n| std::str::from_utf8(n).ok())
-            .is_some_and(|n| pdfcraft_fonts::pdf::glyph_text(n).is_some())
+            .is_some_and(|n| pdfcraft_fonts::pdf::glyph_text(n).is_some()),
     })
 }
 
@@ -483,20 +552,23 @@ enum BuiltIn {
 
 /// The built-in encoding of a Type 1 font program, from the `/Encoding` its clear text defines
 /// before `eexec` (Adobe Type 1 Font Format, 2.3): StandardEncoding, or an array filled with
-/// `dup code /name put`. `None` when the program defines neither.
+/// `dup code /name put` and closed by `def`. `None` when the program defines neither, or when the
+/// definition isn't closed within the clear text read. Comments and strings are not read as
+/// code (PostScript Language Reference, 3.2.2 to 3.2.4).
 fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
     let clear = program.get(..program.len().min(MAX_CLEAR_TEXT))?;
-    let clear = clear.windows(5).position(|w| w == b"eexec").and_then(|end| clear.get(..end)).unwrap_or(clear);
-    let at = clear.windows(9).position(|w| w == b"/Encoding")?;
-    let rest = clear.get(at.saturating_add(9)..)?;
-    let mut tokens = rest.split(|b| b.is_ascii_whitespace() || *b == 0).filter(|t| !t.is_empty()).peekable();
-    if tokens.peek().is_some_and(|t| *t == b"StandardEncoding") {
+    let tokens = ps_tokens(clear);
+    let tokens = tokens.split(|t| *t == b"eexec").next().unwrap_or_default();
+    let at = tokens.iter().position(|t| *t == b"/Encoding")?;
+    let rest = tokens.get(at.saturating_add(1)..)?;
+    // `dup 33 /arrowright put`, until the array is defined (`readonly def` or `def`).
+    let end = rest.iter().position(|t| *t == b"def")?;
+    let tokens = rest.get(..end)?;
+    if tokens.first().is_some_and(|t| *t == b"StandardEncoding") {
         return Some(BuiltIn::Standard);
     }
     let mut names: Vec<Option<Vec<u8>>> = vec![None; 256];
     let mut any = false;
-    // `dup 33 /arrowright put`, until the array is defined (`readonly def` or `def`).
-    let tokens: Vec<&[u8]> = tokens.take_while(|t| *t != b"def").collect();
     for w in tokens.windows(4) {
         if let [b"dup", code, name, b"put"] = w
             && let Some(name) = name.strip_prefix(b"/")
@@ -507,6 +579,64 @@ fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
         }
     }
     any.then_some(BuiltIn::Names(names))
+}
+
+/// The tokens of PostScript clear text, in order: names, numbers and operators, split at white
+/// space and the delimiters `[ ] { } < > ( ) / %`, a literal name keeping its `/`. Comments (`%`
+/// to the end of the line) and strings (`(...)` with nested parentheses and backslash escapes, or
+/// `<...>`) are left out (PostScript Language Reference, 3.2.2 to 3.2.4).
+fn ps_tokens(text: &[u8]) -> Vec<&[u8]> {
+    let space = |b: u8| b.is_ascii_whitespace() || b == 0;
+    let delimiter = |b: u8| matches!(b, b'[' | b']' | b'{' | b'}' | b'<' | b'>' | b'(' | b')' | b'/' | b'%');
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while let Some(&b) = text.get(i) {
+        match b {
+            b'%' => {
+                while text.get(i).is_some_and(|&c| c != b'\n' && c != b'\r') {
+                    i += 1;
+                }
+            }
+            b'(' => {
+                let mut level = 0usize;
+                while let Some(&c) = text.get(i) {
+                    i += 1;
+                    match c {
+                        b'\\' => i += 1,
+                        b'(' => level += 1,
+                        b')' => {
+                            level = level.saturating_sub(1);
+                            if level == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // `<<` opens a dictionary; a lone `<` a hexadecimal string, to its `>`.
+            b'<' if text.get(i.saturating_add(1)) == Some(&b'<') => i += 2,
+            b'<' => {
+                while text.get(i).is_some_and(|&c| c != b'>') {
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ if space(b) || (delimiter(b) && b != b'/') => i += 1,
+            _ => {
+                // A name, number or operator; a literal name keeps its `/`.
+                let start = i;
+                i += 1;
+                while text.get(i).is_some_and(|&c| !space(c) && !delimiter(c)) {
+                    i += 1;
+                }
+                if let Some(token) = text.get(start..i) {
+                    out.push(token);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Predefined CJK CMaps (ISO 32000-2 §9.7.5.2, Table 116), excluding Identity-H/V.
