@@ -58,11 +58,16 @@ fn edits_pages(edit: &Edit) -> bool {
 
 /// How many pages `edit` leaves of the `shown` ones, for the page edits whose result needs no
 /// other document to tell: a rotation, page box, move or reversal keeps them all, and a deletion
-/// takes the distinct pages it names. `None` for any other edit.
+/// takes the distinct pages it names. A batch that edits pages is followed member by member in
+/// the order they run, its other members keeping the count; it has a count only when each of its
+/// page edits has one. `None` for any other edit.
 fn pages_after(edit: &Edit, shown: usize) -> Option<usize> {
     match edit {
         Edit::RotatePages { .. } | Edit::SetPageBox { .. } | Edit::MovePages { .. } | Edit::ReversePages { .. } => Some(shown),
         Edit::DeletePages { pages } => shown.checked_sub(pages.iter().filter(|p| **p < shown).collect::<std::collections::HashSet<_>>().len()),
+        Edit::Batch { edits, .. } if edits_pages(edit) => {
+            edits.iter().try_fold(shown, |n, e| if edits_pages(e) { pages_after(e, n) } else { Some(n) })
+        }
         _ => None,
     }
 }
@@ -889,6 +894,23 @@ mod page_count_tests {
         assert_eq!(pages_after(&Edit::ReversePages { pages: vec![0, 1, 2] }, 13), Some(13));
         assert_eq!(pages_after(&Edit::DeletePages { pages: vec![12, 12, 3, 40] }, 13), Some(11), "twice and past the end count once and not at all");
         assert_eq!(pages_after(&Edit::SetInfo { key: "Title".into(), value: "t".into() }, 13), None);
+    }
+
+    /// A batch is checked like the page edits in it, in the order they run: one rotation alone in
+    /// a batch keeps every page, a deletion after another counts from what the first one left, and
+    /// the members that don't edit pages keep the count. A batch with no page edit, or with one
+    /// whose result needs another document to tell, has no count to check.
+    #[test]
+    fn a_batch_of_page_edits_says_how_many_pages_it_leaves() {
+        let batch = |edits: Vec<Edit>| Edit::Batch { label: "b".into(), edits };
+        let info = || Edit::SetInfo { key: "Title".into(), value: "t".into() };
+        assert_eq!(pages_after(&batch(vec![Edit::RotatePages { pages: vec![0], degrees: 90 }]), 13), Some(13));
+        let deletes = batch(vec![info(), Edit::DeletePages { pages: vec![12] }, Edit::DeletePages { pages: vec![11, 12] }]);
+        assert_eq!(pages_after(&deletes, 13), Some(11), "the second deletion sees 12 pages, so page 12 is past the end");
+        assert_eq!(pages_after(&batch(vec![batch(vec![Edit::DeletePages { pages: vec![0] }])]), 13), Some(12), "nested");
+        assert_eq!(pages_after(&batch(vec![info()]), 13), None);
+        let insert = Edit::InsertBlankPage { at: 0, width: 100.0, height: 100.0 };
+        assert_eq!(pages_after(&batch(vec![insert, Edit::RotatePages { pages: vec![0], degrees: 90 }]), 13), None);
     }
 
     /// Only a written result that reads with another page count is called a damaged page tree;
