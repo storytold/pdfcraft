@@ -71,7 +71,7 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     app.create_stamp_pass(ctx);
     app.summarize_pass();
 
-    crate::colour_picker::colour_picker_pass(app, ctx);
+    crate::colour_picker::colour_picker_pass(app);
     // Forms.
     if let Some(result) = app.dialogs.take::<SignaturePadDialog>() {
         super::signature::finish(app, result);
@@ -79,12 +79,6 @@ fn results(app: &mut PdfCraftApp, ctx: &egui::Context) {
     crate::prepare::dialog::finish(app);
     crate::bulk_fields::finish(app);
     crate::field_table_ui::pass(app, ctx);
-    // PLAN: assumed `fn redact_prompts_pass(app: &mut PdfCraftApp)` (pdf-forms-w13): takes the Apply redactions and
-    // Sanitize prompts by their instance ids and calls `finish_apply` / `finish_sanitize`.
-    crate::redact_ui::redact_prompts_pass(app);
-    // PLAN: assumed `fn lock_prompt_pass(app: &mut PdfCraftApp)` (pdf-forms-w6): takes the lock question by its
-    // instance id and calls `finish_lock`.
-    super::signature::lock_prompt_pass(app);
     if let Some(fields) = param_ok(app, "redact.pages") {
         crate::redact_ui::dialogs::finish_pages(app, &fields);
     }
@@ -116,4 +110,3 @@ fn param_ok(app: &mut PdfCraftApp, key: &str) -> Option<DialogFields> {
     let result = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id(key))?;
     result.ok().map(|r| r.fields)
 }
-
