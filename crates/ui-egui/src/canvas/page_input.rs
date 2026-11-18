@@ -831,16 +831,22 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
             view.selection.filter(|selection| selection.page == gesture.page || (selecting && matches!(selection.span, Span::Run { .. })))
     {
         // On the page the drag started on it stays in its column until the pointer has crossed the gutter beside it.
-        let hit = match selection.span {
-            Span::Run { anchor, .. } if selection.page == gesture.page => text.nearest_from(anchor, gesture.vx, gesture.vy),
-            _ => text.nearest(gesture.vx, gesture.vy),
+        let (hit, kept) = match selection.span {
+            Span::Run { anchor, .. } if selection.page == gesture.page => {
+                let hit = text.nearest_from(anchor, gesture.vx, gesture.vy);
+                (hit, hit != text.nearest(gesture.vx, gesture.vy))
+            }
+            _ => (text.nearest(gesture.vx, gesture.vy), false),
         };
+        // Held in its column, the drag ends at its head: the pointer, still in the gutter, would take
+        // the rows on across it.
+        let head_x = Some(gesture.vx).filter(|x| x.is_finite() && !kept);
         match selection.span {
             Span::Run { .. } if clicks >= 2 => {
                 if let Some(hit) = hit {
                     if selection.page == gesture.page {
                         // Same page: also select table rows by whole units, as a plain drag does.
-                        extend_by_unit_on_page(&mut selection, text, clicks, hit, gesture.vx);
+                        extend_by_unit_on_page(&mut selection, text, clicks, hit, head_x);
                     } else {
                         extend_by_unit(view, &mut selection, text, clicks, (gesture.page, hit));
                     }
@@ -848,7 +854,7 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
             }
             Span::Run { .. } => {
                 if let Some(hit) = hit {
-                    selection.extend_to_at(gesture.page, hit, Some(gesture.vx).filter(|x| x.is_finite()));
+                    selection.extend_to_at(gesture.page, hit, head_x);
                 }
             }
             Span::Column { rect } => selection.span = Span::Column { rect: [rect[0], rect[1], gesture.vx, gesture.vy] },
@@ -892,11 +898,11 @@ fn extend_by_unit(view: &DocView, selection: &mut Selection, text: &PageText, cl
 /// After a multi-click, a same-page drag extends by its unit and, over a table, by visual rows
 /// (the rest of the first row, the rows between, the start of the last). The page unit (four
 /// clicks) is the page's text in reading order, so it has no `head_x`.
-fn extend_by_unit_on_page(selection: &mut Selection, text: &PageText, clicks: u32, hit: usize, vx: f32) {
+fn extend_by_unit_on_page(selection: &mut Selection, text: &PageText, clicks: u32, hit: usize, vx: Option<f32>) {
     let Span::Run { anchor, head, head_page, head_x } = &mut selection.span else { return };
     let Some((first, last)) = click_unit(text, clicks, *anchor) else { return };
     let (to_first, to_last) = click_unit(text, clicks, hit).unwrap_or((hit, hit));
-    *head_x = Some(vx).filter(|x| x.is_finite() && clicks < 4);
+    *head_x = vx.filter(|_| clicks < 4);
     let in_order = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
     let by_rows = text.row_ends((first, last), (to_first, to_last));
     let rows = head_x.is_some() && text.visual_between(by_rows.0, by_rows.1, *head_x).is_some();

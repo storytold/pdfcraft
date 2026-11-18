@@ -1,7 +1,7 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
 use super::order::{
-    COLUMN_EMS, COLUMN_LINES, GUTTER_MIN, Gap, Gutters, NONE, Piece, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, ink_of,
-    is_script_on, mark_barcode_rows, measure_cluster_gaps, parted_by_gutter, place_glyphs, redraws, restarts_run, reverse_rtl, same_line,
+    COLUMN_EMS, COLUMN_LINES, COLUMN_ROWS, GUTTER_MIN, Gap, Gutters, NONE, Piece, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint,
+    ink_of, is_script_on, mark_barcode_rows, measure_cluster_gaps, parted_by_gutter, place_glyphs, redraws, restarts_run, reverse_rtl, same_line,
 };
 use super::{HashMap, HashSet, PageText, TextGlyph};
 
@@ -173,9 +173,10 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    A smaller glyph right next to the previous one (a sub- or superscript) stays in the segment.
 ///    Segments on the same baseline that nearly touch are merged (text drawn out of order), and so
 ///    is a table cell padded with spaces with the next cell of its row (`PADDED_FIELD`).
-///    Nothing is joined across the gutter between two columns of running text (#2387), however narrow
-///    (`gutter_in`): a segment that runs across one is cut there, and neither a line nor a sub- or
-///    superscript is merged across one.
+///    Nothing is joined across the gutter between two columns of running text (#2387), down to 0.6
+///    line heights wide with three lines of running text on each side (`gutter_in`): a segment that
+///    runs across one is cut there, and neither a line nor a sub- or superscript is merged across one,
+///    but for a table cell padded with spaces up to the next cell of its row.
 /// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
@@ -348,7 +349,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                     continue;
                 }
                 let (sa, sb) = (&segs[a], &segs[b]);
-                if nearly_touch(sa, sb) && !gutter_parts(&segs, sa, sb, &mut parted, &mut gutters) {
+                if nearly_touch(sa, sb) && (padded_cells(sa, sb) || !gutter_parts(&segs, sa, sb, &mut parted, &mut gutters)) {
                     let sb = segs.remove(b);
                     let a = if b < a { a - 1 } else { a };
                     segs[a].merge(sb);
@@ -665,13 +666,20 @@ fn nearly_touch(a: &Seg, b: &Seg) -> bool {
     (a.cy() - b.cy()).abs() < h * 0.3 && (a.h / b.h - 1.0).abs() < 0.35 && joined
 }
 
+/// Whether one of segments `a` and `b` is a table cell padded with spaces towards the other ([`Seg::padded_towards`]):
+/// the two are a row, merged whatever gap the padding leaves after the cell's text.
+fn padded_cells(a: &Seg, b: &Seg) -> bool {
+    let h = a.h.min(b.h);
+    a.padded_towards(b, h) || b.padded_towards(a, h)
+}
+
 /// Looks for the page's gutters between the segments that would be merged, before any is: a gutter found between
 /// two lines also parts the lines that have too little text around them to show it, whichever of them the merging
 /// comes to first.
 fn find_gutters(segs: &[Seg], parted: &mut HashSet<(usize, usize)>, gutters: &mut Gutters) {
     for (k, a) in segs.iter().enumerate() {
         for b in segs.iter().skip(k + 1) {
-            if nearly_touch(a, b) || nearly_touch(b, a) {
+            if (nearly_touch(a, b) || nearly_touch(b, a)) && !padded_cells(a, b) {
                 gutter_parts(segs, a, b, parted, gutters);
             }
         }
@@ -719,8 +727,11 @@ fn split_at_gutters(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, segs: 
             if g.text.trim().is_empty() {
                 continue;
             }
-            // From the glyph drawn before, a space too: the space between two words is no jump. Measured in the
-            // segment's height: a superscript or a bullet is smaller than the line it is on.
+            // From the glyph drawn before, a space too: the space between two words is no jump (a typewriter
+            // face's space is as wide as the narrowest gutter, and a justified line's extra spacing is not part of
+            // a space's box). So a space that ends a line and reaches into the gutter of columns drawn row by row
+            // in one run narrows it. Measured in the segment's height: a superscript or a bullet is smaller than
+            // the line it is on.
             if let Some(before) = before
                 && g.rect[0] - before.rect[2] >= s.h * GUTTER_MIN
                 && let Some(done) = piece.take()
@@ -791,8 +802,9 @@ fn seg_of(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, run: Run) -> Opt
 /// [`COLUMN_LINES`] lines of text level with the stretch from `top` to `bottom`: the gutter at the height of
 /// `last`, the line the stretch starts from, whose text is `h` high ([`Gutters::between`]). The lines level with
 /// the stretch are at least half as wide as running text: a paragraph's last line and a heading count, a figure's
-/// labels don't. Beside a figure as wide as the page, or above a footer, the column beside has nothing level with
-/// the stretch.
+/// labels don't, and that column's text reaches down to within [`COLUMN_ROWS`] heights of the stretch's bottom, or
+/// further. Beside a figure as wide as the page, or above a footer, the column beside has nothing level with the
+/// stretch, or ends near its top.
 fn gutter_beside(
     segs: &[Seg],
     (x0, x1): (f32, f32),
@@ -807,13 +819,25 @@ fn gutter_beside(
     // The text level with the stretch right of the column, then left of it: its near edge, its far edge, and its lines.
     let (mut right, mut after) = ((f32::INFINITY, f32::NEG_INFINITY), 0usize);
     let (mut left, mut before) = ((f32::NEG_INFINITY, f32::INFINITY), 0usize);
-    for p in pieces().filter(|p| p.cy > top && p.cy < bottom && p.ink - p.x0 >= h * COLUMN_EMS / 2.0) {
+    // How far down each side's text reaches, below the stretch too: a column with a figure of its own beside the
+    // stretch goes on below it.
+    let (mut right_low, mut left_low) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in pieces().filter(|p| p.cy > top && p.ink - p.x0 >= h * COLUMN_EMS / 2.0) {
+        let level = p.cy < bottom;
         if p.x0 >= x1 {
-            (right, after) = ((right.0.min(p.x0), right.1.max(p.ink)), after + 1);
+            right_low = right_low.max(p.cy);
+            if level {
+                (right, after) = ((right.0.min(p.x0), right.1.max(p.ink)), after + 1);
+            }
         } else if p.ink <= x0 {
-            (left, before) = ((left.0.max(p.ink), left.1.min(p.x0)), before + 1);
+            left_low = left_low.max(p.cy);
+            if level {
+                (left, before) = ((left.0.max(p.ink), left.1.min(p.x0)), before + 1);
+            }
         }
     }
+    let reaches_down = |low: f32| low >= bottom - h * COLUMN_ROWS;
+    let (after, before) = (if reaches_down(right_low) { after } else { 0 }, if reaches_down(left_low) { before } else { 0 });
     gutters.spend(segs.len());
     let cy = (last[1] + last[3]) / 2.0;
     if after >= COLUMN_LINES

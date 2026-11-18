@@ -877,7 +877,7 @@ pub(super) fn same_line(p: &Seg, s: &Seg) -> bool {
 }
 
 /// Line heights above and below a gap that are looked over for the columns beside it.
-const COLUMN_ROWS: f32 = 6.0;
+pub(super) const COLUMN_ROWS: f32 = 6.0;
 /// Lines of running text needed on each side of a gap for it to be a gutter.
 pub(super) const COLUMN_LINES: usize = 3;
 /// A line of running text is at least this many line heights wide, some 25 letters. Table cells, names, labels and
@@ -892,6 +892,8 @@ pub(super) const GUTTER_MIN: f32 = 0.6;
 const GUTTER_WORK: usize = 1 << 22;
 /// Gutters one page keeps. A page has a few: past this, the first ones found are the ones known.
 const GUTTERS_KEPT: usize = 64;
+/// Lines counted on each side of a gap. Twelve line heights hold about thirteen lines of the text beside it.
+const LINES_KEPT: usize = 64;
 
 /// A stretch of one line with no gap as wide as a gutter in it: its left edge, the right edge of its ink and its
 /// vertical centre.
@@ -970,16 +972,27 @@ pub(super) fn gutter_in(
         best.filter(|(a, b)| b - a >= h * GUTTER_MIN)
     })?;
     let mid = (lo + hi) / 2.0;
-    let (mut before, mut after, mut across) = (0usize, 0usize, 0usize);
+    // The lines before, after and across it, each by its baseline: the pieces of one line are one line.
+    let (mut before, mut after, mut across) = (Vec::new(), Vec::new(), Vec::new());
+    let line = |lines: &mut Vec<f32>, at: f32| {
+        if lines.len() < LINES_KEPT && lines.iter().all(|y| (y - at).abs() > h * 0.5) {
+            lines.push(at);
+        }
+    };
     for p in pieces.filter(|p| (p.cy - cy).abs() <= reach) {
         if p.ink <= mid {
-            before += usize::from(p.ink - p.x0 >= wide && p.ink > start - h * GUTTER_MIN);
+            if p.ink - p.x0 >= wide && p.ink > start - h * GUTTER_MIN {
+                line(&mut before, p.cy);
+            }
         } else if p.x0 >= mid {
-            after += usize::from(p.ink - p.x0 >= wide);
+            if p.ink - p.x0 >= wide {
+                line(&mut after, p.cy);
+            }
         } else {
-            across += 1;
+            line(&mut across, p.cy);
         }
     }
+    let (before, after, across) = (before.len(), after.len(), across.len());
     (before >= COLUMN_LINES && after >= COLUMN_LINES && across < before.min(after)).then_some((lo, hi))
 }
 
@@ -1061,7 +1074,9 @@ impl Gutters {
 /// Whether segments `a` and `b`, on one baseline, are parted by the gutter between two columns of running text
 /// ([`Gutters::between`]): the end of a line in one column and the start of a line in the next.
 pub(super) fn parted_by_gutter(segs: &[Seg], a: &Seg, b: &Seg, gutters: &mut Gutters) -> bool {
-    let (left, right) = if a.bbox[0] <= b.bbox[0] { (a, b) } else { (b, a) };
+    // Which is left, by where their visible text starts: blanks may reach back past the other's text.
+    let first = |a: &Seg, b: &Seg| if a.ink.is_finite() && b.ink.is_finite() { a.ink_start <= b.ink_start } else { a.bbox[0] <= b.bbox[0] };
+    let (left, right) = if first(a, b) { (a, b) } else { (b, a) };
     // The visible gap: a line's spaces reach into the gutter. A segment of blanks starts and ends where its box does.
     let (start, from) = if left.ink.is_finite() { (left.ink_start, left.ink) } else { (left.bbox[0], left.bbox[2]) };
     let (to, end) = if right.ink.is_finite() { (right.ink_start, right.ink) } else { (right.bbox[0], right.bbox[2]) };

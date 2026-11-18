@@ -2183,6 +2183,107 @@ fn a_block_of_blanks_holds_up_no_column() {
     assert_eq!(read, [a, b, c, d].concat());
 }
 
+/// A drag measures the gutter by the text around it: more text set larger elsewhere on the page, for which 9 pt
+/// would be no gutter, does not take a drag ending in the gutter of two 10 pt columns across it.
+#[test]
+fn a_drag_measures_the_gutter_by_the_text_beside_it() {
+    let (left, right) = NARROW_COLUMNS;
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &right, 169.0, 10.0);
+    for row in 0..20 {
+        for (i, c) in "Large print set well below".chars().enumerate() {
+            v.push(tilted(&c.to_string(), [10.0 + i as f32 * 10.0, 200.0 + row as f32 * 20.0], [1.0, 0.0], [0.0, 1.0], 10.0, 16.0));
+        }
+    }
+    let t = layout(v);
+    let anchor = t.nearest(10.0, 15.0).expect("a glyph");
+    let y = 10.0 + 3.0 * 12.0 + 5.0;
+    assert_eq!(t.nearest(167.0, y).map(|i| t.glyphs[i].rect[0]), Some(169.0), "the right column's line is nearer");
+    let kept = t.nearest_from(anchor, 167.0, y).map(|i| (t.glyphs[i].rect[2], t.glyphs[i].rect[1]));
+    assert_eq!(kept, Some((160.0, 46.0)), "the end of the left column's line");
+}
+
+/// Table cells padded with spaces to a fixed width, as wide as running text: the row reads across, as it did
+/// before gutters were looked for, and the gap after a cell's padding is no gutter.
+#[test]
+fn padded_cells_as_wide_as_running_text_stay_rows() {
+    let rows = [
+        ("The first cell of the row", "and the cell beside it too"),
+        ("A second cell of the rows", "with its own cell set next"),
+        ("The third cell is as wide", "as the cell that is beside"),
+        ("And the last of them ends", "the table with a last cell"),
+    ];
+    // Drawn one column of cells after the other. 25 letters to 160, four spaces of padding to 184, the next cell
+    // 5 pt further.
+    let mut v = Vec::new();
+    for (row, (a, _)) in rows.iter().enumerate() {
+        word(&mut v, &format!("{a}    "), 10.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    for (row, (_, b)) in rows.iter().enumerate() {
+        word(&mut v, b, 189.0, 10.0 + row as f32 * 12.0, 6.0);
+    }
+    let text = layout(v).plain_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), rows.len(), "one line a row: {text:?}");
+    for (line, (a, b)) in lines.iter().zip(rows) {
+        assert!(line.starts_with(a) && line.ends_with(b), "{line:?}");
+    }
+}
+
+/// A footer below the left column, far below where the right column ends: the right column reads before it. The
+/// right column runs past the end of the left one only near its top, not beside the gap down to the footer.
+#[test]
+fn a_footer_below_the_column_reads_after_the_next_column() {
+    let (left, right) = NARROW_COLUMNS;
+    let more = ["and the right column goes", "on for four lines further", "than the column left of it", "before it ends at the top."];
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    column(&mut v, &[&right[..], &more[..]].concat(), 169.0, 10.0);
+    word(&mut v, "A footer at the foot", 10.0, 500.0, 6.0);
+    assert_eq!(layout(v).plain_text(), [&left[..], &right[..], &more[..], &["A footer at the foot"]].concat().join("\n"));
+}
+
+/// Three wide pieces on one line beside three lines ending before a gap are one line's text, not three lines of a
+/// column: the gap after the short lines is no gutter, and the line reads across.
+#[test]
+fn pieces_of_one_line_count_as_one_line_of_a_column() {
+    let left = ["A short column of three", "lines stands at the left", "and a long line runs on"];
+    let pieces = ["beside its second one in", "three wide pieces drawn", "one after the other here"];
+    let mut v = Vec::new();
+    column(&mut v, &left, 10.0, 10.0);
+    // The second line's three pieces, each 24 letters (144 pt) wide and 9 pt after the text before, drawn last
+    // first, so that each is a run of its own.
+    let mut x = 10.0 + 24.0 * 6.0 + 9.0;
+    let mut at = Vec::new();
+    for piece in pieces {
+        at.push(x);
+        x += piece.len() as f32 * 6.0 + 9.0;
+    }
+    for (piece, x) in pieces.iter().zip(at).rev() {
+        word(&mut v, piece, x, 22.0, 6.0);
+    }
+    let text = layout(v).plain_text();
+    assert_eq!(text.lines().nth(1), Some([left[1], pieces[0], pieces[1], pieces[2]].join(" ").as_str()), "{text:?}");
+}
+
+/// Two segments on one line, the right one with blanks reaching back past the left one's start: which is left is
+/// told by their visible text, so the gutter between them is found.
+#[test]
+fn a_gutter_is_looked_for_between_the_visible_text() {
+    use super::order::{Gutters, parted_by_gutter};
+    let seg = |k: usize, x0: f32, x1: f32, row: f32| Seg::new(Run { start: k, end: k + 1 }, [x0, 10.0 + row * 12.0, x1, 20.0 + row * 12.0], 10.0, x1);
+    let mut segs = Vec::new();
+    for row in 0..5 {
+        segs.push(seg(2 * row, 10.0, 160.0, row as f32));
+        segs.push(seg(2 * row + 1, 169.0, 319.0, row as f32));
+    }
+    let (left, mut right) = (seg(4, 10.0, 160.0, 2.0), seg(5, 169.0, 319.0, 2.0));
+    right.bbox[0] = 4.0;
+    assert!(parted_by_gutter(&segs, &left, &right, &mut Gutters::new()));
+    assert!(parted_by_gutter(&segs, &right, &left, &mut Gutters::new()));
+}
+
 #[test]
 fn tracked_text_keeps_letters_together() {
     let mut v = Vec::new();

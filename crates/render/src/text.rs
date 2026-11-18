@@ -320,9 +320,14 @@ impl PageText {
         let lines = self.line_boxes();
         let barcodes = self.barcode_lines();
         let pieces = lines.iter().filter(|(l, _)| !barcodes.contains(l)).map(|(_, r)| Piece { x0: r[0], ink: r[2], cy: (r[1] + r[3]) / 2.0 });
-        let height = self.text_height()?;
+        // Measured by the text around each place: a page's larger print elsewhere, or a heading the drag
+        // began on, is not the measure of the columns.
         let mut work = usize::MAX;
-        let (g0, g1) = [y, (a.rect[1] + a.rect[3]) / 2.0].into_iter().find_map(|cy| gutter_in(pieces.clone(), start, gap, cy, height, &mut work))?;
+        let places = [(y, h.rect[3] - h.rect[1]), ((a.rect[1] + a.rect[3]) / 2.0, a.rect[3] - a.rect[1])];
+        let (g0, g1) = places.into_iter().find_map(|(cy, own)| {
+            let height = self.text_height_near(cy, own * GUTTER_ROWS)?;
+            gutter_in(pieces.clone(), start, gap, cy, height, &mut work)
+        })?;
         // Past the gutter the pointer is in the next column, beside its text there too.
         let crossed = if leftward { x > g1 } else { x < g0 };
         if crossed {
@@ -352,11 +357,12 @@ impl PageText {
         lines
     }
 
-    /// The height of the page's text: the median height of its visible glyphs. A heading or a
-    /// superscript under the pointer is not the measure of the columns around it.
-    fn text_height(&self) -> Option<f32> {
-        let mut heights: Vec<f32> =
-            self.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect[3] - g.rect[1]).filter(|h| *h > 0.0).collect();
+    /// The height of the text around height `cy`: the median height of the visible glyphs whose
+    /// centres lie within `reach` of it. A heading or a superscript is not the measure of the
+    /// lines around it.
+    fn text_height_near(&self, cy: f32, reach: f32) -> Option<f32> {
+        let near = |g: &&TextGlyph| !g.text.trim().is_empty() && ((g.rect[1] + g.rect[3]) / 2.0 - cy).abs() <= reach;
+        let mut heights: Vec<f32> = self.glyphs.iter().filter(near).map(|g| g.rect[3] - g.rect[1]).filter(|h| *h > 0.0).collect();
         heights.sort_by(f32::total_cmp);
         heights.get(heights.len() / 2).copied()
     }

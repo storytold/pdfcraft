@@ -275,6 +275,53 @@ fn a_drag_stays_in_its_column_until_the_pointer_crosses_a_narrow_gutter() {
     assert_eq!(text(&h), Some([NARROW_LEFT.join("\n"), NARROW_RIGHT[..2].join("\n"), "n".into()].join("\n")), "over the right column");
 }
 
+/// Two columns 9 pt apart, the left one set ragged right, as text set flush left is: its second
+/// and third lines are short, and beside them the two columns look like the cells of a table's
+/// rows. Its longest line ends at x 188, and the right column starts at 197.
+fn ragged_columns() -> Vec<u8> {
+    let column = |x: u32, lines: &[&str]| {
+        let lines: String = lines.iter().map(|line| format!("({line}) Tj T* ")).collect();
+        format!("BT /F1 10 Tf 12 TL {x} 250 Td {lines}ET ")
+    };
+    let content = format!("{}{}", column(20, &RAGGED_LEFT), column(197, &RAGGED_RIGHT));
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+const RAGGED_LEFT: [&str; 5] = ["A left column set flush left", "two short", "lines next", "and then longer ones again", "the column, as text does"];
+const RAGGED_RIGHT: [&str; 5] =
+    ["and the right one is set", "close beside it and all", "of its lines run as far", "as the column is wide so", "they end at the same place"];
+
+/// A drag down the ragged left column that ends in the gutter takes no text of the right column,
+/// as rows or otherwise, until the pointer crosses the gutter.
+#[test]
+fn a_drag_in_the_gutter_beside_a_ragged_column_takes_no_rows_across_it() {
+    let mut h = opened("ragged.pdf", ragged_columns());
+    let rect = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_rect(0, g).expect("glyph on screen");
+    let mut starts = Vec::new();
+    let mut glyphs = 0;
+    for line in RAGGED_LEFT.iter().chain(&RAGGED_RIGHT) {
+        starts.push(glyphs);
+        glyphs += line.len();
+    }
+    // The gutter, from the end of the left column's longest line to the right column's start.
+    let (g0, g1) = (rect(&h, starts[1] - 1).right(), rect(&h, starts[5]).left());
+    // From the start of the second line, down to the third.
+    let from = glyph(&h, starts[1]) - vec2(4.0, 0.0);
+    let level = rect(&h, starts[7]).center().y;
+    drag(&mut h, from, egui::pos2(g1 - (g1 - g0) / 6.0, level), Modifiers::NONE);
+    assert_eq!(text(&h), Some(RAGGED_LEFT[1..3].join("\n")));
+}
+
 /// Two article columns, the right one a line shorter: its last glyph, the end of reading order,
 /// sits above the left column's last line.
 fn uneven_columns() -> Vec<u8> {
