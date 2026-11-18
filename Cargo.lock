@@ -5099,7 +5099,7 @@ dependencies = [
  "block2 0.6.2",
  "bytemuck",
  "chrono",
- "craft-cms",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-i18n",
  "craft-image-codecs",
  "craft-keymap",
