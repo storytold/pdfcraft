@@ -105,16 +105,18 @@ fn radio_row(key: &str, label: &str, options: [(&str, &str); 2]) -> PropertyRow 
 /// A row of buttons that ask the host for `actions` (an id and its label); `lead` is text before them.
 fn action_row(key: &str, label: &str, lead: Option<String>, actions: Vec<(String, String)>) -> PropertyRow {
     PropertyRow::field(Param::custom(key, tl!(label).to_string(), move |ui, _, cx| {
-        Row::new().show(ui, |ui, _| {
-            if let Some(lead) = &lead {
-                Text::new(lead.clone()).show(ui);
-            }
-            for (id, text) in &actions {
-                if clicked(&Button::new(text.clone()).show(ui)) {
-                    cx.request_action(id.clone());
+        Row::new()
+            .show(ui, |ui, _| {
+                if let Some(lead) = &lead {
+                    Text::new(lead.clone()).show(ui);
                 }
-            }
-        })
+                for (id, text) in &actions {
+                    if clicked(&Button::new(text.clone()).show(ui)) {
+                        cx.request_action(id.clone());
+                    }
+                }
+            })
+            .response
     }))
 }
 
@@ -208,7 +210,7 @@ fn custom_row(file_listed: usize, editable: bool, listed: Vec<(String, String)>)
         if custom_pairs(fields).as_ref() != Some(&props) {
             fields.set("custom", custom_json(&props));
         }
-        shown
+        shown.response
     })
     .companions(["custom.name", "custom.value", "custom.unlisted"])
     .opens_with(custom_json(&listed));

@@ -75,12 +75,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     let current_label = view.current_page_label(labels.get(current).map(String::as_str));
     // Taken once, in the pass that shows the field, also while the field is not focused.
     let reselect = std::mem::take(&mut view.page_input_reselect);
-    let edit = TextField::new("Current page", Bind::bound(&mut view.page_input))
-        .id(view.page_input_id())
-        .select_on_focus()
-        .select_all(reselect)
-        .submits()
-        .show(ui);
+    let input_id = view.page_input_id();
+    let edit =
+        TextField::new("Current page", Bind::bound(&mut view.page_input)).id(input_id).select_on_focus().select_all(reselect).submits().show(ui);
     if edit.submitted {
         let typed = view.page_input.clone();
         view.go_to_typed(&typed, &labels);

@@ -230,7 +230,7 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     assert!(app.password_prompt.is_some() && app.views.is_empty());
     app.combine_paths(&[]);
     assert!(app.combine_showing());
-    app.submit_password(Some("pw".into()));
+    app.submit_password(&egui::Context::default(), Some("pw".into()));
     assert!(app.password_prompt.is_none());
     assert_eq!(app.views.len(), 1, "the document is open");
     assert!(app.combine_showing(), "and the Combine files tab still shows");

@@ -934,32 +934,48 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.print_tasks = PrintTasks::new(jobs.clone(), Wake::none());
-        // PLAN: assumed `Notices::progress(&self, ProgressKey) -> Option<ProgressNotice>` and `Notices::posted(&self) -> Vec<String>` (the posted messages, oldest first), read through `app.notices` (pdf-chrome-w19, L-206).
-        let card = |app: &PdfCraftApp| app.notices.progress(crate::notices::ProgressKey::Print);
+        // The notices the app queued are posted into one context, as a pass would post them.
+        let ctx = egui::Context::default();
+        let card = |app: &mut PdfCraftApp| {
+            crate::notices::post_queued(app, &ctx);
+            let fraction = crate::notices::progress(app, &ctx, crate::notices::ProgressKey::Print)?;
+            let id = app.progress_cards.get(&crate::notices::ProgressKey::Print)?;
+            let cancellable = crate::notices::posted(&ctx).iter().any(|c| c.id == *id && !c.toast.actions.is_empty());
+            Some((fraction, cancellable))
+        };
+        // The outcome notices: every card but a job's progress card, oldest first.
+        let outcomes = |app: &mut PdfCraftApp| {
+            crate::notices::post_queued(app, &ctx);
+            crate::notices::posted(&ctx)
+                .into_iter()
+                .filter(|c| c.toast.progress.is_none())
+                .map(|c| format!("{} {}", c.toast.title.as_ref().map_or("", |t| t.as_str()), c.toast.message.as_str()))
+                .collect::<Vec<_>>()
+        };
 
         let count = Arc::new(crate::JobCount::default());
         app.print_tasks.running.push(RunningPrint { ticket: 0, printer: "Office".into(), count: count.clone() });
         app.show_print_progress("Office", None);
-        let started = card(&app).expect("a card shows while the job runs");
-        assert!(!started.cancellable);
+        let (started, cancellable) = card(&mut app).expect("a card shows while the job runs");
+        assert!(!cancellable);
 
         count.set(1, 3);
         app.poll_print();
-        let first = card(&app).unwrap().fraction;
-        assert!(first > started.fraction, "one sheet sent moves the card: {first}");
+        let first = card(&mut app).unwrap().0;
+        assert!(first > started, "one sheet sent moves the card: {first}");
 
         count.set(2, 3);
         app.poll_print();
-        let second = card(&app).unwrap().fraction;
+        let second = card(&mut app).unwrap().0;
         assert!(second > first && second < 1.0, "the card keeps rising with the sheets: {second}");
 
-        let before = app.notices.posted().len();
+        let before = outcomes(&mut app).len();
         count.set(3, 3);
         app.print_tasks.jobs.submit(0, Priority::VISIBLE, |_| Ok(String::new()));
         jobs.run_all();
         app.poll_print();
-        assert!(card(&app).is_none() && app.print_tasks.running.is_empty());
-        let posted = app.notices.posted();
+        assert!(card(&mut app).is_none() && app.print_tasks.running.is_empty());
+        let posted = outcomes(&mut app);
         assert_eq!(posted.len(), before + 1, "one outcome notice");
         assert!(posted.last().is_some_and(|m| m.contains("Office")), "it names the printer: {posted:?}");
 
@@ -968,8 +984,8 @@ mod tests {
         app.print_tasks.jobs.submit(1, Priority::VISIBLE, |_| Err("the spooler refused the job".into()));
         jobs.run_all();
         app.poll_print();
-        assert!(card(&app).is_none() && app.print_tasks.running.is_empty());
-        let posted = app.notices.posted();
+        assert!(card(&mut app).is_none() && app.print_tasks.running.is_empty());
+        let posted = outcomes(&mut app);
         assert_eq!(posted.len(), before + 2, "the refusal is one more notice");
         assert!(posted.last().is_some_and(|m| m.contains("refused")), "{posted:?}");
     }

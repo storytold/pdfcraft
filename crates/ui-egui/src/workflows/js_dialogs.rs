@@ -100,10 +100,11 @@ fn console(app: &mut PdfCraftApp, ui: &mut egui::Ui, open: &mut bool) {
         submitted = input.submitted;
     });
     let picked = shown.output.picked.and_then(|at| actions.get(at)).map(|(a, _)| *a);
+    let ctx = ui.ctx().clone();
     match picked {
-        Some(Action::Run) => app.run_console(),
+        Some(Action::Run) => app.run_console(&ctx),
         Some(Action::Clear) => app.js_console.log.clear(),
-        _ if submitted => app.run_console(),
+        _ if submitted => app.run_console(&ctx),
         _ => {}
     }
 }

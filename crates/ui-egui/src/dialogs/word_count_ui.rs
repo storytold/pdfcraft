@@ -220,7 +220,10 @@ mod tests {
     /// The figure in the Words row of the open dialog: the value beside the row's label.
     fn words_shown(h: &Harness<'_, PdfCraftApp>) -> String {
         let row = h.get_by_label("Words").parent().expect("the Words label sits in its row");
-        row.children_recursive().filter_map(|n| n.label()).find(|l| l.chars().all(|c| c.is_ascii_digit())).expect("the row shows a figure")
+        row.children_recursive()
+            .filter_map(|n| n.accesskit_node().label().map(|l| l.to_string()))
+            .find(|l| l.chars().all(|c| c.is_ascii_digit()))
+            .expect("the row shows a figure")
     }
 
     #[test]
