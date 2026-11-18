@@ -52,7 +52,7 @@ impl Scan {
             if damaged {
                 s.partial_text.insert(p);
             }
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, font: None };
+            let mut w = Walk { doc, scan: &mut s, page: p, page_res: res.clone(), forms: HashSet::new(), budget, font: None };
             w.content(&data, &res, false, 0);
         }
         s
@@ -63,6 +63,8 @@ struct Walk<'a> {
     doc: &'a Document,
     scan: &'a mut Scan,
     page: usize,
+    /// The page's resources, which a form without its own inherits (ISO 32000-2 §7.8.3).
+    page_res: Dict,
     forms: HashSet<ObjRef>,
     /// Decoded bytes and form entries left for this page.
     budget: DecodeBudget,
@@ -163,10 +165,14 @@ impl Walk<'_> {
                     // An ExtGState's /Font entry, an array of the font and its size, sets the font
                     // as Tf does (ISO 32000-2 §8.4.5, Table 57). Without one the font stays.
                     // A direct dictionary is read in place, so many `gs` don't copy it many times.
+                    // An ExtGState or /Font the file holds but can't read may set a font: which
+                    // one the later text is in is not known.
                     let doc = self.doc;
+                    let mut lost = false;
                     let font = op.name(0).and_then(|n| states.get(n)).and_then(|g| {
                         let held;
-                        let g = if let Object::Ref(_) = g {
+                        let g = if let Object::Ref(r) = g {
+                            lost |= crate::alt::unreadable(doc, *r);
                             held = doc.resolve(g);
                             &*held
                         } else {
@@ -174,7 +180,8 @@ impl Walk<'_> {
                         };
                         let entry = g.as_dict()?.get(b"Font")?;
                         let held;
-                        let entry = if let Object::Ref(_) = entry {
+                        let entry = if let Object::Ref(r) = entry {
+                            lost |= crate::alt::unreadable(doc, *r);
                             held = doc.resolve(entry);
                             &*held
                         } else {
@@ -182,6 +189,9 @@ impl Walk<'_> {
                         };
                         entry.as_array().map(|a| a.first().and_then(Object::as_ref))
                     });
+                    if lost {
+                        self.scan.partial_text.insert(self.page);
+                    }
                     if let Some(font) = font {
                         self.set_font(font, over);
                     }
@@ -193,6 +203,11 @@ impl Walk<'_> {
                 }
                 b"Do" => {
                     let Some(r) = op.name(0).and_then(|n| xobjects.get(n)).and_then(Object::as_ref) else { continue };
+                    // An XObject the file holds but can't read may be a form showing text.
+                    if crate::alt::unreadable(self.doc, r) {
+                        self.scan.partial_text.insert(self.page);
+                        continue;
+                    }
                     let obj = self.doc.get(r);
                     let Object::Stream(x) = &*obj else { continue };
                     match x.dict.name(b"Subtype") {
@@ -232,7 +247,7 @@ impl Walk<'_> {
                                 .get(b"Resources")
                                 .map(|o| self.doc.resolve(o))
                                 .and_then(|o| o.as_dict().cloned())
-                                .unwrap_or_else(|| res.clone());
+                                .unwrap_or_else(|| self.page_res.clone());
                             self.content(&data, &inner, inside, depth + 1);
                             self.font = font;
                             self.forms.remove(&r);
@@ -536,8 +551,8 @@ fn built_in_names_map(doc: &Document, f: &Dict, codes: Option<&[u64; 4]>, budget
     let program = descriptor.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"FontFile")).map(|x| doc.resolve(x));
     let Some(Object::Stream(program)) = program.as_deref() else { return false };
     // Through the document, so /DecodeParms given by reference are read too.
-    let Ok((data, _)) = budget.decode_with_damage(doc, program, MAX_FONT_PROGRAM) else { return false };
-    let Some(encoding) = built_in_encoding(&data) else { return false };
+    let Ok((data, damaged)) = budget.decode_with_damage(doc, program, MAX_FONT_PROGRAM) else { return false };
+    let Some(encoding) = built_in_encoding(&data, !damaged) else { return false };
     let Some(codes) = codes else { return true };
     (0..=u8::MAX).filter(|&c| codes.get(usize::from(c >> 6)).is_some_and(|w| w & (1 << (c & 63)) != 0)).all(|c| match &encoding {
         BuiltIn::Standard => pdfcraft_fonts::pdf::standard_encoding_char(c).is_some(),
@@ -560,13 +575,18 @@ enum BuiltIn {
 /// The built-in encoding of a Type 1 font program, from the `/Encoding` its clear text defines
 /// before `eexec` (Adobe Type 1 Font Format, 2.3): StandardEncoding, or an array filled with
 /// `dup code /name put` and closed by `def`. `None` when the program defines neither, when the
-/// definition isn't closed within the clear text read, or when an assignment's code is not an
-/// integer from 0 to 255. Comments and strings are not read as code (PostScript Language
+/// definition isn't closed within the clear text read, when an assignment's code is not an
+/// integer from 0 to 255, when StandardEncoding is only where the definition starts (a copy it
+/// then changes), or, for a program that stopped at damage (`whole` false), when its clear text
+/// doesn't reach `eexec`: what the damage cut off may define the encoding again. Comments and strings are not read as code (PostScript Language
 /// Reference, 3.2.2 to 3.2.4), nor are procedure bodies, `{` to `}`, which are not run where they
 /// are written (3.5.3).
-fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
+fn built_in_encoding(program: &[u8], whole: bool) -> Option<BuiltIn> {
     let clear = program.get(..program.len().min(MAX_CLEAR_TEXT))?;
     let tokens = ps_tokens(clear);
+    if !whole && !tokens.contains(&b"eexec".as_slice()) {
+        return None;
+    }
     let tokens = tokens.split(|t| *t == b"eexec").next().unwrap_or_default();
     // Each token with how many procedures it is inside.
     let mut depth = 0usize;
@@ -588,8 +608,12 @@ fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
     // `dup 33 /arrowright put`, until the array is defined (`readonly def` or `def`).
     let end = (start..tokens.len()).find(|&i| top(i, b"def"))?;
     let body = tokens.get(start..end)?;
-    if body.first().is_some_and(|&(t, _)| t == b"StandardEncoding") {
-        return Some(BuiltIn::Standard);
+    // `/Encoding StandardEncoding def` (or `readonly def`) is the standard table itself; any more
+    // after StandardEncoding (`256 array copy`, then `put`s) changes a copy of it.
+    match body {
+        [(b"StandardEncoding", _)] | [(b"StandardEncoding", _), (b"readonly", _)] => return Some(BuiltIn::Standard),
+        [(b"StandardEncoding", _), ..] => return None,
+        _ => {}
     }
     let mut names: Vec<Option<Vec<u8>>> = vec![None; 256];
     let mut any = false;

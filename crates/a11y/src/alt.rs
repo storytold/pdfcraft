@@ -170,6 +170,13 @@ fn bdc_mcid(doc: &Document, props: &Dict, op: &pdfcraft_content::Op) -> Option<i
     }
 }
 
+/// Whether the file holds the object `r` names but can't read it. A reference to an object the
+/// file doesn't have, or to another generation of one it has, is to null (ISO 32000-2 §7.3.10):
+/// nothing is missing.
+pub(crate) fn unreadable(doc: &Document, r: ObjRef) -> bool {
+    doc.try_get(r.num).is_err() && doc.accepted_generations(r.num).contains(&r.generation)
+}
+
 pub(crate) fn page_content(doc: &Document, page: &Dict) -> Vec<u8> {
     page_content_within(doc, page, &mut DecodeBudget::page())
 }
@@ -186,9 +193,9 @@ pub(crate) fn page_content_within(doc: &Document, page: &Dict, budget: &mut Deco
 /// file doesn't have is to null (ISO 32000-2 §7.3.10), which holds no content.
 pub(crate) fn page_content_with_damage(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> (Vec<u8>, bool) {
     let Some(c) = page.get(b"Contents") else { return (Vec::new(), false) };
-    let unreadable = |o: &Object| o.as_ref().is_some_and(|r| doc.try_get(r.num).is_err());
+    let lost = |o: &Object| o.as_ref().is_some_and(|r| unreadable(doc, r));
     let mut out = Vec::new();
-    let mut damaged = unreadable(c) || doc.resolve(c).as_array().is_some_and(|a| a.iter().any(unreadable));
+    let mut damaged = lost(c) || doc.resolve(c).as_array().is_some_and(|a| a.iter().any(lost));
     for read in budget.decode_contents_with_damage(doc, c) {
         match read {
             Ok((data, stopped)) => {

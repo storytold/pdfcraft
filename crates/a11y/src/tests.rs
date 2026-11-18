@@ -2129,3 +2129,74 @@ fn shown_codes_are_trusted_only_where_the_page_text_was_read_in_full() {
     let lost = format!("BT /F1 12 Tf {} q /F2 12 Tf Q (+) Tj ET", "q ".repeat(4096));
     assert_eq!(found(&symbolic_type1_doc(&lost, math, other)), [f1, f2]);
 }
+
+#[test]
+fn objects_the_file_holds_but_cannot_read_leave_the_shown_codes_untrusted() {
+    // The fonts of `symbolic_type1_bodies`: F1 names `+` plus, F2 names it geqslant. Object 14 and
+    // on are each test's own; "<< /Length 9" is an object that doesn't parse.
+    let math = "/Encoding 256 array\ndup 43 /plus put\nreadonly def";
+    let other = "/Encoding 256 array\ndup 43 /geqslant put\nreadonly def";
+    let found = |bodies: &[String]| -> Vec<String> {
+        let doc = pdf(bodies, "");
+        checked(&doc, &[Rule::CharacterEncoding]).result(Rule::CharacterEncoding).unwrap().findings.iter().map(|f| f.message.clone()).collect()
+    };
+    let f1 = "Font ABCDEF+Test-Math on page 1 doesn't map its characters to Unicode";
+    let f2 = "Font GHIJKL+Other-Math on page 1 doesn't map its characters to Unicode";
+    let bodies = |content: &str| symbolic_type1_bodies(&stream(content), math, other, "");
+    // A /Contents member naming generation 1 of an object the file has only at generation 0 is
+    // null (ISO 32000-2 §7.3.10), even though that object doesn't parse: nothing is missing.
+    let mut b = symbolic_type1_bodies("[14 0 R 15 1 R]", math, other, "");
+    b.push(stream("BT /F1 12 Tf (+) Tj ET"));
+    b.push("<< /Length 9".into());
+    assert_eq!(found(&b), Vec::<String>::new(), "another generation");
+    // `Do` of an XObject the file holds but can't read: it may be a form that shows more codes.
+    let mut b = bodies("BT /F1 12 Tf (+) Tj ET /Z Do");
+    if let Some(page) = b.get_mut(2) {
+        *page = page.replace("/XObject << /X 8 0 R", "/XObject << /Z 14 0 R /X 8 0 R");
+    }
+    b.push("<< /Length 9".into());
+    assert_eq!(found(&b), [f1], "unreadable XObject");
+    // `gs` whose ExtGState /Font can't be read may set another font for the `+` after it.
+    let mut b = bodies("BT /F1 12 Tf /G2 gs (+) Tj ET");
+    if let Some(page) = b.get_mut(2) {
+        *page = page.replace("/ExtGState << /G1 13 0 R >>", "/ExtGState << /G1 13 0 R /G2 14 0 R >>");
+    }
+    b.push("<< /Type /ExtGState /Font 15 0 R >>".into());
+    b.push("<< /Length 9".into());
+    assert_eq!(found(&b), [f1], "unreadable /Font");
+    // A form without /Resources, drawn by a form that has its own, takes the page's (ISO 32000-2
+    // §7.8.3): its F2 is the page's geqslant font, not the outer form's F2.
+    let mut b = bodies("/W Do");
+    if let Some(page) = b.get_mut(2) {
+        *page = page.replace("/XObject << /X 8 0 R", "/XObject << /W 14 0 R /X 8 0 R");
+    }
+    b.push("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Font << /F2 5 0 R >> /XObject << /V 15 0 R >> >> /Length 5 >>\nstream\n/V Do\nendstream".into());
+    b.push("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 22 >>\nstream\nBT /F2 12 Tf (+) Tj ET\nendstream".into());
+    assert_eq!(found(&b), [f2], "legacy form");
+}
+
+#[test]
+fn a_damaged_or_changed_built_in_encoding_is_not_taken() {
+    let other = "/Encoding 256 array\ndup 43 /geqslant put\nreadonly def";
+    let status_of = |doc: &Document| status(&checked(doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding);
+    // A program that stops at damage before `eexec`: what the damage cut off may define the
+    // encoding again. One that reaches `eexec` first has its clear text whole.
+    let program = "%!PS-AdobeFont-1.0: Test-Math 001.000\n/Encoding 256 array\ndup 43 /plus put\nreadonly def\n";
+    for (tail, expected) in [("", Status::Failed), ("currentfile eexec\n", Status::Passed)] {
+        let hex: String = format!("{program}{tail}").bytes().map(|b| format!("{b:02X}")).collect();
+        let data = format!("{hex}zz{}>", "20".repeat(4));
+        let mut b = symbolic_type1_bodies(&stream("BT /F1 12 Tf (+) Tj ET"), program, other, "");
+        if let Some(file) = b.get_mut(5) {
+            *file = format!("<< /Filter /ASCIIHexDecode /Length {} >>\nstream\n{data}\nendstream", data.len());
+        }
+        assert_eq!(status_of(&pdf(&b, "")), expected, "{tail:?}");
+    }
+    // StandardEncoding as the source of a copy that is then changed is not StandardEncoding
+    // (Adobe Type 1 Font Format, 2.3); `readonly def` after it still is.
+    for (encoding, expected) in [
+        ("/Encoding StandardEncoding 256 array copy dup 43 /.notdef put readonly def", Status::Failed),
+        ("/Encoding StandardEncoding readonly def", Status::Passed),
+    ] {
+        assert_eq!(status_of(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", encoding, other)), expected, "{encoding}");
+    }
+}
