@@ -185,7 +185,8 @@ fn f8_hides_the_interface_of_any_document_and_shows_it_again() {
 #[test]
 fn hiding_the_interface_is_never_saved() {
     let h = harness(|_| {}, &[HIDE_ALL]);
-    let settings = h.state().persist();
+    // PLAN: assumed the settings snapshot is `Serialize` (pdf-shell-w9)
+    let settings = serde_json::to_string(&h.state().settings_snapshot()).unwrap();
     assert!(!settings.contains("interface"), "{settings}");
 }
 
@@ -194,7 +195,7 @@ fn opening_fit(catalog: &str, own_view: bool) -> Fit {
     let mut app = PdfCraftApp::new();
     app.always_default_view = own_view;
     app.open_bytes("x.pdf", None, fixture(catalog)).unwrap();
-    app.views[0].fit
+    app.views[0].fit()
 }
 
 #[test]
@@ -214,7 +215,7 @@ fn one_page_at_a_time_opens_at_fit_page() {
     assert_eq!(opening_fit("/PageLayout /SinglePage /OpenAction [3 0 R /FitH 300]", false), Fit::Width);
     let mut app = PdfCraftApp::new();
     app.open_bytes("x.pdf", None, fixture("/PageLayout /SinglePage /OpenAction [3 0 R /XYZ 0 300 2]")).unwrap();
-    assert_eq!((app.views[0].fit, app.views[0].zoom), (Fit::None, 2.0));
+    assert_eq!((app.views[0].fit(), app.views[0].zoom()), (Fit::None, 2.0));
 }
 
 /// Review on #4378: where the reader left off wins over the fit page a one-page-at-a-time
@@ -224,11 +225,11 @@ fn a_remembered_zoom_wins_over_the_layouts_fit_page() {
     let path = std::env::temp_dir().join(format!("pdfcraft-viewer-prefs-last-view-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let mut app = PdfCraftApp::new();
     let json_path = serde_json::to_string(&path).unwrap();
-    app.restore(&format!(r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}]}}"#));
+    app.apply_settings(&pdfcraft_ui_egui::settings::import_json(&format!(r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}]}}"#)).0);
     assert!(app.restore_last_view);
     app.open_bytes("x.pdf", Some(path), fixture("/PageLayout /SinglePage")).unwrap();
     let v = &app.views[0];
-    assert_eq!((v.fit, v.zoom, v.current), (Fit::None, 0.625, 1));
+    assert_eq!((v.fit(), v.zoom(), v.current()), (Fit::None, 0.625, 1));
 }
 
 #[test]
@@ -236,14 +237,17 @@ fn always_default_view_wins_over_a_remembered_view() {
     let path = std::env::temp_dir().join(format!("pdfcraft-viewer-prefs-always-default-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let mut app = PdfCraftApp::new();
     let json_path = serde_json::to_string(&path).unwrap();
-    app.restore(&format!(
-        r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}], "always_default_view": true}}"#
-    ));
+    app.apply_settings(
+        &pdfcraft_ui_egui::settings::import_json(&format!(
+            r#"{{"last_views": [{{"path": {json_path}, "page": 1, "zoom": "62.5%", "display": "single"}}], "always_default_view": true}}"#
+        ))
+        .0,
+    );
     assert!(app.always_default_view);
     assert!(app.restore_last_view);
     app.open_bytes("x.pdf", Some(path), fixture("/PageLayout /SinglePage")).unwrap();
     let v = &app.views[0];
-    assert_eq!((v.fit, v.layout, v.continuous(), v.current), (Fit::Width, pdfcraft_ui_egui::canvas::PageLayout::Single, true, 1));
+    assert_eq!((v.fit(), v.view.display, v.view.continuous, v.current()), (Fit::Width, craft::pages::PageDisplay::Single, true, 1));
 }
 
 /// The last `InnerSize` and `OuterPosition` asked for over `frames` frames.

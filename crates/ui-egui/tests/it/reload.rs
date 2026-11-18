@@ -1,8 +1,9 @@
 //! A document reloads when its file changes on disk (#431): a LaTeX or Typst build rewriting the
-//! open PDF. Here the watcher looks once per frame on the test's thread (`run_inline`); in the
-//! app a worker thread looks every quarter second.
+//! open PDF. Here the watcher is built inline and looks once per frame on the test's thread; in
+//! the app a worker thread looks every quarter second.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use egui_kittest::Harness;
@@ -73,21 +74,43 @@ impl Drop for TempPdf {
     }
 }
 
-fn harness(path: &str) -> Harness<'static, PdfCraftApp> {
+/// An app on a host whose jobs wait for the test (`ManualJobs`) and whose watcher looks inline
+/// on each pass.
+fn app_with(jobs: Arc<craft::host::ManualJobs>) -> PdfCraftApp {
+    use craft::host::{AppInfo, Host, Wake};
+    use craft::platform::clipboard::{Clipboard, SystemClipboard};
+    use craft::platform::open::FileIntake;
+    use craft::platform::watch::FileWatch;
+    use pdfcraft_ui_egui::AppServices;
+    let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
+    let host = Host::builder(info).jobs(jobs).files(Arc::new(craft::host::ScriptedFiles::new())).build();
+    let (intake, _sender) = FileIntake::new(Wake::none());
+    let watch = FileWatch::new(Wake::none()).inline();
+    let services = AppServices::new(Wake::none(), Clipboard::new(SystemClipboard::new()), None, None, intake, watch);
+    let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+    // The labels looked for are English, whatever the machine's language.
+    app.set_option("language", "en").unwrap();
+    app
+}
+
+/// A window over `app_with` whose open job has run.
+fn harness_with(path: &str, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let path = path.to_owned();
+    let jobs = Arc::new(craft::host::ManualJobs::new());
+    let queue = jobs.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        // The labels looked for are English, whatever the machine's language.
-        app.set_option("language", "en").unwrap();
-        // The labels below are English whatever the developer's system language is.
-        app.set_option("language", "en").unwrap();
-        app.run_inline = true;
+        let mut app = app_with(jobs);
+        setup(&mut app);
         app.open_path(&path);
         app
     });
+    queue.run_all();
     h.run_steps(4);
     h
+}
+
+fn harness(path: &str) -> Harness<'static, PdfCraftApp> {
+    harness_with(path, |_| {})
 }
 
 fn pages(h: &Harness<'static, PdfCraftApp>) -> usize {
@@ -110,8 +133,8 @@ fn a_rebuilt_file_reloads_in_place_keeping_the_page_and_zoom() {
     let file = TempPdf::new("rebuild", &fixture(3));
     let mut h = harness(&file.path);
     let id = h.state().views[0].id;
-    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::None;
-    h.state_mut().views[0].zoom = 1.5;
+    h.state_mut().views[0].view.fit = craft::pages::Fit::None;
+    h.state_mut().views[0].view.zoom = 1.5;
     h.state_mut().views[0].go_to_page(2);
     h.run_steps(4);
     file.rebuild(&fixture(4));
@@ -120,14 +143,13 @@ fn a_rebuilt_file_reloads_in_place_keeping_the_page_and_zoom() {
     let app = h.state();
     assert_eq!(pages(&h), 4, "the new version shows");
     assert_eq!((app.views.len(), app.views[0].id), (1, id), "in the same tab");
-    assert_eq!((app.views[0].current, app.views[0].zoom), (2, 1.5), "at the same page and zoom");
+    assert_eq!((app.views[0].current(), app.views[0].zoom()), (2, 1.5), "at the same page and zoom");
 }
 
 #[test]
 fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
     use pdfcraft_engine::{Edit, LabelStyle, Session};
-    use pdfcraft_ui_egui::canvas::display_token;
-    use std::sync::Arc;
+    use craft::pages::display_token;
 
     let labelled = |ranges: &[(usize, usize, LabelStyle)]| {
         let mut source = Session::new().with_clock(|| 1_700_000_000);
@@ -148,7 +170,7 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         h.state_mut().set_option("page", "4").unwrap();
         h.run_steps(3);
         let view = &h.state().views[0];
-        assert_eq!((view.current, display_token(view.layout, view.continuous())), (3, display));
+        assert_eq!((view.current(), display_token(view.view.display, view.view.continuous)), (3, display));
         let doc = h.state().session.get(id).unwrap();
         assert_eq!(doc.bytes, original);
         assert!(!doc.dirty);
@@ -179,8 +201,12 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         assert_eq!(doc.bytes, replacement, "the watcher loaded the replacement before checking navigation");
         assert_eq!((doc.info.pages.len(), doc.info.pages[3].label.as_str()), (5, "iv"));
         // First causal negative: a single-page reader must not become a continuous reader.
-        assert_eq!((view.current, display_token(view.layout, view.continuous())), (3, display), "reload retains the physical page and display mode");
-        assert_eq!(view.zoom, 1.0);
+        assert_eq!(
+            (view.current(), display_token(view.view.display, view.view.continuous)),
+            (3, display),
+            "reload retains the physical page and display mode"
+        );
+        assert_eq!(view.zoom(), 1.0);
         assert_eq!(view.page_input, "iv");
         assert_eq!(h.ctx.memory(|m| m.focused()), Some(editor));
         h.get(By::new().role(egui::accesskit::Role::TextInput).value("iv"));
@@ -188,7 +214,7 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         // Keep the replacement editor's selection and then its caret, without re-focusing it.
         h.event(egui::Event::Text("2".into()));
         h.run_steps(2);
-        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "2"));
+        assert_eq!((h.state().views[0].current(), h.state().views[0].page_input.as_str()), (3, "2"));
         h.event(egui::Event::Text("x".into()));
         h.run_steps(1);
         assert_eq!(h.state().views[0].page_input, "2x");
@@ -198,7 +224,7 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         h.key_press(egui::Key::Enter);
         h.run_steps(3);
         let app = h.state();
-        assert_eq!((app.views[0].id, app.views[0].current, app.views[0].page_input.as_str()), (id, 1, "ii"));
+        assert_eq!((app.views[0].id, app.views[0].current(), app.views[0].page_input.as_str()), (id, 1, "ii"));
         let doc = app.session.get(id).unwrap();
         assert_eq!(doc.path.as_deref(), Some(file.path.as_str()));
         assert!(!doc.dirty);
@@ -276,7 +302,7 @@ fn nothing_reloads_with_the_preference_off() {
     h.run_steps(4);
     assert_eq!(pages(&h), 2);
     let mut restarted = PdfCraftApp::new();
-    restarted.restore(&h.state().persist());
+    restarted.apply_settings(&h.state().settings_snapshot());
     assert!(!restarted.reload_changed_files, "the choice is kept");
 }
 
@@ -286,14 +312,17 @@ fn a_shorter_new_version_drops_what_pointed_into_the_old_one() {
     let mut h = harness(&file.path);
     h.state_mut().views[0].go_to_page(4);
     h.state_mut().views[0].select_pages(&[3, 4]);
-    h.state_mut().views[0].comments.selected = Some((4, 0));
+    h.run_steps(2);
+    // Pick the last page's comment as a user does: its row in the Comments panel.
+    h.get_all_by_label_contains("note").last().expect("a comment row").click();
     h.run_steps(2);
     file.rebuild(&fixture(1));
     h.run_steps(4);
     let view = &h.state().views[0];
     assert_eq!(pages(&h), 1);
-    assert_eq!(view.current, 0, "the page is clamped");
-    assert!(view.selected.is_empty() && view.comments.selected.is_none(), "no selection points past the new version");
+    assert_eq!(view.current(), 0, "the page is clamped");
+    // PLAN: assumed `comments.primary()` reads the selected comment (pdf-comments)
+    assert!(view.selected.is_empty() && view.comments.primary().is_none(), "no selection points past the new version");
 }
 
 /// Save asks before writing over a version of the file the document did not come from (#2166):
@@ -330,16 +359,7 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
 #[test]
 fn saving_checks_the_file_with_the_watcher_off_too() {
     let file = TempPdf::new("overwrite-unwatched", &fixture(2));
-    let path = file.path.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.run_inline = true;
-        app.reload_changed_files = false;
-        app.open_path(&path);
-        app
-    });
-    h.run_steps(4);
+    let mut h = harness_with(&file.path, |app| app.reload_changed_files = false);
     rotate_first_page(&mut h);
     file.rebuild(&fixture(4));
     h.run_steps(3);
@@ -373,7 +393,7 @@ fn a_file_rebuilt_under_an_open_dialog_reloads_when_the_dialog_closes() {
     // open would apply the dialog (Rotate, Protect, Comment Properties…) to the new version.
     let file = TempPdf::new("under-dialog", &fixture(2));
     let mut h = harness(&file.path);
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::RotatePages);
+    h.state_mut().set_option("dialog", "page.rotate_dialog").unwrap();
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
@@ -381,7 +401,7 @@ fn a_file_rebuilt_under_an_open_dialog_reloads_when_the_dialog_closes() {
     file.rebuild(&fixture(5));
     h.run_steps(4);
     assert_eq!(pages(&h), 2, "still not replaced under the dialog");
-    h.state_mut().dialog = None;
+    h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!((pages(&h), dirty(&h)), (5, false), "the newest version is applied once the dialog closes");
 }
@@ -392,12 +412,12 @@ fn a_version_held_under_preferences_is_dropped_when_reloading_is_turned_off_ther
     // change on disk" must not still apply the version found while it was open.
     let file = TempPdf::new("held-pref-off", &fixture(2));
     let mut h = harness(&file.path);
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::RotatePages);
+    h.state_mut().set_option("dialog", "preferences").unwrap();
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
     h.state_mut().reload_changed_files = false;
-    h.state_mut().dialog = None;
+    h.get_by_label("Cancel").click();
     h.run_steps(4);
     assert_eq!(pages(&h), 2, "reloading was turned off before the dialog closed");
 }
@@ -409,7 +429,7 @@ fn a_newer_version_found_as_the_dialog_closes_replaces_the_held_one() {
     // edit generation: one is expected.
     let file = TempPdf::new("held-coalesced", &fixture(2));
     let mut h = harness(&file.path);
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::RotatePages);
+    h.state_mut().set_option("dialog", "page.rotate_dialog").unwrap();
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
@@ -419,7 +439,7 @@ fn a_newer_version_found_as_the_dialog_closes_replaces_the_held_one() {
     h.step();
     let generation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
     let before = generation(&h);
-    h.state_mut().dialog = None;
+    h.get_by_label("Cancel").click();
     h.step();
     assert_eq!((pages(&h), generation(&h) - before), (5, 1), "the held version is not loaded on the way");
 }
@@ -430,12 +450,13 @@ fn a_file_rebuilt_under_the_full_screen_prompt_reloads_once_it_is_answered() {
     let file = TempPdf::new("under-full-screen", &fixture(2));
     let mut h = harness(&file.path);
     let id = h.state().views[0].id;
-    h.state_mut().pending_full_screen = Some(id);
+    // PLAN: assumed `ask_full_screen(id)` takes the document id (pdf-dialogs-w4)
+    h.state_mut().ask_full_screen(id);
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
     assert_eq!(pages(&h), 2, "not replaced under the prompt");
-    h.state_mut().pending_full_screen = None;
+    h.get_by_label("Not now").click();
     h.run_steps(3);
     assert_eq!(pages(&h), 4, "applied once the prompt is gone");
 }
