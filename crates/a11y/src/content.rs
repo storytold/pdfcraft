@@ -127,7 +127,8 @@ impl Walk<'_> {
         // `q` saves past MAX_SAVES still open: their `Q`s restore nothing kept.
         let mut over = 0usize;
         // One operator at a time: the walk keeps counts, never the stream's operators.
-        for op in pdfcraft_content::ops(data) {
+        let mut ops = pdfcraft_content::ops(data);
+        for op in ops.by_ref() {
             let inside = covered || stack.last().copied().unwrap_or(false);
             match op.op.as_slice() {
                 b"q" => {
@@ -241,6 +242,11 @@ impl Walk<'_> {
                 }
                 _ => {}
             }
+        }
+        // Bytes the parser skipped, or an inline image whose end it guessed, may hold text shown
+        // in some font: the codes the walk saw are not all there are.
+        if ops.skipped() > 0 || ops.ambiguous_images() > 0 {
+            self.scan.partial_text.insert(self.page);
         }
         if untagged > 0 {
             *self.scan.untagged.entry(self.page).or_default() += untagged;
@@ -529,7 +535,8 @@ fn built_in_names_map(doc: &Document, f: &Dict, codes: Option<&[u64; 4]>, budget
     let descriptor = f.get(b"FontDescriptor").map(|d| doc.resolve(d));
     let program = descriptor.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"FontFile")).map(|x| doc.resolve(x));
     let Some(Object::Stream(program)) = program.as_deref() else { return false };
-    let Ok(data) = budget.decode_within(program, MAX_FONT_PROGRAM) else { return false };
+    // Through the document, so /DecodeParms given by reference are read too.
+    let Ok((data, _)) = budget.decode_with_damage(doc, program, MAX_FONT_PROGRAM) else { return false };
     let Some(encoding) = built_in_encoding(&data) else { return false };
     let Some(codes) = codes else { return true };
     (0..=u8::MAX).filter(|&c| codes.get(usize::from(c >> 6)).is_some_and(|w| w & (1 << (c & 63)) != 0)).all(|c| match &encoding {
@@ -552,28 +559,46 @@ enum BuiltIn {
 
 /// The built-in encoding of a Type 1 font program, from the `/Encoding` its clear text defines
 /// before `eexec` (Adobe Type 1 Font Format, 2.3): StandardEncoding, or an array filled with
-/// `dup code /name put` and closed by `def`. `None` when the program defines neither, or when the
-/// definition isn't closed within the clear text read. Comments and strings are not read as
-/// code (PostScript Language Reference, 3.2.2 to 3.2.4).
+/// `dup code /name put` and closed by `def`. `None` when the program defines neither, when the
+/// definition isn't closed within the clear text read, or when an assignment's code is not an
+/// integer from 0 to 255. Comments and strings are not read as code (PostScript Language
+/// Reference, 3.2.2 to 3.2.4), nor are procedure bodies, `{` to `}`, which are not run where they
+/// are written (3.5.3).
 fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
     let clear = program.get(..program.len().min(MAX_CLEAR_TEXT))?;
     let tokens = ps_tokens(clear);
     let tokens = tokens.split(|t| *t == b"eexec").next().unwrap_or_default();
-    let at = tokens.iter().position(|t| *t == b"/Encoding")?;
-    let rest = tokens.get(at.saturating_add(1)..)?;
+    // Each token with how many procedures it is inside.
+    let mut depth = 0usize;
+    let tokens: Vec<(&[u8], usize)> = tokens
+        .iter()
+        .map(|&t| {
+            let at = depth;
+            match t {
+                b"{" => depth = depth.saturating_add(1),
+                b"}" => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            (t, at.min(depth))
+        })
+        .collect();
+    let top = |i: usize, word: &[u8]| tokens.get(i).is_some_and(|&(t, d)| d == 0 && t == word);
+    let at = (0..tokens.len()).find(|&i| top(i, b"/Encoding"))?;
+    let start = at.saturating_add(1);
     // `dup 33 /arrowright put`, until the array is defined (`readonly def` or `def`).
-    let end = rest.iter().position(|t| *t == b"def")?;
-    let tokens = rest.get(..end)?;
-    if tokens.first().is_some_and(|t| *t == b"StandardEncoding") {
+    let end = (start..tokens.len()).find(|&i| top(i, b"def"))?;
+    let body = tokens.get(start..end)?;
+    if body.first().is_some_and(|&(t, _)| t == b"StandardEncoding") {
         return Some(BuiltIn::Standard);
     }
     let mut names: Vec<Option<Vec<u8>>> = vec![None; 256];
     let mut any = false;
-    for w in tokens.windows(4) {
-        if let [b"dup", code, name, b"put"] = w
+    for w in body.windows(4) {
+        if let [(b"dup", 0), (code, 0), (name, 0), (b"put", 0)] = w
             && let Some(name) = name.strip_prefix(b"/")
-            && let Some(slot) = std::str::from_utf8(code).ok().and_then(|c| c.parse::<usize>().ok()).and_then(|c| names.get_mut(c))
         {
+            // A code this reader can't place may be the one that undoes another assignment.
+            let slot = ps_integer(code).and_then(|c| usize::try_from(c).ok()).and_then(|c| names.get_mut(c))?;
             *slot = Some(name.to_vec());
             any = true;
         }
@@ -581,8 +606,26 @@ fn built_in_encoding(program: &[u8]) -> Option<BuiltIn> {
     any.then_some(BuiltIn::Names(names))
 }
 
+/// A PostScript integer: decimal with an optional sign, or `base#digits` with a base from 2 to 36
+/// (PostScript Language Reference, 3.2.2). `None` for anything else, a real number included.
+fn ps_integer(token: &[u8]) -> Option<i64> {
+    let text = std::str::from_utf8(token).ok()?;
+    match text.split_once('#') {
+        Some((base, digits)) => {
+            let base = base.parse::<u32>().ok().filter(|b| (2..=36).contains(b))?;
+            // Radix digits are unsigned (`from_str_radix` would take a sign).
+            if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return None;
+            }
+            i64::from_str_radix(digits, base).ok()
+        }
+        None => text.parse::<i64>().ok(),
+    }
+}
+
 /// The tokens of PostScript clear text, in order: names, numbers and operators, split at white
-/// space and the delimiters `[ ] { } < > ( ) / %`, a literal name keeping its `/`. Comments (`%`
+/// space and the delimiters `[ ] { } < > ( ) / %`, a literal name keeping its `/`, and the braces
+/// `{` and `}` that open and close a procedure. Comments (`%`
 /// to the end of the line) and strings (`(...)` with nested parentheses and backslash escapes, or
 /// `<...>`) are left out (PostScript Language Reference, 3.2.2 to 3.2.4).
 fn ps_tokens(text: &[u8]) -> Vec<&[u8]> {
@@ -619,6 +662,12 @@ fn ps_tokens(text: &[u8]) -> Vec<&[u8]> {
             b'<' => {
                 while text.get(i).is_some_and(|&c| c != b'>') {
                     i += 1;
+                }
+                i += 1;
+            }
+            b'{' | b'}' => {
+                if let Some(brace) = text.get(i..=i) {
+                    out.push(brace);
                 }
                 i += 1;
             }

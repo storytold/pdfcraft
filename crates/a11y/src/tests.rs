@@ -1931,7 +1931,7 @@ fn type1_program(encoding: &str) -> String {
 /// A page showing `content` with fonts /F1 (object 5) and /F2 (object 7): symbolic Type 1 fonts
 /// without /Encoding or /ToUnicode whose embedded programs (objects 6 and 9) have the built-in
 /// encodings `first` and `second`; a form XObject /X (object 8) shows `(+)` in the font in effect,
-/// and /Y (object 12) sets F2 and shows `(-)`. /G1 (object 13) is an ExtGState that sets F1.
+/// and /Y (object 12) sets F2 and shows `(+)`. /G1 (object 13) is an ExtGState that sets F1.
 fn symbolic_type1_doc(content: &str, first: &str, second: &str) -> Document {
     symbolic_type1_doc_with(&stream(content), first, second, "")
 }
@@ -1939,30 +1939,32 @@ fn symbolic_type1_doc(content: &str, first: &str, second: &str) -> Document {
 /// [`symbolic_type1_doc`] with the page's content stream object written out as `contents`, and
 /// `extra` added to F1's font dictionary.
 fn symbolic_type1_doc_with(contents: &str, first: &str, second: &str, extra: &str) -> Document {
+    pdf(&symbolic_type1_bodies(contents, first, second, extra), "")
+}
+
+/// The objects of [`symbolic_type1_doc_with`], for a test that adds its own.
+fn symbolic_type1_bodies(contents: &str, first: &str, second: &str, extra: &str) -> Vec<String> {
     let font = |name: &str, descriptor: u32, extra: &str| {
         format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /FontDescriptor {descriptor} 0 R {extra}>>")
     };
     let descriptor = |file: u32| format!("<< /Type /FontDescriptor /FontName /Test-Math /Flags 4 /FontFile {file} 0 R >>");
-    pdf(
-        &[
-            "<< /Type /Catalog /Pages 2 0 R >>".into(),
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> \
+    vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> \
              /XObject << /X 8 0 R /Y 12 0 R >> /ExtGState << /G1 13 0 R >> >> >>"
-                .into(),
-            contents.into(),
-            font("ABCDEF+Test-Math", 10, extra),
-            type1_program(first),
-            font("GHIJKL+Other-Math", 11, ""),
-            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 13 >>\nstream\nBT (+) Tj ET\nendstream".into(),
-            type1_program(second),
-            descriptor(6),
-            descriptor(9),
-            "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 22 >>\nstream\nBT /F2 12 Tf (-) Tj ET\nendstream".into(),
-            "<< /Type /ExtGState /Font [5 0 R 12] >>".into(),
-        ],
-        "",
-    )
+            .into(),
+        contents.into(),
+        font("ABCDEF+Test-Math", 10, extra),
+        type1_program(first),
+        font("GHIJKL+Other-Math", 11, ""),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 13 >>\nstream\nBT (+) Tj ET\nendstream".into(),
+        type1_program(second),
+        descriptor(6),
+        descriptor(9),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 22 >>\nstream\nBT /F2 12 Tf (+) Tj ET\nendstream".into(),
+        "<< /Type /ExtGState /Font [5 0 R 12] >>".into(),
+    ]
 }
 
 #[test]
@@ -1987,8 +1989,9 @@ fn a_symbolic_type1_font_maps_through_its_built_in_glyph_names() {
         // A form XObject shows its `+` in the font set where it is drawn, and restores none.
         ("BT /F2 12 Tf ET /X Do", Some("GHIJKL+Other-Math")),
         ("BT /F1 12 Tf ET /X Do BT /F2 12 Tf (-) Tj ET", None),
-        // A form that sets F2 shows its `-` in F2; after it the page's F1 is back for the `+`.
-        ("BT /F1 12 Tf ET /Y Do BT (+) Tj ET", None),
+        // A form that sets F2 shows its `+` in F2, geqslant; after it the page's F1 is back for
+        // the page's `+`.
+        ("BT /F1 12 Tf ET /Y Do BT (+) Tj ET", Some("GHIJKL+Other-Math")),
         // An ExtGState's /Font sets the font as Tf does (ISO 32000-2 Table 57).
         ("BT /F2 12 Tf /G1 gs (+) Tj ET", None),
         ("BT /G1 gs <CA> Tj ET", Some("ABCDEF+Test-Math")),
@@ -2021,7 +2024,22 @@ fn built_in_glyph_names_are_read_from_the_program_code_only() {
     let commented = "/Encoding 256 array\ndup 43 /.notdef put % dup 43 /plus put\n(dup 43 /plus put) pop\nreadonly def";
     let cut = format!("/Encoding 256 array\ndup 43 /plus put\n{}\ndup 43 /.notdef put\nreadonly def", " ".repeat(300 << 10));
     let closed = "/Encoding 256 array\ndup 43 /plus put % a comment ( with a parenthesis\nreadonly def";
-    for (program, expected) in [(commented, Status::Failed), (cut.as_str(), Status::Failed), (closed, Status::Passed)] {
+    // A procedure body is not run where it is written (3.5.3): its `plus` assigns nothing.
+    let procedure = "/Encoding 256 array\ndup 43 /.notdef put { dup 43 /plus put } pop\nreadonly def";
+    // Codes in radix notation are integers too (3.2.2): 16#2B undoes the `plus` at 43, 8#53 sets
+    // it. A code this reader can't place leaves the encoding unread.
+    let radix = "/Encoding 256 array\ndup 43 /plus put\ndup 16#2B /.notdef put\nreadonly def";
+    let octal = "/Encoding 256 array\ndup 8#53 /plus put\nreadonly def";
+    let real = "/Encoding 256 array\ndup 43 /plus put\ndup 43.0 /.notdef put\nreadonly def";
+    for (program, expected) in [
+        (commented, Status::Failed),
+        (cut.as_str(), Status::Failed),
+        (closed, Status::Passed),
+        (procedure, Status::Failed),
+        (radix, Status::Failed),
+        (octal, Status::Passed),
+        (real, Status::Failed),
+    ] {
         let r = checked(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", program, other), &[Rule::CharacterEncoding]);
         assert_eq!(status(&r, Rule::CharacterEncoding), expected, "{program:.80}");
     }
@@ -2029,6 +2047,17 @@ fn built_in_glyph_names_are_read_from_the_program_code_only() {
     let math = "/Encoding 256 array\ndup 43 /plus put\nreadonly def";
     let r = checked(&symbolic_type1_doc_with(&stream("BT /F1 12 Tf (+) Tj ET"), math, other, "/Encoding null "), &[Rule::CharacterEncoding]);
     assert_eq!(status(&r, Rule::CharacterEncoding), Status::Passed);
+    // A program compressed with a PNG predictor given in /DecodeParms by reference: with the
+    // predictor undone the program reads as written; without it every byte has a zero before it.
+    let mut doc = symbolic_type1_doc("BT /F1 12 Tf (+) Tj ET", math, other);
+    let program = format!("%!PS-AdobeFont-1.0: Test-Math 001.000\n{math}\ncurrentfile eexec\n");
+    let rows: Vec<u8> = program.bytes().flat_map(|b| [0, b]).collect();
+    let parms =
+        doc.add(Object::Dict(pdfcraft_cos::Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(1))])));
+    let mut flate = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &rows);
+    flate.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    doc.set(pdfcraft_cos::ObjRef::new(6, 0), flate);
+    assert_eq!(status(&checked(&doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding), Status::Passed);
 }
 
 #[test]
@@ -2049,6 +2078,17 @@ fn shown_codes_are_trusted_only_where_the_page_text_was_read_in_full() {
     let data = format!("{hex}zz{}>", "20".repeat(4));
     let damaged = format!("<< /Filter /ASCIIHexDecode /Length {} >>\nstream\n{data}\nendstream", data.len());
     assert_eq!(found(&symbolic_type1_doc_with(&damaged, math, other, "")), [f1]);
+    // Bytes the content parser skips, here a string that never ends, may show more codes.
+    assert_eq!(found(&symbolic_type1_doc("BT /F1 12 Tf (+) Tj (\\312", math, other)), [f1]);
+    // A /Contents member the file holds but can't read may show more; one the file doesn't have
+    // is null (ISO 32000-2 §7.3.10) and shows nothing.
+    for (member, expected) in [("15 0 R", vec![f1]), ("99 0 R", vec![])] {
+        let mut bodies = symbolic_type1_bodies(&format!("[14 0 R {member}]"), math, other, "");
+        bodies.push(stream("BT /F1 12 Tf (+) Tj ET"));
+        // An object that doesn't parse: a dictionary that never closes.
+        bodies.push("<< /Length 9".into());
+        assert_eq!(found(&pdf(&bodies, "")), expected, "{member}");
+    }
     // A form nested past the limit, holding text of its own, is not read.
     let mut forms = String::new();
     let mut objects: Vec<String> = Vec::new();

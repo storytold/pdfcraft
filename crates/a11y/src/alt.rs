@@ -181,11 +181,14 @@ pub(crate) fn page_content_within(doc: &Document, page: &Dict, budget: &mut Deco
 }
 
 /// [`page_content_within`], also saying whether part of the page wasn't read for a reason other
-/// than the spent budget: a stream stopped at damage, or didn't decode.
+/// than the spent budget: a stream stopped at damage, or didn't decode, or the file holds an
+/// object for /Contents or one of its members that can't be read. A reference to an object the
+/// file doesn't have is to null (ISO 32000-2 §7.3.10), which holds no content.
 pub(crate) fn page_content_with_damage(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> (Vec<u8>, bool) {
     let Some(c) = page.get(b"Contents") else { return (Vec::new(), false) };
+    let unreadable = |o: &Object| o.as_ref().is_some_and(|r| doc.try_get(r.num).is_err());
     let mut out = Vec::new();
-    let mut damaged = false;
+    let mut damaged = unreadable(c) || doc.resolve(c).as_array().is_some_and(|a| a.iter().any(unreadable));
     for read in budget.decode_contents_with_damage(doc, c) {
         match read {
             Ok((data, stopped)) => {
