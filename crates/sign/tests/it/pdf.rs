@@ -673,6 +673,26 @@ fn signing_an_empty_field_with_other_widget_changes_is_not_only_signing() {
     }
 }
 
+/// The text of a signature's appearance is set by its widget's `/DA`, so a signer may rewrite it
+/// along with `/AP` when it signs an empty field (one counter-signing tool writes
+/// `/HerosBFO-Regular 16 Tf 0 0 0 rg` over `/Helv 0 Tf 0 g`). Under a P=2 certification that is
+/// still signing, and nothing else.
+#[test]
+fn signing_an_empty_field_that_rewrites_its_default_appearance_is_signing() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.certify == Some(2)).unwrap();
+    let mut doc = open(&fixture());
+    let field = ObjRef { num: 6, generation: 0 };
+    doc.update_dict(field, |w| w.set(b"DA".to_vec(), Object::String(PdfString::literal("/Helv 0 Tf 0 g")))).unwrap();
+    let certified = pdfcraft_sign::sign(&doc, &id, &SignOptions { certify: Some(2), ..opts() }).unwrap();
+    let mut doc = open(&certified);
+    doc.update_dict(field, |w| w.set(b"DA".to_vec(), Object::String(PdfString::literal("/HerosBFO-Regular 16 Tf 0 0 0 rg")))).unwrap();
+    let signed = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let s = check(&signed);
+    assert_eq!((s.status, s.modification), (Status::Valid, Modification::Allowed(vec![kind::SIGNATURE])));
+}
+
 /// A signature brings its widget with it: signing writes the value and the widget that shows it in
 /// one revision. Under a P=2 certification an approval signature may follow, but a widget added
 /// in a later revision that takes that signature's value (pointing at it, or as a kid of the
