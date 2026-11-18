@@ -1,7 +1,9 @@
 //! PowerPoint presentation (.pptx, Office Open XML PresentationML): slides per page,
 //! largest text as slide title, remaining paragraphs as body text, images and tables between them.
 
-use crate::as_docx::{core_properties_xml, image_mime};
+use std::collections::HashMap;
+
+use crate::as_docx::{core_properties_xml, image_mime, room_for};
 use crate::{Image, Page, Run, Table, hex};
 use craft_opc::{PackageOut, RT_BASE, RelOut, RelsOut};
 use craft_xml::{DECL_STANDALONE, esc};
@@ -127,6 +129,8 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
     let content_w = sw - 2 * mx;
 
     let mut global_media: Vec<(String, &Image)> = Vec::new();
+    // Shared picture bytes remain alive throughout export; only admitted media enter this map.
+    let mut media_of: HashMap<*const u8, usize> = HashMap::new();
     let mut slides: Vec<(String, RelsOut)> = Vec::new(); // (slide_xml, slide_rels)
     let body = crate::layout::body_size(pages);
 
@@ -201,9 +205,19 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
                     current_y = current_y.saturating_add(box_h).saturating_add(height_emu(12.0));
                 }
                 SlideBodyItem::Img(im) => {
-                    let global_img_idx = global_media.len() + 1;
-                    let img_name = format!("image{global_img_idx}.{}", im.ext);
-                    global_media.push((img_name, *im));
+                    let global_img_idx = match media_of.get(&im.bytes.as_ptr()) {
+                        Some(&i) => i,
+                        None if room_for(&global_media, im) => {
+                            let n = global_media.len() + 1;
+                            global_media.push((format!("image{n}.{}", im.ext), *im));
+                            media_of.insert(im.bytes.as_ptr(), n);
+                            n
+                        }
+                        None => {
+                            i += 1;
+                            continue;
+                        }
+                    };
                     let r_id = format!("rIdImg{}", slide_media_rels.len() + 1);
                     slide_media_rels.push((r_id.clone(), global_img_idx));
 
