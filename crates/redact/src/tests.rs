@@ -4830,6 +4830,8 @@ fn a_reply_kept_to_an_attachment_or_link_removed_no_longer_keeps_it() {
     assert!(written_in_place(&doc, b"Popup").is_empty(), "so do the pop-ups written in place");
 
     let mut doc = pdf(objs);
+    let popups = written_in_place(&doc, b"Popup");
+    assert_eq!(popups.len(), 3, "the attachment's pop-ups written in place");
     remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
     let file = saved(&doc);
     assert!(!holds(&file, b"secret.example"), "the link's address is gone");
@@ -4838,7 +4840,7 @@ fn a_reply_kept_to_an_attachment_or_link_removed_no_longer_keeps_it() {
     }
     assert!(reply(&doc, 7).contains(b"IRT") && reply(&doc, 48).contains(b"IRT"), "the replies to the attachment, which stays, keep theirs");
     assert!(holds(&file, b"Reply two") && holds(&file, b"Reply four"), "the replies stay");
-    assert_eq!(written_in_place(&doc, b"Popup").len(), 3, "the attachment's pop-ups written in place stay");
+    assert_eq!(written_in_place(&doc, b"Popup"), popups, "the attachment's pop-ups written in place stay as they were");
 }
 
 #[test]

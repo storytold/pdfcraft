@@ -920,17 +920,16 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         .collect();
     // The annotation a `/Parent` or `/IRT` names, followed through references to references.
     let named = |doc: &Document, d: &Dict, key: &[u8]| d.get(key).and_then(Object::as_ref).map(|r| last_ref(doc, r));
+    // A pop-up goes with the annotation its `/Parent` names, held by reference or written in place.
+    let popup_of_removed = |doc: &Document, d: &Dict| {
+        crate::subtype(doc, d).as_deref() == Some(b"Popup") && named(doc, d, b"Parent").is_some_and(|x| removed.contains(&x))
+    };
     // What goes: the annotations removed, and the pop-ups that go with them.
     let gone: std::collections::HashSet<ObjRef> = pages
         .iter()
         .flat_map(|p| annots_of(doc, &p.dict))
         .filter_map(|a| a.as_ref())
-        .filter(|&r| {
-            removed.contains(&r)
-                || doc.get(r).as_dict().is_some_and(|d| {
-                    crate::subtype(doc, d).as_deref() == Some(b"Popup") && named(doc, d, b"Parent").is_some_and(|x| removed.contains(&x))
-                })
-        })
+        .filter(|&r| removed.contains(&r) || doc.get(r).as_dict().is_some_and(|d| popup_of_removed(doc, d)))
         .collect();
     for p in pages {
         let list = annots_of(doc, &p.dict);
@@ -938,12 +937,7 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         for a in list {
             let Some(r) = a.as_ref() else {
                 match doc.resolve(&a).as_dict().cloned() {
-                    Some(d) if drop_annot(&d) => {}
-                    // A pop-up goes with the annotation its `/Parent` names, as one held by
-                    // reference does.
-                    Some(d)
-                        if crate::subtype(doc, &d).as_deref() == Some(b"Popup")
-                            && named(doc, &d, b"Parent").is_some_and(|x| removed.contains(&x)) => {}
+                    Some(d) if drop_annot(&d) || popup_of_removed(doc, &d) => {}
                     Some(mut d) if named(doc, &d, b"IRT").is_some_and(|x| gone.contains(&x)) => {
                         d.remove(b"IRT");
                         d.remove(b"RT");
