@@ -115,7 +115,8 @@ impl PdfCraftApp {
                 Request::Highlight(on) => self.script_highlight(id, on),
                 Request::Focus(name) => self.focus_script_field(id, view, &name, None),
                 Request::FocusField { name, object_id } => self.focus_script_field(id, view, &name, Some(object_id)),
-                Request::Beep | Request::Reset(_) => {}
+                // The engine applies these with the script's other changes (resets, templates).
+                Request::Beep | Request::Reset(_) | Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {}
             }
         }
         self.show_script_messages(out.alerts);
