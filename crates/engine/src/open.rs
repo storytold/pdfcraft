@@ -370,6 +370,7 @@ impl Session {
             password: render_password,
             dirty: false,
             generation: 0,
+            // PLAN: pdf-workflows-w10 removes `Document::snapshot_generation` (document.rs:37); delete this line with it.
             snapshot_generation: 0,
             read_only_reason,
             form: Arc::new(form),
