@@ -379,9 +379,18 @@ fn pptx_table_cell_with_largest_font_stays_in_table_and_not_in_title() {
 fn pptx_opens_in_libreoffice() {
     let p = sample_page();
     let bytes = pptx(&[p], "LibreOffice Check");
-    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::create_dir_all(&dir);
+    // A new folder of our own, never one left (or planted) at a guessable name.
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pptx-lo-{}-{nanos:x}", std::process::id()));
+    // Only Unix sets a mode on it, so elsewhere `made` is never changed.
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut made = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        made.mode(0o700);
+    }
+    made.create(&dir).expect("a fresh test folder");
     let pptx_path = dir.join("test.pptx");
     std::fs::write(&pptx_path, &bytes).unwrap();
 
@@ -393,4 +402,41 @@ fn pptx_opens_in_libreoffice() {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture drawn in many places is one media part, referred to from each place; the package
+/// stays within the media limits however many places there are.
+#[test]
+fn pptx_packages_a_repeated_picture_once() {
+    let mut p = sample_page();
+    let one = p.images[0].clone();
+    p.images = std::iter::repeat_n(one, 2 * crate::as_docx::MAX_MEDIA).collect();
+    let bytes = pptx(&[p], "Deck");
+    let rels = part(&bytes, "ppt/slides/_rels/slide1.xml.rels");
+    assert_eq!(rels.matches("relationships/image\"").count(), 2 * crate::as_docx::MAX_MEDIA, "every place refers to the picture");
+    assert!(rels.contains("Target=\"../media/image1.png\"") && !rels.contains("image2."), "one media part");
+    assert_eq!(part(&bytes, "ppt/slides/slide1.xml").matches("<p:pic>").count(), 2 * crate::as_docx::MAX_MEDIA);
+    assert_eq!(bytes.windows(20).filter(|w| *w == b"ppt/media/image1.png").count(), 2, "its local header and central directory entry");
+}
+
+/// Distinct allocations remain distinct media, even when their bytes match. Once the media
+/// budget is full, an existing picture remains usable on a later slide, but a new one is omitted.
+#[test]
+fn pptx_bounds_distinct_pictures_and_reuses_media_across_slides() {
+    let mut first = sample_page();
+    let one = first.images[0].clone();
+    first.images = (0..crate::as_docx::MAX_MEDIA).map(|_| Image { bytes: one.bytes.as_ref().to_vec().into(), ..one.clone() }).collect();
+    // Media names follow reading order, not the input vector. Give the reused picture a
+    // distinct top edge so it is unambiguously image1 rather than tying every rectangle.
+    first.images[0].rect[3] += 1.0;
+    let mut second = sample_page();
+    second.images =
+        vec![first.images[0].clone(), Image { bytes: one.bytes.as_ref().to_vec().into(), ..one.clone() }, Image { bytes: Vec::new().into(), ..one }];
+    let bytes = pptx(&[first, second], "Deck");
+    assert_eq!(part(&bytes, "ppt/slides/slide1.xml").matches("<p:pic>").count(), crate::as_docx::MAX_MEDIA);
+    assert_eq!(part(&bytes, "ppt/slides/slide2.xml").matches("<p:pic>").count(), 1);
+    let rels = part(&bytes, "ppt/slides/_rels/slide2.xml.rels");
+    assert_eq!(rels.matches("relationships/image\"").count(), 1);
+    assert!(rels.contains("Target=\"../media/image1.png\""));
+    assert!(part(&bytes, "ppt/slides/_rels/slide1.xml.rels").contains("../media/image1000.png"));
 }
