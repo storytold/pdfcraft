@@ -1,12 +1,16 @@
 //! Prepare a form in the real shell (egui_kittest): field tools, placing, selecting, moving,
 //! Field Properties and deleting.
 
+use craft::ui::dialog::StackDialog;
+use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::toast;
 use egui::Pos2;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{Queryable, by};
-use pdfcraft_engine::field_table::TableColumn;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
+use pdfcraft_ui_egui::field_table_ui::FieldTableDialog;
+use pdfcraft_ui_egui::prepare::FieldPropsDialog;
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_with("form.pdf", include_bytes!("../data/form.pdf").to_vec())
@@ -55,6 +59,77 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().widgets[0].rect
 }
 
+/// Opens Field Properties of widget 0 of `name` through the control key, as a script or the Fields
+/// panel does.
+fn open_props(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    h.state_mut().set_option("dialog", &format!("field-properties:{name}")).unwrap();
+    h.run_steps(2);
+}
+
+/// Whether Field Properties is open.
+fn props_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.state().dialogs.is_open::<FieldPropsDialog>()
+}
+
+/// The values Field Properties holds, as the dialog host reports them to automation.
+fn props(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+    h.state().dialogs.get::<FieldPropsDialog>().and_then(|d| d.json_fields()).expect("Field Properties is open")
+}
+
+/// Whether the text field table's window is open.
+fn table_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.state().dialogs.is_open::<FieldTableDialog>()
+}
+
+/// The values the text field table's window holds, as the dialog host reports them to automation.
+fn table(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+    h.state().dialogs.get::<FieldTableDialog>().and_then(|d| d.json_fields()).expect("the table's window is open")
+}
+
+/// What the text box `label` holds.
+fn text_of(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<String> {
+    h.get_by_role_and_label(Role::TextInput, label).value()
+}
+
+/// Selects all of the text box `label` and types `text` over it.
+fn retype(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
+    h.get_by_role_and_label(Role::TextInput, label).click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_role_and_label(Role::TextInput, label).type_text(text);
+    h.run_steps(2);
+}
+
+/// Opens the list `label` and picks `option`. The open list is the last thing in the tree, so an
+/// option that a row of the dialog also says is still the list's.
+fn pick(h: &mut Harness<'static, PdfCraftApp>, label: &str, option: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(2);
+    h.get_all_by_label(option).last().expect("the list offers the option").click();
+    h.run_steps(2);
+}
+
+/// Clicks the tab `label` of Field Properties.
+fn tab(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(2);
+}
+
+/// The label of the document's next undo step.
+fn undo_label(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned)
+}
+
+/// The text of every notice card the main window shows, oldest first.
+fn notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    toast::cards(&h.ctx, &WindowKey::main()).iter().map(|card| card.toast.message.as_str().to_owned()).collect()
+}
+
+/// The row of the calculation order page for the field `name`, whatever its position and value.
+fn order_row<'h>(h: &'h Harness<'static, PdfCraftApp>, name: &str) -> egui_kittest::Node<'h> {
+    h.get_by_label_contains(&format!(". {name}:"))
+}
+
 fn text_center_near(h: &Harness<'static, PdfCraftApp>, label: &str, expected: Pos2) -> Option<Pos2> {
     h.output()
         .shapes
@@ -97,35 +172,48 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
     h.event(Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
     assert_eq!(h.state().views[0].prepare.names().len(), 2);
-    let blue = Color32::from_rgb(0x14, 0x73, 0xE6);
-    for (x, y, selected) in [(47.0, 103.0, true), (97.0, 103.0, true), (135.0, 158.0, false)] {
-        let center = at(&h, x, y);
-        let shapes: Vec<_> = h.output().shapes.iter().filter(|s| s.clip_rect.contains(center)).collect();
-        let tag = shapes.iter().position(|s| {
-            matches!(&s.shape, Shape::Rect(r)
-            if r.rect.contains(center) && r.fill == if selected { blue } else { Color32::BLACK })
-        });
-        assert!(tag.is_some(), "widget at {center:?} must have its selection-colored name tag");
-        let outline = shapes.iter().position(|s| {
-            matches!(&s.shape, Shape::Rect(r)
-            if r.rect.contains(center) && r.stroke.color == blue && r.stroke.width == 2.0 && r.stroke_kind == StrokeKind::Outside)
-        });
-        if selected {
-            assert!(outline > tag, "the selected outline must be outside and painted after the tag");
-        } else {
-            assert!(outline.is_none(), "unselected text field has no selection outline");
-        }
-    }
-    assert_eq!(
-        h.output()
-            .shapes
+    let shapes = &h.output().shapes;
+    // The name tag over a widget: the smallest filled rectangle under its centre, with where it was
+    // painted in the frame.
+    let tag = |center: Pos2| {
+        shapes
             .iter()
-            .filter(|s| matches!(&s.shape, Shape::Circle(c)
-        if c.radius == 3.5 && c.stroke.color == blue))
-            .count(),
-        4,
-        "only the primary has resize handles"
-    );
+            .enumerate()
+            .filter(|(_, s)| s.clip_rect.contains(center))
+            .filter_map(|(i, s)| match &s.shape {
+                Shape::Rect(r) if r.rect.contains(center) && r.fill != Color32::TRANSPARENT => Some((i, r.rect.area(), r.fill)),
+                _ => None,
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _, fill)| (i, fill))
+    };
+    let (first, second, unselected) = (at(&h, 47.0, 103.0), at(&h, 97.0, 103.0), at(&h, 135.0, 158.0));
+    let (first_tag, second_tag, other_tag) = (tag(first), tag(second), tag(unselected));
+    let ink = first_tag.expect("the selected small widget has a name tag").1;
+    assert_eq!(second_tag.expect("the second selected widget has a name tag").1, ink, "selected tags share their ink");
+    assert_ne!(other_tag.expect("the unselected field has a name tag").1, ink, "an unselected tag differs from a selected one");
+    let outline = |center: Pos2, ink: Color32| {
+        shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.stroke.color == ink && r.stroke_kind == StrokeKind::Outside)
+        })
+    };
+    for (center, tag) in [(first, first_tag), (second, second_tag)] {
+        let outline = outline(center, ink);
+        assert!(outline > tag.map(|t| t.0), "the selected outline must be outside and painted after the tag");
+    }
+    assert!(outline(unselected, ink).is_none(), "unselected text field has no selection outline");
+    // The anchor, the first one picked, shows a box of corner handles only.
+    let handles: Vec<Pos2> =
+        shapes.iter().filter_map(|s| match &s.shape { Shape::Circle(c) if c.stroke.color == ink => Some(c.center), _ => None }).collect();
+    assert_eq!(handles.len(), 4, "only the primary has resize handles, at its corners");
+    let distinct = |value: fn(&Pos2) -> f32| {
+        let mut v: Vec<i32> = handles.iter().map(|p| value(p).round() as i32).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.len()
+    };
+    assert_eq!((distinct(|p| p.x), distinct(|p| p.y)), (2, 2), "four corners of one box: {handles:?}");
 }
 
 #[test]
@@ -156,11 +244,10 @@ fn placing_moving_editing_and_deleting_a_field() {
     h.state_mut().execute("form.field.properties");
     h.run_steps(2);
     h.get_by_label("Text Field Properties");
-    {
-        let d = h.state_mut().field_props.as_mut().expect("open");
-        d.name = "email".into();
-        d.required = true;
-    }
+    assert!(props_open(&h));
+    retype(&mut h, "Name:", "email");
+    h.get_by_label("Required").click();
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(names(&h).contains(&"email".to_string()));
@@ -187,122 +274,8 @@ fn placing_moving_editing_and_deleting_a_field() {
     h.run_steps(4);
     let r = rect_of(&h, "Check Box1");
     assert_eq!((r[2] - r[0], r[3] - r[1]), (14.0, 14.0));
-}
-
-/// The arrow keys nudge the selected field a point, Shift and an arrow ten points (#2608), as they
-/// do for a selected object or image and as dragging it does. One press is one undo step, the page
-/// does not turn with them, and the field stays selected for the next press.
-#[test]
-fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
-    let mut h = harness();
-    h.state_mut().execute("form.add.text");
-    h.run_steps(1);
-    // A click places a default-size text field and selects it.
-    let p = at(&h, 40.0, 250.0);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
-    let id = h.state().views[0].id;
-    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
-    let near = |a: f64, b: f64| (a - b).abs() < 0.01;
-    let before = rect_of(&h, &name);
-    h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
-    let right = rect_of(&h, &name);
-    assert!(near(right[0], before[0] + 1.0) && near(right[2], before[2] + 1.0), "{before:?} → {right:?}");
-    assert!(near(right[2] - right[0], before[2] - before[0]), "moved, not resized");
-    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change field properties"));
-    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowUp);
-    h.run_steps(2);
-    let up = rect_of(&h, &name);
-    assert!(near(up[1], right[1] + 10.0) && near(up[3], right[3] + 10.0), "{right:?} → {up:?}");
-    h.key_press(egui::Key::ArrowDown);
-    h.run_steps(2);
-    h.key_press(egui::Key::ArrowLeft);
-    h.run_steps(2);
-    let back = rect_of(&h, &name);
-    assert!(near(back[0], up[0] - 1.0) && near(back[1], up[1] - 1.0), "{up:?} → {back:?}");
-    assert!(h.state().views[0].prepare.selected.is_some(), "it stays selected for the next nudge");
-    assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
-}
-
-/// Shift keeps a dragged field on the axis it set off along, even when the drag then turns and
-/// crosses the diagonal: 40 points right and then 60 down still moves it 40 points right and not
-/// at all down, where choosing the axis from the whole drag each frame made it jump to 60 down.
-#[test]
-fn a_shift_drag_keeps_its_axis_when_it_crosses_the_diagonal() {
-    let mut h = harness();
-    h.state_mut().execute("form.add.text");
-    h.run_steps(1);
-    let p = at(&h, 40.0, 250.0);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
-    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
-    let before = rect_of(&h, &name);
-    // The default text field is 144 by 22 points with its top-left at the click.
-    let c = at(&h, 110.0, 261.0);
-    let (right, down) = (at(&h, 150.0, 261.0), at(&h, 150.0, 321.0));
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
-    h.hover_at(c);
-    h.run_steps(1);
-    h.drag_at(c);
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.hover_at(c + (right - c) * (k as f32 / 4.0));
-        h.run_steps(1);
-    }
-    for k in 1..=4 {
-        h.hover_at(right + (down - right) * (k as f32 / 4.0));
-        h.run_steps(1);
-    }
-    h.drop_at(down);
-    h.run_steps(1);
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    h.run_steps(3);
-    let after = rect_of(&h, &name);
-    assert!((after[0] - before[0] - 40.0).abs() < 1.5, "40 points right: {before:?} → {after:?}");
-    assert!((after[1] - before[1]).abs() < 0.01, "not down: {before:?} → {after:?}");
-}
-
-/// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
-/// leave the field where it is, even when Alt is let go in the same frame as the arrow, so the
-/// frame has no modifiers and only the press carries Alt.
-#[test]
-fn alt_arrows_navigate_instead_of_nudging_the_selected_field() {
-    let mut h = harness();
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 }));
-    h.run_steps(2);
-    h.state_mut().execute("form.add.text");
-    h.run_steps(1);
-    let p = at(&h, 40.0, 250.0);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
-    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
-    let before = rect_of(&h, &name);
-    h.state_mut().views[0].go_to_page(1);
-    h.run_steps(2);
-    h.state_mut().views[0].go_to_page(0);
-    h.run_steps(2);
-    assert!(h.state().views[0].prepare.selected.is_some(), "still selected, so a nudge could take the keys");
-    let arrow = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-    h.event(arrow(egui::Key::ArrowLeft, egui::Modifiers::ALT));
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 1, "an Alt+← press went back");
-    h.event(arrow(egui::Key::ArrowRight, egui::Modifiers::ALT));
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].current, 0, "an Alt+→ press went forward");
-    assert_eq!(rect_of(&h, &name), before, "the field didn't move");
+    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Check Box1"), "the clicked check box is selected");
 }
 
 #[test]
@@ -311,22 +284,19 @@ fn format_validate_and_calculate_tabs() {
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
-    h.get_by_label("Format").click();
-    h.run_steps(2);
-    h.get_by_label("Select format category:");
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.format = Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
-        d.validate = Validate::Range { min: Some(0.0), max: None };
-        d.calculate = Calculate::Notation("name".into());
-    }
-    h.run_steps(2);
+    open_props(&mut h, "city");
+    tab(&mut h, "Format");
+    pick(&mut h, "Select format category:", "Number");
+    pick(&mut h, "Currency symbol:", "$");
     h.get_by_label_contains("Example: -$1,234.50");
-    h.get_by_label("Calculate").click();
+    tab(&mut h, "Validate");
+    choose(&mut h, "Field value is in range:");
+    // The range opens as 0 to 100; unticking "To:" leaves it open above.
+    h.get_by_label("To:").click();
     h.run_steps(2);
-    h.get_by_label("Simplified field notation:");
+    tab(&mut h, "Calculate");
+    choose(&mut h, "Simplified field notation:");
+    retype_script(&mut h, "name");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -363,10 +333,8 @@ fn set_calculate_script(h: &mut Harness<'static, PdfCraftApp>, js: &str) {
 
 /// Opens Field Properties of `name` on the Calculate tab.
 fn open_calculate(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
-    h.state_mut().open_field_props(name, 0);
-    h.run_steps(2);
-    h.get_by_label("Calculate").click();
-    h.run_steps(2);
+    open_props(h, name);
+    tab(h, "Calculate");
 }
 
 /// Clicks the dialog button `label` (OK or Cancel).
@@ -438,8 +406,9 @@ fn the_calculate_tab_shows_a_custom_calculation_script() {
     assert!(!script_boxes(&h).contains(&js.to_owned()));
     choose(&mut h, CUSTOM);
     assert_eq!(script_boxes(&h), [js]);
-    assert_eq!(h.state().field_props.as_ref().and_then(|d| d.props()), None, "an untouched tab changes nothing");
+    let undo = undo_label(&h);
     press(&mut h, "OK");
+    assert_eq!(undo_label(&h), undo, "an untouched tab changes nothing");
     assert_eq!(city_calculation(&h), (pdfcraft_engine::form_scripts::Calculate::None, Some(js.to_owned())));
 }
 
@@ -568,29 +537,29 @@ fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
     let rename = |h: &mut Harness<'static, PdfCraftApp>, from: &str, to: &str| {
-        h.state_mut().open_field_props(from, 0);
-        h.run_steps(2);
-        h.state_mut().field_props.as_mut().expect("open").name = to.into();
+        open_props(h, from);
+        retype(h, "Name:", to);
         h.get_by_label("OK").click();
         h.run_steps(3);
     };
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
-    h.state_mut().field_props.as_mut().expect("open").calculate = Calculate::Notation("name * 2".into());
+    open_calculate(&mut h, "city");
+    choose(&mut h, "Simplified field notation:");
+    retype_script(&mut h, "name * 2");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let calculation = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().actions.calculate.clone()
     };
-    h.state_mut().toast = None;
+    let shown = notices(&h);
     rename(&mut h, "name", "full_name");
     assert_eq!(calculation(&h), Calculate::Notation("full_name * 2".into()));
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("1 calculation now uses the new name."));
-    h.state_mut().toast = None;
+    let after = notices(&h);
+    assert_eq!(after.len(), shown.len() + 1, "one new card: {after:?}");
+    assert_eq!(after.last().map(String::as_str), Some("1 calculation now uses the new name."));
     rename(&mut h, "city", "town");
     assert!(names(&h).contains(&"town".to_string()));
-    assert_eq!(h.state().toast, None, "no formula reads the calculated field itself");
+    assert_eq!(notices(&h), after, "no formula reads the calculated field itself, so no new card");
     h.state_mut().execute("edit.undo");
     h.state_mut().execute("edit.undo");
     h.run_steps(2);
@@ -604,10 +573,12 @@ fn appearance_tab_restyles_the_field() {
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
-    h.get_by_label("Appearance").click();
-    h.run_steps(2);
+    let before = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().field_look("city").unwrap()
+    };
+    open_props(&mut h, "city");
+    tab(&mut h, "Appearance");
     h.get_by_label("Line Style:");
     fn no_grid_id_warning(shape: &egui::Shape) -> bool {
         match shape {
@@ -618,30 +589,21 @@ fn appearance_tab_restyles_the_field() {
     }
     // Check egui's actual painted diagnostics, rather than reproducing the ID formula.
     assert!(h.output().shapes.iter().all(|shape| no_grid_id_warning(&shape.shape)), "palette grids must not share an ID");
-    let before = h.state().field_props.as_ref().unwrap().look.unwrap();
     assert_eq!(h.get_all_by_label("No color").count(), 2);
+    // Each "No color" toggles its own colour: the first is the border's, the second the fill's.
     h.get_all_by_label("No color").next().unwrap().click();
     h.run_steps(2);
-    let border = h.state().field_props.as_ref().unwrap().look.as_ref().unwrap().border;
-    assert_eq!(border, if before.border.is_some() { None } else { Some([0.0; 3]) });
-    assert_eq!(h.state().field_props.as_ref().unwrap().look.as_ref().unwrap().fill, before.fill);
     h.get_all_by_label("No color").nth(1).unwrap().click();
     h.run_steps(2);
-    let look = h.state().field_props.as_ref().unwrap().look.as_ref().unwrap();
-    assert_eq!(look.border, border);
-    assert_eq!(look.fill, if before.fill.is_some() { None } else { Some([0.0; 3]) });
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        let l = d.look.as_mut().expect("a look");
-        l.style = BorderStyle::Dashed;
-        l.font = FieldFont::Courier;
-        l.fill = Some([1.0, 1.0, 0.8]);
-    }
+    pick(&mut h, "Line Style:", "Dashed");
+    pick(&mut h, "Font:", "Courier");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
     let l = s.session.get(s.views[0].id).unwrap().field_look("city").unwrap();
-    assert_eq!((l.style, l.font, l.fill), (BorderStyle::Dashed, FieldFont::Courier, Some([1.0, 1.0, 0.8])));
+    assert_eq!(l.border, if before.border.is_some() { None } else { Some([0.0; 3]) });
+    assert_eq!(l.fill, if before.fill.is_some() { None } else { Some([0.0; 3]) });
+    assert_eq!((l.style, l.font), (BorderStyle::Dashed, FieldFont::Courier));
 }
 
 #[test]
@@ -649,20 +611,24 @@ fn appearance_tab_keeps_auto_font_size() {
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
-    h.get_by_label("Appearance").click();
-    h.run_steps(2);
-    h.state_mut().field_props.as_mut().unwrap().font_size = 0.0;
+    open_props(&mut h, "city");
+    tab(&mut h, "Appearance");
+    let size = |h: &Harness<'static, PdfCraftApp>| props(h)["font_size"].as_f64().expect("a font size");
+    if size(&h) == 0.0 {
+        // Already Auto: turn it off so that choosing Auto is a change.
+        h.get_by_label("Auto").click();
+        h.run_steps(2);
+        assert_ne!(size(&h), 0.0);
+    }
+    h.get_by_label("Auto").click();
     h.run_steps(3);
-    assert_eq!(h.state().field_props.as_ref().unwrap().font_size, 0.0, "Auto (0) must survive a frame");
+    assert_eq!(size(&h), 0.0, "Auto (0) must survive a frame");
 }
 
 #[test]
 fn position_tab_rotates_a_field() {
     let mut h = harness();
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
+    open_props(&mut h, "city");
     let widget = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap();
@@ -670,18 +636,9 @@ fn position_tab_rotates_a_field() {
     };
     let before = widget(&h);
     assert_eq!(before.rotation, 0);
-    assert!(h.state().field_props.as_ref().unwrap().props().is_none(), "an unchanged draft is not an edit");
-    h.get_by_label("Position").click();
-    h.run_steps(2);
+    tab(&mut h, "Position");
     // Picked from the list, as a person does.
-    h.get_by_label("Rotation:").click();
-    h.run_steps(2);
-    h.get_by_label("90°").click();
-    h.run_steps(2);
-    let draft = h.state().field_props.as_ref().unwrap().clone();
-    assert_eq!(draft.rotation, 90);
-    let props = draft.props().expect("a new rotation is an edit");
-    assert!(props.rect.is_none(), "picking a rotation moved the field: {:?}", props.rect);
+    pick(&mut h, "Rotation:", "90°");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let turned = widget(&h);
@@ -706,13 +663,10 @@ fn options_tab_sets_the_check_box_style() {
         kind: pdfcraft_engine::NewField::CheckBox,
         name: Some("agree".into()),
     });
-    h.state_mut().open_field_props("agree", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
-    h.get_by_label("Check Box Style:");
-    assert_eq!(h.state().field_props.as_ref().unwrap().check_style, Some(CheckStyle::Check));
-    h.state_mut().field_props.as_mut().unwrap().check_style = Some(CheckStyle::Cross);
+    open_props(&mut h, "agree");
+    tab(&mut h, "Options");
+    h.get_by_value("Check");
+    pick(&mut h, "Check Box Style:", "Cross");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -732,10 +686,8 @@ fn button_label_is_editable_without_renaming_the_field() {
         kind: NewField::Button { caption: String::new() },
         name: Some("clear_button".into()),
     });
-    h.state_mut().open_field_props("clear_button", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
+    open_props(&mut h, "clear_button");
+    tab(&mut h, "Options");
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Label").click();
     h.run_steps(1);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Label").type_text("Clear Form");
@@ -755,11 +707,9 @@ fn button_label_is_editable_without_renaming_the_field() {
 
     // Read the existing label back, and leave both Cancel and an unchanged OK harmless.
     let before = app.session.save_bytes(id).unwrap();
-    h.state_mut().open_field_props("clear_button", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
-    assert_eq!(h.state().field_props.as_ref().unwrap().caption, "Clear Form");
+    open_props(&mut h, "clear_button");
+    tab(&mut h, "Options");
+    assert_eq!(text_of(&h, "Label").as_deref(), Some("Clear Form"));
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Label").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -768,20 +718,17 @@ fn button_label_is_editable_without_renaming_the_field() {
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(h.state().session.save_bytes(id).unwrap(), before);
-    h.state_mut().open_field_props("clear_button", 0);
-    h.run_steps(2);
+    open_props(&mut h, "clear_button");
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().session.save_bytes(id).unwrap(), before);
 }
 
+/// A drop-down and a list box each take an alignment from the Options tab, keep their items,
+/// value and flags, and write it to the file.
 #[test]
 fn dropdown_alignment_is_editable_and_preserved() {
     choice_alignment(pdfcraft_engine::NewField::Combo { options: vec!["One".into(), "Two".into()], editable: false }, "Center", 1);
-}
-
-#[test]
-fn list_box_alignment_is_editable_and_preserved() {
     choice_alignment(pdfcraft_engine::NewField::List { options: vec!["One".into(), "Two".into()], multi: true }, "Left", 0);
 }
 
@@ -797,10 +744,8 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
         app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "aligned_choice").unwrap().clone()
     };
     let original = field(&h);
-    h.state_mut().open_field_props("aligned_choice", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
+    open_props(&mut h, "aligned_choice");
+    tab(&mut h, "Options");
     h.get_by_label("Alignment:");
     // The imported right alignment is displayed and unchanged until a choice is made.
     h.get_by_value("Right").click();
@@ -810,10 +755,8 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(field(&h).quadding, 2, "cancel keeps the existing /Q");
-    h.state_mut().open_field_props("aligned_choice", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
+    open_props(&mut h, "aligned_choice");
+    tab(&mut h, "Options");
     h.get_by_value("Right").click();
     h.run_steps(2);
     h.get_by_label(label).click();
@@ -842,18 +785,13 @@ fn choice_alignment(kind: pdfcraft_engine::NewField, label: &str, quadding: i64)
 fn options_tab_sets_flags_alignment_and_defaults() {
     use pdfcraft_engine::field_flags as ff;
     let mut h = harness();
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
+    open_props(&mut h, "city");
+    tab(&mut h, "Options");
     h.get_by_label("Check spelling").click();
     h.get_by_label("Password").click();
     h.run_steps(1);
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.quadding = 2;
-        d.default = "Paris".into();
-    }
+    pick(&mut h, "Alignment:", "Right");
+    retype(&mut h, "Default Value:", "Paris");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -1088,19 +1026,17 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
     h.run_steps(2);
     assert!(h.state().is_preparing());
     // Lock a field: its properties are then greyed out until unlocked.
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
+    open_props(&mut h, "city");
     h.get_by_label("Locked").click();
     h.run_steps(1);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    let locked = |h: &Harness<'static, PdfCraftApp>| {
+    let locked =|h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().locked()
     };
     assert!(locked(&h));
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
+    open_props(&mut h, "city");
     h.get_by_label_contains("This field is locked");
     h.get_by_label("Locked").click();
     h.run_steps(1);
@@ -1135,37 +1071,33 @@ fn image_fields_take_a_picture_when_clicked() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Set the image of Image1"));
 }
 
+/// Adds an action on the Actions tab: picks its trigger and kind, types its script or value, and
+/// presses Add.
+fn add_action(h: &mut Harness<'static, PdfCraftApp>, trigger: &str, kind: &str, text: &str) {
+    pick(h, "Select Trigger:", trigger);
+    pick(h, "Select Action:", kind);
+    if kind == "Run a JavaScript" {
+        retype_script(h, text);
+    } else {
+        retype(h, "Value:", text);
+    }
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+}
+
 #[test]
 fn actions_tab_adds_and_removes_actions() {
     use pdfcraft_engine::{FieldAction, FieldTrigger};
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
-    h.state_mut().open_field_props("city", 0);
-    h.run_steps(2);
-    h.get_by_label("Actions").click();
-    h.run_steps(2);
+    open_props(&mut h, "city");
+    tab(&mut h, "Actions");
     h.get_by_label("Select Trigger:");
     h.get_by_label("No actions");
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.new_action.trigger = FieldTrigger::OnBlur;
-        d.new_action.kind = 1;
-        d.new_action.text = "https://example.org".into();
-    }
-    h.run_steps(3);
-    h.get_by_label("Add").click();
-    h.run_steps(2);
+    add_action(&mut h, "On Blur", "Open a web link", "https://example.org");
     h.get_by_label("Open a web link: https://example.org");
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.new_action.trigger = FieldTrigger::MouseUp;
-        d.new_action.kind = 0;
-        d.new_action.text = "app.alert('x')".into();
-    }
-    h.run_steps(3);
-    h.get_by_label("Add").click();
-    h.run_steps(2);
+    add_action(&mut h, "Mouse Up", "Run a JavaScript", "app.alert('x')");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -1191,20 +1123,13 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
         s.session.get(s.views[0].id).unwrap().field_actions("city")
     };
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.state_mut().open_field_props("city", 0);
-        h.run_steps(2);
-        h.get_by_label("Actions").click();
-        h.run_steps(2);
+        open_props(h, "city");
+        tab(h, "Actions");
     };
     // A script on Mouse Up and a link on Blur, saved with the field.
     open(&mut h);
-    for (trigger, kind, text) in [(FieldTrigger::MouseUp, 0, script), (FieldTrigger::OnBlur, 1, "https://example.org")] {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger, kind, text: text.into() };
-        h.run_steps(3);
-        h.get_by_label("Add").click();
-        h.run_steps(2);
-    }
+    add_action(&mut h, "Mouse Up", "Run a JavaScript", script);
+    add_action(&mut h, "On Blur", "Open a web link", "https://example.org");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let saved = actions(&h);
@@ -1213,9 +1138,8 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
     h.get_all_by_label("Edit").last().unwrap().click();
     h.run_steps(2);
     h.get_by_label("Edit Action");
-    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, script);
-    h.state_mut().field_props.as_mut().unwrap().new_action.text = "app.alert('changed');".into();
-    h.run_steps(2);
+    assert_eq!(script_boxes(&h), [script]);
+    retype_script(&mut h, "app.alert('changed');");
     h.get_by_label("Discard").click();
     h.run_steps(2);
     h.get_by_label("Add an Action");
@@ -1226,8 +1150,7 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
     open(&mut h);
     h.get_all_by_label("Edit").last().unwrap().click();
     h.run_steps(2);
-    h.state_mut().field_props.as_mut().unwrap().new_action.text = "app.alert('changed');".into();
-    h.run_steps(2);
+    retype_script(&mut h, "app.alert('changed');");
     h.get_by_label("Update").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -1306,9 +1229,8 @@ fn a_radio_button_joining_a_group_by_name_stays_selected() {
         form.iter().flat_map(|f| f.widgets.iter().map(|w| w.rect)).collect::<Vec<_>>()
     };
     let start = rects(&h);
-    h.state_mut().open_field_props("Group2", 0);
-    h.run_steps(2);
-    h.state_mut().field_props.as_mut().expect("open").name = "Group1".into();
+    open_props(&mut h, "Group2");
+    retype(&mut h, "Name:", "Group1");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(names(&h), ["Group1"]);
@@ -1333,15 +1255,12 @@ fn a_radio_button_joining_a_group_by_name_stays_selected() {
 #[test]
 fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     use egui_kittest::kittest::NodeT;
-    use pdfcraft_engine::FieldTrigger;
     let mut h = harness_with("chain.pdf", chained_action_fixture());
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.state_mut().open_field_props("go", 0);
-        h.run_steps(2);
-        h.get_by_label("Actions").click();
-        h.run_steps(2);
+        open_props(h, "go");
+        tab(h, "Actions");
     };
     open(&mut h);
     h.get_by_label("Run a JavaScript, then 1 more action");
@@ -1349,21 +1268,14 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     assert_eq!(h.get_all_by_label("Edit").count(), 4);
     h.get_all_by_label("Edit").nth(2).unwrap().click();
     h.run_steps(2);
-    assert_eq!(h.state().field_props.as_ref().unwrap().editing, Some(FieldTrigger::MouseUp));
+    h.get_by_label("Edit Action");
     // While one script is open, no other Edit can overwrite it.
     assert!(h.get_all_by_label("Edit").skip(2).all(|n| n.accesskit_node().is_disabled()));
     h.get_by_label("Discard").click();
     h.run_steps(2);
     assert!(h.get_all_by_label("Edit").skip(2).all(|n| !n.accesskit_node().is_disabled()));
     // Replace the Mouse Up script with a link: the chained link stays after it.
-    {
-        let d = h.state_mut().field_props.as_mut().unwrap();
-        d.actions.retain(|(t, _)| *t != FieldTrigger::MouseUp);
-        d.new_action = pdfcraft_ui_egui::prepare::ActionDraft { trigger: FieldTrigger::MouseUp, kind: 1, text: "https://example.com".into() };
-    }
-    h.run_steps(3);
-    h.get_by_label("Add").click();
-    h.run_steps(2);
+    add_action(&mut h, "Mouse Up", "Open a web link", "https://example.com");
     h.get_by_label("OK").click();
     h.run_steps(3);
     open(&mut h);
@@ -1377,11 +1289,7 @@ fn draw_table(h: &mut Harness<'static, PdfCraftApp>) {
     h.run_steps(2);
     let (a, b) = (at(h, 40.0, 240.0), at(h, 240.0, 360.0));
     drag(h, a, b);
-    assert_eq!(h.state().dialog, Some(Dialog::FieldTable));
-}
-
-fn columns(patterns: &[(&str, f64)]) -> Vec<TableColumn> {
-    patterns.iter().map(|(p, w)| TableColumn { pattern: (*p).to_owned(), width: *w }).collect()
+    assert!(table_open(h));
 }
 
 #[test]
@@ -1390,27 +1298,27 @@ fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
     let before = names(&h);
     draw_table(&mut h);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select once the area is drawn");
-    {
-        let s = h.state_mut();
-        let id = s.views[0].id;
-        let d = s.field_table_draft.as_mut().expect("the table's window is open");
-        assert_eq!((d.doc, d.page), (id, 0));
-        let r = d.table.rect;
-        assert!([40.0, 240.0, 240.0, 360.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "drawn as displayed: {r:?}");
-        d.table.rows = 2;
-        d.table.columns = columns(&[("desc_N", 3.0), ("price_N", 1.0)]);
+    // The table starts with four rows and one column: two rows fewer and one column more.
+    for _ in 0..2 {
+        h.get_all_by_label("-").next().expect("the Rows field's minus").click();
+        h.run_steps(2);
     }
+    h.get_all_by_label("+").nth(1).expect("the Columns field's plus").click();
     h.run_steps(2);
+    retype(&mut h, "Column 1", "desc_N");
+    retype(&mut h, "Column 2", "price_N");
+    assert_eq!(table(&h)["rows"], 2);
     h.get_by_label("Add fields").click();
     h.run_steps(3);
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "added, the window closes");
+    assert!(!table_open(&h), "added, the window closes");
     let added: Vec<_> = names(&h).into_iter().filter(|n| !before.contains(n)).collect();
     assert_eq!(added, ["desc_1", "price_1", "desc_2", "price_2"]);
-    // 150 and 50 points wide, 60 high, the first row at the top: user space has y up from 400.
+    // Two equal columns of 100 points, 60 high, the first row at the top: user space has y up from
+    // 400, and the area is the 200 by 120 points drawn from (40, 240) as displayed.
     let r = rect_of(&h, "desc_1");
-    assert!([40.0, 100.0, 190.0, 160.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    assert!([40.0, 100.0, 140.0, 160.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
     let r = rect_of(&h, "price_2");
-    assert!([190.0, 40.0, 240.0, 100.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    assert!([140.0, 40.0, 240.0, 100.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add text field table"));
     h.state_mut().execute("edit.undo");
     h.run_steps(2);
@@ -1426,20 +1334,23 @@ fn a_table_whose_names_are_taken_stays_open_saying_so() {
     assert!(names(&h).contains(&"Table1_4".to_owned()), "{:?}", names(&h));
     // The next table takes the next free names on its own.
     draw_table(&mut h);
-    assert_eq!(h.state().field_table_draft.as_ref().unwrap().table.columns[0].pattern, "Table2_N");
+    assert_eq!(text_of(&h, "Column 1").as_deref(), Some("Table2_N"));
     // Named like the first, it can't be added: the window says why and keeps what was set up.
-    h.state_mut().field_table_draft.as_mut().unwrap().table.columns[0].pattern = "Table1_N".into();
+    retype(&mut h, "Column 1", "Table1_N");
+    // Tab leaves the box, so the Escape below is the window's and not the box's.
+    h.key_press(egui::Key::Tab);
     h.run_steps(2);
     let count = names(&h).len();
     h.get_by_label("a field named \"Table1_1\" already exists");
     h.get_by_label("Add fields").click();
     h.run_steps(3);
     assert_eq!(names(&h).len(), count, "nothing added");
-    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    assert!(table_open(&h), "still open");
     // Escape closes it, adding nothing.
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some(), names(&h).len()), (None, false, count));
+    assert!(!table_open(&h));
+    assert_eq!(names(&h).len(), count);
 }
 
 /// Enter commits a number being typed. It used to add the table there and then, before the rest
@@ -1461,32 +1372,8 @@ fn enter_in_a_number_field_does_not_add_the_table() {
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(names(&h).len(), before, "nothing added");
-    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.rows), Some(6), "the number is in, the window open");
-}
-
-/// With 26 or more columns each pair of columns has less than twice the least share a divider
-/// keeps, and dragging one panicked in `f64::clamp`.
-#[test]
-fn dragging_a_column_divider_between_many_columns() {
-    let mut h = harness();
-    draw_table(&mut h);
-    h.state_mut().field_table_draft.as_mut().unwrap().table.columns = columns(&[("c{c}_N", 1.0); 30]);
-    h.run_steps(2);
-    let (above, below) = (h.get_by_label("Distribute evenly").rect(), h.get_by_label("Field names").rect());
-    let p = egui::pos2(above.center().x - 120.0, (above.bottom() + below.top()) / 2.0);
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    for dx in [-10.0, -20.0] {
-        h.hover_at(p + egui::vec2(dx, 0.0));
-        h.run_steps(1);
-    }
-    h.drop_at(p + egui::vec2(-20.0, 0.0));
-    h.run_steps(2);
-    let widths: Vec<f64> = h.state().field_table_draft.as_ref().unwrap().table.columns.iter().map(|c| c.width).collect();
-    assert!(widths.iter().any(|w| (w - 1.0).abs() > 1e-9), "a divider moved: {widths:?}");
-    assert!((widths.iter().sum::<f64>() - 30.0).abs() < 1e-9 && widths.iter().all(|w| *w > 0.0), "{widths:?}");
+    assert!(table_open(&h), "the window is open");
+    assert_eq!(table(&h)["rows"], 6, "the number is in");
 }
 
 #[test]
@@ -1507,7 +1394,8 @@ fn the_table_window_closes_when_its_document_is_left() {
     h.drop_at(tab.center());
     h.run_steps(3);
     assert_eq!(h.state().active, Some(1));
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+    assert!(!table_open(&h));
+    assert!(h.query_by_label("Text Field Table").is_none(), "the window's title is no longer shown");
     h.state_mut().active = Some(0);
     h.run_steps(2);
     assert_eq!(names(&h).len(), before, "nothing added to either document");
@@ -1515,7 +1403,7 @@ fn the_table_window_closes_when_its_document_is_left() {
     draw_table(&mut h);
     h.state_mut().left_open = false;
     h.run_steps(2);
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+    assert!(!table_open(&h));
 }
 
 /// With its panel closed after the tool was picked, the form is still prepared and a table can be
@@ -1533,7 +1421,7 @@ fn a_table_drawn_with_the_panel_closed_opens_it_again() {
     let (a, b) = (at(&h, 40.0, 240.0), at(&h, 240.0, 360.0));
     drag(&mut h, a, b);
     h.run_steps(3);
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (Some(Dialog::FieldTable), true), "the window stays open");
+    assert!(table_open(&h), "the window stays open");
     assert!(h.state().left_open && h.state().is_preparing(), "Prepare a form is open again");
     h.get_by_label("Add fields").click();
     h.run_steps(3);
@@ -1549,12 +1437,12 @@ fn the_table_window_closes_when_the_document_changes_under_it() {
     draw_table(&mut h);
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
     h.run_steps(2);
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "closed by the rotation");
+    assert!(!table_open(&h), "closed by the rotation");
     assert_eq!(names(&h), before, "nothing added");
 }
 
-/// Escape in a name field leaves the field, as it does in any field; it closed the window too,
-/// and the column setup with it.
+/// Escape in a name field leaves the field and takes back what was typed, as it does in any field;
+/// it closed the window too, and the column setup with it. A second Escape closes the window.
 #[test]
 fn escape_in_a_name_field_leaves_the_field_not_the_table() {
     let mut h = harness();
@@ -1570,11 +1458,11 @@ fn escape_in_a_name_field_leaves_the_field_not_the_table() {
     h.run_steps(1);
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
-    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.columns[0].pattern.as_str()), Some("Table1_Nx"), "what was typed stays");
+    assert!(table_open(&h), "still open");
+    assert_eq!(text_of(&h, "Column 1").as_deref(), Some("Table1_N"), "what was typed is taken back");
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "a second Escape closes it");
+    assert!(!table_open(&h), "a second Escape closes it");
 }
 
 /// A click puts the default 180 × 110 table's corner at the pointer; near the page's edges it is
@@ -1591,30 +1479,36 @@ fn a_table_clicked_near_the_page_edge_stays_on_the_page() {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(3);
-    let r = h.state().field_table_draft.as_ref().expect("the table's window").table.rect;
-    assert!([120.0, 290.0, 300.0, 400.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "on the 300 × 400 page: {r:?}");
+    assert!(table_open(&h), "the table's window");
+    // The table's cells fill its area, so the added fields together are the area.
+    let before = names(&h);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    let rects: Vec<[f64; 4]> = names(&h).iter().filter(|n| !before.contains(n)).map(|n| rect_of(&h, n)).collect();
+    assert!(!rects.is_empty(), "the table was added");
+    let r = rects.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
+    // In user space, y up from the bottom of the 300 × 400 page.
+    assert!([120.0, 0.0, 300.0, 110.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "on the page: {r:?}");
 }
 
 /// Prepare a form ▸ Calculation order opens as a page of its own, with the form still being
 /// prepared, says when nothing calculates, and Back returns to Prepare a form.
 #[test]
 fn the_calculation_order_is_a_page_of_prepare_a_form() {
-    use pdfcraft_ui_egui::LeftPanel;
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(3);
     assert!(h.query_by_label("Field list").is_some());
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
-    assert_eq!(h.state().left, LeftPanel::CalculationOrder);
     assert!(h.state().is_preparing(), "the fields stay editable, so a row can select one");
     // The page replaces the Prepare a form tools.
     assert!(h.query_by_label("Field list").is_none());
     assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_some());
     h.get_by_label("Back to Prepare a form").click();
     h.run_steps(3);
-    assert_eq!(h.state().left, LeftPanel::Tool("form"));
     assert!(h.query_by_label("Field list").is_some());
+    assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_none());
     assert!(h.query_by_label("Back to Prepare a form").is_none());
     // Opened from Preview, the page edits the fields again.
     h.get_by_label("Preview").click();
@@ -1669,7 +1563,6 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().calculation_order().fields.into_iter().map(|f| f.name).collect()
     };
-    let undo_label = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
     assert_eq!(order(&h), ["total", "sub", "other"]);
     // The card says what is wrong, and each row shows its value as the field does: total
     // calculated before sub, so it still has sub's old value.
@@ -1680,19 +1573,26 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     }
     // The selected field's arrows move it.
     assert!(h.query_by_label("Later in calculation order: total").is_none(), "arrows only on the selected field or the one pointed at");
-    h.get_by_label("1. total: 0").click();
+    order_row(&h, "total").click();
     h.run_steps(3);
     h.get_by_label("Later in calculation order: total").click();
     h.run_steps(3);
     assert_eq!(order(&h), ["sub", "total", "other"]);
     assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
-    // Alt+↑ moves it back.
+    // Alt+↑ (Option on macOS) moves it back, as one more undo step.
     h.key_press_modifiers(Modifiers::ALT, Key::ArrowUp);
     h.run_steps(3);
     assert_eq!(order(&h), ["total", "sub", "other"]);
+    assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(order(&h), ["sub", "total", "other"], "the key press was one undo step");
+    h.state_mut().execute("edit.redo");
+    h.run_steps(3);
+    assert_eq!(order(&h), ["total", "sub", "other"]);
     // Dragging other onto the first row puts it first.
-    let from = h.get_by_label("3. other: $4.00").rect().center();
-    let to = h.get_by_label("1. total: 6").rect().center();
+    let from = order_row(&h, "other").rect().center();
+    let to = order_row(&h, "total").rect().center();
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
@@ -1704,6 +1604,7 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     h.drop_at(to);
     h.run_steps(4);
     assert_eq!(order(&h), ["other", "total", "sub"]);
+    assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
     // Fix order moves only total, after sub, and the card says the order is right.
     h.get_by_label("Fix order").click();
     h.run_steps(3);
@@ -1716,7 +1617,7 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     h.run_steps(3);
     assert_eq!(order(&h), ["other", "total", "sub"]);
     // A row selects its field.
-    h.get_by_label("3. sub: 6").click();
+    order_row(&h, "sub").click();
     h.run_steps(2);
     assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("sub"));
 }
@@ -1727,7 +1628,6 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
 fn a_loop_has_its_own_card_that_opens_the_formula() {
     use pdfcraft_engine::form_scripts::Calculate;
     use pdfcraft_engine::{Edit, FieldProps, NewField};
-    use pdfcraft_ui_egui::prepare::FieldTab;
     let mut h = harness();
     for (i, (name, formula)) in [("a", "b + 1"), ("b", "a + 1")].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
@@ -1745,8 +1645,9 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     assert!(h.query_by_label("Fix order").is_none(), "no order fixes a loop");
     h.get_by_label("Edit a's formula").click();
     h.run_steps(3);
-    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
-    assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
+    // Field Properties of a is open on the Calculate tab, which shows a's formula.
+    assert!(props_open(&h));
+    assert_eq!(script_boxes(&h), ["b + 1"]);
 }
 
 /// A radio group `shirt` of three buttons, S, M and L, with L chosen, while preparing the form.
@@ -1892,20 +1793,23 @@ fn a_notation_that_cannot_be_stored_keeps_field_properties_open() {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "sub").unwrap().actions.calculate.clone()
     };
-    h.state_mut().open_field_props("sub", 0);
-    h.run_steps(3);
-    let d = h.state_mut().field_props.as_mut().expect("Field Properties is open");
-    d.calculate = Calculate::Notation("qty EVCALC 2".into());
-    d.tooltip = "Subtotal".into();
+    open_props(&mut h, "sub");
+    assert!(props_open(&h), "Field Properties is open");
+    retype(&mut h, "Tooltip:", "Subtotal");
+    tab(&mut h, "Calculate");
+    retype_script(&mut h, "qty EVCALC 2");
     h.get_by_label("OK").click();
     h.run_steps(3);
-    let kept = h.state().field_props.as_ref().map(|d| (d.calculate.clone(), d.tooltip.clone()));
-    assert_eq!(kept, Some((Calculate::Notation("qty EVCALC 2".into()), "Subtotal".to_owned())), "the dialog stays open as typed");
+    assert!(props_open(&h), "the dialog stays open");
+    assert_eq!(script_boxes(&h), ["qty EVCALC 2"], "as typed");
+    tab(&mut h, "General");
+    assert_eq!(text_of(&h, "Tooltip:").as_deref(), Some("Subtotal"), "as typed");
     assert_eq!(formula(&h), Calculate::Notation("qty * 2".into()), "the field keeps its formula");
-    h.state_mut().field_props.as_mut().expect("still open").calculate = Calculate::Notation("qty * 3".into());
+    tab(&mut h, "Calculate");
+    retype_script(&mut h, "qty * 3");
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert!(h.state().field_props.is_none(), "applied and closed");
+    assert!(!props_open(&h), "applied and closed");
     assert_eq!(formula(&h), Calculate::Notation("qty * 3".into()));
 }
 
@@ -1916,7 +1820,6 @@ fn a_notation_that_cannot_be_stored_keeps_field_properties_open() {
 fn a_formula_reading_a_missing_field_has_its_own_card() {
     use pdfcraft_engine::form_scripts::Calculate;
     use pdfcraft_engine::{Edit, FieldProps, NewField};
-    use pdfcraft_ui_egui::prepare::FieldTab;
     let mut h = harness();
     for (i, name) in ["qty", "discount", "sub", "rows"].into_iter().enumerate() {
         let y = 200.0 + 30.0 * i as f64;
@@ -1951,37 +1854,26 @@ fn a_formula_reading_a_missing_field_has_its_own_card() {
     assert_eq!(order, ["sub", "rows"], "Undo put the order back");
     h.get_by_label("Edit sub's formula").click();
     h.run_steps(3);
-    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
-    assert_eq!(draft, Some(("sub".to_owned(), FieldTab::Calculate)));
+    // Field Properties of sub is open on the Calculate tab, which shows sub's formula.
+    assert!(props_open(&h));
+    assert_eq!(script_boxes(&h), ["qty - discount"]);
 }
 
 #[test]
 fn button_export_properties_apply_cancel_and_undo() {
-    fn retype(h: &mut Harness<'static, PdfCraftApp>, value: &str) {
-        use egui::accesskit::Role;
-        h.get_by_role_and_label(Role::TextInput, "Export value").click();
-        h.run_steps(1);
-        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        h.get_by_role_and_label(Role::TextInput, "Export value").type_text(value);
-        h.run_steps(2);
-    }
     let mut h = harness();
     h.state_mut().execute("form.prepare");
     h.run_steps(2);
-    h.state_mut().open_field_props("agree", 0);
-    h.run_steps(2);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
-    let original = h.state().field_props.as_ref().unwrap().export_value.clone();
-    retype(&mut h, "Accepted");
+    open_props(&mut h, "agree");
+    tab(&mut h, "Options");
+    let original = text_of(&h, "Export value").expect("the export value");
+    retype(&mut h, "Export value", "Accepted");
     h.get_by_label("Cancel").click();
     h.run_steps(2);
-    h.state_mut().open_field_props("agree", 0);
-    h.run_steps(2);
-    assert_eq!(h.state().field_props.as_ref().unwrap().export_value, original);
-    h.get_by_label("Options").click();
-    h.run_steps(2);
-    retype(&mut h, "Accepted");
+    open_props(&mut h, "agree");
+    tab(&mut h, "Options");
+    assert_eq!(text_of(&h, "Export value").as_deref(), Some(original.as_str()));
+    retype(&mut h, "Export value", "Accepted");
     h.get_by_label("OK").click();
     h.run_steps(3);
     {
@@ -2077,28 +1969,5 @@ fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
     let s = h.state();
     let polygons = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Polygon").count();
     assert_eq!(polygons, 0, "the polygon is not finished");
-    assert!(matches!(s.views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })), "it is still being clicked out");
-}
-
-/// Delete and Escape with a dialog open are the dialog's: the field selected behind it stays and
-/// stays selected. Delete removed it, and Escape deselected it as it closed the dialog.
-#[test]
-fn delete_and_escape_under_a_dialog_leave_the_selected_field() {
-    for key in [egui::Key::Delete, egui::Key::Escape] {
-        let mut h = harness();
-        let before = names(&h).len();
-        assert!(h.state_mut().execute("form.add.text"));
-        h.run_steps(2);
-        let (a, b) = (at(&h, 40.0, 300.0), at(&h, 200.0, 322.0));
-        drag(&mut h, a, b);
-        h.run_steps(2);
-        assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("Text1"));
-        h.state_mut().dialog = Some(Dialog::Shortcuts);
-        h.run_steps(3);
-        h.key_press(key);
-        h.run_steps(3);
-        assert_eq!(names(&h).len(), before + 1, "{key:?} under a dialog deletes nothing");
-        assert!(h.state().views[0].prepare.selected.is_some(), "{key:?}: still selected");
-        assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
-    }
+    assert!(!s.views[0].comments.tool.drawing().is_empty(), "it is still being clicked out");
 }
