@@ -2,7 +2,10 @@
 //! status lookup for evidence embedded in a DSS or supplied by the caller. Never fetches:
 //! the transport and the choice of evidence stay with the caller.
 
-use crate::der::{Tlv, tag};
+use crate::der::Tlv;
+// Only the retained parity parsers (`parse_legacy`, test-only) read DER tags directly.
+#[cfg(test)]
+use crate::der::tag;
 use crate::keys::{self, DigestAlg, PublicKey};
 use crate::x509::Certificate;
 use crate::{SignError, Time};
@@ -26,6 +29,8 @@ pub enum RevocationStatus {
     Unknown,
 }
 
+// Used only by the test-only parity parsers since parsing moved to the shared crates (#7654, #7656).
+#[cfg(test)]
 fn bad(what: impl Into<String>) -> SignError {
     SignError::Malformed(format!("revocation: {}", what.into()))
 }
