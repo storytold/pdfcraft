@@ -374,8 +374,8 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
-    // PdfCraft installs its own last-resort system face (`PDFCRAFT_SYSTEM_FONTS`); eframe's
-    // provider would read every installed face, including proprietary ones, into every UI pass.
+    // PdfCraft installs its own system and Unifont providers, both respecting
+    // `PDFCRAFT_SYSTEM_FONTS`. A second provider here would bypass that screenshot opt-out.
     native.system_font_fallback = false;
     if renderer == eframe::Renderer::Wgpu {
         configure_gpu(&mut native);

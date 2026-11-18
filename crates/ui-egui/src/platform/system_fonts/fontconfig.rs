@@ -1,7 +1,7 @@
 //! Discover font files in configured directories, including Nix store paths.
 //!
-//! Only the existing fallback filenames are selected by the caller. Font bytes are still
-//! checked for size and glyph coverage there; no font is copied or embedded.
+//! Callers select fallback filenames and validate size and glyph coverage. Include OpenType
+//! files too: current GNU Unifont releases use `.otf`. No font is copied or embedded.
 
 use std::collections::HashSet;
 use std::io::Read as _;
@@ -126,7 +126,12 @@ pub(super) fn font_files(config_path: &Path) -> Vec<PathBuf> {
                 if depth < MAX_DEPTH {
                     pending.push((path, depth + 1));
                 }
-            } else if path.extension().is_some_and(|ext| ext == "ttf" || ext == "ttc") && path.is_file() {
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ["ttf", "ttc", "otf", "otc"].iter().any(|known| ext.eq_ignore_ascii_case(known)))
+                && path.is_file()
+            {
                 files.push(path);
             }
         }
@@ -272,6 +277,22 @@ mod tests {
         }
         fixture.config("conf.d/9999-fonts.conf", &format!("<dir>{}</dir>", fixture.0.join("fonts").display()));
         assert!(font_files(&config).is_empty());
+    }
+
+    #[test]
+    fn discovers_opentype_and_collection_files_in_configured_font_directories() {
+        let fixture = Fixture::new();
+        let fonts = fixture.0.join("fonts");
+        std::fs::create_dir(&fonts).unwrap();
+        let names = ["RenamedKorean.OTF", "unifont-16.0.04.otf", "collection.otc"];
+        for name in names {
+            std::fs::write(fonts.join(name), b"discovery does not parse font bytes").unwrap();
+        }
+        std::fs::write(fonts.join("README.txt"), b"not a font").unwrap();
+        let config = fixture.config("fonts.conf", &format!("<dir>{}</dir>", fonts.display()));
+        let mut expected: Vec<_> = names.iter().map(|name| fonts.join(name)).collect();
+        expected.sort();
+        assert_eq!(font_files(&config), expected);
     }
 
     #[test]

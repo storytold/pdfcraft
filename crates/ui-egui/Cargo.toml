@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 edit-session = { workspace = true }
-craft-ui = { workspace = true }
+craft-ui = { workspace = true, features = ["system_fonts"] }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
 craft-keymap = { workspace = true }
@@ -76,7 +76,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
 block2 = "0.6"
 plist = "1.10"
-# Query and read Finder association attributes without following symbolic links.
+
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+# Nonblocking font opens and macOS Finder association attributes, through safe OS wrappers.
 rustix = { version = "1.1.6", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -117,3 +119,7 @@ xattr = "1.6"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tempfile = "3.27"
+
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dev-dependencies]
+# Detect the same optional backend fontique uses, independently of glyph lookup results.
+yeslogic-fontconfig-sys = { version = "6", features = ["dlopen"] }

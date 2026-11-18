@@ -1193,7 +1193,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=8503f24cb845268f47f97e829491114fe9ad1bfa#8503f24cb845268f47f97e829491114fe9ad1bfa"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "md-5 0.10.6",
  "rayon",
@@ -1202,7 +1202,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=8503f24cb845268f47f97e829491114fe9ad1bfa#8503f24cb845268f47f97e829491114fe9ad1bfa"
 dependencies = [
  "md-5 0.10.6",
  "rayon",
@@ -1216,7 +1216,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=f29e82f1a7a009e68312bd
 [[package]]
 name = "craft-csv"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1224,7 +1224,7 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 
 [[package]]
 name = "craft-flow"
@@ -1239,7 +1239,7 @@ dependencies = [
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 
 [[package]]
 name = "craft-html"
@@ -1249,7 +1249,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae71219258698
 [[package]]
 name = "craft-i18n"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "fixed_decimal",
  "icu_decimal",
@@ -1272,7 +1272,7 @@ dependencies = [
 [[package]]
 name = "craft-image-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "craft-jpeg",
  "exr",
@@ -1294,7 +1294,7 @@ dependencies = [
 [[package]]
 name = "craft-jpeg"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1302,7 +1302,7 @@ dependencies = [
 [[package]]
 name = "craft-keymap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "egui",
  "serde",
@@ -1331,7 +1331,7 @@ dependencies = [
 [[package]]
 name = "craft-menu"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "craft-keymap",
  "craft-quit",
@@ -1354,9 +1354,9 @@ dependencies = [
 [[package]]
 name = "craft-opc"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-xml 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "craft-zip",
  "log",
  "thiserror 2.0.21",
@@ -1416,7 +1416,7 @@ dependencies = [
 [[package]]
 name = "craft-prc"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -1425,7 +1425,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "craft-winprint-gdi",
  "log",
@@ -1439,7 +1439,7 @@ dependencies = [
 [[package]]
 name = "craft-quit"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "dispatch2",
  "egui",
@@ -1470,7 +1470,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -1479,12 +1479,13 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "craft-fonts-build",
  "craft-i18n",
  "egui",
  "epaint",
+ "fontique",
  "js-sys",
  "log",
  "objc2 0.6.5",
@@ -1492,6 +1493,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "serde",
  "skrifa 0.44.0",
+ "unicode-script",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1500,7 +1502,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "chrono",
  "dunce",
@@ -1596,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "quick-xml 0.41.0",
  "thiserror 2.0.21",
@@ -1625,7 +1627,7 @@ dependencies = [
 [[package]]
 name = "craft-zip"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80#729f84bdc0f03079757a47a03c3748b2e4783e80"
 dependencies = [
  "flate2",
  "thiserror 2.0.21",
@@ -1988,7 +1990,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "bytemuck",
  "emath",
@@ -2024,7 +2026,7 @@ version = "0.1.0-alpha.2"
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2062,7 +2064,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "accesskit",
  "ahash",
@@ -2083,7 +2085,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2102,7 +2104,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -2129,7 +2131,7 @@ dependencies = [
 [[package]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "ahash",
  "egui",
@@ -2143,7 +2145,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "bytemuck",
  "egui",
@@ -2156,7 +2158,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "eframe",
  "egui",
@@ -2199,7 +2201,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "bytemuck",
  "serde",
@@ -2280,7 +2282,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -2307,7 +2309,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 
 [[package]]
 name = "equator"
@@ -2588,6 +2590,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
  "roxmltree 0.20.0",
+]
+
+[[package]]
+name = "fontique"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6688bc1294fe7117d788937b6c53480169b29c566954af490830d4c09da9516a"
+dependencies = [
+ "hashbrown 0.17.1",
+ "linebender_resource_handle",
+ "memmap2",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "objc2-foundation 0.3.2",
+ "parlance",
+ "read-fonts 0.41.0",
+ "roxmltree 0.21.2",
+ "smallvec",
+ "windows",
+ "windows-core",
+ "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
@@ -4303,6 +4327,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-text"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-encode"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4617,6 +4651,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "parlance"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
+
+[[package]]
 name = "pastey"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4697,7 +4737,7 @@ name = "pdfcraft-automation"
 version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-cms 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "craft-image-codecs",
  "craft-prc",
  "flate2",
@@ -4812,7 +4852,7 @@ name = "pdfcraft-engine"
 version = "0.21.1"
 dependencies = [
  "chrono",
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-cms 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "craft-docpath",
  "craft-image-codecs",
  "craft-tiff",
@@ -4860,7 +4900,7 @@ dependencies = [
  "craft-mime",
  "craft-opc",
  "craft-rtf",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-xml 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "craft-zip",
  "flate2",
 ]
@@ -5012,7 +5052,7 @@ name = "pdfcraft-preflight"
 version = "0.21.1"
 dependencies = [
  "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8503f24cb845268f47f97e829491114fe9ad1bfa)",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-xml 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "flate2",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -5023,7 +5063,7 @@ dependencies = [
 name = "pdfcraft-print"
 version = "0.21.1"
 dependencies = [
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-cms 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "craft-print",
  "log",
  "pdfcraft-content",
@@ -5040,7 +5080,7 @@ name = "pdfcraft-redact"
 version = "0.21.1"
 dependencies = [
  "aho-corasick",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-xml 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -5184,6 +5224,7 @@ dependencies = [
  "web-time",
  "winsafe",
  "xattr",
+ "yeslogic-fontconfig-sys",
  "zeroize",
 ]
 
@@ -5209,7 +5250,7 @@ dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
  "craft-xfa",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-xml 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "sha2 0.11.1",
@@ -5223,7 +5264,7 @@ dependencies = [
  "base64 0.23.1",
  "craft-csv",
  "craft-xfdf",
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "craft-xml 0.1.0 (git+https://github.com/tinywolf3/craft-libs?rev=729f84bdc0f03079757a47a03c3748b2e4783e80)",
  "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-forms",
@@ -7746,6 +7787,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
+name = "unicode-script"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa04c955db05429d464c74d495c1ee677e1866e783a4c3747f9c0cef7756cabf"
+
+[[package]]
 name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8948,6 +8995,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "yeslogic-fontconfig-sys"
+version = "6.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d8b8abf912b9a29ff112e1671c97c33636903d13a69712037190e6805af4f76"
+dependencies = [
+ "dlib",
+ "once_cell",
+ "pkg-config",
+]
+
+[[package]]
 name = "yoke"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9279,14 +9337,14 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=725a39fca940f77149ffbb9c58eef405a16997bc#725a39fca940f77149ffbb9c58eef405a16997bc"
+source = "git+https://github.com/tinywolf3/egui.git?rev=dee3aa400804a31540c0bdd0579a2ed78b1b7a80#dee3aa400804a31540c0bdd0579a2ed78b1b7a80"
