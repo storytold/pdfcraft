@@ -3,8 +3,10 @@
 
 use std::cell::RefCell;
 
+use craft::behavior::IconId;
 use craft::behavior::{DisplayOrder, ItemSource, SizeHint};
 use craft::keymap::CommandRef;
+use craft::theme::variant::Tone;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{CollectionEvent, Props as _, Show as _, ShowCollection as _};
 use craft::ui::display::{PictureSize, Text};
@@ -14,8 +16,6 @@ use craft::ui::runtime::env::Env;
 use craft::ui::shell::{RecentFile, StartAction, StartLink, StartPlace, StartScreen};
 use craft::ui::style::DataColor;
 use craft::ui::tile_grid::{Tile, TileGrid, TilePartEvent};
-use craft::behavior::IconId;
-use craft::theme::variant::Tone;
 use pdfcraft_engine::catalog::{self, ToolGroup};
 
 use crate::{PdfCraftApp, brand, panels::human_size};
@@ -107,8 +107,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let pinned_folders = app.pinned_folders(&Env::of(ui));
 
     let pinned_tools: Vec<&'static ToolGroup> = app.pinned_tools.iter().filter_map(|id| catalog::group(id)).collect();
-    let recommended: Vec<&'static ToolGroup> =
-        RECOMMENDED.iter().filter(|id| !app.is_tool_pinned(id)).filter_map(|id| catalog::group(id)).collect();
+    let recommended: Vec<&'static ToolGroup> = RECOMMENDED.iter().filter(|id| !app.is_tool_pinned(id)).filter_map(|id| catalog::group(id)).collect();
     let community_card = !app.community_card_closed;
     let asked = RefCell::new(Vec::new());
 
@@ -146,8 +145,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         })
         .section(StartPlace::AfterSections, |ui, _| {
             let _ = Text::new(tl!("Privacy").to_string()).show(ui);
-            let _ = Text::new(tl!("PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.").to_string())
-                .show(ui);
+            let _ =
+                Text::new(tl!("PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.").to_string())
+                    .show(ui);
         });
     #[cfg(not(target_arch = "wasm32"))]
     {

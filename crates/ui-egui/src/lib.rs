@@ -87,8 +87,14 @@ pub use workflows::js_dialogs::JsDialog;
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+pub(crate) mod brand;
+pub(crate) mod colour_picker;
+pub(crate) mod credits_data;
+pub mod fonts;
 mod frame_guard;
 mod hooks;
+pub(crate) mod icons;
+pub(crate) mod notices;
 mod persist;
 mod platform;
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,15 +102,9 @@ mod script_dialog;
 mod state;
 mod tools;
 mod workflows;
-pub(crate) mod brand;
-pub(crate) mod colour_picker;
-pub(crate) mod credits_data;
-pub mod fonts;
-pub(crate) mod icons;
-pub(crate) mod notices;
 
-pub use app::settings;
 pub(crate) use app::same_file;
+pub use app::settings;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
 use canvas::crop;
 use canvas::image_pick;
@@ -204,7 +204,7 @@ struct PendingOpen {
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<craft::platform::autosave::RecoveryEntry>,
     then: Option<&'static str>,
-    display_override: Option<craft::pages::PageDisplay>,
+    display_override: Option<(craft::pages::PageDisplay, bool)>,
     /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).
     ready: Option<open_worker::ResultKind>,
@@ -435,7 +435,7 @@ pub struct PdfCraftApp {
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
     #[cfg(not(target_arch = "wasm32"))]
-    launch_layout: Option<craft::pages::PageDisplay>,
+    launch_layout: Option<(craft::pages::PageDisplay, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     launch_display_target: Option<DocId>,
     /// The file picks asked of the host's file service, by ticket, with what each is for.
@@ -678,8 +678,13 @@ pub struct PdfCraftApp {
     pub(crate) document_fonts: Option<files::InstalledFonts>,
     /// The installed fonts being listed off the UI thread.
     pub(crate) font_scan: Queue<(), Vec<pdfcraft_engine::text_fonts::FontFile>>,
-    /// The last web link the app asked the system to open (tests and automation).
-    pub last_opened_url: Option<String>,
+    /// Web links the app asked the system to open, waiting for the pass that hands them to the
+    /// runtime.
+    pub(crate) pending_urls: Vec<String>,
+    /// A file the user opened, or a dialog or document that came up, since the app started: the
+    /// browser's startup `?file=` download then opens in the background instead of in front
+    /// (#171).
+    pub(crate) startup_superseded: bool,
     /// The home screen's community card was closed; it comes back next launch (not remembered).
     pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).

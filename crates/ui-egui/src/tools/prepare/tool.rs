@@ -177,7 +177,8 @@ impl CanvasTool for PrepareTool<'_> {
         // A drag that began on a field part moves the field the part's press selected.
         let on_selected = self
             .view
-            .session.prepare
+            .session
+            .prepare
             .selected
             .clone()
             .filter(|key| widget_rect(self.view, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos)));
@@ -188,7 +189,11 @@ impl CanvasTool for PrepareTool<'_> {
             return ToolAction::Claimed;
         }
         let extend = pointer.mods.shift || pointer.mods.cmd;
-        let base = if extend { self.view.session.prepare.selected.iter().chain(self.view.session.prepare.also.iter()).cloned().collect() } else { Vec::new() };
+        let base = if extend {
+            self.view.session.prepare.selected.iter().chain(self.view.session.prepare.also.iter()).cloned().collect()
+        } else {
+            Vec::new()
+        };
         self.view.session.prepare.gesture = Gesture::Marquee(MarqueeSelect::begin(pointer.pos, pointer.mods, base));
         ToolAction::Claimed
     }

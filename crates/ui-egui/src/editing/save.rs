@@ -133,8 +133,13 @@ impl PdfCraftApp {
             failed(self);
             return false;
         }
-        self.pending_save =
-            Some(PendingSave { key: id, after: Some(Box::new(after)), failed: Some(Box::new(failed)), redactions: (redacted, unredacted), prompt: None });
+        self.pending_save = Some(PendingSave {
+            key: id,
+            after: Some(Box::new(after)),
+            failed: Some(Box::new(failed)),
+            redactions: (redacted, unredacted),
+            prompt: None,
+        });
         self.run_save_step(step)
     }
 

@@ -15,11 +15,11 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageBoxDrag, PageXform};
 
+pub(crate) mod dialog;
 mod draft;
 mod properties;
 mod tabs;
 pub(crate) mod tool;
-pub(crate) mod dialog;
 pub use dialog::FieldPropsDialog;
 
 pub use draft::{ACTION_KINDS, ActionDraft, FieldDraft, FieldTab};

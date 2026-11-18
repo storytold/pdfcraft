@@ -440,7 +440,9 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let views = SplitViews::new(tl!("Pages").to_string(), layout, Bind::bound(&mut at))
         .count(1)
         .active(active)
-        .takes_tabs::<StripTab>(|documents, _| !documents.is_empty() && documents.iter().all(|d| matches!(d, StripTab::View(key) if open.contains(key))))
+        .takes_tabs::<StripTab>(|documents, _| {
+            !documents.is_empty() && documents.iter().all(|d| matches!(d, StripTab::View(key) if open.contains(key)))
+        })
         .show(ui, |ui, body| {
             let rects = shown.placed(layout, count, body.rect, body.env.direction().is_rtl());
             for (pane, rect) in rects.iter().enumerate() {

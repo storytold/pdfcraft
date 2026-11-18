@@ -278,7 +278,9 @@ impl PdfCraftApp {
                     self.notify(match &n {
                         pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
                         pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
-                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => crate::redact_ui::still_holding_note(e).unwrap_or_else(|| n.to_string()),
+                        pdfcraft_engine::EditNotice::RedactionElsewhere(e) => {
+                            crate::redact_ui::still_holding_note(e).unwrap_or_else(|| n.to_string())
+                        }
                         pdfcraft_engine::EditNotice::RedactionIdentification(id) => {
                             crate::redact_ui::identification_note(id).unwrap_or_else(|| n.to_string())
                         }
@@ -462,9 +464,9 @@ impl PdfCraftApp {
     /// text.
     // PLAN: callers still pass a ctx (`commands.rs:880`, `:882`, owner pdf-hub-w3): drop the argument there
     pub(crate) fn page_box_focused(&self) -> bool {
-        self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
-            v.session.line_editor.as_ref().is_some_and(|ed| ed.focus) || v.session.content.draft.as_ref().is_some_and(|d| d.focus)
-        })
+        self.active
+            .and_then(|i| self.views.get(i))
+            .is_some_and(|v| v.session.line_editor.as_ref().is_some_and(|ed| ed.focus) || v.session.content.draft.as_ref().is_some_and(|d| d.focus))
     }
 
     /// Whether the focused box on the page has typing its own Redo would put back: after Undo in
@@ -492,7 +494,8 @@ impl PdfCraftApp {
     /// have yet: Undo and Redo keys take it back in the box first.
     pub(crate) fn page_typing_unapplied(&self) -> bool {
         self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
-            v.session.line_editor.as_ref().is_some_and(|ed| ed.has_unsaved_text()) || v.session.content.draft.as_ref().is_some_and(|d| d.has_unapplied_typing())
+            v.session.line_editor.as_ref().is_some_and(|ed| ed.has_unsaved_text())
+                || v.session.content.draft.as_ref().is_some_and(|d| d.has_unapplied_typing())
         })
     }
 
@@ -1264,7 +1267,7 @@ impl PdfCraftApp {
                 self.apply_edit(Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page, left, top });
                 // Like Acrobat: the new bookmark starts in rename mode.
                 self.bookmark_rename = Some((vec![n], "Untitled".into()));
-                self.right = Some(crate::RightPanel::Bookmarks);
+                self.set_right(Some(crate::RightPanel::Bookmarks));
                 return;
             }
             A::StartRename(path) => {
@@ -1314,7 +1317,7 @@ impl PdfCraftApp {
                 return;
             }
             A::FromStructure => {
-                self.right = Some(crate::RightPanel::Bookmarks);
+                self.set_right(Some(crate::RightPanel::Bookmarks));
                 Edit::BookmarksFromStructure
             }
             // A dialog chooses the styles; it makes the edit.
@@ -1390,7 +1393,6 @@ fn step_typing(
     *aligns = now.aligns;
     stepped
 }
-
 
 #[cfg(test)]
 mod tests;
@@ -1601,7 +1603,8 @@ mod revert_draft_tests {
         };
         assert_eq!(hint(&app), "Type here");
         // As the editor opens on it: its text and value.
-        app.views[0].session.forms.focus = Some(Focus { name: "hint".into(), text: "Type here".into(), picked: vec!["Type here".into()], ..focus("") });
+        app.views[0].session.forms.focus =
+            Some(Focus { name: "hint".into(), text: "Type here".into(), picked: vec!["Type here".into()], ..focus("") });
         assert!(app.commit_form_typing());
         assert_eq!(hint(&app), "", "hint's enter ran before the document is read");
         assert_eq!(app.views[0].session.forms.focus.as_ref().map(|f| f.text.as_str()), Some(""), "and its editor shows it");
@@ -1668,7 +1671,11 @@ mod revert_draft_tests {
             assert!(!reverted.dirty);
             assert_eq!(reverted.edit_generation(), source_generation + 1);
             assert!(reverted.form.iter().find(|field| field.name == "name").unwrap().value.is_empty());
-            assert!(app.views[0].session.forms.focus.is_none() && app.views[0].session.forms.committed.is_none() && app.views[0].session.pending_edit.is_none());
+            assert!(
+                app.views[0].session.forms.focus.is_none()
+                    && app.views[0].session.forms.committed.is_none()
+                    && app.views[0].session.pending_edit.is_none()
+            );
             assert!(!app.has_unsaved_work(0));
             assert_eq!(app.views[1].session.forms.focus.as_ref().unwrap().text, "Other focused draft");
             assert_eq!(app.views[1].session.forms.committed.as_ref().unwrap().text, "Other queued draft");

@@ -14,13 +14,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft::behavior::item_source::keyed;
+use craft::behavior::kurbo::{CubicBez, ParamCurve as _, Point};
 use craft::behavior::selection::Selection;
 use craft::behavior::{EditEvent, IconId, Input, Metrics, ReorderKeys, SelectionChange};
 use craft::theme::variant::Tone as Status;
 use craft::ui::buttons::IconButton;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{
-    Access, Bind, CollectionEvent, Common, Component, Cx, MeasureCx, Outcome as _, PaintUi, Props as _, ReorderRule, Role, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Access, Bind, CollectionEvent, Common, Component, Cx, MeasureCx, Outcome as _, PaintUi, Props as _, ReorderRule, Role, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _,
 };
 use craft::ui::display::{Badge, Shade, Text};
 use craft::ui::layout_components::Stack;
@@ -29,7 +31,6 @@ use craft::ui::notices::{Notice, NoticeAction};
 use craft::ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, StyleColor, StyleCx};
-use craft::behavior::kurbo::{CubicBez, ParamCurve as _, Point};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::form_scripts::{CalcOp, Calculate, format_value};
@@ -674,10 +675,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
         }
         Text::new(String::new()).show(ui);
-        Checkbox::new(Bind::bound(&mut links_on))
-            .label(tl!("Links on page"))
-            .tooltip(tl!("Show on the page which fields each field reads"))
-            .show(ui);
+        Checkbox::new(Bind::bound(&mut links_on)).label(tl!("Links on page")).tooltip(tl!("Show on the page which fields each field reads")).show(ui);
         if editable {
             let (up, down) = if cfg!(target_os = "macos") { ("⌥↑", "⌥↓") } else { ("Alt+↑", "Alt+↓") };
             let hint = crate::i18n::fmt(tl!("Drag a field to move it, or select it and press {up} or {down}."), &[("up", up), ("down", down)]);
