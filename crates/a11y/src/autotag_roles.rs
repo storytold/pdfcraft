@@ -15,7 +15,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_fonts::pdf::Metrics;
 
 /// A line this much larger than body text reads as a heading.
-const HEADING_SIZE_RATIO: f64 = 1.15;
+pub(crate) const HEADING_SIZE_RATIO: f64 = 1.15;
 /// Bold text this much of the body size or more can be a heading by weight.
 const WEIGHT_SIZE_RATIO: f64 = 0.9;
 const MAX_LINES: usize = 3;
@@ -25,9 +25,12 @@ const MAX_CHARS: usize = 200;
 const MAX_SAVED: usize = 64;
 /// Distinct fonts measured per document; text in any further font counts as unstyled.
 const MAX_FONTS: usize = 256;
+/// Characters of an object's text kept for finding running headers and footers; longer text is
+/// body text.
+pub(crate) const MAX_KEPT_CHARS: usize = 256;
 
 /// What one text object shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Evidence {
     /// The size, in user space, carrying the most of the object's characters.
     pub size: f64,
@@ -37,6 +40,11 @@ pub(crate) struct Evidence {
     /// Characters shown, whitespace excluded.
     pub chars: usize,
     pub letters: bool,
+    /// The text shown, at most [`MAX_KEPT_CHARS`] characters, with a space at each line move.
+    pub text: String,
+    /// `[x0, y0, x1, y1]` in user space around each shown string's origin and the point one font
+    /// size above it.
+    pub extent: Option<[f64; 4]>,
 }
 
 /// The structure type for each text object, in document order: `H1`–`H6` or `P`.
@@ -71,6 +79,11 @@ pub(crate) fn roles(objects: &[Evidence]) -> Vec<&'static str> {
 fn half_points(size: f64) -> i64 {
     // Sizes are finite and bounded by `evidence`; `as` saturates in any case.
     (size * 2.0).round() as i64
+}
+
+/// The body text size: the size carrying the most characters.
+pub(crate) fn body_size(objects: &[Evidence]) -> Option<f64> {
+    body_style(objects).map(|(size, _)| size)
 }
 
 /// The size carrying the most characters, and whether most of them are bold.
@@ -136,6 +149,9 @@ struct Shown {
     shown: bool,
     moved: bool,
     letters: bool,
+    text: String,
+    kept: usize,
+    extent: Option<[f64; 4]>,
 }
 
 impl Shown {
@@ -151,18 +167,37 @@ impl Shown {
             (self.shown, self.lines) = (true, 1);
         } else if self.moved {
             self.lines = self.lines.saturating_add(1);
+            self.keep(" ");
         }
         self.moved = false;
-        let [_, _, c, d, _, _] = state.tm.then(&state.ctm).0;
+        let [_, _, c, d, e, f] = state.tm.then(&state.ctm).0;
         let size = (state.size * c.hypot(d)).abs();
         if !size.is_finite() || size <= 0.0 || size > 1e6 {
             return;
         }
+        self.keep(&text);
+        self.reach(e, f);
+        self.reach(e + state.size * c, f + state.size * d);
         let entry = self.by_size.entry(half_points(size)).or_default();
         entry.0 = entry.0.saturating_add(chars);
         if metrics.bold {
             entry.1 = entry.1.saturating_add(chars);
         }
+    }
+
+    fn keep(&mut self, text: &str) {
+        for ch in text.chars().take(MAX_KEPT_CHARS.saturating_sub(self.kept)) {
+            self.text.push(ch);
+            self.kept = self.kept.saturating_add(1);
+        }
+    }
+
+    fn reach(&mut self, x: f64, y: f64) {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        let [x0, y0, x1, y1] = self.extent.unwrap_or([x, y, x, y]);
+        self.extent = Some([x0.min(x), y0.min(y), x1.max(x), y1.max(y)]);
     }
 
     /// A line move counts once text is shown after it, so blank lines and trailing moves do not.
@@ -175,7 +210,15 @@ impl Shown {
         let Some((size, (count, bold))) = self.by_size.into_iter().max_by_key(|&(s, (n, _))| (n, s)) else {
             return Evidence::default();
         };
-        Evidence { size: size as f64 / 2.0, bold: bold.saturating_mul(2) > count, lines: self.lines, chars, letters: self.letters }
+        Evidence {
+            size: size as f64 / 2.0,
+            bold: bold.saturating_mul(2) > count,
+            lines: self.lines,
+            chars,
+            letters: self.letters,
+            text: self.text,
+            extent: self.extent,
+        }
     }
 }
 
@@ -283,7 +326,7 @@ mod tests {
     use super::*;
 
     fn text(size: f64, chars: usize) -> Evidence {
-        Evidence { size, bold: false, lines: 1, chars, letters: true }
+        Evidence { size, bold: false, lines: 1, chars, letters: true, ..Evidence::default() }
     }
 
     fn bold(e: Evidence) -> Evidence {
@@ -363,8 +406,11 @@ mod tests {
         let found = walk(
             b"q 2 0 0 2 0 0 cm BT /F1 1 Tf 9 0 0 9 10 10 Tm (Title) Tj ET Q BT /F1 12 Tf 10 50 Td (one) Tj T* (two) ' 0 -14 Td (three) Tj ET BT ET",
         );
-        assert_eq!(found[0], Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true });
-        assert_eq!(found[1], Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true });
+        assert_eq!(found[0], Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true, ..found[0].clone() });
+        assert_eq!(found[1], Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true, ..found[1].clone() });
+        assert_eq!(found[0].text, "Title");
+        assert_eq!(found[0].extent, Some([20.0, 20.0, 20.0, 38.0]), "origin and one font size above it, through Tm and cm");
+        assert_eq!(found[1].text, "one two three");
         assert_eq!(found[2], Evidence::default());
         assert_eq!(found.len(), 3);
     }

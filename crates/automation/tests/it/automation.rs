@@ -554,6 +554,68 @@ fn autotag_apply_tags_headings_by_size_across_pages() {
     assert_eq!(nesting["status"], "passed", "{check}");
 }
 
+/// #7065: Apply marks a running header and a numbered footer as pagination artifacts and lists
+/// them, and tags a body line that repeats mid-page like any other text.
+#[test]
+fn autotag_apply_marks_running_headers_and_footers_as_artifacts() {
+    let dir = workdir("autotag-running");
+    let page = |n: usize| {
+        format!(
+            "BT /FR 9 Tf 72 760 Td (Annual report) Tj ET BT /FR 11 Tf 72 640 Td (Body text on page {n} that runs long enough to set the body size) Tj ET \
+             BT /FR 11 Tf 72 400 Td (A body line repeated on every page) Tj ET BT /FR 9 Tf 300 30 Td (Page {n}) Tj ET"
+        )
+    };
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 612 792] /Resources << /Font << /FR 9 0 R >> >> >>".into(),
+    ];
+    objs.extend((6..9).map(|c| format!("<< /Type /Page /Parent 2 0 R /Contents {c} 0 R >>")));
+    objs.extend((1..4).map(|n| {
+        let content = page(n);
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+    }));
+    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into());
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("running.pdf"), bytes).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "running.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "P", "P", "P", "P", "P", "P"], "only the body text is tagged: {applied}");
+    assert_eq!(applied["running_count"], 6);
+    let listed: Vec<(u64, &str, &str)> = applied["running_text"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["page"].as_u64().unwrap(), r["subtype"].as_str().unwrap(), r["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(listed[..2], [(1, "Header", "Annual report"), (1, "Footer", "Page 1")]);
+    assert_eq!(listed[5], (3, "Footer", "Page 3"));
+    assert!(applied["note"].as_str().unwrap().contains("6 text objects"), "{applied}");
+    let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content"] }));
+    let content = check["results"].as_array().unwrap().iter().find(|r| r["rule"] == "tagged-content").unwrap();
+    assert_eq!(content["status"], "passed", "{check}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "tagged.pdf" }));
+    let reopened = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("tagged.pdf")).unwrap())).unwrap();
+    let first = pdfcraft_model::pages(&reopened).into_iter().next().unwrap();
+    let pdfcraft_cos::Object::Stream(stream) = &*reopened.resolve(first.dict.get(b"Contents").unwrap()) else { panic!("page content") };
+    let text = String::from_utf8(stream.decoded_strict().unwrap()).unwrap();
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Header>> BDC"), "{text}");
+    assert!(text.contains("/Artifact <</Type /Pagination/Subtype /Footer>> BDC"), "{text}");
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
