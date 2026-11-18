@@ -2923,6 +2923,13 @@ fn optional_content_configurations_are_checked_clause_6_9() {
     assert_eq!(oc(auto, "", Level::A2b), [("6.9", "An optional content configuration has an auto state (AS)".to_owned())]);
     assert_eq!(oc(auto, "", Level::A4), none);
     assert_eq!(oc("<< /Name (View) /AS null >>", "", Level::A2b), none);
+    // Configurations past the 4,096 read are reported as not checked, at every level.
+    let named: String = (0..4096).map(|i| format!("<< /Name (C{i}) >>")).collect();
+    assert_eq!(oc("<< /Name (View) >>", &format!("/Configs [{named}]"), Level::A2b), none);
+    let unread = "Some optional content configurations weren't checked: there are more of them than one verification reads";
+    for (level, clause) in [(Level::A2b, "6.9"), (Level::A4, "6.10")] {
+        assert_eq!(oc("<< /Name (View) >>", &format!("/Configs [{named} << >>]"), level), [(clause, unread.to_owned())]);
+    }
 }
 
 /// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`.
@@ -3001,4 +3008,26 @@ fn pdfa4_embedded_files_share_one_allowance() {
     // Four decode whole, the fifth runs past what is left and spends it, the sixth is refused.
     assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 6);
     assert!(found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
+
+/// An embedded file that decodes to more than [`part4::MAX_EMBEDDED_PDF`] isn't read, and is
+/// reported as not checked, not as a file that isn't PDF/A: its size is no fault of its data.
+#[test]
+fn pdfa4_an_embedded_file_too_large_to_read_is_unchecked() {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&vec![0; part4::MAX_EMBEDDED_PDF + (1 << 20)]).unwrap();
+    let packed = z.finish().unwrap();
+    let more = vec![embedded_stream("/Filter /FlateDecode", &packed), embedded_spec(4)];
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    let found = verify(&doc, Level::A4);
+    assert_eq!(found.iter().filter(|i| i.clause == "6.9" && i.pattern == part4::UNCHECKED).count(), 1, "{found:#?}");
+    assert!(!found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+
+    // Data that isn't a PDF is still one that isn't PDF/A.
+    let more = vec![embedded_stream("", b"not a PDF"), embedded_spec(4)];
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    let found = verify(&doc, Level::A4);
+    assert!(found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+    assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
 }

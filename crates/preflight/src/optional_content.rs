@@ -13,7 +13,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::Level;
 
-/// How many optional content configurations are read.
+/// How many optional content configurations of `/Configs` are read; a longer `/Configs` is reported
+/// as not checked in full.
 const MAX_CONFIGURATIONS: usize = 4096;
 /// How deep an `/Order` array's nested arrays are followed.
 const MAX_ORDER_DEPTH: usize = 32;
@@ -69,6 +70,16 @@ pub(crate) fn check(
         && let Some(list) = list.as_array()
     {
         configurations.extend(list.iter().take(MAX_CONFIGURATIONS).cloned());
+        // What the configurations past the limit hold isn't known, so the file doesn't pass.
+        if list.len() > MAX_CONFIGURATIONS {
+            issue(
+                "6.9",
+                "Some optional content configurations weren't checked: there are more of them than one verification reads",
+                None,
+                None,
+                false,
+            );
+        }
     }
     // Every group of the file is listed in /OCGs (Table 98).
     let groups: HashSet<ObjRef> = properties
