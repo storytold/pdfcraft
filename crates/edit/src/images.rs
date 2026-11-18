@@ -116,11 +116,15 @@ fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditErro
     pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
 }
 
-fn xobjects(doc: &Document, page: &Dict) -> Dict {
+fn resource_dict(doc: &Document, page: &Dict, key: &[u8]) -> Dict {
     page.get(b"Resources")
         .map(|r| doc.resolve(r))
-        .and_then(|r| r.as_dict().and_then(|d| d.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
+        .and_then(|r| r.as_dict().and_then(|d| d.get(key).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
         .unwrap_or_default()
+}
+
+fn xobjects(doc: &Document, page: &Dict) -> Dict {
+    resource_dict(doc, page, b"XObject")
 }
 
 fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
@@ -281,6 +285,74 @@ impl ImageState {
         }
         Ok(())
     }
+}
+
+/// Non-scan content present on a page so scan-only pipelines can leave vector art, inline
+/// images, optional-content layers and tagged structure intact.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PageScanContent {
+    /// The content stream paints vector paths (`S`/`f`/`B`), shadings (`sh`) or inline images (`BI`).
+    pub has_vector_or_inline: bool,
+    /// The page uses optional content (`/OC` marked content, OCG/OCMD properties or XObject `/OC`).
+    pub has_optional_content: bool,
+    /// The page carries structure markers (`/StructParents` or marked-content `/MCID` sequences).
+    pub has_tagged_content: bool,
+}
+
+fn op_has_mcid(doc: &Document, op: &Op, props: &Dict) -> bool {
+    match op.operands.get(1) {
+        Some(Object::Dict(d)) => d.contains(b"MCID"),
+        Some(Object::Name(n)) => props.get(n).is_some_and(|x| doc.resolve(x).as_dict().is_some_and(|d| d.contains(b"MCID"))),
+        _ => false,
+    }
+}
+
+/// Inspect page `page` (0-based) for vector painting operators, inline images, optional content
+/// and structure-tree markers (`/StructParents` or `/MCID`).
+pub fn page_scan_content(doc: &Document, page: usize) -> Result<PageScanContent, EditError> {
+    let p = page_of(doc, page)?;
+    let xo = resource_dict(doc, &p.dict, b"XObject");
+    let props = resource_dict(doc, &p.dict, b"Properties");
+    let mut out = PageScanContent { has_tagged_content: p.dict.contains(b"StructParents"), ..Default::default() };
+    for (_, val) in props.iter() {
+        let resolved = doc.resolve(val);
+        let Some(dict) = resolved.as_dict() else { continue };
+        if let Some(kind) = dict.name(b"Type")
+            && (kind == b"OCG" || kind == b"OCMD")
+        {
+            out.has_optional_content = true;
+        }
+        if dict.contains(b"MCID") {
+            out.has_tagged_content = true;
+        }
+    }
+    let pieces = joined(&content_streams(doc, &p.dict)?);
+    for op in &pieces.parse().ops {
+        match op.op.as_slice() {
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"sh" | b"BI" => {
+                out.has_vector_or_inline = true;
+            }
+            b"BDC" | b"DP" => {
+                if op.name(0) == Some(b"OC") {
+                    out.has_optional_content = true;
+                }
+                if op_has_mcid(doc, op, &props) {
+                    out.has_tagged_content = true;
+                }
+            }
+            b"Do" => {
+                if let Some(name) = op.name(0)
+                    && let Some(resource) = xo.get(name)
+                    && let Object::Stream(s) = &*doc.resolve(resource)
+                    && s.dict.contains(b"OC")
+                {
+                    out.has_optional_content = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// The images and Form artwork page `page` (0-based) draws, in drawing order.
