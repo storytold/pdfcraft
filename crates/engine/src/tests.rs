@@ -3219,6 +3219,29 @@ fn import_data_follows_the_permission_to_fill_in_fields() {
     assert_eq!(import(&mut s, id, values), Err(EditError::NotPermitted("importing form data or comments")));
     assert!(name(&s, id).is_empty());
     assert!(!enabled(&s, id, "form.import_data") && !enabled(&s, id, "comment.import"));
+
+    // Filling in fields only, on a file with no field to fill: no import can go ahead.
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(
+        pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>")
+            .build(),
+    ))
+    .unwrap();
+    let protection = Protection { permissions_password: Some("boss".into()), changes: Changes::FillSign, ..Protection::default() };
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "boss",
+        permissions: protection.permission_bits(),
+        encrypt_metadata: true,
+        seed: [3; 32],
+    })
+    .unwrap();
+    let id = s.open("blank.pdf", None, Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()), None).unwrap();
+    assert!(s.get(id).unwrap().allows_form_filling() && s.get(id).unwrap().form.is_empty());
+    assert!(!enabled(&s, id, "form.import_data") && !enabled(&s, id, "comment.import"));
 }
 
 /// Importing data into a laid-out XFA form lays it out again, which replaces its pages'
