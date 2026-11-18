@@ -83,4 +83,12 @@ impl Document {
             .collect();
         Ok(Preview { candidates, unclassified_images: self.page_images(page).len(), unclassified_text_blocks, existing_structure })
     }
+
+    /// The blocks of aligned text rows that applying auto-tag would tag as tables, and those it
+    /// would leave as paragraphs for review. Reads the working PDF and does not alter it; refuses
+    /// what auto-tag refuses.
+    pub fn autotag_tables(&self) -> Result<Vec<crate::a11y::TableCandidate>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        crate::a11y::table_candidates(&editor.cos).map_err(|e| e.to_string())
+    }
 }

@@ -607,6 +607,48 @@ fn bold_and_regular_pdf(page1: &str, page2: &str) -> Vec<u8> {
     bytes
 }
 
+/// #7066: Apply tags rows of text lining up in columns as a table with a bold header row, lists
+/// it, and leaves a ragged label and value list as paragraphs, listed for review.
+#[test]
+fn autotag_apply_tags_borderless_tables_and_lists_ragged_blocks_for_review() {
+    let dir = workdir("autotag-tables");
+    let row = |font: &str, y: u32, cells: [&str; 3]| -> String {
+        [72, 200, 330].iter().zip(cells).map(|(x, t)| format!("BT /{font} 10 Tf {x} {y} Td ({t}) Tj ET ")).collect()
+    };
+    let page1 = [
+        row("FB", 700, ["Fruit", "Count", "Colour"]),
+        row("FR", 686, ["Apples", "12", "Red"]),
+        row("FR", 672, ["Pears", "7", "Green"]),
+        row("FR", 658, ["Plums", "30", "Purple"]),
+    ]
+    .concat();
+    let page2 = "BT /FR 10 Tf 72 700 Td (Name:) Tj ET BT /FR 10 Tf 112 700 Td (Ada Lovelace) Tj ET \
+                 BT /FR 10 Tf 72 686 Td (Address:) Tj ET BT /FR 10 Tf 126 686 Td (12 Hill Street) Tj ET \
+                 BT /FR 10 Tf 72 672 Td (Telephone number:) Tj ET BT /FR 10 Tf 172 672 Td (555 0100) Tj ET";
+    std::fs::write(dir.join("tables.pdf"), bold_and_regular_pdf(&page1, page2)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tables.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    let mut expected = vec!["Document", "Table"];
+    for kind in ["TH", "TD", "TD", "TD"] {
+        expected.extend(["TR", kind, kind, kind]);
+    }
+    expected.extend(["P"; 6]);
+    assert_eq!(types, expected, "{applied}");
+    let table = &applied["tables"][0];
+    assert_eq!((table["page"].as_u64(), table["rows"].as_u64(), table["columns"].as_u64()), (Some(1), Some(4), Some(3)));
+    assert_eq!(table["header_row"], true);
+    let review = applied["tables_to_review"].as_array().unwrap();
+    assert_eq!(review.len(), 1, "{applied}");
+    assert_eq!((review[0]["page"].as_u64(), review[0]["reason"].as_str()), (Some(2), Some("its columns do not line up from row to row")));
+    let check = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content", "table-headers", "table-regularity"] }));
+    for rule in ["tagged-content", "table-headers", "table-regularity"] {
+        let result = check["results"].as_array().unwrap().iter().find(|r| r["rule"] == rule).unwrap();
+        assert_eq!(result["status"], "passed", "{rule}: {check}");
+    }
+}
+
 /// #1693: text_styles lists the styles, largest first; bookmark_from_text_styles makes the
 /// bookmarks from the ones given per level, returns the tree, undoes in one step and says why
 /// when it can't.
