@@ -626,6 +626,21 @@ fn output_intents_share_one_local_output_or_monitor_profile() {
         class.copy_from_slice(b"scnr");
     }
     reports(&with(format!("/OutputIntents [{}]", intent(6)), vec![stream("/N 3", &input)]), Level::A4, "6.2.3", "isn't an output or monitor profile");
+    // A profile cut short is no profile (ICC.1 7.2.2, 7.3): shorter than its header, shorter than
+    // the size its header gives, or with a tag whose data runs past that size.
+    let srgb = icc::srgb();
+    let mut stretched = srgb.clone();
+    if let Some(size) = stretched.get_mut(140..144) {
+        size.copy_from_slice(&u32::try_from(srgb.len()).unwrap().to_be_bytes());
+    }
+    for cut in [srgb.get(..100).unwrap().to_vec(), srgb.get(..srgb.len() - 1).unwrap().to_vec(), stretched] {
+        reports(
+            &with(format!("/OutputIntents [{}]", intent(6)), vec![stream("/N 3", &cut)]),
+            Level::A4,
+            "6.2.3",
+            "isn't an output or monitor profile",
+        );
+    }
     // A profile stream that can't be decoded is no such profile, even where nothing is drawn; one
     // that is no stream at all is taken as missing.
     let broken = stream("/N 3 /Filter /NoSuchDecode", b"xxxx");
@@ -912,6 +927,12 @@ fn the_metadata_stream_is_a_well_formed_utf8_packet() {
     }
     let named = text.replacen("W5M0MpCehiHzreSzNTczkc9d\"", "W5M0MpCehiHzreSzNTczkc9d\" xbytes=\"1\"", 1).into_bytes();
     passes(&File { packet: named, ..File::default() }, Level::A4);
+    // The header is the processing instruction, not a comment's text that looks like one (XML 1.0
+    // 2.5): a comment before the header neither adds the attribute nor hides it.
+    let commented = |comment: &str, tail: &str| format!("<!-- {comment} -->{}", text.replacen("?>", tail, 1)).into_bytes();
+    passes(&File { packet: commented("<?xpacket begin=\"\" bytes=\"10\"?>", "?>"), ..File::default() }, Level::A4);
+    let hidden = commented("<?xpacket begin=\"\"?>", " bytes=\"10\"?>");
+    reports(&File { packet: hidden, ..File::default() }, Level::A4, "6.7.2.1", "bytes or encoding attribute");
     reports(&File { packet: [good.as_slice(), b"<!-- \xFF -->"].concat(), ..File::default() }, Level::A4, "6.7.2.1", "isn't UTF-8");
     let mut objects = vec![
         o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
@@ -933,6 +954,8 @@ fn nothing_follows_the_last_end_of_file_marker() {
     reports(&File { after: b"garbage!", ..File::default() }, Level::A4, "6.1.3", "follows the last end-of-file marker");
     // One end-of-line after the marker is its own; a second is data, as veraPDF counts it.
     reports(&File { after: b"\n", ..File::default() }, Level::A4, "6.1.3", "follows the last end-of-file marker");
+    // The marker is a line of its own: `%%EOF` at the end of appended data doesn't end the file.
+    reports(&File { after: b"junk%%EOF\n", ..File::default() }, Level::A4, "6.1.3", "follows the last end-of-file marker");
     passes(&File::default(), Level::A4);
 }
 
@@ -968,6 +991,12 @@ fn streams_use_the_standard_filters_and_only_the_identity_crypt_filter() {
     let mut by_reference = image("/Filter [/Crypt] /DecodeParms [<< /Name 7 0 R >>]");
     by_reference.more.push(o("/StdCF"));
     reports(&by_reference, Level::A4, "6.1.6.2", "other than Identity");
+    // No external file, nor its filters or their parameters on their own (ISO 32000-2 Table 5); a
+    // null value is no entry (7.3.9).
+    for entry in ["/F (data.bin)", "/FFilter /FlateDecode", "/FDecodeParms << >>"] {
+        reports(&image(entry), Level::A4, "6.1.6.1", "refers to an external file");
+    }
+    passes(&image("/F null /FFilter null /FDecodeParms null"), Level::A4);
 }
 
 #[test]
