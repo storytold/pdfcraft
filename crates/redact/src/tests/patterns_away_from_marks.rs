@@ -21,10 +21,6 @@ const TEXT: [f64; 4] = [5.0, 95.0, 45.0, 110.0];
 /// A box filled with the pattern at (200, 200), 50 pt square.
 const FILLED: &str = "q /Pattern cs /P1 scn 200 200 50 50 re f Q";
 
-fn refused(doc: &mut Document) -> bool {
-    matches!(apply(doc, None), Err(RedactError::Pattern { page: 1, reason: PatternProblem::Content }))
-}
-
 /// The pattern's cell and its image are in the saved file, unchanged.
 fn pattern_kept(doc: &Document) -> bool {
     let saved = reopen(doc);
@@ -77,6 +73,7 @@ fn a_pattern_that_may_paint_under_a_mark_is_still_refused() {
     let type3 = "/Font << /T3 9 0 R >>";
     let glyph = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 10 0 R >> \
                  /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << >> >>";
+    let t3 = "BT /T3 10 Tf 10 100 Td (a) Tj ET";
     let cases: Vec<(&str, String, String, Vec<Vec<u8>>)> = vec![
         // The marked text is painted with the pattern.
         ("text in the pattern", "/Pattern cs /P1 scn BT /F1 10 Tf 10 100 Td (SECRET) Tj ET".into(), String::new(), vec![]),
@@ -132,12 +129,39 @@ fn a_pattern_that_may_paint_under_a_mark_is_still_refused() {
             "/ExtGState << /Gs << /SMask << /S /Luminosity /G 9 0 R >> >> >>".into(),
             vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"")],
         ),
-        // A Type 3 glyph is a content stream this pass does not enter.
+        // A Type 3 glyph is a content stream this pass does not enter: one that may select a
+        // pattern, set a soft mask, draw a form or show text, or that can't be read, counts.
         (
-            "Type 3 text",
-            "BT /T3 10 Tf 10 100 Td (a) Tj ET".into(),
+            "a Type 3 glyph selecting a pattern",
+            t3.into(),
             type3.into(),
-            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 0 0 1000 1000 re f")],
+            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Pattern cs /P1 scn 0 0 1000 1000 re f")],
+        ),
+        (
+            "a Type 3 glyph setting a graphics state",
+            t3.into(),
+            type3.into(),
+            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Gs gs 0 0 1000 1000 re f")],
+        ),
+        ("a Type 3 glyph drawing a form", t3.into(), type3.into(), vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Fm Do")]),
+        ("a Type 3 glyph showing text", t3.into(), type3.into(), vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 BT /F1 1 Tf (a) Tj ET")]),
+        (
+            "a Type 3 glyph with an unknown operator",
+            t3.into(),
+            type3.into(),
+            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 0 0 1000 1000 re f zz")],
+        ),
+        (
+            "a Type 3 glyph that doesn't decode",
+            t3.into(),
+            type3.into(),
+            vec![glyph.as_bytes().to_vec(), stream("/Filter /FlateDecode", b"not Flate")],
+        ),
+        (
+            "a Type 3 glyph with parameters by reference",
+            t3.into(),
+            type3.into(),
+            vec![glyph.as_bytes().to_vec(), stream("/DecodeParms 11 0 R", b"1000 0 d0 0 0 1000 1000 re f"), b"<< >>".to_vec()],
         ),
         // A form under the mark that can't be read is removed with whatever it painted.
         (
@@ -168,6 +192,28 @@ fn a_pattern_that_may_paint_under_a_mark_is_still_refused() {
         objects.extend(extra);
         let mut doc = one_page(page.as_bytes(), &format!("{PATTERN} {resources}"), objects);
         mark(&mut doc, 0, &[TEXT], "");
-        assert!(refused(&mut doc), "{label}");
+        let result = apply(&mut doc, None);
+        assert!(matches!(result, Err(RedactError::Pattern { page: 1, reason: PatternProblem::Content })), "{label}: {result:?}");
     }
+}
+
+/// A browser prints every web font as a Type 3 font without `/Resources`, each glyph a path. Such
+/// a glyph paints with the colour in force and can select nothing, so text in it, marked or not,
+/// leaves a pattern that fills a shape elsewhere alone.
+#[test]
+fn text_in_a_type3_font_of_plain_outlines_leaves_patterns_alone() {
+    let font = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 10 0 R /b 11 0 R >> \
+                /Encoding << /Differences [97 /a /b] >> /FirstChar 97 /LastChar 98 /Widths [1000 1000] >>";
+    let mut objects = image_pattern();
+    objects.extend([
+        font.as_bytes().to_vec(),
+        stream("", b"1000 0 0 0 1000 1000 d1 0 0 m 1000 0 l 500 1000 l h f"),
+        stream("/Filter /FlateDecode", &Stream::flate(Dict::new(), b"1000 0 d0 q 0.5 g 0 0 1000 1000 re f Q").raw),
+    ]);
+    let page = format!("{FILLED} 0 g BT /T3 10 Tf 10 100 Td (ab) Tj 0 150 Td (ba) Tj ET");
+    let mut doc = one_page(page.as_bytes(), &format!("{PATTERN} /Font << /F1 5 0 R /T3 9 0 R >>"), objects);
+    mark(&mut doc, 0, &[[5.0, 95.0, 35.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 2);
+    assert!(content(&doc, 0).contains("200 200 50 50 re"));
+    assert!(pattern_kept(&doc));
 }
