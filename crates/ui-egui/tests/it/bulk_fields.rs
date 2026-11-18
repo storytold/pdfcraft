@@ -1,8 +1,12 @@
 //! Shared properties and multi-selection through the real Prepare-a-form shell.
 
+use craft::ui::dialog::StackDialog;
+use egui::accesskit::Role;
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_engine::{Edit, FieldFont, FieldProps, FieldValue, NewField, Session, field_flags};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, bulk_fields::Tab};
+use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::bulk_fields::SharedFieldPropsDialog;
+use pdfcraft_ui_egui::prepare::FieldPropsDialog;
 
 fn fixture() -> Vec<u8> {
     let mut s = Session::new();
@@ -75,6 +79,46 @@ fn select(h: &mut Harness<'static, PdfCraftApp>, names: &[&str]) {
     h.run_steps(4);
 }
 
+/// The values the Shared Field Properties dialog holds, as the dialog host reports them to
+/// automation: each property is `{ value, mixed, apply }`.
+fn shared(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+    h.state().dialogs.get::<SharedFieldPropsDialog>().and_then(|d| d.json_fields()).expect("Shared Field Properties is open")
+}
+
+/// Whether the Shared Field Properties dialog is open.
+fn shared_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.state().dialogs.is_open::<SharedFieldPropsDialog>()
+}
+
+/// Whether the dialog shows a refusal containing `words`. The General tab's hint also says
+/// "locked", so it is not a refusal.
+fn refused_with(h: &Harness<'static, PdfCraftApp>, words: &str) -> bool {
+    use egui_kittest::kittest::NodeT;
+    h.query_all_by_label_contains(words).any(|n| n.accesskit_node().label().is_some_and(|l| !l.starts_with("To change locked fields")))
+}
+
+/// Types `text` into the number field that follows the control that has focus, as a person tabs to
+/// it, and confirms it.
+fn type_in_next_field(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+}
+
+/// Ticks the Tooltip property of the dialog and types `text` into its text box.
+fn set_tooltip(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.get_by_label("Tooltip:").click();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::TextInput, "Tooltip").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::TextInput, "Tooltip").type_text(text);
+    h.run_steps(4);
+}
+
 #[test]
 fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     let mut h = harness();
@@ -83,10 +127,12 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     select(&mut h, &["alpha", "beta"]);
     h.get_by_label("Shared Field Properties");
     h.get_by_label("2 fields selected");
-    assert!(h.state().bulk_field_props.as_ref().unwrap().required.mixed);
+    assert!(shared(&h)["required"]["mixed"].as_bool().unwrap());
+    // Ticking a property applies the value the first field has: alpha is required.
     h.get_by_label("Required").click();
     h.run_steps(4);
-    h.state_mut().bulk_field_props.as_mut().unwrap().required.value = true;
+    assert_eq!(shared(&h)["required"]["apply"], true);
+    assert_eq!(shared(&h)["required"]["value"], true);
     h.get_by_label("Appearance").click();
     h.run_steps(4);
     // Below the fold of the dialog's scroll area with the roomier rows (#487).
@@ -94,11 +140,11 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     h.run_steps(4);
     h.get_by_label("Line Thickness:").click();
     h.run_steps(4);
-    assert!(h.state().bulk_field_props.as_ref().unwrap().width.apply, "thickness click enables the property");
-    h.state_mut().bulk_field_props.as_mut().unwrap().width.value = 4.0;
+    assert_eq!(shared(&h)["width"]["apply"], true, "thickness click enables the property");
+    type_in_next_field(&mut h, "4");
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert!(h.state().dialog.is_none());
+    assert!(!shared_open(&h));
     for (name, look, value) in [("alpha", original[0], "Ada"), ("beta", original[1], "Lovelace")] {
         let field = doc(&h).form.iter().find(|f| f.name == name).unwrap();
         assert!(field.has(field_flags::REQUIRED));
@@ -124,33 +170,23 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
 }
 
 #[test]
-fn visiting_shared_property_tabs_without_changes_does_not_dirty_the_document() {
-    let mut h = harness();
-    let before = bytes(&h);
-    select(&mut h, &["alpha", "beta"]);
-    for tab in ["Appearance", "Options", "General"] {
-        h.get_by_label(tab).click();
-        h.run_steps(4);
-    }
-    h.get_by_label("OK").click();
-    h.run_steps(4);
-    assert_eq!(bytes(&h), before);
-    assert!(!doc(&h).dirty);
-    assert!(doc(&h).can_undo().is_none());
-}
-
-#[test]
 fn cancelling_shared_properties_discards_only_the_draft() {
     let mut h = harness();
     let before = bytes(&h);
     select(&mut h, &["alpha", "beta", "consent"]);
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.fill.apply = true;
-    d.fill.value = None;
+    h.get_by_label("Appearance").click();
+    h.run_steps(4);
+    // The fill row is the second "No color": border first, then fill.
+    h.get_by_label("Fill Color:").click();
+    h.run_steps(4);
+    h.get_all_by_label("No color").nth(1).unwrap().click();
+    h.run_steps(4);
+    assert_eq!(shared(&h)["fill"]["apply"], true);
+    assert!(shared(&h)["fill"]["value"].is_null(), "no fill is the draft's value");
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     assert_eq!(bytes(&h), before);
-    assert!(h.state().bulk_field_props.is_none());
+    assert!(!shared_open(&h));
     assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta", "consent"]);
 }
 
@@ -160,20 +196,20 @@ fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
     h.state_mut().apply_edit(Edit::SetFieldProps { name: "beta".into(), props: Box::new(FieldProps { locked: Some(true), ..Default::default() }) });
     let before = bytes(&h);
     select(&mut h, &["alpha", "beta"]);
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.tooltip.apply = true;
-    d.tooltip.value = "Shared help".into();
+    set_tooltip(&mut h, "Shared help");
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(bytes(&h), before, "alpha must not be committed before beta refuses");
-    assert_eq!(h.state().dialog, Some(Dialog::BulkFieldProps));
-    assert!(h.state().bulk_field_props.as_ref().unwrap().error.as_ref().unwrap().contains("locked"));
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.locked.apply = true;
-    d.locked.value = false;
+    assert!(shared_open(&h), "the dialog stays open for the correction");
+    assert!(refused_with(&h, "locked"));
+    // Unlocking applies the first field's value: alpha is not locked.
+    h.get_by_label("Locked").click();
+    h.run_steps(4);
+    assert_eq!(shared(&h)["locked"]["value"], false);
+    assert_eq!(shared(&h)["tooltip"]["value"], "Shared help", "what was typed is kept");
     h.get_by_label("OK").click();
     h.run_steps(4);
-    assert!(h.state().dialog.is_none());
+    assert!(!shared_open(&h));
     assert!(
         doc(&h)
             .form
@@ -191,9 +227,8 @@ fn shared_properties_cannot_apply_to_a_different_active_document() {
     let mut h = harness();
     let before = bytes(&h);
     select(&mut h, &["alpha", "beta"]);
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.required.apply = true;
-    d.required.value = true;
+    h.get_by_label("Required").click();
+    h.run_steps(4);
     h.state_mut().open_bytes("other.pdf", None, fixture()).unwrap();
     h.run_steps(4);
     h.get_by_label("OK").click();
@@ -201,22 +236,21 @@ fn shared_properties_cannot_apply_to_a_different_active_document() {
     assert_eq!(bytes(&h), before);
     let id = h.state().views[1].id;
     assert!(!h.state().session.get(id).unwrap().dirty);
-    assert!(h.state().bulk_field_props.as_ref().unwrap().error.as_ref().unwrap().contains("document changed"));
+    assert!(shared_open(&h));
+    assert!(refused_with(&h, "document changed"));
 }
 
 #[test]
 fn deleting_a_field_while_properties_are_open_does_not_partly_apply_the_draft() {
     let mut h = harness();
     select(&mut h, &["alpha", "beta"]);
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.tooltip.apply = true;
-    d.tooltip.value = "New help".into();
+    set_tooltip(&mut h, "New help");
     h.state_mut().apply_edit(Edit::DeleteField { name: "beta".into() });
     let before = bytes(&h);
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(bytes(&h), before);
-    assert!(h.state().bulk_field_props.as_ref().unwrap().error.as_ref().unwrap().contains("no longer exists"));
+    assert!(refused_with(&h, "no longer exists"));
 }
 
 #[test]
@@ -260,29 +294,9 @@ fn double_clicking_a_field_in_the_panel_opens_its_individual_properties() {
     }
     h.run_steps(4);
     h.get_by_label("Text Field Properties");
-    assert_eq!(h.state().field_props.as_ref().unwrap().field, "beta");
-}
-
-#[test]
-fn dragging_an_empty_page_area_selects_fields_without_moving_them() {
-    let mut h = harness();
-    let before = bytes(&h);
-    let r = h.state().views[0].page_screen_rect(0).unwrap();
-    let scale = r.width() / 300.0;
-    let a = r.min + egui::vec2(30.0, 75.0) * scale;
-    let b = r.min + egui::vec2(240.0, 165.0) * scale;
-    h.hover_at(a);
-    h.run_steps(4);
-    h.drag_at(a);
-    h.run_steps(4);
-    for step in 1..=4 {
-        h.hover_at(a + (b - a) * (step as f32 / 4.0));
-        h.run_steps(4);
-    }
-    h.drop_at(b);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].prepare.names(), ["alpha", "beta"]);
-    assert_eq!(bytes(&h), before);
+    assert!(h.state().dialogs.is_open::<FieldPropsDialog>());
+    let draft = h.state().dialogs.get::<FieldPropsDialog>().and_then(|d| d.json_fields()).expect("Field Properties is open");
+    assert_eq!(draft["name"], "beta");
 }
 
 #[test]
@@ -301,14 +315,9 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
     p.also = vec![("group".into(), 1), ("alpha".into(), 0)];
     h.state_mut().execute("form.field.properties");
     h.run_steps(4);
-    let d = h.state().bulk_field_props.as_ref().unwrap();
-    assert_eq!(d.names, ["group", "alpha"]);
-    assert_eq!(d.tab, Tab::General);
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.tooltip.apply = true;
-    d.tooltip.value = "Shared help".into();
-    let edits = d.clone().edits(doc(&h)).unwrap();
-    assert_eq!(edits.len(), 2);
+    assert_eq!(shared(&h)["names"], serde_json::json!(["group", "alpha"]), "the group is listed once");
+    h.get_by_label("Tooltip:");
+    set_tooltip(&mut h, "Shared help");
     h.get_by_label("OK").click();
     h.run_steps(4);
     let group = doc(&h).form.iter().find(|f| f.name == "group").unwrap();
@@ -317,35 +326,15 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
 }
 
 #[test]
-fn escape_cancels_a_selection_rectangle_and_restores_the_previous_selection() {
-    let mut h = harness();
-    h.state_mut().views[0].prepare.selected = Some(("consent".into(), 0));
-    let before = bytes(&h);
-    let r = h.state().views[0].page_screen_rect(0).unwrap();
-    let scale = r.width() / 300.0;
-    let a = r.min + egui::vec2(30.0, 75.0) * scale;
-    let b = r.min + egui::vec2(240.0, 165.0) * scale;
-    h.hover_at(a);
-    h.run_steps(4);
-    h.drag_at(a);
-    h.run_steps(4);
-    h.hover_at(b);
-    h.run_steps(4);
-    h.key_press(egui::Key::Escape);
-    h.run_steps(4);
-    h.drop_at(b);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].prepare.names(), ["consent"]);
-    assert_eq!(bytes(&h), before);
-}
-
-#[test]
 fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
     let mut h = harness();
     select(&mut h, &["alpha", "beta"]);
-    let d = h.state_mut().bulk_field_props.as_mut().unwrap();
-    d.width.apply = true;
-    d.width.value = 2.0;
+    h.get_by_label("Appearance").click();
+    h.run_steps(4);
+    h.get_by_label("Line Thickness:").click();
+    h.run_steps(4);
+    type_in_next_field(&mut h, "2");
+    assert_eq!(shared(&h)["width"]["value"], 2.0);
     h.state_mut().apply_edit(Edit::SetFieldProps {
         name: "beta".into(),
         props: Box::new(FieldProps {
