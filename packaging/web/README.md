@@ -182,20 +182,16 @@ Opening a PDF, handing a saved or exported file to the page, the file name and t
 
 ## URL query flags
 
-URL query flags configure startup behavior and renderer selection. They work on the iframe `src` too.
-PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
-**WebGL2** on its own; `?webgl` and `?cpu` override this.
+URL query flags configure startup behavior. They work on the iframe `src` too.
 
 | Flag | Effect |
 |---|---|
-| *(none)* | WebGPU if available, otherwise WebGL2 |
-| `?webgl` | Force the WebGL2 backend (useful when a WebGPU driver misbehaves) |
-| `?cpu` | Force the CPU canvas path (slowest, most compatible) |
 | `?embedded` | Hide external community links (welcome screen card and header bar Discord button) |
 
 For example: `<iframe src="https://example.com/pdfcraft/?embedded" ...>`.
 
-A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+PdfCraft renders with **WebGL2** (eframe's Glow renderer). No flag changes the renderer. A browser
+without WebGL2 gets a message in place of the app.
 
 The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
 times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
