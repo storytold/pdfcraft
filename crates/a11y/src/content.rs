@@ -23,6 +23,9 @@ pub(crate) struct Scan {
     pub fonts: BTreeMap<usize, BTreeSet<ObjRef>>,
     /// Pages read only in part: content or forms past the page's decode budget are missing.
     pub incomplete: BTreeSet<usize>,
+    /// Some marked content was counted neither as tagged nor as untagged: the parent tree can't
+    /// tell whether an element owns it ([`ParentTree::owns`]).
+    pub undecided: bool,
     /// The structure parent tree: which element owns each tagged item.
     pub tree: ParentTree,
 }
@@ -68,10 +71,11 @@ fn struct_parents(doc: &Document, d: &Dict) -> Option<i64> {
 impl Walk<'_> {
     /// Whether a BDC opens an artifact, or tagged content: marked content whose MCID belongs to a
     /// structure element through the parent tree entry `self.key` names (ISO 32000-2 §14.7.5.4).
-    /// An MCID that no element owns is not tagged: no tag in the tree answers it. One whose entry
-    /// may be in the part of a truncated parent tree not read is not counted either way: the rule
-    /// is then left to a manual check.
-    fn bdc_marks(&self, op: &pdfcraft_content::Op, props: &Dict) -> bool {
+    /// An MCID that no element owns is not tagged: no tag in the tree answers it. One the parent
+    /// tree can't decide for (its entry may be in the part of a truncated tree not read, or its
+    /// element's parents run past the ancestor limit) is not counted either way, and noted in
+    /// [`Scan::undecided`]: the rule is then left to a manual check.
+    fn bdc_marks(&mut self, op: &pdfcraft_content::Op, props: &Dict) -> bool {
         if op.name(0) == Some(b"Artifact") {
             return true;
         }
@@ -82,7 +86,10 @@ impl Walk<'_> {
             _ => None,
         };
         match (mcid, self.key) {
-            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, key, mcid) || self.scan.tree.unread(key),
+            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, key, mcid).unwrap_or_else(|| {
+                self.scan.undecided = true;
+                true
+            }),
             _ => false,
         }
     }
@@ -292,25 +299,42 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
 /// Whether annotation `a`, of subtype `st`, is tagged: its /StructParent names, in the parent tree,
 /// the structure element that holds it, and that element is of the type that holds annotations of
 /// its kind (ISO 32000-2 §14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link,
-/// Annot for any other. An entry that may be in the part of a truncated parent tree not read is
-/// not counted against it: the rule is then left to a manual check.
-fn annotation_tagged(doc: &Document, tree: &ParentTree, role_map: &Dict, a: &Dict, st: &[u8]) -> bool {
-    let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return false };
-    if tree.unread(key) {
-        return true;
-    }
-    let Some(element) = tree.element(doc, key) else { return false };
-    let Some(ty) = element.as_dict().and_then(|e| e.name(b"S")).map(|s| crate::alt::standard(doc, role_map, s)) else { return false };
+/// Annot for any other. `None` when the parent tree can't tell ([`ParentTree::element`]): the
+/// annotation is then not counted against the rule, which is left to a manual check.
+fn annotation_tagged(doc: &Document, tree: &ParentTree, role_map: &Dict, a: &Dict, st: &[u8]) -> Option<bool> {
+    let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return Some(false) };
+    let Some(element) = tree.element(doc, key)? else { return Some(false) };
     let want: &[u8] = match st {
         b"Widget" => b"Form",
         b"Link" => b"Link",
         _ => b"Annot",
     };
-    ty == want
+    Some(element.as_dict().and_then(|e| e.name(b"S")).is_some_and(|s| role_maps_to(doc, role_map, s, want)))
 }
 
-pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> Vec<Finding> {
+/// Whether structure type `s` is, or maps through `role_map` to, the standard type `want`. Every
+/// mapping is followed until a standard type, a type the map doesn't hold, or one already passed
+/// (a cycle, ISO 32000-2 §14.7.3): a long chain that ends in `want` still does.
+fn role_maps_to(doc: &Document, role_map: &Dict, s: &[u8], want: &[u8]) -> bool {
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut t = s.to_vec();
+    loop {
+        if crate::structure::is_standard(&t) {
+            return t == want;
+        }
+        let Some(next) = role_map.get(&t).map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)) else { return false };
+        if !seen.insert(t) {
+            return false;
+        }
+        t = next;
+    }
+}
+
+/// The findings of page rule `rule` on the pages in `list`, and whether an item it applies to was
+/// counted neither way because the parent tree can't tell whether it is tagged.
+pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usize], scan: &Scan, tagged: bool) -> (Vec<Finding>, bool) {
     let mut out = Vec::new();
+    let mut undecided = false;
     // The annotation objects are shared, never deep-copied: a reference repeated across a page's
     // Annots array (or its pages) must not copy the dictionary each time.
     let annots = |p: &Page| -> Vec<(ObjRef, std::sync::Arc<Object>)> {
@@ -323,7 +347,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
     match rule {
         Rule::TaggedContent => {
             if !tagged && !scan.untagged.is_empty() {
-                return doc_finding("The document isn't tagged, so none of its content is");
+                return (doc_finding("The document isn't tagged, so none of its content is"), false);
             }
             for (p, n) in &scan.untagged {
                 // One item and several items are separate wordings, so a language can agree the
@@ -347,7 +371,13 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                         Rule::TaggedMultimedia => MULTIMEDIA.contains(&st),
                         _ => st != b"Widget" && !MULTIMEDIA.contains(&st) && st != b"PrinterMark",
                     };
-                    if applies && !(tagged && annotation_tagged(doc, &scan.tree, &role_map, a, st)) {
+                    let held = applies
+                        && tagged
+                        && annotation_tagged(doc, &scan.tree, &role_map, a, st).unwrap_or_else(|| {
+                            undecided = true;
+                            true
+                        });
+                    if applies && !held {
                         // A whole sentence each way, rather than a noun put in front of one: a form
                         // field and an annotation of some subtype read differently in other
                         // languages. The subtype itself is the PDF's own name and goes in as it is.
@@ -427,7 +457,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
         }
         _ => {}
     }
-    out
+    (out, undecided)
 }
 
 fn full_name(doc: &Document, field: ObjRef) -> String {

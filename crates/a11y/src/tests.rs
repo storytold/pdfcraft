@@ -1930,7 +1930,7 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
         "",
     );
     let pages = pdfcraft_model::pages(&doc);
-    let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
+    let (found, _) = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
 }
 
@@ -1957,7 +1957,11 @@ fn tagged_content_and_annotations_need_an_element_in_the_parent_tree() {
     objs[21] = kids.into();
     objs.push(format!("<< /Limits [0 1] /Nums [0 {all} 1 20 0 R] >>"));
     objs.push("<< /Limits [2 2] /Nums [2 21 0 R] /Kids [22 0 R] >>".into());
-    assert!(failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default())).is_empty());
+    let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+    assert!(failed(&r).is_empty());
+    for rule in [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields] {
+        assert_eq!(status(&r, rule), Status::Passed, "{rule:?}");
+    }
     // No parent tree, no entry for the page, or an MCID whose slot is null or past the array.
     let annotations = [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields];
     assert_eq!(failed_with_parent_tree("<< >>"), annotations);
@@ -2037,8 +2041,9 @@ fn an_element_is_in_the_hierarchy_only_through_structure_elements() {
     assert_eq!(heading_parent("28 0 R", &["<< /S /Sect /P 6 0 R >>"]), Status::Passed);
     // A parent whose type is written as a string (PDFBOX-3652 after_patch.pdf) is still one.
     assert_eq!(heading_parent("28 0 R", &["<< /S (Sect) /P 6 0 R >>"]), Status::Passed);
-    // A parent that is no structure element, on the way to the root.
+    // A parent that is no structure element, on the way to the root: no /S, or one that is null.
     assert_eq!(heading_parent("28 0 R", &["<< /P 6 0 R >>"]), Status::Failed);
+    assert_eq!(heading_parent("28 0 R", &["<< /S null /P 6 0 R >>"]), Status::Failed);
 }
 
 #[test]
@@ -2056,4 +2061,57 @@ fn a_parent_tree_read_only_in_part_leaves_the_tagging_rules_to_a_manual_check() 
     };
     assert_eq!(nested(10), [Status::Passed; 3]);
     assert_eq!(nested(80), [Status::Manual; 3]);
+    // The page's and the annotations' entries are read, in a first kid, before the tree runs past
+    // the depth limit in a second: every item is decided, so the rules pass.
+    let mut objs = good();
+    let first = objs.len() + 1;
+    objs[21] = format!("<< /Kids [{first} 0 R {} 0 R] >>", first + 1);
+    objs.push("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into());
+    objs.extend((0..80).map(|i| format!("<< /Kids [{} 0 R] >>", first + i + 2)));
+    objs.push("<< /Nums [9 20 0 R] >>".into());
+    let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+    assert_eq!([Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields].map(|rule| status(&r, rule)), [Status::Passed; 3]);
+    // In the truncated tree, MCID -1 has no slot in any array: untagged, whatever the tree holds.
+    let mut objs = good();
+    let first = objs.len() + 1;
+    objs[3] = stream(&format!("{GOOD_CONTENT} /P << /MCID -1 >> BDC 0 0 1 1 re f EMC"));
+    objs[21] = format!("<< /Kids [{first} 0 R] >>");
+    objs.extend((0..80).map(|i| format!("<< /Kids [{} 0 R] >>", first + i + 1)));
+    objs.push("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into());
+    let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+    assert_eq!(status(&r, Rule::TaggedContent), Status::Failed, "{:?}", r.result(Rule::TaggedContent));
+}
+
+#[test]
+fn an_ancestry_past_the_walk_limit_is_left_to_a_manual_check() {
+    // The heading's parents are `len` Sect elements before `last`. Past the walk's limit of 256,
+    // the walk stops without an answer, so the rule is manual, not failed; within it, a chain to
+    // the root passes and one that goes round fails.
+    let chain = |len: usize, last: &str| {
+        let mut objs = good();
+        let first = objs.len() + 1;
+        objs[11] = format!("<< /S /Heading1 /P {first} 0 R /Pg 3 0 R /K 0 >>");
+        objs.extend(
+            (0..len).map(|i| format!("<< /S /Sect /P {} >>", if i + 1 == len { last.to_string() } else { format!("{} 0 R", first + i + 1) })),
+        );
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(chain(300, "6 0 R"), Status::Manual);
+    assert_eq!(chain(200, "6 0 R"), Status::Passed);
+    assert_eq!(chain(200, "28 0 R"), Status::Failed);
+}
+
+#[test]
+fn an_annotation_element_type_is_followed_through_every_mapping() {
+    // A Link element typed R0, mapped thirteen times to Link, holds the link; a role map that goes
+    // round never reaches Link.
+    let link_rule = |map: String| {
+        let mut objs = good();
+        objs[19] = "<< /S /R0 /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into();
+        objs[5] = objs[5].replace("/RoleMap << /Heading1 /H1 >>", &format!("/RoleMap << /Heading1 /H1 {map} >>"));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations)
+    };
+    let long: String = (0..13).map(|i| if i == 12 { format!("/R{i} /Link ") } else { format!("/R{i} /R{} ", i + 1) }).collect();
+    assert_eq!(link_rule(long), Status::Passed);
+    assert_eq!(link_rule("/R0 /R1 /R1 /R0".into()), Status::Failed);
 }

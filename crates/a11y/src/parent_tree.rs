@@ -81,64 +81,74 @@ impl ParentTree {
         tree
     }
 
-    /// Whether the number tree was read only in part, so that a missing entry is not known to be
-    /// missing.
-    pub fn truncated(&self) -> bool {
-        self.truncated
-    }
-
     /// Whether entry `key` may be in the part of a truncated number tree that was not read.
-    pub fn unread(&self, key: i64) -> bool {
+    fn unread(&self, key: i64) -> bool {
         self.truncated && !self.entries.contains_key(&key)
     }
 
     /// The structure element that entry `key` names for a content item that is an object (an
-    /// annotation's /StructParent): a dictionary with a structure type (/S).
-    pub fn element(&self, doc: &Document, key: i64) -> Option<Arc<Object>> {
-        self.entries.get(&key).map(|v| doc.resolve(v)).filter(|e| self.in_hierarchy(doc, e))
+    /// annotation's /StructParent): a dictionary with a structure type (/S). `None` when that is
+    /// not known: the entry may be in the part of a truncated tree not read, or the element's
+    /// parents go on past the ancestor limit.
+    pub fn element(&self, doc: &Document, key: i64) -> Option<Option<Arc<Object>>> {
+        if self.unread(key) {
+            return None;
+        }
+        let Some(e) = self.entries.get(&key).map(|v| doc.resolve(v)) else { return Some(None) };
+        Some(self.in_hierarchy(doc, &e)?.then_some(e))
     }
 
     /// Whether marked content `mcid` of the content stream whose /StructParents is `key` belongs to
-    /// a structure element: the entry's array names one at index `mcid`.
-    pub fn owns(&self, doc: &Document, key: i64, mcid: i64) -> bool {
-        let Some(list) = self.entries.get(&key).map(|v| doc.resolve(v)) else { return false };
-        let Ok(at) = usize::try_from(mcid) else { return false };
-        list.as_array().and_then(|items| items.get(at)).is_some_and(|e| self.in_hierarchy(doc, &doc.resolve(e)))
+    /// a structure element: the entry's array names one at index `mcid`. `None` when that is not
+    /// known, as for [`ParentTree::element`]; an MCID no array has a slot for (a negative one) is
+    /// owned by nothing either way.
+    pub fn owns(&self, doc: &Document, key: i64, mcid: i64) -> Option<bool> {
+        let Ok(at) = usize::try_from(mcid) else { return Some(false) };
+        if self.unread(key) {
+            return None;
+        }
+        let Some(list) = self.entries.get(&key).map(|v| doc.resolve(v)) else { return Some(false) };
+        match list.as_array().and_then(|items| items.get(at)) {
+            Some(e) => self.in_hierarchy(doc, &doc.resolve(e)),
+            None => Some(false),
+        }
     }
 
     /// Whether `e` is a structure element of the structure hierarchy: a dictionary with a type
     /// (/S) whose parents (/P, required: ISO 32000-2 §14.7.2, Table 355) are structure elements up
     /// to the structure tree root. One without a parent, or whose parents end elsewhere (in a
-    /// dictionary that is neither), or go round, is in no tree.
-    fn in_hierarchy(&self, doc: &Document, e: &Object) -> bool {
+    /// dictionary that is neither), or go round, is in no tree. `None` when the parents go on past
+    /// [`MAX_ANCESTORS`] steps: the walk stopped before it could tell.
+    fn in_hierarchy(&self, doc: &Document, e: &Object) -> Option<bool> {
         if !e.as_dict().is_some_and(|d| d.name(b"S").is_some()) {
-            return false;
+            return Some(false);
         }
         let mut seen: HashSet<ObjRef> = HashSet::new();
         let mut node: Option<Arc<Object>> = None;
         for _ in 0..MAX_ANCESTORS {
             let current = node.as_deref().unwrap_or(e);
-            let Some(parent) = current.as_dict().and_then(|d| d.get(b"P")) else { return false };
+            let Some(parent) = current.as_dict().and_then(|d| d.get(b"P")) else { return Some(false) };
             if let Some(r) = parent.as_ref() {
                 if Some(r) == self.root {
-                    return true;
+                    return Some(true);
                 }
                 if !seen.insert(r) {
-                    return false;
+                    return Some(false);
                 }
             }
             let parent = doc.resolve(parent);
-            let Some(d) = parent.as_dict() else { return false };
+            let Some(d) = parent.as_dict() else { return Some(false) };
             if d.name(b"Type") == Some(b"StructTreeRoot") {
-                return true;
+                return Some(true);
             }
             // A dictionary without a structure type is no structure element; one whose type is
-            // written as a string rather than a name, as some producers write it, still is.
-            if !d.contains(b"S") {
-                return false;
+            // written as a string rather than a name, as some producers write it, still is. A
+            // null or any other value is no type.
+            if !d.get(b"S").is_some_and(|s| matches!(*doc.resolve(s), Object::Name(_) | Object::String(_))) {
+                return Some(false);
             }
             node = Some(parent);
         }
-        false
+        None
     }
 }

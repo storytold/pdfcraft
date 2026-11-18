@@ -8870,8 +8870,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::tagged_content_and_annotations_need_an_element_in_the_parent_tree", "crates/a11y/src/tests.rs::marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry", "crates/a11y/src/tests.rs::an_element_is_in_the_hierarchy_only_through_structure_elements", "crates/a11y/src/tests.rs::a_parent_tree_read_only_in_part_leaves_the_tagging_rules_to_a_manual_check"]
-notes = "rule tagged-content: painting outside Artifact marked content and outside MCID marked content that a structure element owns, through form XObjects; counted per page. Ownership goes through the parent tree (ISO 32000-2 14.7.5.4): the page's or form XObject's /StructParents entry names, at the MCID, an element whose /P parents, each a structure element, reach the structure tree root. A parent tree read only in part (past its node, depth or entry limits) leaves this rule and the three annotation rules to a manual check when they find nothing"
+evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::tagged_content_and_annotations_need_an_element_in_the_parent_tree", "crates/a11y/src/tests.rs::marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry", "crates/a11y/src/tests.rs::an_element_is_in_the_hierarchy_only_through_structure_elements", "crates/a11y/src/tests.rs::a_parent_tree_read_only_in_part_leaves_the_tagging_rules_to_a_manual_check", "crates/a11y/src/tests.rs::an_ancestry_past_the_walk_limit_is_left_to_a_manual_check"]
+notes = "rule tagged-content: painting outside Artifact marked content and outside MCID marked content that a structure element owns, through form XObjects; counted per page. Ownership goes through the parent tree (ISO 32000-2 14.7.5.4): the page's or form XObject's /StructParents entry names, at the MCID, an element whose /P parents, each a structure element, reach the structure tree root. An item whose owner the parent tree can't decide (its entry may be in the part of a tree read only up to its node, depth or entry limits, or its element's parents run past 256 steps) is counted neither way, and a rule with such an item that finds nothing is left to a manual check; an MCID with no array slot (a negative one) is untagged either way"
 
 [[feature]]
 id = "a11y.rule-tagged-annotations"
@@ -8882,7 +8882,7 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::an_annotation_belongs_in_the_element_type_that_holds_its_kind"]
+evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::an_annotation_belongs_in_the_element_type_that_holds_its_kind", "crates/a11y/src/tests.rs::an_annotation_element_type_is_followed_through_every_mapping"]
 notes = "rule tagged-annotations: annotations other than popups, widgets and multimedia need a /StructParent whose parent-tree entry is an element of the structure hierarchy, Link for a link and Annot for the others (ISO 32000-2 14.8.2.5.2)"
 
 [[feature]]
