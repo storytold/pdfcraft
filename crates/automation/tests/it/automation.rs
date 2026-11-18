@@ -14805,6 +14805,9 @@ fn a_save_of_a_repaired_file_reports_a_full_rewrite() {
     assert_eq!(first["incremental"], false, "{first}");
     ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 90 }));
     let second = ok(&mut a, "doc_save", json!({ "doc": doc, "full": false }));
-    assert!(std::fs::read(dir.join("damaged.pdf")).unwrap().starts_with(&written), "the next save appends");
+    let appended = std::fs::read(dir.join("damaged.pdf")).unwrap();
+    assert!(appended.len() > written.len() && appended.starts_with(&written), "the next save appends");
     assert_eq!(second["incremental"], true, "{second}");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "damaged.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": reopened }))["pages"][0]["rotation"], 90, "the rotation is in the file");
 }
