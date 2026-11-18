@@ -3319,6 +3319,18 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let edit_text = app.quick_tool == QuickTool::EditText && doc.allows_modification();
     let view = &mut app.views[index];
     view.objects.prepare(doc, edit_text, view.pending_edit.is_some());
+    // So do the fields' and the added content's selections: a field or an item added last pass is
+    // selected before Delete or an arrow reads the selection (and the selection ages see it).
+    if preparing {
+        crate::prepare::after_refresh(view, &doc.form);
+    } else {
+        view.prepare.selected = None;
+    }
+    if editing_content {
+        crate::content_ui::after_refresh(view, doc.added());
+    } else {
+        view.content.selected = None;
+    }
     // The pages' keys, for the active view only: Compare and split view draw two.
     if app.active == Some(index) {
         let cx = key_order::KeyCx { ctx: ui.ctx(), keys, doc, tool: app.quick_tool, preparing, editing_content, speed: app.scroll_speed };
@@ -3437,19 +3449,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
-    if preparing {
-        crate::prepare::after_refresh(view, &form);
-    } else {
-        view.prepare.selected = None;
-    }
     view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
-    if editing_content {
-        crate::content_ui::after_refresh(view, &added);
-    } else {
-        view.content.selected = None;
-    }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });

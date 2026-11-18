@@ -189,6 +189,38 @@ fn placing_moving_editing_and_deleting_a_field() {
     assert_eq!((r[2] - r[0], r[3] - r[1]), (14.0, 14.0));
 }
 
+/// Review on #7138: a field placed while another is selected is selected before the keys are read.
+/// Its selection waits for the form to show it (`select_added`); a Delete on that pass deletes the
+/// new field, not the one selected before it.
+#[test]
+fn delete_right_after_placing_a_field_deletes_the_new_one() {
+    let mut h = harness();
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let placed = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let all = names(&h);
+    let older = all.iter().find(|n| **n != placed).expect("another field").clone();
+    // As on the pass the new field reaches the form: the older field is still selected, and the
+    // new one waits to be.
+    {
+        let prep = &mut h.state_mut().views[0].prepare;
+        prep.selected = Some((older.clone(), 0));
+        prep.select_added = Some(all.len() - 1);
+    }
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    let left = names(&h);
+    assert!(!left.contains(&placed), "the new field is deleted: {left:?}");
+    assert!(left.contains(&older), "the one selected before it stays: {left:?}");
+}
+
 /// The arrow keys nudge the selected field a point, Shift and an arrow ten points (#2608), as they
 /// do for a selected object or image and as dragging it does. One press is one undo step, the page
 /// does not turn with them, and the field stays selected for the next press.
