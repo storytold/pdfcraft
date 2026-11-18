@@ -1,5 +1,5 @@
 use super::error::{Result, failed};
-use super::{Automation, Path, PathBuf, StagingName, file_access, staging_suffixes};
+use super::{Automation, Path, PathBuf, file_access};
 
 impl Automation {
     // ---- paths -------------------------------------------------------------------------------
@@ -155,20 +155,6 @@ pub(crate) fn read_input(path: &Path) -> Result<Vec<u8>> {
 /// This flushes staged contents; it does not promise parent-directory durability after a
 /// power loss. Filesystems that refuse sync cause the save to fail before publication.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    write_atomic_with(path, bytes, staging_suffixes())
-}
-
-/// [`write_atomic`], trying the staging names that `suffixes` give.
-pub(crate) fn write_atomic_with(path: &Path, bytes: &[u8], suffixes: impl IntoIterator<Item = u64>) -> Result<()> {
-    write_atomic_synced(path, bytes, suffixes, std::fs::File::sync_all)
-}
-
-pub(crate) fn write_atomic_synced(
-    path: &Path,
-    bytes: &[u8],
-    suffixes: impl IntoIterator<Item = u64>,
-    sync: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
-) -> Result<()> {
     // A folder can't be replaced, and staging beside it could land outside the root: "." names
     // the root itself, whose parent isn't ours to write in.
     if path.is_dir() {
@@ -177,10 +163,9 @@ pub(crate) fn write_atomic_synced(
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     path.file_name().ok_or_else(|| failed(format!("{}: not a file path", path.display())))?;
     std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-    // The writer itself is the platform crate's, shared with the desktop app and the CLI
-    // (#2166): the staging file is written, flushed (delayed writeback failures surface before
-    // the destination is replaced or a document marked clean), closed and renamed; a failure at
-    // any step removes it and leaves the destination as it was.
-    pdfcraft_platform::staging::write_atomically_with(path, bytes, StagingName::SuffixThenTag, suffixes, sync)
-        .map_err(|e| failed(format!("{}: {e}", path.display())))
+    // The writer itself is the framework's, shared with the desktop app and the CLI (#2166): the
+    // staging file is written, flushed (delayed writeback failures surface before the
+    // destination is replaced or a document marked clean), closed and renamed; a failure at any
+    // step removes it and leaves the destination as it was.
+    craft::atomic::atomic_write(path, bytes).map_err(|e| failed(format!("{}: {e}", path.display())))
 }
