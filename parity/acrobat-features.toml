@@ -6936,7 +6936,7 @@ status = "shipped"
 commands = []
 tools = ["ocr_adaptive_compress"]
 evidence = ["crates/automation/tests/it/automation.rs::ocr_adaptive_compress_binarizes_near_bilevel_scans"]
-notes = "Adaptive compression of scans (Acrobat Scan & OCR): detects near-bilevel 8-bit grayscale and RGB scans of text documents, applies heuristic guards (chroma, bimodal histogram, local 64x64 tile midtone concentration) and Otsu thresholding with symmetric content-loss prevention (both bleached `[threshold..215)` and darkened `(65..threshold)` bounds), and packs samples to 1-bit monochrome bitmaps compressed via CCITT Group 4 or Flate. Prepress assets (SMask, OPI, Mask) and colored content are strictly guarded and preserved (headless only; UI dialog is a follow-up)."
+notes = "Adaptive compression of scans (Acrobat Scan & OCR): detects near-bilevel 8-bit grayscale and RGB scans of text documents, applies heuristic guards (chroma, bimodal histogram, and scale-invariant smooth-grey luminance-flux collapse check across DPIs) and Otsu thresholding with `[threshold..215)` content-loss prevention, and packs samples to 1-bit monochrome bitmaps compressed via CCITT Group 4 or Flate. Prepress assets (SMask, OPI, Mask) and colored content are strictly guarded and preserved (headless only; UI dialog is a follow-up)."
 
 [[feature]]
 id = "ocr.scan-pdfa"

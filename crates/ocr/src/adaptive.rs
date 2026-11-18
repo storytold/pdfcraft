@@ -6,8 +6,8 @@
 //! Prepress and content-loss guards:
 //! - Chroma guard: Rejects colored content, stamps, and highlighters.
 //! - Bimodal histogram guard: Requires clear dark ink and bright paper peaks; rejects flat or unimodal distributions.
-//! - Local 64x64 tile midtone guard: Rejects localized greyscale emblems or photos hidden inside predominantly white pages.
-//! - Symmetric content-loss guard: Protects both faint pencil/pen strokes in `[threshold..215)` from bleaching and dark-grey midtones in `(65..threshold)` from crushing to black.
+//! - Scale-invariant smooth-grey flux guard: Rejects localized smooth grey regions (emblems, binder clips, seals, shaded banners) whose local mean luminance shifts by >40 levels under binarization, regardless of scan DPI.
+//! - Content-loss guard: Protects faint pencil/pen strokes in `[threshold..215)` from bleaching out to background.
 //! - Prepress fail-safe: Strictly preserves images with soft masks (/SMask, /SMaskInData),
 //!   transparency masks (/Mask), or prepress production links (/OPI).
 
@@ -45,19 +45,33 @@ const MIN_BRIGHT_RATIO: f64 = 0.50;
 /// Maximum fraction of pixels in `[threshold..215)` that may be bleached to white (2.0%).
 const MAX_CONTENT_LOSS_RATIO: f64 = 0.02;
 
-/// Maximum fraction of pixels in `(65..threshold)` that may be crushed to black (4.0%).
-// Why: dark-grey gradients below Otsu's threshold turn into solid black blobs without a lower-side guard.
-const MAX_DARKENED_LOSS_RATIO: f64 = 0.04;
+/// Minimum scale-invariant tile dimension in pixels (matches ~8x8 blocks at 72 DPI for ~100 DPI scans).
+const MIN_TILE_SIZE: usize = 8;
 
-/// Spatial tile dimension for localized midtone concentration checks (64x64 pixels).
-const TILE_SIZE: usize = 64;
+/// Maximum scale-invariant tile dimension in pixels.
+const MAX_TILE_SIZE: usize = 64;
 
-/// Minimum pixel count in an edge/small tile before enforcing the local midtone cap (32x32).
-const MIN_TILE_PIXELS: u32 = 1024;
+/// Lower mean luminance bound for identifying continuous smooth grey tiles.
+const SMOOTH_GREY_MIN_MEAN: f64 = 60.0;
 
-/// Maximum midtone fraction allowed inside any single 64x64 tile (40%).
-// Why: small greyscale emblems/photos (<2% of page area) pass global ratios but saturate local tiles.
-const MAX_TILE_MIDTONE_RATIO: f64 = 0.40;
+/// Upper mean luminance bound for identifying continuous smooth grey tiles.
+const SMOOTH_GREY_MAX_MEAN: f64 = 195.0;
+
+/// Maximum local luminance shift `|mu_after - mu_before|` before a smooth grey tile counts as distorted.
+// Why: matches oracle detection of greyscale regions that collapse to solid black or wash out under thresholding.
+const MAX_TILE_FLUX_SHIFT: f64 = 40.0;
+
+/// Maximum white paper fraction (`>= 215`) allowed for a tile to qualify as continuous grey tone.
+const MAX_TILE_PAPER_RATIO: f64 = 0.20;
+
+/// Minimum midtone fraction (`66..=214`) required so bold dark-ink strokes (`<= 65`) are not mistaken for grey shading.
+const MIN_TILE_MIDTONE_RATIO: f64 = 0.30;
+
+/// Maximum average adjacent-pixel gradient allowed for a smooth grey tile (separates smooth emblems from halftoned screens).
+const MAX_TILE_SMOOTH_GRADIENT: f64 = 20.0;
+
+/// Maximum number of 8-connected distorted smooth-grey tiles tolerated before rejecting binarization.
+const MAX_CLUSTERED_SMOOTH_GREY_TILES: usize = 3;
 
 /// Options for adaptive scan compression.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,8 +132,148 @@ pub fn compute_otsu(hist: &[u32; 256], total: usize) -> Option<u8> {
     best_t
 }
 
+#[inline]
+fn rgb_lum(r: u8, g: u8, b: u8) -> u8 {
+    ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8
+}
+
+#[inline]
+fn sample_lum(row: &[u8], x: usize, n: usize) -> Option<u8> {
+    if n == 1 {
+        row.get(x).copied()
+    } else {
+        let base = x.checked_mul(3)?;
+        let r = *row.get(base)?;
+        let g = *row.get(base + 1)?;
+        let b = *row.get(base + 2)?;
+        Some(rgb_lum(r, g, b))
+    }
+}
+
+/// Detects localized smooth grey regions (emblems, seals, binder clips, shaded banners) whose local
+/// block luminance collapses by >40 levels under binarization across a scale-invariant tile grid.
+fn has_smooth_grey_flux_collapse(samples: &[u8], row_len: usize, w: usize, h: usize, n: usize, threshold: u8) -> bool {
+    // Scale tile dimension to image resolution (~2.8 mm / ~8x8 px at 72 DPI) so 100-DPI small objects
+    // are not diluted inside oversized fixed tiles.
+    let tile_size = (w.min(h) / 75).clamp(MIN_TILE_SIZE, MAX_TILE_SIZE);
+    let th = h / tile_size;
+    let tw = w / tile_size;
+    if th == 0 || tw == 0 {
+        return false;
+    }
+    let Some(grid_len) = th.checked_mul(tw) else { return false };
+    let Some(row_stride_px) = w.checked_mul(n) else { return false };
+
+    let area = (tile_size * tile_size) as f64;
+    let grad_h_denom = (tile_size * tile_size.saturating_sub(1).max(1)) as f64;
+    let grad_v_denom = (tile_size.saturating_sub(1).max(1) * tile_size) as f64;
+
+    let mut smooth_bad = vec![false; grid_len];
+    let mut prev_row = [0u8; MAX_TILE_SIZE];
+
+    for ty in 0..th {
+        let y0 = ty * tile_size;
+        for tx in 0..tw {
+            let x0 = tx * tile_size;
+            let mut sum_lum = 0u32;
+            let mut bright_after_t = 0u32;
+            let mut paper_count = 0u32;
+            let mut mid_count = 0u32;
+            let mut sum_gx = 0u32;
+            let mut sum_gy = 0u32;
+
+            for dy in 0..tile_size {
+                let Some(y_off) = (y0 + dy).checked_mul(row_len) else { return false };
+                let Some(row) = samples.get(y_off..).and_then(|s| s.get(..row_stride_px)) else {
+                    return false;
+                };
+                let mut prev_x = 0u8;
+                for dx in 0..tile_size {
+                    let Some(lum) = sample_lum(row, x0 + dx, n) else { return false };
+                    sum_lum += u32::from(lum);
+                    if lum >= threshold {
+                        bright_after_t += 1;
+                    }
+                    if lum >= 215 {
+                        paper_count += 1;
+                    } else if lum >= 66 {
+                        mid_count += 1;
+                    }
+                    if dx > 0 {
+                        sum_gx += u32::from(lum.abs_diff(prev_x));
+                    }
+                    if dy > 0
+                        && let Some(&up) = prev_row.get(dx)
+                    {
+                        sum_gy += u32::from(lum.abs_diff(up));
+                    }
+                    prev_x = lum;
+                    if let Some(slot) = prev_row.get_mut(dx) {
+                        *slot = lum;
+                    }
+                }
+            }
+
+            let mu_b = f64::from(sum_lum) / area;
+            let mu_a = (f64::from(bright_after_t) * 255.0) / area;
+            let bright_frac = f64::from(paper_count) / area;
+            let mid_frac = f64::from(mid_count) / area;
+            let gx = f64::from(sum_gx) / grad_h_denom;
+            let gy = f64::from(sum_gy) / grad_v_denom;
+            let grad = 0.5 * (gx + gy);
+
+            if (SMOOTH_GREY_MIN_MEAN..=SMOOTH_GREY_MAX_MEAN).contains(&mu_b)
+                && (mu_a - mu_b).abs() > MAX_TILE_FLUX_SHIFT
+                && bright_frac < MAX_TILE_PAPER_RATIO
+                && mid_frac >= MIN_TILE_MIDTONE_RATIO
+                && grad < MAX_TILE_SMOOTH_GRADIENT
+                && let Some(cell) = smooth_bad.get_mut(ty * tw + tx)
+            {
+                *cell = true;
+            }
+        }
+    }
+
+    let mut clustered = 0usize;
+    for ty in 0..th {
+        for tx in 0..tw {
+            if smooth_bad.get(ty * tw + tx) != Some(&true) {
+                continue;
+            }
+            let mut has_neighbor = false;
+            for dy in -1isize..=1 {
+                for dx in -1isize..=1 {
+                    if dy == 0 && dx == 0 {
+                        continue;
+                    }
+                    if let (Some(ny), Some(nx)) = (ty.checked_add_signed(dy), tx.checked_add_signed(dx))
+                        && ny < th
+                        && nx < tw
+                        && smooth_bad.get(ny * tw + nx) == Some(&true)
+                    {
+                        has_neighbor = true;
+                        break;
+                    }
+                }
+                if has_neighbor {
+                    break;
+                }
+            }
+            if has_neighbor {
+                clustered += 1;
+                if clustered > MAX_CLUSTERED_SMOOTH_GREY_TILES {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 /// Attempts to binarize an 8-bit image (1 channel grayscale or 3 channels RGB) into 1-bit samples
-/// using Heuristic Dual-Guard (Chroma Guard + Bimodal Histogram Guard) and Otsu thresholding.
+/// using Heuristic Dual-Guard (Chroma Guard + Bimodal Histogram Guard), scale-invariant smooth-grey
+/// flux guard, and Otsu thresholding.
 pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usize) -> Option<Vec<u8>> {
     let total = w.checked_mul(h)?;
     if total == 0 || (n != 1 && n != 3) {
@@ -132,24 +286,21 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
         return None;
     }
 
-    // Pass 1: Chroma, Bimodal Histogram & Local 64x64 Tile Midtone Guard
+    // Pass 1: Chroma & Bimodal Histogram Guard
     let mut hist = [0u32; 256];
     let mut dark = 0usize;
     let mut bright = 0usize;
     let mut mid = 0usize;
     let mut chroma_fringe = 0usize;
-    let tiles_x = w.div_ceil(TILE_SIZE);
-    let mut tile_mid = vec![0u32; tiles_x];
-    let mut tile_tot = vec![0u32; tiles_x];
 
-    for (y, row) in samples.chunks(row_len).take(h).enumerate() {
+    for row in samples.chunks(row_len).take(h) {
         let row_pixels = row.get(..w.checked_mul(n)?)?;
-        for (x, chunk) in row_pixels.chunks_exact(n).enumerate() {
+        for chunk in row_pixels.chunks_exact(n) {
             let lum = if n == 1 {
                 chunk[0]
             } else {
                 let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-                let lum = ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8;
+                let lum = rgb_lum(r, g, b);
                 let max_c = r.max(g).max(b);
                 let min_c = r.min(g).min(b);
                 let chroma = max_c - min_c;
@@ -170,34 +321,17 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
             if let Some(entry) = hist.get_mut(usize::from(lum)) {
                 *entry += 1;
             }
-            let tile_idx = x / TILE_SIZE;
-            if let Some(tot) = tile_tot.get_mut(tile_idx) {
-                *tot += 1;
-            }
             match lum {
                 0..=65 => dark += 1,
                 215..=255 => bright += 1,
                 66..=214 => {
                     mid += 1;
-                    if let Some(tm) = tile_mid.get_mut(tile_idx) {
-                        *tm += 1;
-                    }
                     // Early exit if midtones exceed 6.0% (mid / total > 0.06)
                     if (mid as u64).saturating_mul(100) > (total as u64).saturating_mul(6) {
                         return None;
                     }
                 }
             }
-        }
-
-        if (y + 1) % TILE_SIZE == 0 || y + 1 == h {
-            for (&tm, &tt) in tile_mid.iter().zip(tile_tot.iter()) {
-                if tt >= MIN_TILE_PIXELS && (f64::from(tm) / f64::from(tt)) > MAX_TILE_MIDTONE_RATIO {
-                    return None;
-                }
-            }
-            tile_mid.fill(0);
-            tile_tot.fill(0);
         }
     }
 
@@ -227,9 +361,9 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
         return None;
     }
 
-    // Why: guard both sides of Otsu's threshold so dark-grey graphics in (65..threshold) aren't crushed to black.
-    let darkened_mid: u32 = hist.get(66..usize::from(threshold)).map_or(0, |slice| slice.iter().sum());
-    if (darkened_mid as f64 / total as f64) > MAX_DARKENED_LOSS_RATIO {
+    // Why: localized smooth greyscale emblems, clips, and shaded banners can stay below 6% global midtones
+    // yet collapse by >40 levels locally; a scale-invariant smooth-grey flux check catches them across DPIs.
+    if has_smooth_grey_flux_collapse(samples, row_len, w, h, n, threshold) {
         return None;
     }
 
@@ -239,8 +373,7 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
         let row_pixels = row.get(..w.checked_mul(n)?)?;
         let out_row = out.get_mut(y * stride..(y + 1) * stride)?;
         for (x, chunk) in row_pixels.chunks_exact(n).enumerate() {
-            let lum =
-                if n == 1 { chunk[0] } else { ((u32::from(chunk[0]) * 299 + u32::from(chunk[1]) * 587 + u32::from(chunk[2]) * 114) / 1000) as u8 };
+            let lum = if n == 1 { chunk[0] } else { rgb_lum(chunk[0], chunk[1], chunk[2]) };
             if lum >= threshold {
                 *out_row.get_mut(x / 8)? |= 0x80 >> (x % 8);
             }
@@ -495,6 +628,7 @@ mod tests {
 
     #[test]
     fn chroma_guard_allows_mild_jpeg_fringe_but_rejects_vivid_pixel() {
+        // Why: legal stamps and wet-ink signatures carry high chroma (>80) and must never be flattened to 1-bit black.
         let (w, h) = (100usize, 100usize);
         // 95% white background, 4.6% black ink, 0.4% mild chroma fringe (chroma=25 <= 80, <= 0.8%) -> passes
         let mut samples = vec![245u8; w * h * 3];
@@ -528,31 +662,42 @@ mod tests {
 
     #[test]
     fn binarizes_anti_aliased_scan_with_mild_jpeg_fringe() {
+        // Why: colour scanners saving B&W text as 4:2:0 JPEG introduce <=0.8% mild edge chroma (<=80) that should still compress to 1-bit.
         let (w, h) = (100usize, 100usize);
         let mut samples = vec![245u8; w * h * 3];
-        // 5.0% dark ink
-        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().take(500) {
-            chunk[0] = 25;
-            chunk[1] = 25;
-            chunk[2] = 25;
+        // 5.0% dark ink spread across every other row so no single tile fills with smooth midtones
+        for y in (0..h).step_by(4) {
+            for x in 10..30 {
+                let idx = (y * w + x) * 3;
+                samples[idx] = 25;
+                samples[idx + 1] = 25;
+                samples[idx + 2] = 25;
+            }
         }
-        // 0.4% mild JPEG fringe (chroma = 40 <= 80, <= 0.8%)
-        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(500).take(40) {
-            chunk[0] = 50;
-            chunk[1] = 10;
-            chunk[2] = 10;
+        // 0.4% mild JPEG fringe (chroma = 40 <= 80, <= 0.8%) along row 2
+        for x in 10..50 {
+            let idx = (2 * w + x) * 3;
+            samples[idx] = 50;
+            samples[idx + 1] = 10;
+            samples[idx + 2] = 10;
         }
-        // 2.5% dark anti-aliased edge (lum = 90 < T)
-        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(540).take(250) {
-            chunk[0] = 90;
-            chunk[1] = 90;
-            chunk[2] = 90;
+        // 2.5% dark anti-aliased edge (lum = 90 < T) adjacent to ink rows
+        for y in (1..h).step_by(4) {
+            for x in 10..20 {
+                let idx = (y * w + x) * 3;
+                samples[idx] = 90;
+                samples[idx + 1] = 90;
+                samples[idx + 2] = 90;
+            }
         }
         // 1.0% light anti-aliased halo (lum = 190 >= T, <= 2.0% content-loss guard)
-        for chunk in samples.as_chunks_mut::<3>().0.iter_mut().skip(790).take(100) {
-            chunk[0] = 190;
-            chunk[1] = 190;
-            chunk[2] = 190;
+        for y in (3..h).step_by(8) {
+            for x in 10..18 {
+                let idx = (y * w + x) * 3;
+                samples[idx] = 190;
+                samples[idx + 1] = 190;
+                samples[idx + 2] = 190;
+            }
         }
         assert!(try_binarize_scan(&samples, w * 3, w, h, 3).is_some());
     }
@@ -573,6 +718,7 @@ mod tests {
 
     #[test]
     fn content_loss_guard_protects_faint_strokes() {
+        // Why: light pencil notes and faded strokes in [T..215) bleach to white paper if bleached flux is unbounded.
         let (w, h) = (200usize, 200usize);
         let total = w * h;
         let mut samples = vec![245u8; total];
@@ -638,46 +784,99 @@ mod tests {
     }
 
     #[test]
-    fn rejects_small_greyscale_emblem_on_white_text_page() {
-        // Why: office letterheads often carry small greyscale logos (<2% page area) that bypass global midtone limits and turn solid black.
-        let (w, h) = (1000, 1000);
+    fn low_dpi_scan_with_binder_clip_or_small_seal_is_rejected() {
+        // Why: 100-DPI scans shrink binder clips and seals to ~11px tiles; scale-invariant tiles B = min(W,H)/75 catch local grey distortion that fixed 64px tiles dilute.
+        let (w, h) = (848, 1280);
         let mut samples = vec![245u8; w * h];
-        // 3% crisp dark text spread across the page
-        for y in 200..900 {
-            if y % 10 == 0 {
-                for x in 100..530 {
-                    samples[y * w + x] = 25;
-                }
+        // ~3% crisp black text rows across the page
+        for y in (200..1100).step_by(10) {
+            for x in 100..360 {
+                samples[y * w + x] = 25;
             }
         }
-        // Small 128x128 greyscale emblem/seal (~1.6% of page area) at top-left corner
-        for y in 20..148 {
-            for x in 20..148 {
-                samples[y * w + x] = if (x + y) % 2 == 0 { 110 } else { 150 };
+        // Small 36x36 smooth grey metallic clip / seal (~0.12% of page area, below fixed 64x64 threshold)
+        for y in 44..80 {
+            for x in 220..256 {
+                samples[y * w + x] = 120 + ((x + y) % 5) as u8;
             }
         }
         assert!(try_binarize_scan(&samples, w, w, h, 1).is_none());
     }
 
     #[test]
-    fn protects_darkened_midtones_below_threshold() {
-        // Why: dark-grey gradients below Otsu threshold get crushed into solid black blobs unless both sides of the threshold are guarded.
-        let (w, h) = (200, 200);
-        let total = w * h; // 40_000
-        let mut samples = vec![245u8; total];
-        // 5% crisp black ink -> Otsu threshold clamps near ~135
-        for px in samples.iter_mut().take(2_000) {
-            *px = 20;
+    fn high_dpi_letterhead_with_small_greyscale_emblem_is_rejected() {
+        // Why: a <1% area greyscale coat-of-arms on a 300-DPI page passes global midtone limits (<6%) but suffers >40-level local luminance collapse.
+        let (w, h) = (1200, 1600);
+        let mut samples = vec![245u8; w * h];
+        // ~3% crisp dark text spread across the page
+        for y in (300..1450).step_by(10) {
+            for x in 150..650 {
+                samples[y * w + x] = 25;
+            }
         }
-        // 5% dark-grey midtones (lum = 95, well below threshold) distributed uniformly
-        // across rows so no single tile exceeds 40%, testing the symmetric darkened guard.
-        let mut placed = 0;
-        for px in samples.iter_mut().skip(2_000).step_by(18) {
-            if placed < 2_000 {
-                *px = 95;
-                placed += 1;
+        // Small 110x110 smooth greyscale coat-of-arms (~0.63% of page area) at top-left
+        for y in 32..142 {
+            for x in 32..142 {
+                samples[y * w + x] = 115 + ((x + y) % 7) as u8;
             }
         }
         assert!(try_binarize_scan(&samples, w, w, h, 1).is_none());
+    }
+
+    #[test]
+    fn shaded_table_header_row_is_rejected() {
+        // Why: office forms and BOQ tables often shade header rows in mid-grey (Y~110..180); binarizing crushes the row to solid black and hides black column titles.
+        let (w, h) = (800, 1000);
+        let mut samples = vec![245u8; w * h];
+        // ~4% crisp dark table body text
+        for y in (220..900).step_by(8) {
+            for x in 80..480 {
+                samples[y * w + x] = 25;
+            }
+        }
+        // Mid-grey shaded header strip (lum = 120, 30px tall, <2.5% page area) with black column labels
+        for y in 120..150 {
+            for x in 80..720 {
+                samples[y * w + x] = if (y - 120) % 12 < 3 && (x % 90) < 8 { 20 } else { 120 };
+            }
+        }
+        assert!(try_binarize_scan(&samples, w, w, h, 1).is_none());
+    }
+
+    #[test]
+    fn white_lettering_inside_grey_banner_is_rejected() {
+        // Why: inverted white text inside a mid-grey header strip disappears when the surrounding grey background falls below Otsu threshold T.
+        let (w, h) = (800, 1000);
+        let mut samples = vec![245u8; w * h];
+        // ~4% crisp dark document body
+        for y in (260..900).step_by(8) {
+            for x in 100..520 {
+                samples[y * w + x] = 20;
+            }
+        }
+        // Smooth mid-grey header banner (90x400, lum = 125) carrying small inverted white lettering (lum = 245)
+        for y in 40..130 {
+            for x in 100..500 {
+                samples[y * w + x] = if (y % 24) < 3 && (x % 32) == 0 { 245 } else { 125 };
+            }
+        }
+        assert!(try_binarize_scan(&samples, w, w, h, 1).is_none());
+    }
+
+    #[test]
+    fn dense_small_font_contract_with_high_edge_halo_is_binarized() {
+        // Why: dense legal/contract pages accumulate 4–5.5% dark-side anti-aliased edge pixels globally while preserving local block luminance (|mu' - mu| << 40).
+        let (w, h) = (1000, 1000);
+        let mut samples = vec![245u8; w * h];
+        // Dense horizontal 2px dark text rows + 1px dark anti-aliased edge (lum = 95) -> 4.8% global darkened midtones,
+        // yet every tile still has >=25% white paper and smooth-grey distortion remains 0.
+        for y in (60..940).step_by(18) {
+            for x in 80..920 {
+                samples[y * w + x] = 20;
+                samples[(y + 1) * w + x] = 20;
+                samples[(y + 2) * w + x] = 95;
+            }
+        }
+        assert!(try_binarize_scan(&samples, w, w, h, 1).is_some());
     }
 }
