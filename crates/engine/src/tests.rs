@@ -15687,3 +15687,64 @@ fn xfa_global_copies_share_check_box_states_and_list_values() {
         assert_eq!(shared_master_shown(&s, again), vec![expected; 3], "checkbox {checkbox}: reopened");
     }
 }
+
+/// [`master_round_trip_review_template`] with every event script taken out, so the form has no
+/// scripts at all (and the session keeps no template for it).
+fn script_free_master_template() -> String {
+    let mut xml = master_round_trip_review_template();
+    while let Some(start) = xml.find("<event ") {
+        let end = start + xml[start..].find("</event>").unwrap() + "</event>".len();
+        xml.replace_range(start..end, "");
+    }
+    xml
+}
+
+/// A form with no scripts shares a global field's value too: its template is parsed for the
+/// binding even though no script needs it.
+#[test]
+fn xfa_global_copies_share_values_in_a_form_without_scripts() {
+    let xml = script_free_master_template();
+    let shell = Arc::new(pdfcraft_xfa::fixtures::shell(&xml));
+    let cos = pdfcraft_cos::Document::open(shell.clone()).unwrap();
+    assert!(!pdfcraft_xfa::has_scripts(&pdfcraft_xfa::template_of(&cos).unwrap()), "the fixture has no scripts");
+    for javascript in [true, false] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_javascript(javascript);
+        let id = s.open("plain.pdf", None, shell.clone(), None).unwrap();
+        assert_eq!(shared_master_shown(&s, id), shown_as("GLOBAL_VALUE"));
+        let names = shared_master_names(&s, id);
+        s.apply(id, Edit::SetFieldValue { name: names[1].clone(), value: FieldValue::Text("NO_SCRIPTS".into()) }).unwrap();
+        assert_eq!(shared_master_shown(&s, id), shown_as("NO_SCRIPTS"), "javascript {javascript}: shown");
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(shared_master_stored(&saved).as_deref(), Some("NO_SCRIPTS"), "javascript {javascript}: stored");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(shared_master_shown(&s, again), shown_as("NO_SCRIPTS"), "javascript {javascript}: reopened");
+    }
+}
+
+/// A value a script change writes counts as much as a typed one: in a batch mixing the two,
+/// whichever comes last reaches every copy, and a script change alone reaches them too.
+#[test]
+fn xfa_global_copies_share_the_last_value_of_a_batch_mixing_typed_and_script_changes() {
+    for javascript in [true, false] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000).with_xfa_time_scale(100);
+        s.set_javascript(javascript);
+        let id = s.open("mixed.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&master_round_trip_review_template())), None).unwrap();
+        let names = shared_master_names(&s, id);
+        let typed = |name: &str, text: &str| Edit::SetFieldValue { name: name.into(), value: FieldValue::Text(text.into()) };
+        let scripted = |name: &str, text: &str| Edit::ApplyScriptChanges {
+            changes: vec![pdfcraft_forms::FieldChange { name: name.into(), value: Some(vec![text.into()]), ..Default::default() }],
+        };
+        let cases = [
+            (vec![typed(&names[0], "TYPED"), scripted(&names[2], "SCRIPTED")], "SCRIPTED"),
+            (vec![scripted(&names[2], "SCRIPTED_FIRST"), typed(&names[0], "TYPED_LAST")], "TYPED_LAST"),
+            (vec![scripted(&names[1], "SCRIPT_ALONE")], "SCRIPT_ALONE"),
+        ];
+        for (edits, last) in cases {
+            s.apply(id, Edit::Batch { label: "Fill in".into(), edits }).unwrap();
+            assert_eq!(shared_master_shown(&s, id), shown_as(last), "javascript {javascript}: shown");
+            let saved = s.save_bytes(id).unwrap();
+            assert_eq!(shared_master_stored(&saved).as_deref(), Some(last), "javascript {javascript}: stored");
+        }
+    }
+}
