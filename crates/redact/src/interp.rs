@@ -558,10 +558,8 @@ struct Walk {
     patterns: Vec<Vec<u8>>,
     /// This scope's `/ColorSpace` resources, read once, for [`Walk::may_be_pattern_space`].
     colour_spaces: Dict,
-    /// The resources give a default colour space (`/DefaultGray`, `/DefaultRGB`, `/DefaultCMYK`)
-    /// that isn't known not to be a Pattern space. None may be one (ISO 32000-2 §8.6.5.6), and
-    /// what a reader does with one that is can't be told, so in this scope no device colour
-    /// operator proves a pattern left.
+    /// [`odd_defaults`] of this scope's resources: in this scope no device colour operator proves
+    /// a pattern left.
     odd_defaults: bool,
     /// [`type3_may_select_pattern`] for the fonts `Tf` selected, by resource name: a page sets
     /// the same few fonts again and again.
@@ -604,9 +602,7 @@ impl Walk {
             clipped: HashSet::new(),
             out: Output::default(),
         };
-        walk.odd_defaults = [b"DefaultGray".as_slice(), b"DefaultRGB", b"DefaultCMYK"]
-            .into_iter()
-            .any(|default| walk.colour_spaces.contains(default) && walk.may_be_pattern_space(doc, Some(default)));
+        walk.odd_defaults = odd_defaults(doc, &walk.colour_spaces);
         walk
     }
 
@@ -625,36 +621,9 @@ impl Walk {
         piece.changed |= was_changed;
     }
 
-    /// Whether the colour space `cs`/`CS` names may be a Pattern space: `/Pattern`, a name the
-    /// resources give as one, or one that can't be told (no name, not in the resources, not a
-    /// colour space). Readers differ on a Pattern space named through the resources, so it counts.
+    /// [`may_be_pattern_space`] in this scope's `/ColorSpace` resources.
     fn may_be_pattern_space(&self, doc: &Document, name: Option<&[u8]>) -> bool {
-        let known = |family: &[u8]| {
-            matches!(
-                family,
-                b"DeviceGray"
-                    | b"DeviceRGB"
-                    | b"DeviceCMYK"
-                    | b"CalGray"
-                    | b"CalRGB"
-                    | b"Lab"
-                    | b"ICCBased"
-                    | b"Indexed"
-                    | b"Separation"
-                    | b"DeviceN"
-            )
-        };
-        match name {
-            Some(b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK") => false,
-            Some(name) => match self.colour_spaces.get(name).map(|space| doc.resolve(space)).as_deref() {
-                Some(Object::Name(family)) => !known(family),
-                Some(Object::Array(space)) => {
-                    !space.first().map(|family| doc.resolve(family)).is_some_and(|family| family.as_name().is_some_and(known))
-                }
-                _ => true,
-            },
-            None => true,
-        }
+        may_be_pattern_space(doc, &self.colour_spaces, name)
     }
 
     fn interpret(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) {
@@ -850,19 +819,27 @@ impl Walk {
             b"J" => self.gs.line_cap = last.map_or(self.gs.line_cap, |j| j as i64),
             _ => {
                 // The state under either operand the readers here take (`last_name`, `name(0)`).
+                // They may name two states: a font either sets may be the one in force, so the
+                // fonts are judged together, not the second over the first.
+                let mut sets_type3 = None;
                 for name in [op.last_name(), op.name(0)].into_iter().flatten() {
                     let Some(state) = self.ext_gstates.get(name).map(|s| doc.resolve(s)) else { continue };
                     let Some(state) = state.as_dict() else {
                         // Not a dictionary: what it sets can't be told.
-                        (self.gs.soft_mask, self.gs.type3) = (true, true);
+                        self.gs.soft_mask = true;
+                        sets_type3 = Some(true);
                         continue;
                     };
                     self.gs.soft_mask |=
                         state.get(b"SMask").map(|m| doc.resolve(m)).is_some_and(|m| !matches!(&*m, Object::Null) && m.as_name() != Some(b"None"));
                     if let Some(font) = state.get(b"Font").map(|f| doc.resolve(f)) {
                         let font = font.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
-                        self.gs.type3 = font.as_deref().and_then(Object::as_dict).is_none_or(|d| type3_may_select_pattern(doc, scope, d));
+                        let may = font.as_deref().and_then(Object::as_dict).is_none_or(|d| type3_may_select_pattern(doc, scope, d));
+                        sets_type3 = Some(sets_type3.unwrap_or(false) || may);
                     }
+                }
+                if let Some(may) = sets_type3 {
+                    self.gs.type3 = may;
                 }
                 if let Some((font, vertical, size)) = op.last_name().and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
@@ -1534,6 +1511,38 @@ fn may_be_type3(doc: &Document, font: &Dict) -> bool {
     !matches!(subtype.as_deref().and_then(Object::as_name), Some(b"Type1" | b"MMType1" | b"TrueType" | b"Type0"))
 }
 
+/// Whether the colour space `cs`/`CS` names may be a Pattern space, `colour_spaces` being the
+/// scope's `/ColorSpace` resources: `/Pattern`, a name the resources give as one, or one that
+/// can't be told (no name, not in the resources, not a colour space). Readers differ on a Pattern
+/// space named through the resources, so it counts.
+fn may_be_pattern_space(doc: &Document, colour_spaces: &Dict, name: Option<&[u8]>) -> bool {
+    let known = |family: &[u8]| {
+        matches!(
+            family,
+            b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"CalGray" | b"CalRGB" | b"Lab" | b"ICCBased" | b"Indexed" | b"Separation" | b"DeviceN"
+        )
+    };
+    match name {
+        Some(b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK") => false,
+        Some(name) => match colour_spaces.get(name).map(|space| doc.resolve(space)).as_deref() {
+            Some(Object::Name(family)) => !known(family),
+            Some(Object::Array(space)) => !space.first().map(|family| doc.resolve(family)).is_some_and(|family| family.as_name().is_some_and(known)),
+            _ => true,
+        },
+        None => true,
+    }
+}
+
+/// Whether `colour_spaces` gives a default colour space (`/DefaultGray`, `/DefaultRGB`,
+/// `/DefaultCMYK`) that isn't known not to be a Pattern space. None may be one (ISO 32000-2
+/// §8.6.5.6), and what a reader does with one that is can't be told, so where one is in force no
+/// device colour operator proves a pattern left.
+fn odd_defaults(doc: &Document, colour_spaces: &Dict) -> bool {
+    [b"DefaultGray".as_slice(), b"DefaultRGB", b"DefaultCMYK"]
+        .into_iter()
+        .any(|default| colour_spaces.contains(default) && may_be_pattern_space(doc, colour_spaces, Some(default)))
+}
+
 /// Most glyph descriptions of one Type 3 font read to tell whether it may select a pattern, most
 /// bytes one may decode to, and most bytes a page's may decode to together: past any of them the
 /// font counts as one that may.
@@ -1551,6 +1560,18 @@ const MAX_TYPE3_PAGE_BYTES: usize = 16 << 20;
 fn type3_may_select_pattern(doc: &Document, scope: &mut Scope<'_>, font: &Dict) -> bool {
     if !may_be_type3(doc, font) {
         return false;
+    }
+    // Its glyphs paint in the font's own resources, whose default colour spaces are in force
+    // for the device colour operators a plain glyph may use. A font without resources paints in
+    // those of the scope that shows it, which `Walk::odd_defaults` covers.
+    match font.get(b"Resources").map(|r| doc.resolve(r)).as_deref() {
+        None | Some(Object::Null) => {}
+        Some(Object::Dict(resources)) => match resources.get(b"ColorSpace").map(|c| doc.resolve(c)).as_deref() {
+            None | Some(Object::Null) => {}
+            Some(Object::Dict(colour_spaces)) if !odd_defaults(doc, colour_spaces) => {}
+            _ => return true,
+        },
+        _ => return true,
     }
     let Some(procs) = font.get(b"CharProcs").map(|p| doc.resolve(p)) else { return true };
     let Some(procs) = procs.as_dict() else { return true };
@@ -1585,7 +1606,12 @@ fn type3_glyph_is_plain(doc: &Document, reference: ObjRef, left: &mut usize) -> 
     if by_reference(b"Filter") || by_reference(b"DecodeParms") || glyph.dict.contains(b"F") {
         return false;
     }
-    let Ok(data) = glyph.decoded_strict_within(MAX_TYPE3_GLYPH_BYTES.min(*left)) else { return false };
+    let Ok(data) = glyph.decoded_strict_within(MAX_TYPE3_GLYPH_BYTES.min(*left)) else {
+        // A decode that fails may have expanded up to its limit first, and how far isn't told:
+        // nothing more is read for this page, so the work stays within the page's allowance.
+        *left = 0;
+        return false;
+    };
     *left = left.saturating_sub(data.len());
     let parsed = pdfcraft_content::parse(&data);
     parsed.skipped == 0

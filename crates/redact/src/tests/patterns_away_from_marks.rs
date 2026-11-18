@@ -163,6 +163,24 @@ fn a_pattern_that_may_paint_under_a_mark_is_still_refused() {
             type3.into(),
             vec![glyph.as_bytes().to_vec(), stream("/DecodeParms 11 0 R", b"1000 0 d0 0 0 1000 1000 re f"), b"<< >>".to_vec()],
         ),
+        // An ExtGState operator with two names: readers differ on which one counts, so a font
+        // either may set counts.
+        (
+            "a Type 3 font set by one of two graphics state names",
+            "/Plain /Glyph gs BT 10 100 Td (a) Tj ET".into(),
+            format!("{type3} /ExtGState << /Plain << /Font [5 0 R 10] >> /Glyph << /Font [9 0 R 10] >> >>"),
+            vec![glyph.as_bytes().to_vec(), stream("", b"1000 0 d0 /Pattern cs /P1 scn 0 0 1000 1000 re f")],
+        ),
+        // A plain glyph whose font gives a default colour space that may be a Pattern space.
+        (
+            "a Type 3 font with a default space that is a Pattern space",
+            t3.into(),
+            type3.into(),
+            vec![
+                glyph.replace("/Resources << >>", "/Resources << /ColorSpace << /DefaultGray /Pattern >> >>").into_bytes(),
+                stream("", b"1000 0 d0 0 g 0 0 1000 1000 re f"),
+            ],
+        ),
         // A form under the mark that can't be read is removed with whatever it painted.
         (
             "a form removed unread",
