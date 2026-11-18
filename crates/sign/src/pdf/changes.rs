@@ -7,8 +7,9 @@ use std::cell::{Cell, OnceCell};
 /// the lists are not compared, and the change is refused.
 const MAX_ANNOT_ENTRIES: usize = 1 << 22;
 
-/// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
-/// an approval signature permits form fill, comments and further signatures).
+/// What later revisions changed, classified as Acrobat reports it, under permission level `p`:
+/// the certification's DocMDP level, or the level a signature set by locking the document (or
+/// none: an approval signature permits form fill, comments and further signatures).
 pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Modification {
     let Some(old) = old else {
         return Modification::Disallowed(vec![kind::UNREADABLE]);

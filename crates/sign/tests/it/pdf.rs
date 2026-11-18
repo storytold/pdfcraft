@@ -482,6 +482,110 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
+/// [`fixture`] whose signature field "Approval" has a `/Lock` over all fields, with `/P` `p`.
+fn fixture_with_lock(p: Option<Object>) -> Document {
+    let mut doc = open(&fixture());
+    let mut lock = vec![("Type", Object::name("SigFieldLock")), ("Action", Object::name("All"))];
+    lock.extend(p.map(|p| ("P", p)));
+    doc.update_dict(ObjRef { num: 6, generation: 0 }, |f| f.set(b"Lock".to_vec(), Object::Dict(dict_of(lock)))).unwrap();
+    doc
+}
+
+/// A signature field's `/Lock` may carry `/P`, the changes the document allows once the field is
+/// signed (ISO 32000-2 §12.7.5.5), with the meaning of a DocMDP level. Changes after such a
+/// signature are judged by it, though it is an approval signature and no certification (#6865):
+/// after `/P 1` a later signature or comment is not permitted and a document timestamp is, after
+/// `/P 2` a signature is and a comment is not, and `/P 3` or no `/P` changes nothing.
+#[test]
+fn later_changes_are_classified_under_a_signature_field_locks_level() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let id2 = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Approval").unwrap();
+    let sign_locked =
+        |p: Option<Object>| pdfcraft_sign::sign(&fixture_with_lock(p), &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let approval: &[(&[u8], Object)] = &[(b"Type", Object::name("Sig")), (b"SubFilter", Object::name("adbe.pkcs7.detached"))];
+
+    // "No changes": the lock itself changes nothing about the signature while nothing follows.
+    let locked = sign_locked(Some(Object::Int(1)));
+    let s = check(&locked);
+    assert_eq!((s.certify, s.status, s.modification.clone()), (None, Status::Valid, Modification::None), "{:?}", s.details);
+    // A later approval signature breaks it, as it breaks a no-changes certification.
+    let s = check(&edit_after(&locked, |doc| add_sig_widget(doc, Some(approval), [0, 0, 0, 0])));
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
+    assert_eq!(s.status, Status::Invalid);
+    // So does a comment.
+    let s = check(&edit_after(&locked, add_comment));
+    assert_eq!((s.status, s.modification.clone()), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+    // A document timestamp is validation data, which "no changes" permits.
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let stamped = pdfcraft_sign::timestamp_document(&open(&locked), &tsa, "D:20261006120000Z").unwrap();
+    let s = check(&stamped);
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
+    // The level is the signed revision's: a later one that rewrites the lock does not relax it.
+    let relaxed = edit_after(&locked, |doc| {
+        let lock = dict_of(vec![("Type", Object::name("SigFieldLock")), ("Action", Object::name("All")), ("P", Object::Int(3))]);
+        doc.update_dict(ObjRef { num: 6, generation: 0 }, |f| f.set(b"Lock".to_vec(), Object::Dict(lock))).unwrap();
+        add_comment(doc);
+    });
+    assert_eq!(check(&relaxed).status, Status::Invalid, "{:?}", check(&relaxed).modification);
+    // /P written by reference is the same level.
+    let mut doc = open(&fixture());
+    let one = doc.add(Object::Int(1));
+    let lock = dict_of(vec![("Type", Object::name("SigFieldLock")), ("Action", Object::name("All")), ("P", Object::Ref(one))]);
+    doc.update_dict(ObjRef { num: 6, generation: 0 }, |f| f.set(b"Lock".to_vec(), Object::Dict(lock))).unwrap();
+    let by_reference = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    assert_eq!(check(&edit_after(&by_reference, add_comment)).status, Status::Invalid);
+
+    // "Form filling and signing": a later signature is permitted, a comment is not.
+    let locked = sign_locked(Some(Object::Int(2)));
+    let countersigned = pdfcraft_sign::sign(&open(&locked), &id2, &SignOptions { rect: Some([20.0, 160.0, 220.0, 210.0]), ..opts() }).unwrap();
+    let s = check(&countersigned);
+    assert_eq!((s.status, s.modification.clone()), (Status::Valid, Modification::Allowed(vec![kind::SIGNATURE])), "{:?}", s.details);
+    let s = check(&edit_after(&locked, add_comment));
+    assert_eq!((s.status, s.modification.clone()), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])));
+
+    // "Also annotations", or a lock that sets no level: as an approval signature without a lock.
+    for p in [Some(Object::Int(3)), None] {
+        let locked = sign_locked(p.clone());
+        let s = check(&edit_after(&locked, add_comment));
+        assert_eq!((s.status, s.modification.clone()), (Status::Valid, Modification::Allowed(vec![kind::COMMENTS])), "/P {p:?}: {:?}", s.details);
+    }
+}
+
+/// Two fields of the signed revision can hold one signature. They get one verdict (#6041), held
+/// to the strictest lock among them: a field with no lock, listed first, does not lend its level
+/// to the others (#6865). Here "Second" locks the document with `/P 1` and "Approval", listed
+/// first, does not, and a later comment breaks the signature under both names.
+#[test]
+fn a_signature_two_fields_hold_is_judged_by_the_strictest_lock() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let base = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] >> >>",
+        &[b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Second) /Rect [0 0 0 0] /P 3 0 R /F 4 /Lock << /Type /SigFieldLock /Action /All /P 1 >> >>"],
+    );
+    let sign_approval = |doc: &Document| pdfcraft_sign::sign(doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    // The object the signature dictionary becomes, learnt from a first run: "Second" names it as
+    // its value before signing, so the signed revision has it in both fields.
+    let trial = sign_approval(&open(&base));
+    let value = open(&trial).get(ObjRef { num: 6, generation: 0 }).as_dict().and_then(|f| f.get(b"V")).and_then(Object::as_ref).unwrap();
+    let mut doc = open(&base);
+    doc.update_dict(ObjRef { num: 7, generation: 0 }, |f| f.set(b"V".to_vec(), Object::Ref(value))).unwrap();
+    let signed = sign_approval(&doc);
+    let of = |bytes: &[u8], field: &str| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == field).unwrap();
+    for field in ["Approval", "Second"] {
+        let s = of(&signed, field);
+        assert!(s.signed && s.status == Status::Valid, "{field}: {:?} {:?}", s.status, s.details);
+    }
+    let commented = edit_after(&signed, add_comment);
+    for field in ["Approval", "Second"] {
+        let s = of(&commented, field);
+        assert_eq!((s.status, s.modification.clone()), (Status::Invalid, Modification::Disallowed(vec![kind::COMMENTS])), "{field}: {:?}", s.details);
+    }
+}
+
 /// Certify `fixture` with "no changes allowed" (DocMDP P=1).
 fn certified_p1() -> (DigitalId, TrustStore, Vec<u8>) {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
