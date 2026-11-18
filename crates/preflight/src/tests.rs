@@ -3146,3 +3146,34 @@ fn pdfa4_an_embedded_file_too_large_to_read_is_unchecked() {
     assert!(found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
     assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
 }
+
+/// An embedded file's `/Filter` is made direct only when every filter resolves to a name: one that
+/// resolves to anything else leaves the stream as it is, for the decoder to reject, so a large
+/// object a filter array names many times is never copied.
+#[test]
+fn embedded_file_filters_are_copied_only_when_they_are_names() {
+    let big: String = (0..1000).map(|i| format!("/K{i} {i} ")).collect();
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "/FlateDecode",
+            &format!("<< {big} >>"),
+            "<< /Filter [3 0 R 4 0 R 4 0 R 4 0 R] /Length 0 >>\nstream\n\nendstream",
+            "<< /Filter [3 0 R 3 0 R] /Length 0 >>\nstream\n\nendstream",
+            &format!("<< /Filter [{}] /Length 0 >>\nstream\n\nendstream", "3 0 R ".repeat(pdfcraft_filters::MAX_CHAIN + 2)),
+        ],
+        "",
+    );
+    let stream = |n: u32| match &*doc.get(pdfcraft_cos::ObjRef::new(n, 0)) {
+        Object::Stream(s) => s.clone(),
+        other => panic!("not a stream: {other:?}"),
+    };
+    let dictionaries = stream(5);
+    assert!(matches!(part4::with_direct_filters(&doc, &dictionaries), std::borrow::Cow::Borrowed(_)));
+    let names = stream(6);
+    let direct = part4::with_direct_filters(&doc, &names);
+    assert_eq!(direct.dict.get(b"Filter"), Some(&Object::Array(vec![Object::name("FlateDecode"), Object::name("FlateDecode")])));
+    // More filters than a decoder takes: left for the decoder to reject.
+    assert!(matches!(part4::with_direct_filters(&doc, &stream(7)), std::borrow::Cow::Borrowed(_)));
+}

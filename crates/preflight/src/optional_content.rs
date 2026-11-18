@@ -2,7 +2,8 @@
 //! dictionary, the catalog's `/OCProperties /D` and those in its `/Configs` (ISO 32000-2 8.11.4.2,
 //! Tables 98 and 99):
 //!
-//! - has a `/Name`, unique among the configurations;
+//! - has a `/Name`, unique among the configurations: names are text strings (Table 99), so two
+//!   are the same when they decode to the same text (7.9.2.2), however each is encoded;
 //! - lists every optional content group of the file (`/OCGs`) when it has an `/Order` array, at any
 //!   depth of that array's nesting;
 //! - in PDF/A-2 and 3, has no `/AS` (auto state) entry. PDF/A-4 doesn't ask this.
@@ -92,7 +93,7 @@ pub(crate) fn check(
     for configuration in &configurations {
         let configuration = doc.resolve(configuration);
         let Some(configuration) = configuration.as_dict() else { continue };
-        match configuration.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().map(|s| s.bytes.clone())) {
+        match configuration.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_string().map(pdfcraft_cos::PdfString::to_text)) {
             Some(name) => repeated |= !names.insert(name),
             None => unnamed = true,
         }
