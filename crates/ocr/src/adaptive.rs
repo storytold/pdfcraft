@@ -6,7 +6,8 @@
 //! Prepress and content-loss guards:
 //! - Chroma guard: Rejects colored content, stamps, and highlighters.
 //! - Bimodal histogram guard: Requires clear dark ink and bright paper peaks; rejects flat or unimodal distributions.
-//! - Content-loss guard: Protects faint pencil/pen strokes from bleaching out to background.
+//! - Local 64x64 tile midtone guard: Rejects localized greyscale emblems or photos hidden inside predominantly white pages.
+//! - Symmetric content-loss guard: Protects both faint pencil/pen strokes in `[threshold..215)` from bleaching and dark-grey midtones in `(65..threshold)` from crushing to black.
 //! - Prepress fail-safe: Strictly preserves images with soft masks (/SMask, /SMaskInData),
 //!   transparency masks (/Mask), or prepress production links (/OPI).
 
@@ -43,6 +44,20 @@ const MIN_BRIGHT_RATIO: f64 = 0.50;
 
 /// Maximum fraction of pixels in `[threshold..215)` that may be bleached to white (2.0%).
 const MAX_CONTENT_LOSS_RATIO: f64 = 0.02;
+
+/// Maximum fraction of pixels in `(65..threshold)` that may be crushed to black (4.0%).
+// Why: dark-grey gradients below Otsu's threshold turn into solid black blobs without a lower-side guard.
+const MAX_DARKENED_LOSS_RATIO: f64 = 0.04;
+
+/// Spatial tile dimension for localized midtone concentration checks (64x64 pixels).
+const TILE_SIZE: usize = 64;
+
+/// Minimum pixel count in an edge/small tile before enforcing the local midtone cap (32x32).
+const MIN_TILE_PIXELS: u32 = 1024;
+
+/// Maximum midtone fraction allowed inside any single 64x64 tile (40%).
+// Why: small greyscale emblems/photos (<2% of page area) pass global ratios but saturate local tiles.
+const MAX_TILE_MIDTONE_RATIO: f64 = 0.40;
 
 /// Options for adaptive scan compression.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,16 +132,19 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
         return None;
     }
 
-    // Pass 1: Chroma & Bimodal Histogram Guard
+    // Pass 1: Chroma, Bimodal Histogram & Local 64x64 Tile Midtone Guard
     let mut hist = [0u32; 256];
     let mut dark = 0usize;
     let mut bright = 0usize;
     let mut mid = 0usize;
     let mut chroma_fringe = 0usize;
+    let tiles_x = w.div_ceil(TILE_SIZE);
+    let mut tile_mid = vec![0u32; tiles_x];
+    let mut tile_tot = vec![0u32; tiles_x];
 
-    for row in samples.chunks(row_len).take(h) {
+    for (y, row) in samples.chunks(row_len).take(h).enumerate() {
         let row_pixels = row.get(..w.checked_mul(n)?)?;
-        for chunk in row_pixels.chunks_exact(n) {
+        for (x, chunk) in row_pixels.chunks_exact(n).enumerate() {
             let lum = if n == 1 {
                 chunk[0]
             } else {
@@ -152,17 +170,34 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
             if let Some(entry) = hist.get_mut(usize::from(lum)) {
                 *entry += 1;
             }
+            let tile_idx = x / TILE_SIZE;
+            if let Some(tot) = tile_tot.get_mut(tile_idx) {
+                *tot += 1;
+            }
             match lum {
                 0..=65 => dark += 1,
                 215..=255 => bright += 1,
                 66..=214 => {
                     mid += 1;
+                    if let Some(tm) = tile_mid.get_mut(tile_idx) {
+                        *tm += 1;
+                    }
                     // Early exit if midtones exceed 6.0% (mid / total > 0.06)
                     if (mid as u64).saturating_mul(100) > (total as u64).saturating_mul(6) {
                         return None;
                     }
                 }
             }
+        }
+
+        if (y + 1) % TILE_SIZE == 0 || y + 1 == h {
+            for (&tm, &tt) in tile_mid.iter().zip(tile_tot.iter()) {
+                if tt >= MIN_TILE_PIXELS && (f64::from(tm) / f64::from(tt)) > MAX_TILE_MIDTONE_RATIO {
+                    return None;
+                }
+            }
+            tile_mid.fill(0);
+            tile_tot.fill(0);
         }
     }
 
@@ -189,6 +224,12 @@ pub fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: 
     // Guard against bleaching faint text strokes (lum in [threshold..215)).
     let bleached_ink: u32 = hist.get(usize::from(threshold)..215).map_or(0, |slice| slice.iter().sum());
     if (bleached_ink as f64 / total as f64) > MAX_CONTENT_LOSS_RATIO {
+        return None;
+    }
+
+    // Why: guard both sides of Otsu's threshold so dark-grey graphics in (65..threshold) aren't crushed to black.
+    let darkened_mid: u32 = hist.get(66..usize::from(threshold)).map_or(0, |slice| slice.iter().sum());
+    if (darkened_mid as f64 / total as f64) > MAX_DARKENED_LOSS_RATIO {
         return None;
     }
 
@@ -594,5 +635,49 @@ mod tests {
         let Object::Stream(s) = &*doc.get(r) else { panic!() };
         assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1));
         assert_eq!(s.dict.name(b"ColorSpace"), Some(b"DeviceGray".as_slice()));
+    }
+
+    #[test]
+    fn rejects_small_greyscale_emblem_on_white_text_page() {
+        // Why: office letterheads often carry small greyscale logos (<2% page area) that bypass global midtone limits and turn solid black.
+        let (w, h) = (1000, 1000);
+        let mut samples = vec![245u8; w * h];
+        // 3% crisp dark text spread across the page
+        for y in 200..900 {
+            if y % 10 == 0 {
+                for x in 100..530 {
+                    samples[y * w + x] = 25;
+                }
+            }
+        }
+        // Small 128x128 greyscale emblem/seal (~1.6% of page area) at top-left corner
+        for y in 20..148 {
+            for x in 20..148 {
+                samples[y * w + x] = if (x + y) % 2 == 0 { 110 } else { 150 };
+            }
+        }
+        assert!(try_binarize_scan(&samples, w, w, h, 1).is_none());
+    }
+
+    #[test]
+    fn protects_darkened_midtones_below_threshold() {
+        // Why: dark-grey gradients below Otsu threshold get crushed into solid black blobs unless both sides of the threshold are guarded.
+        let (w, h) = (200, 200);
+        let total = w * h; // 40_000
+        let mut samples = vec![245u8; total];
+        // 5% crisp black ink -> Otsu threshold clamps near ~135
+        for px in samples.iter_mut().take(2_000) {
+            *px = 20;
+        }
+        // 5% dark-grey midtones (lum = 95, well below threshold) distributed uniformly
+        // across rows so no single tile exceeds 40%, testing the symmetric darkened guard.
+        let mut placed = 0;
+        for px in samples.iter_mut().skip(2_000).step_by(18) {
+            if placed < 2_000 {
+                *px = 95;
+                placed += 1;
+            }
+        }
+        assert!(try_binarize_scan(&samples, w, w, h, 1).is_none());
     }
 }
