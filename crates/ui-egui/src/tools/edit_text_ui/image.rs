@@ -1154,7 +1154,15 @@ pub(crate) fn image_context_menu(
         view.pending_edit = edit(E::Ungroup);
     }
     // A raster image, or grouped artwork that wraps one picture (its frame and clip are kept).
-    if item(ui, img.replaceable, tl!("Replace image")) {
+    let replace = ui.add_enabled(img.replaceable, egui::Button::new(tl!("Replace image")));
+    let replace = if !img.is_form {
+        replace
+    } else if img.replaceable {
+        replace.on_hover_text(tl!("Replaces the picture inside this group. Its frame and crop stay."))
+    } else {
+        replace.on_disabled_hover_text(tl!("This group holds no single picture to replace. Ungroup it to replace a picture inside."))
+    };
+    if picked(ui, replace) {
         *action = Some(ImageAction::Replace(page, hit));
     }
     if item(ui, raster, tl!("Save Image As…")) {

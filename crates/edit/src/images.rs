@@ -133,9 +133,11 @@ const MAX_WRAP_DRAWS: usize = 256;
 /// How many bytes of Form content [`wrapped_picture`] decodes for one group, in all.
 const MAX_WRAP_CONTENT: usize = 16 << 20;
 
-/// A Form's own resources dictionary (empty when it has none).
-fn form_resources(doc: &Document, form: &pdfcraft_cos::Stream) -> Dict {
-    form.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default()
+/// The resources a page or Form dictionary draws with: its own `/Resources`, or, when it has
+/// none, `inherited` (the ones it is drawn with), as the renderer resolves them. A Form that has
+/// its own does not fall back to its caller's for a name they lack.
+fn resources_in(doc: &Document, dict: &Dict, inherited: &Dict) -> Dict {
+    dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_else(|| inherited.clone())
 }
 
 /// A resources dictionary's XObjects (empty when it has none).
@@ -152,7 +154,10 @@ fn resource_xobjects(doc: &Document, res: &Dict) -> Dict {
 /// inline image, so Replace never has to guess which. A Form that draws itself, a group nested
 /// deeper than [`MAX_WRAP_DEPTH`] or past the draw and content budgets is `None` too: what lies
 /// beyond the limit is unknown, so it may hold another picture.
-fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<ObjRef>) -> Option<Vec<Name>> {
+///
+/// `inherited` are the resources the group is drawn with (the page's), which a Form without
+/// `/Resources` of its own draws from. `Do` draws its last operand, as the renderer reads it.
+fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<ObjRef>, inherited: &Dict) -> Option<Vec<Name>> {
     #[derive(Default)]
     struct Scan {
         found: Vec<Vec<Name>>,
@@ -166,13 +171,14 @@ fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<Obj
             self.unknown || self.found.len() > 1
         }
     }
-    fn walk(doc: &Document, form: &pdfcraft_cos::Stream, on_path: &mut Vec<ObjRef>, path: &mut Vec<Name>, scan: &mut Scan) {
+    fn walk(doc: &Document, form: &pdfcraft_cos::Stream, inherited: &Dict, on_path: &mut Vec<ObjRef>, path: &mut Vec<Name>, scan: &mut Scan) {
         let Ok(content) = form.decoded_within(MAX_WRAP_CONTENT.saturating_sub(scan.decoded)) else {
             scan.unknown = true;
             return;
         };
         scan.decoded = scan.decoded.saturating_add(content.len());
-        let xobjects = resource_xobjects(doc, &form_resources(doc, form));
+        let resources = resources_in(doc, &form.dict, inherited);
+        let xobjects = resource_xobjects(doc, &resources);
         for op in parse(&content).ops {
             if op.is("BI") {
                 // An inline picture has no resource to swap: a second picture, never the one.
@@ -183,7 +189,7 @@ fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<Obj
                     scan.unknown = true;
                     return;
                 }
-                let Some((name, v)) = op.name(0).and_then(|n| xobjects.get(n).map(|v| (n, v))) else { continue };
+                let Some((name, v)) = op.last_name().and_then(|n| xobjects.get(n).map(|v| (n, v))) else { continue };
                 let r = v.as_ref();
                 if r.is_some_and(|r| on_path.contains(&r)) {
                     scan.unknown = true;
@@ -197,7 +203,7 @@ fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<Obj
                     Some(b"Form") if path.len() >= MAX_WRAP_DEPTH => scan.unknown = true,
                     Some(b"Form") => {
                         on_path.extend(r);
-                        walk(doc, s, on_path, path, scan);
+                        walk(doc, s, &resources, on_path, path, scan);
                         if r.is_some() {
                             on_path.pop();
                         }
@@ -212,7 +218,7 @@ fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<Obj
         }
     }
     let mut scan = Scan::default();
-    walk(doc, form, &mut root.into_iter().collect(), &mut Vec::new(), &mut scan);
+    walk(doc, form, inherited, &mut root.into_iter().collect(), &mut Vec::new(), &mut scan);
     if scan.unknown {
         return None;
     }
@@ -224,12 +230,14 @@ fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<Obj
 
 /// A copy of `form` whose picture at the end of `path` (from [`wrapped_picture`]) is `image`:
 /// each Form on the way is copied with that one resource changed, so the original artwork,
-/// which other pages may share, stays as it was. Returns the new outermost Form.
-fn replace_wrapped(doc: &mut Document, form: &pdfcraft_cos::Stream, path: &[Name], image: ObjRef) -> Result<ObjRef, EditError> {
+/// which other pages may share, stays as it was. A Form that drew with `inherited` resources
+/// gets a copy of them as its own, so every other name it draws still resolves as before.
+/// Returns the new outermost Form.
+fn replace_wrapped(doc: &mut Document, form: &pdfcraft_cos::Stream, inherited: &Dict, path: &[Name], image: ObjRef) -> Result<ObjRef, EditError> {
     let Some((name, rest)) = path.split_first() else {
         return Err(EditError::Invalid("the artwork holds no picture to replace".into()));
     };
-    let mut res = form_resources(doc, form);
+    let mut res = resources_in(doc, &form.dict, inherited);
     let mut xo = resource_xobjects(doc, &res);
     let target = if rest.is_empty() {
         image
@@ -242,7 +250,7 @@ fn replace_wrapped(doc: &mut Document, form: &pdfcraft_cos::Stream, path: &[Name
                 _ => None,
             })
             .ok_or_else(|| EditError::Invalid("the artwork's nested group is missing".into()))?;
-        replace_wrapped(doc, &child, rest, image)?
+        replace_wrapped(doc, &child, &res, rest, image)?
     };
     xo.set(name.clone(), Object::Ref(target));
     res.set(b"XObject".to_vec(), Object::Dict(xo));
@@ -416,6 +424,7 @@ impl ImageState {
 pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditError> {
     let p = page_of(doc, page)?;
     let xo = xobjects(doc, &p.dict);
+    let page_resources = resources_in(doc, &p.dict, &Dict::new());
     let mut out = Vec::new();
     // Whether each Form, by its resource name, holds one picture. A name stands for one
     // stream on this page, and a page may draw the same Form many times, so it is scanned once.
@@ -482,7 +491,8 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 name: String::from_utf8_lossy(name).into_owned(),
                 object: resource.as_ref(),
                 is_form,
-                replaceable: !is_form || *replaceable_forms.entry(name).or_insert_with(|| wrapped_picture(doc, s, resource.as_ref()).is_some()),
+                replaceable: !is_form
+                    || *replaceable_forms.entry(name).or_insert_with(|| wrapped_picture(doc, s, resource.as_ref(), &page_resources).is_some()),
                 width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 stream: pieces.piece_of(op.span.start),
@@ -1839,12 +1849,13 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
                         _ => None,
                     })
                     .ok_or_else(|| EditError::Invalid("the artwork could not be located".into()))?;
-                let Some(path) = wrapped_picture(doc, &form, img.object) else {
+                let page_resources = resources_in(doc, &p.dict, &Dict::new());
+                let Some(path) = wrapped_picture(doc, &form, img.object, &page_resources) else {
                     return Err(EditError::Invalid(
                         "this grouped artwork holds no single picture; it can be moved, resized, rotated, flipped or deleted, not replaced".into(),
                     ));
                 };
-                ("PCForm", replace_wrapped(doc, &form, &path, *r)?)
+                ("PCForm", replace_wrapped(doc, &form, &page_resources, &path, *r)?)
             } else {
                 ("PCImg", *r)
             };

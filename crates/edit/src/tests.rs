@@ -5853,6 +5853,65 @@ fn a_group_drawn_many_times_is_scanned_once() {
 }
 
 #[test]
+fn replace_swaps_the_picture_do_draws_not_a_surplus_operand() {
+    // `Do` draws its last operand; the name before it is surplus the renderer ignores.
+    let mut doc = fixture();
+    let (unused, photo) = (tiny_image(&mut doc, 10), tiny_image(&mut doc, 40));
+    let art = group(&mut doc, b"q 100 0 0 100 0 0 cm /Unused /Ph Do Q", &[("Unused", unused), ("Ph", photo)]);
+    let mut doc = draw_figure(doc, art);
+    let new_photo = tiny_image(&mut doc, 200);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).unwrap();
+    let copy = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    assert_eq!(picture_of(&doc, copy, &[], "Ph"), Some(new_photo));
+    assert_eq!(picture_of(&doc, copy, &[], "Unused"), Some(unused));
+}
+
+/// A Form with bounding box `[0 0 100 100]` and no `/Resources`: it draws with its caller's.
+fn inheriting_group(doc: &mut Document, content: &[u8]) -> pdfcraft_cos::ObjRef {
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 100].map(Object::Int).to_vec()));
+    doc.add(Object::Stream(Stream::flate(form, content)))
+}
+
+#[test]
+fn a_group_without_resources_draws_with_its_callers() {
+    // The group names no resources, so `/Ph` is the page's picture: it is the one to replace.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let art = inheriting_group(&mut doc, b"q 100 0 0 100 0 0 cm /Ph Do Q");
+    let mut doc = draw_figure(doc, art);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        if let Some(Object::Dict(xo)) = d.get_mut(b"XObject") {
+            xo.set(b"Ph".to_vec(), Object::Ref(photo));
+        }
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+    assert!(images::page_images(&doc, 0).unwrap()[0].replaceable);
+    let new_photo = tiny_image(&mut doc, 200);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).unwrap();
+    let copy = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    // The copy carries the resources it drew with as its own, with only the picture changed.
+    assert_eq!(picture_of(&doc, copy, &[], "Ph"), Some(new_photo));
+    assert_eq!(picture_of(&doc, copy, &[], "Figure"), Some(art));
+    let page_res = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let page_ph = page_res
+        .as_dict()
+        .and_then(|d| d.get(b"XObject"))
+        .map(|x| doc.resolve(x))
+        .and_then(|x| x.as_dict().and_then(|x| x.get(b"Ph")).and_then(|r| r.as_ref()));
+    assert_eq!(page_ph, Some(photo), "the page's own picture is unchanged");
+
+    // A nested Form without resources draws the group's second picture: two pictures, refused.
+    let mut doc = fixture();
+    let (first, second) = (tiny_image(&mut doc, 40), tiny_image(&mut doc, 90));
+    let inner = inheriting_group(&mut doc, b"q 50 0 0 50 0 0 cm /B Do Q");
+    let both = group(&mut doc, b"q 50 0 0 50 0 0 cm /A Do Q /Inner Do", &[("A", first), ("B", second), ("Inner", inner)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, both)), (false, false));
+}
+
+#[test]
 fn form_artwork_edits_only_the_selected_placement() {
     let mut doc = fixture(); // three pages share resources; pages 0 and 1 also share contents
     let mut form = Dict::new();
