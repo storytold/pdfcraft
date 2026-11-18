@@ -9,19 +9,19 @@
 // `content_controls`, `forms_ui::paint_page`, ..) are shown by w8's page body before `PageOverlays`, because each is
 // its own component and their signatures are their owners'.
 
-use craft::behavior::{HitShape, IconId, Input, PointerButton, PressPhase, Sense};
+use craft::behavior::{CursorIcon, HitShape, IconId, Input, PointerButton, PressPhase, Sense};
+use craft::pages::ui::PlacedPage;
 use craft::theme::variant::Tone;
 use craft::ui::contract::{Access, Animate as _, Common, Component, Cx, MeasureCx, NoValue, Outcome, PaintUi, Props, Role, Show as _};
 use craft::ui::primitives::{Draw, IconSpec, PaintShape, StrokeWidth, TextRun};
 use craft::ui::style::{ComponentStyle, DataColor, Metrics, StyleColor, StyleCx, TypeRole};
-use egui::{Color32, CornerRadius, CursorIcon, Rect, Response, Vec2, pos2};
+use egui::{Color32, CornerRadius, Rect, Response, Vec2, pos2};
 use pdfcraft_engine::{Document, FormFieldKind, LinkItem};
 use pdfcraft_render::{DocInfo, Link, LinkTarget};
 
 use super::area::{MARK_ICON_SHARE, SignTab, mark_anchor, sign_tab_on_page, sign_tabs, signature_badges, verdict_mark_rect};
 use super::page_parts::{Owner, PageLayer, PagePart, PagePress};
-use super::{DocView, PageXform};
-use crate::QuickTool;
+use super::{DocView, PageSession, PageXform};
 use crate::link_ui::{LINK_TOOL_MARGIN, target_label};
 use crate::sign_ui::status_tone;
 
@@ -74,32 +74,93 @@ pub(crate) enum LinkEvent {
 /// as page text. One list builds the parts and the same list reads their presses, so what the hand promises
 /// is what the click does.
 pub(crate) struct PageLinks<'a> {
-    /// What a click on a link does.
-    pub mode: LinkMode,
-    /// The view, whose text layer the written addresses come from. The caller refreshes them
+    mode: LinkMode,
+    /// The session, whose text layer the written addresses come from. The caller refreshes them
     /// (`DocView::refresh_text_links`) before the parts are built.
-    pub view: &'a DocView,
-    /// The document's page and link listing.
-    pub info: &'a DocInfo,
-    /// The page's place on screen.
-    pub xf: &'a PageXform,
-    /// The page.
-    pub page: usize,
-    /// The tool: only Select follows links and only Link edits them.
-    pub tool: QuickTool,
-    /// Whether addresses written as page text open too (Preferences).
-    pub text_links: bool,
-    /// Nothing is drawn over the pages (no palette, no menu), so tips show and a click counts.
-    pub unobstructed: bool,
+    session: &'a PageSession,
+    info: &'a DocInfo,
     /// In `Edit`, every link the document has (the engine's listing, which holds links the renderer cannot
     /// follow too); empty in `Follow`.
-    pub engine: &'a [LinkItem],
+    engine: &'a [LinkItem],
+    pages: &'a [PlacedPage],
+    rotation: u16,
+    sizes: &'a [(f32, f32)],
+    text_links: bool,
+    unobstructed: bool,
 }
 
-impl PageLinks<'_> {
-    /// Appends the page's link parts, later links over earlier ones as the renderer draws them. Links are
+/// One page's link family: what [`PageLinks`] builds the parts and reads the presses of a page with.
+struct LinksOnPage<'a> {
+    mode: LinkMode,
+    session: &'a PageSession,
+    info: &'a DocInfo,
+    engine: &'a [LinkItem],
+    text_links: bool,
+    unobstructed: bool,
+    /// The page's place on screen.
+    xf: PageXform,
+    page: usize,
+}
+
+impl<'a> PageLinks<'a> {
+    /// The links of `pages`, placed as `rotation` turns the view and `sizes` gives each page's size in view space.
+    /// `Follow` is the Select tool's mode, `Edit` the Link tool's; addresses written as page text are off and tips
+    /// are off until [`text_links`](Self::text_links) and [`tips`](Self::tips) say otherwise.
+    pub(crate) fn new(
+        mode: LinkMode,
+        session: &'a PageSession,
+        info: &'a DocInfo,
+        engine: &'a [LinkItem],
+        pages: &'a [PlacedPage],
+        rotation: u16,
+        sizes: &'a [(f32, f32)],
+    ) -> Self {
+        Self { mode, session, info, engine, pages, rotation, sizes, text_links: false, unobstructed: false }
+    }
+
+    /// Whether addresses written as page text open too (Preferences).
+    pub(crate) fn text_links(mut self, on: bool) -> Self {
+        self.text_links = on;
+        self
+    }
+
+    /// Nothing is drawn over the pages (no palette, no menu), so tips show and a click counts.
+    pub(crate) fn tips(mut self, on: bool) -> Self {
+        self.unobstructed = on;
+        self
+    }
+
+    fn on_page(&self, placed: &PlacedPage) -> LinksOnPage<'a> {
+        let size = self.sizes.get(placed.page).copied().unwrap_or_default();
+        LinksOnPage {
+            mode: self.mode,
+            session: self.session,
+            info: self.info,
+            engine: self.engine,
+            text_links: self.text_links,
+            unobstructed: self.unobstructed,
+            xf: PageXform::of(placed, self.rotation, size),
+            page: placed.page,
+        }
+    }
+
+    /// Appends the pages' link parts, later links over earlier ones as the renderer draws them. Links are
     /// click-only parts: a drag over one reaches what lies under it (a text selection, a new link).
     pub(crate) fn parts(&self, out: &mut Vec<PagePart>) {
+        for placed in self.pages {
+            self.on_page(placed).parts(out);
+        }
+    }
+
+    /// What `press` did to a link of its page, or `None` when it is no click of the pages' links.
+    pub(crate) fn read(&self, press: &PagePress) -> Option<LinkEvent> {
+        let placed = self.pages.iter().find(|placed| placed.page == press.page)?;
+        self.on_page(placed).read(press)
+    }
+}
+
+impl LinksOnPage<'_> {
+    fn parts(&self, out: &mut Vec<PagePart>) {
         match self.mode {
             LinkMode::Follow => self.follow_parts(out),
             LinkMode::Edit => self.edit_parts(out),
@@ -107,9 +168,6 @@ impl PageLinks<'_> {
     }
 
     fn follow_parts(&self, out: &mut Vec<PagePart>) {
-        if !matches!(self.tool, QuickTool::Select | QuickTool::Link) {
-            return;
-        }
         for link in self.info.links.iter().filter(|l| l.page == self.page) {
             let tip = self.unobstructed.then(|| target_label(self.info, &link.target));
             for shape in self.link_shapes(link) {
@@ -119,7 +177,7 @@ impl PageLinks<'_> {
         if !self.text_links {
             return;
         }
-        let (Some((_, found)), Some(page_info)) = (self.view.session.text_links.get(&self.page), self.info.pages.get(self.page)) else { return };
+        let (Some((_, found)), Some(page_info)) = (self.session.text_links.get(&self.page), self.info.pages.get(self.page)) else { return };
         for (index, link) in found.iter().enumerate() {
             // The annotation over an address is what the document asks for there.
             if self.info.links.iter().any(|l| l.page == self.page && link.covered_by(page_info, l.rect)) {
@@ -184,7 +242,7 @@ impl PageLinks<'_> {
     /// What `press` did to a link of this family, or `None` when it is no click of this page's links.
     /// A press that was not released over the part it began on is no click (`PressPhase::Release`). It
     /// reads only the press it is given, so a pass that reports none follows nothing.
-    pub(crate) fn read(&self, press: &PagePress) -> Option<LinkEvent> {
+    fn read(&self, press: &PagePress) -> Option<LinkEvent> {
         let PressPhase::Release { start, click: true, .. } = &press.phase else { return None };
         if press.page != self.page {
             return None;
@@ -199,7 +257,8 @@ impl PageLinks<'_> {
             // A web or email address written as page text (#4207): the same click, the same check and
             // confirmation on opening.
             (LinkMode::Follow, Owner::TextLink { index }) if primary && self.follows() => {
-                let uri = self.view.text_link_uri(self.page, index)?;
+                let (_, found) = self.session.text_links.get(&self.page)?;
+                let uri = found.get(index)?.uri.clone();
                 Some(LinkEvent::Follow { target: LinkTarget::Uri(uri), javascript: None })
             }
             (LinkMode::Edit, Owner::Link { index }) if primary => Some(LinkEvent::Select { page: self.page, index, clicks: start.clicks }),
@@ -210,9 +269,9 @@ impl PageLinks<'_> {
         }
     }
 
-    /// Whether a click follows a link: with the Select tool, with nothing drawn over the pages.
+    /// Whether a click follows a link: `Follow` is the Select tool's mode, and nothing is drawn over the pages.
     fn follows(&self) -> bool {
-        self.unobstructed && self.tool == QuickTool::Select
+        self.unobstructed && self.mode == LinkMode::Follow
     }
 }
 

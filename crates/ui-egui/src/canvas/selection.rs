@@ -1,5 +1,6 @@
 use super::{Arc, DocInfo, DocView, Edit, PageSession, PageText, Pos2, Range, Rect, comments};
 use crate::QuickTool;
+use craft::behavior::Selection;
 use craft::behavior::kurbo::{self, Point};
 use craft::pages::ui::{PageBody, PageTextSource, PageTexts, TextSelection, TextSpan as FwSpan};
 use craft::ui::buttons::Button;
