@@ -193,6 +193,21 @@ pub struct TextNotice {
     pub redrawn_elsewhere: bool,
 }
 
+/// A measurement of how the file's bytes are spent, owning what it reads so it can run off the UI thread
+/// ([`Document::space_audit_job`]).
+pub struct SpaceAuditJob {
+    /// The document as the editor holds it; `None` when the document can't be read for editing.
+    cos: Option<pdfcraft_cos::Document>,
+    size: u64,
+}
+
+impl SpaceAuditJob {
+    /// The measurement [`Document::audit_space`] makes; empty when the document can't be read for editing.
+    pub fn run(self) -> Vec<optimize::SpaceUse> {
+        self.cos.map(|cos| optimize::audit_space(&cos, self.size)).unwrap_or_default()
+    }
+}
+
 impl std::fmt::Display for TextNotice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ch = format!("\"{}\" (U+{:04X})", self.ch.escape_debug(), u32::from(self.ch));
@@ -288,6 +303,11 @@ impl Document {
     /// PDF Optimizer ▸ Audit space usage.
     pub fn audit_space(&self) -> Vec<optimize::SpaceUse> {
         self.editor.as_ref().map(|e| optimize::audit_space(&e.cos, self.bytes.len() as u64)).unwrap_or_default()
+    }
+
+    /// [`Self::audit_space`] as a job over a copy of the document's state, to run in the background.
+    pub fn space_audit_job(&self) -> SpaceAuditJob {
+        SpaceAuditJob { cos: self.editor.as_ref().map(|e| e.cos.clone()), size: self.bytes.len() as u64 }
     }
 
     /// The backdrop `page` (0-based) paints itself, which hides a background (Add Background).
