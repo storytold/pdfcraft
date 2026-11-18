@@ -1227,9 +1227,24 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
 
 [[package]]
+name = "craft-flow"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
+dependencies = [
+ "craft-wordmodel",
+ "image",
+ "log",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+
+[[package]]
+name = "craft-html"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
 
 [[package]]
 name = "craft-i18n"
@@ -1295,6 +1310,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-markdown"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
+dependencies = [
+ "craft-flow",
+ "craft-html",
+ "craft-wordmodel",
+]
+
+[[package]]
+name = "craft-math"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
+dependencies = [
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33)",
+ "serde",
+]
+
+[[package]]
 name = "craft-menu"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
@@ -1322,7 +1356,7 @@ name = "craft-opc"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
 dependencies = [
- "craft-xml",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-zip",
  "log",
  "thiserror 2.0.21",
@@ -1519,11 +1553,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wordmodel"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
+dependencies = [
+ "base64 0.23.1",
+ "craft-math",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "craft-xml"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
 dependencies = [
  "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb3f47f7ae712192586984af11ca8f6c0f64d33#fbb3f47f7ae712192586984af11ca8f6c0f64d33"
+dependencies = [
+ "quick-xml 0.41.0",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -3410,6 +3468,7 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png 0.18.1",
@@ -4759,10 +4818,11 @@ dependencies = [
 name = "pdfcraft-export"
 version = "0.21.1"
 dependencies = [
+ "craft-markdown",
  "craft-mime",
  "craft-opc",
  "craft-rtf",
- "craft-xml",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "craft-zip",
  "flate2",
 ]
@@ -4914,7 +4974,7 @@ name = "pdfcraft-preflight"
 version = "0.21.1"
 dependencies = [
  "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8503f24cb845268f47f97e829491114fe9ad1bfa)",
- "craft-xml",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "flate2",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4942,7 +5002,7 @@ name = "pdfcraft-redact"
 version = "0.21.1"
 dependencies = [
  "aho-corasick",
- "craft-xml",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -5110,7 +5170,7 @@ version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
- "craft-xml",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "sha2 0.11.1",
@@ -5123,7 +5183,7 @@ version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
  "craft-csv",
- "craft-xml",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
  "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-forms",
