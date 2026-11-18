@@ -59,6 +59,10 @@ const MAX_DECODED: usize = 1 << 28;
 const MAX_DEPTH: usize = 32;
 /// How many content streams are read in all.
 const MAX_STREAMS: usize = 1 << 16;
+/// How many glyph procedures the Type 3 fonts list may be passed over in all as read already with
+/// the same resources. Fonts sharing one `/CharProcs` dictionary would otherwise go through it once
+/// each: past this many, no more glyphs are read.
+const MAX_PASSED: usize = 1 << 16;
 /// The bytes of content read in all, a stream read again with other resources counted again:
 /// twice [`MAX_DECODED`], so content read once always fits.
 const MAX_READ: usize = 2 * MAX_DECODED;
@@ -84,8 +88,10 @@ pub(crate) fn check(doc: &Document) -> Findings {
     let mut walk = Walk {
         doc,
         seen: HashMap::new(),
+        procs: HashMap::new(),
         decoded: HashMap::new(),
         streams: 0,
+        passed: 0,
         read: 0,
         budget: DecodeBudget::new(MAX_DECODED, usize::MAX),
         found: Findings::default(),
@@ -160,10 +166,15 @@ struct Walk<'a> {
     doc: &'a Document,
     /// The content streams and Type 3 fonts read, each with the shallowest depth it was read at.
     seen: HashMap<Visit, usize>,
+    /// The Type 3 `/CharProcs` dictionaries gone through, as [`Self::seen`]: each with the
+    /// resource dictionary and `explicit` its glyphs were read with.
+    procs: HashMap<Visit, usize>,
     /// The data of each content stream decoded, so one read again with other resources isn't
     /// decoded again (`None` when it can't be).
     decoded: HashMap<ObjRef, Option<Arc<[u8]>>>,
     streams: usize,
+    /// The glyph procedures passed over as read already (see [`MAX_PASSED`]).
+    passed: usize,
     /// The bytes of content read so far (see [`MAX_READ`]).
     read: usize,
     budget: DecodeBudget,
@@ -177,14 +188,7 @@ impl Walk<'_> {
     /// deeper visit is then read. Never at the same depth or deeper, so a cycle ends.
     fn visit(&mut self, o: &Object, context: Context, explicit: bool, depth: usize) -> bool {
         let Object::Ref(r) = o else { return true };
-        let key = (*r, context, explicit);
-        match self.seen.get(&key) {
-            Some(&before) if before <= depth => false,
-            _ => {
-                self.seen.insert(key, depth);
-                true
-            }
-        }
+        first_visit(&mut self.seen, (*r, context, explicit), depth)
     }
 
     /// The decoded data of the stream `o` refers to, read as [`Self::visit`] says: once per stream,
@@ -358,9 +362,24 @@ impl Walk<'_> {
             None => context,
         };
         let resources = own.as_deref().or(outer);
-        let procs = d.get(b"CharProcs").map(|c| doc.resolve(c));
+        if depth > MAX_DEPTH {
+            return;
+        }
+        // A `/CharProcs` dictionary fonts share is gone through once for each resource dictionary
+        // and `explicit` its glyphs are read with, as its glyphs are: another font with the same
+        // ones would find each of them read already. Its object stands for it when it is written
+        // in the font.
+        let procs_entry = d.get(b"CharProcs");
+        let procs_key = procs_entry.and_then(Object::as_ref).or_else(|| f.as_ref());
+        if let Some(r) = procs_key
+            && !first_visit(&mut self.procs, (r, context, explicit), depth)
+        {
+            return;
+        }
+        let procs = procs_entry.map(|c| doc.resolve(c));
         for (_, p) in procs.as_deref().and_then(Object::as_dict).into_iter().flat_map(|d| d.iter()) {
-            if depth > MAX_DEPTH {
+            // Past the stream limit nothing more is read; past the passed limit, no more glyphs.
+            if self.streams >= MAX_STREAMS || self.passed >= MAX_PASSED {
                 return;
             }
             // A glyph's own stream may carry the resources it uses, as readers accept.
@@ -374,12 +393,27 @@ impl Walk<'_> {
             // with, the font's own among them, and for whether its font has them: two fonts may
             // share it.
             let glyph_explicit = explicit || glyph_own.is_some();
-            let Some(data) = self.decode(p, if glyph_own.is_some() { None } else { context }, glyph_explicit, depth) else { continue };
+            if !self.visit(p, if glyph_own.is_some() { None } else { context }, glyph_explicit, depth) {
+                self.passed = self.passed.saturating_add(1);
+                continue;
+            }
+            let Some(data) = self.data(p) else { continue };
             let context = match &glyph_entry {
                 Some(entry) => entry.as_ref().or_else(|| p.as_ref()),
                 None => context,
             };
             self.run(&data, glyph_own.as_deref().or(resources), context, glyph_explicit, Holder::Type3, depth);
+        }
+    }
+}
+
+/// Whether `key` is read at `depth` as [`Walk::visit`] says, noting it in `seen` when it is.
+fn first_visit(seen: &mut HashMap<Visit, usize>, key: Visit, depth: usize) -> bool {
+    match seen.get(&key) {
+        Some(&before) if before <= depth => false,
+        _ => {
+            seen.insert(key, depth);
+            true
         }
     }
 }

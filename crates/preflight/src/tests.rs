@@ -2630,6 +2630,43 @@ fn a_shared_glyph_is_read_for_a_font_without_resources_too_clause_6_2_2() {
     }
 }
 
+/// Type 3 fonts that share one `/CharProcs` dictionary don't go through it once each: with the
+/// same resources it is gone through once, and glyphs passed over as read already count towards a
+/// limit past which no more glyphs are read. A last font `T`, selected after the others, has a
+/// glyph with an undefined operator.
+#[test]
+fn type3_fonts_sharing_char_procs_are_bounded_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    // `fonts` fonts (each with `font_own` added) sharing a `/CharProcs` dictionary (6) of 256
+    // glyphs (each with `glyph_own` added).
+    let found = |fonts: usize, font_own: &str, glyph_own: &str| {
+        let glyphs = 256;
+        let first_font = 7 + glyphs;
+        let t = first_font + fonts;
+        let names: String = (0..fonts).map(|i| format!("/F{i} {} 0 R ", first_font + i)).collect();
+        let mut objs = vec![format!("<< /Font << {names}/T {t} 0 R >> >>")];
+        objs.push(format!("<< {}>>", (0..glyphs).map(|i| format!("/g{i} {} 0 R ", 7 + i)).collect::<String>()));
+        objs.extend((0..glyphs).map(|_| content(glyph_own, "1000 0 d0")));
+        let font = |procs: &str, own: &str| {
+            format!("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs {procs} {own} >>")
+        };
+        objs.extend((0..fonts).map(|_| font("6 0 R", font_own)));
+        objs.push(font(&format!("<< /a {} 0 R >>", t + 1), "/Resources << >>"));
+        objs.push(content("", "1000 0 d0 UnknownOperator"));
+        let page: String = (0..fonts).map(|i| format!("/F{i} 1 Tf ")).collect();
+        let more: Vec<&str> = objs.iter().map(String::as_str).collect();
+        content_findings("", "/Resources 5 0 R", &format!("BT {page}/T 1 Tf (a) Tj ET"), &more)
+    };
+    // 300 fonts without resources, read with the page's: the dictionary is gone through once, so
+    // T's glyph is read.
+    assert_eq!(found(300, "", ""), unknown);
+    // Each font with resources of its own, its glyphs with theirs: each font after the first
+    // passes over all 256 as read already. 254 such fonts stay within the limit ...
+    assert_eq!(found(255, "/Resources << >>", "/Resources << >>"), unknown);
+    // ... 256 of them don't, and T's glyph isn't read.
+    assert!(found(257, "/Resources << >>", "/Resources << >>").is_empty());
+}
+
 /// Content past damage is not followed: a name it uses isn't looked up for the association
 /// finding, and the form it would draw isn't read from there. A page part that is there but can't
 /// be read ends the page's content: the parts after it aren't read without it, while a part that
