@@ -426,6 +426,9 @@ fn pptx_bounds_distinct_pictures_and_reuses_media_across_slides() {
     let mut first = sample_page();
     let one = first.images[0].clone();
     first.images = (0..crate::as_docx::MAX_MEDIA).map(|_| Image { bytes: one.bytes.as_ref().to_vec().into(), ..one.clone() }).collect();
+    // Media names follow reading order, not the input vector. Give the reused picture a
+    // distinct top edge so it is unambiguously image1 rather than tying every rectangle.
+    first.images[0].rect[3] += 1.0;
     let mut second = sample_page();
     second.images =
         vec![first.images[0].clone(), Image { bytes: one.bytes.as_ref().to_vec().into(), ..one.clone() }, Image { bytes: Vec::new().into(), ..one }];
