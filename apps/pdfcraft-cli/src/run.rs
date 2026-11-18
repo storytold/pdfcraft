@@ -8,7 +8,12 @@ use super::{CliError, stdout_line};
 // ---- automation --------------------------------------------------------------------------------
 
 pub(crate) fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
-    let a = pdfcraft_automation::Automation::new();
+    let mut a = pdfcraft_automation::Automation::new();
+    // `--plugins DIR`: plug-ins installed in DIR/Plug-ins (the desktop app's settings folder
+    // shares them); without it, plug-ins are installed for this run only.
+    if let Some(dir) = flag(args, "--plugins") {
+        a = a.with_plugin_store(std::path::Path::new(dir));
+    }
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),
