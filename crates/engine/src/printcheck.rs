@@ -465,14 +465,18 @@ mod tests {
         // 8 px across 720 pt (10 in) is 0.8 ppi, as in the issue.
         let pixels = "A".repeat(64);
         page(&mut doc, "Unused", unused, &format!("q 720 0 0 400 0 0 cm BI /W 8 /H 8 /CS /G /BPC 8 ID {pixels} EI Q"));
-        // The long keys, and a placement squashed to nothing.
-        page(&mut doc, "Unused", unused, "q 72 0 0 0 0 0 cm BI /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 ID AAAA EI Q");
+        // The long keys: 2 px across 72 pt is 2 ppi.
+        page(&mut doc, "Unused", unused, "q 72 0 0 72 0 0 cm BI /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 ID AAAA EI Q");
+        // A placement squashed to nothing can't be measured.
+        page(&mut doc, "Unused", unused, "q 72 0 0 0 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 ID AAAA EI Q");
         let report = inspect(&doc);
         let inline: Vec<_> = report.images.iter().filter(|i| i.name == "inline image").collect();
-        assert_eq!(inline.len(), 1, "{:?}", report.images);
+        assert_eq!(inline.len(), 2, "{:?}", report.images);
         assert_eq!((inline[0].page, inline[0].pixels), (1, [8, 8]));
         assert!((inline[0].ppi - 0.8).abs() < 0.01, "{}", inline[0].ppi);
         assert!((inline[0].size_mm[0] - 254.0).abs() < 0.1 && (inline[0].size_mm[1] - 141.1).abs() < 0.1, "{:?}", inline[0].size_mm);
+        assert_eq!((inline[1].page, inline[1].pixels), (2, [2, 2]), "the long keys");
+        assert!((inline[1].ppi - 2.0).abs() < 0.01, "{}", inline[1].ppi);
         assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail" && f.page == Some(1)), "{:?}", report.findings);
         assert_eq!(report.resolution_unknown, 1, "the squashed one");
     }
