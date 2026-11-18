@@ -68,7 +68,9 @@ fn struct_parents(doc: &Document, d: &Dict) -> Option<i64> {
 impl Walk<'_> {
     /// Whether a BDC opens an artifact, or tagged content: marked content whose MCID belongs to a
     /// structure element through the parent tree entry `self.key` names (ISO 32000-2 §14.7.5.4).
-    /// An MCID that no element owns is not tagged: no tag in the tree answers it.
+    /// An MCID that no element owns is not tagged: no tag in the tree answers it. One whose entry
+    /// may be in the part of a truncated parent tree not read is not counted either way: the rule
+    /// is then left to a manual check.
     fn bdc_marks(&self, op: &pdfcraft_content::Op, props: &Dict) -> bool {
         if op.name(0) == Some(b"Artifact") {
             return true;
@@ -80,7 +82,7 @@ impl Walk<'_> {
             _ => None,
         };
         match (mcid, self.key) {
-            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, key, mcid),
+            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, key, mcid) || self.scan.tree.unread(key),
             _ => false,
         }
     }
@@ -290,9 +292,13 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
 /// Whether annotation `a`, of subtype `st`, is tagged: its /StructParent names, in the parent tree,
 /// the structure element that holds it, and that element is of the type that holds annotations of
 /// its kind (ISO 32000-2 §14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link,
-/// Annot for any other.
+/// Annot for any other. An entry that may be in the part of a truncated parent tree not read is
+/// not counted against it: the rule is then left to a manual check.
 fn annotation_tagged(doc: &Document, tree: &ParentTree, role_map: &Dict, a: &Dict, st: &[u8]) -> bool {
     let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return false };
+    if tree.unread(key) {
+        return true;
+    }
     let Some(element) = tree.element(doc, key) else { return false };
     let Some(ty) = element.as_dict().and_then(|e| e.name(b"S")).map(|s| crate::alt::standard(doc, role_map, s)) else { return false };
     let want: &[u8] = match st {

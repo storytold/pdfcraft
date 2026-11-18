@@ -399,6 +399,14 @@ fn marked_as_an_indirect_reference_still_counts_as_tagged() {
     assert_eq!(status(&check(&pdf(&none, ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None }), Rule::TaggedPdf), Status::Failed);
 }
 
+/// The page content of `good()` (object 4).
+const GOOD_CONTENT: &str = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 20 180 Td (Title) Tj ET EMC \
+     /Figure << /MCID 1 >> BDC q 10 0 0 10 20 120 cm /Im Do Q EMC \
+     /Artifact BMC 0 0 200 2 re f EMC \
+     /TH << /MCID 2 >> BDC BT (A) Tj ET EMC /TH << /MCID 3 >> BDC BT (B) Tj ET EMC \
+     /TD << /MCID 4 >> BDC BT (1) Tj ET EMC /TD << /MCID 5 >> BDC BT (2) Tj ET EMC \
+     /Lbl << /MCID 6 >> BDC BT (1.) Tj ET EMC /LBody << /MCID 7 >> BDC BT (Item) Tj ET EMC";
+
 /// A tagged document that passes every automatic rule.
 fn good() -> Vec<String> {
     vec![
@@ -408,22 +416,11 @@ fn good() -> Vec<String> {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Tabs /S /Annots [9 0 R 10 0 R] /StructParents 0 \
          /Resources << /Font << /F1 5 0 R >> /XObject << /Im 11 0 R >> >> >>"
             .into(),
-        stream(
-            "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 20 180 Td (Title) Tj ET EMC \
-             /Figure << /MCID 1 >> BDC q 10 0 0 10 20 120 cm /Im Do Q EMC \
-             /Artifact BMC 0 0 200 2 re f EMC \
-             /TH << /MCID 2 >> BDC BT (A) Tj ET EMC /TH << /MCID 3 >> BDC BT (B) Tj ET EMC \
-             /TD << /MCID 4 >> BDC BT (1) Tj ET EMC /TD << /MCID 5 >> BDC BT (2) Tj ET EMC \
-             /Lbl << /MCID 6 >> BDC BT (1.) Tj ET EMC /LBody << /MCID 7 >> BDC BT (Item) Tj ET EMC",
-        ),
+        stream(GOOD_CONTENT),
         FONT.into(),
         // 6 struct tree root, 7 Document element, 8 info
         "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading1 /H1 >> /ParentTree 22 0 R /ParentTreeNextKey 3 >>".into(),
-        "<< /S /Document /P 6 0 R /Pg 3 0 R /K [12 0 R 13 0 R \
-         << /S /Table /Pg 3 0 R /A << /O /Table /Summary (Two columns) >> /K [\
-            << /S /TR /K [14 0 R 15 0 R] >> << /S /TR /K [16 0 R 17 0 R] >> ] >> \
-         << /S /L /K [ << /S /LI /K [18 0 R 19 0 R] >> ] >> 20 0 R 21 0 R] >>"
-            .into(),
+        "<< /S /Document /P 6 0 R /Pg 3 0 R /K [12 0 R 13 0 R 23 0 R 26 0 R 20 0 R 21 0 R] >>".into(),
         "<< /Title (Quarterly report) >>".into(),
         // 9 link, 10 field, 11 image
         "<< /Type /Annot /Subtype /Link /Rect [20 20 80 40] /StructParent 1 >>".into(),
@@ -431,20 +428,25 @@ fn good() -> Vec<String> {
         "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
             .into(),
         // 12 to 21: the elements the parent tree names, owners of marked content 0 to 7 on the
-        // page, of the link and of the field. The cells' parents (/P) are written as the Document,
-        // since their rows are direct objects.
+        // page, of the link and of the field. Each names its immediate parent (/P).
         "<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
         "<< /S /Figure /P 7 0 R /Pg 3 0 R /Alt (A red square) /K 1 >>".into(),
-        "<< /S /TH /P 7 0 R /Pg 3 0 R /K 2 >>".into(),
-        "<< /S /TH /P 7 0 R /Pg 3 0 R /K 3 >>".into(),
-        "<< /S /TD /P 7 0 R /Pg 3 0 R /K 4 >>".into(),
-        "<< /S /TD /P 7 0 R /Pg 3 0 R /K 5 >>".into(),
-        "<< /S /Lbl /P 7 0 R /Pg 3 0 R /K 6 >>".into(),
-        "<< /S /LBody /P 7 0 R /Pg 3 0 R /K 7 >>".into(),
+        "<< /S /TH /P 24 0 R /Pg 3 0 R /K 2 >>".into(),
+        "<< /S /TH /P 24 0 R /Pg 3 0 R /K 3 >>".into(),
+        "<< /S /TD /P 25 0 R /Pg 3 0 R /K 4 >>".into(),
+        "<< /S /TD /P 25 0 R /Pg 3 0 R /K 5 >>".into(),
+        "<< /S /Lbl /P 27 0 R /Pg 3 0 R /K 6 >>".into(),
+        "<< /S /LBody /P 27 0 R /Pg 3 0 R /K 7 >>".into(),
         "<< /S /Link /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into(),
         "<< /S /Form /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 10 0 R >> >>".into(),
         // 22: the parent tree, by the page's /StructParents and the annotations' /StructParent.
         "<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into(),
+        // 23 to 27: the table, its two rows, the list and its item.
+        "<< /S /Table /P 7 0 R /Pg 3 0 R /A << /O /Table /Summary (Two columns) >> /K [24 0 R 25 0 R] >>".into(),
+        "<< /S /TR /P 23 0 R /K [14 0 R 15 0 R] >>".into(),
+        "<< /S /TR /P 23 0 R /K [16 0 R 17 0 R] >>".into(),
+        "<< /S /L /P 7 0 R /K [27 0 R] >>".into(),
+        "<< /S /LI /P 26 0 R /K [18 0 R 19 0 R] >>".into(),
     ]
 }
 
@@ -1950,7 +1952,7 @@ fn tagged_content_and_annotations_need_an_element_in_the_parent_tree() {
     let owned = format!("<< /Nums [0 {all} 1 20 0 R 2 21 0 R] >>");
     assert_eq!(failed_with_parent_tree(&owned), []);
     // A two-level number tree, its kids given in an array by reference, with a kid listed twice.
-    let kids = "<< /Kids [23 0 R 24 0 R 23 0 R] >>";
+    let kids = "<< /Kids [28 0 R 29 0 R 28 0 R] >>";
     let mut objs = good();
     objs[21] = kids.into();
     objs.push(format!("<< /Limits [0 1] /Nums [0 {all} 1 20 0 R] >>"));
@@ -1966,9 +1968,9 @@ fn tagged_content_and_annotations_need_an_element_in_the_parent_tree() {
     // no structure hierarchy (ISO 32000-2 Table 355: /P is required).
     let mut objs = good();
     objs[11] = "<< /S /Heading1 /Pg 3 0 R /K 0 >>".into();
-    objs[19] = "<< /S /Link /P 24 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into();
-    objs.push("<< /S /Sect /P 24 0 R >>".into());
-    objs.push("<< /S /Sect /P 23 0 R >>".into());
+    objs[19] = "<< /S /Link /P 29 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into();
+    objs.push("<< /S /Sect /P 29 0 R >>".into());
+    objs.push("<< /S /Sect /P 28 0 R >>".into());
     let mut got = failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default()));
     got.sort();
     assert_eq!(got, [Rule::TaggedContent, Rule::TaggedAnnotations]);
@@ -2008,16 +2010,50 @@ fn marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry() {
     // A form XObject's marked content is keyed by its own /StructParents, not the page's.
     let doc_with = |form_key: &str, nums: &str| {
         let mut objs = good();
-        objs[2] = objs[2].replace("/XObject << /Im 11 0 R >>", "/XObject << /Im 11 0 R /Fm 23 0 R >>");
-        objs[3] = objs[3].replace("/Artifact BMC", "/Fm Do /Artifact BMC");
+        objs[2] = objs[2].replace("/XObject << /Im 11 0 R >>", "/XObject << /Im 11 0 R /Fm 28 0 R >>");
+        objs[3] = stream(&GOOD_CONTENT.replace("/Artifact BMC", "/Fm Do /Artifact BMC"));
         objs[21] = format!("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R {nums}] >>");
         let content = "/P << /MCID 0 >> BDC BT /F1 12 Tf (In a form) Tj ET EMC";
         objs.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {form_key} /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{content}\nendstream", content.len()));
-        objs.push("<< /S /P /P 7 0 R /K << /Type /MCR /Stm 23 0 R /MCID 0 >> >>".into());
+        objs.push("<< /S /P /P 7 0 R /K << /Type /MCR /Stm 28 0 R /MCID 0 >> >>".into());
         status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
     };
-    assert_eq!(doc_with("/StructParents 3", "3 [24 0 R]"), Status::Passed);
+    assert_eq!(doc_with("/StructParents 3", "3 [29 0 R]"), Status::Passed);
     // Read through the page's key instead, MCID 0 would be the heading's: it is not.
-    assert_eq!(doc_with("", "3 [24 0 R]"), Status::Failed);
+    assert_eq!(doc_with("", "3 [29 0 R]"), Status::Failed);
     assert_eq!(doc_with("/StructParents 3", ""), Status::Failed);
+}
+
+#[test]
+fn an_element_is_in_the_hierarchy_only_through_structure_elements() {
+    // ISO 32000-2 §14.7.2, Table 355: an element's parent (/P) is another structure element (/S
+    // required) or the structure tree root; a dictionary that is neither ends the way up.
+    let heading_parent = |p: &str, extra: &[&str]| {
+        let mut objs = good();
+        objs[11] = format!("<< /S /Heading1 /P {p} /Pg 3 0 R /K 0 >>");
+        objs.extend(extra.iter().map(ToString::to_string));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(heading_parent("28 0 R", &["<< /S /Sect /P 6 0 R >>"]), Status::Passed);
+    // A parent whose type is written as a string (PDFBOX-3652 after_patch.pdf) is still one.
+    assert_eq!(heading_parent("28 0 R", &["<< /S (Sect) /P 6 0 R >>"]), Status::Passed);
+    // A parent that is no structure element, on the way to the root.
+    assert_eq!(heading_parent("28 0 R", &["<< /P 6 0 R >>"]), Status::Failed);
+}
+
+#[test]
+fn a_parent_tree_read_only_in_part_leaves_the_tagging_rules_to_a_manual_check() {
+    // A number tree past the depth limit: the page's entry, at the bottom, is never read, so its
+    // content can't be called untagged; the rules come out manual rather than failed.
+    let nested = |levels: usize| {
+        let mut objs = good();
+        let first = objs.len() + 1;
+        objs[21] = format!("<< /Kids [{first} 0 R] >>");
+        objs.extend((0..levels).map(|i| format!("<< /Kids [{} 0 R] >>", first + i + 1)));
+        objs.push("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into());
+        let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+        [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields].map(|rule| status(&r, rule))
+    };
+    assert_eq!(nested(10), [Status::Passed; 3]);
+    assert_eq!(nested(80), [Status::Manual; 3]);
 }

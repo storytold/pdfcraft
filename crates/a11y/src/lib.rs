@@ -693,6 +693,11 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                 Rule::TaggedContent | Rule::CharacterEncoding => findings.is_empty(),
                 _ => false,
             };
+        // A parent tree read only in part may hold the entry of an item the scan found none for.
+        let unsure = unsure
+            || (scan.tree.truncated()
+                && findings.is_empty()
+                && matches!(rule, Rule::TaggedContent | Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields));
         if unsure {
             results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
             continue;

@@ -8870,8 +8870,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::tagged_content_and_annotations_need_an_element_in_the_parent_tree", "crates/a11y/src/tests.rs::marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry"]
-notes = "rule tagged-content: painting outside Artifact marked content and outside MCID marked content that a structure element owns, through form XObjects; counted per page. Ownership goes through the parent tree (ISO 32000-2 14.7.5.4): the page's or form XObject's /StructParents entry names, at the MCID, an element whose /P parents reach the structure tree root"
+evidence = ["crates/a11y/src/tests.rs::page_content_and_annotation_problems_are_found", "crates/a11y/src/tests.rs::tagged_content_and_annotations_need_an_element_in_the_parent_tree", "crates/a11y/src/tests.rs::marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry", "crates/a11y/src/tests.rs::an_element_is_in_the_hierarchy_only_through_structure_elements", "crates/a11y/src/tests.rs::a_parent_tree_read_only_in_part_leaves_the_tagging_rules_to_a_manual_check"]
+notes = "rule tagged-content: painting outside Artifact marked content and outside MCID marked content that a structure element owns, through form XObjects; counted per page. Ownership goes through the parent tree (ISO 32000-2 14.7.5.4): the page's or form XObject's /StructParents entry names, at the MCID, an element whose /P parents, each a structure element, reach the structure tree root. A parent tree read only in part (past its node, depth or entry limits) leaves this rule and the three annotation rules to a manual check when they find nothing"
 
 [[feature]]
 id = "a11y.rule-tagged-annotations"

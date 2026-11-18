@@ -28,6 +28,9 @@ pub(crate) struct ParentTree {
     entries: HashMap<i64, Object>,
     /// The structure tree root, when the catalog names it by reference.
     root: Option<ObjRef>,
+    /// Whether the number tree was read only up to one of the limits: an entry not found may then
+    /// be in the part not read.
+    truncated: bool,
 }
 
 impl ParentTree {
@@ -48,6 +51,7 @@ impl ParentTree {
             }
             nodes += 1;
             if nodes > MAX_NODES {
+                tree.truncated = true;
                 break;
             }
             let node = doc.resolve(&node);
@@ -55,21 +59,37 @@ impl ParentTree {
             if let Some(nums) = d.get(b"Nums").map(|n| doc.resolve(n)) {
                 for [key, value] in nums.as_array().map(Vec::as_slice).unwrap_or_default().as_chunks::<2>().0 {
                     let Some(key) = doc.resolve(key).as_int() else { continue };
-                    if tree.entries.len() >= MAX_ENTRIES {
+                    if tree.entries.len() >= MAX_ENTRIES && !tree.entries.contains_key(&key) {
+                        tree.truncated = true;
                         break;
                     }
                     tree.entries.entry(key).or_insert_with(|| value.clone());
                 }
             }
-            if depth < MAX_DEPTH
-                && let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k))
+            if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k))
                 && let Some(kids) = kids.as_array()
+                && !kids.is_empty()
             {
-                // Pushed in reverse, so the kids are read in order and an earlier key wins.
-                stack.extend(kids.iter().rev().map(|k| (k.clone(), depth + 1)));
+                if depth < MAX_DEPTH {
+                    // Pushed in reverse, so the kids are read in order and an earlier key wins.
+                    stack.extend(kids.iter().rev().map(|k| (k.clone(), depth + 1)));
+                } else {
+                    tree.truncated = true;
+                }
             }
         }
         tree
+    }
+
+    /// Whether the number tree was read only in part, so that a missing entry is not known to be
+    /// missing.
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    /// Whether entry `key` may be in the part of a truncated number tree that was not read.
+    pub fn unread(&self, key: i64) -> bool {
+        self.truncated && !self.entries.contains_key(&key)
     }
 
     /// The structure element that entry `key` names for a content item that is an object (an
@@ -87,8 +107,9 @@ impl ParentTree {
     }
 
     /// Whether `e` is a structure element of the structure hierarchy: a dictionary with a type
-    /// (/S) whose parents (/P, required: ISO 32000-2 §14.7.2, Table 355) lead to the structure tree
-    /// root. One without a parent, or whose parents end elsewhere or go round, is in no tree.
+    /// (/S) whose parents (/P, required: ISO 32000-2 §14.7.2, Table 355) are structure elements up
+    /// to the structure tree root. One without a parent, or whose parents end elsewhere (in a
+    /// dictionary that is neither), or go round, is in no tree.
     fn in_hierarchy(&self, doc: &Document, e: &Object) -> bool {
         if !e.as_dict().is_some_and(|d| d.name(b"S").is_some()) {
             return false;
@@ -107,8 +128,14 @@ impl ParentTree {
                 }
             }
             let parent = doc.resolve(parent);
-            if parent.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"StructTreeRoot")) {
+            let Some(d) = parent.as_dict() else { return false };
+            if d.name(b"Type") == Some(b"StructTreeRoot") {
                 return true;
+            }
+            // A dictionary without a structure type is no structure element; one whose type is
+            // written as a string rather than a name, as some producers write it, still is.
+            if !d.contains(b"S") {
+                return false;
             }
             node = Some(parent);
         }
