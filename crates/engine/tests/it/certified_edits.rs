@@ -1,7 +1,8 @@
 //! A certification named from the catalog's `/Perms /DocMDP` prevents the changes its DocMDP
 //! permissions don't allow, as well as detecting them (ISO 32000-2 §12.8.2.2.1, Table 257): 1 no
-//! changes, 2 filling in forms and signing, 3 comments as well. Disallowed edits are refused
-//! before they change anything; allowed ones still apply, save and keep the certification valid.
+//! changes, 2 filling in forms, instantiating page templates and signing, 3 comments as well.
+//! Disallowed edits are refused before they change anything; allowed ones still apply, and the
+//! form fill and comments save and keep the certification valid.
 
 use std::sync::Arc;
 
@@ -146,6 +147,25 @@ fn document_information_and_undo_stay_available_under_a_certification() {
     s.undo(id).expect("undo");
     s.redo(id).expect("redo");
     assert!(matches!(saved_verdict(&mut s, id), Modification::Allowed(_)), "the certification stays valid");
+}
+
+#[test]
+fn instantiating_a_page_template_is_allowed_from_form_fill_up_and_hiding_one_never() {
+    let spawn = Edit::SpawnTemplate { name: "More".into(), at: 1, rename: true };
+    let hide = |hidden| Edit::SetTemplateHidden { name: "More".into(), hidden };
+    let (s, id) = certified(Some(1));
+    let doc = s.get(id).unwrap();
+    assert_eq!(refused(doc.check_certification(&spawn)), "instantiating page templates");
+    assert_eq!(refused(doc.check_certification(&hide(false))), "changes to the document");
+    assert_eq!(refused(doc.check_certification(&hide(true))), "changes to the document");
+    for level in [2, 3] {
+        let (s, id) = certified(Some(level));
+        let doc = s.get(id).unwrap();
+        doc.check_certification(&spawn).unwrap_or_else(|e| panic!("P {level} permits instantiating a template: {e}"));
+        // Showing or hiding a template moves its own page in or out of the document.
+        assert_eq!(refused(doc.check_certification(&hide(false))), "changes to the document", "P {level}");
+        assert_eq!(refused(doc.check_certification(&hide(true))), "changes to the document", "P {level}");
+    }
 }
 
 #[test]

@@ -180,8 +180,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
 
 /// Whether a certification with DocMDP permissions `level` allows an edit (ISO 32000-2
 /// §12.8.2.2.1, Table 257). A certification the catalog's `/Perms /DocMDP` names prevents the
-/// changes it does not permit, as well as detecting them: 1 permits none, 2 filling in forms (and
-/// signing, which is not an edit), 3 comments as well. Document information is metadata at every
+/// changes it does not permit, as well as detecting them: 1 permits none, 2 filling in forms and
+/// instantiating page templates (and signing, which is not an edit), 3 comments as well. Document information is metadata at every
 /// level, as signature validation judges it (every save rewrites `/ModDate`). An import is
 /// judged by what it brings in, once it has been read ([`check_import`]); with no changes
 /// allowed it is refused here. Anything not named here is refused, so an edit added later fails
@@ -201,6 +201,16 @@ pub(crate) fn check_certification(edit: &Edit, level: u8) -> Result<(), EditErro
                 Ok(())
             } else {
                 refuse("filling in form fields")
+            }
+        }
+        // Table 257 names instantiating page templates among the changes 2 and 3 permit.
+        // Showing or hiding a template (`SetTemplateHidden`) moves the template's own page in or
+        // out of the document rather than instantiating it, and falls through to the refusal.
+        Edit::SpawnTemplate { .. } => {
+            if level >= 2 {
+                Ok(())
+            } else {
+                refuse("instantiating page templates")
             }
         }
         Edit::AddMeasurement(_)

@@ -82,8 +82,8 @@ pub enum EditError {
 fn certified_message(level: u8, what: &str) -> String {
     let allows = match level {
         1 => "no changes",
-        2 => "only filling in forms and signing",
-        _ => "only filling in forms, signing and comments",
+        2 => "only filling in forms, page templates and signing",
+        _ => "only filling in forms, page templates, signing and comments",
     };
     format!("the document is certified with {allows} allowed: {what} would invalidate the certification, so the document was not changed")
 }
