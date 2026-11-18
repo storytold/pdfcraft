@@ -57,7 +57,6 @@ pub fn percent(factor: f32) -> u32 {
     (factor * 100.0).round().clamp(0.0, 1000.0) as u32
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

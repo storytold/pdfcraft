@@ -229,10 +229,7 @@ pub(crate) fn pass(app: &mut PdfCraftApp, ctx: &Context) {
     // The window belongs to one page of one document, while that document is being prepared.
     let belongs = app.active_ids().map(|(_, id)| id) == Some(doc)
         && app.is_preparing()
-        && app
-            .session
-            .get(doc)
-            .is_some_and(|d| d.edit_generation() == generation && page < d.info.pages.len() && d.allows_modification());
+        && app.session.get(doc).is_some_and(|d| d.edit_generation() == generation && page < d.info.pages.len() && d.allows_modification());
     if !belongs {
         app.dialogs.cancel::<FieldTableDialog>(ctx);
         return;
@@ -336,8 +333,10 @@ fn widths(ui: &mut Ui, d: &mut FieldTableDraft) {
 fn names(ui: &mut Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[FormField]) {
     Text::new(tl!("Field names").to_owned()).show(ui);
     // How the names are worked out. Its tokens are the same in every language.
-    Text::new(tl!("N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.").to_owned())
-        .show(ui);
+    Text::new(
+        tl!("N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.").to_owned(),
+    )
+    .show(ui);
     // The widths shown don't depend on the names being typed below.
     let layout = d.laid(info, form);
     let total: f64 = d.table.columns.iter().map(|c| c.width).sum();

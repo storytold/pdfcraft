@@ -42,7 +42,8 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
     commands.push(HeaderCommand::new(IconId::new("settings"), "app.preferences"));
     let shown = Panel::new(title).titled().commands(commands).actions([HeaderAction::Close]).show(ui, |ui, _| {
         // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
-        let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].session.objects.count());
+        let count =
+            app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].session.objects.count());
         if count > 0 {
             Text::new(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected")).show(ui);
             Text::new(tl!("Drag the selection to move it. Esc clears the selection.").to_string()).show(ui);

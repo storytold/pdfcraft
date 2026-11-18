@@ -24,7 +24,7 @@ impl PdfCraftApp {
         {
             view.find = None;
         } else if self.full_screen() && self.combine_tab.preview.is_none() {
-            self.set_full_screen(ctx, false);
+            self.set_full_screen(false);
         }
     }
 }
@@ -38,7 +38,7 @@ impl PdfCraftApp {
             return;
         }
         let pages_owns_keyboard =
-            self.right == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+            self.right() == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
         let view = &self.views[i];
         // A paragraph or text box open for typing keeps ⌘A for its own text.
         let edit_objects = self.quick_tool == QuickTool::EditText && view.session.line_editor.is_none() && view.session.content.draft.is_none();

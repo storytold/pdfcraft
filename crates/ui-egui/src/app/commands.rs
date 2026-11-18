@@ -13,7 +13,7 @@ impl PdfCraftApp {
                 .flat_map(|g| g.sections.iter().flat_map(|s| s.items.iter()))
                 .any(|i| i.command == spec.id);
             if self.active.is_none() && needs_document && is_tool && !self.command_enabled(spec) {
-                self.open_then_run(spec);
+                self.open_then_run(ctx, spec);
                 return;
             }
             self.execute(ctx, command);
@@ -35,12 +35,14 @@ impl PdfCraftApp {
 
     /// Ask for a file to open, then run `spec` on it once it is open (or unlocked). Nothing runs
     /// when the picker is cancelled or the file doesn't open.
-    fn open_then_run(&mut self, spec: &'static pdfcraft_engine::commands::CommandSpec) {
+    fn open_then_run(&mut self, ctx: &egui::Context, spec: &'static pdfcraft_engine::commands::CommandSpec) {
         self.startup_superseded = true;
         let request = craft::host::PickRequest::open("open").title(tl!(spec.label).trim_end_matches('…'));
         let command = spec.id;
-        // PLAN: assumed `open_picked_then(&mut self, Picked, &'static str)` (pdf-shell-w13), which opens desktop paths and browser contents alike.
-        self.pick_file(request, None, move |app, picked| app.open_picked_then(picked, command));
+        // The continuation runs on the pass that takes the answer, which has no context of its
+        // own: it gets this one, a handle to the same window.
+        let ctx = ctx.clone();
+        self.pick_file(request, None, move |app, picked| app.open_picked_then(&ctx, picked, command));
     }
 
     pub(crate) fn reveal_tools(&mut self) {
@@ -156,7 +158,8 @@ impl PdfCraftApp {
             self.enter_mode(mode);
         }
         if mode == Mode::Read && !was_read {
-            self.right_before_read = self.right.take();
+            self.right_before_read = self.right();
+            self.set_right(None);
             // An editing tool is put down so its open paragraph is applied, as `select_mode` does.
             if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
                 self.put_down_edit_text();
@@ -165,8 +168,8 @@ impl PdfCraftApp {
             }
         } else if mode != Mode::Read && was_read {
             let before = self.right_before_read.take();
-            if self.right.is_none() {
-                self.right = before;
+            if self.right().is_none() {
+                self.set_right(before);
             }
         }
     }
@@ -180,15 +183,15 @@ impl PdfCraftApp {
         }
         if panel == Some(RightPanel::Comments) {
             self.comments_panel_closed = false;
-        } else if panel.is_none() && self.right == Some(RightPanel::Comments) {
+        } else if panel.is_none() && self.right() == Some(RightPanel::Comments) {
             self.comments_panel_closed = true;
         }
         if panel.is_some() {
             self.right_panel_closed = false;
-        } else if self.right.is_some() {
+        } else if self.right().is_some() {
             self.right_panel_closed = true;
         }
-        self.right = panel;
+        self.set_right(panel);
         if let Some(panel) = panel {
             self.last_right = panel;
         }
@@ -196,6 +199,6 @@ impl PdfCraftApp {
 
     /// F4: closes the side panel, or reopens the one open last.
     pub(crate) fn toggle_side_panel(&mut self) {
-        self.choose_right_panel(if self.right.is_some() { None } else { Some(self.last_right) });
+        self.choose_right_panel(if self.right().is_some() { None } else { Some(self.last_right) });
     }
 }

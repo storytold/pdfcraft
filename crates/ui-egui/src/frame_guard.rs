@@ -34,15 +34,15 @@ impl PdfCraftApp {
     }
 
     /// Run one part of the frame (`logic` or `ui`) under the guard.
-    pub(crate) fn guarded_frame(&mut self, part: impl FnOnce(&mut PdfCraftApp)) {
+    pub(crate) fn guarded_frame(&mut self, ctx: &egui::Context, part: impl FnOnce(&mut PdfCraftApp)) {
         if let Err(message) = pdfcraft_engine::guard(|| part(self)) {
-            self.after_frame_panic(&message);
+            self.after_frame_panic(ctx, &message);
         }
     }
 
     /// After a frame panicked: keep the work, drop what the frame was showing on top (a dialog,
     /// the command palette), keep `active` pointing at a tab, and say so.
-    fn after_frame_panic(&mut self, message: &str) {
+    fn after_frame_panic(&mut self, ctx: &egui::Context, message: &str) {
         log::error!("a frame panicked and was caught: {message}");
         if !self.frame_panicked {
             self.frame_panicked = true;
@@ -60,13 +60,15 @@ impl PdfCraftApp {
         self.palette_open = false;
         self.keep_active_valid();
         self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", message)]);
-        if let Some(ctx) = &self.ctx {
-            // Top first, so a child dialog is cancelled before the parent it was opened from.
-            // PLAN: assumed `PdfCraftApp.dialogs: DialogHost` (pdf-hub-w1)
-            for open in self.dialogs.open_dialogs().into_iter().rev() {
-                self.dialogs.cancel_by_id(ctx, open.id);
-            }
-            ctx.request_repaint();
+        self.cancel_dialogs(ctx);
+        ctx.request_repaint();
+    }
+
+    /// Cancels every dialog the dialog host has open, the top one first so a child dialog is
+    /// cancelled before the parent it was opened from.
+    pub(crate) fn cancel_dialogs(&mut self, ctx: &egui::Context) {
+        for open in self.dialogs.open_dialogs().into_iter().rev() {
+            self.dialogs.cancel_by_id(ctx, open.id);
         }
     }
 
@@ -142,7 +144,6 @@ mod tests {
     }
 
     /// An app built through `with_host`, with recovery in `dir` when given.
-    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` and `PdfCraftApp::with_host(Arc<Host>, AppServices)` (pdf-hub-w1, L-207)
     fn app(dir: Option<&std::path::Path>) -> PdfCraftApp {
         let wake = craft::host::Wake::none();
         let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
@@ -156,9 +157,9 @@ mod tests {
     /// Two tabs, the second with an unsaved edit, and the About dialog open when `about`.
     fn harness(store: &Store, about: bool) -> Harness<'static, PdfCraftApp> {
         let dir = store.0.clone();
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
             let mut app = app(Some(&dir));
-            app.set_option("language", "en").unwrap();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
             app.enable_recovery();
             app.open_bytes("a.pdf", None, pdf("First")).unwrap();
             app.open_bytes("b.pdf", None, pdf("Second")).unwrap();
@@ -167,7 +168,8 @@ mod tests {
         h.run_steps(4);
         assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
         if about {
-            h.state_mut().set_option("dialog", "about").unwrap();
+            let ctx = h.ctx.clone();
+            h.state_mut().set_option(&ctx, "dialog", "about").unwrap();
         }
         h.run_steps(1);
         h
@@ -186,7 +188,8 @@ mod tests {
         h.get_by_label_contains("injected Logic panic");
         assert_eq!(snapshots(&store), 1);
 
-        h.state_mut().set_option("dialog", "about").unwrap();
+        let ctx = h.ctx.clone();
+        h.state_mut().set_option(&ctx, "dialog", "about").unwrap();
         h.run_steps(1);
         assert!(!h.state().dialogs.open_dialogs().is_empty(), "the dialog is showing");
         h.state_mut().panic_next = Some(FramePart::Ui);

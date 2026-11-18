@@ -231,7 +231,6 @@ impl PdfCraftApp {
     /// File ▸ Pin folder to Home…: choose a folder whose newest PDFs Home lists.
     pub fn pin_folder_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-
         self.pick_first(PickRequest::folder("pin-folder").title(tl!("Pin a folder to Home").to_string()), None, |app, dir| {
             app.pin_folder(&dir.to_string_lossy());
         });
@@ -301,10 +300,7 @@ impl PdfCraftApp {
                 let listing = match self.pinned.listing(folder) {
                     None => ShellListing::Pending,
                     Some(l) if l.unavailable => ShellListing::Unavailable,
-                    Some(l) => ShellListing::Listed {
-                        files: l.files.iter().take(MAX_LISTED).map(|f| pinned_file(f, env)).collect(),
-                        total: l.total,
-                    },
+                    Some(l) => ShellListing::Listed { files: l.files.iter().take(MAX_LISTED).map(|f| pinned_file(f, env)).collect(), total: l.total },
                 };
                 PinnedFolder::new(folder.as_str(), name)
                     .listing(listing)

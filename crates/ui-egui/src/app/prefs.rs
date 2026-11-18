@@ -47,6 +47,24 @@ impl PdfCraftApp {
         self.theme_preference = preference;
     }
 
+    /// Sets Preferences ▸ Animation effects; the next frame's [`Self::root_env`] carries it and
+    /// the next [`Self::save_settings`] keeps it.
+    pub fn set_motion(&mut self, motion: craft::theme::MotionChoice) {
+        self.animation_effects = motion;
+    }
+
+    /// Hands the preferences to the settings store and writes them if they changed. A write that
+    /// fails is logged: the preferences stay in the app and the next save tries again.
+    pub(crate) fn save_settings(&mut self) {
+        let snapshot = self.settings_snapshot();
+        if let Some(store) = self.settings.as_mut() {
+            store.set(snapshot);
+            if let Err(e) = store.flush() {
+                log::warn!("the preferences could not be written: {e}");
+            }
+        }
+    }
+
     /// The app-wide reading-colours preference: sets it and applies it to every open document,
     /// not just the active one (Preferences ▸ Reading colours, Acrobat's Replace Document
     /// Colors). A document the change actually touches re-renders.
@@ -75,7 +93,7 @@ impl PdfCraftApp {
             reopen_last_session: Some(self.reopen_last_session),
             restore_last_view: Some(self.restore_last_view),
             last_views: json_text(&self.last_views_to_save()),
-            system_title_bar: Some(self.system_title_bar),
+            system_title_bar: Some(self.title_bar_choice == TitleBarPref::System),
             reload_changed_files: Some(self.reload_changed_files),
             update_check_at_start: Some(self.update_check_at_start),
             show_secured_notice: Some(self.show_secured_notice),
@@ -163,9 +181,13 @@ impl PdfCraftApp {
             self.comment_prefs.font_sizes().map(|(t, size)| serde_json::json!({ "tool": t.command(), "font_size": size })).collect();
         let comment = settings::Comment { comment_styles: json_text(&styles), comment_font_sizes: json_text(&font_sizes) };
         let signature = settings::Signature {
-            // PLAN: assumed app fields `saved_signatures: Vec<SavedSignature>` and `sign_graphic: Option<SignatureImage>` (forms-w5)
-            signatures: Some(self.saved_signatures.clone()),
-            sign_graphic: self.sign_graphic.clone(),
+            signatures: Some({
+                let mut slots = craft::review::ui::signature::SignatureSettings::default();
+                slots.signature = self.signature.clone();
+                slots.initials = self.initials.clone();
+                slots
+            }),
+            sign_graphic: Some(self.sign_graphic.clone()),
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
             digital_ids: Some(
                 self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).cloned().collect(),
@@ -183,8 +205,7 @@ impl PdfCraftApp {
             recent_view: name_of(&self.recent_view),
             recent_sort: name_of(&self.recent_sort),
         };
-        // PLAN: assumed app field `hotbar_tools: Vec<String>` (chrome-w18)
-        let hotbar = settings::Hotbar { tools: Some(self.hotbar_tools.clone()) };
+        let hotbar = settings::Hotbar { tools: Some(self.hotbar.tools.clone()) };
         // Kept only while the preference is on.
         let session = settings::Session { last_session: self.reopen_last_session.then(|| json_text(&self.session_to_save())).flatten() };
         PdfCraftSettings { layout, print, behavior, view, comment, signature, dock, recent, hotbar, session }
@@ -207,7 +228,7 @@ impl PdfCraftApp {
 
     fn apply_hotbar(&mut self, s: &settings::Hotbar) {
         if let Some(tools) = &s.tools {
-            self.hotbar_tools = tools.clone();
+            self.hotbar.tools = tools.clone();
         }
     }
 
@@ -266,12 +287,8 @@ impl PdfCraftApp {
         }
         self.restore_last_views(&parsed(&s.last_views).unwrap_or(serde_json::Value::Null));
         if let Some(on) = s.system_title_bar {
-            let changed = on != self.system_title_bar;
-            self.system_title_bar = on;
-            if changed && let Some(ctx) = self.ctx.clone() {
-                let pref = if on { TitleBarPref::System } else { TitleBarPref::Integrated };
-                self.set_title_bar_choice(&ctx, pref);
-            }
+            // The window follows in the next frame (`prepare_raw_input`).
+            self.title_bar_choice = if on { TitleBarPref::System } else { TitleBarPref::Integrated };
         }
         if let Some(on) = s.reload_changed_files {
             self.reload_changed_files = on;
@@ -542,12 +559,12 @@ impl PdfCraftApp {
 
     /// Saved signatures, stamps, actions and trusted certificates.
     fn apply_signature(&mut self, s: &settings::Signature) {
-        if let Some(signatures) = &s.signatures {
-            // PLAN: assumed app field `saved_signatures: Vec<SavedSignature>` (forms-w5)
-            self.saved_signatures = signatures.clone();
+        if let Some(slots) = &s.signatures {
+            self.signature = slots.signature.clone();
+            self.initials = slots.initials.clone();
         }
         // An unreadable choice (a damaged image) falls back to the name.
-        self.sign_graphic = s.sign_graphic.clone();
+        self.sign_graphic = s.sign_graphic.clone().unwrap_or_default();
         if let Some(ids) = &s.digital_ids {
             self.digital_ids = ids.clone();
         }
