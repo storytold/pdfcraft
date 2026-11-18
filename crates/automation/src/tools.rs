@@ -488,6 +488,13 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .with(schema(json!({ "doc": doc() }), &["doc"])),
         t(
+            "bookmark_suggest",
+            "Suggest bookmarks",
+            "Propose a bookmark tree for the whole document, for review: its tagged headings (H, H1-H6) when it has them (source \"structure\"), or else headings found from how its text looks (source \"layout\"): short blocks set larger than the body text, or bold where the body is not, levelled by size without skipping a level, a heading set on several lines as one bookmark that goes to its top; captions such as \"Figure 3\" are left out. Reads the first 5000 pages for a layout suggestion (pages_read; truncated is true when the document has more). Changes nothing: bookmarks is in bookmark_export's form, so edit titles, levels or remove entries, then apply it with bookmark_import (with replace to drop the existing outline), one undoable step. headings counts the suggested bookmarks; note says what to try when there are none. Needs the document to allow copying, as its text is returned.",
+        )
+        .ro()
+        .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t(
             "text_styles",
             "List text styles",
             "The styles the document's text is set in, the largest first: font (without its subset tag), the size it is shown at in points, bold, italic, how many lines and pages use it, and the first line in it as a sample. For choosing the styles bookmark_from_text_styles makes bookmarks from (headings are usually the larger, rarer styles). Reads the first 5000 pages.",

@@ -3434,6 +3434,18 @@ evidence = ["crates/engine/src/tests.rs::bookmarks_from_text_styles_nest_the_hea
 notes = "Bookmark options (and Pages) ▸ New bookmarks from text styles…, for documents whose headings aren't tagged (#1693): the dialog lists the document's text styles (font without its subset tag, the size shown at, bold, italic, line count and a sample), the largest first and offered for level 1; one style per level, up to four levels (nine headlessly). Every line in a level's style becomes a bookmark of that level under a new first \"Untitled\" bookmark, a heading set on several rows is one bookmark, and each goes to the top of its heading (/XYZ). Lines are read down each page, then left to right, so a multi-column page's headings are taken row by row across the columns; sizes within a quarter point match. Not yet: several styles for one level, colour as part of a style, and the first 5000 pages only. Acrobat has no such command (its bookmarks come from structure); this is beyond it"
 
 [[feature]]
+id = "organize.suggest-outline"
+title = "Suggest bookmarks for review"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "partial"
+commands = []
+tools = ["bookmark_suggest"]
+evidence = ["crates/automation/tests/it/suggest_outline.rs::suggest_from_layout_then_import_and_undo", "crates/automation/tests/it/suggest_outline.rs::suggest_uses_the_tags_once_there_are_some", "crates/engine/src/suggest_outline.rs::headings_take_levels_by_size_and_weight_and_wrapped_lines_join", "crates/engine/src/suggest_outline.rs::a_wrapped_heading_joins_across_a_line_of_another_column", "crates/engine/src/suggest_outline.rs::captions_and_numbers_are_not_headings", "crates/engine/src/suggest_outline.rs::the_tree_nests_by_level_and_caps_the_depth", "crates/a11y/src/heading_levels.rs::blocks_take_the_levels_auto_tag_gives_text_objects"]
+notes = "#6020, headless only: bookmark_suggest proposes a bookmark tree without changing the document, from its tagged headings when it has them, or else from how its text looks, by the heading rules Auto-tag uses (a short block larger than the body text, or bold where the body is not, levelled by size without skipping a level). A heading set on several lines is one bookmark going to its top (/XYZ); captions (Figure 3, Table 2) are left out. The proposal is in bookmark_export's form, so it is reviewed and edited as data and applied with bookmark_import in one undoable step. Not yet: the review dialog in the app, leaving out running headers and footers, multi-column reading order (lines are read down the page, then across), and the first 5000 pages only. Acrobat makes bookmarks from structure only; this is beyond it"
+
+[[feature]]
 id = "organize.bookmarks-import-export"
 title = "Export, import and copy bookmarks"
 area = "D"
