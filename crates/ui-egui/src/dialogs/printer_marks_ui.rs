@@ -142,7 +142,7 @@ impl PdfCraftApp {
     pub(crate) fn open_printer_marks(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views[i].current;
+        let current = self.views[i].current();
         let unit = self.units;
         let mut fields = DialogFields::new();
         self.printer_marks_draft.write(&mut fields, unit.per_point());
@@ -174,7 +174,7 @@ impl PdfCraftApp {
         let (count, label) = (doc.info.pages.len(), doc.name.clone());
         let (y, m, d) = self.session.today();
         let date = format!("{y:04}-{m:02}-{d:02}");
-        let pages = self.printer_marks_draft.range.pages(count, self.views[i].current, &[]);
+        let pages = self.printer_marks_draft.range.pages(count, self.views[i].current(), &[]);
         let edit = self.printer_marks_draft.edit(pages, &label, &date);
         if self.apply_edit(edit) {
             self.notify_tr("Printer marks added");

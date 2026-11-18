@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use craft::behavior::DockSide;
 use craft::theme::color::{Rgba, Srgba};
 use craft::theme::selection::MotionChoice;
 use craft::theme::variant::Tone;
@@ -14,6 +15,7 @@ use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec};
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
+use craft::window::policy::TitleBarPref;
 use egui::Ui;
 
 use crate::PdfCraftApp;
@@ -72,6 +74,7 @@ struct PrefsDraft {
     reading_colors: pdfcraft_render::ReadingColors,
     default_mode: Mode,
     view_defaults: ViewDefaults,
+    highlight_fields: bool,
     always_default_view: bool,
     text_links: bool,
     units: Unit,
@@ -91,8 +94,8 @@ impl PrefsDraft {
         Self {
             language: app.language.clone(),
             ui_scale: app.ui_scale,
-            tools_right: app.side_panels.tools_on_right(),
-            rail_right: app.side_panels.rail_on_right(),
+            tools_right: crate::side_panels::tools_on_right(app),
+            rail_right: app.rail_side != DockSide::Start,
             animation: app.animation_effects,
             reopen_last_session: app.reopen_last_session,
             restore_last_view: app.restore_last_view,
@@ -100,11 +103,12 @@ impl PrefsDraft {
             update_check_at_start: app.update_check_at_start,
             show_secured_notice: app.show_secured_notice,
             recent_limit: app.recent_limit,
-            system_title_bar: app.system_title_bar,
+            system_title_bar: app.title_bar_choice == TitleBarPref::System,
             show_page_edge_shadows: app.show_page_edge_shadows,
             reading_colors: app.reading_colors,
             default_mode: app.default_mode,
             view_defaults: app.view_defaults,
+            highlight_fields: app.highlight_fields,
             always_default_view: app.always_default_view,
             text_links: app.text_links,
             units: app.units,
@@ -120,40 +124,42 @@ impl PrefsDraft {
         }
     }
 
-    /// The draft a fresh install starts with, read from the settings defaults through the mapping
-    /// `apply_settings` uses, so no second list of defaults exists.
-    // PLAN: assumed `PdfCraftSettings::default()` with the app's field names (pdf-shell-w9)
+    /// The draft a fresh install starts with: the values `PdfCraftApp::with_host` starts the app with, and the
+    /// engine session's own for the date format, date language and JavaScript.
+    // PLAN: the app's starting values are literals in `PdfCraftApp::with_host`, not a shared item; this list repeats them.
     fn defaults() -> Self {
-        let s = crate::settings::PdfCraftSettings::default();
+        let engine = pdfcraft_engine::Session::new();
+        let prefs = crate::comments::CommentPrefs::default();
         Self {
-            language: s.language,
-            ui_scale: s.ui_scale,
-            tools_right: s.tools_right,
-            rail_right: s.rail_right,
-            animation: s.animation_effects,
-            reopen_last_session: s.reopen_last_session,
-            restore_last_view: s.restore_last_view,
-            reload_changed_files: s.reload_changed_files,
-            update_check_at_start: s.update_check_at_start,
-            show_secured_notice: s.show_secured_notice,
-            recent_limit: s.recent_limit,
-            system_title_bar: s.system_title_bar,
-            show_page_edge_shadows: s.show_page_edge_shadows,
-            reading_colors: s.reading_colors,
-            default_mode: s.default_mode,
-            view_defaults: s.view_defaults,
-            always_default_view: s.always_default_view,
-            text_links: s.text_links,
-            units: s.units,
-            scroll_speed: s.scroll_speed,
-            invert_middle_drag: s.invert_middle_drag,
-            author: s.author,
-            hide_empty_highlight_hover: s.hide_empty_highlight_hover,
-            flatten_fill_sign_on_save: s.flatten_fill_sign_on_save,
-            ask_to_lock_signatures: s.ask_to_lock_signatures,
-            date_format: s.date_format,
-            date_language: s.date_language,
-            javascript: s.javascript,
+            language: i18n::AUTO.to_string(),
+            ui_scale: None,
+            tools_right: false,
+            rail_right: true,
+            animation: MotionChoice::System,
+            reopen_last_session: false,
+            restore_last_view: true,
+            reload_changed_files: true,
+            update_check_at_start: true,
+            show_secured_notice: true,
+            recent_limit: crate::RECENT_FILES_DEFAULT,
+            system_title_bar: false,
+            show_page_edge_shadows: true,
+            reading_colors: Default::default(),
+            default_mode: Mode::AllTools,
+            view_defaults: ViewDefaults::default(),
+            highlight_fields: true,
+            always_default_view: false,
+            text_links: true,
+            units: Unit::default(),
+            scroll_speed: ScrollSpeed::default(),
+            invert_middle_drag: false,
+            author: prefs.author,
+            hide_empty_highlight_hover: prefs.hide_empty_highlight_hover,
+            flatten_fill_sign_on_save: false,
+            ask_to_lock_signatures: true,
+            date_format: engine.date_format().to_string(),
+            date_language: engine.date_language().map(str::to_string),
+            javascript: engine.javascript(),
         }
     }
 }
@@ -172,8 +178,9 @@ impl PdfCraftApp {
             return;
         };
         let PreferencesSession { state, draft, selection, host, answers } = &mut session;
+        let ctx = ui.ctx().clone();
         let output = {
-            let mut prefs = Prefs::new(self, draft, selection, host, answers, ui.ctx().native_pixels_per_point().unwrap_or(1.0));
+            let mut prefs = Prefs::new(self, draft, selection, host, answers, &ctx);
             PreferencesWindow::new(Bind::bound(state)).remember(SaveKey::new("pdfcraft.preferences")).show(ui, &mut prefs)
         };
         if let Some(request) = output.pick_color {
@@ -204,9 +211,11 @@ struct Texts {
 }
 
 impl Texts {
-    fn new(app: &PdfCraftApp, draft: &PrefsDraft, native_pixels: f32) -> Self {
+    fn new(app: &PdfCraftApp, draft: &PrefsDraft, ctx: &egui::Context) -> Self {
         use pdfcraft_engine::dates::DATE_FORMATS;
-        let auto_percent = ui_scale::percent(ui_scale::drawn(None, app.system_text_scale, native_pixels));
+        let native_pixels = ctx.native_pixels_per_point().unwrap_or(1.0);
+        let system_text_scale = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
+        let auto_percent = ui_scale::percent(ui_scale::drawn(None, system_text_scale, native_pixels));
         let sample = |f: &str| format!("{}   {f}", app.date_text(Some(f)).unwrap_or_default());
         let interface = i18n::current().picker_name(|_| true);
         let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
@@ -250,6 +259,7 @@ struct Prefs<'a> {
     selection: &'a mut SelectionChange,
     host: &'a mut DialogHost,
     answers: &'a Answers,
+    ctx: &'a egui::Context,
     texts: Texts,
 }
 
@@ -260,10 +270,10 @@ impl<'a> Prefs<'a> {
         selection: &'a mut SelectionChange,
         host: &'a mut DialogHost,
         answers: &'a Answers,
-        native_pixels: f32,
+        ctx: &'a egui::Context,
     ) -> Self {
-        let texts = Texts::new(app, draft, native_pixels);
-        Self { app, draft, selection, host, answers, texts }
+        let texts = Texts::new(app, draft, ctx);
+        Self { app, draft, selection, host, answers, ctx, texts }
     }
 }
 
@@ -272,7 +282,7 @@ type Table<'a, T> = Vec<(T, &'static str, &'a str)>;
 /// A choice row over `table` (value, id, label) with `current` chosen.
 fn choice_row<'a, T: Copy + PartialEq>(key: &'a str, label: &'a str, current: T, table: &Table<'a, T>) -> RowSpec<'a> {
     let value = table.iter().find(|(v, ..)| *v == current).map_or("", |(_, id, _)| *id);
-    RowSpec::new(key, label, RowKind::choice(value, table.iter().map(|(_, id, l)| Entry::new(*id, *l)).collect()))
+    RowSpec::new(key, label, RowKind::choice(value, table.iter().map(|(_, id, l)| Entry::new(*id, l.to_string())).collect()))
 }
 
 /// The value a choice row's `id` stands for.
@@ -372,7 +382,7 @@ impl PreferencesModel for Prefs<'_> {
             ("general.recent", PrefValue::Int(v)) => d.recent_limit = usize::try_from(v).unwrap_or(0).min(crate::RECENT_FILES_MAX),
             ("general.title_bar", PrefValue::Bool(v)) => d.system_title_bar = v,
             ("appearance.edge_shadows", PrefValue::Bool(v)) => d.show_page_edge_shadows = v,
-            ("appearance.highlight_fields", PrefValue::Bool(v)) => d.view_defaults.highlight_fields = v,
+            ("appearance.highlight_fields", PrefValue::Bool(v)) => d.highlight_fields = v,
             ("appearance.reading.mode", PrefValue::Choice(id)) => {
                 if id == "custom" {
                     if d.reading_colors.params.is_none() {
@@ -403,13 +413,13 @@ impl PreferencesModel for Prefs<'_> {
                 }
             }
             ("view.mode", PrefValue::Choice(id)) => d.default_mode = lookup(&mode_table(), &id).unwrap_or(d.default_mode),
-            ("view.layout", PrefValue::Choice(id)) => d.view_defaults.layout = lookup(&layout_table(), &id).unwrap_or(d.view_defaults.layout),
+            ("view.layout", PrefValue::Choice(id)) => d.view_defaults.display = lookup(&layout_table(), &id).unwrap_or(d.view_defaults.display),
             ("view.continuous", PrefValue::Bool(v)) => d.view_defaults.continuous = v,
-            ("view.gaps", PrefValue::Bool(v)) => d.view_defaults.show_page_gaps = v,
+            ("view.gaps", PrefValue::Bool(v)) => d.view_defaults.page_gaps = v,
             ("view.fit", PrefValue::Choice(id)) => d.view_defaults.fit = lookup(&fit_table(), &id).unwrap_or(d.view_defaults.fit),
             ("view.zoom", PrefValue::Int(v)) => {
                 d.view_defaults.fit = Fit::None;
-                d.view_defaults.zoom = v.clamp(8, 6400) as f32 / 100.0;
+                d.view_defaults.zoom = v.clamp(8, 6400) as f64 / 100.0;
             }
             ("view.always", PrefValue::Bool(v)) => d.always_default_view = v,
             ("view.text_links", PrefValue::Bool(v)) => d.text_links = v,
@@ -488,9 +498,8 @@ impl PreferencesModel for Prefs<'_> {
         self.app.language = d.language;
         i18n::set_current(Lang::from_pref(&self.app.language));
         self.app.ui_scale = d.ui_scale;
-        // PLAN: assumed `SidePanels::set_tools_on_right(bool)` / `set_rail_on_right(bool)` writing the workspace edge and `rail_side` (pdf-chrome-w13)
-        self.app.side_panels.set_tools_on_right(d.tools_right);
-        self.app.side_panels.set_rail_on_right(d.rail_right);
+        crate::side_panels::set_tools_on_right(self.app, d.tools_right)?;
+        crate::side_panels::set_rail_side(self.app, if d.rail_right { DockSide::End } else { DockSide::Start })?;
         self.app.animation_effects = d.animation;
         self.app.reopen_last_session = d.reopen_last_session;
         self.app.restore_last_view = d.restore_last_view;
@@ -499,11 +508,16 @@ impl PreferencesModel for Prefs<'_> {
         self.app.show_secured_notice = d.show_secured_notice;
         self.app.recent_limit = d.recent_limit;
         self.app.recent.truncate(d.recent_limit);
-        self.app.system_title_bar = d.system_title_bar;
+        let title_bar = if d.system_title_bar { TitleBarPref::System } else { TitleBarPref::Integrated };
+        if title_bar != self.app.title_bar_choice {
+            self.app.title_bar_choice = title_bar;
+            self.app.set_title_bar_choice(self.ctx, title_bar);
+        }
         self.app.show_page_edge_shadows = d.show_page_edge_shadows;
         self.app.set_reading_colors(d.reading_colors);
         self.app.default_mode = d.default_mode;
         self.app.view_defaults = d.view_defaults;
+        self.app.highlight_fields = d.highlight_fields;
         self.app.always_default_view = d.always_default_view;
         self.app.text_links = d.text_links;
         self.app.units = d.units;
@@ -521,9 +535,9 @@ impl PreferencesModel for Prefs<'_> {
         let defaults = self.app.view_defaults;
         let changes = ViewPrefChanges {
             always_reset: old_always != self.app.always_default_view,
-            layout: old_defaults.layout != defaults.layout,
+            layout: old_defaults.display != defaults.display,
             continuous: old_defaults.continuous != defaults.continuous,
-            gaps: old_defaults.show_page_gaps != defaults.show_page_gaps,
+            gaps: old_defaults.page_gaps != defaults.page_gaps,
             fit: old_defaults.fit != defaults.fit,
             zoom: old_defaults.zoom != defaults.zoom,
         };
@@ -565,11 +579,11 @@ impl PreferencesModel for Prefs<'_> {
                 *self.selection = SelectionChange::default();
                 d.show_page_edge_shadows = fresh.show_page_edge_shadows;
                 d.reading_colors = fresh.reading_colors;
-                d.view_defaults.highlight_fields = fresh.view_defaults.highlight_fields;
+                d.highlight_fields = fresh.highlight_fields;
             }
             "documents" => {
                 d.default_mode = fresh.default_mode;
-                d.view_defaults = ViewDefaults { highlight_fields: d.view_defaults.highlight_fields, ..fresh.view_defaults };
+                d.view_defaults = fresh.view_defaults;
                 d.always_default_view = fresh.always_default_view;
                 d.text_links = fresh.text_links;
                 d.units = fresh.units;
@@ -611,8 +625,8 @@ impl Prefs<'_> {
         let mut languages = vec![Entry::new(i18n::AUTO, tl!("Auto"))];
         languages.extend(Lang::for_picker_by(|l| l.picker_name(|_| true)).into_iter().map(|l| Entry::new(l.code(), l.picker_name(|_| true))));
         let language = if Lang::from_code(&d.language).is_some() { d.language.as_str() } else { i18n::AUTO };
-        let mut scales = vec![Entry::new(AUTO_ID, t.auto_scale.as_str())];
-        scales.extend(t.scale_ids.iter().map(|(id, label)| Entry::new(id.as_str(), label.as_str())));
+        let mut scales = vec![Entry::new(AUTO_ID, t.auto_scale.clone())];
+        scales.extend(t.scale_ids.iter().map(|(id, label)| Entry::new(id.as_str(), label.clone())));
         let scale = d.ui_scale.map_or(AUTO_ID, |f| {
             t.scale_ids.iter().find(|(id, _)| id.parse::<u32>().is_ok_and(|p| p == ui_scale::percent(f))).map_or(AUTO_ID, |(id, _)| id.as_str())
         });
@@ -676,7 +690,7 @@ impl Prefs<'_> {
         ];
         let display = vec![
             RowSpec::new("appearance.edge_shadows", tl!("Show Page Edge Shadows"), RowKind::Bool(d.show_page_edge_shadows)),
-            RowSpec::new("appearance.highlight_fields", tl!("Highlight fields"), RowKind::Bool(d.view_defaults.highlight_fields)),
+            RowSpec::new("appearance.highlight_fields", tl!("Highlight fields"), RowKind::Bool(d.highlight_fields)),
         ];
         PageSpec::custom("appearance", tl_ctx!("theme", "Appearance"))
             .group(GroupSpec::new(None, display))
@@ -690,9 +704,9 @@ impl Prefs<'_> {
         let rows = vec![
             choice_row("view.mode", tl!("Default workspace mode"), d.default_mode, &mode_table())
                 .help(tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session.")),
-            choice_row("view.layout", tl!("Default page display"), v.layout, &layout_table()),
+            choice_row("view.layout", tl!("Default page display"), v.display, &layout_table()),
             RowSpec::new("view.continuous", tl!("Continuous scrolling"), RowKind::Bool(v.continuous)),
-            RowSpec::new("view.gaps", tl!("Show gaps between pages"), RowKind::Bool(v.show_page_gaps))
+            RowSpec::new("view.gaps", tl!("Show gaps between pages"), RowKind::Bool(v.page_gaps))
                 .help(tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged.")),
             choice_row("view.fit", tl!("Default zoom"), v.fit, &fit_table())
                 .help(tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.")),
@@ -726,9 +740,9 @@ impl Prefs<'_> {
         let d = &*self.draft;
         let t = &self.texts;
         let preset = DATE_FORMATS.iter().position(|f| *f == d.date_format).and_then(|i| DATE_FORMATS.get(i).copied()).unwrap_or(t.date_custom_id);
-        let mut presets: Vec<_> = DATE_FORMATS.iter().zip(&t.date_samples).map(|(f, sample)| Entry::new(*f, sample.as_str())).collect();
+        let mut presets: Vec<_> = DATE_FORMATS.iter().zip(&t.date_samples).map(|(f, sample)| Entry::new(*f, sample.clone())).collect();
         presets.push(Entry::new(t.date_custom_id, tl!("Custom")));
-        let mut languages = vec![Entry::new(FOLLOW_ID, t.date_follow.as_str())];
+        let mut languages = vec![Entry::new(FOLLOW_ID, t.date_follow.clone())];
         languages.extend(DATE_LANGUAGES.iter().map(|l| Entry::new(l.code, date_language_picker_name(l))));
         let language = d.date_language.as_deref().filter(|c| DATE_LANGUAGES.iter().any(|l| l.code == *c)).unwrap_or(FOLLOW_ID);
         let rows = vec![
@@ -776,11 +790,11 @@ impl ViewPrefChanges {
 
 fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, changes: ViewPrefChanges) {
     if changes.always_reset || changes.gaps {
-        view.set_page_gaps(defaults.show_page_gaps);
+        view.view.page_gaps = defaults.page_gaps;
     }
     if let Some(saved) = view.saved_display_mut() {
         if changes.always_reset || changes.layout {
-            saved.layout = defaults.layout;
+            saved.display = defaults.display;
         }
         if changes.always_reset || changes.continuous {
             saved.continuous = defaults.continuous;
@@ -796,25 +810,23 @@ fn apply_view_pref_changes(view: &mut crate::DocView, defaults: &ViewDefaults, c
             saved.zoom = defaults.zoom;
         }
     } else {
-        if changes.always_reset || (changes.layout && changes.continuous) {
-            view.set_display(defaults.layout, defaults.continuous);
-        } else {
-            if changes.layout {
-                view.set_layout(defaults.layout);
-            }
-            if changes.continuous {
-                view.set_continuous(defaults.continuous);
-            }
+        // The page view's next pass takes the display, fit and zoom from its state and keeps the current page in view.
+        let shown = &mut view.view;
+        if changes.always_reset || changes.layout {
+            shown.display = defaults.display;
+        }
+        if changes.always_reset || changes.continuous {
+            shown.continuous = defaults.continuous;
         }
         if changes.always_reset || changes.fit {
-            match defaults.fit {
-                Fit::None => view.set_zoom(defaults.zoom),
-                fit if view.fit != fit => view.set_fit(fit),
-                _ => {}
+            shown.fit = defaults.fit;
+            if defaults.fit == Fit::None {
+                shown.zoom = defaults.zoom;
             }
         }
         if changes.zoom {
-            view.set_zoom(defaults.zoom);
+            shown.fit = Fit::None;
+            shown.zoom = defaults.zoom;
         }
     }
 }

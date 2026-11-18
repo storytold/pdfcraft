@@ -48,7 +48,6 @@ pub(crate) fn finish(app: &mut PdfCraftApp, result: DialogResult<SignaturePadRes
     };
     app.fill_tool = tool;
     app.quick_tool = crate::QuickTool::Fill(tool);
-    app.toast = None;
 }
 
 /// Asks whether to lock the placed signatures into the page before the save `pending` holds. The save waits in
@@ -76,6 +75,6 @@ pub(crate) fn finish_lock(app: &mut PdfCraftApp, answer: PromptAnswer) {
     match answer.choice {
         PromptChoice::Proceed => app.answer_lock_signatures(true, answer.skip),
         PromptChoice::Alternate => app.answer_lock_signatures(false, answer.skip),
-        PromptChoice::Cancel => app.pending_lock = None,
+        _ => app.pending_lock = None,
     }
 }

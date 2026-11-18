@@ -82,7 +82,7 @@ impl PdfCraftApp {
     pub(crate) fn open_fix_hairlines(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views[i].current;
+        let current = self.views[i].current();
         let unit = self.units;
         let mut fields = DialogFields::new();
         self.hairlines_draft.write(&mut fields, unit.per_point());
@@ -110,7 +110,7 @@ impl PdfCraftApp {
     pub(crate) fn fix_hairlines(&mut self) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        let pages = self.hairlines_draft.range.pages(count, self.views[i].current, &[]);
+        let pages = self.hairlines_draft.range.pages(count, self.views[i].current(), &[]);
         let settings = self.hairlines_draft.settings.clone();
         let found = self.session.count_hairlines(id, &pages, &settings);
         if found.lines == 0 {

@@ -65,9 +65,9 @@ mod password_draft_tests {
     #[test]
     fn inactive_password_drafts_are_cleared_before_early_returns() {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         seed_password_drafts(&mut app);
-        app.set_option("dialog", "about").unwrap();
+        app.set_option(&egui::Context::default(), "dialog", "about").unwrap();
         assert!(app.sign_draft.is_none(), "opening About ends the Sign draft");
     }
 
@@ -79,9 +79,9 @@ mod password_draft_tests {
         for _ in 0..2 {
             for replacement in ["none", "about", "protect"] {
                 seed_password_drafts(&mut app);
-                app.set_option("dialog", replacement).unwrap();
+                app.set_option(&egui::Context::default(), "dialog", replacement).unwrap();
                 assert!(app.sign_draft.is_none(), "inactive Sign draft retained after {replacement}");
-                app.set_option("dialog", "sign").unwrap();
+                app.set_option(&egui::Context::default(), "dialog", "sign").unwrap();
                 let sign = app.sign_draft.as_ref().unwrap();
                 assert!(sign.password.is_empty());
                 assert_eq!(sign.new_id, crate::sign_ui::NewIdDraft::default());
@@ -94,10 +94,10 @@ mod password_draft_tests {
         let mut app = PdfCraftApp::for_unit_tests();
         for _ in 0..2 {
             seed_password_drafts(&mut app);
-            assert!(app.execute("help.about"));
+            assert!(app.execute(&egui::Context::default(), "help.about"));
             assert!(app.sign_draft.is_none());
             assert!(app.modal_open(), "About is open");
-            app.set_option("dialog", "sign").unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "sign").unwrap();
             let sign = app.sign_draft.as_ref().unwrap();
             assert!(sign.password.is_empty());
             assert_eq!(sign.new_id, crate::sign_ui::NewIdDraft::default());

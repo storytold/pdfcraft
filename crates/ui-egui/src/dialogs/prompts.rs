@@ -190,7 +190,7 @@ impl PdfCraftApp {
             self.prompts.lock_signatures = None;
             match result {
                 DialogResult::Ok(answer) => super::signature::finish_lock(self, answer),
-                DialogResult::Cancel => self.pending_lock = None,
+                _ => self.pending_lock = None,
             }
         }
         if self.pending_link.is_some() && self.prompts.link.is_none() {

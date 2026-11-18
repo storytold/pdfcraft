@@ -9,6 +9,7 @@ use craft::ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog
 use craft::ui::display::Text;
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{HueTarget, List, ListRow};
+use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::sections::{DialogRole, FooterButton};
 use craft::ui::style::DataColor;
@@ -114,7 +115,7 @@ impl StackDialog for PinTools {
                         let at = *key;
                         let pressed = &pressed;
                         ListRow::new(row.label.clone())
-                            .icon(IconId::new(row.icon))
+                            .icon(IconSpec::svg(IconId::new(row.icon)))
                             .hue(DataColor::new(Color32::from_rgb(r, g, b)), HueTarget::Icon)
                             .detail(row.detail.clone())
                             .trailing_field(ToggleButton::new(button, Bind::given(on)), move |out| {

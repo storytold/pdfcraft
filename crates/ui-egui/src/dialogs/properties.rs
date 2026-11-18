@@ -3,7 +3,7 @@
 
 use craft::behavior::{DisplayOrder, ItemSource, Selection};
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
+use craft::ui::contract::{Bind, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::display::Text;
 use craft::ui::layout_components::{Row, Stack};
@@ -277,7 +277,7 @@ impl PdfCraftApp {
             if let Some(n) = action.strip_prefix("revision:").and_then(|n| n.parse().ok()) {
                 self.open_revision(n);
             } else if matches!(action.as_str(), "protect.password" | "protect.unlock" | "protect.remove") {
-                self.execute(&action);
+                self.execute(ctx, &action);
             }
             return;
         }

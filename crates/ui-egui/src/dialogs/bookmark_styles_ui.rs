@@ -80,7 +80,7 @@ impl PdfCraftApp {
             })
             .collect();
         let dialog = HostedParamDialog::new(ctx, KEY, DialogFields::new(), move |_| {
-            ParamDialog::new(KEY, tl!("New bookmarks from text styles"), params.clone()).ok_label(tl!("Create"))
+            ParamDialog::new(KEY, tl!("New bookmarks from text styles"), params.clone()).ok_label(tl!("Create").into())
         });
         self.dialogs.open(dialog);
     }
