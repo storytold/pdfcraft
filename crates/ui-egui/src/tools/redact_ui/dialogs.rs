@@ -178,15 +178,14 @@ pub(crate) fn show_props(app: &mut PdfCraftApp, ui: &mut Ui) {
 }
 
 /// Opens Mark Page Range over the current page.
-pub(crate) fn open_pages(app: &mut PdfCraftApp) {
+pub(crate) fn open_pages(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some((i, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let count = doc.info.pages.len();
-    let current = app.views.get(i).map_or(0, |v| v.current);
+    let current = app.views.get(i).map_or(0, |v| v.current());
     let range = PageRange { scope: PageScope::Current, ..PageRange::default() };
     let fields = DialogFields::from_pairs([("pages", PageRangeOptions::field_value(&range))]);
-    let Some(ctx) = app.ctx.clone() else { return };
-    let dialog = HostedParamDialog::new(&ctx, "redact.pages", fields, move |fields| {
+    let dialog = HostedParamDialog::new(ctx, "redact.pages", fields, move |fields| {
         let rows = vec![PageRangeOptions::param("pages", "", count, current, PageRangeChoices::Current)];
         ParamDialog::new("redact.pages", tl!("Mark Page Range"), rows).values(Bind::bound(fields))
     });
@@ -200,7 +199,7 @@ pub(crate) fn finish_pages(app: &mut PdfCraftApp, fields: &DialogFields) {
     let Some((i, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let count = doc.info.pages.len();
-    let current = app.views.get(i).map_or(0, |v| v.current);
+    let current = app.views.get(i).map_or(0, |v| v.current());
     let pages = range.pages(count, current, &[]);
     app.redact_pages(&pages);
 }

@@ -384,15 +384,22 @@ pub(crate) fn field_parts(view: &DocView, info: &DocInfo, doc: &pdfcraft_engine:
 /// The char offset in widget `wi` of field `fi`'s draft that the screen point `at` on `page` is over: the one mapping
 /// from a point to an offset is the editor's, which takes the screen point.
 fn press_offset(ctx: &egui::Context, view: &DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, fi: usize, wi: usize, at: Pos2) -> usize {
-    // PLAN: `editor` is pdf-forms-w8's module; the lead declares `mod editor;` at combine.
-    editor::offset_at(ctx, view, &doc.form, info, fi, wi, at)
+    editor::offset_at(ctx, view, doc, &doc.form, info, fi, wi, at)
 }
 
 /// A press on a form widget part. `allowed`: whether the document lets its fields be filled. A text field opens on
 /// the press, its caret where it landed, and a drag moves the caret, so press-and-drag selects text in a field that
 /// was not focused (#2213). The rest act on the click, which counts when the button comes up over the widget its press
 /// began on, as a button's does.
-pub(crate) fn field_press(ctx: &egui::Context, view: &mut DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, allowed: bool, press: &PagePress, mods: Mods) {
+pub(crate) fn field_press(
+    ctx: &egui::Context,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    info: &DocInfo,
+    allowed: bool,
+    press: &PagePress,
+    mods: Mods,
+) {
     let Owner::Field { field, widget: wi } = press.owner else { return };
     let form = doc.form.as_slice();
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return };
@@ -517,8 +524,14 @@ fn clicked(
                     picked
                 } else if multi
                     && shift
-                    && let Some(anchor) =
-                        view.session.forms.list_anchor.as_ref().filter(|(name, _)| *name == f.name).map(|(_, row)| *row).or_else(|| in_order.last().copied())
+                    && let Some(anchor) = view
+                        .session
+                        .forms
+                        .list_anchor
+                        .as_ref()
+                        .filter(|(name, _)| *name == f.name)
+                        .map(|(_, row)| *row)
+                        .or_else(|| in_order.last().copied())
                 {
                     let (min, max) = (anchor.min(opt_idx), anchor.max(opt_idx));
                     (min..=max).collect()
@@ -726,7 +739,14 @@ pub fn field_screen_font(painter: &egui::Painter, f: &FormField, w: &FormWidget,
     if font.is_nan() { 3.0 } else { font.clamp(3.0, MAX_SCREEN_FONT) }
 }
 
-fn paint_unbaked_widget(draw: &Draw<'_>, painter: &egui::Painter, xf: &PageXform, frame: TextFrame, (f, wi, w): (&FormField, usize, &FormWidget), r: Rect) {
+fn paint_unbaked_widget(
+    draw: &Draw<'_>,
+    painter: &egui::Painter,
+    xf: &PageXform,
+    frame: TextFrame,
+    (f, wi, w): (&FormField, usize, &FormWidget),
+    r: Rect,
+) {
     // PLAN: framework gap: `Draw` gives no `state.selected` colour, so the selected row still reads the visuals.
     let selected_row = painter.ctx().global_style().visuals.selection.bg_fill;
     match f.kind {
@@ -774,7 +794,13 @@ fn paint_unbaked_widget(draw: &Draw<'_>, painter: &egui::Painter, xf: &PageXform
                 if f.selected.contains(&i) {
                     p.rect_filled(row_rect, CornerRadius::ZERO, selected_row);
                 }
-                p.text(egui::pos2(r.min.x + 3.0, y + font_size * 0.15), egui::Align2::LEFT_TOP, display, egui::FontId::proportional(font_size), Color32::BLACK);
+                p.text(
+                    egui::pos2(r.min.x + 3.0, y + font_size * 0.15),
+                    egui::Align2::LEFT_TOP,
+                    display,
+                    egui::FontId::proportional(font_size),
+                    Color32::BLACK,
+                );
                 y += row_h;
             }
         }
@@ -784,7 +810,8 @@ fn paint_unbaked_widget(draw: &Draw<'_>, painter: &egui::Painter, xf: &PageXform
             if checked {
                 let sz = (r.height() * 0.75).clamp(8.0, 32.0);
                 let c = r.center();
-                let tick = vec![egui::pos2(c.x - sz * 0.3, c.y), egui::pos2(c.x - sz * 0.1, c.y + sz * 0.25), egui::pos2(c.x + sz * 0.3, c.y - sz * 0.25)];
+                let tick =
+                    vec![egui::pos2(c.x - sz * 0.3, c.y), egui::pos2(c.x - sz * 0.1, c.y + sz * 0.25), egui::pos2(c.x + sz * 0.3, c.y - sz * 0.25)];
                 draw.stroke(&PaintShape::Path(tick), StrokeWidth::Medium, DataColor::new(Color32::BLACK));
             }
         }
