@@ -40,6 +40,9 @@ pub struct FieldChange {
     /// Optional exact object target for malformed forms with duplicate field names.
     pub object: Option<ObjRef>,
     pub value: Option<Vec<String>>,
+    /// The worker already calculated the final pending values; do not calculate them twice.
+    pub calculation_complete: bool,
+    pub default_value: Option<Vec<String>>,
     /// This value came from a Calculate script; redraw it through the field's Format script.
     pub formatted: bool,
     pub read_only: Option<bool>,
@@ -56,6 +59,7 @@ pub struct FieldChange {
     pub line_width: Option<f64>,
     pub border_style: Option<String>,
     pub user_name: Option<String>,
+    pub submit_name: Option<String>,
     pub icon: Option<Option<u64>>,
     /// A combo box's or list box's new items (export value, text), from `setItems`.
     pub options: Option<Vec<(String, String)>>,
@@ -80,6 +84,10 @@ pub struct ScriptResult {
 
 /// Runs field scripts (JavaScript).
 pub trait Scripts {
+    /// Document scripts may suspend automatic calculations around a batch of field writes.
+    fn calculations_enabled(&self) -> bool {
+        true
+    }
     /// Whether the host stopped this edit's callbacks.
     fn stopped(&self) -> bool {
         false
@@ -253,6 +261,48 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags; button captions). `except` is the event's own
 /// field, whose value the event sets.
+fn apply_submit_name(doc: &mut Document, field: ObjRef, name: Option<&str>) -> Result<(), FormError> {
+    if let Some(name) = name {
+        if name.len() > 1 << 20 {
+            return Err(FormError::Invalid("submitName is too long".into()));
+        }
+        doc.update_dict(field, |d| d.set(b"TM".to_vec(), Object::String(crate::PdfString::text(name))))?;
+    }
+    Ok(())
+}
+
+fn apply_default(doc: &mut Document, field: &Field, value: Option<&Vec<String>>) -> Result<(), FormError> {
+    let Some(value) = value else { return Ok(()) };
+    let object = match field.kind {
+        FieldKind::CheckBox | FieldKind::Radio => Object::Name(value.first().map_or("Off", String::as_str).as_bytes().to_vec()),
+        FieldKind::List if value.len() > 1 => Object::Array(value.iter().map(|v| Object::String(PdfString::text(v))).collect()),
+        _ => Object::String(PdfString::text(value.first().map_or("", String::as_str))),
+    };
+    doc.update_dict(field.obj, |d| d.set(b"DV".to_vec(), object))?;
+    Ok(())
+}
+
+/// Apply widget visibility and report whether deferred text layout is now needed.
+fn apply_display(doc: &mut Document, field: &Field, display: i32) -> Result<bool, FormError> {
+    let mut shown = false;
+    for w in &field.widgets {
+        let old = doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0);
+        // Hidden 2, Print 4, NoView 32 (Table 167).
+        let base = old & !(2 | 4 | 32);
+        let new = match display {
+            1 => base | 2 | 4,
+            2 => base,
+            3 => base | 4 | 32,
+            _ => base | 4,
+        };
+        if new != old {
+            doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
+            shown |= old & 2 != 0 && new & 2 == 0 && w.page.is_some();
+        }
+    }
+    Ok(shown && matches!(field.kind, FieldKind::Text | FieldKind::Combo))
+}
+
 pub(crate) fn apply_changes(
     doc: &mut Document,
     changes: &[FieldChange],
@@ -281,6 +331,7 @@ pub(crate) fn apply_changes(
         }
     }
 
+    let mut formatted = Vec::new();
     for c in changes {
         let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
         // New items go first, so a value among them is written against them.
@@ -313,7 +364,7 @@ pub(crate) fn apply_changes(
                 tmp.actions = Default::default();
                 crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
                 if c.formatted {
-                    crate::redraw_calculated_value(doc, f, v, scripts)?;
+                    formatted.push(f.obj);
                 }
             }
         }
@@ -328,21 +379,10 @@ pub(crate) fn apply_changes(
         if ff != f.flags {
             doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(ff as i64)))?;
         }
-        if let Some(display) = c.display {
-            for w in &f.widgets {
-                let old = doc.get(w.obj).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0);
-                // Hidden 2, Print 4, NoView 32 (Table 167).
-                let base = old & !(2 | 4 | 32);
-                let new = match display {
-                    1 => base | 2 | 4,
-                    2 => base,
-                    3 => base | 4 | 32,
-                    _ => base | 4,
-                };
-                if new != old {
-                    doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
-                }
-            }
+        let shown = c.display.map(|display| apply_display(doc, f, display)).transpose()?.unwrap_or(false);
+        if shown && !formatted.contains(&f.obj) {
+            // Hidden widgets defer layout; restore Format before the raw-value fallback.
+            formatted.push(f.obj);
         }
         if c.fill_color.is_some() || c.stroke_color.is_some() {
             protect_other_mk_owners(doc, f, &mk_owners)?;
@@ -366,6 +406,8 @@ pub(crate) fn apply_changes(
                 .transpose()?,
             ..Default::default()
         };
+        apply_submit_name(doc, f.obj, c.submit_name.as_deref())?;
+        apply_default(doc, f, c.default_value.as_ref())?;
         if appearance != crate::LookPatch::default() || c.text_size.is_some() || c.user_name.is_some() {
             crate::author::set_props_object(
                 doc,
@@ -429,7 +471,7 @@ pub(crate) fn apply_changes(
             crate::author::set_props_object(doc, &f.name, f.obj, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
         }
     }
-    Ok(())
+    crate::values::redraw_calculated_values(doc, &formatted, scripts)
 }
 
 /// An Acrobat colour array as the RGB the look model stores, `None` for transparent (`["T"]`).
@@ -464,7 +506,7 @@ pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts
     apply_changes(doc, changes, "", None, scripts)?;
     // Acrobat's automatic calculation is driven by value changes. A keypad caption,
     // position or visibility update must not execute every calculated field again.
-    if changes.iter().any(|change| change.value.is_some()) {
+    if changes.iter().any(|change| change.value.is_some() && !change.calculation_complete) {
         crate::recalculate_with(doc, scripts)?;
     }
     Ok(())

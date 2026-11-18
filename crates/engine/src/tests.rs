@@ -13796,6 +13796,7 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
     let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    s.apply(id, Edit::ScriptPages { changes: vec![crate::js::TemplateChange::Create { name: "Notes".into(), page: 0 }] }).unwrap();
     mark_shown_text(&mut s, id, "SECRET42");
     let apply = Edit::ApplyRedactions { pages: None };
     let copy = Edit::DuplicatePages { pages: vec![0], at: None };
@@ -13803,6 +13804,10 @@ fn a_batch_that_applies_redactions_and_copies_a_page_is_refused() {
     assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("copy pages")), "{refused:?}");
     assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
     assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    let spawn = Edit::ScriptPages { changes: vec![crate::js::TemplateChange::Spawn { name: "Notes".into(), page: 1, rename: true, overlay: false }] };
+    let refused = s.apply(id, Edit::Batch { label: "spawn".into(), edits: vec![apply.clone(), spawn] });
+    assert!(matches!(&refused, Err(EditError::Invalid(m)) if m.contains("spawn template pages")), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"));
     // Copying before the redaction is applied puts the mark on the copy too, and both are checked.
     s.apply(id, Edit::Batch { label: "y".into(), edits: vec![copy, apply] }).unwrap();
     assert!(page_texts(&s, id).iter().all(|t| !t.contains("SECRET42")), "{:?}", page_texts(&s, id));

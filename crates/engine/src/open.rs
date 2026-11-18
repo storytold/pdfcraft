@@ -383,6 +383,7 @@ impl Session {
             config,
             js_output: Default::default(),
             js_runtime: Default::default(),
+            script_tool_buttons: Vec::new(),
             js_zoom: 100.0,
             js_page: 0,
             live: Default::default(),

@@ -194,3 +194,6 @@ sync_github_name = false
 
 [people.enriquemelzer-bit]
 sync_github_name = true
+
+[people.FloThePro]
+sync_github_name = true

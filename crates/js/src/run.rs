@@ -8,6 +8,15 @@ use super::{
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 
+/// Rule libraries are larger than event handlers, but still need bounded source storage.
+pub(crate) const MAX_DOCUMENT_SCRIPT_BYTES: usize = 1 << 20;
+pub(crate) const MAX_DOCUMENT_SCRIPTS_BYTES: usize = 8 << 20;
+
+/// Bound the complete library set before creating or replacing a document realm.
+pub(crate) fn document_scripts_over_budget(scripts: &[String]) -> bool {
+    scripts.len() > 1024 || scripts.iter().try_fold(0usize, |n, s| n.checked_add(s.len())).is_none_or(|n| n > MAX_DOCUMENT_SCRIPTS_BYTES)
+}
+
 /// Largest width or precision accepted by `util.printf`.
 pub(crate) const MAX_PRINTF_WIDTH_PRECISION: usize = 4096;
 
@@ -47,8 +56,17 @@ mod preflight;
 /// would overflow the stack in boa's parser ([`crate::nesting`]), or with an arrow-function or
 /// right-associative chain longer than the document worker takes ([`preflight`]).
 pub(crate) fn refuse(source: &str) -> Option<String> {
-    if source.len() > MAX_SCRIPT_BYTES {
-        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
+    refuse_with_limit(source, MAX_SCRIPT_BYTES)
+}
+
+/// Libraries retain every nesting/parser guard applied to event handlers.
+pub(crate) fn refuse_document_script(source: &str) -> Option<String> {
+    refuse_with_limit(source, MAX_DOCUMENT_SCRIPT_BYTES)
+}
+
+fn refuse_with_limit(source: &str, max_bytes: usize) -> Option<String> {
+    if source.len() > max_bytes {
+        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, max_bytes / 1024));
     }
     if crate::nesting::too_deep(source) {
         return Some("the script is nested too deeply to run safely".to_string());
@@ -123,13 +141,16 @@ pub(crate) fn run_shared_here(
     if let Some(why) = refuse(script) {
         return failed(why);
     }
+    if document_scripts_over_budget(doc_scripts) {
+        return failed("document scripts exceed their budget".into());
+    }
     // A document script too long or too deeply nested to run safely is skipped and reported,
     // as one that throws is; the others and the script still run (#3940).
     let mut skipped = Vec::new();
     let kept: Vec<(usize, &str)> = doc_scripts
         .iter()
         .enumerate()
-        .filter_map(|(i, d)| match refuse(d) {
+        .filter_map(|(i, d)| match refuse_document_script(d) {
             Some(why) => {
                 skipped.push((i, why));
                 None
@@ -170,6 +191,45 @@ impl HostHooks for NoCodeFromStrings {
 /// Host hooks that hold code compiled from strings to the checks a script passes ([`refuse`]),
 /// for runners that start the script itself through `eval`.
 pub(crate) struct CheckedCodeFromStrings;
+
+/// Document scripts restore state and imported rules through eval/Function. Every generated
+/// source passes the parser preflight, and one event cannot repeatedly compile unlimited text.
+pub(crate) struct DocumentCodeFromStrings;
+
+impl HostHooks for DocumentCodeFromStrings {
+    fn ensure_can_compile_strings(&self, _: Realm, parameters: &[JsString], body: &JsString, _: bool, ctx: &mut Context) -> JsResult<()> {
+        const MAX_DYNAMIC_SOURCE: usize = 8 << 20;
+        const MAX_DYNAMIC_TOTAL: usize = 16 << 20;
+        let units = parameters.iter().chain(std::iter::once(body)).fold(0usize, |n, s| n.saturating_add(s.len()));
+        let h = host(ctx)?;
+        {
+            let mut h = h.borrow_mut();
+            h.compiled_units = h.compiled_units.saturating_add(units);
+            if parameters.len() > 1024 || units > MAX_DYNAMIC_SOURCE || h.compiled_units > MAX_DYNAMIC_TOTAL {
+                return Err(JsNativeError::range().with_message("dynamic code exceeds its source budget").into());
+            }
+        }
+        let mut source = parameters.iter().map(JsString::to_std_string_lossy).collect::<Vec<_>>().join(",");
+        source.push('\n');
+        source.push_str(&body.to_std_string_lossy());
+        // UTF-16 length admits the copy before allocation. Charge the remaining UTF-8
+        // bytes and parameter separators too, so Unicode cannot multiply the total budget.
+        {
+            let mut h = h.borrow_mut();
+            h.compiled_units = h.compiled_units.saturating_add(source.len().saturating_sub(units));
+            if h.compiled_units > MAX_DYNAMIC_TOTAL {
+                return Err(JsNativeError::range().with_message("dynamic code exceeds its source budget").into());
+            }
+        }
+        match refuse_with_limit(&source, MAX_DYNAMIC_SOURCE) {
+            Some(why) => {
+                let why = if let Some((offset, kind)) = crate::nesting::refusal(&source) { format!("{why} ({kind} at byte {offset})") } else { why };
+                Err(JsNativeError::range().with_message(why).into())
+            }
+            None => Ok(()),
+        }
+    }
+}
 
 impl HostHooks for CheckedCodeFromStrings {
     fn ensure_can_compile_strings(&self, _: Realm, parameters: &[JsString], body: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
@@ -234,7 +294,7 @@ pub(crate) fn run_in_context(
 ) -> Outcome {
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let (icons, mut objects, cached_keys) = ctx
+    let (icons, mut objects, cached_keys, calculate, calculations_current) = ctx
         .remove_data::<Shared>()
         .map(|h| {
             let h = h.into_inner();
@@ -247,14 +307,23 @@ pub(crate) fn run_in_context(
             // The field identities are those of the previous job when every current key is one
             // of its keys and there are as many (the previous snapshot itself is not retained).
             let same_fields = h.field_keys.len() == fields.len()
-                && fields.iter().all(|f| h.field_keys.contains(&crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)));
-            (icons, h.objects, same_fields.then_some(h.field_keys))
+                && fields
+                    .iter()
+                    .enumerate()
+                    .all(|(i, f)| h.field_keys.get(&crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)) == Some(&i));
+            let current = h.calculations_current && Arc::ptr_eq(&h.fields, &fields);
+            (icons, h.objects, same_fields.then_some(h.field_keys), h.calculate, current)
         })
-        .unwrap_or_default();
-    let field_keys =
-        cached_keys.unwrap_or_else(|| fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)).collect());
-    objects.retain(|key, _| field_keys.contains(key));
+        .unwrap_or_else(|| (Vec::new(), Default::default(), None, true, false));
+    let field_keys = cached_keys.unwrap_or_else(|| crate::host::field_indices(&fields));
+    objects.retain(|key, _| field_keys.contains_key(key));
     ctx.insert_data(RefCell::new(Host {
+        page_changes: Vec::new(),
+        calculate,
+        calculations_current,
+        document_changes: Vec::new(),
+        tool_buttons: Vec::new(),
+        compiled_units: 0,
         event_name: event.name.clone(),
         fields,
         icons,
@@ -327,12 +396,17 @@ pub(crate) fn run_in_context(
     out.doc_errors = doc_errors.into_iter().map(|(_, e)| e).collect();
     if let Some(h) = ctx.remove_data::<Shared>() {
         let mut h = h.into_inner();
+        out.calculate_enabled = Some(h.calculate);
+        out.calculations_current = h.calculations_current;
         out.reset_limit_exceeded = h.reset_limit_exceeded;
         out.calculation_limit_exceeded = h.calculation_limit_exceeded;
         if h.calculation_limit_exceeded && out.error.is_none() {
             out.error = Some("script calculation work limit exceeded".into());
         }
         out.changed = h.changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
+        out.document_changes = std::mem::take(&mut h.document_changes);
+        out.tool_buttons = std::mem::take(&mut h.tool_buttons);
+        out.page_changes = std::mem::take(&mut h.page_changes);
         out.formatted = h.formatted.iter().filter_map(|&i| h.fields.get(i).map(|f| f.name.clone())).collect();
         out.alerts = std::mem::take(&mut h.alerts);
         out.console = std::mem::take(&mut h.console);

@@ -386,6 +386,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     if let Ok(shared) = host(ctx) {
         let mut h = shared.borrow_mut();
         h.calculate_depth = h.calculate_depth.saturating_sub(1);
+        h.calculations_current = result.is_ok() && restored.is_ok();
     }
     result.and(restored)
 }
@@ -546,6 +547,14 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_callable(JsString::from(name), len, f)?;
     }
     let zg = function(ctx, NativeFunction::from_fn_ptr(zoom_get));
+    let calculate_get = function(ctx, NativeFunction::from_fn_ptr(|_, _, ctx| Ok(host(ctx)?.borrow().calculate.into())));
+    let calculate_set = function(
+        ctx,
+        NativeFunction::from_fn_ptr(|_, args, ctx| {
+            host(ctx)?.borrow_mut().calculate = arg(args, 0).to_boolean();
+            Ok(JsValue::undefined())
+        }),
+    );
     let zs = function(ctx, NativeFunction::from_fn_ptr(zoom_set));
 
     let border = ObjectInitializer::new(ctx)
@@ -556,7 +565,14 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .property(js_string!("u"), s("underline"), Attribute::all())
         .build();
     ctx.register_global_property(js_string!("border"), border, Attribute::CONFIGURABLE)?;
+    let bookmark_root = crate::bookmarks::root(ctx)?;
+    ctx.register_global_property(js_string!("bookmarkRoot"), bookmark_root, Attribute::CONFIGURABLE)?;
     let global = ctx.global_object();
+    global.define_property_or_throw(
+        js_string!("calculate"),
+        boa_engine::property::PropertyDescriptor::builder().get(calculate_get.clone()).set(calculate_set.clone()).configurable(true),
+        ctx,
+    )?;
     global.define_property_or_throw(
         js_string!("zoom"),
         boa_engine::property::PropertyDescriptor::builder().get(zg).set(zs).configurable(true).build(),
@@ -587,11 +603,17 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
 
     let highlight_get = function(ctx, NativeFunction::from_fn_ptr(runtime_highlight));
     let highlight_set = function(ctx, NativeFunction::from_fn_ptr(set_runtime_highlight));
+    let thermometer = crate::viewer::thermometer(ctx)?;
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("calculate"), Some(calculate_get), Some(calculate_set), rw)
+        .property(js_string!("thermometer"), thermometer, rw)
         .accessor(js_string!("runtimeHighlight"), Some(highlight_get), Some(highlight_set), rw)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(crate::interaction::response), js_string!("response"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::dialogs::execute), js_string!("execDialog"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::viewer::add_button), js_string!("addToolButton"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::viewer::remove_button), js_string!("removeToolButton"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
         .function(NativeFunction::from_fn_ptr(open_doc), js_string!("openDoc"), 1)
@@ -609,6 +631,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .build();
     ctx.register_global_property(js_string!("app"), app, rw)?;
     let util = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(crate::streams::read), js_string!("readFileIntoStream"), 0)
+        .function(NativeFunction::from_fn_ptr(crate::streams::string), js_string!("stringFromStream"), 1)
         .function(NativeFunction::from_fn_ptr(printf), js_string!("printf"), 1)
         .function(NativeFunction::from_fn_ptr(printd), js_string!("printd"), 2)
         .function(NativeFunction::from_fn_ptr(printx), js_string!("printx"), 2)
@@ -632,6 +656,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     let color = color_object(ctx);
     ctx.register_global_property(js_string!("color"), color, rw)?;
     crate::source::install(ctx)?;
+    crate::legacy::install(ctx)?;
+    crate::templates::install(ctx)?;
     Ok(())
 }
 

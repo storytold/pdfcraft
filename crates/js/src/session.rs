@@ -13,13 +13,20 @@ pub struct Job {
     pub event: Event,
     pub doc: DocInfo,
     pub fields: Arc<Vec<FieldState>>,
-    pub doc_scripts: Vec<String>,
+    pub doc_scripts: Arc<Vec<String>>,
     /// Target positions in this job's field snapshot and their ordered script sources.
     pub calculations: Vec<(usize, String)>,
     /// Fire this timer of the realm (`app.setInterval`, `app.setTimeOut`) in place of `script`
     /// (#169). A timer the realm no longer has runs nothing; nor does any timer of a realm that
     /// has not started, or whose document scripts changed (its timers went with it).
     pub timer: Option<u32>,
+}
+
+/// Large form startup and a full calculation pass legitimately exceed a short event on
+/// a busy machine. Keep one bounded deadline for the whole operation, never per field.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn execution_budget(fields: usize, library_bytes: usize) -> std::time::Duration {
+    std::time::Duration::from_secs(if fields > 1024 || library_bytes > 1 << 20 { 30 } else { 10 })
 }
 /// Live field instances are independent of restorable PDF object-number allocation.
 #[derive(Default)]
@@ -64,6 +71,14 @@ impl FieldInstances {
     }
 }
 impl ScriptSession {
+    pub fn calculations_enabled(&self) -> bool {
+        self.calculation_enabled.unwrap_or(true)
+    }
+    pub fn record_outcome(&mut self, outcome: &Outcome) {
+        if let Some(enabled) = outcome.calculate_enabled {
+            self.calculation_enabled = Some(enabled);
+        }
+    }
     /// Stamp the caller's retained snapshot with the current instance tokens before it builds a
     /// job, so the worker's own stamping finds nothing to change and does not copy it.
     pub fn stamp_fields(&mut self, fields: &mut Arc<Vec<FieldState>>) {
@@ -114,12 +129,12 @@ impl ScriptSession {
 /// Boa context and initialization sources retained by exactly one open-document runtime.
 pub(crate) struct Realm {
     context: Option<crate::Context>,
-    scripts: Vec<String>,
+    scripts: Arc<Vec<String>>,
 }
 impl Realm {
     /// Create an empty isolated realm; the first job initializes its document scripts.
     fn new() -> Self {
-        Self { context: None, scripts: Vec::new() }
+        Self { context: None, scripts: Arc::new(Vec::new()) }
     }
     /// Validate sources, initialize once when needed, and execute this job in the retained document realm.
     fn run(&mut self, job: Job) -> Outcome {
@@ -150,12 +165,12 @@ impl Realm {
                 ..Default::default()
             };
         }
-        if job.doc_scripts.len() > 1024 || job.doc_scripts.iter().try_fold(0usize, |n, s| n.checked_add(s.len())).is_none_or(|n| n > 1 << 20) {
+        if crate::run::document_scripts_over_budget(&job.doc_scripts) {
             return failed("document scripts exceed their budget".into());
         }
         let initialize = self.context.is_none() || self.scripts != job.doc_scripts;
         if initialize {
-            self.context = match crate::Context::builder().host_hooks(std::rc::Rc::new(crate::run::NoCodeFromStrings)).build() {
+            self.context = match crate::Context::builder().host_hooks(std::rc::Rc::new(crate::run::DocumentCodeFromStrings)).build() {
                 Ok(mut c) => {
                     crate::timers::enable(&mut c);
                     Some(c)
@@ -173,7 +188,7 @@ impl Realm {
                 if !initialize {
                     return None;
                 }
-                match crate::refuse(s) {
+                match crate::run::refuse_document_script(s) {
                     Some(e) => {
                         skipped.push((i, e));
                         None
@@ -208,18 +223,18 @@ impl Realm {
             if initial.execution_refused {
                 return initial;
             }
-            let (fields, reset_calls, calculation_evaluations) = crate::host::host(ctx)
+            let (fields, doc, reset_calls, calculation_evaluations) = crate::host::host(ctx)
                 .map(|h| {
                     let h = h.borrow();
-                    (h.fields.clone(), h.reset_calls, h.calculation_evaluations)
+                    (h.fields.clone(), h.doc.clone(), h.reset_calls, h.calculation_evaluations)
                 })
-                .unwrap_or((job.fields, 0, 0));
+                .unwrap_or((job.fields, job.doc.clone(), 0, 0));
             let saved = link.then(|| crate::timers::save(ctx)).flatten();
             let mut out = crate::run::run_in_context(
                 ctx,
                 &job.script,
                 &job.event,
-                &job.doc,
+                &doc,
                 fields,
                 crate::run::ScriptSetup {
                     doc_scripts: &[],
@@ -249,6 +264,12 @@ impl Realm {
             out.console = initial.console;
             initial.requests.append(&mut out.requests);
             out.requests = initial.requests;
+            initial.document_changes.append(&mut out.document_changes);
+            out.document_changes = initial.document_changes;
+            initial.tool_buttons.append(&mut out.tool_buttons);
+            out.tool_buttons = initial.tool_buttons;
+            initial.page_changes.append(&mut out.page_changes);
+            out.page_changes = initial.page_changes;
             out.doc_errors = initial.doc_errors;
             if out.error.is_none() {
                 out.error = initial.error;
@@ -393,6 +414,7 @@ struct WorkerJob {
 /// Dropping it releases the sender; after any active job finishes the worker exits and drops its realm.
 #[derive(Default)]
 pub struct ScriptSession {
+    calculation_enabled: Option<bool>,
     sender: Option<mpsc::SyncSender<WorkerJob>>,
     executing: Arc<std::sync::atomic::AtomicBool>,
     reset_realm: bool,
@@ -537,7 +559,8 @@ impl ScriptSession {
 
     /// Run a job with one total deadline, discarding its entire realm when the host times out.
     pub fn run(&mut self, job: Job, answers: &[Option<String>]) -> Outcome {
-        self.run_with_limit(job, answers, std::time::Duration::from_secs(10))
+        let budget = execution_budget(job.fields.len(), job.doc_scripts.iter().map(String::len).fold(0usize, usize::saturating_add));
+        self.run_with_limit(job, answers, budget)
     }
     /// Run a callback within the remaining time of a larger operation.
     pub fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
@@ -572,6 +595,7 @@ impl ScriptSession {
         };
         match Self::receive(&rx, answers, started, limit) {
             Some(out) => {
+                self.record_outcome(&out);
                 self.acknowledge_completion();
                 out
             }
@@ -598,6 +622,7 @@ impl ScriptSession {
             }
             match rx.recv_timeout(remaining) {
                 Ok(InteractiveEvent::Complete(out)) => return Some(out),
+                Ok(InteractiveEvent::Progress(_)) => {}
                 Ok(InteractiveEvent::Prompt(_, reply)) => {
                     let _ = reply.send(answers.next().cloned().flatten());
                 }
@@ -609,6 +634,7 @@ impl ScriptSession {
 /// Web-local retained realm; native worker/dialog hosting is deliberately unavailable.
 #[cfg(target_arch = "wasm32")]
 pub struct ScriptSession {
+    calculation_enabled: Option<bool>,
     realm: Realm,
     instances: FieldInstances,
     icon_epoch: u64,
@@ -621,6 +647,7 @@ impl Default for ScriptSession {
     fn default() -> Self {
         Self {
             realm: Realm::new(),
+            calculation_enabled: None,
             instances: FieldInstances::default(),
             icon_epoch: 0,
             icon_versions: Default::default(),
@@ -644,7 +671,9 @@ impl ScriptSession {
     pub fn run(&mut self, mut job: Job, _answers: &[Option<String>]) -> Outcome {
         self.instances.stamp(&mut job);
         self.stamp_icons(&mut job);
-        self.realm.run(job)
+        let out = self.realm.run(job);
+        self.record_outcome(&out);
+        out
     }
 }
 
@@ -658,7 +687,8 @@ mod tests {
             event: Event::field("Mouse Up", "go", ""),
             doc: DocInfo::default(),
             fields: Arc::new(vec![FieldState::new("go", crate::FieldType::Button, vec!["old".into()])]),
-            doc_scripts: vec!["var buffer='', init=1, opened=event.name;var held=getField('go');function digit(v){buffer+=v;return buffer;}".into()],
+            doc_scripts: vec!["var buffer='', init=1, opened=event.name;var held=getField('go');function digit(v){buffer+=v;return buffer;}".into()]
+                .into(),
             calculations: Vec::new(),
             timer: None,
         }
@@ -707,7 +737,7 @@ mod tests {
         let one_off = crate::run("app.setInterval('1', 50); 'set';", &Event::doc("Console"), &DocInfo::default(), &[], &[], Limits::default());
         assert_eq!(one_off.result.as_deref(), Some("set"));
         assert!(one_off.timers.is_empty());
-        let changed = Job { doc_scripts: vec!["var other = 1;".into()], ..fire(1) };
+        let changed = Job { doc_scripts: vec!["var other = 1;".into()].into(), ..fire(1) };
         let gone = s.run(changed, &[]);
         assert!(gone.timers.is_empty() && gone.changed.is_empty(), "{gone:?}");
     }
@@ -736,7 +766,7 @@ mod tests {
         changed.fields = Arc::new(vec![FieldState::new("go", crate::FieldType::Button, vec!["live".into()])]);
         assert_eq!(a.run(changed, &[]).result.as_deref(), Some("live"));
         let mut edited = job("buffer;");
-        edited.doc_scripts = vec!["var buffer='changed';".into()];
+        edited.doc_scripts = vec!["var buffer='changed';".into()].into();
         assert_eq!(a.run(edited, &[]).result.as_deref(), Some("changed"));
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -941,7 +971,7 @@ mod tests {
         let block = format!("function library(){{var x=0\n{}return x}}\nlibrary()", "x=1\n".repeat(6000));
         assert_eq!(ScriptSession::default().run(job(&block), &[]).result.as_deref(), Some("1"));
         let mut document = job("f299();");
-        document.doc_scripts.push((0..300).map(|i| format!("const f{i}=()=>1\n")).collect::<String>());
+        Arc::make_mut(&mut document.doc_scripts).push((0..300).map(|i| format!("const f{i}=()=>1\n")).collect::<String>());
         let result = ScriptSession::default().run(document, &[]);
         assert_eq!(result.error, None);
         assert!(result.doc_errors.is_empty());
@@ -949,11 +979,13 @@ mod tests {
     }
 
     #[test]
-    /// Retaining the realm must not re-enable eval or dynamic Function construction.
-    fn persistent_context_keeps_dynamic_compilation_blocked() {
+    /// Retained realms apply the parser guards to eval and Function construction alike.
+    fn persistent_context_bounds_dynamic_compilation() {
         let mut a = ScriptSession::default();
-        assert!(a.run(job("eval('1')"), &[]).error.is_some());
-        assert!(a.run(job("new Function('return 1')()"), &[]).error.is_some());
+        assert_eq!(a.run(job("eval('1')"), &[]).result.as_deref(), Some("1"));
+        assert!(a.run(job("eval('('.repeat(1000)+'1'+')'.repeat(1000))"), &[]).error.is_some());
+        assert_eq!(a.run(job("new Function('return 1')()"), &[]).result.as_deref(), Some("1"));
+        assert!(a.run(job("new Function('('.repeat(1000)+'1'+')'.repeat(1000))()"), &[]).error.is_some());
     }
     /// The completion itself must not release the realm before its caller accepts the outcome.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1100,7 +1132,7 @@ mod tests {
             let dest = FieldState::new("dest", crate::FieldType::Text, vec!["before".into()]);
             let mut task = job("getField('dest').value=held.value;held.value='old';openedValue+'/'+getField('dest').value");
             task.fields = Arc::new(vec![source, dest]);
-            task.doc_scripts = vec![format!("var held=getField('group.source');{reset}var openedValue=held.value;")];
+            task.doc_scripts = vec![format!("var held=getField('group.source');{reset}var openedValue=held.value;")].into();
             let out = ScriptSession::default().run(task, &[]);
             assert_eq!(out.error, None);
             assert_eq!(out.result.as_deref(), Some("new/new"));
@@ -1121,7 +1153,7 @@ mod reset_budget_tests {
             event: Event::doc("Console"),
             doc: Default::default(),
             fields: Arc::new(vec![]),
-            doc_scripts: vec!["for(var i=0;i<64;i++)resetForm();".into()],
+            doc_scripts: vec!["for(var i=0;i<64;i++)resetForm();".into()].into(),
             calculations: vec![],
             timer: None,
         };
@@ -1148,7 +1180,7 @@ mod event_identity_tests {
             event: Event::field("Mouse Up", "go", ""),
             doc: Default::default(),
             fields: Arc::new(vec![field]),
-            doc_scripts: vec![],
+            doc_scripts: vec![].into(),
             calculations: vec![],
             timer: None,
         };
@@ -1172,7 +1204,7 @@ mod cache_capacity_tests {
                 })
                 .collect(),
         );
-        let job=Job{script:"for(var i=0;i<4100;i++)getField('f'+i);var held=getField('f4099');held.custom=42;held===getField('f4099') && getField('f4099').custom===42;".into(),event:Event::doc("Console"),doc:Default::default(),fields,doc_scripts:vec![],calculations:vec![],timer:None};
+        let job=Job{script:"for(var i=0;i<4100;i++)getField('f'+i);var held=getField('f4099');held.custom=42;held===getField('f4099') && getField('f4099').custom===42;".into(),event:Event::doc("Console"),doc:Default::default(),fields,doc_scripts:vec![].into(),calculations:vec![],timer:None};
         let mut session = ScriptSession::default();
         let out = session.run(job.clone(), &[]);
         assert_eq!(out.error, None);
@@ -1194,7 +1226,7 @@ mod cache_lifecycle_tests {
             event: Event::doc("Console"),
             doc: Default::default(),
             fields: Arc::new(vec![field.clone()]),
-            doc_scripts: vec![],
+            doc_scripts: vec![].into(),
             calculations: vec![],
             timer: None,
         };
@@ -1232,7 +1264,7 @@ mod review13_tests {
             event: Event::doc("Test"),
             doc: DocInfo::default(),
             fields: Arc::new(fields),
-            doc_scripts: vec![],
+            doc_scripts: vec![].into(),
             calculations: vec![],
             timer: None,
         }
@@ -1262,7 +1294,7 @@ mod review13_tests {
         let mut session = ScriptSession::default();
         let f = FieldState::new("amount", FieldType::Text, vec!["2".into()]);
         let mut first = job("event.name", vec![f.clone()]);
-        first.doc_scripts = vec!["Object.freeze(globalThis);".into()];
+        first.doc_scripts = vec!["Object.freeze(globalThis);".into()].into();
         assert_eq!(session.run(first.clone(), &[]).result.as_deref(), Some("Test"));
         first.event = Event::doc("Next");
         first.script = "calculateNow();event.name".into();
@@ -1319,7 +1351,7 @@ mod review13_tests {
         let fields = vec![FieldState::new("amount", FieldType::Text, vec!["0".into()])];
         let mut j = job("for(var i=0;i<4097;i++){try{calculateNow()}catch(e){}} try{calculateNow()}catch(e){} count;", fields.clone());
         j.calculations = vec![(0, "count += 1;".into())];
-        j.doc_scripts = vec!["var count = 0;".into()];
+        j.doc_scripts = vec!["var count = 0;".into()].into();
         let out = session.run(j.clone(), &[]);
         assert!(out.calculation_limit_exceeded);
         assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation work limit")));

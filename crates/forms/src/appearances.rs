@@ -28,6 +28,12 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
     for f in fields(doc) {
         for w in &f.widgets {
             let widget = doc.get(w.obj);
+            // Hidden storage fields and widgets outside the page tree have no appearance to
+            // display. Their values can hold megabytes of serialized scripts; laying them out
+            // on every refresh stalls opening and editing the otherwise small visible form.
+            if w.page.is_none() || widget.as_dict().and_then(|d| d.int(b"F")).is_some_and(|flags| flags & 2 != 0) {
+                continue;
+            }
             let normal = widget
                 .as_dict()
                 .and_then(|d| d.get(b"AP"))

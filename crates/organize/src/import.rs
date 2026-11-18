@@ -26,6 +26,211 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::{INHERITABLE, OrganizeError, pages_root, rebuild, walk};
 
+/// Copy one in-document template, sharing immutable resources and preserving field identity
+/// for unrenamed spawns. The caller owns the transaction/working copy.
+pub(crate) fn copy_template_page(
+    dst: &mut Document,
+    page: ObjRef,
+    inherited: Dict,
+    at: usize,
+    prefix: Option<String>,
+) -> Result<ObjRef, OrganizeError> {
+    if let Some(prefix) = prefix.as_deref()
+        && fields::taken_field_names(dst)?.iter().any(|name| name.starts_with(prefix))
+    {
+        return Err(OrganizeError::Invalid("template field prefix is already in use; choose another insertion position".into()));
+    }
+    let src = dst.clone();
+    let mut order = walk(&src)?;
+    let root = pages_root(dst)?;
+    let kept = fields_on(&src, [page]);
+    if kept.len() > 100_000 {
+        return Err(OrganizeError::Invalid("template has too many fields".into()));
+    }
+    let source = src.get(page).as_dict().cloned().ok_or_else(|| OrganizeError::Invalid("template is not a page".into()))?;
+    let annotations = source.get(b"Annots").map(|v| src.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    if annotations.len() > 100_000 {
+        return Err(OrganizeError::Invalid("template has too many annotations".into()));
+    }
+    let mut copied = kept.clone();
+    copied.insert(page);
+    // An indirect Annots array is mutable too: sharing it would bypass copying all
+    // widgets and leave the spawned page without its renamed field graph.
+    copied.extend(source.get(b"Annots").and_then(Object::as_ref));
+    copied.extend(annotations.iter().filter_map(Object::as_ref));
+    // Action containers are mutable graphs too: sharing /AA would keep references
+    // to the original fields after a renamed spawn. Their immutable streams stay shared.
+    let mut actions = Vec::new();
+    for r in &copied {
+        if actions.len() >= 100_000 {
+            return Err(OrganizeError::Invalid("template action graph is too large".into()));
+        }
+        if let Some(d) = src.get(*r).as_dict() {
+            actions.extend([b"A".as_slice(), b"AA".as_slice()].into_iter().filter_map(|k| d.get(k).cloned()));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut steps = 0usize;
+    while let Some(value) = actions.pop() {
+        steps = steps.saturating_add(1);
+        if steps > 100_000 {
+            return Err(OrganizeError::Invalid("template action graph is too large".into()));
+        }
+        let resolved = if let Some(r) = value.as_ref() {
+            if copied.contains(&r) || !seen.insert(r) {
+                continue;
+            }
+            let value = src.get(r);
+            // A destination or field list can point outside the action graph.
+            // Keep those document objects shared; selected fields are already in `copied`.
+            if value.as_dict().is_some_and(|d| {
+                matches!(d.name(b"Type"), Some(b"Page" | b"Pages" | b"Template" | b"Catalog"))
+                    || d.contains(b"FT")
+                    || d.name(b"Subtype") == Some(b"Widget")
+                    || (d.contains(b"T") && d.contains(b"Kids"))
+            }) {
+                continue;
+            }
+            if matches!(&*value, Object::Dict(_) | Object::Array(_) | Object::Ref(_)) {
+                copied.insert(r);
+            }
+            value
+        } else {
+            std::sync::Arc::new(value)
+        };
+        match &*resolved {
+            Object::Ref(r) => actions.push(Object::Ref(*r)),
+            Object::Dict(d) => {
+                if actions.len().saturating_add(d.len()).saturating_add(steps) > 100_000 {
+                    return Err(OrganizeError::Invalid("template action graph is too large".into()));
+                }
+                actions.extend(d.iter().map(|(_, v)| v.clone()));
+            }
+            Object::Array(a) => {
+                if actions.len().saturating_add(a.len()).saturating_add(steps) > 100_000 {
+                    return Err(OrganizeError::Invalid("template action graph is too large".into()));
+                }
+                actions.extend(a.iter().cloned());
+            }
+            _ => {}
+        }
+    }
+    let objects = src.object_numbers();
+    if objects.len() > 1_000_000 {
+        return Err(OrganizeError::Invalid("document has too many objects to spawn a template".into()));
+    }
+    let map = objects.into_iter().map(|n| ObjRef::new(n, src.generation(n))).filter(|r| !copied.contains(r)).map(|r| (r, r)).collect();
+    let new_page = dst.add(Object::Null);
+    let mut pages: HashMap<_, _> = order.iter().map(|(r, _)| (*r, *r)).collect();
+    pages.insert(page, new_page);
+    let mut copier = Copier::new(&src, map, pages);
+    copier.kept = Some(Rc::new(kept));
+    copier.map.insert(page, new_page);
+    let mut body = Dict::new();
+    for (k, v) in source.iter() {
+        if !SKIP_ON_PAGE.contains(&k.as_slice()) {
+            body.set(k.clone(), copier.copy_value(dst, v, None)?);
+        }
+    }
+    for (k, v) in inherited.iter() {
+        if !body.contains(k) {
+            body.set(k.clone(), v.clone());
+        }
+    }
+    body.set(b"Parent".to_vec(), Object::Ref(root));
+    body.set(b"Type".to_vec(), Object::name("Page"));
+    dst.set(new_page, Object::Dict(body));
+    let annot_pages: HashMap<_, _> =
+        annotations.iter().filter_map(Object::as_ref).filter_map(|r| copier.map.get(&r).copied()).map(|r| (r, new_page)).collect();
+    copier.fix_annotations(dst, &annot_pages)?;
+    if let Some(prefix) = prefix {
+        for field in &copier.fields {
+            let old =
+                dst.get(*field).as_dict().and_then(|d| d.get(b"T")).and_then(|v| dst.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+            let name = if old.is_empty() { prefix.trim_end_matches('.').to_string() } else { format!("{prefix}{old}") };
+            dst.update_dict(*field, |d| d.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::text(&name))))?;
+        }
+        register_fields(dst, &copier.fields)?;
+        let af = src.root().and_then(|r| src.get(r).as_dict().and_then(|d| d.get(b"AcroForm")).map(|v| src.resolve(v)));
+        let order = af.as_ref().and_then(|v| v.as_dict()).and_then(|d| d.get(b"CO")).map(|v| src.resolve(v));
+        let extra: Vec<_> = order
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Object::as_ref)
+            .filter_map(|old| copier.map.get(&old).copied().filter(|new| *new != old))
+            .map(Object::Ref)
+            .collect();
+        if !extra.is_empty() {
+            let mut form = dst
+                .get(root_catalog(dst)?)
+                .as_dict()
+                .and_then(|d| d.get(b"AcroForm"))
+                .and_then(|v| dst.resolve(v).as_dict().cloned())
+                .unwrap_or_default();
+            let mut order = form.get(b"CO").map(|v| dst.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+            order.extend(extra);
+            form.set(b"CO".to_vec(), Object::Array(order));
+            let cat = root_catalog(dst)?;
+            dst.update_dict(cat, |d| d.set(b"AcroForm".to_vec(), Object::Dict(form)))?;
+        }
+    } else {
+        for original in annotations.iter().filter_map(Object::as_ref) {
+            let original_dict = src.get(original).as_dict().cloned().unwrap_or_default();
+            if original_dict.name(b"Subtype") != Some(b"Widget") {
+                continue;
+            }
+            let Some(widget) = copier.map.get(&original).copied().filter(|r| *r != original) else { continue };
+            let own_field = original_dict.contains(b"T") || original_dict.contains(b"FT");
+            let parent = if own_field {
+                // Keep the field's original object number, so held JavaScript Field objects
+                // remain valid when its formerly combined widget gains a sibling.
+                let (mut field, mut own) = field_and_widget(dst, &original_dict);
+                own.set(b"Parent".to_vec(), Object::Ref(original));
+                let own = dst.add(Object::Dict(own));
+                field.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(own)]));
+                dst.set(original, Object::Dict(field));
+                dst.update_dict(page, |d| {
+                    if let Some(list) = d.get(b"Annots").map(|v| src.resolve(v)).and_then(|v| v.as_array().cloned()) {
+                        d.set(
+                            b"Annots".to_vec(),
+                            Object::Array(list.into_iter().map(|v| if v.as_ref() == Some(original) { Object::Ref(own) } else { v }).collect()),
+                        );
+                    }
+                })?;
+                original
+            } else {
+                original_dict.reference(b"Parent").ok_or_else(|| OrganizeError::Invalid("template widget has no field".into()))?
+            };
+            let copied = dst.get(widget).as_dict().cloned().unwrap_or_default();
+            let mut copied = if own_field { field_and_widget(dst, &copied).1 } else { copied };
+            copied.set(b"Parent".to_vec(), Object::Ref(parent));
+            copied.set(b"P".to_vec(), Object::Ref(new_page));
+            dst.set(widget, Object::Dict(copied));
+            add_kid(dst, parent, widget)?;
+        }
+    }
+    order.insert(at.min(order.len()), (new_page, Dict::new()));
+    // Rebuild removes inherited attributes from the old root. Hidden templates
+    // are outside `order`, but later spawns still need their effective attributes.
+    for template in crate::templates(dst).into_iter().filter(|t| t.visible_page.is_none()) {
+        let attrs = crate::templates::inherited(dst, template.page);
+        dst.update_dict(template.page, |d| {
+            for (key, value) in attrs.iter() {
+                if !d.contains(key) {
+                    d.set(key.clone(), value.clone());
+                }
+            }
+        })?;
+    }
+    rebuild(dst, &order)?;
+    Ok(new_page)
+}
+fn root_catalog(doc: &Document) -> Result<ObjRef, OrganizeError> {
+    doc.root().ok_or(OrganizeError::NoPageTree)
+}
+
 mod carry;
 mod combine;
 mod copy;

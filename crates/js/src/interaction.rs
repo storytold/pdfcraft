@@ -13,13 +13,69 @@ pub struct MenuItem {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prompt {
+    File,
+    Dialog(crate::dialogs::Dialog),
     Menu(Vec<MenuItem>),
     Text { title: String, question: String, default: String, password: bool, label: String },
     Alert(crate::Message),
 }
+// Keep the existing public completion payload: one outcome is sent per invocation, while
+// intermediate prompts and progress events have independent bounds.
+#[allow(clippy::large_enum_variant)]
 pub enum InteractiveEvent {
+    Progress(Progress),
     Prompt(Prompt, Sender<Option<String>>),
     Complete(Outcome),
+}
+#[derive(Clone, Debug)]
+pub struct Progress {
+    pub text: String,
+    pub value: f64,
+    pub duration: f64,
+    pub active: bool,
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+thread_local! {
+    static PROGRESS_CANCEL:RefCell<std::sync::Arc<std::sync::atomic::AtomicBool>>=RefCell::new(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    static PROGRESS_COUNT:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};
+    static PROGRESS_CLEARED:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};
+}
+pub(crate) fn cancelled() -> bool {
+    PROGRESS_CANCEL.with(|c| c.borrow().load(std::sync::atomic::Ordering::Relaxed))
+}
+pub(crate) fn progress(text: String, value: f64, duration: f64, active: bool) {
+    if !PROGRESS_COUNT.with(|n| {
+        let old = n.get();
+        n.set(old.saturating_add(1));
+        old < 64 || (!active && PROGRESS_CLEARED.with(|cleared| !cleared.replace(true)))
+    }) {
+        return;
+    }
+    HOST.with(|h| {
+        if let Some((tx, _)) = h.borrow().as_ref() {
+            let cancel = PROGRESS_CANCEL.with(|c| c.borrow().clone());
+            let _ = tx.send(InteractiveEvent::Progress(Progress { text, value, duration, active, cancel }));
+        }
+    });
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+fn exhausted_progress_budget_still_clears_once_per_invocation() {
+    for _ in 0..2 {
+        let (tx, rx) = mpsc::channel();
+        set_host(Some(tx));
+        for _ in 0..70 {
+            progress(String::new(), 0.0, 1.0, true);
+        }
+        progress(String::new(), 0.0, 1.0, false);
+        progress(String::new(), 0.0, 1.0, true);
+        progress(String::new(), 0.0, 1.0, false);
+        set_host(None);
+        let events: Vec<_> = rx.try_iter().collect();
+        assert_eq!(events.len(), 65);
+        assert!(matches!(events.last(), Some(InteractiveEvent::Progress(p)) if !p.active));
+    }
 }
 thread_local! { static HOST:RefCell<Option<(Sender<InteractiveEvent>,usize)>>=const {RefCell::new(None)}; }
 /// Tell alert/menu helpers whether this worker has an interactive or deterministic reply channel.
@@ -29,27 +85,34 @@ pub(crate) fn has_host() -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 /// Install or clear the worker-local prompt channel and reset the per-invocation prompt budget.
 pub(crate) fn set_host(host: Option<Sender<InteractiveEvent>>) {
+    PROGRESS_CANCEL.with(|c| *c.borrow_mut() = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    PROGRESS_COUNT.with(|c| c.set(0));
+    PROGRESS_CLEARED.with(|c| c.set(false));
     HOST.with(|h| *h.borrow_mut() = host.map(|h| (h, 0)));
 }
 /// Charge one prompt to the invocation's budget: the channel to send it on, if the worker has one.
-fn reserve() -> JsResult<Option<Sender<InteractiveEvent>>> {
+fn reserve_with_limit(limit: usize) -> JsResult<Option<Sender<InteractiveEvent>>> {
     HOST.with(|h| {
         let mut h = h.borrow_mut();
         let Some((tx, n)) = h.as_mut() else { return Ok(None) };
-        if *n >= 32 {
+        if *n >= limit {
             return Err(error("too many interactive prompts"));
         }
         *n += 1;
         Ok(Some(tx.clone()))
     })
 }
+fn reserve() -> JsResult<Option<Sender<InteractiveEvent>>> {
+    reserve_with_limit(32)
+}
 /// Send a bounded prompt and await its reply, treating disconnect/timeout as cancellation.
 pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
-    let Some(sender) = reserve()? else { return Ok(None) };
+    let bytes = if matches!(prompt, Prompt::File | Prompt::Dialog(_)) { 8 << 20 } else { 4096 };
+    let Some(sender) = reserve_with_limit(if matches!(prompt, Prompt::Dialog(_)) { 128 } else { 32 })? else { return Ok(None) };
     let (tx, rx) = mpsc::channel();
     sender.send(InteractiveEvent::Prompt(prompt, tx)).map_err(|_| error("interactive host closed"))?;
     let answer = rx.recv_timeout(std::time::Duration::from_secs(300)).ok().flatten();
-    if answer.as_ref().is_some_and(|s| s.len() > 4096) {
+    if answer.as_ref().is_some_and(|s| s.len() > bytes) {
         return Err(error("interactive response exceeds its limit"));
     }
     Ok(answer)

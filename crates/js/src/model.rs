@@ -36,6 +36,8 @@ pub const DISPLAY_NO_VIEW: i32 = 3;
 /// A field as scripts see it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
+    pub submit_name: String,
+    pub pages: Vec<i32>,
     pub name: String,
     /// Stable PDF object identity, absent for synthetic name-only callers.
     pub object_id: Option<u64>,
@@ -85,6 +87,8 @@ impl FieldState {
     /// Construct a field snapshot with explicit defaults for optional appearance and interaction state.
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
+            submit_name: String::new(),
+            pages: vec![-1],
             name: name.into(),
             object_id: None,
             instance_id: 0,
@@ -169,6 +173,8 @@ impl Event {
 /// About the document, for `this.numPages`, `this.info` and the like.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DocInfo {
+    pub templates: Vec<crate::templates::Template>,
+    pub bookmarks: Vec<crate::bookmarks::Bookmark>,
     /// Changes when history can replace an icon object under the same PDF reference.
     pub icon_epoch: u64,
     /// Revisions of referenced icons that can change independently across history.
@@ -177,7 +183,7 @@ pub struct DocInfo {
     pub num_pages: usize,
     /// The current page, 0-based.
     pub page: usize,
-    /// Document information (`this.info.title` etc.): lower-case key, value.
+    /// Document information: standard keys are lowercase; custom keys preserve PDF spelling.
     pub info: Vec<(String, String)>,
     /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
     pub page_boxes: Vec<[[f64; 4]; 5]>,
@@ -363,6 +369,11 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    pub page_changes: Vec<crate::templates::Change>,
+    pub calculate_enabled: Option<bool>,
+    pub calculations_current: bool,
+    pub document_changes: Vec<crate::bookmarks::Change>,
+    pub tool_buttons: Vec<crate::viewer::ButtonChange>,
     /// The runtime could not execute the callback safely.
     pub execution_refused: bool,
     /// Execution was refused before invoking any code in the retained realm.

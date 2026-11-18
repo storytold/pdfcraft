@@ -878,6 +878,8 @@ impl PdfCraftApp {
         let hidden = self.hidden_interface();
         if !hidden.mode_bar(self.native_menu.is_some()) {
             chrome::mode_bar(self, ui);
+            #[cfg(not(target_arch = "wasm32"))]
+            self.show_document_tool_buttons(ui);
         }
         // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
         // recognized text brings it back with its review as it was.

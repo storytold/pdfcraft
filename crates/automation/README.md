@@ -335,7 +335,18 @@ FreeText appearance and survives reopening. Other mark/signature types reject
 
 ## AcroForm script interactions
 
-`js_run` accepts optional `answers` (strings or null, at most 32), consumed in popup, response and alert order. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).
+`js_run` accepts optional `answers` (at most 128), consumed in prompt order.
+Strings answer menus, text prompts, alerts and custom dialogs; null cancels.
+For custom dialogs, send a JSON string such as
+`{"event":"ok","values":{"name":"Wizard"}}`, or a control ID to invoke its callback.
+Each reply resumes the same worker and callbacks run once. Dialog replies are bounded
+to 8 MiB; menu/text/alert replies retain their 4 KiB limit.
+`{"file":"rules.js"}` explicitly shares a UTF-8 text file with a script file-selection
+prompt; paths honor the automation roots, with 8 MiB per file and 16 MiB total replies.
+Scripts cannot open arbitrary paths.
+`js_tool_buttons` lists document controls and `js_tool_button` activates one with
+the same ordered answers. `page_templates`, `page_template_spawn` and
+`page_template_set_hidden` expose named pages, including hidden templates. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).
 
 For distinct PDF fields sharing a name, form_fields exposes a document-local integer field_id. Pass it with field to js_run to bind event.target to that exact field (including ordered answers); omit it for existing first-match behavior. Mismatched names/IDs, missing names and non-integer/out-of-range IDs are refused before execution.
 

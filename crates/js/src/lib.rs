@@ -23,6 +23,8 @@
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
+//! Document libraries may be up to 1 MiB each, with an 8 MiB combined source budget;
+//! individual event handlers remain limited to 256 KiB.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -41,10 +43,12 @@ mod document;
 mod format;
 mod globals;
 mod host;
+mod legacy;
 mod model;
 mod nesting;
 mod run;
 mod source;
+mod streams;
 
 #[cfg(test)]
 pub(crate) use format::PRINTD_SCANNED;
@@ -73,12 +77,16 @@ mod tests;
 mod geometry;
 pub use geometry::{rotate_rect, unrotate_rect};
 
+pub mod bookmarks;
 mod icons;
 mod ocg;
+pub mod templates;
+pub mod viewer;
 pub use ocg::Layer;
 mod timers;
 pub use timers::{MAX_TIMERS, MIN_TIMER_MS, Timer};
 
+pub mod dialogs;
 pub mod interaction;
 pub mod session;
 

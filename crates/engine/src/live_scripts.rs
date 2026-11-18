@@ -209,6 +209,19 @@ impl Session {
     /// into the document win over how page actions and timers showed that field.
     pub(crate) fn after_script(&mut self, id: DocId, o: &Outcome, written: &[String]) {
         let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return };
+        for change in &o.tool_buttons {
+            use pdfcraft_js::viewer::ButtonChange;
+            match change {
+                ButtonChange::Remove(name) => doc.script_tool_buttons.retain(|b| &b.name != name),
+                ButtonChange::Add(button) => {
+                    if let Some(old) = doc.script_tool_buttons.iter_mut().find(|b| b.name == button.name) {
+                        *old = button.clone();
+                    } else if doc.script_tool_buttons.len() < 64 {
+                        doc.script_tool_buttons.push(button.clone());
+                    }
+                }
+            }
+        }
         let runtime = doc.js_runtime.clone();
         doc.live.schedule(&runtime, &o.timers);
         let before = doc.live.shown.len();

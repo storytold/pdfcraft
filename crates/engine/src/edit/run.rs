@@ -22,6 +22,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         // "Assemble the document: insert, rotate or delete pages and create bookmarks" (Table 22).
         | Edit::AddBookmark { .. }
         | Edit::RenameBookmark { .. }
+        | Edit::ScriptBookmarks { .. }
+        | Edit::ScriptPages { .. }
         | Edit::DeleteBookmark { .. }
         | Edit::MoveBookmark { .. }
         | Edit::SetBookmarkPage { .. }
@@ -568,6 +570,17 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;
         }
         Edit::RenameBookmark { path, title } => pdfcraft_organize::rename_bookmark(doc, path, title)?,
+        Edit::ScriptPages { changes } => {
+            // Spawned pages have new identities, so the batch's redaction marks cannot
+            // check text subsequently written onto those copies.
+            if !cx.redaction_marks.is_empty() && changes.iter().any(|c| matches!(c, pdfcraft_js::templates::Change::Spawn { .. })) {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also spawn template pages: the copies can't be checked against the marks; the document was not changed".into(),
+                ));
+            }
+            crate::js::apply_page_changes(doc, changes)?;
+        }
+        Edit::ScriptBookmarks { changes } => crate::js::apply_bookmark_changes(doc, changes)?,
         Edit::DeleteBookmark { path } => pdfcraft_organize::delete_bookmark(doc, path)?,
         Edit::MoveBookmark { from, to_parent, index } => {
             pdfcraft_organize::move_bookmark(doc, from, to_parent, *index)?;

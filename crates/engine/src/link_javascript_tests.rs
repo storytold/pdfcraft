@@ -121,6 +121,7 @@ fn a_link_menu_is_answered_and_open_doc_is_only_requested() {
 fn a_started_link_script_finishes_like_a_run_one() {
     let wait = |p: &js::PendingScript| loop {
         match p.receiver.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
+            js::InteractiveEvent::Progress(_) => {}
             js::InteractiveEvent::Prompt(_, reply) => reply.send(Some("a".into())).unwrap(),
             js::InteractiveEvent::Complete(o) => break o,
         }

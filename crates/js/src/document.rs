@@ -31,7 +31,7 @@ pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>)
     }
     let object = field_object_new(ctx, name, id, token);
     if let Ok(h) = host(ctx)
-        && h.borrow().field_keys.contains(&key)
+        && h.borrow().field_keys.contains_key(&key)
     {
         h.borrow_mut().objects.insert(key, object.clone());
     }
@@ -41,6 +41,18 @@ pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>)
 fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) -> JsObject {
     let n = (JsString::from(name), id, token);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
+    let default_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+            let values = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
+            charge(c, name, |f| text_bytes(&f.default), text_bytes(&values))?;
+            write(c, name, |f| {
+                f.default = values;
+                f.default_known = true;
+            })?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
     let value_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let vals = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
@@ -163,6 +175,21 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
     let user_name_get = getter!(ctx, n, |f, c| s(&f.user_name));
+    let submit_name_get = getter!(ctx, n, |f, _c| s(&f.submit_name));
+    let submit_name_set = {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+            let v = crate::host::text_with_budget(&arg(args, 0), c, 1 << 20, "submitName is too long")?;
+            charge(c, name, |f| f.submit_name.len(), v.len())?;
+            write(c, name, |f| f.submit_name = v)?;
+            Ok(JsValue::undefined())
+        }
+        function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
+    };
+    let pages_get = getter!(ctx, n, |f, c| if f.pages.len() == 1 {
+        JsValue::from(f.pages.first().copied().unwrap_or(-1))
+    } else {
+        JsArray::from_iter(f.pages.into_iter().map(JsValue::from), c).into()
+    });
     let user_name_set = {
         /// Bound the tooltip string to 4,096 bytes before staging the field user name.
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
@@ -360,7 +387,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
-        .accessor(js_string!("defaultValue"), Some(default), None, rw)
+        .accessor(js_string!("defaultValue"), Some(default), Some(default_set), rw)
         .accessor(js_string!("type"), Some(kind), None, rw)
         .accessor(js_string!("name"), Some(fname), None, rw)
         .accessor(js_string!("readonly"), Some(readonly_get), Some(readonly_set), rw)
@@ -377,6 +404,8 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .accessor(js_string!("lineWidth"), Some(line_width_get), Some(line_width_set), rw)
         .accessor(js_string!("borderStyle"), Some(border_style_get), Some(border_style_set), rw)
         .accessor(js_string!("userName"), Some(user_name_get), Some(user_name_set), rw)
+        .accessor(js_string!("submitName"), Some(submit_name_get), Some(submit_name_set), rw)
+        .accessor(js_string!("page"), Some(pages_get), None, rw)
         .accessor(js_string!("strokeColor"), Some(stroke_color_get), Some(stroke_color_set), rw)
         .accessor(js_string!("rect"), Some(rect_get), Some(rect_set), rw)
         .function(get_item_at, js_string!("getItemAt"), 2)
@@ -389,6 +418,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .function(button_set_icon, js_string!("buttonSetIcon"), 2)
         .function(button_get_caption, js_string!("buttonGetCaption"), 1)
         .function(button_set_caption, js_string!("buttonSetCaption"), 2)
+        .function(NativeFunction::from_copy_closure_with_captures(leaf_array, n), js_string!("getArray"), 0)
         .build()
 }
 
@@ -411,7 +441,41 @@ pub(crate) fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     // A parent name (e.g. "total" for "total.0"): its first kid stands in, as for groups.
     let prefix = format!("{name}.");
     let kid = host(ctx)?.borrow().fields.iter().find(|f| f.name.starts_with(&prefix)).map(|f| f.name.clone());
-    Ok(kid.map_or(JsValue::null(), |k| field_object(ctx, &k).into()))
+    let Some(kid) = kid else { return Ok(JsValue::null()) };
+    let (id, token) = host(ctx)?.borrow().fields.iter().find(|f| f.name == kid).map_or((None, 0), |f| (f.object_id, f.instance_id));
+    let group = field_object_new(ctx, &kid, id, token);
+    group.define_property_or_throw(
+        js_string!("name"),
+        boa_engine::property::PropertyDescriptor::builder().value(s(&name)).configurable(true),
+        ctx,
+    )?;
+    let array = function(ctx, NativeFunction::from_copy_closure_with_captures(group_array, JsString::from(name)));
+    group.set(js_string!("getArray"), array, false, ctx)?;
+    Ok(group.into())
+}
+
+fn leaf_array(_: &JsValue, _: &[JsValue], key: &FieldKey, ctx: &mut Context) -> JsResult<JsValue> {
+    let field = read(ctx, key)?;
+    let value = field_object_by_id(ctx, &field.name, field.object_id);
+    Ok(JsArray::from_iter([value.into()], ctx).into())
+}
+fn group_array(_: &JsValue, _: &[JsValue], name: &JsString, ctx: &mut Context) -> JsResult<JsValue> {
+    let prefix = format!("{}.", name.to_std_string_escaped());
+    // Each returned field constructs native accessors. Cap the expansion before creating
+    // those objects, just as setItems bounds a document-supplied list.
+    let fields: Vec<_> = host(ctx)?
+        .borrow()
+        .fields
+        .iter()
+        .filter(|f| f.name.starts_with(&prefix))
+        .take(MAX_ITEMS + 1)
+        .map(|f| (f.name.clone(), f.object_id))
+        .collect();
+    if fields.len() > MAX_ITEMS {
+        return Err(error("getArray: too many descendant fields"));
+    }
+    let values: Vec<_> = fields.into_iter().map(|(name, id)| field_object_by_id(ctx, &name, id)).collect();
+    Ok(JsArray::from_iter(values.into_iter().map(JsValue::from), ctx).into())
 }
 
 pub(crate) fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -435,6 +499,7 @@ pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     h.request(Request::Reset(names));
     // Keep the live shadow and the bounded host request in agreement, including clipped names.
     let Some(Request::Reset(names)) = h.requests.get(queued).cloned() else { return Ok(JsValue::undefined()) };
+    h.calculations_current = false;
     let super::host::Host { fields, changed, .. } = &mut *h;
     for (i, field) in std::sync::Arc::make_mut(fields).iter_mut().enumerate() {
         if field.default_known
