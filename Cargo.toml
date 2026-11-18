@@ -12,6 +12,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
+craft-markdown = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "fbb3f47f7ae712192586984af11ca8f6c0f64d33" }
 # Small, revision-bound UI drafts; the existing engine remains the owner of PDF edits/history.
 edit-session = { path = "vendor/edit-session", version = "=0.1.0-alpha.2" }
 # Shared frontend components; engines remain independent of egui.
