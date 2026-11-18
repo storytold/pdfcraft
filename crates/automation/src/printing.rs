@@ -403,8 +403,10 @@ impl Automation {
         }
         // A document that allows only low-resolution printing is later forced to print as
         // pictures in Session::print_pdf_marked. Refuse marks here, before Will Print runs
-        // and could change the document for a print that then fails.
-        if marks.is_some() && self.doc(a)?.permissions().is_some_and(|p| !p.print_high_quality()) {
+        // and could change the document for a print that then fails. A document that allows
+        // no printing gets the engine's permission error instead.
+        let doc = self.doc(a)?;
+        if marks.is_some() && doc.allows_printing() && doc.permissions().is_some_and(|p| !p.print_high_quality()) {
             return Err(bad(
                 "printer marks print with the pages as they are, not as pictures: a document that allows only low-resolution printing always prints as pictures",
             ));

@@ -12724,6 +12724,33 @@ fn printing_with_printer_marks_through_tools() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Marks on a protected document: low-resolution-only printing refuses the marks, since it
+/// prints as pictures; no printing at all is the permission error, not the marks one.
+#[test]
+fn printing_marks_on_a_print_restricted_document_through_tools() {
+    let dir = workdir("print-marks-restricted");
+    let mut a = auto(&dir);
+    for (printing, file) in [("low", "low.pdf"), ("none", "none.pdf")] {
+        let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        ok(&mut a, "doc_protect", json!({ "doc": doc, "permissions_password": "boss", "printing": printing }));
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": file }));
+        ok(&mut a, "doc_close", json!({ "doc": doc }));
+    }
+    let mut b = auto(&dir);
+    let low = ok(&mut b, "doc_open", json!({ "path": "low.pdf" }))["doc"].as_u64().unwrap();
+    match b.call("doc_print", &json!({ "doc": low, "pages": "1", "marks": ["all"], "path": "x.pdf" })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("low-resolution"), "{m}"),
+        other => panic!("low-resolution only: {other:?}"),
+    }
+    let none = ok(&mut b, "doc_open", json!({ "path": "none.pdf" }))["doc"].as_u64().unwrap();
+    match b.call("doc_print", &json!({ "doc": none, "pages": "1", "marks": ["all"], "path": "x.pdf" })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow printing"), "{m}"),
+        other => panic!("no printing: {other:?}"),
+    }
+    assert!(!dir.join("x.pdf").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Convert colours through the tools: counts, converts, reports nothing to do.
 #[test]
 fn convert_colours_through_tools() {
