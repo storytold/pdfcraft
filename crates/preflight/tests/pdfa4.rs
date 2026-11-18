@@ -878,6 +878,22 @@ fn embedded_files_at_2b_are_pdfa_1_or_2_and_named_in_unicode() {
     assert!(report.remaining.iter().all(|i| i.clause != "6.8"), "{:#?}", report.remaining);
     let spec = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
     assert_eq!(spec.as_dict().and_then(|d| d.get(b"UF")).and_then(|u| u.as_string()).map(|u| u.to_text()), Some("a.pdf".to_owned()));
+    // A null UF is none (ISO 32000-2 7.3.9), and F fills it in; an F that is no string, or whose
+    // bytes are in an encoding nothing names (7.11.2), can't: "café" in Latin-1 or in UTF-8 bytes
+    // is no certain text.
+    assert_eq!(found(&file("/F (a.pdf) /UF null", pdf(&pdfa2)), Level::A2b), lacks(true));
+    for f in ["/F 42", r"/F (caf\351.pdf)", r"/F (caf\303\251.pdf)"] {
+        assert_eq!(found(&file(f, pdf(&pdfa2)), Level::A2b), lacks(false), "{f}");
+    }
+    // A name with a byte order mark is a text string as it is.
+    assert_eq!(found(&file("/F <FEFF0061002E007000640066>", pdf(&pdfa2)), Level::A2b), lacks(true));
+    for (f, uf) in [("/F (a.pdf) /UF null", Some("a.pdf")), (r"/F (caf\351.pdf)", None)] {
+        let mut doc = open(bytes(&file(f, text())));
+        convert(&mut doc, Level::A3b).unwrap();
+        let spec = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+        let made = spec.as_dict().and_then(|d| d.get(b"UF")).and_then(|u| u.as_string()).map(|u| u.to_text());
+        assert_eq!(made.as_deref(), uf, "{f}");
+    }
 }
 
 /// 6.7.2.1 holds for every metadata stream, a page's as well as the catalog's.

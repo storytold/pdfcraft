@@ -2089,12 +2089,27 @@ fn fix_file_spec(doc: &Document, level: Level, d: &Dict) -> Option<(Dict, bool, 
     if relationship {
         nd.set(b"AFRelationship".to_vec(), Object::name("Unspecified"));
     }
-    // The name in Unicode, from the name every reader reads (ISO 32000-2 7.11.3, Table 43).
-    let name = d.get(b"F").map(|f| doc.resolve(f)).filter(|f| d.get(b"UF").is_none() && f.as_string().is_some());
+    let name = unicode_name(doc, d);
     if let Some(name) = &name {
-        nd.set(b"UF".to_vec(), (**name).clone());
+        nd.set(b"UF".to_vec(), name.clone());
     }
     (relationship || name.is_some()).then_some((nd, relationship, name.is_some()))
+}
+
+/// The `/UF` (the file name in Unicode, a text string: ISO 32000-2 7.11.3, Table 43) that Save as
+/// PDF/A gives the file specification `d`, which has none (a null one is none, 7.3.9): its `/F`,
+/// when that is a string that reads the same as a text string (7.9.2.2), printable ASCII or bytes
+/// that start with a UTF-16BE or UTF-8 byte order mark. Other bytes of `/F` are passed to the file
+/// system as they are (7.11.2), in an encoding nothing names, so no `/UF` is made of them.
+fn unicode_name(doc: &Document, d: &Dict) -> Option<Object> {
+    if present(doc, d, b"UF") {
+        return None;
+    }
+    let f = doc.resolve(d.get(b"F")?);
+    let name = f.as_string()?;
+    let bytes = name.bytes.as_slice();
+    let certain = bytes.iter().all(|b| (0x20..0x7F).contains(b)) || bytes.starts_with(&[0xFE, 0xFF]) || bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+    certain.then(|| Object::String(name.clone()))
 }
 
 /// 6.8 (6.9 for PDF/A-4): the embedded file the file specification `dict` holds, at `level`.
@@ -2121,11 +2136,10 @@ fn check_embedded_file(
         Level::A3b => {}
         Level::A4 | Level::A4e | Level::A4f => return part4::embedded_file(doc, level, dict, embedded, issue),
     }
-    // ISO 32000-2 7.11.3, Table 43: F for compatibility and UF for the name in Unicode. `convert`
-    // fills in UF from F.
-    let has_f = dict.get(b"F").is_some();
-    if !has_f || dict.get(b"UF").is_none() {
-        issue("6.8", "An embedded file's file specification lacks F or UF", None, None, has_f);
+    // ISO 32000-2 7.11.3, Table 43: F for compatibility and UF for the name in Unicode; a null
+    // value is no entry (7.3.9). `convert` fills in UF from an F that `unicode_name` can read.
+    if !present(doc, dict, b"F") || !present(doc, dict, b"UF") {
+        issue("6.8", "An embedded file's file specification lacks F or UF", None, None, unicode_name(doc, dict).is_some());
     }
 }
 
