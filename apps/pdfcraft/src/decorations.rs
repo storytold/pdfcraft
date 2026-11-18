@@ -68,3 +68,46 @@ impl wayland_client::Dispatch<wayland_client::protocol::wl_registry::WlRegistry,
     ) {
     }
 }
+
+/// Apply an explicit app-frame choice after restoring the user's saved preference.
+pub(crate) fn apply_app_override(app: &mut pdfcraft_ui_egui::PdfCraftApp, force_app: bool) {
+    if force_app && app.window_controls.is_some() {
+        app.system_title_bar = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_ui_egui::PdfCraftApp;
+
+    #[test]
+    fn explicit_app_titlebar_overrides_a_restored_system_frame() {
+        let mut app = PdfCraftApp::new();
+        app.restore(r#"{"system_title_bar":true}"#);
+        assert!(app.system_title_bar);
+        app.window_controls = Some(Layout::default());
+        apply_app_override(&mut app, true);
+        assert!(app.draws_window_frame(), "the explicit app override must win over the saved system frame");
+    }
+
+    #[test]
+    fn automatic_titlebar_preserves_the_restored_preference() {
+        for saved in [false, true] {
+            let mut app = PdfCraftApp::new();
+            app.restore(&format!(r#"{{"system_title_bar":{saved}}}"#));
+            app.window_controls = Some(Layout::default());
+            apply_app_override(&mut app, false);
+            assert_eq!(app.draws_window_frame(), !saved);
+        }
+    }
+
+    #[test]
+    fn an_app_override_without_app_controls_keeps_the_system_frame() {
+        let mut app = PdfCraftApp::new();
+        app.restore(r#"{"system_title_bar":true}"#);
+        apply_app_override(&mut app, true);
+        assert!(app.system_title_bar);
+        assert!(!app.draws_window_frame());
+    }
+}
