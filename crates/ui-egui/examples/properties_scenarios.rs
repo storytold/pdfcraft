@@ -91,7 +91,7 @@ impl Adapter {
     /// Open two independent fixtures and create a deterministic 60 Hz headless UI harness.
     fn new(artifacts: Option<PathBuf>) -> Result<Self, String> {
         let mut app = PdfCraftApp::new();
-        app.set_option("language", "en")?;
+        app.set_option(&egui::Context::default(), "language", "en")?;
         let mut originals = Vec::new();
         for (name, title) in [("A.pdf", "Original"), ("B.pdf", "Second document")] {
             let bytes = fixture(title)?;

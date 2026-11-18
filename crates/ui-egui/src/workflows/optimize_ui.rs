@@ -761,7 +761,7 @@ mod tests {
         let stage = Arc::new(Mutex::new(OptimizeStage::Images { done: 3, total: 10 }));
         let (p, s) = (progress.clone(), stage.clone());
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::for_unit_tests();
             app.set_option("language", "en").unwrap();
             app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();

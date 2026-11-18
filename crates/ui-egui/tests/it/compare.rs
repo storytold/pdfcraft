@@ -5,6 +5,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::Session;
 use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
+use crate::support::AppHarness as _;
 
 #[test]
 fn compare_two_versions() {
@@ -12,14 +13,14 @@ fn compare_two_versions() {
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
         app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
+    assert!(h.execute("doc.compare"));
     h.run_steps(2);
     h.get_by_label("Compare Files");
     h.get_by_label("Compare").click();
@@ -65,14 +66,14 @@ fn side_by_side() -> Harness<'static, PdfCraftApp> {
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
         app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
+    assert!(h.execute("doc.compare"));
     h.run_steps(2);
     h.get_by_label("Compare").click();
     h.run_steps(3);
@@ -118,8 +119,8 @@ fn text_and_visual_versions() -> (Vec<u8>, Vec<u8>) {
 fn compare_filters_hide_text_or_visual_changes() {
     let (v1, v2) = text_and_visual_versions();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
         app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
         app
@@ -164,13 +165,13 @@ fn compare_filters_hide_text_or_visual_changes() {
 fn pdfa_dialog_verifies_and_converts() {
     let doc = Session::new().create_from_text("t", "Keep forever").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("keep.pdf", None, doc.clone()).unwrap();
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("standards.pdfa"));
+    assert!(h.execute("standards.pdfa"));
     h.run_steps(2);
     h.get_by_label("Declared conformance: none");
     assert!(h.query_by_label("Remove PDF/A identification").is_none(), "nothing to remove yet");
@@ -226,13 +227,13 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
     ] {
         let doc = declaring(ids);
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("ua.pdf", None, doc.clone()).unwrap();
             app
         });
         h.run_steps(4);
-        assert!(h.state_mut().execute("standards.pdfa"));
+        assert!(h.execute("standards.pdfa"));
         h.run_steps(2);
         h.get_by_label(shown);
     }
@@ -241,14 +242,14 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
 #[test]
 fn export_to_word_html_and_rtf() {
     let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("e.pdf", None, doc).unwrap();
     for ext in ["docx", "pptx", "html", "rtf"] {
         // Each save is answered with the suggested name in the suggested folder.
         let files = std::sync::Arc::new(craft::host::ScriptedFiles::new().saving_suggested());
         app.set_files(files.clone()); // PLAN: assumed `PdfCraftApp::set_files(Arc<dyn Files>)` (pdf-shell-w16)
-        assert!(app.execute(&format!("export.{ext}")));
+        assert!(app.execute(&egui::Context::default(), &format!("export.{ext}")));
         let request = files.requests().pop().expect("the export asked where to save");
         let path = request.directory.or(request.default_directory).unwrap_or_default().join(request.file_name.expect("a suggested name"));
         let bytes = files.file(&path).unwrap_or_else(|| panic!("{ext} was written"));

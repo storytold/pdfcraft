@@ -1177,7 +1177,7 @@ mod tests {
     }
 
     fn app_with(pdf: Vec<u8>) -> PdfCraftApp {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("doc.pdf", None, pdf).unwrap();
         app.quick_tool = QuickTool::EditText;
         app
@@ -1508,7 +1508,7 @@ mod tests {
     /// write the same output: the batch stops before anything is read or written.
     #[test]
     fn inputs_that_share_a_file_name_are_refused_before_anything_is_read() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-same-name-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("fixture");
         app.ocr_draft.output_folder = Some(dir.to_string_lossy().into_owned());
@@ -1527,7 +1527,7 @@ mod tests {
     /// and its collision pre-flight still stops the batch before the first page is read.
     #[test]
     fn a_remembered_output_folder_is_used_and_still_preflights_collisions() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-folder-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("fixture");
         std::fs::write(dir.join("a.pdf"), b"would be overwritten").expect("fixture");
@@ -1548,7 +1548,7 @@ mod tests {
     /// writes nothing, so words read before a redaction cannot come back as invisible text.
     #[test]
     fn a_result_that_arrives_after_the_document_changed_is_refused() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let pdf = pdfcraft_engine::Session::new().create_from_text("t", "Typed text").expect("fixture");
         app.open_bytes("a.pdf", None, pdf.to_vec()).expect("opens");
         let id = app.active_ids().expect("a document").1;

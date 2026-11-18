@@ -87,7 +87,7 @@ fn no_changes_pdf() -> Vec<u8> {
 /// behind once the add was refused.
 #[test]
 fn a_refused_text_box_is_put_back_whole() {
-    let mut app = crate::PdfCraftApp::new();
+    let mut app = crate::PdfCraftApp::for_unit_tests();
     app.set_option("language", "en").unwrap();
     app.open_bytes("a.pdf", None, no_changes_pdf()).unwrap();
     let style = crate::content_ui::default_style();
@@ -163,7 +163,7 @@ fn moving_pages_cancels_an_in_progress_drawing() {
     let tool = std::mem::take(&mut *rig.tool_mut());
     assert_eq!(tool.drawing().len(), 2, "the drawing is under way");
 
-    let mut app = crate::PdfCraftApp::new();
+    let mut app = crate::PdfCraftApp::for_unit_tests();
     app.set_option("language", "en").unwrap();
     app.open_bytes("a.pdf", None, pdf).unwrap();
     app.views[0].comments.tool = tool;
@@ -208,7 +208,7 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
 fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     // 100 K text, open in its box.
     let open = || {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.set_option("language", "en").unwrap();
         app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
         let mut text = pdfcraft_engine::AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), ..Default::default() };

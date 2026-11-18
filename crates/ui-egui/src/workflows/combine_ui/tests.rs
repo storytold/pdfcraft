@@ -60,7 +60,7 @@ fn locked() -> Vec<u8> {
 #[test]
 fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
     let bytes = locked();
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.stage_combine(vec![("same.pdf".into(), bytes.clone())]);
     let mut part = app.combine_draft[0].clone();
     part.id = 99;
@@ -88,7 +88,7 @@ fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
     let img = craft_image_codecs::Image::from_u8(12, 4, craft_image_codecs::ChannelLayout::Rgba, [20, 30, 40, 255].repeat(48)).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let warnings = |first: (&str, &[u8]), second: (&str, &[u8])| {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.session = std::mem::take(&mut app.session).with_clock(|| NOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         for (name, bytes) in [first, second] {
             app.stage_combine(vec![(name.into(), bytes.to_vec())]);
@@ -105,7 +105,7 @@ fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
 fn every_read_of_a_file_is_new_even_after_undo() {
     // Regression: the read counter lived in the undo history, so unlock → undo → unlock (with
     // another password) could repeat a value and keep a thumbnail of the other read.
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.stage_combine(vec![("secret.pdf".into(), locked())]);
     let added = app.combine_draft[0].auth;
     assert!(app.combine_unlock_rows(&[0], "pw"));
@@ -119,7 +119,7 @@ fn every_read_of_a_file_is_new_even_after_undo() {
 
 #[test]
 fn moves_by_rank_never_lose_or_repeat_a_file() {
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.stage_combine((0..6).map(|i| (format!("f{i}.pdf"), locked())).collect());
     let mut ids: Vec<u64> = app.combine_draft.iter().map(|f| f.id).collect();
     for (moving, gap) in [(vec![0usize, 2, 4], 6), (vec![5], 0), (vec![1, 3], 3)] {
@@ -221,7 +221,7 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.open_bytes("locked.pdf", None, locked()).unwrap();
     assert!(app.password_prompt.is_some() && app.views.is_empty());
     app.combine_paths(&[]);
@@ -231,7 +231,7 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     assert_eq!(app.views.len(), 1, "the document is open");
     assert!(app.combine_showing(), "and the Combine files tab still shows");
 
-    let mut app = PdfCraftApp::new();
+    let mut app = PdfCraftApp::for_unit_tests();
     app.open_bytes("locked.pdf", None, locked()).unwrap();
     app.password_prompt.as_mut().unwrap().then = Some("export.text");
     app.combine_paths(&[]);

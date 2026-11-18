@@ -811,7 +811,7 @@ mod tests {
 
     fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::for_unit_tests();
             app.set_option("language", "en").unwrap();
             setup(&mut app);
             app

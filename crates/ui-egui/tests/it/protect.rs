@@ -3,6 +3,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -13,8 +14,8 @@ trailer << /Root 1 0 R >>
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
@@ -32,7 +33,7 @@ fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
 #[test]
 fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     let mut h = harness();
-    assert!(h.state_mut().execute("protect.password"));
+    assert!(h.execute("protect.password"));
     h.run_steps(2);
     h.get_by_label("Viewing");
     type_into(&mut h, "Type Password", "Open-Sesame-42");
@@ -53,7 +54,7 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     assert!(s.open("p.pdf", None, bytes.clone(), None).is_err());
     assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
     // Remove security is now offered, and undo also takes the protection back.
-    assert!(h.state_mut().execute("protect.remove"));
+    assert!(h.execute("protect.remove"));
     h.state_mut().undo();
     h.state_mut().undo();
     assert!(!h.state().session.get(id).unwrap().info.encrypted);
@@ -62,7 +63,7 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
 #[test]
 fn editing_restrictions_via_advanced_options() {
     let mut h = harness();
-    h.state_mut().execute("protect.password");
+    h.execute("protect.password");
     h.run_steps(2);
     h.get_by_label("Editing").click();
     h.run_steps(2);

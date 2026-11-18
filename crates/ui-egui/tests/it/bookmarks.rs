@@ -4,6 +4,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 const PAGES: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -16,11 +17,11 @@ trailer << /Root 1 0 R >>
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("pages.pdf", None, PAGES.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "bookmarks").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
         app
     });
     h.run_steps(6);
@@ -70,7 +71,7 @@ fn new_rename_reorder_indent_delete_and_undo() {
     let mut h = harness();
     h.get_by_label("This document has no bookmarks.");
     add(&mut h, "Intro");
-    h.state_mut().set_option("page", "3").unwrap();
+    h.set_option("page", "3").unwrap();
     h.run_steps(3);
     add(&mut h, "Results");
     assert_eq!(outline(&h), [("Intro".into(), Some(0), 0), ("Results".into(), Some(2), 0)]);
@@ -103,7 +104,7 @@ fn new_rename_reorder_indent_delete_and_undo() {
 fn number_pages_dialog_labels_the_selected_pages() {
     let mut h = harness();
     h.state_mut().views[0].select_pages(&[0, 1]);
-    assert!(h.state_mut().execute("page.number"));
+    assert!(h.execute("page.number"));
     h.run_steps(3);
     h.get_by_label("Number pages");
     h.get_by_value("1, 2, 3").click(); // the style menu
@@ -305,7 +306,7 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);
     // The command (Pages menu, command palette) opens it too.
-    assert!(h.state_mut().execute("bookmark.from_text_styles"));
+    assert!(h.execute("bookmark.from_text_styles"));
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::BookmarksFromTextStyles));
 }
@@ -455,7 +456,7 @@ trailer << /Root 1 0 R >>
 fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
     let mut h = harness();
     add(&mut h, "Intro");
-    h.state_mut().set_option("page", "3").unwrap();
+    h.set_option("page", "3").unwrap();
     h.run_steps(3);
     add(&mut h, "Results");
     menu(&mut h, "Results", "Indent");

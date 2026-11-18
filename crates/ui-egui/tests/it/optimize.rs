@@ -11,6 +11,7 @@ use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// A harness whose jobs wait until the test steps them, with a document open and the answer to Reduce's "where to save" given.
 fn held() -> (Arc<ManualJobs>, Harness<'static, PdfCraftApp>) {
@@ -19,7 +20,7 @@ fn held() -> (Arc<ManualJobs>, Harness<'static, PdfCraftApp>) {
     let out = std::env::temp_dir().join(format!("pdfcraft-optimize-held-{}.pdf", std::process::id()));
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = support::held_app(queue);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         app.save_override = Some(out.to_string_lossy().into_owned());
         app
@@ -31,10 +32,10 @@ fn held() -> (Arc<ManualJobs>, Harness<'static, PdfCraftApp>) {
 #[test]
 fn a_second_run_is_refused_while_one_is_going() {
     let (jobs, mut h) = held();
-    assert!(h.state_mut().execute("optimize.reduce"));
+    assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     assert!(h.state().optimize_run.is_some(), "the first run is going");
-    assert!(h.state_mut().execute("optimize.reduce"));
+    assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     assert!(support::shown_notice(&h).is_some(), "the second run is refused with a notice");
     assert!(jobs.run_next(), "the first run's job is kept");
@@ -47,7 +48,7 @@ fn enhancing_scans_refuses_optimizing() {
     h.state_mut().start_scan_clean();
     h.run_steps(2);
     assert!(h.state().scan_clean_run.is_some(), "the enhancement is going");
-    assert!(h.state_mut().execute("optimize.reduce"));
+    assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     assert!(support::shown_notice(&h).is_some());
     assert!(h.state().optimize_run.is_none());
@@ -56,7 +57,7 @@ fn enhancing_scans_refuses_optimizing() {
 #[test]
 fn optimizing_refuses_enhancing_scans() {
     let (_jobs, mut h) = held();
-    assert!(h.state_mut().execute("optimize.reduce"));
+    assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     assert!(h.state().optimize_run.is_some(), "the run is going");
     h.state_mut().start_scan_clean();

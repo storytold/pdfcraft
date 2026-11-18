@@ -25,6 +25,9 @@ mod keys;
 mod links;
 mod prefs;
 mod window;
+pub(crate) mod picks;
+pub(crate) mod reload;
+pub mod settings;
 
 pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
 #[cfg(not(target_arch = "wasm32"))]
@@ -152,6 +155,21 @@ impl PdfCraftApp {
         let mut app = Self::with_host(Arc::new(host), services);
         app.file_panels = Some(panels);
         app
+    }
+
+    /// The app unit tests start from: the default host (threads run its jobs, pickers answer Cancelled), no
+    /// wake-ups, no autosave folder, the GitHub update source, a fresh intake and an inline watch.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn for_unit_tests() -> Self {
+        let services = AppServices::new(
+            Wake::none(),
+            Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+            None,
+            None,
+            FileIntake::new(Wake::none()).0,
+            craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+        );
+        Self::with_host(Arc::new(Host::builder(APP_INFO).build()), services)
     }
 
     /// The app over `host` and `services`, with no document open: every queue runs on the host's

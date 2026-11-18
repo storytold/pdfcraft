@@ -7,6 +7,7 @@ use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -24,12 +25,12 @@ fn export_dialogs_write_images_and_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         // PLAN: assumed `PdfCraftApp::with_host(host: Host) -> PdfCraftApp` (L-71)
         let mut app = PdfCraftApp::with_host(host);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("export.image"));
+    assert!(h.execute("export.image"));
     h.run_steps(2);
     h.get_by_label("Export to Image");
     h.get_by_label("Export").click();
@@ -40,7 +41,7 @@ fn export_dialogs_write_images_and_text() {
     let second = files.file(Path::new("/out/doc_page_2.png")).expect("page 2 written");
     assert_ne!(first, second, "one file per page");
     h.get_by_label_contains("Exported 2 images");
-    assert!(h.state_mut().execute("export.text"));
+    assert!(h.execute("export.text"));
     h.run_steps(2);
     h.get_by_label("Export").click();
     h.run_steps(4);
@@ -48,7 +49,7 @@ fn export_dialogs_write_images_and_text() {
     h.run_steps(4);
     assert!(files.file(Path::new("/out/doc.txt")).is_some());
     // Export all images: this document has none, and says so.
-    assert!(h.state_mut().execute("export.all_images"));
+    assert!(h.execute("export.all_images"));
     h.run_steps(2);
     h.get_by_label("Export All Images");
     h.get_by_label("Export").click();

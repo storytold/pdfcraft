@@ -14,6 +14,7 @@ use pdfcraft_render::Annotation;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp, QuickTool};
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// Two 300×200 pages of Helvetica text.
 const TEXT_FIXTURE: &[u8] = b"%PDF-1.7
@@ -37,11 +38,11 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 
 fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("text.pdf", None, bytes).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         setup(&mut app);
         app
     });
@@ -66,10 +67,10 @@ fn harness_on_files(files: std::sync::Arc<ScriptedFiles>, setup: impl FnOnce(&mu
             FileWatch::inline(),
         );
         let mut app = PdfCraftApp::with_host(std::sync::Arc::new(host), services);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         setup(&mut app);
         app
     });
@@ -146,9 +147,9 @@ fn comments(h: &Harness<'static, PdfCraftApp>) -> Vec<Annotation> {
 fn sidebar_comment_centres_the_annotation_at_high_zoom() {
     for (layout, rotation) in [("continuous", 0), ("single", 0), ("two-page", 0), ("continuous", 90), ("continuous", 180), ("continuous", 270)] {
         let mut h = harness(move |app| {
-            app.set_option("panel", "comments").unwrap();
-            app.set_option("layout", layout).unwrap();
-            app.set_option("zoom", "800").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+            app.set_option(&egui::Context::default(), "layout", layout).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "800").unwrap();
             app.views[0].rotation = rotation;
             let shape = pdfcraft_engine::Shape::Note { at: [150.0, 90.0], icon: pdfcraft_engine::NoteIcon::Comment };
             assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
@@ -159,7 +160,7 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
                 author: "Tester".into(),
             })));
             app.views[0].comments.clear_selection();
-            app.set_option("page", "1").unwrap();
+            app.set_option(&egui::Context::default(), "page", "1").unwrap();
         });
         h.get_by_label("Reveal this note").click();
         h.run_steps(8);
@@ -191,7 +192,7 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
 
 #[test]
 fn dragging_over_text_with_the_highlighter_highlights_it() {
-    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
     let (a, b) = {
         let v = &h.state().views[0];
         (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
@@ -211,7 +212,7 @@ fn dragging_over_text_with_the_highlighter_highlights_it() {
 fn the_quick_bar_colour_changes_the_selected_comment() {
     use pdfcraft_ui_egui::comments::CommentTool;
 
-    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
     let (a, b) = {
         let v = &h.state().views[0];
         (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
@@ -236,7 +237,7 @@ fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;
 
     // Arrows are saved as Line annotations; the Arrow tool's colour must still reach them.
-    let mut h = harness(|app| app.set_option("quick", "arrow").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "arrow").unwrap());
     drag_pt(&mut h, (20.0, 20.0), (120.0, 30.0));
     assert_eq!(comments(&h)[0].subtype, "Line");
     assert_eq!(h.state().quick_tool, QuickTool::Comment(CommentTool::Arrow), "the arrow tool is still active");
@@ -278,7 +279,7 @@ trailer << /Root 1 0 R >>
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes");
     let mut h = harness(move |app| {
         app.open_bytes("restricted.pdf", None, bytes).expect("opens restricted");
-        app.set_option("quick", "highlight").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
     });
     let id = h.state().active_ids().expect("active document").1;
     assert!(!h.state().session.get(id).expect("document").allows_annotation(), "commenting is forbidden");
@@ -302,7 +303,7 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn a_new_highlight_opens_its_note_for_typing() {
-    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
     assert_eq!(note(&h), None);
     let (a, b) = {
         let v = &h.state().views[0];
@@ -375,8 +376,8 @@ fn clicking_the_page_gives_the_keyboard_back_from_a_highlight_note() {
     // #2669: the note editor took the keyboard back on every frame, so after a click on the
     // page V and H were typed into the note instead of picking a tool.
     let mut h = harness(|app| {
-        app.set_option("quick", "highlight").unwrap();
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
     });
     highlight_text(&mut h, 4, 14);
     assert!(note_editor(&h).is_focused(), "a new highlight's note takes the keyboard straight away");
@@ -405,8 +406,8 @@ fn drawing_another_comment_takes_the_keyboard_from_a_highlight_note() {
     // is not a click, so the editor never let go), and V and H were typed into it.
     use pdfcraft_ui_egui::comments::CommentTool;
     let mut h = harness(|app| {
-        app.set_option("quick", "highlight").unwrap();
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
     });
     highlight_text(&mut h, 4, 14);
     assert!(note_editor(&h).is_focused());
@@ -439,7 +440,7 @@ fn drawing_another_comment_takes_the_keyboard_from_a_highlight_note() {
 fn a_selection_made_first_is_marked_when_a_tool_is_picked() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);
-    assert!(h.state_mut().execute("comment.strikeout"));
+    assert!(h.execute("comment.strikeout"));
     h.run_steps(2);
     let c = comments(&h);
     assert_eq!(c.len(), 1);
@@ -527,7 +528,7 @@ fn a_selection_action_or_tool_makes_its_comment_kind() {
                 h.run_steps(2);
             }
             Err(command) => {
-                assert!(h.state_mut().execute(command), "{command} runs");
+                assert!(h.execute(command), "{command} runs");
                 h.run_steps(2);
             }
         }
@@ -564,7 +565,7 @@ fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
     h.run_steps(3);
     h.get_by_label("Add comment").click();
     h.run_steps(2);
-    h.state_mut().set_option("quick", "note").unwrap();
+    h.set_option("quick", "note").unwrap();
     click_pt(&mut h, (250.0, 180.0));
     let anchor = h.state().views[0].comments.composer.as_ref().unwrap().at;
     field(&h, "Add a comment").type_text("New sticky note");
@@ -600,7 +601,7 @@ fn selection_note_posts_highlight_and_hovers_author_and_comment() {
     assert_eq!(c[0].contents.as_deref(), Some("Check these words"));
     assert!(!c[0].quads.is_empty());
     let hover = format!("{}\nCheck these words", c[0].author.as_deref().expect("comment has an author"));
-    h.state_mut().set_option("panel", "none").unwrap();
+    h.set_option("panel", "none").unwrap();
     h.state_mut().views[0].comments.clear_selection();
     h.hover_at(pos2(0.0, 0.0));
     h.run_steps(3);
@@ -618,14 +619,14 @@ fn selection_note_posts_highlight_and_hovers_author_and_comment() {
 
 #[test]
 fn shapes_and_ink_are_drawn_by_dragging() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "ink").unwrap();
+    h.set_option("quick", "ink").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
-    h.state_mut().set_option("quick", "arrow").unwrap();
+    h.set_option("quick", "arrow").unwrap();
     drag_pt(&mut h, (20.0, 20.0), (120.0, 30.0));
     // A click with a drawing tool draws nothing.
-    h.state_mut().set_option("quick", "circle").unwrap();
+    h.set_option("quick", "circle").unwrap();
     click_pt(&mut h, (200.0, 180.0));
     let c = comments(&h);
     let mut c = c;
@@ -664,7 +665,7 @@ fn pen_harness() -> Harness<'static, PdfCraftApp> {
     harness(|app| {
         app.comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_COLOUR);
         app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_WIDTH);
-        app.set_option("quick", "ink").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "ink").unwrap();
     })
 }
 
@@ -715,9 +716,9 @@ fn undoing_a_pen_stroke_before_its_raster_leaves_no_ghost() {
 
 #[test]
 fn pen_strokes_stay_unselected_so_writing_continues() {
-    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "ink").unwrap());
     // No Comments panel: the author's name should only show in a hover popup.
-    h.state_mut().set_option("panel", "none").unwrap();
+    h.set_option("panel", "none").unwrap();
     h.run_steps(2);
     drag_pt(&mut h, (40.0, 100.0), (140.0, 60.0));
     assert!(h.state().views[0].comments.selection().is_empty(), "the first stroke isn't selected");
@@ -732,14 +733,14 @@ fn pen_strokes_stay_unselected_so_writing_continues() {
     assert!(h.state().views[0].comments.selection().is_empty(), "nothing is selected after drawing");
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Ink), "the pen stays on");
     // Other drawn shapes are still selected when made.
-    h.state_mut().set_option("quick", "square").unwrap();
+    h.set_option("quick", "square").unwrap();
     drag_pt(&mut h, (180.0, 100.0), (260.0, 40.0));
     assert_eq!(h.state().views[0].comments.selection(), vec![(0, 2)]);
 }
 
 #[test]
 fn sticky_note_composer_posts_and_returns_to_select() {
-    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "note").unwrap());
     click_pt(&mut h, (250.0, 180.0));
     assert!(h.state().views[0].comments.composer.is_some(), "the composer opened");
     field(&h, "Add a comment").type_text("Please check");
@@ -752,7 +753,7 @@ fn sticky_note_composer_posts_and_returns_to_select() {
     assert!(h.state().views[0].comments.composer.is_none());
     assert_eq!(h.state().quick_tool, QuickTool::Select, "one-shot tools return to Select");
     // Cancelling another one creates nothing.
-    h.state_mut().set_option("quick", "freetext").unwrap();
+    h.set_option("quick", "freetext").unwrap();
     click_pt(&mut h, (50.0, 60.0));
     h.get_by_label("Cancel").click();
     h.run_steps(2);
@@ -766,7 +767,7 @@ fn sticky_note_composer_posts_and_returns_to_select() {
 fn a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn() {
     let mut h = harness(|app| {
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-        app.set_option("quick", "note").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "note").unwrap();
     });
     crate::support::settle(&mut h);
     let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
@@ -796,7 +797,7 @@ fn a_sticky_note_on_a_turned_page_is_picked_where_it_is_drawn() {
 /// the toolbar, while its comment was out of sight.
 #[test]
 fn the_composer_hides_while_its_comment_is_scrolled_away() {
-    let mut h = harness(|app| app.set_option("quick", "note").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "note").unwrap());
     click_pt(&mut h, (250.0, 180.0));
     field(&h, "Add a comment").type_text("Draft");
     h.run_steps(2);
@@ -823,7 +824,7 @@ fn the_composer_hides_while_its_comment_is_scrolled_away() {
 /// while the rest of the comment is on screen, so it can be posted or cancelled (#4095).
 #[test]
 fn the_edit_composer_shows_while_part_of_its_comment_is_on_screen() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (20.0, 190.0), (280.0, 10.0));
     // What "Edit text…" opens: the composer anchored at the comment's top-right corner.
     h.state_mut().views[0].comments.composer = Some(pdfcraft_ui_egui::comments::Composer {
@@ -868,7 +869,7 @@ fn near(r: [f32; 4], want: [f32; 4]) -> bool {
 /// a click (or a drag of a few pixels) still makes a box sized to its text.
 #[test]
 fn a_text_box_is_sized_by_dragging() {
-    let mut h = harness(|app| app.set_option("quick", "freetext").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "freetext").unwrap());
     let (from, to) = (at(&h, 40.0, 150.0), at(&h, 200.0, 100.0));
     h.hover_at(from);
     h.run_steps(1);
@@ -885,14 +886,14 @@ fn a_text_box_is_sized_by_dragging() {
 
     // Too much text for the drawn box: it keeps its width and grows down, moving up so that it
     // stays on the page (whose bottom is at 0).
-    h.state_mut().set_option("quick", "freetext").unwrap();
+    h.set_option("quick", "freetext").unwrap();
     drag_pt(&mut h, (20.0, 80.0), (120.0, 70.0));
     post_text(&mut h, &"word ".repeat(20));
     let r = rect_of(&h, "word word");
     assert!((r[0] - 20.0).abs() < 1.5 && (r[2] - 120.0).abs() < 1.5 && r[1].abs() < 0.5 && r[3] > 90.0, "{r:?}");
 
     // More text than the page can hold: the box keeps the drawn size and the text is clipped.
-    h.state_mut().set_option("quick", "freetext").unwrap();
+    h.set_option("quick", "freetext").unwrap();
     drag_pt(&mut h, (150.0, 190.0), (250.0, 180.0));
     post_text(&mut h, &"longerwords ".repeat(16));
     let r = rect_of(&h, "longerwords");
@@ -901,7 +902,7 @@ fn a_text_box_is_sized_by_dragging() {
     // Drags of two and four pixels are clicks: the box fits its text.
     let fitted = pdfcraft_ui_egui::comments::text_box_rect([0.0, 0.0], "Hi", 12.0, 0);
     for (text, x, d) in [("Hi", 200.0, 2.0), ("Hi again", 270.0, 4.0)] {
-        h.state_mut().set_option("quick", "freetext").unwrap();
+        h.set_option("quick", "freetext").unwrap();
         let p = at(&h, x, 40.0);
         drag(&mut h, p, p + egui::vec2(d, d));
         post_text(&mut h, text);
@@ -916,11 +917,11 @@ fn a_text_box_is_sized_by_dragging() {
 #[test]
 fn a_dragged_text_box_follows_a_rotated_view() {
     for rotation in [90u16, 270] {
-        let mut h = harness(|app| app.set_option("quick", "freetext").unwrap());
+        let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "freetext").unwrap());
         while h.state().views[0].rotation != rotation {
             h.state_mut().views[0].rotate_view(true);
         }
-        h.state_mut().set_option("zoom", "150").unwrap();
+        h.set_option("zoom", "150").unwrap();
         h.run_steps(3);
         crate::support::settle(&mut h);
         let screen = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
@@ -943,7 +944,7 @@ fn a_dragged_text_box_follows_a_rotated_view() {
 fn a_dragged_text_box_wraps_inside_its_border() {
     use pdfcraft_ui_egui::comments::CommentTool;
     let mut h = harness(|app| {
-        app.set_option("quick", "freetext").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "freetext").unwrap();
         app.comment_prefs.set_width(CommentTool::TextBox, 3.0);
     });
     // Wide enough for "word word" inside a 2 pt padding, not inside 2 + 3 pt.
@@ -956,9 +957,9 @@ fn a_dragged_text_box_wraps_inside_its_border() {
 
 #[test]
 fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     // Click away, then on the rectangle's border area.
     click_pt(&mut h, (250.0, 20.0));
     assert!(h.state().views[0].comments.selection().is_empty());
@@ -981,7 +982,7 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
 /// drawing from an end: a new line starts there rather than dragging the one just drawn.
 #[test]
 fn line_ends_are_dragged_to_change_length_and_angle() {
-    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "line").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 100.0));
     let line = comments(&h).into_iter().find(|a| a.subtype == "Line").expect("a line");
     assert_eq!(line.points.len(), 2);
@@ -991,7 +992,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     drag_pt(&mut h, (first[1][0], first[1][1]), (140.0, 40.0));
     assert_eq!(comments(&h).iter().filter(|a| a.subtype == "Line").count(), 2, "a second line");
     assert_eq!(ends(&h), first, "the first one stays");
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     click_pt(&mut h, (90.0, 100.0));
     assert_eq!(h.state().views[0].comments.primary(), Some((0, line.index)));
     // Drag the right end up and further right: longer, and turned.
@@ -1030,10 +1031,10 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
 #[test]
 fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
     use egui::Key;
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (30.0, 110.0), (80.0, 70.0));
     drag_pt(&mut h, (130.0, 110.0), (180.0, 70.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     let before: Vec<_> = comments(&h).iter().map(|a| a.rect).collect();
     assert_eq!(before.len(), 2);
     h.state_mut().views[0].comments.select_only((0, 0));
@@ -1052,11 +1053,11 @@ fn arrow_keys_nudge_all_selected_comments_as_one_undo_step() {
 
 #[test]
 fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
         drag_pt(&mut h, a, b);
     }
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 1, locked: true }));
     h.run_steps(2);
     let before = comments(&h);
@@ -1088,7 +1089,7 @@ fn arrow_nudge_skips_locked_comments_and_duplicate_selection_entries() {
 #[test]
 fn the_rubber_band_shows_the_closing_side_with_shift_held() {
     let _gpu = crate::gpu();
-    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "polygon").unwrap());
     for p in [(40.0, 40.0), (140.0, 40.0), (140.0, 140.0)] {
         click_pt(&mut h, p);
     }
@@ -1112,7 +1113,7 @@ fn the_rubber_band_shows_the_closing_side_with_shift_held() {
 /// Shift they go where the pointer is.
 #[test]
 fn shift_holds_new_lines_and_sides_level_or_plumb() {
-    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "line").unwrap());
     let shift = |h: &mut Harness<'static, PdfCraftApp>, on: bool| {
         h.event(egui::Event::ModifiersChanged(if on { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }));
         h.run_steps(1);
@@ -1135,7 +1136,7 @@ fn shift_holds_new_lines_and_sides_level_or_plumb() {
     assert!(close(lines[1][0], [200.0, 40.0]) && close(lines[1][1], [200.0, 150.0]), "mostly up: plumb: {lines:?}");
     assert!(close(lines[2][1], [140.0, 190.0]), "no Shift, no hold: {lines:?}");
 
-    h.state_mut().set_option("quick", "arrow").unwrap();
+    h.set_option("quick", "arrow").unwrap();
     shift(&mut h, true);
     drag_pt(&mut h, (260.0, 180.0), (150.0, 170.0));
     shift(&mut h, false);
@@ -1143,7 +1144,7 @@ fn shift_holds_new_lines_and_sides_level_or_plumb() {
     assert!(close(arrow[1], [150.0, 180.0]), "an arrow too, leftwards: {arrow:?}");
 
     // Connected lines: each click with Shift is held to the corner before.
-    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.set_option("quick", "polyline").unwrap();
     click_pt(&mut h, (20.0, 20.0));
     shift(&mut h, true);
     click_pt(&mut h, (90.0, 30.0));
@@ -1161,7 +1162,7 @@ fn shift_holds_new_lines_and_sides_level_or_plumb() {
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.
     let square = QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)], "the new rectangle is selected");
     let before = comments(&h)[0].rect;
@@ -1182,7 +1183,7 @@ fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
 /// Row of `panel_and_card_actions_become_engine_edits`: the panel's add box and a card's reply box
 /// give the engine an `Add` and a `Reply`.
 fn panel_posts_comment_and_reply_row() {
-    let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
     field(&h, "Add a comment").click();
     h.run_steps(2);
     field(&h, "Add a comment").type_text("General remark");
@@ -1238,7 +1239,7 @@ fn accept_props(h: &mut Harness<'static, PdfCraftApp>) {
 
 #[test]
 fn line_ending_properties_change_and_undo() {
-    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "line").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (160.0, 40.0));
     h.state_mut().open_comment_props(0, 0);
     h.run_steps(2);
@@ -1252,7 +1253,7 @@ fn line_ending_properties_change_and_undo() {
         doc.comment_props(0, 0).unwrap().endings
     };
     assert_eq!(endings.as_deref(), Some(&[pdfcraft_engine::LineEnding::None, pdfcraft_engine::LineEnding::Diamond][..]));
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
@@ -1264,7 +1265,7 @@ fn line_ending_properties_change_and_undo() {
 
 #[test]
 fn comment_properties_change_appearance_and_author() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     h.state_mut().open_comment_props(0, 0);
     h.run_steps(2);
@@ -1292,7 +1293,7 @@ fn comment_properties_change_appearance_and_author() {
 #[test]
 fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     use pdfcraft_ui_egui::comments::CommentTool;
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     h.run_steps(2);
     // No fill by default; the quick bar says so.
     h.get_by_label("Fill colour: none");
@@ -1311,7 +1312,7 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     };
     assert_eq!(fill_of(&h, 0), Some([1.0, 0.5, 0.0]), "the new rectangle is filled");
     // Quick bar ▸ Fill colour ▸ No fill: the next rectangle has none.
-    h.state_mut().set_option("quick", "square").unwrap();
+    h.set_option("quick", "square").unwrap();
     h.run_steps(2);
     h.get_by_label("Fill colour").click();
     h.run_steps(2);
@@ -1419,7 +1420,7 @@ fn no_thickness_in_text_box_properties_takes_the_circle_away() {
 #[test]
 fn comment_properties_set_each_parts_opacity() {
     use pdfcraft_ui_egui::comments::CommentTool;
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 1.0, 0.0]));
     h.run_steps(2);
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
@@ -1440,7 +1441,7 @@ fn comment_properties_set_each_parts_opacity() {
     assert_eq!(props(&h, 0), (1.0, Some(0.3), None));
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill_opacity, Some(0.3));
-    h.state_mut().set_option("quick", "square").unwrap();
+    h.set_option("quick", "square").unwrap();
     h.run_steps(2);
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
     assert_eq!(props(&h, 1), (1.0, Some(0.3), None), "the next rectangle takes the default");
@@ -1456,7 +1457,7 @@ fn comment_properties_set_each_parts_opacity() {
         contents: "Note".into(),
         author: "Tester".into(),
     })));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.run_steps(2);
     h.state_mut().open_comment_props(0, 2);
     h.run_steps(2);
@@ -1511,7 +1512,7 @@ trailer << /Root 1 0 R >>
 #[test]
 fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     let mut h = harness_with_bytes(REVIEW_FIXTURE.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].comments.panel.search = "needle".into();
         app.views[0].comments.panel.search_open = true;
         app.views[0].comments.panel.filter.hidden_authors.push("Beta".into());
@@ -1574,7 +1575,7 @@ trailer << /Root 1 0 R >>
 #[test]
 fn search_finds_a_comment_by_the_status_set_on_one_of_its_replies() {
     let mut h = harness_with_bytes(REPLY_STATUS_FIXTURE.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].comments.panel.search = "reply-status token".into();
         app.views[0].comments.panel.search_open = true;
     });
@@ -1601,7 +1602,7 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn replies_follow_irt_references_when_names_repeat_on_every_page() {
-    let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
     let reply = h.get_by_label("Reply on page two");
     assert!(reply.rect().top() > h.get_by_label("Second page note").rect().top(), "the reply sits under page 2's comment");
     assert!(h.get_by_label("Page 2").rect().top() < reply.rect().top(), "not under page 1's comment, which shares the /NM");
@@ -1644,7 +1645,7 @@ fn reply_options<'a>(h: &'a Harness<'static, PdfCraftApp>, text: &str) -> egui_k
 /// back. A locked reply can't be deleted, and Edit changes the reply's text, not the comment's.
 fn delete_one_reply_row() {
     let mut h = harness_with_bytes(REPLY_THREAD.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].comments.select_only((0, 2));
     });
     let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
@@ -1743,7 +1744,7 @@ fn draft_reply(h: &mut Harness<'static, PdfCraftApp>, text: &str, draft: &str) {
 #[test]
 fn undo_and_redo_close_a_reply_editor_left_open() {
     let mut h = harness_with_bytes(THREE_REPLIES.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].comments.select_only((0, 0));
     });
     let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
@@ -1809,8 +1810,8 @@ trailer << /Root 1 0 R >>
 #[test]
 fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread() {
     let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "select").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "select").unwrap();
     });
     // An `/IRT` that reaches no listed comment leaves its annotation a comment of its own,
     // rather than a reply shown nowhere.
@@ -1839,7 +1840,7 @@ fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread(
 /// The arrow keys move a comment, not a reply: also not a reply to a comment with no `/NM`.
 #[test]
 fn arrow_keys_leave_a_reply_to_an_unnamed_comment_where_it_is() {
-    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| app.set_option("quick", "select").unwrap());
+    let mut h = harness_with_bytes(THREAD_EDGES.to_vec(), |app| app.set_option(&egui::Context::default(), "quick", "select").unwrap());
     let rect = |h: &Harness<'static, PdfCraftApp>, text: &str| comments(h).into_iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().rect;
     let (reply, parent) = (rect(&h, "Direct reply"), rect(&h, "Unnamed parent"));
     h.state_mut().views[0].comments.select_only((0, 1));
@@ -1869,8 +1870,8 @@ trailer << /Root 1 0 R >>
 #[test]
 fn a_checkmark_on_a_reply_does_not_mark_its_comment() {
     let mut h = harness_with_bytes(CHECKED_REPLY.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "select").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "select").unwrap();
     });
     click_pt(&mut h, (110.0, 110.0));
     assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)], "the comment is selected");
@@ -1891,7 +1892,7 @@ fn a_checkmark_on_a_reply_does_not_mark_its_comment() {
 #[test]
 fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replies() {
     let mut h = harness_with_bytes(REVIEW_FIXTURE.to_vec(), |app| {
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].comments.panel.collapsed_pages = vec![0, 1];
     });
     assert_eq!(h.query_all_by_label("Late root").count(), 0);
@@ -1923,7 +1924,7 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
     let id = h.state().views[0].id;
     let saved = h.state().session.save_bytes(id).unwrap().as_ref().clone();
     let mut reopened = harness_with_bytes(saved, |app| {
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].comments.panel.search = "late thread reply".into();
         app.views[0].comments.panel.search_open = true;
     });
@@ -1949,8 +1950,8 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
 /// A page with one rectangle comment ("Reviewed"), the Comments panel open and nothing selected.
 fn flatten_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "select").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "select").unwrap();
     });
     let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 80.0, 60.0] };
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
@@ -1993,11 +1994,11 @@ fn flatten_from_the_panel_menu_row() {
 #[test]
 fn comments_take_checkmarks_lock_hide_and_summarize() {
     let mut h = harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "square").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "square").unwrap();
     });
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.run_steps(2);
     assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)], "the new comment is selected");
     // The card's checkmark.
@@ -2059,7 +2060,7 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
 
 #[test]
 fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
-    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "polygon").unwrap());
     // Polygon: click the corners, Enter finishes.
     for p in [(40.0, 40.0), (120.0, 40.0), (80.0, 110.0)] {
         click_pt(&mut h, p);
@@ -2072,14 +2073,14 @@ fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     assert_eq!(c[0].subtype, "Polygon");
 
     // Cloud: clicking the first point again closes it.
-    h.state_mut().set_option("quick", "cloud").unwrap();
+    h.set_option("quick", "cloud").unwrap();
     for p in [(160.0, 40.0), (260.0, 40.0), (260.0, 100.0), (160.0, 100.0), (160.0, 40.0)] {
         click_pt(&mut h, p);
     }
     assert_eq!(comments(&h).len(), 2);
 
     // Connected lines.
-    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.set_option("quick", "polyline").unwrap();
     for p in [(20.0, 150.0), (60.0, 130.0), (100.0, 150.0)] {
         click_pt(&mut h, p);
     }
@@ -2088,7 +2089,7 @@ fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     assert!(comments(&h).iter().any(|a| a.subtype == "PolyLine"));
 
     // Callout: drag from the target to where the box goes, then type.
-    h.state_mut().set_option("quick", "callout").unwrap();
+    h.set_option("quick", "callout").unwrap();
     drag_pt(&mut h, (60.0, 160.0), (180.0, 190.0));
     assert!(h.state().views[0].comments.composer.is_some(), "the composer opened");
     field(&h, "Type text").type_text("Why?");
@@ -2103,7 +2104,7 @@ fn polygons_clouds_connected_lines_callouts_and_inserted_text() {
     assert!((knee[0] - (tb[0] - 12.0)).abs() < 0.01 && (knee[1] - (tb[1] + tb[3]) / 2.0).abs() < 0.01, "{tb:?} {knee:?}");
 
     // Insert text at a click.
-    h.state_mut().set_option("quick", "caret").unwrap();
+    h.set_option("quick", "caret").unwrap();
     click_pt(&mut h, (95.0, 150.0));
     field(&h, "Text to insert").type_text("very ");
     h.run_steps(2);
@@ -2120,7 +2121,7 @@ fn drawn_points(h: &Harness<'static, PdfCraftApp>) -> usize {
 
 #[test]
 fn a_wrong_polygon_point_is_taken_back_with_backspace_or_undo() {
-    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "polygon").unwrap());
     for p in [(40.0, 40.0), (120.0, 40.0), (200.0, 150.0)] {
         click_pt(&mut h, p);
     }
@@ -2142,7 +2143,7 @@ fn a_wrong_polygon_point_is_taken_back_with_backspace_or_undo() {
     assert_eq!(c.len(), 1);
     assert_eq!(c[0].subtype, "Polygon");
     // Taking back the only point cancels the drawing without making a comment.
-    h.state_mut().set_option("quick", "polygon").unwrap();
+    h.set_option("quick", "polygon").unwrap();
     click_pt(&mut h, (200.0, 200.0));
     h.key_press(egui::Key::Backspace);
     h.run_steps(2);
@@ -2153,7 +2154,7 @@ fn a_wrong_polygon_point_is_taken_back_with_backspace_or_undo() {
 
 #[test]
 fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
-    let mut h = harness(|app| app.set_option("quick", "caret").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "caret").unwrap());
     // "The quick brown fox", Helvetica 14 pt from x = 20 on the baseline y = 150. With the
     // standard-14 widths "The quick b" ends at 92.366 and "r" (333/1000 em) at 97.028, so a click
     // in the right half of "r", above the baseline, puts the tip between "r" and "o".
@@ -2169,7 +2170,7 @@ fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
     assert!((y1 - y0 - 7.0).abs() < 0.3, "half the 14 pt em: {:?}", caret.rect);
 
     // Away from the text the caret stays where the click was, at its default size.
-    h.state_mut().set_option("quick", "caret").unwrap();
+    h.set_option("quick", "caret").unwrap();
     click_pt(&mut h, (200.0, 60.0));
     field(&h, "Text to insert").type_text("y");
     h.run_steps(2);
@@ -2186,11 +2187,11 @@ fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
 #[test]
 fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
     let mut h = harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "square").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "square").unwrap();
     });
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     let me = h.state().comment_prefs.author.clone();
     let other = format!("{me} (other)");
     for (state, author) in [
@@ -2214,9 +2215,9 @@ fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
 
     // Filters: a comment stays while any reviewer's status is shown; one nobody set a status on
     // counts as None; the checkmark filter goes by my checkmark only.
-    h.state_mut().set_option("quick", "circle").unwrap();
+    h.set_option("quick", "circle").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.state_mut().views[0].comments.clear_selection();
     h.run_steps(2);
     let cards = |h: &Harness<'static, PdfCraftApp>| (h.query_all_by_label("Rectangle").count(), h.query_all_by_label("Oval").count());
@@ -2245,11 +2246,11 @@ fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "square").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "square").unwrap();
     });
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation {
         page: 0,
         index: 0,
@@ -2268,12 +2269,12 @@ fn make_current_properties_default() {
     // The default survives a restart (#340): a fresh app reads the persisted settings and its
     // next rectangle still takes the style.
     let saved = h.state().settings_snapshot();
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     fresh.apply_settings(&saved);
     let st = fresh.comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Rectangle);
     assert_eq!((st.color, st.opacity, st.width), ([0.0, 0.47, 0.84], 0.5, 5.0), "the tool default persisted");
     // The next rectangle takes it.
-    h.state_mut().set_option("quick", "square").unwrap();
+    h.set_option("quick", "square").unwrap();
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
     let c = comments(&h);
     let last = c.iter().rfind(|a| a.subtype == "Square").unwrap();
@@ -2285,7 +2286,7 @@ fn make_current_properties_default() {
 #[test]
 fn properties_dialog_makes_the_strikethrough_colour_default() {
     use pdfcraft_ui_egui::comments::CommentTool;
-    let mut h = harness(|app| app.set_option("quick", "strikeout").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "strikeout").unwrap());
     let green = [0.18, 0.62, 0.36];
     let blue = [0.0, 0.47, 0.84];
     assert_ne!(h.state().comment_prefs.style(CommentTool::StrikeOut).color, green);
@@ -2310,7 +2311,7 @@ fn properties_dialog_makes_the_strikethrough_colour_default() {
     let st = h.state().comment_prefs.style(CommentTool::StrikeOut);
     assert_eq!((st.color, st.opacity), (green, 0.1));
     let fresh = {
-        let mut fresh = PdfCraftApp::new();
+        let mut fresh = crate::control::new_app();
         fresh.apply_settings(&h.state().settings_snapshot());
         fresh.comment_prefs.style(CommentTool::StrikeOut).color
     };
@@ -2389,7 +2390,7 @@ fn a_text_box_made_default_gives_the_tool_its_border_colour() {
 #[test]
 fn the_border_colour_button_shows_the_selected_text_boxs_colour() {
     use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
-    let mut h = harness(|app| app.set_option("quick", "freetext").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "freetext").unwrap());
     let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
     let style = Style { width: 1.0, ..Style::default_for(&shape) };
     assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
@@ -2430,11 +2431,11 @@ fn an_arrows_default_does_not_restyle_lines() {
     use pdfcraft_ui_egui::comments::CommentTool;
 
     let mut h = harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "arrow").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "arrow").unwrap();
     });
     drag_pt(&mut h, (20.0, 40.0), (140.0, 80.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::StyleAnnotation {
         page: 0,
         index: 0,
@@ -2453,9 +2454,9 @@ fn an_arrows_default_does_not_restyle_lines() {
     assert_eq!((arrow.color, arrow.opacity, arrow.width), ([0.0, 0.47, 0.84], 0.5, 6.0));
     assert_eq!((line.color, line.opacity, line.width), ([0.89, 0.13, 0.13], 1.0, 2.0), "plain lines keep their own default");
 
-    h.state_mut().set_option("quick", "arrow").unwrap();
+    h.set_option("quick", "arrow").unwrap();
     drag_pt(&mut h, (20.0, 100.0), (140.0, 140.0));
-    h.state_mut().set_option("quick", "line").unwrap();
+    h.set_option("quick", "line").unwrap();
     drag_pt(&mut h, (160.0, 40.0), (260.0, 80.0));
     let c = comments(&h);
     let arrows = c.iter().filter(|a| a.subtype == "Line").collect::<Vec<_>>();
@@ -2468,7 +2469,7 @@ fn an_arrows_default_does_not_restyle_lines() {
 
 #[test]
 fn highlighting_an_area_off_the_text() {
-    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
     // Blank space below the text line (text is at y 150).
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     let c = comments(&h);
@@ -2525,7 +2526,7 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn replacing_text_strikes_it_and_adds_a_caret() {
-    let mut h = harness(|app| app.set_option("quick", "replace").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "replace").unwrap());
     // Review on #5689 (CodeRabbit): both parts take the Replace text tool's style.
     h.state_mut().comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::ReplaceText, [0.1, 0.6, 0.2]);
     drag_pt(&mut h, (20.0, 155.0), (120.0, 155.0));
@@ -2550,7 +2551,7 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     assert_eq!(pdfcraft_ui_egui::comments::tool_for(caret), Some(pdfcraft_ui_egui::comments::CommentTool::ReplaceText));
     // The panel's card is the caret's, the group's primary: it shows the replacement, and
     // nothing is named Strikethrough.
-    h.state_mut().set_option("panel", "comments").unwrap();
+    h.set_option("panel", "comments").unwrap();
     h.run_steps(3);
     // One card, the caret's, showing the replacement text; sorted by type, its group is named
     // Replace text (not Insert text, and no Strikethrough).
@@ -2571,7 +2572,7 @@ fn attaching_a_file_as_a_comment() {
     std::fs::write(&file, b"remember the milk").unwrap();
     let files = std::sync::Arc::new(ScriptedFiles::answering([Picked::Paths(vec![file.clone()])]));
     let asked = files.clone();
-    let mut h = harness_on_files(files, |app| app.set_option("quick", "attach").unwrap());
+    let mut h = harness_on_files(files, |app| app.set_option(&egui::Context::default(), "quick", "attach").unwrap());
     click_pt(&mut h, (250.0, 180.0));
     h.run_steps(3);
     assert_eq!(asked.requests().len(), 1, "the tool asks the picker once");
@@ -2615,10 +2616,10 @@ fn attachment_comment_fixture() -> Vec<u8> {
 
 fn attachment_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("annexed.pdf", None, attachment_comment_fixture()).expect("opens");
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         setup(&mut app);
         app
     });
@@ -2636,8 +2637,8 @@ fn open_tab_names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 /// attachment comment opens its file in a new tab.
 fn attachment_page_menu_row() {
     let mut h = attachment_harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "select").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "select").unwrap();
     });
     assert_eq!(comments(&h)[0].subtype, "FileAttachment");
     click_pt(&mut h, (110.0, 112.0));
@@ -2654,7 +2655,7 @@ fn attachment_page_menu_row() {
 /// Row of `panel_and_card_actions_become_engine_edits`: a card's "…" menu on an attachment
 /// comment opens its file in a new tab.
 fn attachment_card_menu_row() {
-    let mut h = attachment_harness(|app| app.set_option("panel", "comments").unwrap());
+    let mut h = attachment_harness(|app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
     h.state_mut().views[0].comments.select_only((0, 0));
     h.run_steps(2);
     h.get_by_label("More").click();
@@ -2668,10 +2669,10 @@ fn attachment_card_menu_row() {
 
 #[test]
 fn erasing_part_of_a_drawing() {
-    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "ink").unwrap());
     drag_pt(&mut h, (40.0, 60.0), (260.0, 60.0));
     assert_eq!(comments(&h).len(), 1);
-    h.state_mut().set_option("quick", "eraser").unwrap();
+    h.set_option("quick", "eraser").unwrap();
     drag_pt(&mut h, (150.0, 90.0), (150.0, 30.0));
     let c = comments(&h);
     assert_eq!(c.len(), 1);
@@ -2687,13 +2688,13 @@ fn erasing_part_of_a_drawing() {
 fn the_eraser_rubs_as_wide_as_its_thickness_setting() {
     // #3747: the eraser's size changed nothing; it always rubbed 6 pixels either side.
     let stroke_near = |width: f64| {
-        let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+        let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "ink").unwrap());
         drag_pt(&mut h, (40.0, 60.0), (260.0, 60.0));
         assert_eq!(comments(&h).len(), 1);
         let zoom = h.state().views[0].page_screen_rect(0).expect("page 1 on screen").width() / 300.0;
         let app = h.state_mut();
         app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Eraser, width);
-        app.set_option("quick", "eraser").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "eraser").unwrap();
         // Along the whole drawing, 20 pixels above it: out of reach of the default eraser
         // (6 pixels), within reach of the largest (36).
         let y = 60.0 + 20.0 / zoom;
@@ -2728,7 +2729,7 @@ fn the_eraser_preview_is_as_wide_as_it_rubs() {
     for (width, across) in [(2.0, 12.0), (12.0, 72.0)] {
         let mut h = harness(move |app| {
             app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Eraser, width);
-            app.set_option("quick", "eraser").unwrap();
+            app.set_option(&egui::Context::default(), "quick", "eraser").unwrap();
         });
         let (from, to) = (at(&h, 60.0, 100.0), at(&h, 240.0, 100.0));
         h.hover_at(from);
@@ -2754,12 +2755,12 @@ fn hovering_a_comment_shows_its_author_and_text() {
         "8 0 obj << /Type /Annot /Subtype /Square /Rect [50 50 150 120] /C [1 0 0] /T (Ada) /Contents (Check this figure) >> endobj\ntrailer",
     );
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("hover.pdf", None, pdf.into_bytes()).expect("opens");
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // No Comments panel: the comment's text should only appear in the hover popup.
-        app.set_option("panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app
     });
     h.run_steps(4);
@@ -2771,7 +2772,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
     h.get_by_label_contains("Check this figure");
     h.get_by_label_contains("Ada");
     // The tip is drawn above every window. A dialog must hide it, or the author floats over the dialog.
-    h.state_mut().set_option("dialog", "shortcuts").unwrap();
+    h.set_option("dialog", "shortcuts").unwrap();
     h.hover_at(p);
     h.run_steps(3);
     assert!(h.query_by_label_contains("Check this figure").is_none(), "a dialog covers the page hover");
@@ -2785,11 +2786,11 @@ fn preference_hides_author_only_highlight_hover_previews() {
         "8 0 obj << /Type /Annot /Subtype /Highlight /Rect [50 50 150 120] /C [1 1 0] /T (Ada) /QuadPoints [50 120 150 120 50 50 150 50] >> endobj\ntrailer",
     );
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("highlight_hover.pdf", None, pdf.into_bytes()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app
     });
     h.run_steps(4);
@@ -2802,7 +2803,7 @@ fn preference_hides_author_only_highlight_hover_previews() {
     h.get_by_label("Ada");
 
     // Enabling preference hides author-only highlight hover.
-    h.state_mut().set_option("hide-empty-highlight-hover", "true").unwrap();
+    h.set_option("hide-empty-highlight-hover", "true").unwrap();
     h.hover_at(p);
     h.run_steps(3);
     assert!(h.query_by_label("Ada").is_none(), "author-only hover must be suppressed");
@@ -2831,14 +2832,14 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
     let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf)).expect("synthetic fixture parses");
     let pdf = pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes complete fixture");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("markup.pdf", None, pdf).expect("opens synthetic markup");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("panel", "none").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         // Small enough to show the whole page in every rotation: a point hovered below the window
         // is not over the page.
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app.views[0].rotation = view_rotation;
         app
     });
@@ -2882,7 +2883,7 @@ fn imported_commented_markup_keeps_author_at_rotated_zoomed_page_edges() {
                         "/QuadPoints [270 200 300 200 270 180 300 180]",
                     );
                 let mut h = markup_hover_harness(pdf.into_bytes(), view_rotation);
-                h.state_mut().set_option("zoom", zoom).unwrap();
+                h.set_option("zoom", zoom).unwrap();
                 h.run_steps(4);
                 support::settle(&mut h);
                 hover_markup_at(&mut h, 285.0, 190.0);
@@ -2994,7 +2995,7 @@ fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
     h.state_mut().comment_prefs.set_opacity(CommentTool::Underline, 0.0);
     assert!((h.state().comment_prefs.style(CommentTool::Underline).opacity - 0.1).abs() < 1e-9);
     h.state_mut().views[0].select_text(0, 4, 8);
-    assert!(h.state_mut().execute("comment.strikeout"));
+    assert!(h.execute("comment.strikeout"));
     h.run_steps(2);
     let c = comments(&h);
     assert_eq!(c.len(), 1, "{c:?}");
@@ -3011,7 +3012,7 @@ fn the_opacity_set_for_a_tool_goes_into_its_new_comments() {
         .collect();
     assert_eq!(opacities, [0.5]);
     // The quick bar offers the control.
-    h.state_mut().set_option("quick", "strikeout").unwrap();
+    h.set_option("quick", "strikeout").unwrap();
     h.run_steps(2);
     h.get_by_label("Opacity");
 }
@@ -3023,7 +3024,7 @@ fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
     use pdfcraft_ui_egui::RightPanel;
     let mut h = harness(|_| {});
     assert_eq!(h.state().right, None);
-    assert!(h.state_mut().execute("comment.highlight"));
+    assert!(h.execute("comment.highlight"));
     h.run_steps(2);
     assert_eq!(h.state().right, Some(RightPanel::Comments), "Acrobat opens Comments with the tools");
     h.get_by_label("Close").click();
@@ -3033,12 +3034,12 @@ fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
         if tool == "select" {
             h.state_mut().quick_tool = QuickTool::Select;
         } else {
-            assert!(h.state_mut().execute(tool));
+            assert!(h.execute(tool));
         }
         h.run_steps(2);
         assert_eq!(h.state().right, None, "{tool} reopened the closed Comments panel");
     }
-    let mut again = PdfCraftApp::new();
+    let mut again = crate::control::new_app();
     again.apply_settings(&h.state().settings_snapshot());
     assert!(again.comments_panel_closed, "the choice survives a restart");
     // Opening it again from the rail lets the tools open it once more.
@@ -3051,7 +3052,7 @@ fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
     h.state_mut().choose_right_panel(None);
     h.run_steps(2);
     assert!(!h.state().comments_panel_closed, "switching to and closing another panel isn't closing Comments");
-    assert!(h.state_mut().execute("comment.strikeout"));
+    assert!(h.execute("comment.strikeout"));
     h.run_steps(2);
     assert_eq!(h.state().right, Some(RightPanel::Comments));
 }
@@ -3126,7 +3127,7 @@ fn text_comments_can_save_a_zero_width_default() {
     h.state_mut().comment_prefs.set_width(CommentTool::Rectangle, 0.0);
     assert_eq!(h.state().comment_prefs.style(CommentTool::Callout).width, 0.0);
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).width, 0.5);
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.comment_prefs.style(CommentTool::TextBox).width, 0.0);
     assert_eq!(restored.comment_prefs.style(CommentTool::Callout).width, 0.0);
@@ -3208,7 +3209,7 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
 fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
     let _gpu = crate::gpu();
     let mut h = harness(|_| {});
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click_pt(&mut h, (40.0, 150.0));
     h.event(egui::Event::Text("WWWWWW".into()));
     h.run_steps(1);
@@ -3328,7 +3329,7 @@ trailer << /Root 1 0 R >>
 /// or text; clicking the Circle on the page selects the group, which is the Square's card.
 #[test]
 fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
-    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
     h.get_by_label("Primary");
     h.get_by_label("Plain reply");
     h.get_by_label("Reply to the subordinate");
@@ -3402,7 +3403,7 @@ fn choosing_the_groups_card_makes_delete_act_on_the_card_not_the_member_clicked(
         out.sort();
         out
     };
-    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
     click_pt(&mut h, (220.0, 150.0));
     assert_eq!(h.state().views[0].comments.primary(), Some((0, 0)), "the Circle's click selects the group");
     // The selected card's header row, with its author.
@@ -3444,7 +3445,7 @@ fn last_edit(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
 /// Help, 11/28/2019, p. 357).
 #[test]
 fn a_callouts_arrow_knee_and_text_box_are_dragged_on_their_own() {
-    let mut h = harness_with_bytes(CALLOUT_FIXTURE.to_vec(), |app| app.set_option("quick", "select").unwrap());
+    let mut h = harness_with_bytes(CALLOUT_FIXTURE.to_vec(), |app| app.set_option(&egui::Context::default(), "quick", "select").unwrap());
     let c = callout(&h);
     assert_eq!((c.points.clone(), c.text_box), (vec![[60.0, 60.0], [120.0, 120.0]], Some([150.0, 100.0, 250.0, 140.0])));
     click_pt(&mut h, (200.0, 120.0));
@@ -3646,10 +3647,10 @@ fn a_double_click_on_a_replace_text_opens_its_one_window() {
     for (caret_first, on_caret) in [(true, true), (false, false)] {
         let pdf = replace_text_pdf(caret_first, false);
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("replace.pdf", None, pdf.clone()).expect("opens");
-            app.set_option("left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
             app
         });
         h.run_steps(4);
@@ -3682,12 +3683,12 @@ fn a_double_click_on_a_replace_text_opens_its_one_window() {
 fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     // Frames a sixtieth apart, so two clicks land within egui's double-click time.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
-        app.set_option("author", "Tester").unwrap();
-        app.set_option("quick", "note").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "note").unwrap();
         app
     });
     h.run_steps(4);
@@ -3908,7 +3909,7 @@ fn a_pop_up_resized_on_a_turned_page_stays_in_place() {
 /// saves that text as the box loses the focus. Both land in one frame and both are kept.
 #[test]
 fn posting_from_the_composer_keeps_a_pop_ups_unsaved_text() {
-    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |app| app.set_option("quick", "note").unwrap());
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |app| app.set_option(&egui::Context::default(), "quick", "note").unwrap());
     // Low on the left, so the composer stays clear of the window.
     click_pt(&mut h, (30.0, 40.0));
     // The composer opens with its editor focused.
@@ -4018,7 +4019,7 @@ fn closing_a_pop_up_saves_its_typed_text() {
 
 #[test]
 fn freehand_highlighter_draws_translucent_yellow_ink() {
-    let mut h = harness(|app| app.set_option("quick", "freehand_highlight").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "freehand_highlight").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (240.0, 100.0));
 
     let c = comments(&h);
@@ -4083,8 +4084,8 @@ fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
     let _gpu = shots.then(crate::gpu);
     use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Shape, Style};
     let mut h = harness(move |app| {
-        app.set_option("layout", "single").unwrap();
-        app.set_option("panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "layout", "single").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.quick_tool = QuickTool::Select;
         // Both pages use index 0, with opposite intents. The lookup must use page AND index.
         for page in 0..2 {
@@ -4178,12 +4179,12 @@ fn other_edit_composers_keep_trimming_trailing_whitespace() {
 /// Delete removes every selected comment as one undo step.
 #[test]
 fn ctrl_click_selects_several_comments_and_delete_removes_them_all() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
         drag_pt(&mut h, a, b);
     }
     assert_eq!(comments(&h).len(), 3);
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.run_steps(2);
     click_pt(&mut h, (40.0, 40.0));
     assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)]);
@@ -4219,11 +4220,11 @@ fn ctrl_click_selects_several_comments_and_delete_removes_them_all() {
 /// grabbed one takes the handles and the one that had them stays selected.
 #[test]
 fn dragging_any_selected_comment_moves_the_whole_selection() {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
         drag_pt(&mut h, a, b);
     }
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.run_steps(2);
     click_pt(&mut h, (40.0, 40.0));
     click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
@@ -4281,13 +4282,13 @@ fn copied_comments_take_the_click_from_the_tool_that_is_on() {
     })));
     h.run_steps(2);
     h.state_mut().views[0].comments.select_only((0, 0));
-    assert!(h.state_mut().execute("comment.copy"));
+    assert!(h.execute("comment.copy"));
     let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations.len();
     for (tool, at) in [(QuickTool::Fill(FillTool::Text), (150.0, 100.0)), (QuickTool::Stamp(pdfcraft_engine::StampKind::Approved), (200.0, 160.0))] {
         h.state_mut().quick_tool = tool;
         h.run_steps(2);
         let before = count(&h);
-        assert!(h.state_mut().execute("comment.paste"));
+        assert!(h.execute("comment.paste"));
         click_pt(&mut h, at);
         assert_eq!(count(&h), before + 1, "{tool:?}: the copy, and nothing else");
         assert!(h.state().views[0].fill_text.is_none(), "{tool:?}: no text box opens");
@@ -4333,19 +4334,19 @@ fn copied_comments_paste_into_another_document() {
     add_two_boxes_and_a_reply(&mut h);
     // Adding a comment selects it; with nothing selected there is nothing to copy.
     h.state_mut().views[0].comments.clear_selection();
-    assert!(!h.state_mut().execute("comment.copy"), "nothing selected: nothing to copy");
+    assert!(!h.execute("comment.copy"), "nothing selected: nothing to copy");
     {
         let cv = &mut h.state_mut().views[0].comments;
         cv.select_only((0, 0));
         cv.toggle((0, 1));
     }
-    assert!(h.state_mut().execute("comment.copy"));
+    assert!(h.execute("comment.copy"));
     assert_eq!(h.state().comment_clipboard.as_ref().map(|c| c.count), Some(2));
     // Into the other document: Edit ▸ Paste comments hangs the bundle on the pointer, a click
     // places it, centred there (the two boxes span 20..140 × 20..60: centre 80, 40).
     h.state_mut().active = Some(1);
     h.run_steps(2);
-    assert!(h.state_mut().execute("comment.paste"));
+    assert!(h.execute("comment.paste"));
     let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(target).unwrap().info.annotations.len();
     assert_eq!(count(&h), 0, "nothing placed yet");
     assert_eq!(h.state().views[1].comments.paste.as_ref().map(|p| p.count), Some(2));
@@ -4383,7 +4384,7 @@ fn copied_comments_paste_into_another_document() {
     // XFDF arriving from the system clipboard pastes too, even without the app's clipboard.
     let xfdf = h.state().comment_clipboard.clone().unwrap().xfdf;
     h.state_mut().comment_clipboard = None;
-    assert!(!h.state_mut().execute("comment.paste"), "nothing copied: disabled");
+    assert!(!h.execute("comment.paste"), "nothing copied: disabled");
     h.event(egui::Event::Paste(xfdf.clone()));
     h.run_steps(3);
     click_pt(&mut h, (200.0, 120.0));
@@ -4406,7 +4407,7 @@ fn copied_comments_paste_into_another_document() {
 /// the menu also takes the last point back and cancels the drawing.
 #[test]
 fn connected_lines_are_completed_from_the_context_menu() {
-    let mut h = harness(|app| app.set_option("quick", "polyline").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "polyline").unwrap());
     for p in [(20.0, 150.0), (60.0, 130.0), (100.0, 150.0)] {
         click_pt(&mut h, p);
     }
@@ -4428,7 +4429,7 @@ fn connected_lines_are_completed_from_the_context_menu() {
     assert_eq!(c.len(), 1, "{c:?}");
     assert_eq!(c[0].subtype, "PolyLine");
     // A polygon needs three points: with two, Complete is greyed; Undo last point and Cancel drawing work.
-    h.state_mut().set_option("quick", "polygon").unwrap();
+    h.set_option("quick", "polygon").unwrap();
     for p in [(150.0, 150.0), (200.0, 150.0)] {
         click_pt(&mut h, p);
     }
@@ -4446,8 +4447,8 @@ fn connected_lines_are_completed_from_the_context_menu() {
     assert_eq!(comments(&h).len(), 1, "nothing else was drawn");
     // On the second page, with the first on screen in the same frame: Complete reaches the page
     // the drawing is on (the first page passes first and must not take the request).
-    h.state_mut().set_option("quick", "polyline").unwrap();
-    h.state_mut().set_option("zoom", "50").unwrap();
+    h.set_option("quick", "polyline").unwrap();
+    h.set_option("zoom", "50").unwrap();
     crate::support::settle(&mut h);
     assert!(h.state().views[0].page_screen_rect(0).is_some(), "page 1 is on screen too");
     let at2 = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
@@ -4617,9 +4618,9 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
 
 /// A square drawn and selected with the Select tool.
 fn selected_square() -> Harness<'static, PdfCraftApp> {
-    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "square").unwrap());
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     click_pt(&mut h, (250.0, 20.0));
     click_pt(&mut h, (90.0, 70.0));
     assert_eq!(h.state().views[0].comments.selection(), vec![(0, 0)]);
@@ -4700,7 +4701,7 @@ fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_leaves_the_commen
     for full_screen in [false, true] {
         let mut h = selected_square();
         if full_screen {
-            assert!(h.state_mut().execute("view.full_screen"));
+            assert!(h.execute("view.full_screen"));
             h.run_steps(4);
             assert!(h.state().full_screen(), "full screen");
         }
@@ -4742,7 +4743,7 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
     for (quick, size, first, second, third) in
         [("freetext", 24.0, (40.0, 60.0), (40.0, 120.0), (40.0, 100.0)), ("callout", 18.0, (150.0, 40.0), (150.0, 100.0), (150.0, 60.0))]
     {
-        h.state_mut().set_option("quick", quick).unwrap();
+        h.set_option("quick", quick).unwrap();
         if quick == "callout" {
             drag_pt(&mut h, first, (first.0 + 60.0, first.1 + 20.0));
         } else {
@@ -4759,7 +4760,7 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         assert_eq!(font_size_of_last(&h).font_size, Some(size));
 
         // The next one takes the font size and the colour.
-        h.state_mut().set_option("quick", quick).unwrap();
+        h.set_option("quick", quick).unwrap();
         if quick == "callout" {
             drag_pt(&mut h, second, (second.0 + 60.0, second.1 + 20.0));
         } else {
@@ -4774,7 +4775,7 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
         let saved = h.state().settings_snapshot();
         let mut fresh = harness(move |app| {
             app.apply_settings(&saved);
-            app.set_option("quick", quick).unwrap();
+            app.set_option(&egui::Context::default(), "quick", quick).unwrap();
         });
         if quick == "callout" {
             drag_pt(&mut fresh, third, (third.0 + 60.0, third.1 + 20.0));
@@ -4788,12 +4789,12 @@ fn properties_dialog_makes_the_text_box_font_size_default() {
 
 #[test]
 fn ctrl_selected_lines_nudge_together_and_undo() {
-    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "line").unwrap());
     for y in [40.0, 80.0, 120.0] {
         drag_pt(&mut h, (40.0, y), (160.0, y));
     }
     assert_eq!(comments(&h).len(), 3);
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.run_steps(2);
     click_pt(&mut h, (100.0, 40.0));
     click_pt_with(&mut h, (100.0, 80.0), egui::Modifiers::COMMAND);
@@ -4815,11 +4816,11 @@ fn ctrl_selected_lines_nudge_together_and_undo() {
 /// status reply of the chosen state.
 fn set_status_row() {
     let mut h = harness(|app| {
-        app.set_option("panel", "comments").unwrap();
-        app.set_option("quick", "square").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "square").unwrap();
     });
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.state_mut().views[0].comments.select_only((0, 0));
     h.run_steps(2);
     h.get_by_label("More").click();
@@ -4928,7 +4929,7 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
             Rights::NoComments => encrypted_highlight(0b0100),
             Rights::Everything => encrypted_highlight(-1),
         };
-        let mut h = harness_with_bytes(bytes, |app| app.set_option("quick", "select").unwrap());
+        let mut h = harness_with_bytes(bytes, |app| app.set_option(&egui::Context::default(), "quick", "select").unwrap());
         let what = format!("{rights:?}, {at:?}, {label}");
         assert_eq!(comments(&h).len(), 1, "{what}: the highlight is there");
         let point = match at {

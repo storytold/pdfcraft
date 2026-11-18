@@ -9,6 +9,7 @@ use std::sync::Arc;
 use craft::host::{AppInfo, Host, Picked, ScriptedFiles, Wake};
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::toast;
+use crate::support::AppHarness as _;
 
 /// The app with `name` open from `bytes` at `zoom` percent, on a host whose file picker answers the
 /// first save or export with `out`, as the user choosing that file would.
@@ -18,10 +19,10 @@ fn scripted_harness(name: &'static str, bytes: Vec<u8>, zoom: &'static str, out:
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
         let mut app = PdfCraftApp::with_host(host, AppServices::new(Wake::none(), None, None, None, None, None));
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(name, None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", zoom).unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -46,12 +47,12 @@ fn asks_to_save(h: &Harness<'static, PdfCraftApp>) -> bool {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // The whole 300×400 pt page on screen.
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -60,10 +61,10 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 fn harness_with_bytes(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(name, None, bytes).unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -457,7 +458,7 @@ fn field_keys_and_clicks_set_field_values() {
     h.run_steps(4);
     assert_eq!(value(&h, "country"), ["fr"]);
     click_field(&mut h, "size", 1);
-    assert!(h.state_mut().execute("form.clear"));
+    assert!(h.execute("form.clear"));
     h.run_steps(2);
     assert!(value(&h, "country").is_empty() && value(&h, "size").is_empty());
     h.state_mut().undo();
@@ -488,11 +489,11 @@ fn check_box_harness() -> Harness<'static, PdfCraftApp> {
         "<< /Type /Page /Parent 2 0 R >>",
     ]);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("agree.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -828,7 +829,7 @@ fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_valu
     }
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
-    h.state_mut().set_option("language", "lt").unwrap();
+    h.set_option("language", "lt").unwrap();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
         page: 0,
         rect: [50.0, 40.0, 200.0, 60.0],
@@ -854,8 +855,8 @@ fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_valu
 
 /// The value of `name` in a saved PDF, read back by opening it in a fresh app.
 fn saved_value(path: &std::path::Path, name: &str) -> Vec<String> {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("saved.pdf", None, std::fs::read(path).unwrap()).unwrap();
     app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
 }
@@ -1037,7 +1038,7 @@ fn an_unrelated_command_leaves_the_field_being_typed_in_alone() {
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Still typing".into()));
     h.run_steps(2);
-    assert!(h.state_mut().execute("view.theme.dark"));
+    assert!(h.execute("view.theme.dark"));
     h.run_steps(2);
     let focus = h.state().views[0].forms.focus.clone().expect("the editor stays open");
     assert_eq!(focus.text, "Still typing");
@@ -1072,11 +1073,11 @@ fn validated_form() -> Vec<u8> {
 fn pressing_another_text_field_validates_the_refused_value_once() {
     // The press commits `qty`; its release must not commit (and alert) a second time.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("order.pdf", None, validated_form_with_note()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -1156,11 +1157,11 @@ fn fields_over_text() -> Vec<u8> {
 #[test]
 fn buttons_over_text_show_the_pointing_hand_not_the_i_beam() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("sheet.pdf", None, fields_over_text()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -1274,7 +1275,7 @@ fn flattening_while_typing_flattens_the_typed_text() {
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Flat Ada".into()));
     h.run_steps(2);
-    assert!(h.state_mut().execute("form.flatten"));
+    assert!(h.execute("form.flatten"));
     h.run_steps(2);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
@@ -1343,7 +1344,7 @@ mod revert_tests {
         h.run_steps(4);
         assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().text, "99");
         assert_eq!(std::fs::read(&path).unwrap(), saved, "rejection leaves the saved file untouched");
-        assert!(h.state_mut().execute("file.revert"));
+        assert!(h.execute("file.revert"));
         h.run_steps(2);
         h.get_all_by_label("Revert").last().expect("confirmation button").click();
         h.run_steps(4);
@@ -1444,10 +1445,10 @@ fn the_fields_panel_lists_a_field_on_a_missing_page_as_unplaced() {
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (orphan) /Rect [10 10 100 30] /P 99 /F 4 >>",
     ]);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("orphan.pdf", None, bytes).unwrap();
-        app.set_option("panel", "fields").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "fields").unwrap();
         app
     });
     h.run_steps(6);
@@ -1466,11 +1467,11 @@ fn list_box_clicks_select_directly_and_ctrl_click_toggles_multi() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ]);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("lists.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(4);
@@ -1567,7 +1568,7 @@ fn a_list_box_click_picks_one_of_two_options_with_the_same_export_value() {
 
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     wait_for_file(&mut h, &out);
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.open_bytes("saved.pdf", None, std::fs::read(&out).unwrap()).unwrap();
     let reopened = app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "dup").unwrap().clone();
     assert_eq!(reopened.value, ["1"], "/V is the one export value");
@@ -1589,11 +1590,11 @@ fn a_click_in_a_twin_list_box_with_options_in_another_order_picks_the_row_clicke
         "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Opt [[(1) (One-B)] [(1) (One-A)] [(2) (Two)]] /Rect [50 100 200 170] /P 3 0 R /F 4 >>",
     ]);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("twins.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(4);
@@ -1634,11 +1635,11 @@ fn a_single_select_list_box_given_two_values_shows_and_takes_one() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ]);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("pair.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(4);
@@ -1671,11 +1672,11 @@ fn auto_size_form() -> Vec<u8> {
 
 fn auto_size_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("auto.pdf", None, auto_size_form()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -1744,8 +1745,8 @@ fn tall_auto_size_form() -> Vec<u8> {
 #[test]
 fn the_field_editor_sizes_auto_size_text_as_the_page_does() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("tall.pdf", None, tall_auto_size_form()).unwrap();
         app
     });
@@ -1815,8 +1816,8 @@ fn guide_fixture() -> Vec<u8> {
 #[test]
 fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, guide_fixture()).unwrap();
         // Another document named like the attachment, its bytes the attachment's and an update.
         app.open_bytes("inner.pdf", None, format!("{GUIDE_INNER}\n% updated later\n").into_bytes()).unwrap();
@@ -1853,8 +1854,8 @@ fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
 #[test]
 fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, guide_fixture()).unwrap();
         app
     });
@@ -1911,11 +1912,11 @@ fn combo_form() -> Vec<u8> {
 
 fn combo_harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("combo.pdf", None, combo_form()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -1974,11 +1975,11 @@ fn a_turned_editable_combo_box_places_the_caret_along_its_turned_text() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ]);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("turned-combo.pdf", None, pdf.clone()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     crate::support::settle(&mut h);
@@ -2032,7 +2033,7 @@ fn a_combo_box_without_edit_takes_no_typing() {
 #[test]
 fn a_form_button_shows_and_hides_the_attachments_panel() {
     let mut h = harness();
-    h.state_mut().set_option("panel", "none").unwrap();
+    h.set_option("panel", "none").unwrap();
     h.run_steps(2);
     let id = h.state().views[0].id;
     h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
@@ -2081,11 +2082,11 @@ fn shared_state_radios() -> Harness<'static, PdfCraftApp> {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let bytes = pdf_from_objects(&objs);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("radios.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -2143,11 +2144,11 @@ fn a_read_only_radio_button_is_focused_but_not_selected() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let bytes = pdf_from_objects(&objs);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("radios.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -2192,11 +2193,11 @@ fn check_box_kids() -> Harness<'static, PdfCraftApp> {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let bytes = pdf_from_objects(&objs);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("kids.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -2247,11 +2248,11 @@ fn click_with(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2, modifiers: e
 fn list_box(objects: &[&str], name: &str) -> (Harness<'static, PdfCraftApp>, egui::Rect) {
     let bytes = pdf_from_objects(objects);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("list.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(4);

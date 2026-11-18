@@ -27,6 +27,7 @@ use crate::canvas::{DocView, PageXform};
 
 mod calendar;
 mod choice_list;
+pub(crate) mod editor;
 
 use calendar::calendar;
 use choice_list::choice_list;

@@ -8,6 +8,7 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui_kittest::Harness;
 use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Session, Shape, Style};
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 /// A two-page PDF: page 1 a grey scan with a darker gutter and text bars (and a sticky note),
 /// page 2 the same scan again.
@@ -30,8 +31,8 @@ fn scan() -> Vec<u8> {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
         app
     });
@@ -51,7 +52,7 @@ fn enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
     assert!(h.state().session.get(id).unwrap().comment_props(0, 0).is_some());
-    assert!(h.state_mut().execute("ocr.enhance"));
+    assert!(h.execute("ocr.enhance"));
     h.run_steps(2);
     let ctx = h.ctx.clone();
     let current = PageRange { scope: PageScope::Current, ..PageRange::default() };

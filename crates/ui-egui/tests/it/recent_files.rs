@@ -8,6 +8,7 @@ use pdfcraft_ui_egui::settings::import_json;
 use pdfcraft_ui_egui::{PdfCraftApp, RecentFile};
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// Settings as a settings file gives them, read the way the app reads them.
 fn restore(app: &mut PdfCraftApp, json: &str) {
@@ -25,8 +26,8 @@ fn names(app: &PdfCraftApp) -> Vec<&str> {
 }
 
 fn app_with(files: &[&str]) -> PdfCraftApp {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.recent.extend(files.iter().map(|n| recent_file(n)));
     app
 }
@@ -89,7 +90,7 @@ fn at_zero_the_menu_and_the_palette_have_nothing_to_open() {
     let mut h = harness(0, &[]);
     support::open_menu(&mut h, "File");
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "Open Recent is disabled");
-    assert!(h.state_mut().execute("file.open_recent"));
+    assert!(h.execute("file.open_recent"));
     assert!(h.state().toast.as_ref().is_some_and(|(m, _)| m.contains("No recent files")));
     assert!(h.state().views.is_empty(), "and nothing opened");
 }
@@ -150,12 +151,12 @@ fn the_limit_is_saved_and_restored_and_cuts_a_longer_list() {
         .collect();
     let entries: Vec<RecentFile> = paths.iter().map(|p| RecentFile { name: "x.pdf".into(), path: p.clone(), pages: 1, size: 0 }).collect();
     let json = serde_json::json!({ "recent": entries, "recent_limit": 2 }).to_string();
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restore(&mut restored, &json);
     assert_eq!(restored.recent_limit, 2);
     let kept: Vec<&str> = restored.recent.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(kept, [paths[0].as_str(), paths[1].as_str()]);
-    let mut again = PdfCraftApp::new();
+    let mut again = crate::control::new_app();
     again.apply_settings(&restored.settings_snapshot());
     assert_eq!(again.recent_limit, 2);
     assert_eq!(again.recent.len(), 2);
@@ -177,14 +178,14 @@ fn restoring_settings_does_not_check_recent_files_and_a_frame_drops_the_gone_one
         [&here, &gone].iter().map(|p| RecentFile { name: "x.pdf".into(), path: (*p).clone(), pages: 1, size: 0 }).collect();
     let json = serde_json::json!({ "recent": entries }).to_string();
 
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restore(&mut restored, &json);
     let paths: Vec<&str> = restored.recent.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, [here.as_str(), gone.as_str()], "restoring keeps every entry without asking whether its file exists");
 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.run_inline = true;
         restore(&mut app, &json);
         app
@@ -208,7 +209,7 @@ fn a_settings_file_can_not_ask_for_a_limit_that_is_not_one() {
         ("{\"recent_limit\": 51}", 50),
         ("{\"recent_limit\": 18446744073709551615}", 50),
     ] {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         restore(&mut app, saved);
         assert_eq!(app.recent_limit, want, "{saved}");
     }
@@ -218,14 +219,14 @@ fn a_settings_file_can_not_ask_for_a_limit_that_is_not_one() {
 fn the_control_channel_sets_the_limit_and_refuses_what_it_can_not_be() {
     let mut app = app_with(&["first.pdf", "second.pdf"]);
     for bad in ["51", "-1", "x", "", "1.5"] {
-        let error = app.set_option("recent-files", bad).unwrap_err();
+        let error = app.set_option(&egui::Context::default(), "recent-files", bad).unwrap_err();
         assert!(error.contains("between 0 and 50"), "{bad}: {error}");
     }
     assert_eq!((app.recent_limit, app.recent.len()), (12, 2), "a refused value changes nothing");
-    app.set_option("recent-files", "50").unwrap();
+    app.set_option(&egui::Context::default(), "recent-files", "50").unwrap();
     assert_eq!((app.recent_limit, app.recent.len()), (50, 2));
-    app.set_option("recent-files", "1").unwrap();
+    app.set_option(&egui::Context::default(), "recent-files", "1").unwrap();
     assert_eq!(names(&app), ["first.pdf"], "cut at once, with no dialog to wait for");
-    app.set_option("recent-files", "0").unwrap();
+    app.set_option(&egui::Context::default(), "recent-files", "0").unwrap();
     assert!(app.recent.is_empty());
 }

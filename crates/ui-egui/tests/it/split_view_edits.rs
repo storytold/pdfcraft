@@ -8,13 +8,13 @@ use pdfcraft_ui_egui::panes::Place;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         app.run_inline = true;
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         // The whole 300×400 pt page in either pane.
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(4);

@@ -40,8 +40,8 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         // PLAN: assumed `PdfCraftApp::with_host(Arc<Host>)` and `crate::support::host() -> Arc<Host>` (pdf-hub-w1, pdf-chrome-w9)
         let mut app = PdfCraftApp::with_host(crate::support::host());
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.open_bytes("triggers.pdf", None, form()).unwrap();
         app
     });

@@ -1417,7 +1417,7 @@ mod revert_draft_tests {
     }
 
     fn app() -> PdfCraftApp {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
         app
     }
@@ -1537,7 +1537,7 @@ mod revert_draft_tests {
             let path = dir.join("source.pdf").to_string_lossy().into_owned();
             let bytes = include_bytes!("../tests/data/form.pdf").to_vec();
             std::fs::write(&path, &bytes).unwrap();
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::for_unit_tests();
             app.open_bytes("source.pdf", Some(path.clone()), bytes).unwrap();
             let rect = [72.0, 72.0, 272.0, 92.0];
             let mut draft = TextDraft::new(0, None, rect, "Typed".into(), default_style());
@@ -1555,7 +1555,7 @@ mod revert_draft_tests {
             press(&mut h, "Save");
             assert!(h.state().views.is_empty(), "the tab closes once saved");
 
-            let mut reopened = PdfCraftApp::new();
+            let mut reopened = PdfCraftApp::for_unit_tests();
             reopened.open_bytes("source.pdf", Some(path.clone()), std::fs::read(&path).unwrap()).unwrap();
             let doc = reopened.session.get(reopened.views[0].id).unwrap();
             assert!(doc.added().iter().any(|a| matches!(&a.content, AddedContent::Text(t) if t.text == "Typed")), "quit: {quit}");
@@ -1567,7 +1567,7 @@ mod revert_draft_tests {
     /// is the saved one again, and nothing changes it after.
     #[test]
     fn revert_runs_no_exit_for_the_field_that_had_the_focus() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("focus.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
         let id = app.views[0].id;
         let count = |app: &PdfCraftApp, name: &str| {
@@ -1587,7 +1587,7 @@ mod revert_draft_tests {
     /// field) runs them before anything reads the document: `hint`'s enter clears its "Type here".
     #[test]
     fn committing_the_form_runs_the_focus_scripts_of_a_move_not_yet_run() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("focus.pdf", None, pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template())).unwrap();
         let hint = |app: &PdfCraftApp| {
             app.session
@@ -1631,7 +1631,7 @@ mod revert_draft_tests {
         }
         pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         for (typed, shown) in [(false, "new"), (true, "typed")] {
-            let mut app = PdfCraftApp::new();
+            let mut app = PdfCraftApp::for_unit_tests();
             app.open_bytes("hot.pdf", None, pdf.clone()).unwrap();
             let hot = app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "hot").unwrap().obj;
             let text = if typed { "typed" } else { "old" };

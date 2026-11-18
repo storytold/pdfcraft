@@ -31,7 +31,7 @@ fn a_custom_paper_cannot_take_a_standard_name() {
     let settings = serde_json::json!({
         "print_custom_papers": [paper("A4"), paper("Label"), paper("us letter")],
     });
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     restore(&mut fresh, &settings.to_string());
     let names: Vec<&str> = fresh.print_draft.custom_papers.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["Label"]);

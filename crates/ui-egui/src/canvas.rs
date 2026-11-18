@@ -1714,3 +1714,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
 mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
+pub(crate) mod page_box_drag;
+pub(crate) use page_box_drag::PageBoxDrag;
+pub(crate) mod page_menu;
+pub(crate) mod page_select;

@@ -62,11 +62,11 @@ fn named_comments(n: usize) -> Vec<u8> {
 /// The app with `bytes` open and each of `options` set, stepped at 60 frames a second.
 fn harness(bytes: Vec<u8>, options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("work.pdf", None, bytes).expect("opens");
         for (key, value) in options {
-            app.set_option(key, value).unwrap();
+            app.set_option(&egui::Context::default(), key, value).unwrap();
         }
         app
     });

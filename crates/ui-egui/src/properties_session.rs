@@ -332,7 +332,7 @@ mod tests {
 
     /// Open a one-page document with its Properties dialog and a pending title edit.
     fn app() -> (PdfCraftApp, egui::Context) {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let ctx = egui::Context::default();
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         app.open_bytes("properties.pdf", None, bytes.as_ref().clone()).unwrap();

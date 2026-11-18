@@ -1726,7 +1726,7 @@ mod tests {
     /// page, against a real job's guard.
     fn app_review(words: Vec<Vec<PlacedWord>>) -> (PdfCraftApp, DocId) {
         let blank = Session::new().create_blank(612.0, 792.0, words.len()).expect("fixture").to_vec();
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.open_bytes("blank.pdf", None, blank).expect("fixture");
         let id = app.active_ids().expect("open").1;
         let job = app.session.ocr_job(id, &[], OcrSettings::default()).expect("fixture");
@@ -2250,7 +2250,7 @@ mod tests {
     /// is rejected the document closes.
     #[test]
     fn closing_the_reviewed_document_brings_its_review_forward() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
         for name in ["a.pdf", "b.pdf", "c.pdf"] {
             app.open_bytes(name, None, bytes.clone()).expect("fixture");
@@ -2282,7 +2282,7 @@ mod tests {
 
     /// Three open documents with a review of the first one, a word of it corrected.
     fn reviewing_the_first_of_three() -> (PdfCraftApp, DocId) {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
         for name in ["a.pdf", "b.pdf", "c.pdf"] {
             app.open_bytes(name, None, bytes.clone()).expect("fixture");
@@ -2362,7 +2362,7 @@ mod tests {
     fn quitting_brings_an_open_review_forward() {
         // PLAN: assumed `PdfCraftApp::close_requested(&mut self) -> CloseDecision` (pdf-shell-w15) and the shell's `CloseDecision` at this path.
         use craft::ui::shell::embed::CloseDecision;
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
         for name in ["a.pdf", "b.pdf"] {
             app.open_bytes(name, None, bytes.clone()).expect("fixture");

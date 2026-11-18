@@ -15,6 +15,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 use crate::gpu;
+use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     harness_bytes(FIXTURE)
@@ -23,12 +24,12 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 fn harness_bytes(fixture: &[u8]) -> Harness<'static, PdfCraftApp> {
     let fixture = fixture.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, fixture.clone()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app.set_option("author", "Ada").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Ada").unwrap();
         app
     });
     h.run_steps(5);
@@ -106,7 +107,7 @@ fn the_line_mark_runs_across_turned_pages() {
             s.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees }).unwrap();
         }
         h.run_steps(4);
-        assert!(h.state_mut().execute("sign.fill.line"));
+        assert!(h.execute("sign.fill.line"));
         click(&mut h, 150.0, 350.0);
         let s = h.state();
         let info = &s.session.get(s.views[0].id).unwrap().info;
@@ -120,14 +121,14 @@ fn the_line_mark_runs_across_turned_pages() {
 #[test]
 fn text_marks_and_date() {
     let mut h = harness();
-    assert!(h.state_mut().execute("sign.fill.check"));
+    assert!(h.execute("sign.fill.check"));
     assert!(matches!(h.state().quick_tool, QuickTool::Fill(_)));
     click(&mut h, 50.0, 350.0);
     click(&mut h, 80.0, 350.0);
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "checkmarks stay repeatable");
-    h.state_mut().execute("sign.fill.date");
+    h.execute("sign.fill.date");
     click(&mut h, 50.0, 300.0);
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Ada Lovelace".into()));
     h.run_steps(1);
@@ -148,7 +149,7 @@ fn type_box_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
 #[test]
 fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("\nAda\nLovelace\n".into()));
     h.run_steps(1);
@@ -165,7 +166,7 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
 #[test]
 fn escape_leaves_the_fill_and_sign_tools() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     assert!(h.state().views[0].fill_text.is_some(), "a box is open");
     h.key_press(egui::Key::Escape);
@@ -179,7 +180,7 @@ fn escape_leaves_the_fill_and_sign_tools() {
     assert!(h.state().views[0].fill_text.is_none(), "no new box");
     assert!(items(&h).is_empty(), "nothing was added: {:?}", items(&h));
     // A mark tool too.
-    h.state_mut().execute("sign.fill.check");
+    h.execute("sign.fill.check");
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
     h.key_press(egui::Key::Escape);
@@ -192,7 +193,7 @@ fn escape_leaves_the_fill_and_sign_tools() {
 #[test]
 fn escape_leaves_the_text_tool_in_two_presses_after_a_selection() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Ada".into()));
     h.run_steps(1);
@@ -214,7 +215,7 @@ fn escape_leaves_the_text_tool_in_two_presses_after_a_selection() {
 #[test]
 fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     h.run_steps(2);
     h.get_by_label("Font size");
     h.state_mut().fill_text_size = 24.0;
@@ -228,7 +229,7 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
         h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Larger text")).unwrap();
     assert!(annotation.rect[3] - annotation.rect[1] > 24.0, "24 pt text has a larger annotation: {annotation:?}");
     let settings = h.state().persist();
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&settings);
     assert_eq!(restored.fill_text_size, 24.0);
     restored.restore(r#"{"fill_text_size":1000000}"#);
@@ -240,7 +241,7 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
 #[test]
 fn fill_text_size_resizes_the_selected_text() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Resize me".into()));
     h.run_steps(1);
@@ -298,7 +299,7 @@ fn fill_text_size_resizes_the_selected_text() {
 #[test]
 fn dragging_the_font_size_resizes_the_selected_text_to_where_the_drag_ends() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Drag me".into()));
     h.run_steps(1);
@@ -362,9 +363,9 @@ fn drawn_sizes(h: &Harness<'static, PdfCraftApp>, text: &str) -> Vec<f32> {
 fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
     for rotate in ["0", "90"] {
         let mut h = harness();
-        h.state_mut().set_option("rotate", rotate).unwrap();
+        h.set_option("rotate", rotate).unwrap();
         h.run_steps(3);
-        h.state_mut().execute("sign.fill.text");
+        h.execute("sign.fill.text");
         click(&mut h, 50.0, 250.0);
         h.event(egui::Event::Text("Ada".into()));
         h.run_steps(2);
@@ -388,7 +389,7 @@ fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
 #[test]
 fn the_toolbar_shows_and_changes_the_selected_texts_border() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Framed".into()));
     h.run_steps(1);
@@ -434,7 +435,7 @@ fn the_toolbar_shows_and_changes_the_selected_texts_border() {
 fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     use pdfcraft_engine::BorderShape;
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     h.run_steps(2);
     assert_eq!(h.query_all_by_label("Border shape").count(), 0, "no shape without a border");
     h.state_mut().fill_text_border = 1.0;
@@ -490,7 +491,7 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
     assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("Rectangle")), "the selected text's own");
 
     // The circle for new text lasts until PdfCraft quits; a saved default is read back.
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&h.state().persist());
     assert_eq!(restored.fill_text_border_shape, BorderShape::Rectangle);
     restored.restore(r#"{"fill_text_border_shape":"oval"}"#);
@@ -505,7 +506,7 @@ fn typed_text_takes_an_oval_or_a_circle_from_the_toolbar() {
 fn no_border_takes_the_oval_or_circle_away_too() {
     use pdfcraft_engine::BorderShape;
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     h.state_mut().fill_text_border = 1.0;
     h.state_mut().fill_text_border_shape = BorderShape::Circle;
     h.run_steps(2);
@@ -551,7 +552,7 @@ fn no_border_takes_the_oval_or_circle_away_too() {
 #[test]
 fn fill_text_border_frames_new_and_selected_text() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     h.run_steps(2);
     h.get_by_label("Border:");
     let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
@@ -594,7 +595,7 @@ fn fill_text_border_frames_new_and_selected_text() {
 
     // The toolbar's border lasts until PdfCraft quits; a saved default is read back.
     let settings = h.state().persist();
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&settings);
     assert_eq!(restored.fill_text_border, 0.0);
     restored.restore(r#"{"fill_text_border":2}"#);
@@ -609,7 +610,7 @@ fn fill_text_border_frames_new_and_selected_text() {
 fn typed_text_made_default_is_what_new_text_gets() {
     use pdfcraft_engine::{BorderShape, Edit};
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     let type_at = |h: &mut Harness<'static, PdfCraftApp>, y: f32, text: &str| {
         click(h, 50.0, y);
         h.event(egui::Event::Text(text.into()));
@@ -637,7 +638,7 @@ fn typed_text_made_default_is_what_new_text_gets() {
     h.run_steps(3);
     let s = h.state();
     assert_eq!((s.fill_text_size, s.fill_text_border, s.fill_text_border_color, s.fill_text_border_shape), (14.0, 1.5, red, BorderShape::Circle));
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&h.state().persist());
     assert_eq!(
         (restored.fill_text_size, restored.fill_text_border, restored.fill_text_border_color, restored.fill_text_border_shape),
@@ -653,7 +654,7 @@ fn typed_text_made_default_is_what_new_text_gets() {
 #[test]
 fn fill_text_colour_survives_preview_commit_settings_and_save() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     h.run_steps(2);
     h.get_by_label("Colour").click();
     h.run_steps(2);
@@ -684,15 +685,15 @@ fn fill_text_colour_survives_preview_commit_settings_and_save() {
         .find(|a| a.contents.as_deref() == Some("Blue form text"))
         .unwrap();
     assert_eq!(saved.color, Some(expected));
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.restore(&h.state().persist());
     assert_eq!(restored.fill_text_color, color);
     restored.restore(r#"{"fill_text_color":[2,0,0]}"#);
     assert_eq!(restored.fill_text_color, color, "invalid saved colours are ignored");
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(2);
     assert!(!items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(2);
     assert!(items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
 }
@@ -700,7 +701,7 @@ fn fill_text_colour_survives_preview_commit_settings_and_save() {
 #[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
     h.run_steps(2);
     let empty = type_box_rect(&h).width();
@@ -713,7 +714,7 @@ fn the_type_box_grows_as_text_is_typed() {
 #[test]
 fn signing_draws_a_signature_once_and_places_it() {
     let mut h = harness();
-    assert!(h.state_mut().execute("sign.fill.signature"));
+    assert!(h.execute("sign.fill.signature"));
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Signature), "no signature yet: the pad opens");
     h.get_all_by_label("Draw").last().unwrap().click();
@@ -740,8 +741,8 @@ fn signing_draws_a_signature_once_and_places_it() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
     // The signature is remembered (persisted with the app's settings).
     let saved = h.state().persist();
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&saved);
     assert!(again.signature.is_some());
 }
@@ -750,7 +751,7 @@ fn signing_draws_a_signature_once_and_places_it() {
 fn typed_signatures_and_initials() {
     let mut h = harness();
     h.state_mut().comment_prefs.author = "Grace Hopper".into();
-    assert!(h.state_mut().execute("sign.fill.signature"));
+    assert!(h.execute("sign.fill.signature"));
     h.run_steps(2);
     // Type is the default, with the author's name filled in.
     h.get_by_label("Type your signature.");
@@ -762,7 +763,7 @@ fn typed_signatures_and_initials() {
     assert!(items(&h).iter().any(|(t, _)| t == "Stamp"), "typed signatures are filled outlines");
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     // Initials: their own pad (GH), then placed.
-    assert!(h.state_mut().execute("sign.fill.initials"));
+    assert!(h.execute("sign.fill.initials"));
     h.run_steps(2);
     h.get_by_label("Create initials");
     assert_eq!(h.state().signature_draft.text, "GH");
@@ -772,8 +773,8 @@ fn typed_signatures_and_initials() {
     assert_eq!(items(&h).iter().filter(|(t, _)| t == "Stamp").count(), 2);
     // Both are remembered.
     let saved = h.state().persist();
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.signature, h.state().signature);
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
@@ -784,7 +785,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
     h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     assert_eq!(h.state().dialog, None, "Sign still reuses the saved signature");
     click(&mut h, 40.0, 300.0);
@@ -827,8 +828,8 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
     click(&mut h, 40.0, 100.0);
     assert_eq!(items(&h).len(), 3);
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, Some(SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
@@ -839,7 +840,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
     h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 300.0);
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
     h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
@@ -852,8 +853,8 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.run_steps(3);
     assert_eq!(h.state().signature, None);
     assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&h.state().persist());
     assert_eq!(again.signature, None, "removal survives restart");
     h.get_by_label("Add signature").click();
@@ -887,7 +888,7 @@ fn long_typed_names_fit_the_placed_signature_and_keep_every_outline() {
     assert!(contours.iter().flatten().all(|p| p.iter().all(|v| (0.0..=1.0).contains(v))), "all ink stays inside the appearance bounds");
     let mut h = harness();
     h.state_mut().signature = Some(sig.clone());
-    h.state_mut().execute("sign.fill.signature.change");
+    h.execute("sign.fill.signature.change");
     h.run_steps(3);
     assert_eq!(h.state().signature_draft.text, text);
     h.get_by_label("Apply").click();
@@ -930,7 +931,7 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
     let path = signature_file("import");
     let mut h = harness();
     for (command, y, initials) in [("sign.fill.signature", 250.0, false), ("sign.fill.initials", 150.0, true)] {
-        h.state_mut().execute(command);
+        h.execute(command);
         h.run_steps(2);
         h.get_by_label("Image").click();
         h.run_steps(2);
@@ -958,13 +959,13 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
     assert_eq!(doc.can_undo(), Some("Add initials"));
     let settings = state.persist();
     assert!(!settings.contains(&path.to_string_lossy().to_string()), "only the image is saved, never its source path");
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&settings);
     assert_eq!(again.signature, state.signature);
     assert_eq!(again.initials, state.initials);
     let saved_image = state.signature.clone();
-    h.state_mut().execute("sign.fill.signature.change");
+    h.execute("sign.fill.signature.change");
     h.run_steps(2);
     assert!(h.state().signature_draft.image_mode);
     assert!(h.state().signature_draft.image.is_some());
@@ -973,14 +974,14 @@ fn image_signatures_and_initials_can_be_imported_placed_and_remembered() {
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().signature, saved_image);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(items(&h).len(), 1);
-    h.state_mut().execute("edit.redo");
+    h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!(items(&h).len(), 2);
     // Show the saved preview cards in the actual shell as well as the dialog.
-    h.state_mut().set_option("tool", "fill_sign").unwrap();
+    h.set_option("tool", "fill_sign").unwrap();
     h.run_steps(3);
     h.get_by_label("Use signature");
     h.get_by_label("Use initials");
@@ -1005,7 +1006,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
         style: pdfcraft_engine::LinkStyle::default(),
     });
     h.state_mut().signature = Some(SavedSig::Image(image));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     // Exercise document rotation and view rotation separately and together. The image is upright
     // as displayed, whatever the page's /Rotate; the view rotation turns the whole screen.
     let mut previous_document_rotation = 0;
@@ -1018,7 +1019,7 @@ fn image_signature_preview_follows_pointer_at_page_size_with_zoom_and_rotation()
         while h.state().views[0].rotation != view_rotation {
             h.state_mut().views[0].rotate_view(true);
         }
-        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.set_option("zoom", zoom).unwrap();
         h.run_steps(3);
         for y in [250.0, 150.0] {
             h.hover_at(at(&h, 40.0, y));
@@ -1069,7 +1070,7 @@ fn image_signature_placement_selects_resize_handles_and_requires_reselecting_to_
     h.state_mut().signature = Some(SavedSig::Image(image.clone()));
     h.state_mut().initials = Some(SavedSig::Image(image));
     h.state_mut().comment_prefs.pinned = true;
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "signatures place once even when comment tools are pinned");
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
@@ -1106,10 +1107,10 @@ fn image_signature_placement_selects_resize_handles_and_requires_reselecting_to_
     h.run_steps(2);
     click(&mut h, 40.0, 150.0);
     assert_eq!(items(&h).len(), 1, "a later page click doesn't add another signature");
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 150.0);
     assert_eq!(items(&h).len(), 2, "selecting the saved signature again places another");
-    h.state_mut().execute("sign.fill.initials");
+    h.execute("sign.fill.initials");
     click(&mut h, 40.0, 100.0);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 2)));
@@ -1143,7 +1144,7 @@ fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_hand
     let path = signature_file("live");
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     h.state_mut().signature = Some(SavedSig::Image(image));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
     rendered_ink(&mut h, 90.0, 250.0);
     let generation = h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
@@ -1258,9 +1259,9 @@ fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
         while h.state().views[0].rotation != view_rotation {
             h.state_mut().views[0].rotate_view(true);
         }
-        h.state_mut().set_option("zoom", "100").unwrap();
+        h.set_option("zoom", "100").unwrap();
         h.state_mut().signature = Some(SavedSig::Image(image.clone()));
-        h.state_mut().execute("sign.fill.signature");
+        h.execute("sign.fill.signature");
         h.run_steps(3);
         // Points as displayed (from the shown page's bottom-left, y up). The signature is upright
         // as displayed, so the same points apply whatever the page's /Rotate.
@@ -1320,7 +1321,7 @@ fn image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen(
     let image = pdfcraft_engine::SignatureImage::read(std::fs::File::open(&path).unwrap()).unwrap();
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Image(image));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 70.0, 210.0);
     // Side handles stretch just their own axis; pointer movement along the other axis is ignored.
     for (from, to, expected) in
@@ -1391,7 +1392,7 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     let mut h = harness();
     let original = SavedSig::Typed("Ada Lovelace".into());
     h.state_mut().signature = Some(original.clone());
-    h.state_mut().execute("sign.fill.signature.change");
+    h.execute("sign.fill.signature.change");
     h.run_steps(2);
     h.get_by_label("Image").click();
     h.run_steps(2);
@@ -1413,7 +1414,7 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     assert_eq!(h.state().signature, Some(original));
     assert!(items(&h).is_empty());
     // A picker answer from a closed dialog cannot populate a later draft.
-    h.state_mut().execute("sign.fill.signature.change");
+    h.execute("sign.fill.signature.change");
     h.run_steps(2);
     h.get_by_label("Image").click();
     h.run_steps(2);
@@ -1425,8 +1426,8 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
     h.run_steps(3);
     assert!(h.state().signature_draft.image.is_none());
     // Malformed settings are ignored while legacy typed/drawn values still restore.
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(r#"{"signature_text":"Ada","signature_image":{"Image":"bm90IGFuIGltYWdl"},"initials":{"Image":"%%%"}}"#);
     assert_eq!(again.signature, Some(SavedSig::Typed("Ada".into())));
     assert!(again.initials.is_none());
@@ -1435,15 +1436,15 @@ fn image_import_cancel_clear_and_errors_preserve_saved_signatures() {
 
 #[test]
 fn flatten_on_save_is_off_by_default_and_round_trips() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     assert!(!app.flatten_fill_sign_on_save);
-    app.set_option("flatten-fill-sign", "true").unwrap();
-    assert!(app.set_option("flatten-fill-sign", "yes").is_err());
-    let mut restored = PdfCraftApp::new();
+    app.set_option(&egui::Context::default(), "flatten-fill-sign", "true").unwrap();
+    assert!(app.set_option(&egui::Context::default(), "flatten-fill-sign", "yes").is_err());
+    let mut restored = crate::control::new_app();
     restored.restore(&app.persist());
     assert!(restored.flatten_fill_sign_on_save);
-    restored.set_option("flatten-fill-sign", "false").unwrap();
-    let mut again = PdfCraftApp::new();
+    restored.set_option(&egui::Context::default(), "flatten-fill-sign", "false").unwrap();
+    let mut again = crate::control::new_app();
     again.restore(&restored.persist());
     assert!(!again.flatten_fill_sign_on_save);
 }
@@ -1465,7 +1466,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
         author: "Ada".into(),
     });
 
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
@@ -1481,7 +1482,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
-    let mut reopened = PdfCraftApp::new();
+    let mut reopened = crate::control::new_app();
     reopened.open_bytes("kept.pdf", None, std::fs::read(&kept).unwrap()).unwrap();
     let texts: Vec<String> =
         reopened.session.get(reopened.views[0].id).unwrap().info.annotations.iter().map(|a| a.contents.clone().unwrap_or_default()).collect();
@@ -1501,7 +1502,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
-    let mut flattened = PdfCraftApp::new();
+    let mut flattened = crate::control::new_app();
     flattened.open_bytes("flat.pdf", None, std::fs::read(&flat).unwrap()).unwrap();
     let left = &flattened.session.get(flattened.views[0].id).unwrap().info.annotations;
     assert!(left.is_empty(), "text and the check mark are page content: {left:?}");
@@ -1617,10 +1618,10 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
         let mut h = harness();
         h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
         h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
-        h.state_mut().execute("sign.fill.signature");
+        h.execute("sign.fill.signature");
         click(&mut h, 40.0, 250.0);
         let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
-        assert!(h.state_mut().execute(tool));
+        assert!(h.execute(tool));
         h.run_steps(2);
         let mid = ((placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
         h.hover_at(at(&h, mid.0, mid.1));
@@ -1660,12 +1661,12 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
     // A drawn signature in a saved and reopened file (read by the viewer, not the editor).
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Drawn(vec![vec![[0.05, 0.1], [0.3, 0.2], [0.55, 0.05], [0.95, 0.15]]]));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
     let saved = h.state().session.save_bytes(h.state().views[0].id).unwrap();
     let mut h = harness_bytes(&saved);
     let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
-    h.state_mut().execute("sign.fill.check");
+    h.execute("sign.fill.check");
     let mid = ((placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
     drag(&mut h, mid, (mid.0 + 40.0, mid.1 - 60.0));
     assert_rect(rects(&h)[0], [placed[0] + 40.0, placed[1] - 60.0, placed[2] + 40.0, placed[3] - 60.0]);
@@ -1674,7 +1675,7 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
     // comments.
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
     let id = h.state().views[0].id;
     let square = pdfcraft_engine::Shape::Rectangle { rect: [100.0, 80.0, 200.0, 140.0] };
@@ -1682,7 +1683,7 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
     let new = pdfcraft_engine::NewAnnotation { page: 0, shape: square, style, contents: String::new(), author: "Ada".into() };
     h.state_mut().session.apply(id, pdfcraft_engine::Edit::AddAnnotation(new)).unwrap();
     h.run_steps(2);
-    h.state_mut().execute("sign.fill.check");
+    h.execute("sign.fill.check");
     click(&mut h, 60.0, 100.0);
     click(&mut h, 150.0, 110.0);
     assert_eq!(items(&h).len(), 4, "{:?}", items(&h));
@@ -1695,7 +1696,7 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
 fn drawn_signatures_resize_from_their_corners() {
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Drawn(vec![vec![[0.05, 0.1], [0.3, 0.2], [0.55, 0.05], [0.95, 0.15]]]));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 40.0, 250.0);
     let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
     assert_eq!(h.state().quick_tool, QuickTool::Select);
@@ -1759,7 +1760,7 @@ fn lines_grow_and_shrink_with_their_handles_before_release() {
             h.state_mut().views[0].rotate_view(true);
         }
         h.run_steps(3);
-        assert!(h.state_mut().execute("sign.fill.line"));
+        assert!(h.execute("sign.fill.line"));
         click(&mut h, 100.0, 250.0);
         assert_rect(rects(&h)[0], line(-18.0, 18.0));
         // In line mode a click on the line picks it up, with its handles.
@@ -1813,7 +1814,7 @@ fn lines_grow_and_shrink_with_their_handles_before_release() {
 fn select_tool_picks_up_a_signature_over_a_form_field() {
     let mut h = harness_bytes(include_bytes!("../data/form.pdf"));
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     click(&mut h, 150.0, 270.0);
     let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
     // Onto the `city` text field (user space y 180..200).
@@ -1907,7 +1908,7 @@ fn scanned_signatures_are_framed_cleaned_adjusted_placed_and_remembered() {
     let _gpu = gpu();
     let path = signature_photo("scan");
     let mut h = harness();
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     h.get_by_label("Scan").click();
     h.run_steps(2);
@@ -1989,8 +1990,8 @@ fn scanned_signatures_are_framed_cleaned_adjusted_placed_and_remembered() {
     let settings = h.state().persist();
     assert!(!settings.contains(&path.to_string_lossy().to_string()));
     assert!(settings.len() < 200_000, "only the trimmed signature is kept: {} bytes", settings.len());
-    let mut again = PdfCraftApp::new();
-    again.set_option("language", "en").unwrap();
+    let mut again = crate::control::new_app();
+    again.set_option(&egui::Context::default(), "language", "en").unwrap();
     again.restore(&settings);
     assert_eq!(again.signature, h.state().signature);
     std::fs::remove_file(path).unwrap();
@@ -2002,7 +2003,7 @@ fn scan_cancel_errors_and_stale_answers_preserve_saved_signatures() {
     let mut h = harness();
     let original = SavedSig::Typed("Ada Lovelace".into());
     h.state_mut().signature = Some(original.clone());
-    h.state_mut().execute("sign.fill.signature.change");
+    h.execute("sign.fill.signature.change");
     h.run_steps(2);
     h.get_by_label("Scan").click();
     h.run_steps(2);
@@ -2054,7 +2055,7 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     let photo = signature_photo("drop");
     let mut h = harness();
     let tabs = h.state().views.len();
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     h.get_by_label("Scan").click();
     h.run_steps(2);
@@ -2091,7 +2092,7 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     let mut h = harness();
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 300.0);
     let signed = |h: &Harness<'static, PdfCraftApp>| {
@@ -2108,7 +2109,7 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     assert_eq!(signed(&h), 1, "still a removable comment");
     assert!(h.state_mut().save_active(SaveTarget::InPlace), "no new signature: no question");
     // A new signature asks again; Lock and save with Don't ask again flattens and remembers.
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 200.0);
     assert!(!h.state_mut().save_active(SaveTarget::InPlace));
@@ -2124,7 +2125,7 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     // where it was easy to miss, no longer has it.
     h.state_mut().flatten_fill_sign_on_save = false;
     // With the signature tool on, the quick tool button opens the Sign menu.
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
@@ -2153,7 +2154,7 @@ fn a_save_that_fails_after_the_lock_question_asks_again() {
     let mut h = harness();
     h.state_mut().save_override = Some(bad.to_string_lossy().into_owned());
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 300.0);
     assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
@@ -2182,7 +2183,7 @@ fn reverting_forgets_a_signature_just_placed() {
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
     // An earlier signature, saved as a comment: the file keeps a Fill & Sign mark.
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 300.0);
     assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
@@ -2190,7 +2191,7 @@ fn reverting_forgets_a_signature_just_placed() {
     h.get_by_label("Keep editable").click();
     h.run_steps(3);
     // A new signature, then Revert: the new one is gone, the saved one stays.
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 200.0);
     h.state_mut().revert_active();
@@ -2212,7 +2213,7 @@ fn placing_a_signature_offers_to_lock_it_now() {
     let out = std::env::temp_dir().join(format!("pdfcraft-lock-now-{}.pdf", std::process::id()));
     let place = |h: &mut Harness<'static, PdfCraftApp>, y: f32| {
         h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-        h.state_mut().execute("sign.fill.signature");
+        h.execute("sign.fill.signature");
         h.run_steps(2);
         click(h, 40.0, y);
         h.run_steps(2);
@@ -2231,7 +2232,7 @@ fn placing_a_signature_offers_to_lock_it_now() {
     assert!(h.query_by_label(NOTICE).is_none(), "nothing left to lock");
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "locked, not saved");
     // Undo brings the movable signature back, with the notice and the save-time question.
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(3);
     assert_eq!(marks(&h), 1);
     h.get_by_label(NOTICE);
@@ -2288,7 +2289,7 @@ fn placing_a_signature_offers_to_lock_it_now() {
 fn locking_a_signature_clears_the_comment_selection() {
     let mut h = harness();
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 300.0);
     h.run_steps(2);
@@ -2318,7 +2319,7 @@ fn a_lock_that_fails_keeps_the_question() {
     let mut h = harness_bytes(&pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 300.0);
     let signed = |h: &Harness<'static, PdfCraftApp>| {
@@ -2348,7 +2349,7 @@ fn a_lock_that_fails_keeps_the_question() {
 fn the_lock_question_is_skipped_or_kept_where_it_must_be() {
     let place = |h: &mut Harness<'static, PdfCraftApp>| {
         h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-        h.state_mut().execute("sign.fill.signature");
+        h.execute("sign.fill.signature");
         h.run_steps(2);
         click(h, 40.0, 300.0);
     };
@@ -2380,7 +2381,7 @@ fn the_lock_question_is_skipped_or_kept_where_it_must_be() {
     let mut h = harness();
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     place(&mut h);
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(2);
     assert!(h.state_mut().save_active(SaveTarget::InPlace), "no question after the signature was undone");
     let _ = std::fs::remove_file(&out);
@@ -2412,7 +2413,7 @@ fn cancelling_the_lock_question_saves_nothing() {
     let mut h = harness();
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().execute("sign.fill.signature");
+    h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 300.0);
     assert!(!h.state_mut().save_active(SaveTarget::InPlace));
@@ -2428,7 +2429,7 @@ fn cancelling_the_lock_question_saves_nothing() {
     h.run_steps(3);
     assert!(out.exists() && !h.state().ask_to_lock_signatures);
     let restored = {
-        let mut a = PdfCraftApp::new();
+        let mut a = crate::control::new_app();
         a.restore(&h.state().persist());
         a.ask_to_lock_signatures
     };
@@ -2477,8 +2478,8 @@ const HAND_ON_EVERY_TAB: [(&str, egui::CursorIcon); 4] = [
 #[test]
 fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     let mut h = harness();
-    assert!(h.state_mut().execute("sign.fill.text"));
-    h.state_mut().set_option("left", "closed").unwrap();
+    assert!(h.execute("sign.fill.text"));
+    h.set_option("left", "closed").unwrap();
     // The page across the window, so the box reaches under the tabs.
     h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
     h.run_steps(4);
@@ -2498,7 +2499,7 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
 }
 
 fn place_selected_text(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
-    h.state_mut().execute("sign.fill.text");
+    h.execute("sign.fill.text");
     click(h, 50.0, 250.0);
     h.event(egui::Event::Text(text.into()));
     h.run_steps(1);
@@ -2562,7 +2563,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         assert!(color[2] > color[0], "blue was selected: {color:?}");
         assert_ne!(before, Some(color));
         assert_eq!(placed_color(h, "Paint me"), Some(color));
-        h.state_mut().execute("edit.undo");
+        h.execute("edit.undo");
         h.run_steps(3);
         assert_eq!(placed_color(h, "Paint me"), before, "one undo takes the colour back");
     };
@@ -2587,7 +2588,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
-        h.state_mut().execute("sign.fill.check");
+        h.execute("sign.fill.check");
         h.state_mut().quick_tool = QuickTool::Select;
         h.run_steps(2);
         h.get_by_label("Fill & Sign: Checkmark").click();
@@ -2596,12 +2597,12 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
     };
     // A fill tool restored from full screen shows without replacing the last selection.
     let restored_tool: Row = |h| {
-        h.state_mut().execute("sign.fill.date");
+        h.execute("sign.fill.date");
         h.run_steps(2);
         let ctx = h.ctx.clone();
         h.state_mut().set_full_screen(&ctx, true);
         h.run_steps(2);
-        h.state_mut().execute("sign.fill.check");
+        h.execute("sign.fill.check");
         h.run_steps(2);
         h.state_mut().set_full_screen(&ctx, false);
         h.run_steps(2);
@@ -2672,7 +2673,7 @@ fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
     assert!(resized > height, "the first size applies: {height} -> {resized}");
     type_size(&mut h, "36.1231");
     assert_eq!(h.state().fill_text_size, 36.1231);
-    h.state_mut().execute("edit.undo");
+    h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(placed_height(&h, "Round me"), height, "one undo takes back the only change; the rounded retype added no step");
 }
@@ -2681,19 +2682,19 @@ fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
 fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
     let mut h = harness();
     let mode = h.state().mode;
-    h.state_mut().set_option("mode", "read").unwrap();
+    h.set_option("mode", "read").unwrap();
     h.run_steps(2);
-    h.state_mut().set_option("quick", "fill-date").unwrap();
+    h.set_option("quick", "fill-date").unwrap();
     h.run_steps(2);
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.state_mut().mode = mode;
     h.run_steps(2);
     h.get_by_label("Fill & Sign: Date");
 
     h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
-    h.state_mut().set_option("mode", "read").unwrap();
+    h.set_option("mode", "read").unwrap();
     h.run_steps(2);
-    h.state_mut().execute("sign.fill.initials.change");
+    h.execute("sign.fill.initials.change");
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(3);
@@ -2735,7 +2736,7 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
     let _gpu = shots.then(gpu);
     let mut h = harness();
-    assert!(h.state_mut().execute("sign.fill.text"));
+    assert!(h.execute("sign.fill.text"));
     click(&mut h, 50.0, 300.0);
     let initial_height = type_box_rect(&h).height();
     fill_key(&mut h, egui::Key::Enter);

@@ -7,8 +7,8 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
     });
@@ -26,7 +26,7 @@ fn home_community_card_closes_for_this_run() {
     assert!(h.query_by_label("Join the ArtCraft community").is_none());
     assert!(h.query_by_label("Join our Discord").is_none());
     // Not remembered: a fresh app shows the card again.
-    assert!(!PdfCraftApp::new().community_card_closed);
+    assert!(!crate::control::new_app().community_card_closed);
 }
 
 /// Runs frames until the node labelled `label` exists and has stopped moving, then returns it.
@@ -51,7 +51,7 @@ fn settled<'a>(h: &'a mut Harness<'static, PdfCraftApp>, label: &'a str) -> egui
 
 #[test]
 fn about_dialog_has_contributors_and_models_tabs() {
-    let mut h = harness(|app| app.set_option("dialog", "about").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "dialog", "about").unwrap());
     settled(&mut h, "Contributors").click();
     // The owner is always in the compiled-in credits (contributors/contributors.json), shown by username.
     settled(&mut h, "@echelon");

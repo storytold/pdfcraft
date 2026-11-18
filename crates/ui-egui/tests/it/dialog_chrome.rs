@@ -4,6 +4,7 @@ use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 /// A one-page file.
 fn fixture() -> Vec<u8> {
@@ -40,10 +41,10 @@ fn audit(app: &PdfCraftApp) -> Vec<pdfcraft_engine::optimize::SpaceUse> {
 /// An app with `doc.pdf` open and the Space Audit tab of Properties showing.
 fn space_audit_harness() -> Harness<'static, PdfCraftApp> {
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, fixture()).unwrap();
-        app.set_option("dialog", "space-audit").unwrap();
+        app.set_option(&egui::Context::default(), "dialog", "space-audit").unwrap();
         app
     })
 }
@@ -88,11 +89,11 @@ fn space_audit_tab_measures_again_after_an_edit() {
 #[test]
 fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         // Large enough that the drop-down sits outside the dialog.
-        app.set_option("zoom", "300").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "300").unwrap();
         app
     });
     for _ in 0..30 {
@@ -105,7 +106,7 @@ fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
     h.hover_at(field);
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "the drop-down takes clicks");
-    h.state_mut().set_option("dialog", "security").unwrap();
+    h.set_option("dialog", "security").unwrap();
     h.run_steps(4);
     let card = dialog_rect(&h);
     assert!(!card.contains(field), "the drop-down {field:?} is beside the dialog {card:?}, under its backdrop");

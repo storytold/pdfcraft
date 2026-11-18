@@ -5,12 +5,13 @@ use egui::{Key, Modifiers};
 use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         app.run_inline = true;
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app
     });
@@ -54,7 +55,7 @@ fn a_late_edit_turns_the_page_in_both_panes() {
     wait(&mut h, "both panes drawn", |s| portrait(s, 0) && portrait(s, 1));
     let id = h.state().views[0].id;
     let rotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages[0].rotation;
-    h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();
+    h.set_option("palette", "rotate pages clockwise").unwrap();
     h.run_steps(2);
     assert!(h.state().palette_open);
     h.key_press(Key::Enter);

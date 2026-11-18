@@ -24,15 +24,15 @@ startxref
 /// Start a fresh shell with the settings a previous process saved.
 fn harness(saved: Option<PdfCraftSettings>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         if let Some(saved) = &saved {
             app.apply_settings(saved);
         }
-        app.set_option("language", "en").unwrap();
-        app.set_option("author", "Tester").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         app.open_bytes("pin.pdf", None, PDF.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("quick", "callout").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "callout").unwrap();
         app
     });
     crate::support::wait_until(&mut h, "the blank page", |app| app.views[0].page_screen_rect(0).is_some() && !app.render_pending());

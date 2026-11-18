@@ -17,6 +17,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+use crate::support::AppHarness as _;
 
 /// An `n`-page document with a proper xref table.
 fn fixture(n: usize) -> Vec<u8> {
@@ -117,7 +118,7 @@ fn rig(docs: &[usize], files: ScriptedFiles) -> Rig {
     let run = jobs.clone();
     let h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_host(host, services);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for (i, n) in docs.iter().enumerate() {
             app.open_bytes(&format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
         }
@@ -154,7 +155,7 @@ fn file_open_returns_at_once_and_opens_the_pick_when_preparation_finishes() {
     std::fs::write(&file, fixture(2)).unwrap();
 
     let mut h = harness(&[]);
-    assert!(h.state_mut().execute("file.open"));
+    assert!(h.execute("file.open"));
     assert!(h.state().views.is_empty(), "the command must not wait for the picker");
     assert!(matches!(h.files.requests().first().map(|r| r.kind), Some(PickKind::Open | PickKind::OpenMany)));
     h.answer(Picked::Paths(vec![file.clone()]));
@@ -175,7 +176,7 @@ fn insert_from_file_uses_the_pick_on_the_next_frame() {
     std::fs::write(&file, fixture(2)).unwrap();
 
     let mut h = harness(&[3]);
-    assert!(h.state_mut().execute("page.insert"));
+    assert!(h.execute("page.insert"));
     h.steps(2);
     assert_eq!(pages(h.state(), 0), 3, "nothing is inserted until the pick arrives");
     h.answer(Picked::Paths(vec![file]));
@@ -191,7 +192,7 @@ fn a_pick_for_a_document_that_is_no_longer_active_is_dropped() {
 
     let mut h = harness(&[3, 4]);
     h.state_mut().active = Some(0);
-    assert!(h.state_mut().execute("page.insert"));
+    assert!(h.execute("page.insert"));
     // The user switches tabs before the pick arrives.
     h.state_mut().active = Some(1);
     h.answer(Picked::Paths(vec![file]));
@@ -229,7 +230,7 @@ fn save_as_writes_on_a_later_frame_including_edits_made_meanwhile() {
     let dir = scratch("save-as");
     let out = dir.join("saved.pdf");
     let mut h = harness(&[3]);
-    assert!(h.state_mut().execute("file.save_as"));
+    assert!(h.execute("file.save_as"));
     h.steps(2);
     assert!(!out.exists(), "the command must not wait for the picker");
     assert_eq!(h.files.open(), 1, "the Save picker is open");
@@ -248,7 +249,7 @@ fn save_on_close_closes_the_tab_only_once_the_file_is_written() {
     let out = dir.join("closed.pdf");
     let mut h = harness(&[2]);
     rotate_first_page(h.state_mut());
-    assert!(h.state_mut().execute("file.close"));
+    assert!(h.execute("file.close"));
     h.steps(2);
     assert_eq!(h.state().views.len(), 1, "a dirty document asks first");
     press(&mut h, "Save");
@@ -264,7 +265,7 @@ fn save_on_close_closes_the_tab_only_once_the_file_is_written() {
 fn a_cancelled_save_on_close_keeps_the_tab_open() {
     let mut h = harness(&[2]);
     rotate_first_page(h.state_mut());
-    assert!(h.state_mut().execute("file.close"));
+    assert!(h.execute("file.close"));
     h.steps(2);
     press(&mut h, "Save");
     h.answer(Picked::Cancelled); // the user cancels the save panel
@@ -280,7 +281,7 @@ fn close_all_saves_each_untitled_document_in_turn() {
         h.state_mut().active = Some(i);
         rotate_first_page(h.state_mut());
     }
-    assert!(h.state_mut().execute("file.close_all"));
+    assert!(h.execute("file.close_all"));
     h.steps(2);
     for (n, name) in ["first.pdf", "second.pdf"].iter().enumerate() {
         press(&mut h, "Save");
@@ -330,7 +331,7 @@ impl Default for Extract<'_> {
 
 /// Opens Extract pages through its command and fills it in; leaves the dialog open.
 fn open_extract(r: &mut Rig, e: Extract) {
-    assert!(r.state_mut().execute("page.extract"));
+    assert!(r.execute("page.extract"));
     r.steps(2);
     if let Some(pages) = e.pages {
         type_into(r, "Pages", pages);
@@ -427,7 +428,7 @@ fn texts_of(app: &PdfCraftApp, view: usize) -> Vec<String> {
 fn extract_pages_takes_the_page_ranges_typed_in_the_dialog() {
     let mut h = harness(&[6]);
     h.state_mut().views[0].select_pages(&[1]);
-    assert!(h.state_mut().execute("page.extract"));
+    assert!(h.execute("page.extract"));
     h.steps(2);
     assert!(h.get_by_label("Pages").value().unwrap_or_default().is_empty(), "opens on the selection");
     press(&mut h, "Cancel");
@@ -483,14 +484,14 @@ fn import_comments_takes_the_comments_of_another_pdf() {
     let path = dir.join("review.pdf");
     std::fs::write(&path, review).unwrap();
     let mut h = harness(&[1]);
-    assert!(h.state_mut().execute("comment.import"));
+    assert!(h.execute("comment.import"));
     h.steps(2);
     h.answer(Picked::Paths(vec![path]));
     let comments = |app: &PdfCraftApp| -> Vec<Option<String>> {
         app.session.get(app.views[0].id).unwrap().info.annotations.iter().map(|a| a.contents.clone()).collect()
     };
     assert_eq!(comments(h.state()), [Some("from the review".to_string())], "the review's comment is imported once");
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.steps(1);
     assert!(comments(h.state()).is_empty(), "the import undoes in one step");
     let _ = std::fs::remove_dir_all(&dir);
@@ -523,13 +524,13 @@ fn a_close_prompt_still_means_its_own_document_after_a_pending_save_closes_anoth
     let (b, c) = (h.state().views[1].id, h.state().views[2].id);
     // Save-and-close the first tab; its save panel is still open...
     h.state_mut().active = Some(0);
-    assert!(h.state_mut().execute("file.close"));
+    assert!(h.execute("file.close"));
     h.steps(2);
     press(&mut h, "Save");
     assert_eq!(h.files.open(), 1, "the first tab's save panel is open");
     // ...when the user asks to close the second one.
     h.state_mut().active = Some(1);
-    assert!(h.state_mut().execute("file.close"));
+    assert!(h.execute("file.close"));
     h.steps(2);
     h.answer(Picked::Paths(vec![dir.join("a.pdf")]));
     assert_eq!(h.state().views.len(), 2, "the first tab closed once saved");
@@ -548,7 +549,7 @@ fn a_watermark_file_from_browse_lands_only_in_the_dialog_that_asked() {
     std::fs::write(&file, fixture(1)).unwrap();
     for keep_open in [true, false] {
         let mut h = harness(&[1]);
-        assert!(h.state_mut().execute("edit.watermark"));
+        assert!(h.execute("edit.watermark"));
         h.steps(2);
         h.get_by_label("File").click();
         h.steps(2);
@@ -575,7 +576,7 @@ fn a_browser_insert_that_arrives_after_switching_documents_changes_neither() {
     // Issue #167: insert into A, open C before the file is read: the pages went into C.
     let mut h = harness(&[3, 1]);
     h.state_mut().active = Some(0);
-    assert!(h.state_mut().execute("page.insert"));
+    assert!(h.execute("page.insert"));
     h.steps(2);
     h.state_mut().active = Some(1);
     h.answer(Picked::Contents(vec![("b.pdf".into(), fixture(1))]));
@@ -592,7 +593,7 @@ fn replace_pages_applies_only_to_the_document_its_dialog_was_opened_on() {
     for switch in [false, true] {
         let mut h = harness(&[3, 3]);
         h.state_mut().active = Some(0);
-        assert!(h.state_mut().execute("page.replace"));
+        assert!(h.execute("page.replace"));
         h.steps(2);
         h.answer(Picked::Paths(vec![file.clone()]));
         h.get_by_label("Replace Pages");
@@ -670,7 +671,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
 
     let dir = scratch("startup-save");
     let path = dir.join("saved.pdf");
-    assert!(h.state_mut().execute("file.save"));
+    assert!(h.execute("file.save"));
     h.steps(2);
     h.answer(Picked::Paths(vec![path.clone()]));
     let saved = PageRenderer::new(std::sync::Arc::new(std::fs::read(&path).unwrap()), Default::default());
@@ -714,7 +715,7 @@ fn deliberate_browser_file_opens_still_activate_the_new_tab() {
     std::fs::write(&picked, fixture(2)).unwrap();
     let mut h = harness(&[3]);
     // The user's own Open, answered on the same frame the startup file arrives.
-    assert!(h.state_mut().execute("file.open"));
+    assert!(h.execute("file.open"));
     h.deliver("late.pdf", fixture(1));
     h.answer(Picked::Paths(vec![picked]));
     settle(&mut h, "both files", |app| app.views.len() == 3);
@@ -726,7 +727,7 @@ fn deliberate_browser_file_opens_still_activate_the_new_tab() {
 #[test]
 fn opening_a_file_picker_supersedes_the_startup_url_even_if_the_picker_is_cancelled() {
     let mut h = harness(&[]);
-    h.state_mut().execute("file.open");
+    h.execute("file.open");
     h.deliver("late.pdf", fixture(1));
     h.answer(Picked::Cancelled);
     assert_eq!(h.state().active, None, "the startup file doesn't replace the user's newer Open action");
@@ -834,7 +835,7 @@ fn a_late_startup_url_preserves_the_combine_files_tab() {
 #[test]
 fn a_late_startup_url_waits_for_an_existing_dialog_to_close() {
     let mut h = harness(&[3]);
-    assert!(h.state_mut().execute("app.preferences"));
+    assert!(h.execute("app.preferences"));
     h.steps(2);
     assert!(h.query_by_label("Preferences").is_some(), "the dialog is open");
     h.deliver("late.pdf", fixture(1));

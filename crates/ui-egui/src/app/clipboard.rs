@@ -409,7 +409,7 @@ mod review_tests {
     fn app_with_clipboard() -> (PdfCraftApp, Writes) {
         let writes: Writes = Arc::default();
         let record = writes.clone();
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.clipboard = Clipboard::new(EventClipboard::new(
             || 0,
             move |flavors| {

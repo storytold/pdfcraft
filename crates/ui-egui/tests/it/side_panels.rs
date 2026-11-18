@@ -4,6 +4,7 @@ use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -17,8 +18,8 @@ const NO_BOOKMARKS: &str = "This document has no bookmarks.";
 
 fn harness_sized(size: egui::Vec2, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
         setup(&mut app);
         app
@@ -57,8 +58,8 @@ fn divider_x(h: &Harness<'static, PdfCraftApp>) -> f32 {
 
 #[test]
 fn read_mode_shows_the_side_panel_without_tools() {
-    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
-    h.state_mut().set_option("mode", "read").unwrap();
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap());
+    h.set_option("mode", "read").unwrap();
     h.run_steps(4);
     assert!(h.query_by_label("Expand all tools").is_none());
     assert!(side(&h).right() < rail(&h).left() && side(&h).left() > WIDTH / 2.0);
@@ -73,7 +74,7 @@ fn read_mode_shows_the_side_panel_without_tools() {
 
 #[test]
 fn a_dragged_width_is_remembered_across_restarts() {
-    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap());
     let before = divider_x(&h);
     let edge = egui::pos2(before, side(&h).center().y);
     h.hover_at(edge);
@@ -96,7 +97,7 @@ fn a_dragged_width_is_remembered_across_restarts() {
 
 #[test]
 fn f4_toggles_the_side_panel_and_shift_f4_the_tools_panel() {
-    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let mut h = harness(|app| app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap());
     h.get_by_label(NO_BOOKMARKS);
     h.key_press(egui::Key::F4);
     h.run_steps(3);

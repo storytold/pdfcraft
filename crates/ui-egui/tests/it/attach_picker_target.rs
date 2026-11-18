@@ -12,6 +12,7 @@ use egui_kittest::Harness;
 use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// A one-page document with a proper xref table.
 fn fixture() -> Vec<u8> {
@@ -54,7 +55,7 @@ fn harness() -> (Harness<'static, PdfCraftApp>, Arc<ScriptedFiles>) {
 
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_host(host, services);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("a.pdf", None, fixture()).unwrap();
         app.open_bytes("b.pdf", None, fixture()).unwrap();
         jobs.run_all();
@@ -78,7 +79,7 @@ fn an_attachment_pick_is_dropped_when_the_user_switches_tabs() {
 
     let (mut h, files) = harness();
     h.state_mut().active = Some(0);
-    assert!(h.state_mut().execute("edit.attach"));
+    assert!(h.execute("edit.attach"));
     h.run_steps(2);
     // The user switches tabs before the pick arrives.
     h.state_mut().active = Some(1);

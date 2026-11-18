@@ -6,14 +6,15 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::LinkAction;
 use pdfcraft_ui_egui::PdfCraftApp;
+use crate::support::AppHarness as _;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     // 60 fps steps, so two clicks fall inside egui's double-click window.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option("zoom", "150").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         app
     });
     h.run_steps(6);
@@ -66,7 +67,7 @@ fn type_url(h: &mut Harness<'static, PdfCraftApp>) {
 
 /// Draws a link over `a`..`b` with the Link tool and confirms the dialog with a web address.
 fn draw_web_link(h: &mut Harness<'static, PdfCraftApp>, a: Pos2, b: Pos2) {
-    assert!(h.state_mut().execute("edit.link"));
+    assert!(h.execute("edit.link"));
     drag(h, a, b);
     h.get_by_label("Create Link");
     type_url(h);
@@ -101,7 +102,7 @@ fn drawing_editing_and_deleting_links() {
 fn link_properties_sets_the_page_view_zoom() {
     use pdfcraft_engine::LinkZoom;
     let mut h = harness();
-    assert!(h.state_mut().execute("edit.link"));
+    assert!(h.execute("edit.link"));
     let (a, b) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
     drag(&mut h, a, b);
     h.get_by_label("Create Link");
@@ -131,8 +132,8 @@ trailer << /Root 1 0 R >>
 fn an_appearance_edit_keeps_the_destination_as_written() {
     use pdfcraft_render::{DestView, LinkTarget};
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("positioned.pdf", None, POSITIONED.to_vec()).unwrap();
         app
     });
@@ -143,7 +144,7 @@ fn an_appearance_edit_keeps_the_destination_as_written() {
         s.session.get(s.views[0].id).unwrap().info.links[0].target.clone()
     };
     assert_eq!(target(&h), positioned);
-    assert!(h.state_mut().execute("edit.link"));
+    assert!(h.execute("edit.link"));
     h.run_steps(2);
     // The link lies at y 340..360 from the top of the 400 pt page.
     let c = at(&h, 100.0, 350.0);
@@ -165,7 +166,7 @@ fn removing_all_links_and_undo() {
     assert_eq!(links(&h).len(), 1);
 
     // Execute remove all links command
-    assert!(h.state_mut().execute("edit.remove_links"));
+    assert!(h.execute("edit.remove_links"));
     h.run_steps(3);
     assert_eq!(links(&h).len(), 0);
 

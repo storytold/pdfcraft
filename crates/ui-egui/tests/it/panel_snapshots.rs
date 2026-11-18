@@ -14,6 +14,7 @@ use pdfcraft_engine::Session;
 use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 use crate::support;
+use crate::support::AppHarness as _;
 
 /// Two pages with something for every panel: bookmarks, a layer, an attachment, a text field, an
 /// unsigned signature field, a comment and a structure tree.
@@ -77,10 +78,10 @@ fn harness(panel: &'static str) -> Harness<'static, PdfCraftApp> {
     // Shortcut labels follow the reported OS ("Ctrl+B" against "⌘B"), so pin it rather than rely
     // on kittest's default; the snapshots then match on every host.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_os(egui::os::OperatingSystem::Nix).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("panels.pdf", None, bytes).expect("opens");
-        app.set_option("panel", panel).unwrap();
+        app.set_option(&egui::Context::default(), "panel", panel).unwrap();
         app
     });
     h.run_steps(6);
@@ -192,7 +193,7 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
         RightPanel::Tags => "tags",
         RightPanel::Accessibility => {
             let mut h = harness("none");
-            assert!(h.state_mut().execute("a11y.check"));
+            assert!(h.execute("a11y.check"));
             h.run_steps(2);
             h.get_by_label("Start Checking").click();
             h.run_steps(3);
@@ -200,7 +201,7 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
         }
         RightPanel::Search => {
             let mut h = harness("none");
-            assert!(h.state_mut().execute("edit.advanced_search"));
+            assert!(h.execute("edit.advanced_search"));
             h.run_steps(2);
             h.state_mut().views[0].find.as_mut().expect("Advanced Search opens a search").query = "sample".into();
             support::wait_until(&mut h, "both pages searched", |app| app.views[0].find.as_ref().is_some_and(|f| f.matches.len() == 2));
@@ -216,14 +217,14 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             let old = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
             let new = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
             let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-                let mut app = PdfCraftApp::new();
-                app.set_option("language", "en").unwrap();
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
                 app.open_bytes("old.pdf", None, old.clone()).unwrap();
                 app.open_bytes("new.pdf", None, new.clone()).unwrap();
                 app
             });
             h.run_steps(4);
-            assert!(h.state_mut().execute("doc.compare"));
+            assert!(h.execute("doc.compare"));
             h.run_steps(2);
             h.get_by_label("Compare").click();
             h.run_steps(3);

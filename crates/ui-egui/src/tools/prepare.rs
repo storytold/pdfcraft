@@ -19,6 +19,8 @@ mod draft;
 mod properties;
 mod tabs;
 pub(crate) mod tool;
+pub(crate) mod dialog;
+pub use dialog::FieldPropsDialog;
 
 pub use draft::{ACTION_KINDS, ActionDraft, FieldDraft, FieldTab};
 pub(crate) use draft::{da_font, da_size};

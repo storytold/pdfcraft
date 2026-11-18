@@ -528,7 +528,7 @@ mod tests {
     const PDF: &[u8] = include_bytes!("../tests/data/form.pdf");
 
     fn app(docs: &[&str]) -> (PdfCraftApp, egui::Context) {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.set_option("language", "en").unwrap();
         for name in docs {
             app.open_bytes(name, None, PDF.to_vec()).unwrap();

@@ -22,7 +22,7 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 
 #[test]
 fn state_operations_and_validation() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     assert!(!app.is_tool_pinned("redact"));
 
     // Pinning a valid tool
@@ -64,13 +64,13 @@ fn state_operations_and_validation() {
 
 #[test]
 fn persistence_round_trip_and_sanitization() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     app.pin_tool("protect");
     app.pin_tool("redact");
 
     let saved = app.settings_snapshot();
 
-    let mut restored = PdfCraftApp::new();
+    let mut restored = crate::control::new_app();
     restored.apply_settings(&saved);
     assert_eq!(restored.pinned_tools, vec!["protect", "redact"]);
 

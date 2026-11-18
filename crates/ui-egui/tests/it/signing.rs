@@ -6,6 +6,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::SignatureStatus;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, RightPanel, SignStep};
+use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -30,10 +31,10 @@ fn dir() -> std::path::PathBuf {
 
 fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
-        app.set_option("left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.export_dir_override = Some(dir.to_string_lossy().into_owned());
         app.save_override = Some(dir.join("contract_signed.pdf").to_string_lossy().into_owned());
         app
@@ -67,7 +68,7 @@ fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, label: &'a str) -> egui_kitte
 #[test]
 fn ctrl_alt_q_types_an_email_without_quitting() {
     let mut h = harness(dir());
-    h.state_mut().execute("sign.digital");
+    h.execute("sign.digital");
     let (a, b) = (at(&h, 40.0, 90.0), at(&h, 220.0, 40.0));
     drag(&mut h, a, b);
     assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::Configure);
@@ -106,7 +107,7 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
 }
 
 fn create_signing_id(h: &mut Harness<'static, PdfCraftApp>) {
-    assert!(h.state_mut().execute("sign.digital"));
+    assert!(h.execute("sign.digital"));
     assert_eq!(h.state().quick_tool, QuickTool::SignArea { certify: false });
     let (a, b) = (at(h, 40.0, 90.0), at(h, 220.0, 40.0));
     drag(h, a, b);
@@ -281,8 +282,8 @@ fn verify_dirty_snapshot_close(h: &mut Harness<'static, PdfCraftApp>) {
 fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     // Trusted certificates and the ID list persist.
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
-    fresh.set_option("language", "en").unwrap();
+    let mut fresh = crate::control::new_app();
+    fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
     fresh.restore(&saved);
     assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
 }
@@ -294,7 +295,7 @@ fn certifying_without_a_visible_signature() {
     let mut h = harness(dir.clone());
     // An ID from a file.
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
-    assert!(h.state_mut().execute("sign.certify_invisible"));
+    assert!(h.execute("sign.certify_invisible"));
     h.run_steps(2);
     {
         let d = h.state_mut().sign_draft.as_mut().unwrap();
@@ -338,8 +339,8 @@ fn save_as_keeps_a_signed_document_incremental() {
     let out = dir().join("copy.pdf");
     let (bytes, cert) = (signed.to_vec(), digital_id.certificate.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("contract.pdf", None, bytes).expect("opens");
         app.session.set_trusted_certificates(vec![cert]);
         app
@@ -389,8 +390,8 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
     let bytes = signature_past_the_field_walk();
     let (original, out) = (bytes.clone(), dir().join("copy.pdf"));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, bytes).expect("opens");
         app
     });
@@ -644,7 +645,7 @@ fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
     assert!(signed.windows(6).any(|w| w == b"/Image"), "the image is embedded");
     assert_eq!(s.session.get(s.views[0].id).unwrap().signatures.iter().filter(|x| x.signed).count(), 2);
-    let mut fresh = PdfCraftApp::new();
+    let mut fresh = crate::control::new_app();
     fresh.restore(&s.persist());
     assert_eq!(fresh.sign_graphic, SignGraphic::Image(image));
     // A saved choice that can't be read back falls back to the name.
@@ -687,7 +688,7 @@ fn the_signature_labels_follow_the_interface_language() {
         std::fs::create_dir_all(&dir).unwrap();
         let mut h = harness(dir.clone());
         let lang = Lang::from_code(code).unwrap();
-        h.state_mut().set_option("language", code).unwrap();
+        h.set_option("language", code).unwrap();
         h.state_mut().start_signing(0, Some([20.0, 110.0, 280.0, 180.0]), None, None);
         let entry = h.state_mut().add_digital_id(p12, &cert);
         {
@@ -711,8 +712,8 @@ fn the_signature_labels_follow_the_interface_language() {
 
 #[test]
 fn os_store_identities_are_not_persisted() {
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     for path in ["windows:Store signer", "keychain:Store signer", "file-id.p12"] {
         app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: path.into(),
@@ -727,8 +728,8 @@ fn os_store_identities_are_not_persisted() {
     let settings: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(settings["digital_ids"].as_array().unwrap().len(), 1);
     assert_eq!(settings["digital_ids"][0]["path"], "file-id.p12");
-    let mut restored = PdfCraftApp::new();
-    restored.set_option("language", "en").unwrap();
+    let mut restored = crate::control::new_app();
+    restored.set_option(&egui::Context::default(), "language", "en").unwrap();
     restored.restore(&saved);
     assert_eq!(restored.digital_ids.len(), 1);
     assert_eq!(restored.digital_ids[0].path, "file-id.p12");
@@ -811,7 +812,7 @@ fn an_imported_digital_id_can_be_removed() {
     let p12 = dir.join("signer.p12");
     std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12"), &p12).unwrap();
     let mut h = harness(dir.clone());
-    assert!(h.state_mut().execute("sign.certify_invisible"));
+    assert!(h.execute("sign.certify_invisible"));
     h.run_steps(2);
     {
         let d = h.state_mut().sign_draft.as_mut().unwrap();

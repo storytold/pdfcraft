@@ -4,6 +4,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use crate::support::AppHarness as _;
 
 /// `n` pages of 200×300; page i says "Page i+1" plus "page" and "Pages" for find tests.
 fn fixture(n: usize) -> Vec<u8> {
@@ -33,8 +34,8 @@ fn fixture(n: usize) -> Vec<u8> {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("a.pdf", None, fixture(5)).unwrap();
         app.open_bytes("b.pdf", None, fixture(2)).unwrap();
         app
@@ -49,7 +50,7 @@ fn close_all_asks_only_for_changed_documents() {
     let mut h = harness();
     // Change the active document (b.pdf).
     h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-    h.state_mut().execute("file.close_all");
+    h.execute("file.close_all");
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1, "the clean document closed at once");
     assert_eq!(h.state().close_request, Some(pdfcraft_ui_egui::CloseRequest::All), "b.pdf asks to be saved");
@@ -60,7 +61,7 @@ fn close_all_asks_only_for_changed_documents() {
 fn revert_after_confirming() {
     let mut h = harness();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
-    assert!(h.state_mut().execute("file.revert"));
+    assert!(h.execute("file.revert"));
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Revert));
     h.get_all_by_label("Revert").last().expect("the button").click();
@@ -91,7 +92,7 @@ fn alt_arrows_go_back_and_forward_through_the_view_history() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].current, 2, "← still turns the page");
     h.ctx.set_os(egui::os::OperatingSystem::Nix);
-    assert!(h.state_mut().execute("help.shortcuts"));
+    assert!(h.execute("help.shortcuts"));
     h.run_steps(3);
     h.get_by_label("Alt+← / Alt+→");
     h.get_by_label("Previous view / Next view");
@@ -494,7 +495,7 @@ fn layouts_fit_height_labels_and_system_theme() {
     h.get(By::new().label(&format!("2/{}", labels.len())));
     assert!(!h.state_mut().views[0].go_to_typed("xx", &labels));
     // Follow the system theme.
-    h.state_mut().set_option("theme", "system").unwrap();
+    h.set_option("theme", "system").unwrap();
     assert_eq!(h.state().theme_preference, pdfcraft_ui_egui::theme::ThemePreference::System);
 }
 
@@ -626,7 +627,7 @@ fn page_label_input_resolves_labels_numbers_and_restores_invalid_input() {
         assert_eq!(h.state().views[0].page_input, displayed, "{typed}");
     }
     // Scripted page selection remains physical and one-based even when a numeric label differs.
-    h.state_mut().set_option("page", "2").unwrap();
+    h.set_option("page", "2").unwrap();
     h.run_steps(3);
     assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (1, "ii"));
 
@@ -704,8 +705,8 @@ fn page_label_input_focus_command_refreshes_same_frame_navigation_and_preserves_
     restart_page_labels(&mut h);
     assert_eq!(h.state().views[0].page_input, "i");
     // No frame between navigation and the real command: it must not focus the old label.
-    h.state_mut().set_option("page", "3").unwrap();
-    assert!(h.state_mut().execute("view.focus_page_input"));
+    h.set_option("page", "3").unwrap();
+    assert!(h.execute("view.focus_page_input"));
     h.run_steps(3);
     assert!(page_input_focused(&h));
     assert_eq!(h.state().views[0].page_input, "1");
@@ -714,8 +715,8 @@ fn page_label_input_focus_command_refreshes_same_frame_navigation_and_preserves_
     assert_eq!(h.state().views[0].current, 2, "the focus command selects the new current label");
 
     type_page_input(&mut h, "draft");
-    h.state_mut().set_option("page", "4").unwrap();
-    assert!(h.state_mut().execute("view.focus_page_input"));
+    h.set_option("page", "4").unwrap();
+    assert!(h.execute("view.focus_page_input"));
     h.run_steps(3);
     assert_eq!(h.state().views[0].current, 3);
     assert_eq!(h.state().views[0].page_input, "draft", "re-focusing keeps text already being edited");
@@ -779,7 +780,7 @@ fn page_label_input_preserves_typing_and_refreshes_after_navigation_and_tab_chan
     assert_eq!(h.state().active, Some(1));
     assert_eq!(h.state().views[0].page_input, "unsent", "switching tabs keeps the hidden document's draft");
     assert_eq!(h.state().views[1].page_input, "1", "the new document displays its own label");
-    h.state_mut().set_option("page", "2").unwrap();
+    h.set_option("page", "2").unwrap();
     h.run_steps(3);
     focus_page_input(&mut h);
     h.key_press(egui::Key::Enter);
@@ -856,7 +857,7 @@ fn page_label_input_same_document_replacement_keeps_full_label_selected_for_typi
         h.state_mut().views[0].go_to_page(3);
         h.run_steps(3);
         assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "4"));
-        assert!(h.state_mut().execute("view.focus_page_input"));
+        assert!(h.execute("view.focus_page_input"));
         h.run_steps(3);
         assert!(page_input_focused(&h), "the real focus command focuses the page editor");
         let editor_id = h.ctx.memory(|m| m.focused()).expect("focused page editor");
@@ -946,8 +947,8 @@ trailer << /Root 1 0 R >>
 %%EOF"
         .to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("damaged.pdf", None, damaged.clone()).unwrap();
         app
     });
@@ -986,8 +987,8 @@ fn initial_view_is_edited_and_honoured_on_open() {
     assert_eq!(s.session.get(id).unwrap().can_undo(), Some("Change document properties"));
     // Opening the saved file follows it.
     let bytes = s.session.save_bytes(id).unwrap();
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "language", "en").unwrap();
     app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
     let view = &app.views[0];
     assert_eq!((view.current, view.cover, app.right), (1, true, Some(pdfcraft_ui_egui::RightPanel::Bookmarks)));
@@ -1020,7 +1021,7 @@ fn initial_view_magnification_offers_25_and_100_percent() {
         let s = h.state();
         let id = s.views[s.active.unwrap()].id;
         let bytes = s.session.save_bytes(id).unwrap();
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         app.open_bytes("again.pdf", None, bytes.to_vec()).unwrap();
         let view = &app.views[0];
         (app.session.get(view.id).unwrap().initial_view().magnification, view.zoom, view.fit)
@@ -1062,14 +1063,14 @@ fn marquee_zoom_and_snapshot() {
     let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
     // Snapshot of the text line.
     h.state_mut().system_clipboard = false;
-    assert!(h.state_mut().execute("edit.snapshot"));
+    assert!(h.execute("edit.snapshot"));
     drag(&mut h, at(15.0, 175.0), at(180.0, 140.0));
     let (w, hgt, px) = h.state().last_snapshot.clone().expect("a snapshot");
     assert!(w > 50 && hgt > 10, "{w} × {hgt}");
     assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
     // Marquee zoom on a small area zooms in, centred on it.
     let before = h.state().views[i].zoom;
-    h.state_mut().set_option("quick", "marquee-zoom").unwrap();
+    h.set_option("quick", "marquee-zoom").unwrap();
     drag(&mut h, at(20.0, 160.0), at(60.0, 140.0));
     h.run_steps(4);
     let after = h.state().views[i].zoom;
@@ -1086,7 +1087,7 @@ fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
     let r = h.state().views[i].page_screen_rect(0).expect("on screen");
     let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
     h.state_mut().system_clipboard = false;
-    assert!(h.state_mut().execute("edit.snapshot"));
+    assert!(h.execute("edit.snapshot"));
     drag(&mut h, at(15.0, 175.0), at(115.0, 125.0));
     h.run_steps(2);
     let (page, area) = h.state().views[i].area_pick.expect("the copied area is kept");
@@ -1114,7 +1115,7 @@ fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
     let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).expect("saved"))).unwrap();
     assert_eq!(pdfcraft_model::pages(&out).len(), 1, "one sheet for the area");
     // The next Print is for pages again.
-    assert!(h.state_mut().execute("print.dialog"));
+    assert!(h.execute("print.dialog"));
     h.run_steps(3);
     assert_eq!(h.state().print_draft.which, PrintWhich::All);
     h.state_mut().dialog = None;
@@ -1123,7 +1124,7 @@ fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
     drag(&mut h, at(15.0, 175.0), at(115.0, 125.0));
     h.run_steps(2);
     assert!(h.state().views[i].area_pick.is_some());
-    h.state_mut().set_option("quick", "select").unwrap();
+    h.set_option("quick", "select").unwrap();
     h.run_steps(2);
     assert!(h.state().views[i].area_pick.is_none());
     let _ = std::fs::remove_dir_all(&dir);
@@ -1137,7 +1138,7 @@ fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
     h.state_mut().system_clipboard = false;
     let mut sizes = Vec::new();
     for zoom in ["25", "100"] {
-        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.set_option("zoom", zoom).unwrap();
         h.run_steps(2);
         // The text line of the page, as a marquee would give it.
         sizes.push(h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot"));
@@ -1150,7 +1151,7 @@ fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
     // Zoomed in past the minimum, a snapshot has every pixel the screen shows, however far.
     let ppp = h.ctx.pixels_per_point();
     for zoom in [400.0_f32, 1600.0] {
-        h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+        h.set_option("zoom", &zoom.to_string()).unwrap();
         h.run_steps(2);
         let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
         let on_screen = (165.0 * zoom / 100.0 * pdfcraft_ui_egui::canvas::PT * ppp).ceil() as u32;
@@ -1176,8 +1177,8 @@ trailer << /Root 1 0 R >>
         stream.len()
     );
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("large.pdf", None, pdf.into_bytes()).unwrap();
         app.system_clipboard = false;
         app
@@ -1197,7 +1198,7 @@ fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();
     let i = h.state().active.unwrap();
     let before = h.state().views[i].zoom;
-    assert!(h.state_mut().execute("view.fit_visible"));
+    assert!(h.execute("view.fit_visible"));
     for _ in 0..4 {
         h.run_steps(2);
     }
@@ -1254,7 +1255,7 @@ fn the_window_title_marks_unsaved_changes_until_saved() {
     std::fs::create_dir_all(&dir.0).unwrap();
     // Saved under its own name, so the title changes only by the mark.
     h.state_mut().save_override = Some(dir.0.join("b.pdf").to_string_lossy().into_owned());
-    assert!(h.state_mut().execute("file.save"));
+    assert!(h.execute("file.save"));
     h.run_steps(2);
     let s = h.state();
     assert!(!s.session.get(s.views[s.active.unwrap()].id).unwrap().dirty);
@@ -1422,7 +1423,7 @@ fn an_earlier_revision_opens_from_document_properties() {
 fn advanced_search_lists_results_with_context() {
     let mut h = harness();
     let i = h.state().active.unwrap();
-    assert!(h.state_mut().execute("edit.advanced_search"));
+    assert!(h.execute("edit.advanced_search"));
     h.run_steps(2);
     h.get_by_label("What word or phrase would you like to search for?");
     h.state_mut().views[i].find.as_mut().unwrap().query = "pages".into();
@@ -1451,7 +1452,7 @@ fn advanced_search_lists_results_with_context() {
 #[test]
 fn optimizer_audits_space_usage() {
     let mut h = harness();
-    assert!(h.state_mut().execute("optimize.advanced"));
+    assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
     h.get_by_label("Audit space usage…").click();
     h.run_steps(3);
@@ -1527,8 +1528,8 @@ fn a_new_document_opens_at_the_top_after_a_relaunch() {
     // Next launch: a document never seen before, which gets a.pdf's old id.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
         cc.egui_ctx.memory_mut(|m| *m = memory);
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("c.pdf", None, fixture(5)).unwrap();
         app.views[0].fit = Fit::Width;
         app
@@ -1697,8 +1698,8 @@ fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
 fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
     use egui::Key;
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("mixed.pdf", None, sized_fixture(&[(200, 1200), (3000, 1200), (200, 1200)])).unwrap();
         app
     });
@@ -1734,10 +1735,10 @@ fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
     const GAP: f32 = 14.0;
     let build = |zoom: f32| {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
-            app.set_option("layout", "two-page").unwrap();
+            app.set_option(&egui::Context::default(), "layout", "two-page").unwrap();
             // Before the first layout: zoomed about the content's top left, scrolled to it.
             app.views[0].set_zoom(zoom);
             app
@@ -1854,8 +1855,8 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
     for fit in [Fit::Width, Fit::Page, Fit::Height] {
         let bytes = sized_fixture(&sizes);
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes("book.pdf", None, bytes).unwrap();
             app
         });
@@ -1880,8 +1881,8 @@ fn page_down_steps_every_spread_when_several_fit_on_screen() {
 fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
     let bytes = sized_fixture(sizes);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("cheques.pdf", None, bytes).unwrap();
         app.right = Some(pdfcraft_ui_egui::RightPanel::Pages);
         app
@@ -1977,7 +1978,7 @@ fn pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection() 
     if let Ok(dir) = std::env::var("PDFCRAFT_THUMBNAIL_SHOTS") {
         let _gpu = crate::gpu();
         h.render().unwrap().save(format!("{dir}/large.png")).unwrap();
-        h.state_mut().set_option("theme", "dark").unwrap();
+        h.set_option("theme", "dark").unwrap();
         h.run_steps(4);
         h.render().unwrap().save(format!("{dir}/large-dark.png")).unwrap();
     }
@@ -1988,13 +1989,13 @@ fn pages_panel_thumbnail_zoom_is_bounded_independent_and_survives_reload() {
     let mut h = pages_panel_harness(&[(200, 300); 6]);
     let usual = thumbnail_rect(&h, 1).width();
     let zoom = h.state().views[0].zoom;
-    h.state_mut().set_option("grid-zoom", "200").unwrap();
-    h.state_mut().set_option("thumbnail-zoom", "50%").unwrap();
+    h.set_option("grid-zoom", "200").unwrap();
+    h.set_option("thumbnail-zoom", "50%").unwrap();
     h.run_steps(4);
     let small = thumbnail_rect(&h, 1).width();
     assert!(small < usual);
     for invalid in ["0", "49", "151", "NaN", "inf", "nope"] {
-        assert!(h.state_mut().set_option("thumbnail-zoom", invalid).is_err(), "reject {invalid}");
+        assert!(h.set_option("thumbnail-zoom", invalid).is_err(), "reject {invalid}");
     }
     h.run_steps(3);
     assert_eq!(thumbnail_rect(&h, 1).width(), small);
@@ -2009,8 +2010,8 @@ fn pages_panel_thumbnail_zoom_is_bounded_independent_and_survives_reload() {
     h.state_mut().views[0].set_thumbnail_zoom(f32::MAX);
     assert_eq!(h.state().views[0].thumbnail_zoom(), 1.5);
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
-    let mut empty = PdfCraftApp::new();
-    assert!(empty.set_option("thumbnail-zoom", "100").is_err());
+    let mut empty = crate::control::new_app();
+    assert!(empty.set_option(&egui::Context::default(), "thumbnail-zoom", "100").is_err());
 }
 
 #[test]
@@ -2019,7 +2020,7 @@ fn pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible() {
     h.state_mut().views[0].go_to_page(24);
     h.run_steps(4);
     for size in ["50", "150", "80", "100"] {
-        h.state_mut().set_option("thumbnail-zoom", size).unwrap();
+        h.set_option("thumbnail-zoom", size).unwrap();
         h.run_steps(4);
         assert!(in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 stays visible at {size}%");
         assert_eq!(h.state().views[0].current, 24);
@@ -2114,25 +2115,25 @@ fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
     let point = egui::MouseWheelUnit::Point;
     let (normal_points, fast_points) = (scrolled(ScrollSpeed::Normal, point, 30.0), scrolled(ScrollSpeed::Fast, point, 30.0));
     assert!(normal_points > 0.0 && (normal_points - fast_points).abs() < 1.0, "trackpad: {normal_points} vs {fast_points}");
-    let mut app = PdfCraftApp::new();
-    app.set_option("scroll_speed", "fast").unwrap();
-    assert!(app.set_option("scroll_speed", "warp").unwrap_err().contains("slow, normal, or fast"));
-    let mut again = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
+    app.set_option(&egui::Context::default(), "scroll_speed", "fast").unwrap();
+    assert!(app.set_option(&egui::Context::default(), "scroll_speed", "warp").unwrap_err().contains("slow, normal, or fast"));
+    let mut again = crate::control::new_app();
     again.restore(&app.persist());
     assert_eq!(again.scroll_speed, ScrollSpeed::Fast);
 }
 
 #[test]
 fn the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings() {
-    let mut app = PdfCraftApp::new();
+    let mut app = crate::control::new_app();
     assert!(!app.invert_middle_drag, "the middle button keeps its direction unless asked");
-    app.set_option("invert_middle_drag", "true").unwrap();
-    assert!(app.set_option("invert_middle_drag", "yes").unwrap_err().contains("true or false"));
-    let mut again = PdfCraftApp::new();
+    app.set_option(&egui::Context::default(), "invert_middle_drag", "true").unwrap();
+    assert!(app.set_option(&egui::Context::default(), "invert_middle_drag", "yes").unwrap_err().contains("true or false"));
+    let mut again = crate::control::new_app();
     again.restore(&app.persist());
     assert!(again.invert_middle_drag, "turned on, it survives a restart");
-    again.set_option("invert_middle_drag", "false").unwrap();
-    let mut off = PdfCraftApp::new();
+    again.set_option(&egui::Context::default(), "invert_middle_drag", "false").unwrap();
+    let mut off = crate::control::new_app();
     off.invert_middle_drag = true;
     off.restore(&again.persist());
     assert!(!off.invert_middle_drag, "turned off, that is saved too");
@@ -2151,8 +2152,8 @@ fn picture_harness_sized(size: egui::Vec2) -> (image::RgbaImage, Harness<'static
     image::DynamicImage::ImageRgba8(px.clone()).write_to(&mut png, image::ImageFormat::Png).unwrap();
     let pdf = pdfcraft_engine::Session::new().create_from_images(&[("p.png".into(), png.into_inner())]).unwrap();
     let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("pic.pdf", None, pdf.to_vec()).unwrap();
         app
     });
@@ -2199,7 +2200,7 @@ fn a_picked_picture_that_is_deleted_in_edit_mode_loses_its_highlight() {
     h.run_steps(2);
     assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
     // Edit text & images: click the picture, delete it with the Delete key.
-    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     h.hover_at(at);
     h.run_steps(1);
@@ -2284,8 +2285,8 @@ fn a_picture_inside_form_artwork_under_text_is_selected_and_copied() {
     }
     pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("scan.pdf", None, pdf).unwrap();
         app
     });
@@ -2313,7 +2314,7 @@ fn a_picture_inside_form_artwork_under_text_is_selected_and_copied() {
 /// whole menu is on screen).
 fn picture_menu() -> (image::RgbaImage, Harness<'static, PdfCraftApp>) {
     let (px, mut h) = picture_harness_sized(egui::vec2(1400.0, 1500.0));
-    h.state_mut().set_option("quick", "edit-text").unwrap();
+    h.set_option("quick", "edit-text").unwrap();
     h.run_steps(3);
     let i = h.state().active.unwrap();
     let at = h.state().views[i].page_screen_rect(0).expect("on screen").center();
@@ -2396,9 +2397,9 @@ fn every_item_of_the_picture_menu_can_be_clicked_outside_the_picture() {
 #[test]
 fn mouse_wheel_scrolls_while_selecting_text() {
     let mut h = harness();
-    h.state_mut().set_option("zoom", "200").unwrap();
-    h.state_mut().set_option("left", "closed").unwrap();
-    h.state_mut().set_option("panel", "none").unwrap();
+    h.set_option("zoom", "200").unwrap();
+    h.set_option("left", "closed").unwrap();
+    h.set_option("panel", "none").unwrap();
     h.run_steps(8);
     let view = h.state().active.unwrap();
     let page = h.state().views[view].page_screen_rect(0).unwrap();
@@ -2429,9 +2430,9 @@ fn mouse_wheel_scrolls_while_selecting_text() {
 }
 fn selection_wheel_harness() -> (Harness<'static, PdfCraftApp>, usize, egui::Pos2) {
     let mut h = harness();
-    h.state_mut().set_option("zoom", "200").unwrap();
-    h.state_mut().set_option("left", "closed").unwrap();
-    h.state_mut().set_option("panel", "none").unwrap();
+    h.set_option("zoom", "200").unwrap();
+    h.set_option("left", "closed").unwrap();
+    h.set_option("panel", "none").unwrap();
     h.run_steps(8);
     let view = h.state().active.unwrap();
     let page = h.state().views[view].page_screen_rect(0).unwrap();
@@ -2542,7 +2543,7 @@ fn selection_page_wheel_preserves_normal_distance() {
 #[test]
 fn selection_wheel_does_not_scroll_behind_preferences() {
     let (mut h, view, _) = selection_wheel_harness();
-    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
     let before = h.state().views[view].page_screen_rect(0).unwrap().top();
     h.event(egui::Event::MouseWheel {
@@ -2595,10 +2596,10 @@ fn selection_mouse_wheel_resumes_after_point_scrolling() {
 #[test]
 fn page_command_without_selection_acts_on_the_page_pressed() {
     let mut h = harness(); // b.pdf (2 pages) is active
-    h.state_mut().set_option("zoom", "50").unwrap();
+    h.set_option("zoom", "50").unwrap();
     h.run_steps(3);
     // Page 2 was gone to earlier; both pages show whole, so it stays current.
-    h.state_mut().set_option("page", "2").unwrap();
+    h.set_option("page", "2").unwrap();
     h.run_steps(5);
     let at = |h: &Harness<'static, PdfCraftApp>, page: usize| {
         let v = &h.state().views[h.state().active.unwrap()];
@@ -2612,7 +2613,7 @@ fn page_command_without_selection_acts_on_the_page_pressed() {
     h.event(egui::Event::PointerButton { pos: first, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
     h.run_steps(3);
     assert_eq!(h.state().views[h.state().active.unwrap()].current, 0, "the pressed page is the current one");
-    h.state_mut().execute("page.rotate");
+    h.execute("page.rotate");
     h.run_steps(3);
     let s = h.state();
     let d = s.session.get(s.views[s.active.unwrap()].id).unwrap();
@@ -2627,7 +2628,7 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
     let lines_to_page_2 = |speed: &str| {
         let mut h = harness();
         h.state_mut().active = Some(0);
-        h.state_mut().set_option("scroll_speed", speed).unwrap();
+        h.set_option("scroll_speed", speed).unwrap();
         h.run_steps(4);
         let mut n = 0;
         while h.state().views[0].current == 0 {
@@ -2649,8 +2650,8 @@ fn arrow_keys_follow_the_scroll_speed_preference() {
 fn go_to_page_brings_the_page_into_view_horizontally() {
     use pdfcraft_ui_egui::canvas::Fit;
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("wide.pdf", None, sized_fixture(&[(595, 842), (595, 842), (595, 842), (6000, 2000)])).unwrap();
         app.views[0].fit = Fit::None;
         app.views[0].zoom = 1.0;

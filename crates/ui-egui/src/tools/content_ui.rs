@@ -1683,11 +1683,11 @@ mod tests {
 
     use super::*;
 
-    // PLAN: these fixtures still build `PdfCraftApp::new()`; moving them onto `with_host` with an
+    // PLAN: these fixtures still build `PdfCraftApp::for_unit_tests()`; moving them onto `with_host` with an
     // `EventClipboard` needs the test host recipe (`AppServices::new` arguments), which no owner set provides yet (pdf-hub-w1).
     #[test]
     fn delivered_pixels_are_bounded_before_cache_or_document_changes() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         app.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
         let before = app.last_copied_image.clone();
@@ -1702,7 +1702,7 @@ mod tests {
 
     #[test]
     fn delivered_pixels_keep_unpremultiplied_alpha() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[255, 0, 0, 128]);
         assert!(app.paste_received_image(0, &image));
@@ -1711,7 +1711,7 @@ mod tests {
 
     #[test]
     fn review_web_can_paste_an_internal_image_without_a_native_clipboard() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
         assert!(app.paste_image_with_system(0, None, None, None, false, None));
@@ -1721,7 +1721,7 @@ mod tests {
 
     #[test]
     fn review_system_without_supported_formats_does_not_paste_a_cached_image() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
         assert!(!app.paste_image_with_system(0, None, None, None, true, None));
@@ -1729,7 +1729,7 @@ mod tests {
 
     #[test]
     fn review_cut_checks_modify_permission_before_writing_the_clipboard() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         let png =crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
         app.add_image("test.png".into(), png);
@@ -1741,7 +1741,7 @@ mod tests {
         }));
         let id = app.active_ids().unwrap().1;
         let bytes = app.session.save_bytes(id).unwrap();
-        let mut locked = crate::PdfCraftApp::new();
+        let mut locked = crate::PdfCraftApp::for_unit_tests();
         locked.open_bytes("locked.pdf", None, bytes.as_ref().clone()).unwrap();
         assert!(!locked.session.get(locked.active_ids().unwrap().1).unwrap().allows_modification());
         locked.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
@@ -1752,7 +1752,7 @@ mod tests {
 
     #[test]
     fn system_text_prevents_context_menu_paste_of_a_cached_image() {
-        let mut app = crate::PdfCraftApp::new();
+        let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         let id = app.active_ids().unwrap().1;
         app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));

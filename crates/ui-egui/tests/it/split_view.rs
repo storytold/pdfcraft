@@ -10,6 +10,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::panes::Place;
+use crate::support::AppHarness as _;
 
 /// The size of view `i`'s first page picture once it is drawn; a stand-in for a page still loading
 /// is not a drawn page.
@@ -57,9 +58,9 @@ fn fixture(pages: usize) -> Vec<u8> {
 
 fn harness(names: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = crate::control::new_app();
         app.run_inline = true;
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in names {
             app.open_bytes(name, None, fixture(3)).unwrap();
         }
@@ -175,7 +176,7 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     let at = h.state().views[first].viewport_rect().center();
     click_at(&mut h, at);
     assert_eq!(h.state().active, Some(first), "a click makes the pane active");
-    assert!(h.state_mut().execute("page.rotate"));
+    assert!(h.execute("page.rotate"));
     wait(&mut h, "the rotated page in both panes", |s| landscape(s, first) && landscape(s, second));
     let id = h.state().views[first].id;
     assert!(h.state().session.get(id).unwrap().dirty);
@@ -183,7 +184,7 @@ fn the_same_document_in_both_panes_is_one_document_with_one_undo() {
     let at = h.state().views[second].viewport_rect().center();
     click_at(&mut h, at);
     assert_eq!(h.state().active, Some(second));
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     wait(&mut h, "the page upright again in both panes", |s| portrait(s, first) && portrait(s, second));
     assert!(h.state().session.get(id).unwrap().can_undo().is_none(), "it was one step");
     // The other pane redraws after a change that leaves its page's size alone too (a comment
@@ -232,7 +233,7 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     // The same document in both panes: closing one view keeps the document and its edits.
     h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
     h.run_steps(3);
-    assert!(h.state_mut().execute("page.rotate"));
+    assert!(h.execute("page.rotate"));
     h.run_steps(2);
     let second = h.state().views.iter().position(|v| v.place() == Place::Second).unwrap();
     h.state_mut().request_close_tab(second);

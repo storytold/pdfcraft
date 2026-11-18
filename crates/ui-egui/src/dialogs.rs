@@ -25,6 +25,7 @@ mod shortcuts;
 pub(crate) mod signature;
 pub(super) mod standards_ui;
 pub(super) mod word_count_ui;
+pub(crate) mod summarize;
 
 pub(crate) use prompts::shorten_middle;
 pub(crate) use properties::PropsTab;
@@ -63,7 +64,7 @@ mod password_draft_tests {
 
     #[test]
     fn inactive_password_drafts_are_cleared_before_early_returns() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         app.set_option("language", "en").unwrap();
         seed_password_drafts(&mut app);
         app.set_option("dialog", "about").unwrap();
@@ -72,7 +73,7 @@ mod password_draft_tests {
 
     #[test]
     fn control_close_and_reopen_clears_passwords_without_a_render_between_requests() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         // The control queue can handle several ui.set requests before the next rendered frame.
         // Repeat the flows so a stale draft cannot return on a later open.
         for _ in 0..2 {
@@ -90,7 +91,7 @@ mod password_draft_tests {
 
     #[test]
     fn commands_discard_replaced_password_drafts_before_the_next_control_request() {
-        let mut app = PdfCraftApp::new();
+        let mut app = PdfCraftApp::for_unit_tests();
         for _ in 0..2 {
             seed_password_drafts(&mut app);
             assert!(app.execute("help.about"));

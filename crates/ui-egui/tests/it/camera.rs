@@ -4,6 +4,7 @@
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use crate::support::AppHarness as _;
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -15,11 +16,11 @@ trailer << /Root 1 0 R >>
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
     h.run_steps(6);
@@ -40,7 +41,7 @@ fn undo_label(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
 #[test]
 fn dragging_a_corner_then_enhance_page_straightens_the_page() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     assert_eq!(h.state().quick_tool, QuickTool::EnhanceCamera);
     h.run_steps(3);
     let quad = h.state().views[0].camera.expect("the corners start on the current page");
@@ -91,7 +92,7 @@ fn dragging_a_corner_then_enhance_page_straightens_the_page() {
 #[test]
 fn the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Enhance page").click();
     h.run_steps(4);
@@ -126,7 +127,7 @@ fn the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn() {
 fn choosing_a_look_enhances_again() {
     use pdfcraft_engine::camera_clean::Look;
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Enhance page").click();
     h.run_steps(4);
@@ -144,7 +145,7 @@ fn choosing_a_look_enhances_again() {
 fn after_enhance_page_crop_and_organize_take_over() {
     for (button, then) in [("Crop pages", QuickTool::Crop), ("Organize pages", QuickTool::Select)] {
         let mut h = harness();
-        assert!(h.state_mut().execute("ocr.enhance_camera"));
+        assert!(h.execute("ocr.enhance_camera"));
         h.run_steps(3);
         h.get_by_label("Enhance page").click();
         h.run_steps(4);
@@ -161,14 +162,14 @@ fn after_enhance_page_crop_and_organize_take_over() {
 #[test]
 fn cancel_and_escape_leave_the_page_alone() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     assert!(h.state().views[0].camera.is_none());
 
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     assert!(h.state().views[0].camera.is_some());
     h.key_press(egui::Key::Escape);
@@ -185,7 +186,7 @@ fn cancel_and_escape_leave_the_page_alone() {
 #[test]
 fn the_level_leaves_the_page_alone_when_another_edit_came_in_between() {
     let mut h = harness();
-    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    assert!(h.execute("ocr.enhance_camera"));
     h.run_steps(3);
     h.get_by_label("Enhance page").click();
     h.run_steps(4);

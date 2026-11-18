@@ -7,6 +7,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 // PLAN: assumed `pdfcraft_ui_egui::JsDialog` with `DocumentScripts(DocJsDraft)` and `Console` (pdf-forms-w17)
 use pdfcraft_ui_egui::{JsDialog, PdfCraftApp};
+use crate::support::AppHarness as _;
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
@@ -40,8 +41,8 @@ fn form_with_text_action(action: &str) -> Vec<u8> {
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("form.pdf", None, form()).unwrap();
         app
     });
@@ -58,7 +59,7 @@ fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
 #[test]
 fn console_runs_scripts_against_the_document() {
     let mut h = harness();
-    assert!(h.state_mut().execute("tools.js_console"));
+    assert!(h.execute("tools.js_console"));
     h.run_steps(2);
     h.get_by_label("JavaScript Console");
     h.state_mut().js_console.input = "getField('greeting').value = 'typed'; console.println(numFields); 6 * 7".into();
@@ -92,9 +93,9 @@ fn button_scripts_run_and_alert() {
 #[test]
 fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.set_option("left", "closed").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         let bytes = form_with_text_action(
             r"/AA << /U << /S /JavaScript /JS (var choice = app.popUpMenuEx\({cName:'Choose test value',cReturn:'selected'}\); if \(choice\) getField\('greeting'\).value = choice;) >> >>",
         );
@@ -208,7 +209,7 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
 #[test]
 fn document_scripts_and_preferences() {
     let mut h = harness();
-    assert!(h.state_mut().execute("tools.document_js"));
+    assert!(h.execute("tools.document_js"));
     h.run_steps(2);
     h.get_by_label("Document JavaScripts");
     match h.state_mut().js_dialog.as_mut() {
@@ -233,8 +234,8 @@ fn document_scripts_and_preferences() {
     h.run_steps(2);
     assert!(!h.state().session.javascript());
     let saved = h.state().persist();
-    let mut fresh = PdfCraftApp::new();
-    fresh.set_option("language", "en").unwrap();
+    let mut fresh = crate::control::new_app();
+    fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
     fresh.restore(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
 }
@@ -249,7 +250,7 @@ fn merge_data_files_into_a_spreadsheet() {
     let host = crate::support::host_with_files(files);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::with_host(host);
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
     h.run_steps(2);
@@ -267,13 +268,13 @@ fn merge_data_files_into_a_spreadsheet() {
 fn prepare_a_form_detects_fields_on_a_paper_form() {
     let paper = pdfcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("paper.pdf", None, paper.clone()).unwrap();
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("form.prepare"));
+    assert!(h.execute("form.prepare"));
     h.run_steps(3);
     let app = h.state();
     let id = app.active_ids().unwrap().1;
@@ -348,7 +349,7 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
     }
     assert_eq!(tr(german, source), heading);
     let mut h = harness();
-    h.state_mut().set_option("language", "de").unwrap();
+    h.set_option("language", "de").unwrap();
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
     wait_for(&mut h, heading);
@@ -501,8 +502,8 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("duplicate-buttons.pdf", None, bytes).unwrap();
         app
     });
@@ -535,10 +536,10 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(3);
     assert_eq!(captions(&h), [Some("idle".into()), Some("idle".into())]);
-    assert!(h.state_mut().execute("edit.redo"));
+    assert!(h.execute("edit.redo"));
     h.run_steps(3);
     assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
@@ -615,8 +616,8 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     std::fs::write(&path, png).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
+        let mut app = crate::control::new_app();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("images.pdf", None, bytes).unwrap();
         app.save_override = Some(path.to_string_lossy().into_owned());
         app
@@ -651,10 +652,10 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
             .collect::<Vec<_>>()
     };
     assert_eq!(icons(&mut h), [false, true]);
-    assert!(h.state_mut().execute("edit.undo"));
+    assert!(h.execute("edit.undo"));
     h.run_steps(2);
     assert_eq!(icons(&mut h), [false, false]);
-    assert!(h.state_mut().execute("edit.redo"));
+    assert!(h.execute("edit.redo"));
     h.run_steps(2);
     assert_eq!(icons(&mut h), [false, true]);
     std::fs::remove_file(path).unwrap();
