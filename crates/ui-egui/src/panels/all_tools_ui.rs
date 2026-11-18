@@ -70,7 +70,9 @@ fn tile(g: &'static ToolGroup, items: &[&'static str]) -> Tile<'static> {
         return tile.dimmed();
     }
     match g.badge {
-        Some(b) => tile.badge(TileBadge::new(BadgeSlot::EndTop, BadgeKind::Text(tl!(b).to_owned().into()), craft::theme::variant::Tone::Accent, None)),
+        Some(b) => {
+            tile.badge(TileBadge::new(BadgeSlot::EndTop, BadgeKind::Text(tl!(b).to_owned().into()), craft::theme::variant::Tone::Accent, None))
+        }
         None => tile,
     }
 }

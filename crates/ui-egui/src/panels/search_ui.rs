@@ -128,7 +128,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 let after = flat(text.text_of(range.end.min(n)..range.end.saturating_add(CONTEXT).min(n)));
                 let name = format!("…{before} {hit} {after}…");
                 ListRow::new(Label::Empty)
-                    .lines(vec![Span::new(format!("…{before} ")).muted(), Span::new(hit).highlight().strong(), Span::new(format!(" {after}…")).muted()])
+                    .lines(vec![
+                        Span::new(format!("…{before} ")).muted(),
+                        Span::new(hit).highlight().strong(),
+                        Span::new(format!(" {after}…")).muted(),
+                    ])
                     .accessible_name(name)
                     .tooltip(tl!("Go to this result").to_string())
             }

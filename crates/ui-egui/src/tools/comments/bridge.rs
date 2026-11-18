@@ -173,7 +173,7 @@ pub(crate) fn kind_of(all: &[Annotation], a: &Annotation) -> AnnotationKind {
     })
 }
 
-fn rgb8(c: [f32; 3]) -> [u8; 3] {
+pub(crate) fn rgb8(c: [f32; 3]) -> [u8; 3] {
     c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
@@ -332,7 +332,8 @@ pub(crate) fn parts(
     let markers = marker_boxes(info, &anns, icon_side);
     let Some(id) = pick_at(&anns, at, tolerance, icon_side, &markers) else { return Vec::new() };
     let Some(found) = anns.iter().find(|a| a.id == id) else { return Vec::new() };
-    let mut shapes: Vec<Rect> = if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { vec![found.extent(icon_side)] };
+    let mut shapes: Vec<Rect> =
+        if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { vec![found.extent(icon_side)] };
     shapes.extend(markers.iter().filter(|(m, _)| *m == id).map(|(_, r)| *r));
     let screen_shapes: Vec<egui::Rect> = shapes
         .iter()

@@ -1,14 +1,15 @@
-use super::{Nav, PanelResult, PanelRow, PdfCraftApp};
+use super::right::PanelResult;
+use super::{Nav, PdfCraftApp};
+use craft::behavior::IconId;
 use craft::behavior::{DisplayOrder, GesturePhase, ItemSource, Mixed, Selection};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
 use craft::ui::choice::Checkbox;
-use craft::behavior::IconId;
 use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Props, SelectMode, Show, ShowCollection, ShowContainer, request_rename};
-use craft::ui::primitives::IconSpec;
 use craft::ui::list::{HueTarget, List, ListRow, OpenSet};
-use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::menu::{Menu, MenuItem, PanelRow};
 use craft::ui::notices::Notice;
+use craft::ui::primitives::IconSpec;
 use craft::ui::style::DataColor;
 use craft::ui::text::TextField;
 use pdfcraft_render::OutlineItem;
@@ -198,7 +199,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let current = view.current;
 
     if outline.is_empty() {
-        Notice::new(craft::theme::Tone::Neutral, tl!("This document has no bookmarks.")).show(ui);
+        Notice::new(craft::theme::variant::Tone::Neutral, tl!("This document has no bookmarks.")).show(ui);
         return result;
     }
 
@@ -347,7 +348,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
 
     if info.outline_more {
         Notice::new(
-            craft::theme::Tone::Neutral,
+            craft::theme::variant::Tone::Neutral,
             tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."),
         )
         .show(ui);
