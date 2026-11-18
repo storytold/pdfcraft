@@ -1286,7 +1286,7 @@ fn pdfs_and_pictures_from_the_file_managers_combine_entry_fill_one_list_in_order
     // one-process-per-file selection reaches the first instance in no defined order); pictures become PDFs as they join (#569). Nothing is opened
     // or combined until Combine is pressed.
     use pdfcraft_ui_egui::OsEvent;
-    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-combine-list-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
