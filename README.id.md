@@ -11,10 +11,10 @@ Tersedia untuk macOS, Windows, Linux, FreeBSD, dan browser.
 ![PdfCraft menampilkan dokumen contoh, daftar alat di kiri, dan percakapan komentar di kanan](docs/images/pdfcraft-viewer.png)
 
 Dokumen contoh dalam gambar adalah *PdfCraft Showcase*, PDF 13 halaman yang memperagakan kemampuan aplikasi.
-Panduan ini mengikuti [README berbahasa Inggris](README.md) pada revisi `175992b5a`.
-Angka pengujian dan penilaian kesiapan di bawah mengikuti laporan dalam sumber tersebut beserta periode pengukurannya.
+Panduan ini diterjemahkan dari [README berbahasa Inggris pada revisi `175992b5a`](https://github.com/storytold/pdfcraft/blob/175992b5a2045d00cdf8a20f812ea4aac522b099/README.md).
+Angka pengujian dan kesiapan fitur mengacu pada pengukuran yang dilaporkan pada revisi tersebut. Lihat README bahasa Inggris untuk keterangan terbaru.
 
-[Membaca](#membaca-dokumen) · [Menata halaman](#menata-halaman) · [Menggabungkan dan memisahkan](#menggabungkan-dan-memisahkan-pdf) · [Keamanan](#dokumen-berkata-sandi) · [Formulir dan komentar](#komentar-formulir-lapisan-dan-lampiran) · [OCR](#memindai-dan-memeriksa-hasil-ocr) · [Otomasi](#otomasi-dan-agen-ai) · [Mulai menggunakan](#mulai-menggunakan) · [Unduhan](#pilihan-unduhan)
+[Membaca](#membaca-dokumen) · [Menata halaman](#menata-halaman) · [Menggabungkan dan memisahkan](#menggabungkan-dan-memisahkan-pdf) · [Keamanan](#dokumen-yang-dilindungi-kata-sandi) · [Formulir dan komentar](#komentar-formulir-lapisan-dan-lampiran) · [OCR](#memindai-dan-memeriksa-hasil-ocr) · [Otomasi](#otomasi-dan-agen-ai) · [Mulai menggunakan](#mulai-menggunakan) · [Unduhan](#pilihan-unduhan)
 
 ## Komunitas
 
@@ -43,7 +43,7 @@ Teks yang dipilih disalin mengikuti urutan baca, termasuk pada dokumen berkolom,
 
 Bookmark, gambar mini halaman, dan label halaman dari dokumen (misalnya i, ii, 1, 2) membantu menemukan bagian yang dibutuhkan.
 Pencarian judul pada panel Bookmark juga menemukan entri bersarang meski induknya diciutkan.
-Hasil tetap menampilkan induknya sebagai konteks. Menghapus pencarian mengembalikan daftar tanpa mengubah keadaan buka atau tutup tiap cabang.
+Hasil pencarian tetap menampilkan induk setiap bookmark. Saat pencarian dikosongkan, daftar kembali seperti semula, termasuk cabang yang sebelumnya terbuka atau tertutup.
 
 Jalankan `pdfcraft --two-paged file.pdf` atau `pdfcraft file.pdf --two-paged` untuk membuka setiap PDF dari baris perintah dalam tampilan dua halaman tanpa gulir berkelanjutan.
 Opsi ini tidak mengubah tata letak bawaan yang tersimpan atau dokumen yang dipulihkan dari sesi sebelumnya.
@@ -58,12 +58,12 @@ Membuka kembali tab dan menampilkan lokasi file tidak tersedia di web. Dokumen t
 
 Pada **Inspector > Halaman**, atur ukuran gambar mini dengan penggeser atau tombol perkecil/perbesar (50–150%).
 Pengaturan ini mempertahankan pilihan beberapa halaman dan halaman yang sedang dilihat.
-Ukurannya tetap berlaku saat file dimuat ulang, tetapi tidak disimpan setelah aplikasi dimulai ulang.
+Ukuran gambar mini tetap sama saat file dimuat ulang. Aplikasi tidak menyimpan ukuran ini untuk sesi berikutnya.
 Otomasi dapat mengaturnya dengan `ui.set {"key":"thumbnail-zoom","value":"75"}` dan membacanya melalui `active.thumbnail_zoom` pada `ui.state`.
 
 ## Menata halaman
 
-Buka **Atur halaman** untuk melihat halaman sebagai kumpulan gambar mini.
+Buka **Atur halaman** untuk melihat gambar mini semua halaman.
 Klik untuk memilih satu halaman; gunakan `⌘`-klik atau `⇧`-klik untuk memilih beberapa halaman di macOS.
 Halaman dapat diputar, dihapus, disisipi halaman kosong atau halaman dari file lain, serta dipindah urutannya.
 `⌘Z` membatalkan perubahan, termasuk setelah dokumen disimpan.
@@ -105,7 +105,7 @@ pdfcraft-cli extract report.pdf --pages 1,3,5-8 --out highlights.pdf
 pdfcraft-cli split report.pdf --every 10 --out-dir parts/
 ```
 
-## Dokumen berkata sandi
+## Dokumen yang dilindungi kata sandi
 
 PdfCraft menerapkan mekanisme keamanan standar PDF, mulai dari RC4 40-bit hingga AES-256.
 Dukungan mencakup kata sandi pengguna dan pemilik, kata sandi Unicode yang dinormalisasi dengan SASLprep, filter kriptografi, serta enkripsi khusus lampiran.
@@ -129,12 +129,12 @@ Komentar ditampilkan sebagai percakapan dengan balasan. Lampiran dapat dibuka at
 **Pindai & OCR > Pengenalan teks** mengubah hasil pindai menjadi teks yang dapat dicari.
 Proses dapat dijalankan pada halaman saat ini, rentang halaman, atau satu folder yang hasilnya disimpan sebagai salinan.
 Pembersihan opsional mencakup rotasi otomatis, pelurusan halaman, pengurangan derau, dan konversi menjadi hitam putih.
-Kotak kata dipetakan kembali ke gambar pindai asli.
+Posisi tiap kata hasil OCR disesuaikan dengan gambar pindai asli.
 
 Tesseract yang terpasang dapat dipakai bersama mesin bawaan. Hasil keduanya digabung sesuai strategi yang dipilih.
 Hasil berupa PDF yang dapat dicari diterapkan sebagai satu langkah yang dapat dibatalkan.
 Pilihan **Teks yang dapat diedit** membuka layar pemeriksaan OCR lebih dulu.
-Di sana, warna menunjukkan tingkat keyakinan pengenalan setiap kata; kata yang meragukan dapat dituju dengan pintasan keyboard.
+Warna menunjukkan seberapa yakin OCR mengenali setiap kata. Gunakan pintasan keyboard untuk berpindah ke kata yang perlu diperiksa.
 Perbaiki kata, gunakan kamus pengguna, atau jalankan ulang OCR pada area atau halaman sebelum menerima hasil dan membuat dokumen baru.
 **Pindai & OCR > Koreksi teks hasil pengenalan** juga membuka pemeriksaan sebelum hasil diterapkan.
 
@@ -339,8 +339,8 @@ emerge --ask app-text/pdfcraft-bin
 
 PdfCraft masih **alpha** dan berkembang cepat.
 Penilaian README sumber untuk Oktober 2026 mencatat sekitar 57% fitur yang dilacak sudah tersedia dalam suatu bentuk dan 94% kebutuhan inti telah tercakup.
-Perkiraan kesiapan saat itu: 55% untuk alur kerja harian, 49% untuk seluruh alur kerja profesional, dan 66% untuk penggunaan yang hanya memerlukan fitur dasar.
-Angka ini adalah penilaian pada periode tersebut, bukan jaminan kelengkapan versi terbaru.
+Saat itu, perkiraan kesiapannya 55% untuk alur kerja harian, 49% untuk seluruh alur kerja profesional, dan 66% untuk penggunaan fitur dasar.
+Angka tersebut menggambarkan status pengembangan pada Oktober 2026.
 
 Membaca, mencari, menata halaman, berkomentar, mengisi formulir, kata sandi, sensor, tanda tangan dasar, pencetakan, pemeriksaan aksesibilitas, serta CLI/MCP sudah tersedia.
 Render halaman masih memakai hayro selama renderer proyek sendiri dikembangkan.
@@ -399,7 +399,7 @@ Folder instalasi dapat diubah melalui halaman awal atau argumen `INSTALLFOLDER="
 Pembaruan mempertahankan folder lama kecuali diberi lokasi lain secara eksplisit.
 Lingkup pengguna tetap mengikuti pilihan pada halaman awal atau `ALLUSERS=1`.
 
-Untuk deployment, patok checksum selain nomor versi.
+Untuk pemasangan terkelola, verifikasi checksum paket di samping nomor versinya.
 MSI hanya memakai angka pada versinya, sehingga `1.2.3-rc.1` dan `1.2.3` sama-sama tercatat sebagai `1.2.3`; paket dengan versi sama dapat saling menggantikan.
 Gunakan SHA-256 dari `SHA256SUMS.txt`, lalu periksa dengan `Get-FileHash <file> -Algorithm SHA256`.
 
