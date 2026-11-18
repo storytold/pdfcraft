@@ -2928,16 +2928,24 @@ fn document_features_no_pdfa_part_allows_clauses_6_4_2_6_10_6_11() {
     for level in [Level::A2b, Level::A3b] {
         assert_eq!(found("/AcroForm << /Fields [] >> /Names << /Dests << >> >>", "", level), []);
         assert_eq!(found("/AcroForm << /Fields [] /XFA [] >>", "", level), [("6.4.2", "The form has an XFA form (XFA)".to_owned(), None)]);
-        assert_eq!(
-            found("/NeedsRendering true", "", level),
-            [("6.4.2", "The catalog asks for its XFA form to be rendered (NeedsRendering)".to_owned(), None)]
-        );
+        // The entry is forbidden whatever its value.
+        for value in ["true", "false"] {
+            assert_eq!(found(&format!("/NeedsRendering {value}"), "", level), [("6.4.2", "The catalog has a NeedsRendering entry".to_owned(), None)]);
+        }
         assert_eq!(
             found("/Names << /AlternatePresentations << >> >>", "", level),
             [("6.10", "The document has alternate presentations (AlternatePresentations)".to_owned(), None)]
         );
         assert_eq!(found("", "/PresSteps << >>", level), [("6.10", "A page has presentation steps (PresSteps)".to_owned(), Some(0))]);
         assert_eq!(found("/Requirements []", "", level), [("6.11", "The catalog has requirements (Requirements)".to_owned(), None)]);
+        // A null value, written so or through a reference to null or to no object, is no entry
+        // (ISO 32000-2 7.3.9).
+        for null in ["null", "99 0 R"] {
+            let catalog = format!(
+                "/AcroForm << /Fields [] /XFA {null} >> /NeedsRendering {null} /Names << /AlternatePresentations {null} >> /Requirements {null}"
+            );
+            assert_eq!(found(&catalog, &format!("/PresSteps {null}"), level), [], "{null}");
+        }
     }
 }
 

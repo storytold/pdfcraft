@@ -895,6 +895,8 @@ fn the_catalog_holds_none_of_what_pdfa4_leaves_out() {
     passes(&with_catalog("/Perms << /DocMDP << >> >>"), Level::A4);
     reports(&with_catalog("/AcroForm << /Fields [] /XFA [] >>"), Level::A4, "6.4.2", "XFA form");
     reports(&with_catalog("/NeedsRendering true"), Level::A4, "6.4.2", "NeedsRendering");
+    reports(&with_catalog("/NeedsRendering false"), Level::A4, "6.4.2", "NeedsRendering");
+    passes(&with_catalog("/NeedsRendering null /Requirements null"), Level::A4);
     reports(&with_catalog("/Names << /AlternatePresentations << >> >>"), Level::A4, "6.11", "alternate presentations");
     reports(&with_catalog("/Requirements []"), Level::A4, "6.12", "requirements");
     reports(&with_page("/PresSteps << >>"), Level::A4, "6.11", "presentation steps");

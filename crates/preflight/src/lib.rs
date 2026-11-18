@@ -277,7 +277,7 @@ pub const WORDINGS: &[&str] = &[
     "A form XObject refers to another file (Ref)",
     "The permissions dictionary holds {}: only UR3 and DocMDP are allowed",
     "The form has an XFA form (XFA)",
-    "The catalog asks for its XFA form to be rendered (NeedsRendering)",
+    "The catalog has a NeedsRendering entry",
     "The document has alternate presentations (AlternatePresentations)",
     "The catalog has requirements (Requirements)",
     "A page has presentation steps (PresSteps)",
@@ -1557,11 +1557,12 @@ fn check_output_intent(
 }
 
 /// What no PDF/A file may hold, whatever its part: an XFA form in the interactive form dictionary
-/// or a catalog that asks for one to be rendered (`/XFA`, `/NeedsRendering`; ISO 19005-2 and -4
-/// 6.4.2), alternate presentations in the name dictionary or presentation steps on a page
-/// (`/AlternatePresentations`, `/PresSteps`; ISO 19005-2 6.10, ISO 19005-4 6.11), and
+/// or a `/NeedsRendering` entry in the catalog, whatever its value (`/XFA`, `/NeedsRendering`; ISO
+/// 19005-2 and -4 6.4.2), alternate presentations in the name dictionary or presentation steps on a
+/// page (`/AlternatePresentations`, `/PresSteps`; ISO 19005-2 6.10, ISO 19005-4 6.11), and
 /// `/Requirements` in the catalog (ISO 19005-2 6.11, ISO 19005-4 6.12). ISO 32000-2 12.7.9, 13.5,
-/// 12.4.4.2 and 12.11 define them. PDF/A-4 numbers the last two clauses one higher.
+/// 12.4.4.2 and 12.11 define them. PDF/A-4 numbers the last two clauses one higher. An entry whose
+/// value is null, written so or through a reference, is no entry (ISO 32000-2 7.3.9).
 fn check_document_features(
     doc: &Document,
     pages: &[pdfcraft_model::Page],
@@ -1570,13 +1571,13 @@ fn check_document_features(
 ) {
     let catalog = catalog(doc);
     let dict_of = |key: &[u8]| catalog.get(key).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned());
-    if dict_of(b"AcroForm").is_some_and(|form| form.get(b"XFA").is_some()) {
+    if dict_of(b"AcroForm").is_some_and(|form| present(doc, &form, b"XFA")) {
         issue("6.4.2", "The form has an XFA form (XFA)", None, None, false);
     }
-    if catalog.get(b"NeedsRendering").is_some() {
-        issue("6.4.2", "The catalog asks for its XFA form to be rendered (NeedsRendering)", None, None, false);
+    if present(doc, &catalog, b"NeedsRendering") {
+        issue("6.4.2", "The catalog has a NeedsRendering entry", None, None, false);
     }
-    if dict_of(b"Names").is_some_and(|names| names.get(b"AlternatePresentations").is_some()) {
+    if dict_of(b"Names").is_some_and(|names| present(doc, &names, b"AlternatePresentations")) {
         if part4 {
             issue("6.11", "The document has alternate presentations (AlternatePresentations)", None, None, false);
         } else {
@@ -1584,7 +1585,7 @@ fn check_document_features(
         }
     }
     for (i, p) in pages.iter().enumerate() {
-        if p.dict.get(b"PresSteps").is_some() {
+        if present(doc, &p.dict, b"PresSteps") {
             if part4 {
                 issue("6.11", "A page has presentation steps (PresSteps)", None, Some(i), false);
             } else {
@@ -1592,7 +1593,7 @@ fn check_document_features(
             }
         }
     }
-    if catalog.get(b"Requirements").is_some() {
+    if present(doc, &catalog, b"Requirements") {
         if part4 {
             issue("6.12", "The catalog has requirements (Requirements)", None, None, false);
         } else {
