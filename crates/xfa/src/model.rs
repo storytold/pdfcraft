@@ -899,6 +899,11 @@ pub struct Template {
     /// The data paths of those fields, by name alone (any instance of a repeating subform), as
     /// a script writes them: a write there changes text shown elsewhere.
     pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
+    /// Some object binds other than by name and position: a subform with `<bind match="none"/>`,
+    /// or an object with a reference this binding follows. Data paths then don't follow the
+    /// form's names, which a walk along them relies on. Set once the template is parsed
+    /// (`data::mark_bindings`).
+    pub explicit_binds: bool,
     /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
     pub cache: TemplateCache,
 }

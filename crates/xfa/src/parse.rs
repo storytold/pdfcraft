@@ -1328,7 +1328,8 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     collect_page_roles(&root_node, &mut page_roles, 0);
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
-    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
+    let mut tpl =
+        Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), explicit_binds: false, cache: Default::default() };
     crate::data::mark_bindings(&mut tpl);
     crate::data::number_star_refs(&mut tpl);
     let paths = crate::data::fields_with_ids(&tpl)

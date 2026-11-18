@@ -570,6 +570,23 @@ pub(crate) fn mark_bindings(tpl: &mut Template) {
             mark(&mut area.items, 1);
         }
     }
+    fn any(nodes: &[Node], depth: usize) -> bool {
+        depth <= MAX_DEPTH
+            && nodes.iter().any(|n| {
+                n.common().follows_ref
+                    || match n {
+                        Node::Subform(sf) => sf.unbound || any(&sf.children, depth + 1),
+                        Node::Area(a) => any(&a.children, depth + 1),
+                        Node::ExclGroup(g) => g.fields.iter().any(|f| f.common.follows_ref),
+                        Node::Field(_) | Node::Draw(_) => false,
+                    }
+            })
+    }
+    let explicit = tpl.root.unbound
+        || tpl.root.common.follows_ref
+        || any(&tpl.root.children, 1)
+        || tpl.root.page_set.iter().flat_map(|ps| ps.areas.iter()).any(|a| any(&a.items, 1));
+    tpl.explicit_binds = explicit;
 }
 
 /// The template field the object at a SOM path is an instance of, each segment's number counted

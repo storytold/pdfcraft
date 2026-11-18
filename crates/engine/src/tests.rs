@@ -12670,6 +12670,37 @@ fn a_reset_clears_a_master_page_floating_field_on_every_page() {
     assert_eq!(text(&s).matches("Paid").count(), 0, "every page's stamp is reset: {}", text(&s));
 }
 
+/// A calculation that sets a field bound through a `match="none"` section, or by a reference,
+/// changes the live form scripts read at once: a later calculation using it sees the new value
+/// on opening, not the empty one the data held (the totals row of a table in a `match="none"`
+/// page, where one total subtracts two others).
+#[test]
+fn calculations_see_values_set_through_explicit_bindings() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb"><bind match="none"/>
+  <field name="b" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">2</script></calculate></field>
+  <field name="d" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">b.rawValue * 3</script></calculate></field>
+  <field name="c" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><bind match="dataRef" ref="$.other.c"/><calculate><script contentType="application/x-javascript">5</script></calculate></field>
+  <field name="e" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">c.rawValue + 1</script></calculate></field>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><b/><d/><other><c/></other><e/></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("calc.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let value = |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no {n}"));
+    assert_eq!(value("b"), ["2"]);
+    assert_eq!(value("d"), ["6"], "d read the b its calculation had just set");
+    assert_eq!(value("c"), ["5"]);
+    assert_eq!(value("e"), ["6"], "e read the c bound by a reference");
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]
