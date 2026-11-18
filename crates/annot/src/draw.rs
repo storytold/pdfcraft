@@ -36,20 +36,28 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
     let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
     let direct = with_direct_values(doc, &d);
     let Some(stream) = build_appearance(doc, &d, &direct, page) else {
-        return Err(shaped_text_error(&d).unwrap_or(AnnotError::Unsupported(subtype)));
+        return Err(shaped_text_error(doc, &direct).unwrap_or(AnnotError::Unsupported(subtype)));
     };
     let built = Built::new(stream, &direct);
     apply_appearance(doc, r, &d, built)
 }
 
-/// Why a text box whose text takes the shaped (Arabic, Hebrew, Thai) path has no appearance:
-/// its text is past the shaping or outline budget, which shortening it fixes.
-pub(crate) fn shaped_text_error(d: &Dict) -> Option<AnnotError> {
+/// Why a text box `d` (references followed) whose text takes the Arabic and Hebrew writer has no
+/// appearance, when the text is the reason: it is past the shaping or outline budget, which
+/// shortening it fixes. `None` when the box can't be drawn with a short Latin text either (a
+/// cloudy callout): the text is not what stops it, so the caller reports the box as unsupported.
+pub(crate) fn shaped_text_error(doc: &Document, d: &Dict) -> Option<AnnotError> {
     if d.name(b"Subtype") != Some(b"FreeText") {
         return None;
     }
     let text = d.get(b"Contents").and_then(Object::as_string).map(PdfString::to_text)?;
-    (pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text))
+    if !(pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text)) {
+        return None;
+    }
+    let mut plain = d.clone();
+    plain.set(b"Contents".to_vec(), Object::String(PdfString::text("x")));
+    appearance::build_on_page(doc, &plain, None)
+        .is_some()
         .then(|| AnnotError::Invalid("the comment's text is too long or too complex to draw; shorten it or split it into several comments".into()))
 }
 
@@ -107,7 +115,16 @@ fn build_appearance(doc: &Document, d: &Dict, direct: &Dict, page: Option<[f64; 
     // cloudy `/BE` on a square), the drawing made without them stays, rather than none.
     let mut stream = match appearance::build_on_page(doc, direct, page) {
         Some(stream) => stream,
-        None if !std::ptr::eq(direct, d) => appearance::build_on_page(doc, d, page)?,
+        None if !std::ptr::eq(direct, d) => {
+            // The text is what the drawing shows, wherever it is kept: a `/Contents` behind a
+            // reference stays the text drawn, so text the builder refused is refused here too
+            // instead of being drawn as none.
+            let mut stored = d.clone();
+            if let Some(contents) = direct.get(b"Contents") {
+                stored.set(b"Contents".to_vec(), contents.clone());
+            }
+            appearance::build_on_page(doc, &stored, page)?
+        }
         None => return None,
     };
     // Picture-stamp restyling must retain the placement's page-axis correction.

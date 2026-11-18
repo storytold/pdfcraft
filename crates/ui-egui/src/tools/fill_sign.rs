@@ -658,7 +658,7 @@ pub(crate) fn type_box(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
                     // the text, the border around that.
                     BorderShape::Circle => {
                         let (bw, size) = (t.border.width, t.size);
-                        let longest = pdfcraft_engine::annot_text::text_width(t.text.trim(), size);
+                        let longest = pdfcraft_engine::annot_text::text_box_width(t.text.trim(), size);
                         let (tw, th) = (longest + 8.0 + 2.0 * bw, size * 1.2 + 6.0 + 2.0 * bw);
                         let o = BorderShape::Circle.around([0.0, 0.0, tw, th], bw, Some([longest, size * 1.2]));
                         let centre = pos + egui::vec2((tw / 2.0 - bw) as f32, (th / 2.0 - bw) as f32) * zoom;

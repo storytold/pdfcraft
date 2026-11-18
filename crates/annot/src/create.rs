@@ -311,11 +311,6 @@ pub(crate) fn on_side(rect: [f64; 4], side: Side, end: [f64; 2]) -> bool {
     }
 }
 
-/// A new text box's quadding (`/Q`): right for text that reads right to left, else left.
-fn text_box_quadding(contents: &str) -> i64 {
-    if pdfcraft_fonts::appearance_text::paragraph_rtl(contents) { 2 } else { 0 }
-}
-
 /// Checked before anything is added: an annotation whose appearance can't be drawn (shaped text
 /// past its budget) is refused with a reason.
 fn refuse_undrawn(doc: &Document, d: &Dict) -> Result<(), AnnotError> {
@@ -323,7 +318,7 @@ fn refuse_undrawn(doc: &Document, d: &Dict) -> Result<(), AnnotError> {
         return Ok(());
     }
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    Err(shaped_text_error(d).unwrap_or(AnnotError::Unsupported(subtype)))
+    Err(shaped_text_error(doc, d).unwrap_or(AnnotError::Unsupported(subtype)))
 }
 
 /// Add a comment; returns its index in the page's `/Annots`.
@@ -511,7 +506,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             }
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
             d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size));
-            d.set(b"Q".to_vec(), Object::Int(text_box_quadding(&new.contents)));
+            d.set(b"Q".to_vec(), Object::Int(0));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
             }

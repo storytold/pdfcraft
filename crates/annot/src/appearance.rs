@@ -13,22 +13,27 @@
 //! ([`crate::text_style`]), draw Thai from the craft-fonts Thai face as Type 3 glyphs
 //! (`pdfcraft_fonts::shaped_text`, the writer Add text uses), and Arabic and Hebrew from their
 //! optional faces in logical order (`pdfcraft_fonts::appearance_text`); lines break at that face's
-//! standard-14 widths and the shaped advances (no other font program is bundled). [`text_width`]
-//! and [`wrap`] use the same metrics and shaping as the appearance they size.
+//! standard-14 widths and the shaped advances (no other font program is bundled).
+//! [`text_box_width`] and [`text_height`] measure a text box as its appearance draws it.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
 use pdfcraft_fonts::{appearance_text, first_undrawable, literal, win_ansi, wrap_with};
 
-/// The width of `text` at `size` as appearances without Arabic or Hebrew draw it: Helvetica, with
-/// Thai shaped in the Thai face that text boxes draw it with.
-fn standard_width(text: &str, size: f64) -> f64 {
+/// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
+/// face that text boxes draw it with.
+pub fn text_width(text: &str, size: f64) -> f64 {
     text_width_in(pdfcraft_fonts::Std14::Helvetica, text, size)
 }
 
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
     shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
+}
+
+/// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    wrap_with(text, size, width, text_width)
 }
 
 /// How far a text box's `lines` reach, in em: above the first baseline (0.9 of the 1.2 em line)
@@ -53,29 +58,34 @@ mod symbols;
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
 
-/// The width of a text line in its generated appearance, including contextual shaping and marks.
-/// Plain WinAnsi text, or a build without the required script face, keeps its Helvetica measure.
-pub fn text_width(text: &str, size: f64) -> f64 {
-    shaped_lines(text, size, f64::MAX)
-        .map(|lines| lines.iter().map(|line| line.width).fold(0.0, f64::max))
-        .unwrap_or_else(|| standard_width(text, size))
+/// The width of one line of a text box as its appearance draws it: Arabic and Hebrew at their
+/// shaped advances. Any other text, and a build without the script's face, is [`text_width`].
+/// Captions, stamps and labels are drawn in Helvetica and keep [`text_width`].
+pub fn text_box_width(text: &str, size: f64) -> f64 {
+    shaped_lines(text, size, f64::MAX).map_or_else(|| text_width(text, size), |lines| lines.iter().map(|line| line.width).fold(0.0, f64::max))
 }
 
-/// Wrap using the same shaped widths and paragraph boundaries as the generated appearance.
-pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
-    shaped_lines(text, size, width)
-        .map(|lines| lines.into_iter().map(|line| line.text).collect())
-        .unwrap_or_else(|| wrap_with(text, size, width, standard_width))
-}
-
-/// Height needed by the generated text at `width`, including positioned script marks.
-/// Shaping has the same input/work limits as the appearance; otherwise keep Helvetica spacing.
+/// The height a text box's text takes `width` wide, as its appearance draws it: Arabic and
+/// Hebrew wrapped at their shaped advances, each line as tall as its marks reach. Any other
+/// text, and text past the shaping limits, is [`text_lines_height`] of [`wrap`].
 pub fn text_height(text: &str, size: f64, width: f64) -> f64 {
-    shaped_lines(text, size, width)
-        .map(|lines| appearance_text::height(&lines, size))
-        .unwrap_or_else(|| text_lines_height(&wrap(text, size, width), size))
+    shaped_lines(text, size, width).map_or_else(|| text_lines_height(&wrap(text, size, width), size), |lines| appearance_text::height(&lines, size))
 }
 
+/// The width of the widest line and the height of the lines of a text box's text wrapped `width`
+/// wide, as its appearance draws it ([`text_box_width`], [`text_height`]).
+pub(crate) fn text_box_extent(text: &str, size: f64, width: f64) -> [f64; 2] {
+    match shaped_lines(text, size, width) {
+        Some(lines) => [lines.iter().map(|line| line.width).fold(0.0, f64::max), appearance_text::height(&lines, size)],
+        None => {
+            let lines = wrap(text, size, width);
+            [lines.iter().map(|l| text_width(l, size)).fold(0.0, f64::max), text_lines_height(&lines, size)]
+        }
+    }
+}
+
+/// The lines the Arabic and Hebrew writer draws `text` on, when it is the writer a text box
+/// draws `text` with.
 fn shaped_lines(text: &str, size: f64, width: f64) -> Option<Vec<appearance_text::Line>> {
     if appearance_text::has_shaped_text(text) && appearance_text::can_shape(text) { appearance_text::wrap(text, size, width).ok() } else { None }
 }

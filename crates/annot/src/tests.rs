@@ -2887,23 +2887,90 @@ fn unsupported_emoji_does_not_replace_supported_arabic_with_question_marks() {
     assert_eq!(text(&annotation, b"Contents"), "نص عربي 😊");
 }
 
+/// A new text box keeps `/Q 0`, as before: under it each paragraph starts at the edge its own
+/// direction reads from, whichever paragraph comes first. `/Q` is not set to 2 for the whole
+/// box, which would right-align its left-to-right paragraphs too.
 #[test]
-fn new_arabic_text_boxes_default_to_right_alignment_and_keep_an_explicit_override() {
+fn new_text_boxes_keep_default_quadding_and_align_each_paragraph_by_its_direction() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    // The x each row starts at, top row first.
+    let row_starts = |contents: &str| {
+        let mut doc = fixture();
+        let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+        annotation.contents = contents.into();
+        let index = add_annotation(&mut doc, &annotation, &meta("paragraphs")).unwrap();
+        let d = list(&doc, 0)[index].clone();
+        assert_eq!(d.int(b"Q"), Some(0), "{contents:?}");
+        let mut rows: Vec<(f64, f64)> = Vec::new();
+        for (x, y) in tm_positions(&ap_content(&doc, &d)) {
+            match rows.iter_mut().find(|row| (row.1 - y).abs() < 0.01) {
+                Some(row) => row.0 = row.0.min(x),
+                None => rows.push((x, y)),
+            }
+        }
+        rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+        rows.into_iter().map(|row| row.0).collect::<Vec<_>>()
+    };
+    let hebrew_first = row_starts("שלום\nHello");
+    assert!(hebrew_first[0] > 300.0 && hebrew_first[1] < 110.0, "Hebrew at the right edge, Latin at the left: {hebrew_first:?}");
+    let latin_first = row_starts("Hello\nשלום");
+    assert!(latin_first[0] < 110.0 && latin_first[1] > 300.0, "Latin at the left edge, Hebrew at the right: {latin_first:?}");
+}
+
+/// Text that does not take the Arabic and Hebrew writer keeps the quadding it always had: a
+/// direction mark before Latin text does not move the box's text to the right.
+#[test]
+fn text_without_arabic_or_hebrew_keeps_left_quadding() {
+    let mut doc = fixture();
+    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
+    annotation.contents = "\u{200f}Hello".into();
+    let index = add_annotation(&mut doc, &annotation, &meta("mark")).unwrap();
+    assert_eq!(list(&doc, 0)[index].int(b"Q"), Some(0));
+}
+
+/// A text box that can't be drawn for a reason other than its text (a cloudy callout) is not
+/// told to shorten the text: that advice is for text past the shaping or outline budget only.
+#[test]
+fn a_text_box_refused_for_its_shape_is_not_told_to_shorten_its_text() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [40 600 300 700] /CL [50 610 80 640 120 650] /RD [80 0 0 0] /BE << /S /C /I 1 >> /DA (0 g /Helv 12 Tf) /Contents (Hi) >>",
+    ]);
+    let latin = set_contents(&mut doc, 0, 0, "Hello", &meta("")).unwrap_err();
+    let hebrew = set_contents(&mut doc, 0, 0, "שלום", &meta("")).unwrap_err();
+    assert!(!hebrew.to_string().contains("shorten"), "{hebrew}");
+    assert_eq!(hebrew.to_string(), latin.to_string(), "the same refusal as for Latin text");
+}
+
+/// Text past the shaping budget, kept in an indirect `/Contents`: the redraw is refused and the
+/// appearance the comment had stays. Before, the retry that draws from the dictionary as stored
+/// read no text through the reference and replaced the appearance with an empty one.
+#[test]
+fn over_budget_text_in_an_indirect_contents_keeps_the_appearance_it_had() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
         return;
     }
-    let mut doc = fixture();
-    let mut annotation = new(0, Shape::TextBox { rect: [100.0, 500.0, 400.0, 650.0], font_size: 14.0 });
-    annotation.contents = "ملاحظة عربية".into();
-    let index = add_annotation(&mut doc, &annotation, &meta("rtl-default")).unwrap();
-    assert_eq!(list(&doc, 0)[index].int(b"Q"), Some(2));
-    let (_, reference) = annot_ref(&mut doc, 0, index).unwrap();
-    doc.update_dict(reference, |d| {
-        d.set(b"Q".to_vec(), Object::Int(0));
-    })
-    .unwrap();
-    set_contents(&mut doc, 0, index, "تعديل عربي", &meta("")).unwrap();
-    assert_eq!(list(&doc, 0)[index].int(b"Q"), Some(0));
+    let contents = format!("<FEFF{}>", "0628".repeat(131_073));
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /FreeText /Rect [45 630 245 700] /DA (0 g /Helv 12 Tf) /Contents 5 0 R /AP << /N 6 0 R >> >>",
+        contents.as_bytes(),
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 200 70] /Length 6 >>\nstream\n0 0 m\nendstream",
+    ]);
+    let (_, r) = annot_ref(&mut doc, 0, 0).unwrap();
+    let before = list(&doc, 0)[0].clone();
+    let error = set_appearance(&mut doc, r).unwrap_err();
+    assert!(error.to_string().contains("shorten it"), "{error}");
+    assert_eq!(list(&doc, 0)[0], before, "the comment and its appearance are as they were");
 }
 
 /// Content edits rebuild the display copy on every commit but leave annotations alone: the
@@ -5998,7 +6065,7 @@ fn check_4153_hebrew_fill_sign_text_fits_the_box_sized_for_it() {
     for (typed, size) in [("שם: שרה כהן", 10.0), ("ישראל ישראלי, רחוב הרצל 12, תל אביב", 10.0), ("שם: שרה כהן", 18.0), ("שם: שרה כהן", 24.0)]
     {
         let mut doc = fixture();
-        let w = appearance::text_width(typed, size) + 8.0;
+        let w = appearance::text_box_width(typed, size) + 8.0;
         let h = size * 1.2 + 6.0;
         let shape = Shape::Typewriter { rect: [100.0, 600.0 - h, 100.0 + w, 600.0], font_size: size };
         // Fill & Sign's own style: no border.
@@ -6074,14 +6141,18 @@ fn marked_hebrew_and_arabic_text_boxes_use_shaped_width_and_wrap_count() {
     }
     for typed in ["שָׁלוֹם", "السَّلَامُ"] {
         for size in [10.0, 18.0, 24.0] {
-            let measured = appearance::text_width(typed, size);
-            let shaped = pdfcraft_fonts::appearance_text::wrap(typed, size, 1.0e6).unwrap()[0].width;
-            assert!((measured - shaped).abs() < 1.0e-6, "{typed:?} at {size} pt: measured {measured} for {shaped} pt of text");
-            let wrapped = appearance::wrap(typed, size, shaped + 1.0);
-            assert_eq!(wrapped, [typed], "marks must not become extra Helvetica placeholders or wrapped rows");
+            let measured = appearance::text_box_width(typed, size);
+            let shaped = pdfcraft_fonts::appearance_text::wrap(typed, size, 1.0e6).unwrap();
+            assert!((measured - shaped[0].width).abs() < 1.0e-6, "{typed:?} at {size} pt: measured {measured} for {} pt of text", shaped[0].width);
+            let height = appearance::text_height(typed, size, shaped[0].width + 1.0);
+            assert!(
+                shaped.len() == 1 && (height - pdfcraft_fonts::appearance_text::height(&shaped, size)).abs() < 1.0e-6,
+                "marks must not become extra Helvetica placeholders or wrapped rows: {height}"
+            );
         }
     }
     let plain = "Cafe 123";
+    assert_eq!(appearance::text_box_width(plain, 12.0), pdfcraft_fonts::helvetica_width(plain, 12.0));
     assert_eq!(appearance::text_width(plain, 12.0), pdfcraft_fonts::helvetica_width(plain, 12.0));
     assert_eq!(appearance::wrap(plain, 12.0, 35.0), pdfcraft_fonts::wrap(plain, 12.0, 35.0));
 }

@@ -91,7 +91,7 @@ fn rich_text_in(d: &mut Dict, style: TextStyle) {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let body: String = text
         .replace("\r\n", "\n")
-        .split(['\r', '\n'])
+        .split(['\r', '\n', '\u{2028}', '\u{2029}'])
         .map(|line| {
             let rtl = pdfcraft_fonts::appearance_text::paragraph_rtl(line);
             let direction = if rtl { "rtl" } else { "ltr" };
@@ -751,9 +751,7 @@ pub(crate) fn shape_text_box(d: &mut Dict, tb: [f64; 4], shape: BorderShape, wid
 fn text_extent(d: &Dict, wrap: f64) -> [f64; 2] {
     let text = d.get(b"Contents").and_then(|o| o.as_string()).map(PdfString::to_text).unwrap_or_default();
     let (_, size) = appearance::parse_da(d);
-    let lines = appearance::wrap(&text, size, wrap.max(1.0));
-    let widest = lines.iter().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max);
-    [widest, appearance::text_lines_height(&lines, size)]
+    appearance::text_box_extent(&text, size, wrap.max(1.0))
 }
 
 /// The width and height of FreeText `d`'s text box `tb` as displayed: swapped on a page turned by

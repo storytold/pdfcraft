@@ -14936,9 +14936,9 @@ fn multiline_arabic_and_hebrew_fill_sign_text_sizes_its_box_by_its_shaped_lines(
     let annot = &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().info.annotations[0];
     assert_eq!(annot.contents.as_deref(), Some(text.as_str()), "logical text with its breaks");
     let (w, h) = (f64::from(annot.rect[2] - annot.rect[0]), f64::from(annot.rect[3] - annot.rect[1]));
-    let widest = lines.iter().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
+    let widest = lines.iter().map(|line| pdfcraft_engine::annot_text::text_box_width(line, size)).fold(0.0, f64::max);
     assert!((w - (widest + 8.0)).abs() < 0.01, "box width {w} follows the widest shaped line {widest}");
-    assert!(w < pdfcraft_engine::annot_text::text_width(&lines.concat(), size), "not the width of the lines set as one row");
+    assert!(w < pdfcraft_engine::annot_text::text_box_width(&lines.concat(), size), "not the width of the lines set as one row");
     // `/Rect` is stored as f32.
     assert!(h + 0.01 >= lines.len() as f64 * size * 1.2 + 6.0, "three rows, the blank one included: {h}");
     let ink = pdfcraft_engine::annot_text::text_height(&text, size, w - 4.0);

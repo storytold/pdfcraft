@@ -264,7 +264,9 @@ pub fn wrap_with_latin(text: &str, size: f64, width: f64, latin: Std14) -> Resul
     if matches!(latin, Std14::Symbol | Std14::ZapfDingbats) {
         return Err(GlyphError::Missing);
     }
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    // A CR, a CRLF pair, a line separator and a paragraph separator each end a paragraph, as a
+    // line feed does (UAX #9 P1 resolves each paragraph on its own).
+    let normalized = text.replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n");
     let mut out = Vec::new();
     for paragraph in normalized.split('\n') {
         let rtl = unicode_bidi::get_base_direction(paragraph) == unicode_bidi::Direction::Rtl;
@@ -294,13 +296,22 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
     while at < count {
         let start = boundaries.get(at).copied().unwrap_or(paragraph.len());
         let range = |end: usize| start..boundaries.get(end).copied().unwrap_or(paragraph.len());
+        let ends_in_hyphen = |end: usize| paragraph.get(range(end)).is_some_and(|s| s.ends_with('\u{00ad}'));
+        // How wide the text up to `end` is where the line goes on past it: a discretionary
+        // hyphen at its end is not shown. Shown, it would make a shorter prefix wider than a
+        // longer one, and the search below would stop at a hyphen inside a word that fits.
+        let unbroken = |end: usize| {
+            let whole = range(end);
+            let shown = paragraph.get(whole.clone()).map_or(whole.end, |s| whole.start + s.trim_end_matches('\u{00ad}').len());
+            if shown > whole.start { measure(whole.start..shown) } else { 0.0 }
+        };
         // Exponential probing then binary search avoids reshaping every growing prefix of an
         // arbitrarily long word. Each emitted line is measured again after its chosen break.
         let mut fit = at;
         let mut probe = at + 1;
         let mut step = 1usize;
         loop {
-            let measured = measure(range(probe));
+            let measured = unbroken(probe);
             if measured > width || !measured.is_finite() {
                 break;
             }
@@ -314,7 +325,7 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
         let mut high = probe;
         while high.saturating_sub(fit) > 1 {
             let middle = fit + (high - fit) / 2;
-            let measured = measure(range(middle));
+            let measured = unbroken(middle);
             if measured.is_finite() && measured <= width {
                 fit = middle;
             } else {
@@ -324,12 +335,28 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
         // A single overwide grapheme cannot be split without separating a mark from its base.
         let mut end = fit.max(at + 1);
         if end < count {
-            for boundary in (at + 1..=end).rev() {
+            // A line may end after a space, a zero-width space or a discretionary hyphen, but
+            // not after indentation alone: that would leave a blank row above the text.
+            let breaks_after = |boundary: usize| {
                 let previous = boundaries.get(boundary.saturating_sub(1)).copied().unwrap_or(start);
                 let next = boundaries.get(boundary).copied().unwrap_or(previous);
-                if paragraph.get(previous..next).is_some_and(|s| s.chars().all(|c| soft_space(c) || matches!(c, '\u{200b}' | '\u{00ad}'))) {
-                    end = boundary;
-                    break;
+                paragraph.get(previous..next).is_some_and(|s| s.chars().all(|c| soft_space(c) || matches!(c, '\u{200b}' | '\u{00ad}')))
+                    && paragraph.get(start..next).is_some_and(|s| !s.chars().all(char::is_whitespace))
+            };
+            // The last such place where the line fits as it is drawn when broken there, with its
+            // hyphen; with none, the line is cut between graphemes.
+            let mut limit = end;
+            loop {
+                match (at + 1..=limit).rev().find(|boundary| breaks_after(*boundary)) {
+                    Some(boundary) if ends_in_hyphen(boundary) && boundary > at + 1 && measure(range(boundary)) > width => limit = boundary - 1,
+                    Some(boundary) => {
+                        end = boundary;
+                        break;
+                    }
+                    None => {
+                        end = limit.max(at + 1);
+                        break;
+                    }
                 }
             }
         }
@@ -704,6 +731,41 @@ mod tests {
         assert_eq!(wide[0].width, Std14::Helvetica.text_width("ABC   ", 12.0));
         let whitespace = wrap("    \n  ABC  ", 12.0, 1000.0).unwrap();
         assert_eq!(whitespace.iter().map(|line| line.text.as_str()).collect::<Vec<_>>(), ["    ", "  ABC  "]);
+    }
+
+    #[test]
+    fn unicode_line_and_paragraph_separators_start_a_new_line() {
+        for separator in ['\u{2028}', '\u{2029}'] {
+            let lines = wrap(&format!("ABC{separator}DEF"), 12.0, 1000.0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["ABC", "DEF"], "U+{:04X}", separator as u32);
+            let (content, _) = draw(&lines, 12.0, [0.0, 0.0, 1000.0, 100.0], 0, [0.0; 3]).unwrap();
+            assert!(!String::from_utf8(content).unwrap().contains('?'));
+        }
+    }
+
+    #[test]
+    fn a_word_that_fits_is_not_broken_at_its_discretionary_hyphen() {
+        // "iii-" is wider than "iiii": probing the break at the hyphen must not end the search.
+        let width = Std14::Helvetica.text_width("iiii", 12.0);
+        assert!(Std14::Helvetica.text_width("iii-", 12.0) > width);
+        let lines = wrap("iii\u{00ad}i", 12.0, width).unwrap();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        // Where the word does not fit, the break at the hyphen shows it and still fits.
+        let narrow = Std14::Helvetica.text_width("ii-", 12.0);
+        let lines = wrap("ii\u{00ad}iiii", 12.0, narrow).unwrap();
+        assert_eq!(lines[0].text, "ii\u{00ad}", "{lines:?}");
+        assert!(lines.iter().all(|line| line.width <= narrow + 1e-6), "{lines:?}");
+    }
+
+    #[test]
+    fn indentation_stays_with_the_first_text_that_fits() {
+        let width = Std14::Helvetica.text_width("  AB", 12.0);
+        let lines = wrap("  ABCDEF", 12.0, width).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "  ABCDEF");
+        assert_eq!(lines[0].text, "  AB", "no blank first row: {lines:?}");
+        // A paragraph of spaces alone is still one intended row.
+        let spaces = wrap("    ", 12.0, 1000.0).unwrap();
+        assert_eq!(spaces.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["    "]);
     }
 
     #[test]
