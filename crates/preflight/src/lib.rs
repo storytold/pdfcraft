@@ -1910,7 +1910,7 @@ fn check_one_object(
     // 6.4.1: a form field has neither an action nor additional actions in PDF/A-2 and 3. PDF/A-4
     // lets it have additional actions. A field merged with its widget is checked as the widget. A
     // field is known by its field type, its own or one it inherits.
-    let (aa, a) = (entry(doc, dict, b"AA"), entry(doc, dict, b"A"));
+    let (aa, a) = (present(doc, dict, b"AA"), present(doc, dict, b"A"));
     if (aa || a) && !is_annot && level.part() != 4 && part4::field_type(doc, dict).is_some() {
         if aa {
             issue("6.4.1", "A form field has additional actions", None, None, true);
@@ -1962,12 +1962,6 @@ fn is_annotation(doc: &Document, dict: &Dict, ty: Option<&[u8]>, subtype: Option
         || (subtype.is_some() && dict.get(b"Rect").is_some_and(|r| doc.resolve(r).as_array().is_some()) && (on_page || dict.get(b"P").is_some()))
 }
 
-/// Whether `dict` has `key` with a value other than null, which counts as no entry (ISO 32000-2
-/// 7.3.9).
-fn entry(doc: &Document, dict: &Dict, key: &[u8]) -> bool {
-    dict.get(key).is_some_and(|v| !matches!(*doc.resolve(v), Object::Null))
-}
-
 fn check_annotation(
     doc: &Document,
     level: Level,
@@ -1995,7 +1989,7 @@ fn check_annotation(
     }
     let widget = subtype == Some(b"Widget");
     // 6.4.1, in every part: a widget has no action of its own.
-    if widget && entry(doc, dict, b"A") {
+    if widget && present(doc, dict, b"A") {
         issue("6.4.1", "A widget annotation has an action (A)", None, page, false);
     }
     match dict.get(b"AA") {
@@ -2007,7 +2001,7 @@ fn check_annotation(
             }
         }
         // PDF/A-2 and 3 put a widget's additional actions under 6.4.1 with the form's.
-        Some(_) if widget && entry(doc, dict, b"AA") => issue("6.4.1", "A {} annotation has additional actions", Some(name), page, true),
+        Some(_) if widget && present(doc, dict, b"AA") => issue("6.4.1", "A {} annotation has additional actions", Some(name), page, true),
         Some(_) if widget => {}
         Some(_) => issue("6.5.2", "A {} annotation has additional actions", Some(name), page, true),
         None => {}
