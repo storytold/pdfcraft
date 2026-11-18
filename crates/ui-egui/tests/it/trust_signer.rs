@@ -75,8 +75,10 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
         (signer, root)
     };
 
-    // Expand the signature row and use the one-click trust button.
+    // Open the signature row (a click picks it, Right opens a tree row) and use the one-click trust button.
     h.get_by_label_contains("Signed by").click();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);
