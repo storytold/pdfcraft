@@ -174,19 +174,19 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
 }
 
 fn single(view: &DocView, page: usize) -> Option<ObjectTarget> {
-    if let Some((_, index)) = view.content.selected.filter(|(p, _)| *p == page) {
+    if let Some((_, index)) = view.session.content.selected.filter(|(p, _)| *p == page) {
         Some(ObjectTarget { kind: ObjectKind::Added, index })
-    } else if let Some(s) = view.image_selection.as_ref().filter(|s| s.page == page) {
+    } else if let Some(s) = view.session.image_selection.as_ref().filter(|s| s.page == page) {
         Some(ObjectTarget { kind: ObjectKind::Image, index: s.index })
     } else {
-        view.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block })
+        view.session.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block })
     }
 }
 
 fn leave_single(view: &mut DocView) {
-    view.content.selected = None;
-    view.image_selection = None;
-    view.line_editor = None;
+    view.session.content.selected = None;
+    view.session.image_selection = None;
+    view.session.line_editor = None;
 }
 
 /// ⌘A in Edit a PDF: every object on the current page selected together, as Acrobat selects
@@ -194,17 +194,17 @@ fn leave_single(view: &mut DocView) {
 /// objects can't be selected together, or has too many, says so and keeps what was selected.
 pub(crate) fn select_all(view: &mut DocView, doc: &Document) {
     let page = view.current;
-    match view.objects.inventory(doc, page) {
-        Ok(objects) if objects.len() > MAX_MOVE_OBJECTS => view.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into()),
+    match view.session.objects.inventory(doc, page) {
+        Ok(objects) if objects.len() > MAX_MOVE_OBJECTS => view.session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into()),
         Ok(objects) => {
-            view.objects.clear();
+            view.session.objects.clear();
             if !objects.is_empty() {
                 leave_single(view);
-                view.objects.page = Some(page);
-                view.objects.selected = objects;
+                view.session.objects.page = Some(page);
+                view.session.objects.selected = objects;
             }
         }
-        Err(_) => view.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into()),
+        Err(_) => view.session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into()),
     }
 }
 
@@ -227,27 +227,27 @@ pub(crate) fn modified_press_at(view: &mut DocView, doc: &Document, info: &DocIn
     if !xf.rect.contains(p) {
         return false;
     }
-    if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
-        view.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
+    if view.session.content.draft.is_some() || view.session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
+        view.session.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
         return true;
     }
-    let objects = match view.objects.inventory(doc, page) {
+    let objects = match view.session.objects.inventory(doc, page) {
         Ok(objects) => objects,
         Err(_) => {
-            view.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
+            view.session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
             return true;
         }
     };
     let Some(object) = object_at(xf, info, page, &objects, p).and_then(|t| objects.iter().find(|o| o.target == t)) else {
         return false;
     };
-    if view.objects.page != Some(page) {
+    if view.session.objects.page != Some(page) {
         let single = single(view, page).and_then(|t| objects.iter().find(|o| o.target == t)).cloned();
-        view.objects.clear();
-        view.objects.page = Some(page);
-        view.objects.selected.extend(single);
+        view.session.objects.clear();
+        view.session.objects.page = Some(page);
+        view.session.objects.selected.extend(single);
     }
-    let s = &mut view.objects;
+    let s = &mut view.session.objects;
     if let Some(index) = s.selected.iter().position(|o| o.target == object.target) {
         s.selected.remove(index);
     } else if s.selected.len() < MAX_MOVE_OBJECTS {
@@ -293,16 +293,16 @@ pub(crate) fn marquee_rect(phase: &PressPhase) -> Option<Rect> {
 /// within 3 points clears. More than [`MAX_MOVE_OBJECTS`] keeps the selection and says so.
 pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, start: PressStart, pos: Pos2) {
     let Some((page, xf)) = view.page_xforms().into_iter().find(|(_, xf)| xf.rect.contains(start.origin)) else { return };
-    let base = view.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
+    let base = view.session.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
     let mut sweep = MarqueeSelect::begin(start.origin, start.mods, base);
     sweep.update(pos);
     let rect = sweep.rect();
     if start.clicks >= 2 && rect.min.distance(rect.max) <= 3.0 {
-        view.objects.clear();
+        view.session.objects.clear();
         return;
     }
-    let Ok(objects) = view.objects.inventory(doc, page) else {
-        view.objects.clear();
+    let Ok(objects) = view.session.objects.inventory(doc, page) else {
+        view.session.objects.clear();
         return;
     };
     let area = rect.intersect(xf.rect);
@@ -310,14 +310,14 @@ pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, st
     let items = objects.iter().filter(|_| sweeps).map(|o| (o.target, screen(&xf, info, page, o)));
     let targets = sweep.selection(items);
     if targets.len() > MAX_MOVE_OBJECTS {
-        view.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into());
+        view.session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into());
         return;
     }
     let selected: Vec<EditableObject> = targets.iter().filter_map(|t| objects.iter().find(|o| o.target == *t).cloned()).collect();
-    view.objects.clear();
+    view.session.objects.clear();
     if !selected.is_empty() {
-        view.objects.page = Some(page);
-        view.objects.selected = selected;
+        view.session.objects.page = Some(page);
+        view.session.objects.selected = selected;
     }
 }
 
@@ -348,7 +348,7 @@ fn outline_path(body: &PageBody<'_>, rect: Rect) -> BezPath {
 
 /// The paragraph open for typing on `page` with no changes yet: its frame takes hold of the box.
 fn open_block(view: &DocView, page: usize) -> Option<usize> {
-    view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
+    view.session.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
 }
 
 /// The controls of the objects selected together on each page shown: an outline per object (and one
@@ -369,14 +369,14 @@ pub(crate) fn object_controls(
         let page = placed.page;
         let Some(xf) = view.page_xform(page) else { continue };
         if let Some(block) = open_block(view, page)
-            && let Ok(objects) = view.objects.inventory(doc, page)
+            && let Ok(objects) = view.session.objects.inventory(doc, page)
             && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
         {
             for band in frame_band(screen(&xf, info, page, object)) {
                 PagePart::new(Owner::Frame { block }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move).show(ui);
             }
         }
-        let s = &view.objects;
+        let s = &view.session.objects;
         if s.page != Some(page) || s.selected.is_empty() {
             continue;
         }
@@ -412,29 +412,29 @@ pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, 
         PressPhase::Down { .. } => {
             if let Owner::Frame { block } = press.owner {
                 let object = view
-                    .objects
+                    .session.objects
                     .inventory(doc, page)
                     .ok()
                     .and_then(|objects| objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block }));
                 let object = object?;
-                view.objects.clear();
-                view.objects.page = Some(page);
-                view.objects.selected.push(object);
+                view.session.objects.clear();
+                view.session.objects.page = Some(page);
+                view.session.objects.selected.push(object);
                 leave_single(view);
                 view.current = page;
             }
             None
         }
         PressPhase::Release { start, pos, .. } => {
-            if start.origin.distance(pos) <= 3.0 || view.pending_edit.is_some() {
+            if start.origin.distance(pos) <= 3.0 || view.session.pending_edit.is_some() {
                 return None;
             }
             let xf = view.page_xform(page)?;
             let (a, b) = (xf.screen_to_view(start.origin), xf.screen_to_view(pos));
             match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
-                Ok(offset) => Some(view.objects.move_by(page, offset)),
+                Ok(offset) => Some(view.session.objects.move_by(page, offset)),
                 Err(_) => {
-                    view.objects.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into());
+                    view.session.objects.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into());
                     None
                 }
             }
@@ -447,11 +447,11 @@ pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, 
 /// An arrow key moves the selected objects, else the selected picture, a point (`far`: ten points), as
 /// in Acrobat. `direction` is a unit vector on screen. Nothing while an edit waits to be applied.
 pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bool) -> Option<Edit> {
-    if view.pending_edit.is_some() {
+    if view.session.pending_edit.is_some() {
         return None;
     }
-    let image = view.image_selection.as_ref().map(|s| (s.page, s.index));
-    let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty());
+    let image = view.session.image_selection.as_ref().map(|s| (s.page, s.index));
+    let objects = view.session.objects.page.filter(|_| !view.session.objects.selected.is_empty());
     let page = objects.or(image.map(|(page, _)| page))?;
     let xf = view.page_xform(page)?;
     let step = direction * if far { 10.0 } else { 1.0 };
@@ -466,7 +466,7 @@ pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bo
     let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
     let offset = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]).ok()?;
     if objects.is_some() {
-        return Some(view.objects.move_by(page, offset));
+        return Some(view.session.objects.move_by(page, offset));
     }
     let (page, index) = image?;
     let r = doc.page_images(page).get(index).map(|im| im.rect)?;
@@ -477,10 +477,10 @@ pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bo
 /// Delete removes the selected objects, as in Acrobat: a paragraph selected by its frame, or
 /// everything an area selection took, goes at once instead of one typed character at a time.
 pub(crate) fn delete(view: &DocView) -> Option<Edit> {
-    if view.pending_edit.is_some() {
+    if view.session.pending_edit.is_some() {
         return None;
     }
-    let (page, targets) = view.objects.selection()?;
+    let (page, targets) = view.session.objects.selection()?;
     // The selection stays until the edit applies: `prepare` clears it when the document changes,
     // and a refused delete (text used as a clipping path) leaves it selected.
     Edit::delete_objects(page, targets)

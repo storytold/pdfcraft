@@ -27,7 +27,7 @@ impl PdfCraftApp {
         let (pages, which, found) = if all {
             // What the find bar holds on each page it has searched, so matches no paragraph
             // holds (a form field, a comment) are counted rather than lost.
-            let mut found: BTreeMap<usize, usize> = view.texts.keys().map(|p| (*p, 0)).collect();
+            let mut found: BTreeMap<usize, usize> = view.session.texts.keys().map(|p| (*p, 0)).collect();
             for m in find.matches.matches() {
                 let n = found.entry(m.page).or_insert(0);
                 *n = n.saturating_add(1);
@@ -37,7 +37,7 @@ impl PdfCraftApp {
             // The highlighted match, by where its first and last glyphs are drawn.
             let Some((page, range)) = find.matches.current_match().map(|m| (m.page, m.range.clone())) else { return };
             let centre = |g: usize| {
-                view.texts.get(&page).and_then(|t| t.glyphs.get(g)).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0])
+                view.session.texts.get(&page).and_then(|t| t.glyphs.get(g)).map(|g| [(g.rect[0] + g.rect[2]) / 2.0, (g.rect[1] + g.rect[3]) / 2.0])
             };
             let (Some(start), Some(end)) = (centre(range.start), centre(range.end.saturating_sub(1))) else { return };
             (vec![page], Which::At { page, start, end }, None)

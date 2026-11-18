@@ -45,10 +45,10 @@ impl DocView {
 
     /// Whether a text layer, a background or a page picture is still on its way.
     pub fn render_pending(&self) -> bool {
-        self.text_queue.counts() != QueueCounts::default()
-            || self.text_background.pending()
-            || self.move_background.pending()
-            || self.placed.iter().any(|p| matches!(p.picture, TextureState::Loading { .. }))
+        self.session.text_queue.counts() != QueueCounts::default()
+            || self.session.text_background.pending()
+            || self.session.move_background.pending()
+            || self.session.placed.iter().any(|p| matches!(p.picture, TextureState::Loading { .. }))
     }
 
     /// Re-render every page and text layer (the document's appearance changed, e.g. a layer
@@ -56,17 +56,17 @@ impl DocView {
     /// view never flashes blank.
     pub fn invalidate_content(&mut self) {
         // Undo, redo and other document-wide changes: a released drawing's preview would be a ghost.
-        self.comments.settling.clear();
+        self.session.comments.settling.clear();
         self.revisions.bump_all();
-        self.forms.unbaked.clear();
-        self.texts.clear();
-        self.text_failed.clear();
-        let _dropped = self.text_queue.reprioritize(|_, _| None);
+        self.session.forms.unbaked.clear();
+        self.session.texts.clear();
+        self.session.text_failed.clear();
+        let _dropped = self.session.text_queue.reprioritize(|_, _| None);
         self.reports.clear();
         // Marks a tool waits to make go with the selection: its glyphs may name other text now.
-        self.text.selection = None;
-        self.marks_waiting = None;
-        self.all_text = false;
+        self.session.text.selection = None;
+        self.session.marks_waiting = None;
+        self.session.all_text = false;
         // A content change is not reader navigation: keep the automatic anchor so the
         // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
         // took over stays in control. `document_changed` clamps `current`; if the view no longer
@@ -81,33 +81,33 @@ impl DocView {
     /// re-read its text, keep everything else.
     pub fn page_changed(&mut self, page: usize) {
         self.revisions.bump(page);
-        self.texts.remove(&page);
-        self.text_failed.remove(&page);
-        let _dropped = self.text_queue.reprioritize(|key, priority| (*key != page).then_some(priority));
+        self.session.texts.remove(&page);
+        self.session.text_failed.remove(&page);
+        let _dropped = self.session.text_queue.reprioritize(|key, priority| (*key != page).then_some(priority));
         self.reports.forget(page);
-        if self.text.selection.as_ref().is_some_and(|s| s.pages().contains(&page)) {
+        if self.session.text.selection.as_ref().is_some_and(|s| s.pages().contains(&page)) {
             // With the marks a tool waits to make on it (#5017 review).
-            self.text.selection = None;
-            self.marks_waiting = None;
+            self.session.text.selection = None;
+            self.session.marks_waiting = None;
         }
     }
 
     pub(crate) fn page_text(&self, page: usize) -> Option<Arc<PageText>> {
-        self.texts.get(&page).cloned()
+        self.session.texts.get(&page).cloned()
     }
 
     /// Finds the addresses written as plain text on `page` (#4207): once per text layer, and only
     /// once the page's text is known. The addresses of text layers that were dropped or replaced
     /// are forgotten.
     pub(crate) fn refresh_text_links(&mut self, page: usize) {
-        let texts = &self.texts;
-        self.text_links.retain(|p, (t, _)| texts.get(p).is_some_and(|current| Arc::ptr_eq(current, t)));
-        if self.text_links.contains_key(&page) {
+        let texts = &self.session.texts;
+        self.session.text_links.retain(|p, (t, _)| texts.get(p).is_some_and(|current| Arc::ptr_eq(current, t)));
+        if self.session.text_links.contains_key(&page) {
             return;
         }
-        if let Some(text) = self.texts.get(&page).cloned() {
+        if let Some(text) = self.session.texts.get(&page).cloned() {
             let found: Arc<[TextLink]> = pdfcraft_engine::text_links::find_text_links(&text).into();
-            self.text_links.insert(page, (text, found));
+            self.session.text_links.insert(page, (text, found));
         }
     }
 
@@ -115,7 +115,7 @@ impl DocView {
     /// with its index among the page's, unless a link annotation lies over it: the annotation is
     /// what the document asks for there. Only addresses [`Self::refresh_text_links`] found count.
     pub(crate) fn text_link_at(&self, info: &DocInfo, page: usize, x: f32, y: f32) -> Option<(usize, &TextLink)> {
-        let (_, links) = self.text_links.get(&page)?;
+        let (_, links) = self.session.text_links.get(&page)?;
         let page_info = info.pages.get(page)?;
         let (index, hit) = links.iter().enumerate().find(|(_, l)| l.contains(x, y))?;
         let covered = info.links.iter().any(|l| l.page == page && hit.covered_by(page_info, l.rect));
@@ -124,13 +124,13 @@ impl DocView {
 
     /// The address of the `index`-th text link found on `page` (#4207).
     pub(crate) fn text_link_uri(&self, page: usize, index: usize) -> Option<String> {
-        self.text_links.get(&page).and_then(|(_, links)| links.get(index)).map(|l| l.uri.clone())
+        self.session.text_links.get(&page).and_then(|(_, links)| links.get(index)).map(|l| l.uri.clone())
     }
 
     /// Whether `page`'s text layer has arrived from the renderer. Selecting text, the I-beam and
     /// find matches on a page all wait for it (tests and automation).
     pub fn has_page_text(&self, page: usize) -> bool {
-        self.texts.contains_key(&page)
+        self.session.texts.contains_key(&page)
     }
 
     /// The text-layer step of a pass: takes the layers the jobs have finished (every result is for the current
@@ -139,7 +139,7 @@ impl DocView {
     /// runs every page from the current one on). Pages whose layer is held, failed or already on its way are not asked
     /// again, so calling it every pass submits nothing new. The queue's own wake asks for the pass a result needs.
     pub(crate) fn want_text(&mut self, session: &pdfcraft_engine::Session, visible: &[usize], rest: &[usize]) {
-        while let Some(done) = self.text_queue.try_recv() {
+        while let Some(done) = self.session.text_queue.try_recv() {
             let page = done.key;
             let outcome = done.result;
             // Whether drawn or read for its text, a page cut at the limits is named (#623).
@@ -148,12 +148,12 @@ impl DocView {
             }
             match outcome.text {
                 Some(t) => {
-                    self.texts.insert(page, t);
+                    self.session.texts.insert(page, t);
                     self.refresh_find_page(page);
                 }
                 None => {
                     log::warn!("page {} text: {}", page + 1, outcome.error.unwrap_or_default());
-                    self.text_failed.insert(page);
+                    self.session.text_failed.insert(page);
                     if let Some(f) = self.find.as_mut() {
                         f.matches.set_page(page, Vec::new());
                     }
@@ -165,11 +165,11 @@ impl DocView {
         let config = session.render_config(self.id).unwrap_or_default();
         let ranked = visible.iter().map(|p| (*p, Priority::VISIBLE)).chain(rest.iter().map(|p| (*p, Priority::BACKGROUND)));
         for (page, priority) in ranked {
-            if page >= self.page_count || self.texts.contains_key(&page) || self.text_failed.contains(&page) || self.text_queue.contains(&page) {
+            if page >= self.page_count || self.session.texts.contains_key(&page) || self.session.text_failed.contains(&page) || self.session.text_queue.contains(&page) {
                 continue;
             }
             let (bytes, config) = (doc.display.clone(), config.clone());
-            self.text_queue.submit(page, priority, move |cancel| {
+            self.session.text_queue.submit(page, priority, move |cancel| {
                 if cancel.is_cancelled() {
                     return TextOutcome::default();
                 }
@@ -187,23 +187,23 @@ impl DocView {
     /// pass and churn the workers. Failures are never evicted either: they cost nothing
     /// to remember, and evicting one would re-request and re-fail it every pass.
     fn retain_text_layers(&mut self, visible: &[usize]) {
-        if self.texts.len() <= MAX_CACHED_TEXT_PAGES {
+        if self.session.texts.len() <= MAX_CACHED_TEXT_PAGES {
             return;
         }
         if self.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
             return;
         }
         let mut keep: HashSet<usize> = visible.iter().copied().collect();
-        if let Some(s) = self.text.selection.as_ref() {
+        if let Some(s) = self.session.text.selection.as_ref() {
             keep.extend(s.pages());
         }
         if let Some(f) = self.find.as_ref() {
             keep.extend(f.matches.matches().iter().map(|m| m.page));
         }
-        let mut rest: Vec<usize> = self.texts.keys().filter(|p| !keep.contains(*p)).copied().collect();
+        let mut rest: Vec<usize> = self.session.texts.keys().filter(|p| !keep.contains(*p)).copied().collect();
         rest.sort_by_key(|p| p.abs_diff(self.current));
         keep.extend(rest.into_iter().take(MAX_CACHED_TEXT_PAGES));
-        self.texts.retain(|p, _| keep.contains(p));
+        self.session.texts.retain(|p, _| keep.contains(p));
     }
 
     /// Device scale of a page raster: exactly the device scale, as a raster at any other scale is

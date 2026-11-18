@@ -799,9 +799,9 @@ mod tests {
         let mut app = PdfCraftApp::for_unit_tests();
         let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
         app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
-        app.views[0].texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
+        app.views[0].session.texts.insert(0, std::sync::Arc::new(pdfcraft_render::PageText::default()));
         app.apply_status_captions(crate::i18n::Lang::from_code("de").unwrap());
-        assert!(!app.views[0].texts.is_empty(), "its text, selection and search results stay");
+        assert!(!app.views[0].session.texts.is_empty(), "its text, selection and search results stay");
     }
 
     #[test]

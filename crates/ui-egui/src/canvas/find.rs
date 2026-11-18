@@ -64,11 +64,11 @@ impl DocView {
         if f.case_query.trim().is_empty() {
             return;
         }
-        let mut pages: Vec<usize> = self.texts.keys().copied().collect();
+        let mut pages: Vec<usize> = self.session.texts.keys().copied().collect();
         pages.sort();
         let mut reveal = false;
         for &p in &pages {
-            if let Some(text) = self.texts.get(&p) {
+            if let Some(text) = self.session.texts.get(&p) {
                 reveal |= f.matches.set_page(p, text.find_opts(&f.case_query, f.options.match_case, f.options.whole_word));
             }
         }
@@ -79,7 +79,7 @@ impl DocView {
     }
 
     pub(super) fn refresh_find_page(&mut self, page: usize) {
-        let (Some(f), Some(text)) = (self.find.as_mut(), self.texts.get(&page)) else { return };
+        let (Some(f), Some(text)) = (self.find.as_mut(), self.session.texts.get(&page)) else { return };
         if f.case_query.trim().is_empty() {
             return;
         }
@@ -122,7 +122,7 @@ impl DocView {
     /// corner, after the view rotation), where the page view's go-to point takes it.
     fn match_centre(&self) -> Option<Point> {
         let m = self.find.as_ref()?.matches.current_match()?;
-        let glyphs = self.texts.get(&m.page)?.glyphs.get(m.range.clone())?;
+        let glyphs = self.session.texts.get(&m.page)?.glyphs.get(m.range.clone())?;
         let [x0, y0, x1, y1] = glyphs.iter().map(|g| g.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
         let &(w, h) = self.page_sizes.get(m.page).filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
         let (w, h) = (f64::from(w), f64::from(h));
@@ -150,7 +150,7 @@ impl DocView {
                 .find
                 .as_ref()
                 .and_then(|f| f.matches.current_match())
-                .and_then(|m| self.texts.get(&m.page).and_then(|t| t.glyphs.get(m.range.start)))
+                .and_then(|m| self.session.texts.get(&m.page).and_then(|t| t.glyphs.get(m.range.start)))
                 .map(|g| f64::from(g.rect[1]))
                 .zip(self.page_sizes.get(page).map(|&(_, h)| f64::from(h)))
                 .filter(|(y, h)| y.is_finite() && h.is_finite() && *h > 0.0);
@@ -175,7 +175,7 @@ impl DocView {
 /// Replace row: Replace changes the highlighted match, Replace all every match, each inside its own
 /// paragraph.
 pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bool, ui: &mut egui::Ui) {
-    let searched = view.texts.len() + view.text_failed.len();
+    let searched = view.session.texts.len() + view.session.text_failed.len();
     let key = view.pane.key;
     let Some(find) = view.find.as_mut() else { return };
     // The Search panel shows this search.

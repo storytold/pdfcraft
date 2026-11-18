@@ -213,7 +213,7 @@ fn arrange_row(
     can_modify: bool,
 ) {
     if MenuItem::new(tl!(label).to_string()).enabled(can_modify).show(ui).ran {
-        view.pending_edit = crate::prepare::arrange(form, anchor, others, op);
+        view.session.pending_edit = crate::prepare::arrange(form, anchor, others, op);
     }
 }
 
@@ -229,8 +229,8 @@ fn field_rows(
 ) {
     use crate::prepare::Arrange as A;
     // Several fields: Align, Distribute, Set Fields to Same Size.
-    if !view.prepare.also.is_empty() {
-        let others = view.prepare.also.clone();
+    if !view.session.prepare.also.is_empty() {
+        let others = view.session.prepare.also.clone();
         let anchor = (name.clone(), widget);
         Menu::submenu_row_enabled(ui, tl!("Align").to_string(), can_modify, |ui, _| {
             for (op, label) in [
@@ -263,27 +263,27 @@ fn field_rows(
         pick.field = Some(FieldMenu::Duplicate(name));
     }
     Divider::horizontal().show(ui);
-    let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
+    let delete = if view.session.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
     if MenuItem::new(tl!(delete).to_string()).enabled(can_modify).show(ui).ran {
-        view.pending_edit = crate::prepare::delete_selected(view);
+        view.session.pending_edit = crate::prepare::delete_selected(view);
     }
 }
 
 /// The menu of the link the press went to.
 fn link_rows(ui: &mut egui::Ui, view: &mut DocView, can_modify: bool, page: usize, index: usize) {
     if MenuItem::new(tl!("Properties…").to_string()).show(ui).ran {
-        view.links.open_existing = Some((page, index));
+        view.session.links.open_existing = Some((page, index));
     }
     if MenuItem::new(tl!("Delete").to_string()).enabled(can_modify).show(ui).ran {
-        view.pending_edit = Some(Edit::DeleteLink { page, index });
-        view.links.selected = None;
-        view.links.context = None;
+        view.session.pending_edit = Some(Edit::DeleteLink { page, index });
+        view.session.links.selected = None;
+        view.session.links.context = None;
     }
     Divider::horizontal().show(ui);
     if MenuItem::new(tl!("Remove all links").to_string()).enabled(can_modify).show(ui).ran {
-        view.pending_edit = Some(Edit::RemoveLinks { pages: None });
-        view.links.selected = None;
-        view.links.context = None;
+        view.session.pending_edit = Some(Edit::RemoveLinks { pages: None });
+        view.session.links.selected = None;
+        view.session.links.context = None;
     }
 }
 
@@ -292,38 +292,38 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
     let can_modify = cx.rights.can_modify;
     let on_selected_field = match menu_for {
         Some(Owner::PrepareField { field, widget }) => {
-            cx.form.get(field).is_some_and(|f| view.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
+            cx.form.get(field).is_some_and(|f| view.session.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
         }
         Some(Owner::PrepareCorner { .. }) => true,
         _ => false,
     };
     if cx.preparing
         && on_selected_field
-        && let Some((name, widget)) = view.prepare.selected.clone()
+        && let Some((name, widget)) = view.session.prepare.selected.clone()
     {
         field_rows(ui, view, cx.form, can_modify, name, widget, pick);
         return;
     }
     if matches!(menu_for, Some(Owner::Link { .. }))
-        && let Some((page, index)) = view.links.context
+        && let Some((page, index)) = view.session.links.context
     {
         link_rows(ui, view, can_modify, page, index);
         return;
     }
     if cx.tool == QuickTool::EditText
-        && let Some((page, Owner::Picture { index, .. })) = view.menu_for
-        && let Some(sel) = view.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
+        && let Some((page, Owner::Picture { index, .. })) = view.session.menu_for
+        && let Some(sel) = view.session.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
     {
         let images = cx.doc.page_images(sel.page);
         // Paste lands where the menu opened, on the picture's page: another page's point means nothing there.
-        let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
-        let rotation = (view.rotation % 360 + cx.info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
+        let at = view.session.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
+        let rotation = (view.view.rotation % 360 + cx.info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
         pick.image = crate::edit_text_ui::picture_menu(ui, view, &images, sel.page, sel.index, cx.can_paste_image, at, rotation);
         return;
     }
     // The comment the press went to, when it is the one selected, or connected lines being drawn.
-    let on_selected_comment = matches!(view.menu_for, Some((page, Owner::Comment { index, .. })) if view.comments.selected == Some((page, index)));
-    let drawing_points = matches!(cx.tool, QuickTool::Comment(t) if t.clicks_points()) && !view.comments.tool.drawing().is_empty();
+    let on_selected_comment = matches!(view.session.menu_for, Some((page, Owner::Comment { index, .. })) if view.session.comments.selected == Some((page, index)));
+    let drawing_points = matches!(cx.tool, QuickTool::Comment(t) if t.clicks_points()) && !view.session.comments.tool.drawing().is_empty();
     if on_selected_comment || drawing_points {
         let tool = if let QuickTool::Comment(t) = cx.tool { Some(t) } else { None };
         pick.canvas = comments::context_rows(
@@ -340,14 +340,14 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         );
         return;
     }
-    let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
+    let (page, at) = view.session.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
     // On a page still being read, the picture rows appear when the answer comes.
-    let picture_under = view.comments.context_at.and_then(|(page, at)| {
-        view.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index)
+    let picture_under = view.session.comments.context_at.and_then(|(page, at)| {
+        view.session.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index)
     });
     // A text selection whose pages are still being read copies once they are.
     let has_text = view.selected_text().is_some() || view.selection_waits_for_text().is_some();
-    let can_copy_items = cx.can_copy && (view.image_selection.is_some() || has_text || picture_under.is_some());
+    let can_copy_items = cx.can_copy && (view.session.image_selection.is_some() || has_text || picture_under.is_some());
     let perms = PageMenuPerms {
         can_modify,
         can_assemble: cx.doc.allows_assembly(),

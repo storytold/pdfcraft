@@ -209,7 +209,7 @@ impl PdfCraftApp {
                 if !deg.is_multiple_of(90) {
                     return Err("rotate: 0, 90, 180 or 270".into());
                 }
-                v.rotation = deg % 360;
+                v.view.rotation = deg % 360;
             }
             ("layer", _) => {
                 // `--layer "Name=off"` / `"Name=on"`
@@ -231,7 +231,7 @@ impl PdfCraftApp {
                 }
                 v.rerun_find();
             }
-            ("fields", Some(v)) => v.highlight_fields = value != "off",
+            ("fields", Some(v)) => v.session.highlight_fields = value != "off",
             ("select", Some(v)) => {
                 // The same physical page ranges as the Organize Pages selection field.
                 let pages = craft::pages::parse_pages(value, v.page_count()).map_err(|e| e.to_string())?;
@@ -247,7 +247,7 @@ impl PdfCraftApp {
                     Some((name, w)) => (name, w.parse::<usize>().map_err(|_| "prepare-select: NAME or NAME:WIDGET")?),
                     None => (value, 0),
                 };
-                v.prepare.selected = Some((name.to_string(), widget));
+                v.session.prepare.selected = Some((name.to_string(), widget));
             }
             // PLAN: assumed `CommentPrefs::set_recent_colours(&mut self, &str) -> Result<(), String>` (pdf-comments, H-18).
             ("recent-colours", _) => self.comment_prefs.set_recent_colours(value)?,
@@ -359,9 +359,9 @@ impl PdfCraftApp {
                 let (p, i): (usize, usize) =
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
                 let thread = (p.saturating_sub(1), i.saturating_sub(1));
-                v.comments.select_only(thread);
+                v.session.comments.select_only(thread);
                 // PLAN: assumed `CommentsPanel::reveal(&mut self, (usize, usize))` (pdf-comments-w12).
-                v.comments.panel.reveal(thread);
+                v.session.comments.panel.reveal(thread);
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).
             ("combine-view", _) => {
@@ -468,7 +468,7 @@ impl PdfCraftApp {
                 let (page, index) = self
                     .active
                     .and_then(|i| self.views.get(i))
-                    .and_then(|v| v.comments.primary())
+                    .and_then(|v| v.session.comments.primary())
                     .ok_or("`dialog comment-props` needs a selected comment")?;
                 self.open_comment_props(ctx, page, index);
             }
@@ -476,7 +476,7 @@ impl PdfCraftApp {
                 let (i, _) = self.active_ids().ok_or("`dialog field-properties` needs an open document")?;
                 let (name, widget) = match field {
                     Some(name) => (name.to_string(), 0),
-                    None => self.views[i].prepare.selected.clone().ok_or("select a field first, or name one: field-properties:NAME")?,
+                    None => self.views[i].session.prepare.selected.clone().ok_or("select a field first, or name one: field-properties:NAME")?,
                 };
                 prepare::dialog::open(self, &name, widget, prepare::FieldTab::General);
             }

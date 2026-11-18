@@ -116,11 +116,11 @@ impl PdfCraftApp {
     /// Copy on the canvas: with objects selected in Edit a PDF, those; with no text selected, the
     /// selected comments with their replies; else the text; else the selected image.
     pub(crate) fn copy_from_canvas(&mut self, i: usize) {
-        if self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
+        if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
         // Objects selected together in Edit a PDF take the copy.
-        if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.objects.count() > 0) {
+        if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
             self.copy_objects(i, false);
             return;
         }
@@ -130,7 +130,7 @@ impl PdfCraftApp {
             self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
         if (text_selected || !self.copy_selected_comments(i))
             && !self.copy_selected_text(i)
-            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
@@ -140,14 +140,14 @@ impl PdfCraftApp {
 
     /// Cut on the canvas: objects selected in Edit a PDF, else the selected image.
     pub(crate) fn cut_from_canvas(&mut self, i: usize) {
-        if self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
+        if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
-        if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.objects.count() > 0) {
+        if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
             self.copy_objects(i, true);
             return;
         }
-        if let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+        if let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
@@ -159,7 +159,7 @@ impl PdfCraftApp {
     /// still holds their copy; a picture the clipboard holds; its text (XFDF is pasted as
     /// comments, and text beats an image the app only remembers); else the remembered image.
     pub(crate) fn paste_from_clipboard(&mut self, i: usize) {
-        if self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
+        if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
         let page = self.views.get(i).map_or(0, |v| v.current());
@@ -192,7 +192,7 @@ impl PdfCraftApp {
     /// document, and put their text (or else their first picture) on the system clipboard for
     /// other applications. A cut then deletes them, as one undo step.
     pub(crate) fn copy_objects(&mut self, i: usize, cut: bool) -> bool {
-        let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.objects.selection())) else { return false };
+        let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.session.objects.selection())) else { return false };
         if !self.may_copy(id) {
             return false;
         }
@@ -267,7 +267,7 @@ impl PdfCraftApp {
             return false;
         }
         if let (Some(Ok(after)), Some(view)) = (self.session.get(id).map(|d| d.editable_objects(page)), self.views.get_mut(i)) {
-            view.objects.select_pasted(page, &before, after);
+            view.session.objects.select_pasted(page, &before, after);
         }
         true
     }
@@ -289,7 +289,7 @@ impl PdfCraftApp {
     /// when nothing is selected.
     pub fn copy_selected_comments(&mut self, i: usize) -> bool {
         let Some(view) = self.views.get(i) else { return false };
-        let keys = view.comments.selection();
+        let keys = view.session.comments.selection();
         if keys.is_empty() {
             return false;
         }
@@ -338,10 +338,10 @@ impl PdfCraftApp {
             }
             None => {
                 let Some(view) = self.views.get_mut(i) else { return false };
-                view.comments.clear_selection();
+                view.session.comments.clear_selection();
                 let outlines = pdfcraft_engine::comment_outlines(&xfdf);
                 // PLAN: assumed `comments::PastePlacement { xfdf, bounds, count, outlines }` (pdf-comments-w8)
-                view.comments.paste = Some(comments::PastePlacement { xfdf, bounds, count, outlines });
+                view.session.comments.paste = Some(comments::PastePlacement { xfdf, bounds, count, outlines });
                 self.notify_tr("Click where the copied comments go; Escape lets them go");
                 true
             }
@@ -358,13 +358,13 @@ impl PdfCraftApp {
         // So are a selection's pages not read yet (a selection across pages copied before every
         // page it covers has its text), rather than copying nothing.
         let waiting = v.selection_waits_for_text();
-        if (v.all_text && !v.pages_without_text().is_empty()) || waiting.is_some() {
+        if (v.session.all_text && !v.pages_without_text().is_empty()) || waiting.is_some() {
             // Checked before any page is read: a document that refuses copying reads nothing.
             if !self.may_copy(id) {
                 return false;
             }
             let job = |v: &crate::DocView, doc: &pdfcraft_engine::Document| match waiting {
-                Some(span) if !v.all_text => DocumentCopyJob::of_selection(v, doc, span),
+                Some(span) if !v.session.all_text => DocumentCopyJob::of_selection(v, doc, span),
                 _ => DocumentCopyJob::of(v, doc),
             };
             let Some(job) = self.views.get(i).and_then(|v| Some(job(v, self.session.get(id)?))) else { return false };
@@ -466,9 +466,9 @@ mod review_tests {
     #[test]
     fn review_failed_keyboard_cut_keeps_the_image_selection() {
         let (mut app, _) = app_with_clipboard();
-        app.views[0].image_selection = Some(crate::edit_text_ui::ImageSelection::at(0, 0));
+        app.views[0].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(0, 0));
         app.execute("edit.cut");
-        assert!(app.views[0].image_selection.is_some());
+        assert!(app.views[0].session.image_selection.is_some());
     }
 
     /// Review of #5017: Copy on a text selection still waiting for its pages' text starts its
@@ -482,9 +482,9 @@ mod review_tests {
         let style = pdfcraft_engine::Style::default_for(&shape);
         let note = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: String::new() };
         assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
-        app.views[0].comments.select_only((0, 0));
+        app.views[0].session.comments.select_only((0, 0));
         // The page's text is not read yet: the selection waits for it.
-        app.views[0].texts.clear();
+        app.views[0].session.texts.clear();
         app.views[0].select_text(0, 0, 0);
         assert!(app.views[0].selection_waits_for_text().is_some());
         assert!(app.execute("edit.copy"));

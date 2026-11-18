@@ -255,7 +255,7 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
     h.run_steps(3);
     let app = h.state();
     let generation = app.session.get(app.views[0].id).unwrap().edit_generation();
-    assert_eq!(app.views[0].edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
+    assert_eq!(app.views[0].session.edit_lines.get(&0).map(|(g, _)| *g), Some(generation), "the boxes follow the edit while input is blocked");
 }
 
 /// A cut page (#623) is named in a bar of its own: a static XFA form's notice, which comes

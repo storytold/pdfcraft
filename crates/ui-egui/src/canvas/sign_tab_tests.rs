@@ -292,7 +292,7 @@ fn a_sign_tab_signs_its_field_where_an_earlier_field_overlaps_it() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
     click_at(&mut h, tab.center());
     assert_eq!(h.state().sign_draft.as_ref().and_then(|d| d.field.clone()).as_deref(), Some("Approver"));
-    assert!(h.state().views[0].forms.focus.is_none(), "the text field didn't open");
+    assert!(h.state().views[0].session.forms.focus.is_none(), "the text field didn't open");
 
     // Three quarters across Approver, level with the tab: clear of the tab at any label width, and
     // under both fields.
@@ -304,5 +304,5 @@ fn a_sign_tab_signs_its_field_where_an_earlier_field_overlaps_it() {
     assert!(!h.state().modal_open(), "the sign dialog is closed");
     h.state_mut().sign_draft = None;
     click_at(&mut h, beside);
-    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("Name"), "the earlier field takes the click");
+    assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.as_str()), Some("Name"), "the earlier field takes the click");
 }

@@ -6,7 +6,7 @@ use craft::review::ui::thread::{CommentComposer, ComposerClose, ComposerDraft};
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
 pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
-    let c = view.comments.composer.as_ref()?;
+    let c = view.session.comments.composer.as_ref()?;
     let page = c.page;
     // Scrolled away: keep the draft until the page is back.
     let xf = view.page_xform(page)?;
@@ -16,7 +16,7 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
     let typewriter_edit = matches!(c.kind, ComposerKind::Edit(index) if info.annotations.iter().any(|a|
         a.page == page && a.index == index && a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
     ));
-    let c = view.comments.composer.as_mut()?;
+    let c = view.session.comments.composer.as_mut()?;
     let title = match c.kind {
         ComposerKind::Note => "Sticky note",
         ComposerKind::TextNote { .. } => "Add comment",
@@ -47,25 +47,25 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
     let output =
         CommentComposer::new(anchor, &mut c.text).header(tl!(title), &prefs.author).draft_kind(draft).close(ComposerClose::OnPostOrCancel).show(ui);
     if output.cancelled {
-        view.comments.composer = None;
+        view.session.comments.composer = None;
         return None;
     }
     let text = output.posted?;
-    let c = view.comments.composer.take()?;
+    let c = view.session.comments.composer.take()?;
     match c.kind {
         ComposerKind::Edit(index) => {
             info.annotations.iter().any(|a| a.page == page && a.index == index).then_some(Edit::SetAnnotationContents { page, index, text })
         }
         ComposerKind::Note => {
-            view.comments.tool_done = true;
+            view.session.comments.tool_done = true;
             Some(new_comment(page, prefs, CommentTool::Note, Shape::Note { at: c.at, icon: NoteIcon::Comment }, text))
         }
         ComposerKind::TextNote { quads } => {
-            view.comments.tool_done = true;
+            view.session.comments.tool_done = true;
             Some(new_comment(page, prefs, CommentTool::Highlight, Shape::TextMarkup { kind: Markup::Highlight, quads }, text))
         }
         ComposerKind::TextBox { size } => {
-            view.comments.tool_done = true;
+            view.session.comments.tool_done = true;
             let rotation = page_rotation(info, page);
             let border = prefs.style(CommentTool::TextBox).width;
             let font_size = prefs.font_size(CommentTool::TextBox).unwrap_or(12.0);
@@ -76,7 +76,7 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
             Some(new_comment(page, prefs, CommentTool::TextBox, Shape::TextBox { rect, font_size }, text))
         }
         ComposerKind::Callout { point } => {
-            view.comments.tool_done = true;
+            view.session.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
             let font_size = prefs.font_size(CommentTool::Callout).unwrap_or(10.0);
             let rect = text_box_rect(c.at, &text, font_size, 0);
@@ -84,8 +84,8 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
             Some(new_comment(page, prefs, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
-            view.comments.tool_done = true;
-            let quads = view.comments.replace.take()?;
+            view.session.comments.tool_done = true;
+            let quads = view.session.comments.replace.take()?;
             Some(Edit::ReplaceText {
                 page,
                 quads,
@@ -99,7 +99,7 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
             })
         }
         ComposerKind::Caret { size } => {
-            view.comments.tool_done = true;
+            view.session.comments.tool_done = true;
             let [x, y] = c.at;
             let half = size / 2.0;
             Some(new_comment(page, prefs, CommentTool::Caret, Shape::Caret { rect: [x - half, y - size, x + half, y] }, text))

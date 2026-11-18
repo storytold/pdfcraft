@@ -57,7 +57,7 @@ impl FieldPropsDialog {
 /// this one is among them, the dialog edits them together.
 pub(crate) fn open(app: &mut PdfCraftApp, name: &str, widget: usize, tab: FieldTab) {
     let Some((index, id)) = app.active_ids() else { return };
-    let names = app.views.get(index).map(|view| view.prepare.names()).unwrap_or_default();
+    let names = app.views.get(index).map(|view| view.session.prepare.names()).unwrap_or_default();
     if names.len() > 1 && names.iter().any(|n| n == name) {
         let made = match app.session.get(id) {
             Some(doc) => crate::bulk_fields::SharedFieldPropsDialog::new(doc, names),
@@ -140,7 +140,7 @@ pub(crate) fn finish(app: &mut PdfCraftApp) {
             }
         }
         if let Some(view) = app.views.get_mut(i) {
-            view.prepare.selected = Some((name, index));
+            view.session.prepare.selected = Some((name, index));
         }
     }
     let answer = if refused { Err(Label::from(tl!("The field properties could not be changed."))) } else { Ok(()) };

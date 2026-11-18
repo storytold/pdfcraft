@@ -282,7 +282,7 @@ impl PdfCraftApp {
             view.document_changed(&doc.info);
             // The marks left the comments: a selected one is gone, and its (page, index) could
             // now name another comment.
-            view.comments.clear_selection();
+            view.session.comments.clear_selection();
         }
         true
     }

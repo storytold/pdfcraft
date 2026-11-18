@@ -283,7 +283,7 @@ fn tool_tips(tool: QuickTool) -> bool {
 /// Whether the page shows a tip for what lies under the pointer (a comment, a signature's badge) with `tool`: not
 /// with Fill & Sign, not while drawing freehand, and not while a comment is moved, resized or drawn.
 pub(crate) fn tips_shown(tool: QuickTool, view: &DocView) -> bool {
-    tool_tips(tool) && view.comments.tool.in_flight().is_none() && view.comments.tool.drawing().is_empty()
+    tool_tips(tool) && view.session.comments.tool.in_flight().is_none() && view.session.comments.tool.drawing().is_empty()
 }
 
 /// What hovering `a` says, as Acrobat's popups do. Replies and Fill & Sign's marks (typed text, checks, signatures)

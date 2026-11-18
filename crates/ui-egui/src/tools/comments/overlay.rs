@@ -48,15 +48,15 @@ pub(crate) fn show(
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
     let markers = bridge::markers(info, &map, hover.pick.1);
-    let selected: Vec<AnnotationId> = view.comments.tool.selected.clone();
-    let in_flight = view.comments.tool.in_flight();
-    let idle = in_flight.is_none() && view.comments.tool.drawing().is_empty() && !body.pass.is_some_and(|p| p.press.phase.is_press());
+    let selected: Vec<AnnotationId> = view.session.comments.tool.selected.clone();
+    let in_flight = view.session.comments.tool.in_flight();
+    let idle = in_flight.is_none() && view.session.comments.tool.drawing().is_empty() && !body.pass.is_some_and(|p| p.press.phase.is_press());
     for page in body.pages {
         let mut on_page: Vec<Marked> = all.iter().filter(|a| a.page == page.page).cloned().collect();
         // The settling strokes are drawn by the overlay until their page is drawn again; their ids sit at the top of
         // the id space, which `id_of(page, index)` never reaches.
         let mut settling_ids = Vec::new();
-        for (n, s) in view.comments.settling.iter().filter(|s| s.page == page.page).enumerate() {
+        for (n, s) in view.session.comments.settling.iter().filter(|s| s.page == page.page).enumerate() {
             let id = bridge::id_of(page.page, u32::MAX as usize - n);
             if let Some(a) = settling_annotation(s, prefs, id, &map) {
                 settling_ids.push(id);

@@ -101,13 +101,13 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         }
         None => {}
     }
-    if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.comments.default_request.take()) {
+    if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.session.comments.default_request.take()) {
         app.make_comment_default(p, i);
     }
-    if let Some((p, i, open)) = app.views.get_mut(index).and_then(|v| v.comments.attachment_request.take()) {
+    if let Some((p, i, open)) = app.views.get_mut(index).and_then(|v| v.session.comments.attachment_request.take()) {
         app.comment_attachment_action(id, p, i, open);
     }
-    if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.comments.props_request.take()) {
+    if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.session.comments.props_request.take()) {
         app.open_comment_props(p, i);
     }
     if let Some(a) = result.bookmark {
@@ -139,7 +139,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
             } else {
                 v.go_to_page(p);
             }
-            v.flash = Some((p, r, 0.0));
+            v.session.flash = Some((p, r, 0.0));
         }
         None => {}
     }

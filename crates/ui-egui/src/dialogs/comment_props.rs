@@ -364,7 +364,7 @@ impl PdfCraftApp {
         });
         // A one-shot tool: back to Select unless pinned (apply_edit acts on this).
         if let Some((i, _)) = self.active_ids() {
-            self.views[i].comments.tool_done = true;
+            self.views[i].session.comments.tool_done = true;
         }
         self.apply_edit(edit);
     }
@@ -439,7 +439,7 @@ impl PdfCraftApp {
     pub(crate) fn colour_selection(&mut self, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
-        let keys = self.views.get(i).map(|v| v.comments.selection()).unwrap_or_default();
+        let keys = self.views.get(i).map(|v| v.session.comments.selection()).unwrap_or_default();
         let mut edits: Vec<Edit> = keys
             .into_iter()
             .filter(|(p, ix)| doc.info.annotations.iter().any(|a| a.page == *p && a.index == *ix && !a.is_reply() && only(a)))
@@ -463,7 +463,7 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let Some(p) = doc.comment_props(page, index) else { return };
-        let selection = self.views.get(i).map(|v| &v.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
+        let selection = self.views.get(i).map(|v| &v.session.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
         let others: Vec<(usize, usize, CommentProps)> =
             selection.into_iter().filter(|k| *k != (page, index)).filter_map(|(pg, ix)| doc.comment_props(pg, ix).map(|c| (pg, ix, c))).collect();
         let me = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply());

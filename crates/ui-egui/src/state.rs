@@ -145,9 +145,9 @@ pub(crate) struct DocumentCopyJob {
 impl DocumentCopyJob {
     pub(crate) fn of(v: &DocView, doc: &pdfcraft_engine::Document) -> DocumentCopyJob {
         let pages = (0..v.page_count())
-            .map(|p| match v.texts.get(&p) {
+            .map(|p| match v.session.texts.get(&p) {
                 Some(t) => CopyPage::Read(t.clone()),
-                None if v.text_failed.contains(&p) => CopyPage::Skip,
+                None if v.session.text_failed.contains(&p) => CopyPage::Skip,
                 None => CopyPage::ToRead,
             })
             .collect();

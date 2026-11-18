@@ -57,7 +57,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let Some((index, id)) = app.active_ids() else { return result };
     let pages = app.session.get(id).map_or(0, |d| d.info.pages.len());
     let Some(view) = app.views.get_mut(index) else { return result };
-    let searched = view.texts.len() + view.text_failed.len();
+    let searched = view.session.texts.len() + view.session.text_failed.len();
     let Some(find) = view.find.as_mut() else { return result };
     find.in_panel = true;
     let field = TextField::search(tl!("What word or phrase would you like to search for?").to_string(), Bind::bound(&mut find.query))
@@ -99,7 +99,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let mut rows = Vec::new();
     let mut last_page = None;
     for (i, m) in matches.iter().enumerate().take(MAX_RESULTS) {
-        if !view.texts.contains_key(&m.page) {
+        if !view.session.texts.contains_key(&m.page) {
             continue;
         }
         if last_page != Some(m.page) {
@@ -120,7 +120,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
             Hit::Page(p) => ListRow::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &(p + 1).to_string())])).section_heading(),
             Hit::Match(i) => {
                 let Some(m) = matches.get(*i) else { return ListRow::new(Label::Empty) };
-                let Some(text) = view.texts.get(&m.page) else { return ListRow::new(Label::Empty) };
+                let Some(text) = view.session.texts.get(&m.page) else { return ListRow::new(Label::Empty) };
                 let n = text.glyphs.len();
                 let range = &m.range;
                 let before = flat(text.text_of(range.start.saturating_sub(CONTEXT)..range.start.min(n)));

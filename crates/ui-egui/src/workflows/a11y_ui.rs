@@ -591,7 +591,7 @@ impl PdfCraftApp {
         let Some(view) = self.views.get_mut(index) else { return };
         view.go_to_page(page);
         if let Some(bbox) = bbox {
-            view.flash = Some((page, bbox.map(|v| v as f32), 0.0));
+            view.session.flash = Some((page, bbox.map(|v| v as f32), 0.0));
         }
     }
 

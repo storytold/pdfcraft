@@ -7,7 +7,7 @@ impl DocView {
     /// Whether Select All of the document applies: it belongs to continuous scrolling, and the flag stays set
     /// while the view is paged.
     pub fn all_text_active(&self) -> bool {
-        self.all_text && self.view.continuous
+        self.session.all_text && self.view.continuous
     }
 
     /// Full screen, as Acrobat's Full Screen Mode (#379, #1459): one page at a time (or one
@@ -26,15 +26,15 @@ impl DocView {
         });
         self.view.continuous = false;
         self.view.fit = Fit::Page;
-        self.text.selection = None;
-        self.presenter = Default::default();
+        self.session.text.selection = None;
+        self.session.presenter = Default::default();
         self.view.go_to(self.view.current);
     }
 
     /// Leave full screen: the display from before it comes back, at the page reached meanwhile.
     pub fn leave_presentation(&mut self) {
         let Some(saved) = self.presentation.take() else { return };
-        self.presenter = Default::default();
+        self.session.presenter = Default::default();
         self.view.display = saved.display;
         self.view.continuous = saved.continuous;
         self.view.cover = saved.cover;
@@ -67,7 +67,7 @@ impl DocView {
     /// Whether full screen is playing a page transition (or holding the page before it until the
     /// next one has rendered).
     pub fn presenting_a_transition(&self) -> bool {
-        self.presenter.turning()
+        self.session.presenter.turning()
     }
 
     /// Whether the view scrolls continuously (as opposed to one page or spread at a time).

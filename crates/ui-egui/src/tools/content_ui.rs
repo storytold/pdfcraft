@@ -459,7 +459,7 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
 // document is a parameter (caller: pdf-canvas-w9's page body).
 pub(crate) fn page_parts(view: &DocView, doc: &Document, page: usize, placed: &PlacedPage) -> Vec<PagePart> {
     let Some(frame) = PageFrame::of(placed, &doc.info) else { return Vec::new() };
-    let draft = view.content.draft.as_ref().filter(|d| d.page == page).and_then(|d| d.index);
+    let draft = view.session.content.draft.as_ref().filter(|d| d.page == page).and_then(|d| d.index);
     on_page(doc.added(), page)
         .into_iter()
         .filter(|(i, a)| matches!(a.content, AddedContent::Text(_)) && draft != Some(*i))
@@ -488,7 +488,7 @@ pub(crate) fn added_press(view: &mut DocView, doc: &Document, pages: &[PlacedPag
     let (_, item) = on_page(added, page).into_iter().find(|(i, _)| *i == index)?;
     let AddedContent::Text(text) = &item.content else { return None };
     let frame = PageFrame::of_page(pages, &doc.info, page)?;
-    let cv = &mut view.content;
+    let cv = &mut view.session.content;
     match press.phase {
         PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
             cv.selected = Some((page, index));
@@ -611,31 +611,31 @@ impl CanvasTool for AddTextTool<'_> {
 /// Delete removes the selected item (not while a box is open): one undoable edit. `None` when
 /// nothing is selected.
 pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
-    if view.content.draft.is_some() {
+    if view.session.content.draft.is_some() {
         return None;
     }
-    let (page, index) = view.content.selected.take()?;
-    view.content.preview = None;
+    let (page, index) = view.session.content.selected.take()?;
+    view.session.content.preview = None;
     Some(Edit::DeleteContent { page, index })
 }
 
 /// Escape clears the selection; whether there was one to clear.
 pub(crate) fn deselect(view: &mut DocView) -> bool {
-    view.content.preview = None;
-    view.content.selected.take().is_some()
+    view.session.content.preview = None;
+    view.session.content.selected.take().is_some()
 }
 
 /// The image controller owns image selection; the added-content panel follows the same XObject.
 pub(crate) fn sync_image_selection(view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], added: &[Added]) {
-    let Some(selection) = view.image_selection.as_ref().filter(|selection| selection.page == page) else { return };
-    if view.content.draft.is_some() {
+    let Some(selection) = view.session.image_selection.as_ref().filter(|selection| selection.page == page) else { return };
+    if view.session.content.draft.is_some() {
         return;
     }
     let object = images
         .get(selection.index)
         .and_then(|image| image.object)
         .filter(|object| images.iter().filter(|image| image.object == Some(*object)).count() == 1);
-    view.content.selected = object.and_then(|object| {
+    view.session.content.selected = object.and_then(|object| {
         let mut matches = added
             .iter()
             .filter(|item| item.page == page)
@@ -644,36 +644,36 @@ pub(crate) fn sync_image_selection(view: &mut DocView, page: usize, images: &[pd
         let selected = matches.next().map(|(index, _)| (page, index));
         if matches.next().is_none() { selected } else { None }
     });
-    view.content.select_added = None;
-    view.content.preview = None;
+    view.session.content.select_added = None;
+    view.session.content.preview = None;
 }
 
 /// Leaving the image controller cannot leave a hidden added image owning keyboard actions.
 pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
-    if view.content.draft.is_some() {
+    if view.session.content.draft.is_some() {
         return;
     }
-    let image_selected = view.content.selected.is_some_and(|(page, index)| {
+    let image_selected = view.session.content.selected.is_some_and(|(page, index)| {
         added.iter().filter(|item| item.page == page).nth(index).is_some_and(|item| matches!(item.content, AddedContent::Image(_)))
     });
     if image_selected {
-        view.content.selected = None;
-        view.content.select_added = None;
-        view.content.preview = None;
+        view.session.content.selected = None;
+        view.session.content.select_added = None;
+        view.session.content.preview = None;
     }
 }
 
 /// After an add: select the new item.
 pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
-    if let Some((page, before)) = view.content.select_added.take()
+    if let Some((page, before)) = view.session.content.select_added.take()
         && on_page(added, page).len() > before
     {
-        view.content.selected = Some((page, before));
+        view.session.content.selected = Some((page, before));
     }
-    if let Some((p, i)) = view.content.selected
+    if let Some((p, i)) = view.session.content.selected
         && on_page(added, p).len() <= i
     {
-        view.content.selected = None;
+        view.session.content.selected = None;
     }
 }
 
@@ -693,8 +693,8 @@ pub(crate) fn content_controls(
     doc: &Document,
     hovered: Option<(usize, usize)>,
 ) -> Option<Edit> {
-    if view.content.draft.is_none() {
-        view.content.drawn = None;
+    if view.session.content.draft.is_none() {
+        view.session.content.drawn = None;
     }
     let mut edit = None;
     for placed in body.pages {
@@ -731,9 +731,9 @@ fn item_controls(
 ) -> Option<Edit> {
     let page = frame.page;
     let items = on_page(doc.added(), page);
-    let draft = view.content.draft.as_ref().filter(|d| d.page == page).and_then(|d| d.index);
+    let draft = view.session.content.draft.as_ref().filter(|d| d.page == page).and_then(|d| d.index);
     let text_at = |index: usize| items.iter().find(|(i, a)| *i == index && matches!(a.content, AddedContent::Text(_))).map(|(_, a)| *a);
-    let selected = view.content.selected.filter(|s| s.0 == page && draft != Some(s.1)).and_then(|(_, i)| text_at(i).map(|a| (i, a)));
+    let selected = view.session.content.selected.filter(|s| s.0 == page && draft != Some(s.1)).and_then(|(_, i)| text_at(i).map(|a| (i, a)));
     if let Some(i) = hovered.filter(|i| draft != Some(*i) && selected.map(|s| s.0) != Some(*i))
         && let Some(a) = text_at(i)
     {
@@ -742,7 +742,7 @@ fn item_controls(
     }
     let (index, item) = selected?;
     let applied = item.content.rect();
-    let shown = view.content.preview.filter(|p| (p.page, p.index) == (page, index)).map_or(applied, |p| p.rect);
+    let shown = view.session.content.preview.filter(|p| (p.page, p.index) == (page, index)).map_or(applied, |p| p.rect);
     // Text resizes freely and rewraps; a picture's own frame is the picture controller's.
     let rules = BoxRules::default()
         .with_scale(ScaleRule::Free)
@@ -756,21 +756,21 @@ fn item_controls(
         .session_arrows(false)
         .show(ui);
     if out.discard {
-        view.content.selected = None;
-        view.content.preview = None;
+        view.session.content.selected = None;
+        view.session.content.preview = None;
     }
     let events = &out.edit.events;
     if let Some(done) = events.committed() {
-        view.content.preview = None;
+        view.session.content.preview = None;
         let rect = display_rect(&body.view, frame, done);
         // A click with no drag leaves the box as it was: nothing is applied.
         let moved = rect.iter().zip(applied).any(|(a, b)| (a - b).abs() > 1.0e-3);
         return moved.then(|| Edit::UpdateContent { page, index, content: item.content.with_rect(rect) });
     }
     if events.cancel_reason().is_some() {
-        view.content.preview = None;
+        view.session.content.preview = None;
     } else if let Some(live) = events.value() {
-        view.content.preview = Some(Preview { page, index, rect: display_rect(&body.view, frame, live), resizing: true });
+        view.session.content.preview = Some(Preview { page, index, rect: display_rect(&body.view, frame, live), resizing: true });
     }
     None
 }
@@ -986,8 +986,8 @@ fn draft_session(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc
     let zoom = placed.scale as f32;
     let page_width = f64::from(doc.info.pages.get(page)?.width);
     let editor_id = egui::Id::new(("added-text-editor", view.view_key()));
-    let background_ready = view.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| view.text_background.ready_added(page, index));
-    let cv = &mut view.content;
+    let background_ready = view.session.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| view.session.text_background.ready_added(page, index));
+    let cv = &mut view.session.content;
     let draft = cv.draft.as_mut().filter(|d| d.page == page)?;
     let font = crate::edit_text_ui::editor_font(&draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));
     grow(&ctx, draft, &mut cv.layout, &font, zoom, page_width);
@@ -1304,7 +1304,7 @@ impl crate::PdfCraftApp {
             return false;
         }
         if let Some(view) = self.views.get_mut(view) {
-            view.image_selection = None;
+            view.session.image_selection = None;
         }
         true
     }
@@ -1401,9 +1401,9 @@ impl crate::PdfCraftApp {
         let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
-            self.views[i].content.selected = Some((page, before_added));
-            self.views[i].content.select_added = Some((page, before_added));
-            self.views[i].image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
+            self.views[i].session.content.selected = Some((page, before_added));
+            self.views[i].session.content.select_added = Some((page, before_added));
+            self.views[i].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
             self.quick_tool = crate::QuickTool::EditText;
             self.left = crate::LeftPanel::Tool("edit");
             self.left_open = true;
@@ -1586,9 +1586,9 @@ impl crate::PdfCraftApp {
             });
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
-                v.content.selected = selection.map(|(added, _)| (page, added));
-                v.content.select_added = v.content.selected;
-                v.image_selection = selection.map(|(_, image)| crate::edit_text_ui::ImageSelection::at(page, image));
+                v.session.content.selected = selection.map(|(added, _)| (page, added));
+                v.session.content.select_added = v.session.content.selected;
+                v.session.image_selection = selection.map(|(_, image)| crate::edit_text_ui::ImageSelection::at(page, image));
             }
             self.quick_tool = crate::QuickTool::EditText;
             self.notify_tr("Image pasted");

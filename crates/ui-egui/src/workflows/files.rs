@@ -369,7 +369,7 @@ impl PdfCraftApp {
                     return;
                 }
                 let Some((index, id)) = self.active_ids() else { return };
-                let Some(mut ed) = self.views.get(index).and_then(|v| v.line_editor.clone()).filter(|ed| ed.page == page) else { return };
+                let Some(mut ed) = self.views.get(index).and_then(|v| v.session.line_editor.clone()).filter(|ed| ed.page == page) else { return };
                 // The font just loaded is the one the user wants: apply it to the paragraph, as
                 // choosing it from the document-font menu does, instead of only registering it (#2591).
                 let resource = self.session.get(id).and_then(|doc| {

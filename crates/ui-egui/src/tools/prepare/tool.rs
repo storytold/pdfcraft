@@ -57,10 +57,10 @@ pub(crate) fn field_press(press: &PagePress, view: &mut DocView, form: &[FormFie
         PointerButton::Secondary => super::context(form, field, widget, view),
         PointerButton::Primary => {
             let extend = press.mods.shift || press.mods.cmd;
-            view.prepare.select((f.name.clone(), widget), extend);
+            view.session.prepare.select((f.name.clone(), widget), extend);
             // The `Down` of a second primary press: the one double press, as `PressState::double_pressed` reads it.
             if start.clicks >= 2 && !extend {
-                view.prepare.outcome.properties = true;
+                view.session.prepare.outcome.properties = true;
             }
         }
         _ => {}
@@ -167,34 +167,34 @@ impl CanvasTool for PrepareTool<'_> {
         if !self.allowed || pointer.button != PointerButton::Primary {
             return ToolAction::Ignored;
         }
-        let Some(placed) = self.view.placed.iter().find(|p| p.rect.contains(pointer.pos)).cloned() else { return ToolAction::Ignored };
+        let Some(placed) = self.view.session.placed.iter().find(|p| p.rect.contains(pointer.pos)).cloned() else { return ToolAction::Ignored };
         if self.tool.is_some() {
             let mut drag = PageBoxDrag::default();
             drag.press(&placed, pointer.pos);
-            self.view.prepare.gesture = Gesture::Draw { drag, origin: pointer.pos };
+            self.view.session.prepare.gesture = Gesture::Draw { drag, origin: pointer.pos };
             return ToolAction::Claimed;
         }
         // A drag that began on a field part moves the field the part's press selected.
         let on_selected = self
             .view
-            .prepare
+            .session.prepare
             .selected
             .clone()
             .filter(|key| widget_rect(self.view, self.form, key).is_some_and(|(page, r)| page == placed.page && r.contains(pointer.pos)));
         if let Some(widget) = on_selected {
             let slop = f64::from(cx.slop);
             let gesture = MoveGesture::press(&ConstrainStyle::new(slop, slop), point(pointer.pos), pointer.mods, Directions::Four);
-            self.view.prepare.gesture = Gesture::Move { page: placed.page, gesture, widget };
+            self.view.session.prepare.gesture = Gesture::Move { page: placed.page, gesture, widget };
             return ToolAction::Claimed;
         }
         let extend = pointer.mods.shift || pointer.mods.cmd;
-        let base = if extend { self.view.prepare.selected.iter().chain(self.view.prepare.also.iter()).cloned().collect() } else { Vec::new() };
-        self.view.prepare.gesture = Gesture::Marquee(MarqueeSelect::begin(pointer.pos, pointer.mods, base));
+        let base = if extend { self.view.session.prepare.selected.iter().chain(self.view.session.prepare.also.iter()).cloned().collect() } else { Vec::new() };
+        self.view.session.prepare.gesture = Gesture::Marquee(MarqueeSelect::begin(pointer.pos, pointer.mods, base));
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        match &mut self.view.prepare.gesture {
+        match &mut self.view.session.prepare.gesture {
             Gesture::Draw { drag, .. } => drag.drag(pointer.pos),
             Gesture::Marquee(marquee) => marquee.update(pointer.pos),
             Gesture::Move { gesture, .. } => {
@@ -205,7 +205,7 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        match std::mem::take(&mut self.view.prepare.gesture) {
+        match std::mem::take(&mut self.view.session.prepare.gesture) {
             Gesture::Idle => {}
             Gesture::Draw { mut drag, origin } => {
                 drag.drag(pointer.pos);
@@ -223,26 +223,26 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
-        if let Gesture::Marquee(marquee) = std::mem::take(&mut self.view.prepare.gesture) {
+        if let Gesture::Marquee(marquee) = std::mem::take(&mut self.view.session.prepare.gesture) {
             let mut before = marquee.cancel().into_iter();
-            self.view.prepare.selected = before.next();
-            self.view.prepare.also = before.collect();
+            self.view.session.prepare.selected = before.next();
+            self.view.session.prepare.also = before.collect();
         }
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.view.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.view.session.prepare.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         match key {
-            ToolKey::Delete { .. } if self.view.prepare.selected.is_some() => {
-                self.view.pending_edit = delete_selected(self.view);
+            ToolKey::Delete { .. } if self.view.session.prepare.selected.is_some() => {
+                self.view.session.pending_edit = delete_selected(self.view);
                 true
             }
-            ToolKey::Cancel if self.view.prepare.selected.is_some() => {
-                self.view.prepare.selected = None;
-                self.view.prepare.also.clear();
+            ToolKey::Cancel if self.view.session.prepare.selected.is_some() => {
+                self.view.session.prepare.selected = None;
+                self.view.session.prepare.also.clear();
                 true
             }
             _ => false,
@@ -250,7 +250,7 @@ impl CanvasTool for PrepareTool<'_> {
     }
 
     fn paint(&self, _draw: &Draw<'_>, cx: &ToolContext<'_>) {
-        match &self.view.prepare.gesture {
+        match &self.view.session.prepare.gesture {
             Gesture::Draw { drag, .. } => drag.paint(cx),
             Gesture::Marquee(marquee) => {
                 let r = marquee.rect();
@@ -275,7 +275,7 @@ impl CanvasTool for PrepareTool<'_> {
 // PLAN: the box's state is in the canvas's document space; assumed that is screen space on the page body
 // (pdf-canvas-w8), as the sheet's `selection_box(ui, view, form, page)` gives no view.
 pub(crate) fn selection_box(ui: &mut Ui, view: &mut DocView, form: &[FormField], page: usize) {
-    let Some(key) = view.prepare.selected.clone() else { return };
+    let Some(key) = view.session.prepare.selected.clone() else { return };
     let Some((widget_page, rect)) = widget_rect(view, form, &key) else { return };
     if widget_page != page {
         return;
@@ -308,10 +308,10 @@ pub(crate) fn selection_box(ui: &mut Ui, view: &mut DocView, form: &[FormField],
     }
     if let Some(user) = edit {
         let (name, wi) = key;
-        view.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
+        view.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
     } else if shown.discard {
-        view.prepare.selected = None;
-        view.prepare.also.clear();
+        view.session.prepare.selected = None;
+        view.session.prepare.also.clear();
     }
 }
 
@@ -339,7 +339,7 @@ impl PrepareOverlay {
     pub(crate) fn new(form: &[FormField], tab_order: &[(usize, usize)], view: &DocView, page: usize) -> Option<Self> {
         let xf = geometry(view, page)?;
         let info = view.info();
-        let prep: &PrepareView = &view.prepare;
+        let prep: &PrepareView = &view.session.prepare;
         let moving = match &prep.gesture {
             Gesture::Move { page: p, gesture, widget } if *p == page => {
                 let d = gesture.value().delta;

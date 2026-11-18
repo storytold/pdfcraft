@@ -32,15 +32,15 @@ pub struct PickedImage {
 /// until then. A click made before an edit asks for nothing.
 // PLAN: assumed DocView::page_xform returns an owned PageXform (pdf-canvas-w8).
 pub(crate) fn resolve_pending(view: &mut DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, jobs: &Arc<dyn Jobs>, wake: &Wake) {
-    let Some((page, at, clicked_in)) = view.pending_pick else { return };
+    let Some((page, at, clicked_in)) = view.session.pending_pick else { return };
     let generation = doc.edit_generation();
     if clicked_in != generation {
-        view.pending_pick = None;
+        view.session.pending_pick = None;
         return;
     }
     // A page not drawn keeps the click waiting.
     let Some(xf) = view.page_xform(page) else { return };
-    let answer = view.pictures.get(jobs, wake, doc, page).map(|pictures| {
+    let answer = view.session.pictures.get(jobs, wake, doc, page).map(|pictures| {
         // Where the click was on the page now: the view may have moved while the page was read.
         let point = xf.user_rect_f64(info, page, [at[0], at[1], at[0], at[1]]).center();
         pdfcraft_engine::picture_at(pictures, at).and_then(|(index, i)| {
@@ -54,8 +54,8 @@ pub(crate) fn resolve_pending(view: &mut DocView, doc: &pdfcraft_engine::Documen
         })
     });
     let Some(picked) = answer else { return };
-    view.picked_image = picked;
-    view.pending_pick = None;
+    view.session.picked_image = picked;
+    view.session.pending_pick = None;
 }
 
 /// Page and document generation.
@@ -206,7 +206,7 @@ mod picture_tests {
     fn click_still_being_looked_into(h: &mut Harness<'static, PdfCraftApp>, at: &impl Fn(f32, f32) -> egui::Pos2) {
         click(h, at(100.0, 150.0));
         h.run_steps(2);
-        assert!(h.state().views[0].pending_pick.is_some(), "the click waits for its page");
+        assert!(h.state().views[0].session.pending_pick.is_some(), "the click waits for its page");
     }
 
     /// A search that takes its time doesn't hold the window: the click returns before the search runs, and its answer is
@@ -216,10 +216,10 @@ mod picture_tests {
         let (mut h, jobs, at) = open_page();
         click_still_being_looked_into(&mut h, &at);
         assert!(jobs.waiting() > 0, "the search is queued as a job");
-        assert_eq!(h.state().views[0].picked_image, None);
+        assert_eq!(h.state().views[0].session.picked_image, None);
         jobs.run_all();
         h.run_steps(3);
-        assert_eq!(h.state().views[0].pending_pick, None, "the answer came: no picture there");
+        assert_eq!(h.state().views[0].session.pending_pick, None, "the answer came: no picture there");
     }
 
     /// Escape takes back a click whose picture isn't known yet: it isn't selected when it is.
@@ -229,7 +229,7 @@ mod picture_tests {
         click_still_being_looked_into(&mut h, &at);
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 
     /// Another tool lets go of the click, even while its page isn't drawn (Organize pages).
@@ -241,12 +241,12 @@ mod picture_tests {
         let ctx = h.ctx.clone();
         assert!(h.state_mut().execute("page.organize", &ctx));
         h.run_steps(2);
-        assert!(h.state().views[0].pending_pick.is_some(), "the click waits while the page isn't drawn");
+        assert!(h.state().views[0].session.pending_pick.is_some(), "the click waits while the page isn't drawn");
         h.state_mut().quick_tool = crate::QuickTool::Hand;
         h.run_steps(1);
         h.state_mut().quick_tool = crate::QuickTool::Select;
         h.run_steps(1);
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 
     /// A click a comment takes lets go of the earlier click: its picture isn't picked after the
@@ -257,8 +257,8 @@ mod picture_tests {
         click_still_being_looked_into(&mut h, &at);
         h.run_steps(30);
         click(&mut h, at(50.0, 50.0));
-        assert!(h.state().views[0].comments.primary().is_some(), "the comment is selected");
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert!(h.state().views[0].session.comments.primary().is_some(), "the comment is selected");
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 
     /// A click on a link follows it and lets go of the earlier click too.
@@ -269,7 +269,7 @@ mod picture_tests {
         h.run_steps(30);
         click(&mut h, at(150.0, 250.0));
         assert!(h.state().pending_link.is_some(), "the link is followed");
-        assert_eq!(h.state().views[0].pending_pick, None);
+        assert_eq!(h.state().views[0].session.pending_pick, None);
     }
 }
 
@@ -277,8 +277,8 @@ mod picture_tests {
 /// images (or Undo) may have deleted or moved it, and its highlight would stay behind on an empty
 /// spot of the page.
 pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, view: &mut DocView) {
-    if view.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
-        view.picked_image = None;
+    if view.session.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
+        view.session.picked_image = None;
     }
 }
 
@@ -394,13 +394,13 @@ impl PdfCraftApp {
     /// may have changed since the click: the same picture must still be there, else it is let go. Returns whether
     /// there was a picked picture to copy.
     pub(crate) fn copy_picked_image(&mut self, i: usize) -> bool {
-        let Some((id, picked)) = self.views.get(i).and_then(|v| Some((v.id, v.picked_image?))) else { return false };
+        let Some((id, picked)) = self.views.get(i).and_then(|v| Some((v.id, v.session.picked_image?))) else { return false };
         let current = self.session.get(id).and_then(|d| d.page_images(picked.page).get(picked.index).map(crate::canvas::image_selectable_bounds));
         if current == Some(picked.rect) {
             self.copy_page_image_file(picked.page, picked.index);
         } else {
             if let Some(view) = self.views.get_mut(i) {
-                view.picked_image = None;
+                view.session.picked_image = None;
             }
             self.notify_tr("The page has changed; select the image again");
         }

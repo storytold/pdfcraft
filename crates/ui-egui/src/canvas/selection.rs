@@ -251,12 +251,12 @@ impl PageSession {
 impl DocView {
     /// The text layers the view has read, for the selection tool and what reads its selection.
     pub(crate) fn doc_texts(&self) -> DocTexts<'_> {
-        DocTexts::new(&self.texts, &self.text_failed, self.rotation, &self.page_sizes)
+        DocTexts::new(&self.session.texts, &self.session.text_failed, self.view.rotation, &self.page_sizes)
     }
 
     /// Whether a page the selection covers is still to be read, so a selection is never copied or marked short.
     fn selection_unread(&self) -> bool {
-        self.text.selection.is_some_and(|s| !s.unread_pages(&self.doc_texts()).is_empty())
+        self.session.text.selection.is_some_and(|s| !s.unread_pages(&self.doc_texts()).is_empty())
     }
 
     /// The text selection as markup quadrilaterals in user space, one entry per page with
@@ -268,7 +268,7 @@ impl DocView {
     /// A reading-order selection whose pages are not all read yet: Copy reads them off the UI
     /// thread ([`crate::DocumentCopyJob::of_selection`]) rather than copying short or nothing.
     pub(crate) fn selection_waits_for_text(&self) -> Option<TextSpan> {
-        let s = self.text.selection.filter(|_| self.selection_unread())?;
+        let s = self.session.text.selection.filter(|_| self.selection_unread())?;
         reading_span(&s)
     }
 
@@ -276,7 +276,7 @@ impl DocView {
     /// selected, so a redaction of the rest would leave that page's content in place: Redact
     /// refuses such a selection rather than mark it short.
     pub(crate) fn selection_has_unreadable_page(&self) -> bool {
-        self.text.selection.is_some_and(|s| s.pages().any(|p| self.text_failed.contains(&p)))
+        self.session.text.selection.is_some_and(|s| s.pages().any(|p| self.session.text_failed.contains(&p)))
     }
 
     /// What a marking tool (a markup tool, Redact) marks for the text selection a drag, a
@@ -288,21 +288,21 @@ impl DocView {
     /// changed meanwhile. With `whole`, a selection over a page whose text could not be read is
     /// refused instead ([`Self::selection_has_unreadable_page`]).
     pub(crate) fn tool_marks(&mut self, tool: QuickTool, finished: bool, page: Option<usize>, whole: bool, info: &DocInfo) -> ToolMarks {
-        let Some(sel) = self.text.selection else {
-            self.marks_waiting = None;
+        let Some(sel) = self.session.text.selection else {
+            self.session.marks_waiting = None;
             return ToolMarks::None;
         };
         if finished {
-            self.marks_waiting = Some((tool, sel));
+            self.session.marks_waiting = Some((tool, sel));
         }
-        if !self.marks_waiting.as_ref().is_some_and(|(t, s)| *t == tool && *s == sel) {
+        if !self.session.marks_waiting.as_ref().is_some_and(|(t, s)| *t == tool && *s == sel) {
             // The selection or the tool changed: the wait is over, so a drag passing back through
             // the selection it was for doesn't mark it before it is released.
-            self.marks_waiting = None;
+            self.session.marks_waiting = None;
             return ToolMarks::None;
         }
         if whole && self.selection_has_unreadable_page() {
-            self.marks_waiting = None;
+            self.session.marks_waiting = None;
             return ToolMarks::Unreadable;
         }
         if self.selection_unread() {
@@ -311,13 +311,13 @@ impl DocView {
         let marks = self.selection_quads(info);
         if marks.is_empty() {
             // Every page is read and nothing is selected: nothing to wait for.
-            self.marks_waiting = None;
+            self.session.marks_waiting = None;
             return ToolMarks::None;
         }
         if page.is_some_and(|page| !marks.iter().any(|(p, _)| *p == page)) {
             return ToolMarks::None;
         }
-        self.marks_waiting = None;
+        self.session.marks_waiting = None;
         ToolMarks::Marks(marks, head_page_of(&sel))
     }
 
@@ -336,8 +336,8 @@ impl DocView {
 
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
-        self.all_text = false;
-        self.text.selection = Some(TextSelection::new(page, FwSpan::run(from, page, to)));
+        self.session.all_text = false;
+        self.session.text.selection = Some(TextSelection::new(page, FwSpan::run(from, page, to)));
     }
 
     /// Screen position of the centre of glyph `glyph` on `page`, if that page is on screen and its
@@ -349,7 +349,7 @@ impl DocView {
     /// The screen rectangle of glyph `glyph` on `page`, when the page is on screen.
     pub fn glyph_screen_rect(&self, page: usize, glyph: usize) -> Option<Rect> {
         let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
-        let g = self.texts.get(&page)?.glyphs.get(glyph)?;
+        let g = self.session.texts.get(&page)?.glyphs.get(glyph)?;
         Some(xf.view_rect(g.rect))
     }
 
@@ -357,10 +357,10 @@ impl DocView {
     /// the others, [`DocView::pages_without_text`]). A selection across pages has each page's
     /// part on a line of its own, as Select All of the document does.
     pub fn selected_text(&self) -> Option<String> {
-        if self.all_text {
+        if self.session.all_text {
             return Some(self.whole_text(&HashMap::new())).filter(|x| !x.is_empty());
         }
-        self.text.selection?.text(&self.doc_texts()).filter(|x| !x.is_empty())
+        self.session.text.selection?.text(&self.doc_texts()).filter(|x| !x.is_empty())
     }
 
     /// The selection's page, its text layer and the selected glyphs in copy order, for Copy with
@@ -369,11 +369,11 @@ impl DocView {
     /// selection across pages, whose formatted copy would hold one page of it: it copies plain
     /// text, every page's.
     pub(crate) fn selected_glyphs(&self) -> Option<(usize, Arc<PageText>, Vec<usize>)> {
-        if self.all_text {
+        if self.session.all_text {
             return None;
         }
-        let s = self.text.selection.filter(|s| s.pages().start() == s.pages().end())?;
-        let t = self.texts.get(&s.page)?;
+        let s = self.session.text.selection.filter(|s| s.pages().start() == s.pages().end())?;
+        let t = self.session.texts.get(&s.page)?;
         let texts = self.doc_texts();
         let source = texts.page(s.page)?;
         let FwSpan::Run { anchor, head, end_x, .. } = s.span else { return None };
@@ -403,23 +403,23 @@ impl DocView {
         // Like the page's, true once some text is selected: the pages whose text isn't read yet are
         // read when the selection is copied.
         if self.continuous && self.page_count > 1 {
-            self.text.selection = None;
-            self.all_text = true;
+            self.session.text.selection = None;
+            self.session.all_text = true;
             return self.selected_text().is_some();
         }
-        self.all_text = false;
+        self.session.all_text = false;
         let page = self.current;
-        let Some(t) = self.texts.get(&page) else { return false };
+        let Some(t) = self.session.texts.get(&page) else { return false };
         if t.glyphs.is_empty() {
             return false;
         }
-        self.text.selection = Some(TextSelection::new(page, FwSpan::run(0, page, t.glyphs.len() - 1)));
+        self.session.text.selection = Some(TextSelection::new(page, FwSpan::run(0, page, t.glyphs.len() - 1)));
         true
     }
 
     /// Pages whose text [`DocView::whole_text`] still needs: not read yet, nor failed.
     pub(crate) fn pages_without_text(&self) -> Vec<usize> {
-        (0..self.page_count).filter(|p| !self.texts.contains_key(p) && !self.text_failed.contains(p)).collect()
+        (0..self.page_count).filter(|p| !self.session.texts.contains_key(p) && !self.session.text_failed.contains(p)).collect()
     }
 
     /// The whole document's text in page order, one page after another on new lines, from the
@@ -427,7 +427,7 @@ impl DocView {
     pub(crate) fn whole_text(&self, more: &HashMap<usize, Arc<PageText>>) -> String {
         let mut out = String::new();
         for p in 0..self.page_count {
-            let Some(t) = self.texts.get(&p).or_else(|| more.get(&p)) else { continue };
+            let Some(t) = self.session.texts.get(&p).or_else(|| more.get(&p)) else { continue };
             let text = t.text_of(0..t.glyphs.len());
             if text.is_empty() {
                 continue;

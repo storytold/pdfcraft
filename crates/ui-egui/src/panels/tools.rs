@@ -168,7 +168,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) 
     // Prepare a form: Preview fills the form as a reader would; Edit goes back.
     if g.id == "form" {
         if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
-            Checkbox::new(Bind::bound(&mut view.prepare.show_tab_numbers)).label(tl!("Show tab numbers").to_owned()).show(ui);
+            Checkbox::new(Bind::bound(&mut view.session.prepare.show_tab_numbers)).label(tl!("Show tab numbers").to_owned()).show(ui);
         }
         let entries = [Entry::new(false, tl!("Edit fields").to_owned()), Entry::new(true, tl!("Preview").to_owned())];
         let landed = Segmented::new(tl!("Form mode").to_owned(), Bind::given(app.form_preview), &entries)

@@ -174,7 +174,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 
     match act {
-        Some(Act::Edit(edit)) => view.pending_edit = Some(*edit),
+        Some(Act::Edit(edit)) => view.session.pending_edit = Some(*edit),
         Some(Act::View(action)) => view.pending_action = Some(action),
         Some(Act::Command(command)) => app.run_command(command),
         None => {}
