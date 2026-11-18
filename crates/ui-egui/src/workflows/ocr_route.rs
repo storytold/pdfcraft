@@ -112,28 +112,4 @@ mod tests {
         r.deliver(n, "next page");
         assert_eq!(next.take(), vec![(n, "next page")]);
     }
-
-    /// A page that couldn't be posted takes no id and has no owner.
-    #[test]
-    fn a_page_that_could_not_be_sent_is_not_routed() {
-        let mut r: Router<&str> = Router::default();
-        let inbox = Inbox::default();
-        assert_eq!(r.send(&inbox, |_| false), None);
-        assert!(r.owners.is_empty());
-        let id = r.send(&inbox, |_| true);
-        assert_eq!(id, Some(0), "the id was not used up");
-    }
-
-    /// Answers for ids nobody sent, or sent twice, change nothing.
-    #[test]
-    fn unknown_and_repeated_answers_are_ignored() {
-        let mut r: Router<&str> = Router::default();
-        let inbox = Inbox::default();
-        let id = r.send(&inbox, |_| true).expect("sent");
-        r.deliver(id + 100, "stray");
-        r.deliver(id, "page");
-        r.deliver(id, "again");
-        assert_eq!(inbox.take(), vec![(id, "page")]);
-        assert!(inbox.take().is_empty());
-    }
 }

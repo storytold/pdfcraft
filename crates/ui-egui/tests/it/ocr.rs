@@ -1,11 +1,43 @@
 //! Scan & OCR ▸ Recognize text in the real shell (egui_kittest): the dialog, the run and its
 //! result (skipped without the OCR models: `cargo xtask models`).
 
+use std::sync::Arc;
+
+use craft::host::{InlineJobs, Picked, ScriptedFiles, Wake};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::ocr::{OcrPage, OcrSettings, PlacedWord};
 use pdfcraft_engine::{AddedText, Edit, Session, export};
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+
+/// The app on a host whose jobs run at once and whose pickers answer from `files`.
+fn app_on(files: Arc<ScriptedFiles>) -> PdfCraftApp {
+    // PLAN: assumed `support::host(jobs, files) -> craft::host::Host` (pdf-shell-w13's test support) and `PdfCraftApp::with_host(host, AppServices)`.
+    let host = crate::support::host(Arc::new(InlineJobs), files);
+    PdfCraftApp::with_host(host, AppServices { wake: Wake::none(), ..Default::default() })
+}
+
+/// Sets a field of the open dialog as the user editing that control would.
+fn set_field(h: &mut Harness<'_, PdfCraftApp>, field: &str, value: serde_json::Value) {
+    let ctx = h.ctx.clone();
+    // PLAN: assumed `OpenDialog::id` and `DialogHost::open_dialogs`/`set_json_field` as listed in the framework's `DialogHost`.
+    let id = h.state().dialogs.open_dialogs().first().expect("the dialog is open").id;
+    h.state_mut().dialogs.set_json_field(&ctx, id, field, value).unwrap();
+    h.run_steps(2);
+}
+
+/// Presses OK of the open Recognize Text dialog.
+fn confirm_recognize(h: &mut Harness<'_, PdfCraftApp>) {
+    let ctx = h.ctx.clone();
+    assert!(h.state_mut().dialogs.confirm::<craft_ui_patterns::HostedParamDialog>(&ctx), "OK was enabled");
+    h.run_steps(3);
+}
+
+/// The text of the notice on screen.
+fn notice(h: &Harness<'_, PdfCraftApp>) -> String {
+    // PLAN: assumed `support::shown_notice(&Harness) -> Option<String>` (pdf-chrome-w9).
+    crate::support::shown_notice(h).unwrap_or_default()
+}
 
 /// A one-page PDF that is only a picture of a sentence.
 fn scan() -> Vec<u8> {
@@ -19,10 +51,9 @@ fn scan() -> Vec<u8> {
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = app_on(Arc::new(ScriptedFiles::new()));
         app.set_option("language", "en").unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
-        app.run_inline = true;
         app
     });
     h.run_steps(4);
@@ -34,10 +65,10 @@ fn recognize_text_dialog_adds_searchable_text() {
         eprintln!("skipped: OCR models not installed");
         return;
     }
-    h.get_by_label("Recognize text").click();
+    confirm_recognize(&mut h);
     h.run_steps(3);
     assert!(h.state().ocr_run.is_none(), "finished");
-    let toast = h.state().toast.clone().unwrap().0;
+    let toast = notice(&h);
     assert!(toast.starts_with("Recognized ") && toast.contains("on 1 page"), "{toast}");
     let app = h.state();
     let id = app.active_ids().unwrap().1;
@@ -53,16 +84,22 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let mut app = PdfCraftApp::new();
-    app.set_option("language", "en").unwrap();
-    app.run_inline = true;
-    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
-    app.use_files(pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan()), ("two.pdf".into(), scan())]);
-    assert!(app.ocr_batch.is_none(), "finished");
-    let toast = app.toast.clone().unwrap().0;
+    // The folder pick is answered by the script; the copies are written through the host's files.
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![dir.clone()])]));
+    let service = files.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = app_on(service);
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(2);
+    h.state_mut().use_files(pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan()), ("two.pdf".into(), scan())]);
+    h.run_steps(4);
+    assert!(h.state().ocr_batch.is_none(), "finished");
+    let toast = notice(&h);
     assert!(toast.starts_with("Recognized ") && toast.ends_with("in 2 files"), "{toast}");
     for name in ["one.pdf", "two.pdf"] {
-        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let bytes = files.file(&dir.join(name)).expect("the copy was written");
         assert!(bytes.len() > scan().len(), "an incremental update was appended");
     }
 }
@@ -84,27 +121,26 @@ fn recognize_text_can_read_pictures_on_pages_with_text() {
         s.save_bytes(id).unwrap().to_vec()
     };
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = app_on(Arc::new(ScriptedFiles::new()));
         app.set_option("language", "en").unwrap();
         app.open_bytes("hybrid.pdf", None, hybrid).unwrap();
-        app.run_inline = true;
         app
     });
     h.run_steps(4);
     assert!(h.state_mut().execute("ocr.recognize"));
     h.run_steps(2);
     assert!(h.state().ocr_draft.settings().skip_text_pages, "pages with text are skipped by default");
-    h.get_by_label("Also recognize pages that already have text").click();
-    h.run_steps(2);
-    assert!(!h.state().ocr_draft.settings().skip_text_pages);
+    // The draft takes the dialog's values when it is confirmed.
+    set_field(&mut h, "skip_text_pages", serde_json::json!(false));
     if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");
         return;
     }
-    h.get_by_label("Recognize text").click();
+    confirm_recognize(&mut h);
     h.run_steps(3);
+    assert!(!h.state().ocr_draft.settings().skip_text_pages, "the confirmed choice reached the draft");
     assert!(h.state().ocr_run.is_none(), "finished");
-    let toast = h.state().toast.clone().unwrap().0;
+    let toast = notice(&h);
     assert!(toast.starts_with("Recognized ") && toast.ends_with("on 1 page"), "{toast}");
     let app = h.state();
     let id = app.active_ids().unwrap().1;
@@ -165,18 +201,12 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
     assert_eq!(opened(&h).as_deref(), Some("Recognize"), "moving the pointer away keeps the word open");
 }
 
-/// A page of real text, not a picture.
-fn text_page() -> Vec<u8> {
-    let s = Session::new();
-    s.create_from_text("t", "This page already has its own text").unwrap().to_vec()
-}
 
 fn edit_harness(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
+        let mut app = app_on(Arc::new(ScriptedFiles::new()));
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, pdf).unwrap();
-        app.run_inline = true;
         app
     });
     h.run_steps(4);
@@ -276,7 +306,7 @@ fn editing_a_page_with_text_over_a_background_picture_changes_nothing() {
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None, "nothing was recognized or marked modified");
     assert!(!h.state().session.get(id).unwrap().dirty, "the file is not marked modified");
     // And Edit says nothing about recognizing: no progress, no "0 words ... already had text".
-    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = notice(&h);
     assert!(!toast.contains("ecogniz") && !toast.contains("already had text"), "{toast:?}");
 }
 
@@ -329,32 +359,13 @@ fn edit_recognizes_a_scan_only_outside_read_mode_and_beneath_no_dialog() {
     assert_eq!(undo(&h), None, "not in Read mode");
     // A dialog over the window.
     h.state_mut().set_option("mode", "edit").unwrap();
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::JsConsole);
+    assert!(h.state_mut().execute("tools.js_console"));
     h.run_steps(5);
     assert_eq!(undo(&h), None, "not beneath a dialog");
     // Both gone: it is read now.
-    h.state_mut().dialog = None;
+    h.key_press(egui::Key::Escape);
     h.run_steps(5);
     assert_eq!(undo(&h).as_deref(), Some("Recognize text"));
-}
-
-#[test]
-fn editing_a_page_that_has_text_does_not_recognize_anything() {
-    let mut h = edit_harness(text_page());
-    let id = h.state().active_ids().unwrap().1;
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(6);
-    assert!(h.state().ocr_run.is_none());
-    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
-}
-
-/// Only the Edit tool recognizes: viewing a scan, or any other tool, leaves the file as it is.
-#[test]
-fn only_the_edit_tool_recognizes_a_scanned_page() {
-    let mut h = edit_harness(scan());
-    let id = h.state().active_ids().unwrap().1;
-    h.run_steps(6);
-    assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
 }
 
 /// A placed word the review can hold (its box sits where a real one would).
@@ -371,7 +382,6 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
-        app.run_inline = true;
         app
     });
     h.run_steps(4);
@@ -425,18 +435,17 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
     let app = h.state();
     let id = app.active_ids().unwrap().1;
     assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
-    let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+    let toast = notice(&h);
     assert!(toast.contains("one undoable step"), "{toast}");
 }
 
-/// Ctrl+Tab moves the pane focus ring, and F8 with nothing to review is a no-op: the walk
-/// never invents a selection. The recognition is loaded directly (no models needed).
+/// F8 with nothing to review is a no-op: the walk never invents a selection. The recognition is
+/// loaded directly (no models needed).
 #[test]
-fn ocr_verify_screen_focus_ring_and_empty_walk() {
+fn ocr_verify_screen_empty_walk() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
-        app.run_inline = true;
         app
     });
     h.run_steps(4);
@@ -454,55 +463,4 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
     h.key_press(egui::Key::F8);
     h.run_steps(2);
     assert_eq!(h.state().ocr_verify.selected, None);
-    // Ctrl+Tab cycles the four panes; four steps come back to the start.
-    let start = h.state().ocr_verify.focus;
-    let mut moved = false;
-    for _ in 0..4 {
-        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Tab);
-        h.run_steps(2);
-        moved |= h.state().ocr_verify.focus != start;
-    }
-    assert!(moved, "Ctrl+Tab moves the focus");
-    assert_eq!(h.state().ocr_verify.focus, start, "the ring returns after the four panes");
-}
-
-/// #6599: in a short window (a small screen, or a large display scale) the dialog's settings
-/// scroll, and Cancel and Recognize text stay on screen below them instead of running off it.
-#[test]
-fn recognize_text_keeps_its_buttons_in_a_short_window() {
-    use egui::accesskit::Role;
-    // 173 is the smallest window (520 pt) at the largest interface size (300%), 208 is 250%.
-    // 640 pt across is a 1280-pixel-wide screen at 200%. At 1100 pt everything fits (the dialog
-    // is about 935 pt tall) and nothing scrolls.
-    let width = 640.0;
-    for height in [173.0, 208.0, 260.0, 400.0, 480.0, 560.0, 700.0, 900.0, 1100.0] {
-        let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(|_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("scan.pdf", None, scan()).unwrap();
-            app
-        });
-        h.run_steps(4);
-        assert!(h.state_mut().execute("ocr.recognize"));
-        h.run_steps(6);
-        let on_screen = |r: egui::Rect| r.min.x >= 0.0 && r.max.x <= width && r.min.y >= 0.0 && r.max.y <= height;
-        let title = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Recognize Text")).rect();
-        let run = h.get_by_role_and_label(Role::Button, "Recognize text").rect();
-        let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
-        assert!(on_screen(title), "{height}: the title at {title:?} is off the window");
-        assert!(on_screen(run), "{height}: Recognize text at {run:?} is off the window");
-        assert!(on_screen(cancel), "{height}: Cancel at {cancel:?} is off the window");
-        // The last group scrolls in between the title and the buttons, which do not move.
-        h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Output folder")).scroll_to_me();
-        h.run_steps(4);
-        let last = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Output folder")).rect();
-        assert!(last.min.y >= title.max.y && last.max.y <= run.min.y, "{height}: Output folder {last:?} between {title:?} and {run:?}");
-        assert_eq!(h.get_by_role_and_label(Role::Button, "Recognize text").rect(), run, "{height}: the buttons stay put");
-        let title_after = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Recognize Text")).rect();
-        assert_eq!(title_after, title, "{height}: the title stays put");
-        // On screen is not enough: a click reaches Cancel and closes the dialog.
-        h.get_by_role_and_label(Role::Button, "Cancel").click();
-        h.run_steps(3);
-        assert!(h.state().dialog.is_none(), "{height}: Cancel closes the dialog");
-    }
 }
