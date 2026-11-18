@@ -163,9 +163,12 @@ pub(crate) fn stream(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, filter
             Some(Object::Array(list)) => list.get(at).map(|p| doc.resolve(p)),
             _ => parameters,
         };
-        // Without decode parameters, or a Name in them, the crypt filter is Identity (Table 14).
-        let identity =
-            parameters.as_deref().and_then(Object::as_dict).is_none_or(|p| p.get(b"Name").is_none() || p.name(b"Name") == Some(b"Identity"));
+        // Without decode parameters, or a Name in them, the crypt filter is Identity (Table 14). A
+        // null Name, direct or through a reference, is no Name (ISO 32000-2 7.3.9).
+        let identity = parameters
+            .as_deref()
+            .and_then(Object::as_dict)
+            .is_none_or(|p| p.get(b"Name").map(|n| doc.resolve(n)).is_none_or(|n| matches!(&*n, Object::Null) || n.as_name() == Some(b"Identity")));
         if !identity {
             issue("6.1.6.2", "A stream uses the Crypt filter with a crypt filter other than Identity", None, None, false);
         }
@@ -299,7 +302,8 @@ fn keys_other_than(dict: &Dict, allowed: &[&[u8]]) -> String {
 
 /// 6.1.12: a catalog `/Version` names PDF 2.n (ISO 32000-2 7.7.2, Table 29).
 fn catalog_version(doc: &Document, catalog: &Dict, issue: &mut Report<'_>) {
-    let Some(version) = catalog.get(b"Version").map(|v| doc.resolve(v)) else { return };
+    // A null version, direct or through a reference, is none (ISO 32000-2 7.3.9).
+    let Some(version) = catalog.get(b"Version").map(|v| doc.resolve(v)).filter(|v| !matches!(&**v, Object::Null)) else { return };
     let ok = version.as_name().is_some_and(|v| matches!(v, [b'2', b'.', b'0'..=b'9']));
     if !ok {
         let shown = match version.as_name() {
@@ -348,17 +352,28 @@ pub(crate) fn page(doc: &Document, page: &Dict, index: usize, profiles: &mut Pro
     output_intents(doc, page, Some(index), profiles, issue);
 }
 
-/// How many optional content configurations [`optional_content_names`] reads.
+/// How many optional content configurations of `/Configs` [`optional_content_names`] reads.
 const MAX_CONFIGURATIONS: usize = 4096;
 
 /// 6.10: each optional content configuration (`/D` and those in `/Configs`, ISO 32000-2 8.11.4.2)
-/// has a `/Name`, and no two have the same one.
+/// has a `/Name`, and no two have the same one. A `/Configs` longer than [`MAX_CONFIGURATIONS`] is
+/// reported as not checked in full: what its other configurations hold isn't known, so the file
+/// doesn't pass.
 fn optional_content_names(doc: &Document, properties: &Dict, issue: &mut Report<'_>) {
     let mut configurations: Vec<Object> = properties.get(b"D").cloned().into_iter().collect();
     if let Some(list) = properties.get(b"Configs").map(|c| doc.resolve(c))
         && let Some(list) = list.as_array()
     {
         configurations.extend(list.iter().take(MAX_CONFIGURATIONS).cloned());
+        if list.len() > MAX_CONFIGURATIONS {
+            issue(
+                "6.10",
+                "Some optional content configurations weren't checked: there are more of them than one verification reads",
+                None,
+                None,
+                false,
+            );
+        }
     }
     let mut names = std::collections::HashSet::new();
     let (mut unnamed, mut repeated) = (false, false);
@@ -661,7 +676,7 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, checked: 
 }
 
 /// The largest embedded file [`embedded_pdfa`] opens.
-const MAX_EMBEDDED_PDF: usize = 64 << 20;
+pub(crate) const MAX_EMBEDDED_PDF: usize = 64 << 20;
 
 /// The decoded bytes of embedded files one top-level verification reads in all, the files embedded
 /// in those included: four files of [`MAX_EMBEDDED_PDF`].
@@ -676,9 +691,9 @@ pub(crate) const MAX_EMBEDDED_READ: usize = 32;
 /// are judged by their declaration only.
 const MAX_NESTED_VERIFY: usize = 1;
 
-/// The wording for embedded files left unread for lack of allowance, as [`EmbeddedChecks::report`]
-/// gives it.
-pub(crate) const UNCHECKED: &str = "Some embedded files weren't checked: there are more of them than one verification reads";
+/// The wording for embedded files left unread for lack of allowance, or larger than
+/// [`MAX_EMBEDDED_PDF`], as [`EmbeddedChecks::report`] gives it.
+pub(crate) const UNCHECKED: &str = "Some embedded files weren't checked: there are more of them, or larger ones, than one verification reads";
 
 /// What the embedded files of one top-level verification may still read, shared with the
 /// verifications of those files.
@@ -731,7 +746,13 @@ impl EmbeddedChecks {
     /// known, so the file doesn't pass.
     pub(crate) fn report(&self, issue: &mut Report<'_>) {
         if self.unchecked {
-            issue("6.9", "Some embedded files weren't checked: there are more of them than one verification reads", None, None, false);
+            issue(
+                "6.9",
+                "Some embedded files weren't checked: there are more of them, or larger ones, than one verification reads",
+                None,
+                None,
+                false,
+            );
         }
     }
 }
@@ -747,8 +768,9 @@ enum Embedded {
     Declares,
     /// A PDF that declares this level and fails its verification.
     Fails(&'static str),
-    /// Not read, or not verified through, because the top-level verification's embedded files
-    /// reached [`MAX_EMBEDDED_READ`] or [`MAX_EMBEDDED_DECODED`].
+    /// Not read, or not verified through, because the file decodes to more than
+    /// [`MAX_EMBEDDED_PDF`] or the top-level verification's embedded files reached
+    /// [`MAX_EMBEDDED_READ`] or [`MAX_EMBEDDED_DECODED`].
     Unchecked,
 }
 
@@ -762,8 +784,8 @@ impl Drop for NestedGuard {
 }
 
 /// The embedded file `s` decoded, charged to the top-level verification's allowance: `None` when
-/// the allowance can't pay for it, `Some(None)` when it can't be decoded within
-/// [`MAX_EMBEDDED_PDF`].
+/// the allowance can't pay for it or it decodes to more than [`MAX_EMBEDDED_PDF`], `Some(None)`
+/// when its data can't be decoded.
 fn read_embedded(s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
     EMBEDDED_ALLOWANCE.with(|a| {
         // The cell is borrowed only here, and nothing in here reenters it; were it busy, the file
@@ -775,12 +797,13 @@ fn read_embedded(s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
         a.files = a.files.saturating_sub(1);
         #[cfg(test)]
         EMBEDDED_READ.with(|n| n.set(n.get().saturating_add(1)));
-        let refused = a.bytes.refused();
-        let bytes = a.bytes.decode_within(s, MAX_EMBEDDED_PDF);
-        if a.bytes.refused() > refused {
-            return None;
+        // A limit reached, the file's own or the allowance's, leaves the file unread: its size is
+        // no fault of its data, but its verdict isn't known.
+        match a.bytes.decode_within(s, MAX_EMBEDDED_PDF) {
+            Ok(bytes) => Some(Some(bytes)),
+            Err(e) if over_limit(&e) => None,
+            Err(_) => Some(None),
         }
-        Some(bytes.ok())
     })
 }
 
