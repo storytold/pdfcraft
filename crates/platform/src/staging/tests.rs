@@ -6,6 +6,8 @@ fn test_dir(test: &str) -> PathBuf {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     for n in 0..64u32 {
         let dir = std::env::temp_dir().join(format!("pdfcraft-platform-staging-{}-{test}-{:x}", std::process::id(), seed.wrapping_add(n.into())));
+        // Only Unix sets a mode on it, so elsewhere `made` is never changed.
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut made = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
