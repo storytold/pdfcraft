@@ -62,6 +62,7 @@ use page_parts::{Owner, PagePart, PageParts, PagePress};
 use page_tools::{PageToolCx, page_tool};
 use pictures::{DocPages, PageRevisions, RenderReports};
 pub(crate) use selection::{TextSpan, ToolMarks};
+pub(crate) use xform::PageGeometry;
 pub use xform::PageXform;
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
@@ -301,6 +302,10 @@ pub struct PageSession {
     pub(crate) presenter: presenter::Presenter,
     /// An edit requested by the view (organize toolbar, keys), applied by the app this frame.
     pub pending_edit: Option<Edit>,
+    /// The page a press or key made the current one (Edit text's objects selected on it, a radio button stepped to),
+    /// with the user-space rectangle on it to scroll into view (a field Tab moved to), gone to by the app after the
+    /// pass: the page view holds the view state while the body runs.
+    pub(crate) pending_page: Option<(usize, Option<[f32; 4]>)>,
     /// Redact tool: the marks to add (page, quads) for the app to style, one per page (a text
     /// selection can cover several), added in one undo step.
     /// With the tool that made them, read when they are styled: a key handled later in the same
@@ -391,6 +396,7 @@ impl PageSession {
             compare_marks: Vec::new(),
             presenter: Default::default(),
             pending_edit: None,
+            pending_page: None,
             pending_redaction: None,
             redaction_refused: false,
             marks_across_pages: None,
@@ -782,7 +788,7 @@ fn finish_sign_requests(
     if let Some(field) = app.views[index].session.sign.field.take() {
         let signed = app.session.get(app.views[index].id).is_some_and(|d| d.signatures.iter().any(|s| s.field == field && s.signed));
         if signed {
-            app.sig_open = Some(field);
+            app.sig_open.set(&field, true);
             crate::side_panels::set_panel_visible(app, RightPanel::Signatures.into(), true);
         } else {
             let page = app.views[index].view.current;
@@ -820,6 +826,8 @@ struct PageBodyCx<'a> {
     unobstructed: bool,
     /// Every page's size in view space, unturned by the view (`DocView::page_sizes`).
     sizes: &'a [(f32, f32)],
+    /// The view's key ([`DocView::view_key`]), which keys what is drawn over the pages.
+    view_key: u64,
     /// What the page tool reads besides the session; its `pages` is filled from the body each run.
     tools: page_tools::PageToolCx<'a>,
     /// Animation effects apply (the preference after Reduce Motion), for full screen's transitions.
@@ -831,6 +839,13 @@ struct PageBodyCx<'a> {
     units: crate::units::Unit,
     find_marks: &'a [TextMark],
     table_preview: Option<&'a crate::field_table_ui::Preview>,
+}
+
+impl PageBodyCx<'_> {
+    /// The page sizes and rotation the body's pages are placed with, and the body's rect as the document area.
+    fn geometry(&self, body: &PageBody<'_>) -> PageGeometry<'_> {
+        PageGeometry { sizes: self.sizes, rotation: self.rotation, viewport: body.rect }
+    }
 }
 
 /// What a run of the page body reports for the rest of the pass. The body runs twice in a pass (a measuring run with
@@ -862,6 +877,8 @@ struct BodyOut {
     area_choice: Option<crate::zoom_snap::AreaChoice>,
     /// The selection bar's Copy.
     copy_selected: bool,
+    /// What the Camera image controls asked the app for.
+    action: Option<ViewAction>,
 }
 
 /// The part list of a pass, in paint order: pictures, paragraphs and added items, links and text links (only under
@@ -871,16 +888,21 @@ struct BodyOut {
 fn page_parts_of(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
-    session: &PageSession,
+    session: &mut PageSession,
     cx: &PageBodyCx<'_>,
 ) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
+    let geo = cx.geometry(body);
     let mut parts = Vec::new();
-    // PLAN: assumed `edit_text_ui::picture_parts(out, session, doc, pages, rotation)`, `edit_text_ui::page_parts` and
-    // `content_ui::page_parts` with the same shape (pdf-edit-w7, w8, w9 give no argument list).
     if cx.editing_content {
-        crate::edit_text_ui::picture_parts(&mut parts, session, cx.doc, body.pages, cx.rotation);
-        crate::edit_text_ui::page_parts(&mut parts, session, cx.doc, body.pages, cx.rotation);
-        crate::content_ui::page_parts(&mut parts, session, cx.doc, body.pages, cx.rotation);
+        for placed in body.pages {
+            parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
+        }
+        for placed in body.pages {
+            parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo));
+        }
+        for placed in body.pages {
+            parts.extend(crate::content_ui::page_parts(session, cx.doc, placed.page, placed));
+        }
     }
     if matches!(cx.tool, QuickTool::Select | QuickTool::Link) {
         links_of(session, cx, body).parts(&mut parts);
@@ -889,8 +911,10 @@ fn page_parts_of(
         crate::comments::parts(&mut parts, session, cx.info, body.pages, cx.rotation, cx.unobstructed);
     }
     if !cx.preparing {
-        // PLAN: assumed `forms_ui::field_parts(out, session, doc, form, pages, rotation, tool)` (pdf-forms-w7 AP-5).
-        crate::forms_ui::field_parts(&mut parts, session, cx.doc, cx.form, body.pages, cx.rotation, cx.tool);
+        let can_fill = cx.doc.allows_form_filling();
+        for placed in body.pages {
+            parts.extend(crate::forms_ui::field_parts(session, cx.info, cx.doc, placed.page, can_fill, geo));
+        }
     }
     // The sign tabs of each page, after the fields: a tab is painted over its field.
     // PLAN: `can_fill` is `can_modify` (pdf-canvas-w15 does not say which right a click that signs needs).
@@ -908,9 +932,7 @@ fn page_parts_of(
         crate::prepare::tool::page_parts(&mut parts, session, cx.form, cx.info, body.pages, cx.rotation);
     }
     if cx.tool == QuickTool::EditText && cx.can_modify {
-        // PLAN: assumed `object_ui::page_parts(out, session, pages, rotation)` for the selected objects and the
-        // frame band (pdf-edit-w10).
-        crate::object_ui::page_parts(&mut parts, session, body.pages, cx.rotation);
+        crate::object_ui::page_parts(&mut parts, session, cx.doc, cx.info, body.pages, geo);
     }
     (parts, tabs)
 }
@@ -927,7 +949,8 @@ fn pressed_by(phase: &PressPhase, button: PointerButton) -> bool {
 }
 
 /// What a press on a part does, routed by its owner.
-fn route_press(session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
+fn route_press(ctx: &egui::Context, session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
+    let geo = cx.geometry(body);
     if pressed_by(&press.phase, PointerButton::Secondary) {
         // The page's menu reads what the secondary press went to.
         session.menu_for = Some((press.page, press.owner.clone()));
@@ -949,8 +972,7 @@ fn route_press(session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>
         }
         // PLAN: assumed `comments::tool::part_pressed(session, info, press)` (pdf-comments-w8).
         Owner::Comment { .. } => crate::comments::part_pressed(session, cx.info, press),
-        // PLAN: assumed `forms_ui::field_press(session, doc, form, press)` (pdf-forms-w5).
-        Owner::Field { .. } => crate::forms_ui::field_press(session, cx.doc, cx.form, press),
+        Owner::Field { .. } => crate::forms_ui::field_press(ctx, session, cx.doc, cx.info, cx.doc.allows_form_filling(), press, geo),
         Owner::SignTab { field } => {
             if clicked && let Some(field) = cx.form.get(*field) {
                 session.sign.field = Some(field.name.clone());
@@ -958,14 +980,12 @@ fn route_press(session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>
         }
         // PLAN: assumed `prepare::tool::field_press(session, form, press)` (pdf-forms-w9).
         Owner::PrepareField { .. } => crate::prepare::tool::field_press(session, cx.form, press),
-        // PLAN: assumed `edit_text_ui::paragraph_press(session, doc, press)` and `content_ui::added_press(session,
-        // doc, press)` (pdf-edit-w7, w8).
-        Owner::Paragraph { .. } => crate::edit_text_ui::paragraph_press(session, cx.doc, press),
-        Owner::Added { .. } => crate::content_ui::added_press(session, cx.doc, press),
-        // PLAN: assumed `edit_text_ui::picture_press(session, doc, press)` and `object_ui::objects_press(session,
-        // press)` (pdf-edit-w9, w10).
-        Owner::Picture { .. } => crate::edit_text_ui::picture_press(session, cx.doc, press),
-        Owner::Objects => crate::object_ui::objects_press(session, press),
+        // The Edit text families' presses, a modified press first taking it for the objects selected together.
+        Owner::Paragraph { .. } | Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects | Owner::Frame { .. } => {
+            if let Some(edit) = page_tools::edit_text_press(session, cx.doc, cx.info, press, body.pages, geo) {
+                session.pending_edit = Some(edit);
+            }
+        }
     }
 }
 
@@ -979,7 +999,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     session.placed.extend_from_slice(body.pages);
 
     // 2-3. Every part on the pages, in one control: hit priority ranks parts inside one control only.
-    let (parts, tabs) = page_parts_of(ui, body, session, cx);
+    let (parts, tabs) = page_parts_of(ui, body, &mut *session, cx);
     // PLAN: assumed `forms_ui::focus_owner(&FormView) -> Option<Owner>` for the focused field (pdf-forms-w7 AP-6).
     let focus = crate::forms_ui::focus_owner(&session.forms);
     let parts_out = PageParts::new(&parts).focus(focus).show_at(ui, body.rect);
@@ -988,16 +1008,17 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         if matches!(press.phase, PressPhase::Down { .. }) {
             session.all_text = false;
         }
-        route_press(session, press, cx, body, out);
+        route_press(ui.ctx(), session, press, cx, body, out);
     }
     if let Some((owner, page)) = &parts_out.focused {
         // Focus arrived on a field (Tab, a request or a click): the field opens, a text field with its text selected.
         // PLAN: assumed `forms_ui::field_focused(session, doc, form, owner, page)` (pdf-forms-w5 AP-6).
         crate::forms_ui::field_focused(session, cx.doc, cx.form, owner, *page);
     }
-    if let Some((owner, key)) = &parts_out.key {
-        // PLAN: assumed `forms_ui::field_key(session, doc, form, owner, key)` (pdf-forms-w5).
-        crate::forms_ui::field_key(session, cx.doc, cx.form, owner, key);
+    if let Some((Owner::Field { .. }, key)) = &parts_out.key
+        && let Some(edit) = crate::forms_ui::field_key(session, cx.info, cx.form, key, cx.geometry(body))
+    {
+        session.pending_edit = Some(edit);
     }
 
     // 4. The tool host, in the real run only: a measuring run has no tool pass.
@@ -1006,10 +1027,10 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             // A press nobody's part took, on the page or the gap between pages, ends Select All of the document.
             session.all_text = false;
         }
-        let tool_cx = PageToolCx { pages: body.pages, ..cx.tools };
+        let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, ..cx.tools };
         let mut bench = page_tools::ToolBench::default();
         let mut fill = None;
-        let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill);
+        let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &pass.press);
         let reply = ToolHost::new().momentary(momentary).run(ui, pass, &mut tool);
         let mut finish = tool.finish();
         finish.apply(fill, session, &tool_cx);
@@ -1034,11 +1055,28 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             .show_at(ui, body.rect);
     }
     if cx.editing_content {
-        // PLAN: assumed `(ui, body, session, doc, rotation)` for the edit controls (pdf-edit-w7..w11).
-        crate::edit_text_ui::picture_controls(ui, body, session, cx.doc, cx.rotation);
-        crate::object_ui::object_controls(ui, body, session, cx.doc, cx.rotation);
-        crate::content_ui::content_controls(ui, body, session, cx.doc, cx.rotation);
-        crate::edit_text_ui::paragraph_controls(ui, body, session, cx.doc, cx.rotation);
+        let geo = cx.geometry(body);
+        let added_hovered = match parts_out.hovered {
+            Some((Owner::Added { index }, page)) => Some((page, index)),
+            _ => None,
+        };
+        let edits = [
+            crate::edit_text_ui::picture_controls(ui, body, session, cx.doc, cx.info, geo),
+            crate::object_ui::object_controls(ui, body, session, cx.info, parts_out.press.as_slice(), geo),
+            crate::content_ui::content_controls(ui, body, session, cx.doc, added_hovered, cx.view_key),
+            // PLAN: `paragraph_controls` paints the open paragraph through a `ContentPainterCx`, which the page body has
+            // no way to get (`PageBody` carries none; the framework's constructor is `#[doc(hidden)]`): reported.
+            crate::edit_text_ui::paragraph_controls(ui, body, content, session, cx.doc, &parts_out, geo),
+        ];
+        // One edit per pass, the first control's that made one, as each control's own `or` keeps its first.
+        if let Some(edit) = edits.into_iter().flatten().next() {
+            session.pending_edit = Some(edit);
+        }
+    }
+    // The focused field's editor, and the Fill & Sign text being typed, over their pages.
+    crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.geometry(body));
+    if let Some(e) = crate::fill_sign::type_box::show(ui, body, session, cx.info, &cx.prefs.author) {
+        session.pending_edit = Some(e);
     }
     if cx.tool == QuickTool::Link {
         crate::link_ui::link_outlines(ui, body, session, cx.doc, cx.rotation);
@@ -1050,7 +1088,9 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     }
     if cx.calc_order {
         let hovered = match &parts_out.hovered {
-            Some(Owner::Field { field, .. } | Owner::PrepareField { field, .. }) => cx.form.get(*field).map(crate::calc_order_ui::Focus::of_field),
+            Some((Owner::Field { field, .. } | Owner::PrepareField { field, .. }, _)) => {
+                cx.form.get(*field).map(crate::calc_order_ui::Focus::of_field)
+            }
             _ => None,
         };
         let selected = session.prepare.selected.as_ref().map(|(name, _)| name.as_str());
@@ -1089,8 +1129,9 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         out.turn = frame.step;
     }
     if cx.tool == QuickTool::EnhanceCamera {
-        crate::camera_ui::show_quad(ui, body, session, cx.can_modify);
-        crate::camera_ui::bar(ui, body, session, cx.can_modify);
+        let quad = crate::camera_ui::show_quad(ui, body, session, cx.can_modify, cx.current);
+        let bar = crate::camera_ui::bar(ui, body, session, cx.can_modify);
+        out.action = bar.or(quad);
     }
     if cx.chosen == QuickTool::Snapshot {
         let sizes = cx.sizes;
@@ -1253,6 +1294,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).map(|stamp| (stamp, custom_line.as_deref())),
         _ => None,
     };
+    let view_key = view.view_key();
     let DocView { view: state, session, momentary, revisions, reports, page_sizes, .. } = &mut *view;
     let tools = page_tools::PageToolCx {
         doc,
@@ -1261,6 +1303,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         pages: &[],
         sizes: &page_sizes[..],
         rotation: state.rotation,
+        viewport: Rect::NOTHING,
+        text_style: &app.text_style,
         allowed,
         can_modify,
         can_crop: can_modify,
@@ -1294,6 +1338,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         rotation: state.rotation,
         current: state.current,
         sizes: &page_sizes[..],
+        view_key,
         tools,
         animates: !app.animation_effects.reduced(None),
         present_at,
@@ -1325,6 +1370,14 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     if out.toggle_white_space {
         view.view.hide_white_space = !view.view.hide_white_space;
+    }
+    if let Some(action) = body_out.action.take() {
+        view.pending_action = Some(action);
+    }
+    match view.session.pending_page.take() {
+        Some((page, Some(rect))) => view.reveal_rect(page, rect, info),
+        Some((page, None)) => view.go_to_page(page),
+        None => {}
     }
     // A turn the presenter's display time or a full-screen key asked for, then a click's turn once the
     // double-click time has passed with no object clicked and no selection made (#2070).
@@ -1379,15 +1432,6 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
             Some(first) => Edit::Batch { label: "Edit comment".into(), edits: vec![first, e] },
             None => e,
         });
-    }
-    let text_box = crate::forms_ui::text_box(doc, session, &form);
-    // PLAN: assumed `forms_ui::editor::show(ui, session, info, form, text_box, today)` and
-    // `fill_sign::type_box::show(ui, session, info, author)` (pdf-forms-w5, w9).
-    if let Some(e) = crate::forms_ui::editor::show(ui, session, info, &form, text_box.as_ref(), app.session.today()) {
-        session.pending_edit = Some(e);
-    }
-    if let Some(e) = crate::fill_sign::type_box::show(ui, session, info, &app.comment_prefs.author) {
-        session.pending_edit = Some(e);
     }
 
     let refused = view.session.objects.notice.take();
@@ -1540,7 +1584,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         crate::prepare::dialog::open(app, &name, w, crate::prepare::FieldTab::General);
     }
     if let Some(FieldMenu::Duplicate(name)) = field_menu {
-        crate::dialogs::duplicate_field::open(app, name);
+        crate::dialogs::duplicate_field::open(app, ctx, name);
     }
     if let Some((page, rect)) = app.views[index].session.links.open_new.take() {
         app.open_link_props(page, Some(rect), None);

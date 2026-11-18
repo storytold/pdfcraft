@@ -1,4 +1,4 @@
-use super::{DocInfo, DocView, Edit, MAX_OUTLINES, PageXform, Pos2, Rect, user_box};
+use super::{DocInfo, Edit, MAX_OUTLINES, PageGeometry, PageSession, PageXform, Pos2, Rect, user_box};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
 use craft::behavior::geometry::{BoxAllow, BoxRules, BoxState, CropBox, CropGuide, ScaleRule, TransformMode};
 use craft::behavior::kurbo::{BezPath, Point, Rect as DocRect, Vec2};
@@ -220,15 +220,16 @@ fn path_of(q: &[Point; 4]) -> BezPath {
 pub(crate) fn picture_controls(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
-    view: &mut DocView,
+    session: &mut PageSession,
     doc: &pdfcraft_engine::Document,
     info: &DocInfo,
+    geo: PageGeometry<'_>,
 ) -> Option<Edit> {
     let mut edit = None;
     for placed in body.pages {
-        let Some(xf) = view.page_xform(placed.page) else { continue };
+        let xf = geo.xform_of(placed);
         let images = doc.page_images(placed.page);
-        let selection = view.session.image_selection.as_ref().filter(|s| s.page == placed.page && s.index < images.len());
+        let selection = session.image_selection.as_ref().filter(|s| s.page == placed.page && s.index < images.len());
         let selected = selection.map(|s| s.index);
         let moving = selection.is_some_and(ImageSelection::gesturing);
         let all = images.len() <= MAX_OUTLINES;
@@ -244,20 +245,26 @@ pub(crate) fn picture_controls(
         }
         let Some(index) = selected else { continue };
         let Some(image) = images.get(index) else { continue };
-        let cropping = view.session.image_selection.as_ref().is_some_and(|s| s.crop.is_some());
+        let cropping = session.image_selection.as_ref().is_some_and(|s| s.crop.is_some());
         let pic = PagePicture { placed, xf: &xf, info, index, image };
-        let made = if cropping { crop_controls(ui, body, view, &pic) } else { box_controls(ui, body, view, doc, &pic) };
+        let made = if cropping { crop_controls(ui, body, session, &pic) } else { box_controls(ui, body, session, doc, &pic) };
         edit = edit.or(made);
     }
     edit
 }
 
-fn box_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc: &pdfcraft_engine::Document, pic: &PagePicture<'_>) -> Option<Edit> {
+fn box_controls(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    session: &mut PageSession,
+    doc: &pdfcraft_engine::Document,
+    pic: &PagePicture<'_>,
+) -> Option<Edit> {
     let PagePicture { placed, xf, info, index, image } = *pic;
     let page = placed.page;
     // The page's picture is the current revision's, not a stand-in for the one before the edit.
     if matches!(placed.picture, TextureState::Ready(_))
-        && let Some(s) = view.session.image_selection.as_mut()
+        && let Some(s) = session.image_selection.as_mut()
         && s.settled.take().is_some()
     {
         s.preview = None;
@@ -282,14 +289,14 @@ fn box_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc:
         match event {
             EditEvent::Begin { .. } => {
                 let cut = cut_preview(doc, placed, index);
-                if let Some(s) = view.session.image_selection.as_mut() {
+                if let Some(s) = session.image_selection.as_mut() {
                     s.preview = cut;
                     s.settled = None;
                 }
             }
             EditEvent::Commit { after, .. } => {
                 edit = picture_edit(page, index, image.matrix, image.rect, quad, after.quad, &to_user);
-                if let Some(s) = view.session.image_selection.as_mut() {
+                if let Some(s) = session.image_selection.as_mut() {
                     s.settled = edit.as_ref().map(|_| (norm_rect(placed, xf, bounds), norm_rect(placed, xf, bounds_of(&after.quad))));
                     if s.settled.is_none() {
                         s.preview = None;
@@ -297,7 +304,7 @@ fn box_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc:
                 }
             }
             EditEvent::Cancel { .. } => {
-                if let Some(s) = view.session.image_selection.as_mut() {
+                if let Some(s) = session.image_selection.as_mut() {
                     s.preview = None;
                 }
             }
@@ -305,7 +312,7 @@ fn box_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc:
         }
     }
     // `shown.discard` (Escape with no drag) is ignored: a selected picture has no Escape outside crop mode.
-    let Some(s) = view.session.image_selection.as_mut() else { return edit };
+    let Some(s) = session.image_selection.as_mut() else { return edit };
     s.paper = None;
     let Some(textures) = s.preview.as_ref() else { return edit };
     let (from, to) = match s.settled {
@@ -319,10 +326,10 @@ fn box_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc:
     edit
 }
 
-fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, pic: &PagePicture<'_>) -> Option<Edit> {
+fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, pic: &PagePicture<'_>) -> Option<Edit> {
     let PagePicture { placed, xf, info, image, .. } = *pic;
     let page = placed.page;
-    let keep = view.session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep)?;
+    let keep = session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep)?;
     let frame = picture_quad(xf, info, page, image).map(|p| placed.to_page(p));
     let kept_screen = xf.user_rect(info, page, keep.map(|v| v as f32));
     let kept = DocRect::from_points(placed.to_page(kept_screen.min), placed.to_page(kept_screen.max));
@@ -339,11 +346,11 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, pic
         let to_screen = |p: Point| placed.to_screen(p);
         let moved = Rect::from_two_pos(to_screen(Point::new(crop.rect.x0, crop.rect.y0)), to_screen(Point::new(crop.rect.x1, crop.rect.y1)));
         let keep = user_box(xf, info, page, moved);
-        if let Some(mode) = view.session.image_selection.as_mut().and_then(|s| s.crop.as_mut()) {
+        if let Some(mode) = session.image_selection.as_mut().and_then(|s| s.crop.as_mut()) {
             mode.keep = keep;
         }
     }
-    let keep = view.session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map_or(keep, |c| c.keep);
+    let keep = session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map_or(keep, |c| c.keep);
     let initial_keep = image.visible_rect.unwrap_or(image.rect);
     let has_crop = image.has_editor_crop() || !same_rect(keep, initial_keep);
     let (mut reset, mut cancel, mut done) = (false, false, false);
@@ -356,19 +363,19 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, pic
         done |= Button::new(tl!("Done")).show(ui).clicks > 0;
     });
     if reset {
-        if let Some(mode) = view.session.image_selection.as_mut().and_then(|s| s.crop.as_mut()) {
+        if let Some(mode) = session.image_selection.as_mut().and_then(|s| s.crop.as_mut()) {
             mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
         }
         return None;
     }
     if done || shown.apply.is_some() {
-        apply_crop_mode(view, image);
+        apply_crop_mode(session, image);
         // A click away lets the selection go; Enter and a double click keep it.
         if shown.apply == Some(CropApply::Away) {
-            view.session.image_selection = None;
+            session.image_selection = None;
         }
     } else if (cancel || shown.discard)
-        && let Some(s) = view.session.image_selection.as_mut()
+        && let Some(s) = session.image_selection.as_mut()
     {
         s.crop = None;
     }
@@ -377,16 +384,16 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, pic
 
 /// Done in crop mode: it ends, and the picture `image` of the selection keeps the box kept (or
 /// all of itself again).
-fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
-    let Some(s) = view.session.image_selection.as_mut() else { return };
+fn apply_crop_mode(session: &mut PageSession, image: &pdfcraft_engine::PageImage) {
+    let Some(s) = session.image_selection.as_mut() else { return };
     let Some(keep) = s.crop.take().map(|mode| mode.keep) else { return };
     let (page, index) = (s.page, s.index);
     if same_rect(keep, image.rect) {
         if image.has_editor_crop() {
-            view.session.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::RemoveCrop });
+            session.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::RemoveCrop });
         }
     } else if image.visible_rect != Some(keep) {
-        view.session.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Crop(keep) });
+        session.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Crop(keep) });
     }
 }
 
@@ -457,9 +464,15 @@ fn picture_change(
 /// The parts of the pictures of `page`, in paint order so the topmost wins a press: a picture's
 /// visible shape, and for the selected one its whole frame, a hole in it included. None while
 /// the picture is cropped, whose crop overlay holds the page.
-pub(crate) fn picture_parts(view: &DocView, doc: &pdfcraft_engine::Document, page: usize, placed: &PlacedPage) -> Vec<PagePart> {
-    let Some(xf) = view.page_xform(page) else { return Vec::new() };
-    let selection = view.session.image_selection.as_ref().filter(|s| s.page == page);
+pub(crate) fn picture_parts(
+    session: &PageSession,
+    doc: &pdfcraft_engine::Document,
+    page: usize,
+    placed: &PlacedPage,
+    geo: PageGeometry<'_>,
+) -> Vec<PagePart> {
+    let Some(xf) = session.page_xform(page, geo) else { return Vec::new() };
+    let selection = session.image_selection.as_ref().filter(|s| s.page == page);
     if selection.is_some_and(|s| s.crop.is_some()) {
         return Vec::new();
     }
@@ -482,7 +495,7 @@ pub(crate) fn picture_parts(view: &DocView, doc: &pdfcraft_engine::Document, pag
 
 /// A press that went to a picture: a click selects it, or on grouped artwork with text prepares
 /// the page so the paragraph clicked opens (a drag still moves the group selected).
-pub(crate) fn picture_press(view: &mut DocView, doc: &pdfcraft_engine::Document, press: &PagePress) -> Option<Edit> {
+pub(crate) fn picture_press(session: &mut PageSession, doc: &pdfcraft_engine::Document, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
     let Owner::Picture { index } = press.owner else { return None };
     let start = press.phase.start().filter(|s| s.button == PointerButton::Primary)?;
     if !press.phase.is_click() {
@@ -490,30 +503,30 @@ pub(crate) fn picture_press(view: &mut DocView, doc: &pdfcraft_engine::Document,
     }
     let page = press.page;
     let grouped = doc.page_images(page).get(index).is_some_and(|im| im.is_form)
-        && view.session.pending_edit.is_none()
-        && view.session.line_editor.is_none()
+        && session.pending_edit.is_none()
+        && session.line_editor.is_none()
         && doc.grouped_text_at(page, index);
-    if grouped && let Some(xf) = view.page_xform(page) {
+    if grouped && let Some(xf) = session.page_xform(page, geo) {
         let (x, y) = screen_to_user(&xf, &doc.info, page, start.origin);
-        view.session.image_selection = None;
-        view.session.grouped_text_click = Some((page, [x, y]));
+        session.image_selection = None;
+        session.grouped_text_click = Some((page, [x, y]));
         return Some(Edit::PrepareText { page });
     }
-    view.session.image_selection = Some(ImageSelection::at(page, index));
+    session.image_selection = Some(ImageSelection::at(page, index));
     None
 }
 
 /// Delete or Backspace on the selected picture, while its page is shown and it is not being cropped
 /// or changed.
-pub(crate) fn delete_picture(view: &mut DocView, placed: &[PlacedPage]) -> Option<Edit> {
-    let s = view.session.image_selection.as_ref().filter(|s| s.crop.is_none() && !s.gesturing())?;
+pub(crate) fn delete_picture(session: &mut PageSession, placed: &[PlacedPage]) -> Option<Edit> {
+    let s = session.image_selection.as_ref().filter(|s| s.crop.is_none() && !s.gesturing())?;
     if !placed.iter().any(|p| p.page == s.page) {
         return None;
     }
     let (page, index) = (s.page, s.index);
-    view.session.image_selection = None;
+    session.image_selection = None;
     // Added content's selection follows the picture's, and goes with it.
-    view.session.content.selected = None;
+    session.content.selected = None;
     Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete })
 }
 
@@ -540,13 +553,13 @@ pub enum ImageAction {
 /// A right-click on `page` that went to its picture `index` (on it or a grip of it) selects it for
 /// its menu, keeping it as it is if it was selected (crop mode included); one that went to anything
 /// else (`None`) unselects the picture selected.
-pub(crate) fn picture_context(page: usize, index: Option<usize>, view: &mut DocView) {
+pub(crate) fn picture_context(page: usize, index: Option<usize>, session: &mut PageSession) {
     match index {
-        Some(index) if view.session.image_selection.as_ref().is_none_or(|s| (s.page, s.index) != (page, index)) => {
-            view.session.image_selection = Some(ImageSelection::at(page, index));
+        Some(index) if session.image_selection.as_ref().is_none_or(|s| (s.page, s.index) != (page, index)) => {
+            session.image_selection = Some(ImageSelection::at(page, index));
         }
         Some(_) => {}
-        None => view.session.image_selection = None,
+        None => session.image_selection = None,
     }
 }
 
@@ -568,8 +581,8 @@ pub(crate) struct PictureMenu<'a> {
 }
 
 /// The right-click menu of the selected picture `menu.hit` on `menu.page`; the action it asks the
-/// caller to run, if any (edits it makes itself are queued on `view`).
-pub(crate) fn picture_menu(ui: &mut egui::Ui, view: &mut DocView, menu: &PictureMenu<'_>) -> Option<ImageAction> {
+/// caller to run, if any (edits it makes itself are queued on `session`).
+pub(crate) fn picture_menu(ui: &mut egui::Ui, session: &mut PageSession, menu: &PictureMenu<'_>) -> Option<ImageAction> {
     let PictureMenu { images, page, hit, can_paste, at, rotation } = *menu;
     let img = images.get(hit)?;
     use pdfcraft_engine::ImageEdit as E;
@@ -595,12 +608,12 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, view: &mut DocView, menu: &Picture
         match picked.0 {
             Pick::Note => action = Some(ImageAction::AddComment(page, hit)),
             Pick::Crop => {
-                if let Some(s) = view.session.image_selection.as_mut() {
+                if let Some(s) = session.image_selection.as_mut() {
                     s.crop = Some(CropMode::new(img.visible_rect.unwrap_or(img.rect)));
                 }
             }
-            Pick::Ccw => view.session.pending_edit = edit(E::Rotate(3)),
-            Pick::Cw => view.session.pending_edit = edit(E::Rotate(1)),
+            Pick::Ccw => session.pending_edit = edit(E::Rotate(3)),
+            Pick::Cw => session.pending_edit = edit(E::Rotate(1)),
         }
     }
 
@@ -616,13 +629,13 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, view: &mut DocView, menu: &Picture
     }
     let _ = Divider::horizontal().show(ui);
     if raster && img.has_editor_crop() && item(ui, true, tl!("Remove crop")) {
-        view.session.pending_edit = edit(E::RemoveCrop);
+        session.pending_edit = edit(E::RemoveCrop);
     }
     if item(ui, true, tl!("Flip horizontal")) {
-        view.session.pending_edit = edit(E::Flip { horizontal: flip_user_axis(true, rotation) });
+        session.pending_edit = edit(E::Flip { horizontal: flip_user_axis(true, rotation) });
     }
     if item(ui, true, tl!("Flip vertical")) {
-        view.session.pending_edit = edit(E::Flip { horizontal: flip_user_axis(false, rotation) });
+        session.pending_edit = edit(E::Flip { horizontal: flip_user_axis(false, rotation) });
     }
     let _ = Menu::submenu_row(ui, tl!("Arrange image"), |ui, _| {
         use pdfcraft_engine::ArrangeOrder as A;
@@ -633,15 +646,15 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, view: &mut DocView, menu: &Picture
             (A::SendBackward, tl!("Send backward")),
         ] {
             if item(ui, true, label) {
-                view.session.pending_edit = edit(E::Arrange(order));
+                session.pending_edit = edit(E::Arrange(order));
             }
         }
     });
     // Grouped Form artwork: draw its content in place, so its text and pictures edit one by
     // one (#2964, #3005).
     if img.is_form && item(ui, true, tl!("Ungroup")) {
-        view.session.image_selection = None;
-        view.session.pending_edit = edit(E::Ungroup);
+        session.image_selection = None;
+        session.pending_edit = edit(E::Ungroup);
     }
     if item(ui, raster, tl!("Replace image")) {
         action = Some(ImageAction::Replace(page, hit));
@@ -665,8 +678,8 @@ pub(crate) fn picture_menu(ui: &mut egui::Ui, view: &mut DocView, menu: &Picture
     }
     let _ = Divider::horizontal().show(ui);
     if item(ui, true, tl!("Delete")) {
-        view.session.image_selection = None;
-        view.session.pending_edit = edit(E::Delete);
+        session.image_selection = None;
+        session.pending_edit = edit(E::Delete);
     }
     action
 }

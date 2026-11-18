@@ -22,7 +22,7 @@ use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle, Link
 use pdfcraft_render::{DocInfo, LinkTarget};
 
 use crate::PdfCraftApp;
-use crate::canvas::DocView;
+use crate::canvas::PageSession;
 use crate::canvas::page_overlays::LinkEvent;
 use crate::colour_picker::PickerHost;
 use crate::comments::{RecentColours, palette, to_rgb};
@@ -154,7 +154,7 @@ pub(crate) fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
 /// selected link and Escape unselects it. A press on a link is the page overlay's (`PageLinks` in
 /// edit mode, read by [`link_edit_press`]); a drag that starts on one passes to this tool.
 pub(crate) struct LinkTool<'a> {
-    view: &'a mut DocView,
+    session: &'a mut PageSession,
     pages: &'a [PlacedPage],
     info: &'a DocInfo,
     /// The canvas background's press of this pass: where a drawn rectangle began.
@@ -163,8 +163,8 @@ pub(crate) struct LinkTool<'a> {
 
 impl<'a> LinkTool<'a> {
     /// The tool over the pages on screen this pass.
-    pub(crate) fn new(view: &'a mut DocView, pages: &'a [PlacedPage], info: &'a DocInfo, press: PressState) -> Self {
-        LinkTool { view, pages, info, press }
+    pub(crate) fn new(session: &'a mut PageSession, pages: &'a [PlacedPage], info: &'a DocInfo, press: PressState) -> Self {
+        LinkTool { session, pages, info, press }
     }
 
     fn placed(&self, page: usize) -> Option<&PlacedPage> {
@@ -194,28 +194,28 @@ impl CanvasTool for LinkTool<'_> {
         let Some((page, r)) = self.drawn(pointer.pos) else { return };
         // A click that moved nothing draws nothing and leaves the page's selection empty.
         if r.width() < MIN_LINK_SIDE || r.height() < MIN_LINK_SIDE {
-            self.view.session.links.selected = None;
+            self.session.links.selected = None;
             return;
         }
         let Some(placed) = self.placed(page) else { return };
         let (Some(a), Some(b)) = (to_user(placed, self.info, r.min), to_user(placed, self.info, r.max)) else { return };
-        self.view.session.links.open_new = Some((page, [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]));
+        self.session.links.open_new = Some((page, [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]));
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {}
 
     fn claims(&self) -> ToolClaims {
-        if self.view.session.links.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.session.links.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         match key {
             ToolKey::Delete { .. } => {
-                let Some((page, index)) = self.view.session.links.selected.take() else { return false };
-                self.view.session.pending_edit = Some(Edit::DeleteLink { page, index });
+                let Some((page, index)) = self.session.links.selected.take() else { return false };
+                self.session.pending_edit = Some(Edit::DeleteLink { page, index });
                 true
             }
-            ToolKey::Cancel => self.view.session.links.selected.take().is_some(),
+            ToolKey::Cancel => self.session.links.selected.take().is_some(),
             _ => false,
         }
     }

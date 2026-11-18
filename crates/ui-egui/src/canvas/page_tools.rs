@@ -3,6 +3,7 @@
 //! edit, a drawn rectangle, a page to move the camera quadrilateral to) is read from it after the run
 //! ([`PageTool::finish`]) and applied to the session ([`ToolFinish::apply`]).
 
+use craft::behavior::press::PressState;
 use craft::behavior::{CancelReason, Cursor, PointerButton};
 use craft::host::{Host, Wake};
 use craft::keymap::Mods;
@@ -21,7 +22,7 @@ use super::page_parts::{Owner, PagePress};
 use super::page_select::{PageSelectTool, PickSlots};
 use super::selection::DocTexts;
 use super::zoom_snap::SnapshotTool;
-use super::{PageSession, PageXform, presenter};
+use super::{PageGeometry, PageSession, PageXform, presenter};
 use crate::QuickTool;
 use crate::image_pick::PickedImage;
 use crate::tools::camera_ui::{CameraQuad, CameraTool};
@@ -72,6 +73,10 @@ pub(crate) struct PageToolCx<'a> {
     pub(crate) sizes: &'a [(f32, f32)],
     /// The view's rotation this pass, in degrees.
     pub(crate) rotation: u16,
+    /// The page body's rect this pass, filled from the body each run as `pages` is.
+    pub(crate) viewport: egui::Rect,
+    /// The style new text gets (Edit a PDF ▸ Format text).
+    pub(crate) text_style: &'a pdfcraft_engine::AddedText,
     /// The document allows comments.
     pub(crate) allowed: bool,
     /// The document allows changes.
@@ -101,6 +106,13 @@ pub(crate) struct PageToolCx<'a> {
     pub(crate) by_line: &'a str,
     /// The custom stamp chosen, and the line filled in for it (#1741).
     pub(crate) custom_stamp: Option<(&'a CustomStamp, Option<&'a str>)>,
+}
+
+impl<'a> PageToolCx<'a> {
+    /// The page sizes, rotation and document area the pages are placed with this pass.
+    pub(crate) fn geometry(&self) -> PageGeometry<'a> {
+        PageGeometry { sizes: self.sizes, rotation: self.rotation, viewport: self.viewport }
+    }
 }
 
 /// What the page tool borrows for a pass besides the session: the text layers and page transforms it builds from
@@ -227,7 +239,8 @@ fn select_tool<'a>(
 }
 
 /// The page tool for `chosen` this pass. The placing rule applies first ([`seen_tool`]); Fill & Sign leaves its
-/// click's outcome in `fill`, which the caller applies after the run with [`ToolFinish::apply`].
+/// click's outcome in `fill`, which the caller applies after the run with [`ToolFinish::apply`]. `press` is the canvas
+/// background's press of the pass, whose span the area tools read.
 // PLAN: the sheet's `page_tool(tool, cx)` cannot lend the per-pass text layers and transforms the tools borrow (they
 // would borrow locals of this function) nor Fill & Sign's outcome slot (forms-w5 decided `&'a mut Option<FillOutcome>`);
 // pdf-canvas-w8 owns `bench` and `fill` beside the call, and reads `fill` after the tool is dropped.
@@ -237,6 +250,7 @@ pub(crate) fn page_tool<'a>(
     session: &'a mut PageSession,
     bench: &'a mut ToolBench<'a>,
     fill: &'a mut Option<FillOutcome>,
+    press: &'a PressState,
 ) -> PageTool<'a> {
     let tool = seen_tool(session, chosen);
     let ToolBench { texts: texts_slot, xforms, map: map_slot } = bench;
@@ -302,10 +316,8 @@ pub(crate) fn page_tool<'a>(
             Arm::Area(Box::new(FillSignTool::new(&cx, input, fill)))
         }
         QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session, cx.info, xforms))),
-        // PLAN: assumed `AddTextTool::new(session, doc, info)` in `content_ui` (pdf-edit-w7 gives no argument list).
-        QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.info))),
-        // PLAN: pdf-edit-w10's `EditTextTool::new(view, doc, info)` takes no placed pages, which the review asked to hand over.
-        QuickTool::EditText => Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info))),
+        QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.pages, cx.text_style))),
+        QuickTool::EditText => Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()))),
         QuickTool::Stamp(kind) => {
             Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), cx.pages, cx.info, map))
         }
@@ -322,8 +334,7 @@ pub(crate) fn page_tool<'a>(
             // The library no longer holds the stamp: no click places one, and a drag pans as the Hand tool's.
             None => Arm::Hand(HandTool::new(cx.navigation)),
         },
-        // PLAN: assumed `LinkTool::new(session, doc, info, can_modify)` (pdf-edit-w11 gives `new(view, ..)`).
-        QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.doc, cx.info, cx.can_modify))),
+        QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.pages, cx.info, *press))),
         QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, cx.pages, cx.rotation, cx.info)),
         QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(cx.pages, cx.rotation, size)),
     };
@@ -450,25 +461,30 @@ impl ToolFinish {
 
 /// A press on an Edit text part: with Shift or Cmd (Ctrl off macOS) held it adds to or takes from the objects
 /// selected together first, whatever lies under it; then the objects and the paragraph frame take their own; then
-/// each family its own.
-// PLAN: pdf-canvas-w8's `route_press` calls this for the Edit text owners under `QuickTool::EditText`; assumed
-// `object_ui::modified_press(..) -> bool` (taken) and `objects_press(session, press)` (pdf-edit-w10 decisions).
-pub(crate) fn edit_text_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress) {
+/// each family its own. `pages` are the pages this pass placed. The edit the press ends in, if any.
+pub(crate) fn edit_text_press(
+    session: &mut PageSession,
+    doc: &Document,
+    info: &DocInfo,
+    press: &PagePress,
+    pages: &[PlacedPage],
+    geo: PageGeometry<'_>,
+) -> Option<Edit> {
     let Mods { cmd, shift, .. } = press.mods;
-    if (shift || cmd) && crate::tools::object_ui::modified_press(session, doc, info, press) {
-        return;
+    if (shift || cmd) && crate::tools::object_ui::modified_press(session, doc, info, press, geo) {
+        return None;
     }
     match press.owner {
-        Owner::Objects | Owner::Frame { .. } => crate::tools::object_ui::objects_press(session, press),
-        Owner::Paragraph { .. } => crate::tools::edit_text_ui::paragraph_press(session, doc, press),
-        Owner::Added { .. } => crate::tools::content_ui::added_press(session, doc, press),
-        Owner::Picture { .. } => crate::tools::edit_text_ui::picture_press(session, doc, press),
+        Owner::Objects | Owner::Frame { .. } => crate::tools::object_ui::objects_press(session, doc, info, press, geo),
+        Owner::Paragraph { .. } => crate::tools::edit_text_ui::paragraph_press(session, doc, press, geo),
+        Owner::Added { .. } => crate::tools::content_ui::added_press(session, doc, pages, press),
+        Owner::Picture { .. } => crate::tools::edit_text_ui::picture_press(session, doc, press, geo),
         Owner::Comment { .. }
         | Owner::Link { .. }
         | Owner::TextLink { .. }
         | Owner::Field { .. }
         | Owner::PrepareField { .. }
-        | Owner::SignTab { .. } => {}
+        | Owner::SignTab { .. } => None,
     }
 }
 

@@ -18,7 +18,7 @@ use craft_ui::style::Variant;
 use craft_ui::value_drag::Slider;
 use egui::Ui;
 
-use crate::canvas::{DocView, ViewAction};
+use crate::canvas::{PageSession, ViewAction};
 pub use pdfcraft_engine::camera_clean::Look;
 
 /// How far in from the page's edges the corners start, as a share of its size.
@@ -69,20 +69,21 @@ pub(crate) fn page_points(placed: &PlacedPage) -> (f32, f32) {
 
 /// The quadrilateral on its page, shown as the framework's perspective quad over the canvas: it seeds the inset corners on
 /// the current page when there are none yet, follows the corners the user drags, and turns Enter into Enhance page and
-/// Esc into Cancel. Called only while the Camera image tool is open.
-pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed: bool) {
+/// Esc into Cancel, which it returns for the app. `current` is the view's current page. Called only while the Camera
+/// image tool is open.
+pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, allowed: bool, current: usize) -> Option<ViewAction> {
     // Once the page is enhanced, the bar's buttons take over.
-    if view.session.camera_done.is_some() {
-        return;
+    if session.camera_done.is_some() {
+        return None;
     }
-    if view.session.camera.is_none()
-        && let Some(placed) = body.pages.iter().find(|p| p.page == view.current())
+    if session.camera.is_none()
+        && let Some(placed) = body.pages.iter().find(|p| p.page == current)
     {
         let (w, h) = page_points(placed);
-        view.session.camera = Some(CameraQuad::inset(placed.page, w, h));
+        session.camera = Some(CameraQuad::inset(placed.page, w, h));
     }
-    let Some(quad) = view.session.camera else { return };
-    let Some(placed) = body.pages.iter().find(|p| p.page == quad.page) else { return };
+    let quad = session.camera?;
+    let placed = body.pages.iter().find(|p| p.page == quad.page)?;
     let to_doc = |c: [f32; 2]| body.view.to_doc(placed.to_screen(Point::new(f64::from(c[0]), f64::from(c[1]))));
     let mut doc_quad = Some(quad.corners.map(to_doc));
     let page_bounds = DocRect::from_points(body.view.to_doc(placed.rect.min), body.view.to_doc(placed.rect.max));
@@ -97,23 +98,25 @@ pub(crate) fn show_quad(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, al
             let p = placed.to_page(body.view.to_screen(d));
             [p.x as f32, p.y as f32]
         };
-        view.session.camera = Some(CameraQuad { page: quad.page, corners: moved.map(to_page) });
-    }
-    if allowed && out.apply {
-        view.pending_action = Some(ViewAction::EnhanceCamera);
+        session.camera = Some(CameraQuad { page: quad.page, corners: moved.map(to_page) });
     }
     if out.discard {
-        view.pending_action = Some(ViewAction::CancelCamera);
+        Some(ViewAction::CancelCamera)
+    } else if allowed && out.apply {
+        Some(ViewAction::EnhanceCamera)
+    } else {
+        None
     }
 }
 
 /// The task bar at the top right of the document area: Enhance page and Cancel; once the page is enhanced, rotate it either
 /// way, choose its look (original, colour, greyscale, black and white) and clean-up level, Crop pages, Organize pages, or
-/// Done. The instructions are a notice (`ocr.enhance_camera`).
-pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed: bool) {
+/// Done. The instructions are a notice (`ocr.enhance_camera`). Returns the action a button asked the app for.
+pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, allowed: bool) -> Option<ViewAction> {
+    let mut action = None;
     TaskBar::at_edge(tl!("Camera image"), Align::End).show(ui, body.rect, |ui, _| {
         // After Enhance page: put the page the right way up, trim it, or move on.
-        if let Some(mut done) = view.session.camera_done {
+        if let Some(mut done) = session.camera_done {
             let looks = [
                 Entry::new(Look::Original, tl!("Original")),
                 Entry::new(Look::Colour, tl!("Colour")),
@@ -136,34 +139,35 @@ pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, allowed:
             // Enhance again once the slider is let go (or moved with the keys).
             again |= edit.events.committed().is_some();
             if again && (done.look, done.level) != done.applied {
-                view.pending_action = Some(ViewAction::CameraLevel);
+                action = Some(ViewAction::CameraLevel);
             }
-            view.session.camera_done = Some(done);
+            session.camera_done = Some(done);
             if clicked(&IconButton::new(IconId::new("rotate_ccw")).label(tl!("Rotate counterclockwise")).enabled(allowed).show(ui)) {
-                view.pending_action = Some(ViewAction::CameraRotate { clockwise: false });
+                action = Some(ViewAction::CameraRotate { clockwise: false });
             }
             if clicked(&IconButton::new(IconId::new("rotate_cw")).label(tl!("Rotate clockwise")).enabled(allowed).show(ui)) {
-                view.pending_action = Some(ViewAction::CameraRotate { clockwise: true });
+                action = Some(ViewAction::CameraRotate { clockwise: true });
             }
             if clicked(&Button::new(tl!("Crop pages")).show(ui)) {
-                view.pending_action = Some(ViewAction::CameraNext("page.crop"));
+                action = Some(ViewAction::CameraNext("page.crop"));
             }
             if clicked(&Button::new(tl!("Organize pages")).show(ui)) {
-                view.pending_action = Some(ViewAction::CameraNext("page.organize"));
+                action = Some(ViewAction::CameraNext("page.organize"));
             }
             if clicked(&Button::new(tl!("Done")).variant(Variant::PRIMARY).show(ui)) {
-                view.pending_action = Some(ViewAction::CancelCamera);
+                action = Some(ViewAction::CancelCamera);
             }
             return;
         }
-        let ready = allowed && view.session.camera.is_some();
+        let ready = allowed && session.camera.is_some();
         if clicked(&Button::new(tl!("Enhance page")).variant(Variant::PRIMARY).enabled(ready).show(ui)) {
-            view.pending_action = Some(ViewAction::EnhanceCamera);
+            action = Some(ViewAction::EnhanceCamera);
         }
         if clicked(&Button::new(tl!("Cancel")).show(ui)) {
-            view.pending_action = Some(ViewAction::CancelCamera);
+            action = Some(ViewAction::CancelCamera);
         }
     });
+    action
 }
 
 /// The press rule of the Camera image tool: a press nobody holds (the quad's corners take their own) on a page without the

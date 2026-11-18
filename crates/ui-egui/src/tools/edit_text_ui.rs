@@ -26,8 +26,8 @@ use egui::{CornerRadius, Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePartsOutput, PagePress};
+use crate::canvas::{PageGeometry, PageSession, PageXform};
 
 // PLAN: at the base `image.rs` imports `ACCENT`, `Color32`, `Stroke` and `PagePointer` from here; they
 // leave with the old overlay (pdf-edit-w9's rewrite takes theme roles instead).
@@ -671,17 +671,17 @@ pub(crate) fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> 
 }
 
 /// The paragraphs of `page` as the document has them now.
-fn blocks_of(view: &DocView, doc: &pdfcraft_engine::Document, page: usize) -> Vec<pdfcraft_engine::TextBlock> {
-    match view.session.edit_lines.get(&page) {
+fn blocks_of(session: &PageSession, doc: &pdfcraft_engine::Document, page: usize) -> Vec<pdfcraft_engine::TextBlock> {
+    match session.edit_lines.get(&page) {
         Some((generation, blocks)) if *generation == doc.edit_generation() => blocks.clone(),
         _ => doc.text_blocks(page),
     }
 }
 
 /// [`blocks_of`], kept for the next call while the document is unchanged.
-fn page_blocks(view: &mut DocView, doc: &pdfcraft_engine::Document, page: usize) -> Vec<pdfcraft_engine::TextBlock> {
-    let blocks = blocks_of(view, doc, page);
-    view.session.edit_lines.insert(page, (doc.edit_generation(), blocks.clone()));
+fn page_blocks(session: &mut PageSession, doc: &pdfcraft_engine::Document, page: usize) -> Vec<pdfcraft_engine::TextBlock> {
+    let blocks = blocks_of(session, doc, page);
+    session.edit_lines.insert(page, (doc.edit_generation(), blocks.clone()));
     blocks
 }
 
@@ -712,13 +712,19 @@ fn reach_of(boxes: &[Rect], i: usize, upright: bool) -> Rect {
 /// reach, taking a click (opens it) and a drag (moves it). The open paragraph has none: its editor
 /// takes the pointer over its own rect.
 // PLAN: A-4 gives `page_parts(view, page, placed)`, but a paragraph's box needs the page's crop and
-// turn (`doc.info`), which `DocView` has no way to reach; `doc` is a parameter, as in A-5's
+// turn (`doc.info`), which the session has no way to reach; `doc` is a parameter, as in A-5's
 // `picture_parts` (pdf-canvas-w9 passes it).
-pub(crate) fn page_parts(view: &DocView, doc: &pdfcraft_engine::Document, page: usize, placed: &PlacedPage) -> Vec<PagePart> {
-    let Some(xf) = view.page_xform(page) else { return Vec::new() };
+pub(crate) fn page_parts(
+    session: &PageSession,
+    doc: &pdfcraft_engine::Document,
+    page: usize,
+    placed: &PlacedPage,
+    geo: PageGeometry<'_>,
+) -> Vec<PagePart> {
+    let Some(xf) = session.page_xform(page, geo) else { return Vec::new() };
     let info = &doc.info;
-    let open = view.session.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
-    let boxes: Vec<Rect> = blocks_of(view, doc, page).iter().map(|l| paragraph_box(&xf, info, page, l.rect)).collect();
+    let open = session.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
+    let boxes: Vec<Rect> = blocks_of(session, doc, page).iter().map(|l| paragraph_box(&xf, info, page, l.rect)).collect();
     let upright = has_edges(info, page);
     let cursor = if open.is_some() { CursorIcon::Text } else { CursorIcon::Move };
     (0..boxes.len())
@@ -732,33 +738,33 @@ pub(crate) fn page_parts(view: &DocView, doc: &pdfcraft_engine::Document, page: 
 
 /// Whether a drag may move a paragraph on `page`: not while a paragraph there is open for typing, nor
 /// while text that can't be drawn where it is being typed (#125) keeps the box where it is.
-fn movable(view: &DocView, page: usize) -> bool {
-    view.session.line_editor.as_ref().is_none_or(|e| e.page != page) && view.session.content.blocked().is_none()
+fn movable(session: &PageSession, page: usize) -> bool {
+    session.line_editor.as_ref().is_none_or(|e| e.page != page) && session.content.blocked().is_none()
 }
 
 /// A press on a paragraph's part. A click opens the paragraph (or, when another has changes, applies
 /// that one and opens this next frame); a drag of the body moves it on release, and nothing moves
 /// when the pointer is released where it began. The drag is the press's own phases: nothing is held
 /// between passes, and [`paragraph_controls`] draws the preview from the same press.
-pub(crate) fn paragraph_press(view: &mut DocView, doc: &pdfcraft_engine::Document, press: &PagePress) -> Option<Edit> {
+pub(crate) fn paragraph_press(session: &mut PageSession, doc: &pdfcraft_engine::Document, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
     let Owner::Paragraph { block } = press.owner else { return None };
     let page = press.page;
-    if view.session.objects.input_blocked() {
+    if session.objects.input_blocked() {
         return None;
     }
     let PressPhase::Release { start, pos, click, .. } = &press.phase else { return None };
     if *click {
-        return open_by_click(view, doc, page, block);
+        return open_by_click(session, doc, page, block, geo);
     }
-    if !movable(view, page) {
+    if !movable(session, page) {
         return None;
     }
     let delta = *pos - start.origin;
     // Translation must keep the selected source operators. Rewriting unchanged text
     // would also remove unrelated paragraphs that now overlap this one (#594).
-    let xf = view.page_xform(page)?;
+    let xf = session.page_xform(page, geo)?;
     doc.info.pages.get(page)?;
-    let blocks = blocks_of(view, doc, page);
+    let blocks = blocks_of(session, doc, page);
     let b = paragraph_box(&xf, &doc.info, page, blocks.get(block)?.rect);
     // A paragraph index belongs to the document where the press began: after an edit it may name
     // another paragraph, which the press did not start on.
@@ -774,61 +780,61 @@ pub(crate) fn paragraph_press(view: &mut DocView, doc: &pdfcraft_engine::Documen
 }
 
 /// A click on paragraph `block` of `page`.
-fn open_by_click(view: &mut DocView, doc: &pdfcraft_engine::Document, page: usize, block: usize) -> Option<Edit> {
-    let blocks = page_blocks(view, doc, page);
-    view.session.image_selection = None;
+fn open_by_click(session: &mut PageSession, doc: &pdfcraft_engine::Document, page: usize, block: usize, geo: PageGeometry<'_>) -> Option<Edit> {
+    let blocks = page_blocks(session, doc, page);
+    session.image_selection = None;
     // Text being typed is finished first; text that can't be drawn stays where it is being typed (#125).
     let mut finished = None;
-    if view.session.content.draft.is_some() {
-        if view.session.content.hold_blocked() {
+    if session.content.draft.is_some() {
+        if session.content.hold_blocked() {
             return None;
         }
-        finished = view.session.content.finish_draft(doc.added());
-        view.session.content.selected = None;
+        finished = session.content.finish_draft(doc.added());
+        session.content.selected = None;
     }
     // A click that moves the editor to another paragraph applies the open one first, so its typed
     // text is not dropped with the switched-away editor (#2022). A click on the open box's own frame
     // keeps it open instead.
-    if view.session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
-        if view.session.line_editor.as_ref().is_some_and(|open| open.page == page && open.block == block) {
+    if session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
+        if session.line_editor.as_ref().is_some_and(|open| open.page == page && open.block == block) {
             return finished;
         }
-        let applied = view.session.line_editor.take().and_then(|old| {
+        let applied = session.line_editor.take().and_then(|old| {
             let style = old.style();
             (old.text != old.original || style != pdfcraft_engine::BlockStyle::default()).then(|| {
-                view.session.applied_editor = Some(old.clone());
+                session.applied_editor = Some(old.clone());
                 Edit::EditTextBlock { page: old.page, block: old.block, text: old.text, style }
             })
         });
         // The clicked box opens next frame, from the document with that edit applied.
-        view.session.pending_text_open = blocks.get(block).map(|l| (page, pdfcraft_engine::BlockKey::of(l)));
+        session.pending_text_open = blocks.get(block).map(|l| (page, pdfcraft_engine::BlockKey::of(l)));
         return applied.or(finished);
     }
-    open_editor(view, doc, page, block);
+    open_editor(session, doc, page, block, geo);
     finished
 }
 
 /// Open `block` on `page` in the inline editor. The box's geometry and source are read from the
 /// document's current inventory.
-fn open_editor(view: &mut DocView, doc: &pdfcraft_engine::Document, page: usize, block: usize) {
-    view.session.pending_text_open = None;
-    let blocks = page_blocks(view, doc, page);
-    let (Some(l), Some(xf)) = (blocks.get(block), view.page_xform(page)) else { return };
+fn open_editor(session: &mut PageSession, doc: &pdfcraft_engine::Document, page: usize, block: usize, geo: PageGeometry<'_>) {
+    session.pending_text_open = None;
+    let blocks = page_blocks(session, doc, page);
+    let (Some(l), Some(xf)) = (blocks.get(block), session.page_xform(page, geo)) else { return };
     if doc.info.pages.get(page).is_none() {
         return;
     }
     let b = paragraph_box(&xf, &doc.info, page, l.rect);
-    view.session.image_selection = None;
+    session.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
     // Screen pixels per point, from the box's width.
     let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
     // How far the editor box may grow: a single-line paragraph's rewrite grows to the
     // page's right edge, a multi-line paragraph rewraps to its own width.
-    let right = xf.rect.right().min(view.viewport_rect().right()) - 6.0;
+    let right = xf.rect.right().min(geo.viewport.right()) - 6.0;
     let max_width = if l.rows.len() == 1 { (right - b.left()).max(b.width()) } else { b.width() };
     let look = look_of(l);
-    view.session.line_editor = Some(LineEditor {
+    session.line_editor = Some(LineEditor {
         selection: None,
         font_resource: None,
         page,
@@ -865,74 +871,85 @@ fn rect_path(rect: DocRect) -> BezPath {
 
 /// Edit text's paragraph controls on the pages of `body`: the faint outline of every closed
 /// paragraph, the box being dragged, the width frame of the paragraph under the pointer, and the open
-/// paragraph's editor. `press` is the pass's press when its owner is a paragraph, and `hovered` the
-/// `(page, block)` of the paragraph under the pointer. Returns the edit a rewrap or an applied
-/// paragraph gives.
-// PLAN: assumed caller (pdf-canvas-w8, with pdf-canvas-w9's part output): `content` is the page body's
-// content painter, which gives the editor its faces and its paint; `press` and `hovered` come from
-// the pass's part output. A paragraph's width-frame handles count as that paragraph for `hovered`, so
-// the frame stays shown while the pointer crosses onto a handle and through its drag.
+/// paragraph's editor. The press and the hover are the pass's part output's (`parts`): the press when
+/// its owner is a paragraph, and the `(page, block)` of the paragraph under the pointer. Returns the
+/// edit a rewrap or an applied paragraph gives.
+// PLAN: assumed caller (pdf-canvas-w8): `content` is the page body's content painter, which gives the
+// editor its faces and its paint. A paragraph's width-frame handles count as that paragraph for the
+// hover, so the frame stays shown while the pointer crosses onto a handle and through its drag.
 pub(crate) fn paragraph_controls(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
     content: &ContentPainterCx<'_>,
-    view: &mut DocView,
+    session: &mut PageSession,
     doc: &pdfcraft_engine::Document,
-    press: Option<&PagePress>,
-    hovered: Option<(usize, usize)>,
+    parts: &PagePartsOutput,
+    geo: PageGeometry<'_>,
 ) -> Option<Edit> {
+    let press = parts.press.as_ref().filter(|p| matches!(p.owner, Owner::Paragraph { .. }));
+    let hovered = match parts.hovered {
+        Some((Owner::Paragraph { block } | Owner::Frame { block }, page)) => Some((page, block)),
+        _ => None,
+    };
     let mut edit = None;
     for placed in body.pages {
         let page = placed.page;
-        let Some(xf) = view.page_xform(page) else { continue };
-        let blocks = page_blocks(view, doc, page);
+        let xf = geo.xform_of(placed);
+        let blocks = page_blocks(session, doc, page);
         let boxes: Vec<Rect> = blocks.iter().map(|l| paragraph_box(&xf, &doc.info, page, l.rect)).collect();
-        open_waiting(view, doc, page, &blocks, &boxes);
-        outline_closed(ui, body, view, page, &boxes);
-        draw_move(ui, body, view, page, &boxes, press);
+        open_waiting(session, doc, page, &blocks, &boxes, geo);
+        outline_closed(ui, body, session, page, &boxes);
+        draw_move(ui, body, session, page, &boxes, press);
         let framed =
             hovered.filter(|(p, _)| *p == page).and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
-        edit = edit.or_else(|| width_frame(ui, body, view, doc, page, framed));
+        edit = edit.or_else(|| width_frame(ui, body, session, doc, page, framed, geo));
     }
-    edit.or_else(|| editor_session(ui, body, content, view, doc))
+    edit.or_else(|| editor_session(ui, body, content, session, doc, geo))
 }
 
 /// Opens the paragraph a switching click, or a click on grouped text, asked for once the document is
 /// ready for it.
-fn open_waiting(view: &mut DocView, doc: &pdfcraft_engine::Document, page: usize, blocks: &[pdfcraft_engine::TextBlock], boxes: &[Rect]) {
-    let open_here = view.session.line_editor.as_ref().is_some_and(|e| e.page == page);
-    let gate = !view.session.objects.input_blocked();
+fn open_waiting(
+    session: &mut PageSession,
+    doc: &pdfcraft_engine::Document,
+    page: usize,
+    blocks: &[pdfcraft_engine::TextBlock],
+    boxes: &[Rect],
+    geo: PageGeometry<'_>,
+) {
+    let open_here = session.line_editor.as_ref().is_some_and(|e| e.page == page);
+    let gate = !session.objects.input_blocked();
     // A box a switching click asked for opens now, once the edit queued with that click has
     // applied and `blocks`/`boxes` are the document's new inventory (#2022).
     if gate
         && !open_here
-        && let Some((open_page, key)) = view.session.pending_text_open.clone()
+        && let Some((open_page, key)) = session.pending_text_open.clone()
         && open_page == page
     {
         // The edit may have regrouped the page: open the paragraph that was clicked, wherever it
         // is now, and none if it was merged into another (#2516).
         match key.find(blocks, 0) {
-            Some(block) => open_editor(view, doc, page, block),
-            None => view.session.pending_text_open = None,
+            Some(block) => open_editor(session, doc, page, block, geo),
+            None => session.pending_text_open = None,
         }
     }
     // A click on grouped text prepared the page: the paragraph now at the point clicked opens, and
     // none if the point is on the group's artwork. A preparation that failed left the page as it
     // was, where no paragraph is at that point. It is taken either way.
-    let open_here = view.session.line_editor.as_ref().is_some_and(|e| e.page == page);
-    if let Some((_, [x, y])) = view.session.grouped_text_click.take_if(|(p, _)| *p == page)
+    let open_here = session.line_editor.as_ref().is_some_and(|e| e.page == page);
+    if let Some((_, [x, y])) = session.grouped_text_click.take_if(|(p, _)| *p == page)
         && gate
         && !open_here
-        && let Some(xf) = view.page_xform(page)
+        && let Some(xf) = session.page_xform(page, geo)
         && let Some((block, _)) = grab_at(boxes, user_to_screen(&xf, &doc.info, page, x, y), false)
     {
-        open_editor(view, doc, page, block);
+        open_editor(session, doc, page, block, geo);
     }
 }
 
 /// The faint outline of every closed paragraph on `page`, one control with every path.
-fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, view: &DocView, page: usize, boxes: &[Rect]) {
-    let open = view.session.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
+fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page: usize, boxes: &[Rect]) {
+    let open = session.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     let paths: Vec<BezPath> =
         boxes.iter().enumerate().filter(|(i, _)| Some(*i) != open).take(MAX_OUTLINES).map(|(_, b)| rect_path(doc_rect(&body.view, *b))).collect();
     if !paths.is_empty() {
@@ -941,11 +958,11 @@ fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, view: &DocView, page: 
 }
 
 /// The box of the paragraph being dragged, where the pass's press has taken it.
-fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, view: &DocView, page: usize, boxes: &[Rect], press: Option<&PagePress>) {
+fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page: usize, boxes: &[Rect], press: Option<&PagePress>) {
     let Some(press) = press.filter(|p| p.page == page) else { return };
     let Owner::Paragraph { block } = press.owner else { return };
     let (PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. }) = &press.phase else { return };
-    if !movable(view, page) {
+    if !movable(session, page) {
         return;
     }
     let Some(b) = boxes.get(block) else { return };
@@ -965,15 +982,16 @@ fn draw_move(ui: &mut egui::Ui, body: &PageBody<'_>, view: &DocView, page: usize
 fn width_frame(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
-    view: &mut DocView,
+    session: &PageSession,
     doc: &pdfcraft_engine::Document,
     page: usize,
     framed: Option<(usize, &pdfcraft_engine::TextBlock, Rect)>,
+    geo: PageGeometry<'_>,
 ) -> Option<Edit> {
     let info = &doc.info;
-    let xf = view.page_xform(page)?;
-    let open_here = view.session.line_editor.as_ref().is_some_and(|e| e.page == page);
-    if open_here || !has_edges(info, page) || view.session.objects.holds(page) {
+    let xf = session.page_xform(page, geo)?;
+    let open_here = session.line_editor.as_ref().is_some_and(|e| e.page == page);
+    if open_here || !has_edges(info, page) || session.objects.holds(page) {
         return None;
     }
     let (block, l, b) = framed?;
@@ -1192,30 +1210,31 @@ fn editor_session(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
     content: &ContentPainterCx<'_>,
-    view: &mut DocView,
+    session: &mut PageSession,
     doc: &pdfcraft_engine::Document,
+    geo: PageGeometry<'_>,
 ) -> Option<Edit> {
     let info = &doc.info;
-    let page = view.session.line_editor.as_ref()?.page;
-    let xf = view.page_xform(page)?;
+    let page = session.line_editor.as_ref()?.page;
+    let xf = session.page_xform(page, geo)?;
     info.pages.get(page)?;
     let (block, invisible) = {
-        let ed = view.session.line_editor.as_ref()?;
+        let ed = session.line_editor.as_ref()?;
         (ed.block, ed.source.as_ref().is_some_and(|(b, _)| b.invisible))
     };
     // An OCR word is invisible text over a scan: the textless background still shows the scanned
     // word, so the editor covers it, as the applied edit will.
-    let background_ready = view.session.text_background.ready(page, block) && !invisible;
+    let background_ready = session.text_background.ready(page, block) && !invisible;
     // The measured extent of this paragraph's draft: a click straight from another paragraph
     // opens this one after the frame's measuring, which was the other one's.
-    let draft_rect = view.session.text_background.draft_rect_for(page, block).map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
+    let draft_rect = session.text_background.draft_rect_for(page, block).map(|r| xf.user_rect(info, page, r.map(|v| v as f32)));
     // The editor draws on its page only, as the page itself does: a paragraph running past the
     // page's edge (a converter relying on the page clip) must not cover the next page or the
     // tool bars (#3061).
-    let page_clip = xf.rect.intersect(view.viewport_rect());
+    let page_clip = xf.rect.intersect(geo.viewport);
     let ctx = ui.ctx().clone();
     let faces = source_faces(content, doc, page);
-    let ed = view.session.line_editor.as_mut()?;
+    let ed = session.line_editor.as_mut()?;
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
@@ -1268,19 +1287,19 @@ fn editor_session(
         painter.galley(origin, Arc::clone(&galley), text_color);
     }
     let ended = output.ended;
-    view.session.text_background.remember(&xf, page, block, galley, origin, text_color);
+    session.text_background.remember(&xf, page, block, galley, origin, text_color);
     match ended {
         None => None,
         Some(EditorEnd::Cancel) => {
             // The draft is discarded, but not the paragraph: its box is selected, as in Acrobat, so
             // Delete removes it without aiming for the frame.
-            let ed = view.session.line_editor.take()?;
-            view.session.objects.select_paragraph_next(ed.page, ed.block);
+            let ed = session.line_editor.take()?;
+            session.objects.select_paragraph_next(ed.page, ed.block);
             None
         }
         Some(_) => {
-            let ed = view.session.line_editor.take()?;
-            view.session.applied_editor = Some(ed.clone());
+            let ed = session.line_editor.take()?;
+            session.applied_editor = Some(ed.clone());
             finished_edit(ed)
         }
     }
