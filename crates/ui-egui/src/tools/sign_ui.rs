@@ -2,28 +2,26 @@
 //! click an empty signature field), the Sign with a Digital ID / Configure New Digital ID /
 //! Sign as dialogs, the Signatures panel, and the signature message bar.
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::file_filter::AddFilterAnyCase as _;
 use std::path::PathBuf;
 
-use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
+use craft::host::PickRequest;
+use craft::review::{SavedSignature, SignatureImage};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
-use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
+use pdfcraft_engine::{SignOptions, SignatureInfo, SignatureStatus, StatusCaptions};
 
-use crate::canvas::{DocView, PageToolContext, Snapshot, SnapshotKind};
-use crate::fill_sign::SavedSig;
-use crate::page_cursor::Layer;
-use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, icons, widgets};
+use crate::PdfCraftApp;
+use crate::canvas::{DocView, Snapshot, SnapshotKind};
+use crate::workflows::FilePurpose;
 
-mod dialog;
+pub(crate) mod dialog;
 mod panel;
+pub(crate) mod tool;
 
 #[cfg(test)]
 use dialog::detail_lines;
 use dialog::graphic_of;
-pub(crate) use dialog::{appearance_labels, dialog, status_captions};
-pub(crate) use panel::{CertAction, banner, cert_viewer, panel, signature_status_style};
+pub(crate) use dialog::{appearance_labels, status_captions};
+pub(crate) use panel::{banner, panel, status_tone};
 pub use panel::{CertTab, CertViewer, PanelAction, certificate_pem};
 
 /// A digital ID the app knows about (Acrobat: Digital ID files). The file stays where it is;
@@ -109,7 +107,7 @@ pub enum SignGraphic {
     /// The saved Fill & Sign signature, as it is when signing.
     FillSign,
     /// An imported PNG or JPEG.
-    Image(#[serde(with = "crate::fill_sign::image_data")] SignatureImage),
+    Image(SignatureImage),
 }
 
 /// The signing dialogs' state.
@@ -168,60 +166,26 @@ impl Drop for SignDraft {
     }
 }
 
+/// The empty draft a dialog value starts from; a real one comes from `start_signing`.
+impl Default for SignDraft {
+    fn default() -> Self {
+        Self::new(0, None, None, None, &[])
+    }
+}
+
 /// What a page asks of the signing flow.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SignView {
-    /// A signature rectangle being dragged: (page, start on screen).
-    pub drag: Option<(usize, Pos2)>,
     /// A rectangle was drawn: (page, user-space rect).
     pub drawn: Option<(usize, [f64; 4])>,
     /// An empty signature field was clicked (its name).
     pub field: Option<String>,
 }
 
-/// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)), from a
-/// press nobody holds (`free`).
-pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, view: &mut DocView) {
-    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let (pointer, origin) = (ptr.pos, ptr.origin);
-    if pointer.is_some_and(|p| xf.rect.contains(p)) {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-    }
-    // The tool's own press, of the primary button: one nobody holds.
-    if resp.drag_started_by(egui::PointerButton::Primary)
-        && free
-        && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
-    {
-        view.sign.drag = Some((page, o));
-    }
-    if let Some((p, start)) = view.sign.drag
-        && p == page
-    {
-        // Where the pointer is, or where it went down when it is off the window.
-        let end = pointer.unwrap_or(start);
-        let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
-        let r = Rect::from_two_pos(start, end);
-        ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(0x14, 0x73, 0xE6, 28));
-        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() || !ptr.primary_down {
-            view.sign.drag = None;
-            if r.width() >= 8.0 && r.height() >= 8.0 {
-                let user = |q: Pos2| {
-                    let (vx, vy) = xf.screen_to_view(q);
-                    info.pages[page].view_to_user(vx, vy)
-                };
-                let (a, b) = (user(r.left_top()), user(r.right_bottom()));
-                let rect = [a[0].min(b[0]) as f64, a[1].min(b[1]) as f64, a[0].max(b[0]) as f64, a[1].max(b[1]) as f64];
-                view.sign.drawn = Some((page, rect));
-            }
-        }
-    }
-}
-
 /// Where new digital IDs are saved: next to the recovery folder (`…/PdfCraft/Digital IDs`, or
 /// `PdfCraftData/Digital IDs` in portable mode).
 fn id_dir() -> Option<PathBuf> {
-    crate::recovery::RecoveryStore::default_dir().and_then(|d| d.parent().map(|p| p.join("Digital IDs")))
+    crate::platform::portable::data_dir().map(|d| d.join("Digital IDs"))
 }
 
 /// Save a new digital ID as `<stem>.p12`, or `<stem> 2.p12`, … when the name is taken. The file
@@ -301,7 +265,8 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
 impl PdfCraftApp {
     /// Export certificate: write `c` as PEM into a chosen folder, named after its subject.
     pub(crate) fn export_certificate(&mut self, c: &Certificate) {
-        let name = format!("{}.cer", crate::files::attachment_file_name(&c.display_name()));
+        // PLAN: assumed `safe_file_name(&str, &str) -> String` (pdf-shell-w13).
+        let name = format!("{}.cer", crate::files::safe_file_name(&c.display_name(), "attachment"));
         self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
     }
 
@@ -318,7 +283,6 @@ impl PdfCraftApp {
             draft.image = Some(image.clone());
         }
         self.sign_draft = Some(draft);
-        self.dialog = Some(crate::Dialog::Sign);
         // A dynamic form's preSign scripts run now, as signing the field begins, so what they
         // change and say shows before the signer confirms (DA 31's date the signature and lock the
         // date). Signing ended without a signature takes them back ([`Self::settle_presign`]).
@@ -348,11 +312,10 @@ impl PdfCraftApp {
     /// back. Called every frame.
     pub(crate) fn settle_presign(&mut self) {
         let Some((doc, depth)) = self.presign else { return };
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.pickers.pending() {
+        if self.picks_pending() {
             return;
         }
-        if self.dialog == Some(crate::Dialog::Sign) {
+        if self.sign_draft.is_some() {
             return;
         }
         self.presign = None;
@@ -519,7 +482,9 @@ impl PdfCraftApp {
         let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         // Only a visible signature shows its graphic.
         let graphic = match self.graphic_sig(&d.graphic) {
-            Some(saved) if d.rect.is_some() || d.field.is_some() => Some(saved.graphic().ok_or("The saved signature has nothing to draw.")?),
+            Some(saved) if d.rect.is_some() || d.field.is_some() => {
+                Some(crate::fill_sign::graphic(&saved).ok_or("The saved signature has nothing to draw.")?)
+            }
             _ => None,
         };
         let choice = d.graphic.clone();
@@ -539,7 +504,6 @@ impl PdfCraftApp {
         // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
         // document is signed once the user has chosen.
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
-        #[cfg(not(target_arch = "wasm32"))]
         let folder = self.session.get(doc_id).and_then(|d| d.path.clone());
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
@@ -559,14 +523,13 @@ impl PdfCraftApp {
                     return Err(e.to_string());
                 }
             };
-            if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()) {
+            if let Err(e) = craft::atomic::atomic_write(&path, signed.as_slice()) {
                 // Not saved, so not signed: the preSign step stays pending as well.
                 app.presign = pending;
                 return Err(format!("Could not save: {e}"));
             }
             // Our own write is not a change on disk to reload (#431).
-            #[cfg(not(target_arch = "wasm32"))]
-            app.watch.known_now(doc_id, &path.to_string_lossy());
+            app.watch.known_now(doc_id, &path);
             app.session.mark_signed(doc_id, signed, Some(path.to_string_lossy().into_owned())).map_err(|e| e.to_string())?;
             // Then its postSign scripts; what they change is a change after signing, to save.
             // What they say shows once signing is done, after the notice that it was saved.
@@ -589,50 +552,49 @@ impl PdfCraftApp {
         };
         match self.save_override.clone() {
             Some(p) => sign_and_save(self, PathBuf::from(p)),
-            #[cfg(not(target_arch = "wasm32"))]
             None => {
-                let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
-                let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                 // The signature's page, rectangle and field refer to the document as it is now:
                 // the pick is dropped (with a notice) if it is edited or switched away from
-                // meanwhile. Once the picker shows, the dialog closes; an error from here on
-                // arrives as a notice. If no picker could show, the dialog stays open.
-                let asked = self.ask_one(crate::pickers::Ask::Save(dialog), Some(doc_id), move |app, path| {
+                // meanwhile. An error after the pick arrives as a notice.
+                let mut request = PickRequest::save(FilePurpose::SignedCopy.key()).file_name(format!("{stem}_signed.pdf")).filter("PDF", &["pdf"]);
+                if let Some(parent) = folder.as_deref().and_then(|p| std::path::Path::new(p).parent()) {
+                    request = request.default_directory(parent);
+                }
+                // PLAN: assumed `pick_file(PickRequest, Option<target of doc_id>, FnOnce(&mut Self, PathBuf))` (pdf-shell-w14); the target is the document id.
+                self.pick_file(request, Some(doc_id), move |app: &mut Self, path: PathBuf| {
                     if let Err(e) = sign_and_save(app, path)
                         && !e.is_empty()
                     {
                         app.notify(e);
                     }
                 });
-                if asked { Ok(()) } else { Err(String::new()) }
-            }
-            #[cfg(target_arch = "wasm32")]
-            None => {
-                let _ = (stem, sign_and_save);
-                Err(String::new())
+                Ok(())
             }
         }
     }
 
     /// The saved signature or image `g` stands for (`None`: the name).
-    fn graphic_sig(&self, g: &SignGraphic) -> Option<SavedSig> {
+    fn graphic_sig(&self, g: &SignGraphic) -> Option<SavedSignature> {
         graphic_of(self.signature.as_ref(), g)
     }
 
     /// Sign as ▸ Choose image…: answered only into the signing dialog that asked.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pick_sign_graphic_image(&mut self) {
-        let epoch = self.dialog_epoch();
-        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case(tl!("Image"), &["png", "jpg", "jpeg"]);
-        self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
-            if app.dialog_epoch() != epoch || app.dialog != Some(crate::Dialog::Sign) {
+        let request = PickRequest::open(FilePurpose::SignGraphic.key()).filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+        // PLAN: assumed `pick_first(PickRequest, Option<target>, FnOnce(&mut Self, PathBuf))` (pdf-shell-w14).
+        self.pick_first(request, None, |app: &mut Self, path: PathBuf| {
+            if app.sign_draft.is_none() {
                 return;
             }
             // Scanned paper becomes transparent, as for Fill & Sign image signatures.
             let image = std::fs::File::open(path)
                 .map_err(pdfcraft_engine::signature_image::SignatureImageError::from)
-                .and_then(SignatureImage::read)
-                .and_then(|image| image.remove_white_background(245, 35));
+                .and_then(pdfcraft_engine::SignatureImage::read)
+                .map(|read| {
+                    let [w, h] = read.size();
+                    SignatureImage::new(w as u32, h as u32, read.rgba().to_vec())
+                        .remove_white_background(craft::review::signature::PAPER_CUTOFF, craft::review::signature::PAPER_FEATHER)
+                });
             match (image, app.sign_draft.as_mut()) {
                 (Ok(image), Some(d)) => {
                     d.graphic = SignGraphic::Image(image.clone());
@@ -829,12 +791,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn signature_status_style_gives_each_verdict_its_panel_icon() {
-        assert_eq!(signature_status_style(SignatureStatus::Valid).0, "circle-check");
-        assert_eq!(signature_status_style(SignatureStatus::Unknown).0, "triangle-alert");
-        assert_eq!(signature_status_style(SignatureStatus::Invalid).0, "circle-x");
-    }
 
     #[test]
     fn a_language_change_leaves_documents_without_a_drawn_state_alone() {
@@ -1073,7 +1029,6 @@ mod tests {
             draft.step = SignStep::SignAs;
             draft.password = "secret12".into();
             app.sign_draft = Some(draft);
-            app.dialog = Some(crate::Dialog::Sign);
             app
         });
         h.run_steps(2);
@@ -1103,8 +1058,8 @@ mod tests {
         h.state_mut().sign_draft.as_mut().unwrap().password = "secret12".into();
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
-        assert_eq!(h.state().dialog, None);
-        assert!(h.state().sign_draft.is_none(), "sign_draft must be cleared when Dialog::Sign is dismissed");
+        assert!(!h.state().modal_open());
+        assert!(h.state().sign_draft.is_none(), "sign_draft must be cleared when the sign dialog is dismissed");
 
         // Importing a digital ID file and signing work by borrowing the draft in place.
         let dir = scratch();
