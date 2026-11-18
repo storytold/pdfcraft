@@ -126,7 +126,7 @@ impl OcrDraft {
     /// The same language, engine and installed-model preflight for every OCR entry point.
     /// Discovery stays in the background; no process is waited on by the interface.
     pub(crate) fn unavailable_reason(&self) -> Option<String> {
-        pdfcraft_engine::ocr::settings_unavailable_reason(&self.settings())
+        ui_preflight_reason(&self.settings())
     }
 
     /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
@@ -269,17 +269,24 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
     }
 }
 
-/// Keep the existing translated built-in-model notice; other preflight reasons are catalog
-/// keys of their own (an untranslated Turkish requirement falls back to its English wording).
-pub(crate) fn preflight_message(why: &str) -> String {
-    if why == pdfcraft_engine::ocr::OcrError::NoModels.to_string() {
-        tl!(
+pub(super) fn ui_preflight_reason(settings: &OcrSettings) -> Option<String> {
+    let lang = i18n::current();
+    pdfcraft_engine::ocr::settings_unavailable_reason_with(settings, |key, args| preflight_message(lang, key, args))
+}
+
+fn preflight_message(lang: i18n::Lang, key: &str, args: &[(&str, &str)]) -> Option<String> {
+    if args.is_empty() {
+        let key = if key == pdfcraft_engine::ocr::OcrError::NoModels.to_string() {
             "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."
-        )
-        .to_string()
-    } else {
-        crate::i18n::t(why).to_string()
+        } else {
+            key
+        };
+        return Some(i18n::tr(lang, key).to_owned());
     }
+
+    let template = i18n::message_template(lang, key)?;
+    let args: Vec<_> = args.iter().map(|&(name, value)| (name, if name == "why" { i18n::tr(lang, value) } else { value })).collect();
+    Some(i18n::fmt(template, &args))
 }
 
 /// The dialog's height outside its scrolling settings: the title, a notice of up to two lines,
@@ -468,7 +475,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     }
     let why = d.unavailable_reason();
     if let Some(reason) = why.as_deref().filter(|_| !downloading) {
-        ui.label(egui::RichText::new(preflight_message(reason)).small().color(t.text_muted));
+        ui.label(egui::RichText::new(reason).small().color(t.text_muted));
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
@@ -1199,6 +1206,61 @@ mod tests {
     use crate::{Dialog, LeftPanel, Mode, QuickTool};
     use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
+
+    #[test]
+    fn preflight_localization_preserves_literal_details_and_requires_message_context() {
+        let key = "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}";
+        let fixture = concat!(
+            "@msg\tthe turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}\tAyrıntı: {why}. Modeller: {models}.\n",
+            "\tstill checking\tDenetleniyor\n",
+        );
+        let lang = i18n::fixture_lang("tr", fixture);
+        let path = r"C:\Türkçe\{models}\tesseract.exe {why}";
+        let args = [("models", "script/Latin"), ("why", path)];
+        assert_eq!(preflight_message(lang, key, &args), Some(format!("Ayrıntı: {path}. Modeller: script/Latin.")));
+        assert_eq!(
+            preflight_message(lang, key, &[("models", "script/Latin"), ("why", "still checking")]).as_deref(),
+            Some("Ayrıntı: Denetleniyor. Modeller: script/Latin.")
+        );
+        assert_eq!(preflight_message(i18n::Lang::EN, key, &args), None);
+        let plain = i18n::fixture_lang(
+            "tr",
+            "\tthe turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}\t{models}: {why}\n",
+        );
+        assert_eq!(preflight_message(plain, key, &args), None);
+    }
+
+    #[test]
+    #[ignore = "requires the updated Turkish OCR preflight catalog embedded at build time"]
+    fn preflight_localization_uses_the_updated_embedded_turkish_catalog() {
+        let tr = i18n::Lang::from_code("tr").expect("the updated Turkish catalog must be embedded");
+        let path = r"C:\Türkçe\{models}\tesseract.exe";
+        let cases = [
+            (
+                "Turkish OCR requires the Turkish (tur) language data installed for tesseract",
+                &[][..],
+                "Tesseract için Türkçe dil verisi (tur) eksik. Devam etmek için bu veriyi yükleyin.",
+            ),
+            (
+                "Turkish OCR requires Tesseract with Turkish (tur) language data: {why}",
+                &[("why", path)][..],
+                "Türkçe OCR için Tesseract çalışabilmeli ve Türkçe dil verisi (tur) yüklü olmalıdır. Ayrıntı: C:\\Türkçe\\{models}\\tesseract.exe",
+            ),
+            (
+                "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used",
+                &[("models", "script/Latin")][..],
+                "Genişletilmiş Türkçe alfabesi profili şu Tesseract modellerinin tümünü gerektirir: script/Latin. Eksik modelleri yükleyin. Standart profile otomatik geçiş yapılmaz.",
+            ),
+            (
+                "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}",
+                &[("models", "script/Latin"), ("why", path)][..],
+                "Genişletilmiş Türkçe alfabesi profili için Tesseract çalışabilmeli ve şu modellerin tümü yüklü olmalıdır: script/Latin. Standart profile otomatik geçiş yapılmaz. Ayrıntı: C:\\Türkçe\\{models}\\tesseract.exe",
+            ),
+        ];
+        for (key, args, expected) in cases {
+            assert_eq!(preflight_message(tr, key, args).as_deref(), Some(expected));
+        }
+    }
 
     #[test]
     fn recognize_ocr_language_label_uses_turkish_catalog() {

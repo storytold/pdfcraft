@@ -563,6 +563,11 @@ pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
     lang.i18n().tc(lang.lang, context, s)
 }
 
+/// Look up a preflight message template without falling back to a plain key.
+pub(crate) fn message_template(lang: Lang, source: &str) -> Option<&str> {
+    lang.i18n().get(lang.lang, "@msg", source)
+}
+
 /// A string keyed by its command id, falling back to the translation of the English `label`. Only
 /// PdfCraft's own `@id` rows count ([`own_id`]).
 pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {

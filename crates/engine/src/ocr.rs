@@ -682,11 +682,19 @@ pub fn preflight(settings: &OcrSettings) -> Result<(), String> {
 /// snapshot keeps even an empty `--list-langs` answer from refreshing on the UI thread.
 /// Call [`engine_probe_running`] to request another frame while the background probe runs.
 pub fn settings_unavailable_reason(settings: &OcrSettings) -> Option<String> {
+    settings_unavailable_reason_with(settings, |_, _| None)
+}
+
+/// Asks the UI for translated wording before inserting details into a preflight notice.
+/// The callback receives a plain key or a template and its named values. Returning None
+/// keeps the same completed English message used by jobs and automation callers.
+pub fn settings_unavailable_reason_with(settings: &OcrSettings, words: impl Fn(&str, &[(&str, &str)]) -> Option<String>) -> Option<String> {
     if let Err(why) = validate_model_profile(settings) {
-        return Some(why);
+        return Some(words(&why, &[]).unwrap_or(why));
     }
     if pdfcraft_ocr::is_turkish_language(&settings.language) && settings.engine == EngineChoice::Ocrs {
-        return Some(turkish_ocrs_unsupported());
+        let why = turkish_ocrs_unsupported();
+        return Some(words(&why, &[]).unwrap_or(why));
     }
     let ocrs = models_installed_cached();
     #[cfg(not(target_arch = "wasm32"))]
@@ -702,25 +710,38 @@ pub fn settings_unavailable_reason(settings: &OcrSettings) -> Option<String> {
     };
     #[cfg(target_arch = "wasm32")]
     let tesseract: Result<LanguageSupport, String> = Err(tesseract_unavailable());
-    unavailable_with(settings, ocrs, tesseract)
+    unavailable_with_words(settings, ocrs, tesseract, words)
 }
 
 /// Shared decision for jobs, blocking tools and non-blocking UI probes. `Ok` means a
 /// Tesseract program is present; its language snapshot decides whether it can read the job.
 fn unavailable_with(settings: &OcrSettings, ocrs: bool, tesseract: Result<LanguageSupport, String>) -> Option<String> {
+    unavailable_with_words(settings, ocrs, tesseract, |_, _| None)
+}
+
+fn unavailable_with_words(
+    settings: &OcrSettings,
+    ocrs: bool,
+    tesseract: Result<LanguageSupport, String>,
+    words: impl Fn(&str, &[(&str, &str)]) -> Option<String>,
+) -> Option<String> {
+    let plain = |why: String| words(&why, &[]).unwrap_or(why);
     if let Err(why) = validate_model_profile(settings) {
-        return Some(why);
+        return Some(plain(why));
     }
     if pdfcraft_ocr::is_turkish_language(&settings.language) {
         return match settings.engine {
-            EngineChoice::Ocrs => Some(turkish_ocrs_unsupported()),
+            EngineChoice::Ocrs => Some(plain(turkish_ocrs_unsupported())),
             EngineChoice::Tesseract | EngineChoice::Auto => match tesseract {
                 Ok(languages) if settings.model_profile == ModelProfile::TurkishExtended && languages.turkish_extended => None,
-                Ok(_) if settings.model_profile == ModelProfile::TurkishExtended => Some(extended_model_missing(settings)),
+                Ok(_) if settings.model_profile == ModelProfile::TurkishExtended => Some(extended_model_missing(settings, None, &words)),
                 Ok(languages) if languages.turkish => None,
-                Ok(_) => Some(turkish_model_missing()),
-                Err(why) if settings.model_profile == ModelProfile::TurkishExtended => Some(format!("{}: {why}", extended_model_missing(settings))),
-                Err(why) => Some(turkish_tesseract_required(why)),
+                Ok(_) => Some(plain(turkish_model_missing())),
+                Err(why) if settings.model_profile == ModelProfile::TurkishExtended => Some(extended_model_missing(settings, Some(&why), &words)),
+                Err(why) => Some(
+                    words("Turkish OCR requires Tesseract with Turkish (tur) language data: {why}", &[("why", &why)])
+                        .unwrap_or_else(|| turkish_tesseract_required(why)),
+                ),
             },
         };
     }
@@ -734,6 +755,7 @@ fn unavailable_with(settings: &OcrSettings, ocrs: bool, tesseract: Result<Langua
             (false, Err(why)) => Some(format!("{}; {why}", models_missing())),
         },
     }
+    .map(plain)
 }
 
 /// Validate a profile before discovery, loading, page rendering or mutation. Status callers
@@ -746,11 +768,28 @@ pub fn validate_model_profile(settings: &OcrSettings) -> Result<(), String> {
     Ok(())
 }
 
-fn extended_model_missing(settings: &OcrSettings) -> String {
-    match settings.model_profile.required_packs(&settings.language) {
-        Ok(packs) => format!("the turkish_extended model profile requires every Tesseract model: {}; no Standard fallback is used", packs.join(", ")),
+fn extended_model_missing(settings: &OcrSettings, why: Option<&str>, words: impl Fn(&str, &[(&str, &str)]) -> Option<String>) -> String {
+    let english = match settings.model_profile.required_packs(&settings.language) {
+        Ok(packs) => {
+            let models = packs.join(", ");
+            let translated = match why {
+                Some(why) => words(
+                    "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}",
+                    &[("models", &models), ("why", why)],
+                ),
+                None => words(
+                    "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used",
+                    &[("models", &models)],
+                ),
+            };
+            if let Some(translated) = translated {
+                return translated;
+            }
+            format!("the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used")
+        }
         Err(error) => error.to_string(),
-    }
+    };
+    if let Some(why) = why { format!("{english}: {why}") } else { english }
 }
 
 /// The primary reader's model inventory. An effective profile means the selection passed
@@ -1703,6 +1742,51 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("Turkish") && error.contains("Tesseract"), "{error}");
+    }
+
+    #[test]
+    fn preflight_localization_passes_named_details_before_formatting() {
+        let detail = r"C:\Türkçe\{models}\tesseract.exe {why}";
+        let mut settings = OcrSettings { language: "tr".into(), engine: EngineChoice::Tesseract, ..Default::default() };
+        let cases = [
+            (
+                ModelProfile::Standard,
+                Err(detail.to_owned()),
+                "Turkish OCR requires Tesseract with Turkish (tur) language data: {why}",
+                vec![("why", detail)],
+            ),
+            (
+                ModelProfile::TurkishExtended,
+                Ok(LanguageSupport { english: false, turkish: true, turkish_extended: false }),
+                "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used",
+                vec![("models", "script/Latin")],
+            ),
+            (
+                ModelProfile::TurkishExtended,
+                Err(detail.to_owned()),
+                "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}",
+                vec![("models", "script/Latin"), ("why", detail)],
+            ),
+        ];
+        for (profile, capabilities, template, values) in cases {
+            settings.model_profile = profile;
+            let english = match values.as_slice() {
+                [("why", _)] => format!("Turkish OCR requires Tesseract with Turkish (tur) language data: {detail}"),
+                [("models", _)] => {
+                    "the turkish_extended model profile requires every Tesseract model: script/Latin; no Standard fallback is used".to_owned()
+                }
+                _ => {
+                    format!("the turkish_extended model profile requires every Tesseract model: script/Latin; no Standard fallback is used: {detail}")
+                }
+            };
+            assert_eq!(unavailable_with(&settings, false, capabilities.clone()), Some(english));
+            let notice = unavailable_with_words(&settings, false, capabilities, |key, args| {
+                assert_eq!(key, template);
+                assert_eq!(args, values);
+                Some("yerelleştirilmiş".into())
+            });
+            assert_eq!(notice.as_deref(), Some("yerelleştirilmiş"));
+        }
     }
 
     /// A machine can have perfectly usable English models without being able to read

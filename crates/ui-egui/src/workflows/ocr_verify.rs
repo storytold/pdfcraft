@@ -1526,7 +1526,7 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     ocr_ui::keep_asking_while_probing(ui.ctx());
     let run_enabled = v.can_run() && v.reread.is_none() && why.is_none();
     if let Some(why) = &why {
-        ui.label(egui::RichText::new(ocr_ui::preflight_message(why)).small());
+        ui.label(egui::RichText::new(why).small());
     }
 
     // Row 2: scope and actions.
@@ -1623,12 +1623,12 @@ fn engine_combo(ui: &mut egui::Ui, draft: &mut ocr_ui::OcrDraft) {
     craft_ui::ComboBox::from_id_salt("ocr-verify-engine").width(120.0).selected_text(engine_label(draft.engine)).show_ui(ui, |ui| {
         for (choice, label) in [(EngineChoice::Auto, tl!("Automatic")), (EngineChoice::Ocrs, "ocrs"), (EngineChoice::Tesseract, "Tesseract")] {
             let settings = OcrSettings { engine: choice, ..draft.settings() };
-            let why = pdfcraft_engine::ocr::settings_unavailable_reason(&settings);
+            let why = ocr_ui::ui_preflight_reason(&settings);
             let resp = ui.add_enabled(why.is_none(), egui::Button::selectable(draft.engine == choice, label));
             let clicked = resp.clicked();
             match why {
                 Some(reason) => {
-                    resp.on_disabled_hover_text(ocr_ui::preflight_message(&reason));
+                    resp.on_disabled_hover_text(reason);
                 }
                 None => {
                     resp.on_hover_text(match choice {
@@ -1849,7 +1849,7 @@ fn source_pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, n: &mut Int
     }
     resp.context_menu(|ui| {
         let rereading = app.ocr_verify.reread.is_some() || app.ocr_verify.word_proposals.is_running();
-        let why = pdfcraft_engine::ocr::settings_unavailable_reason(&app.ocr_verify.reread_settings(&app.ocr_draft));
+        let why = ocr_ui::ui_preflight_reason(&app.ocr_verify.reread_settings(&app.ocr_draft));
         let can_reread = review && !rereading && why.is_none();
         ocr_ui::keep_asking_while_probing(ui.ctx());
         if ui.add_enabled(can_reread && app.ocr_verify.region.is_some(), egui::Button::new(tl!("Re-OCR this region"))).clicked() {
@@ -1861,7 +1861,7 @@ fn source_pane(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, n: &mut Int
             ui.close();
         }
         if let Some(why) = why {
-            ui.label(egui::RichText::new(ocr_ui::preflight_message(&why)).small());
+            ui.label(egui::RichText::new(why).small());
         }
         ui.separator();
         if ui.add_enabled(review, egui::Button::new(tl!("Accept entire page"))).clicked() {
