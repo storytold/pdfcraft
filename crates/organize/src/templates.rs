@@ -94,7 +94,12 @@ pub fn set_template_hidden(doc: &mut Document, name: &str, hidden: bool) -> Resu
         }
         // Out of the tree, the page no longer inherits: it keeps what it showed with.
         let (_, inherited) = order.remove(at);
-        let pushed = pushed_down(doc, page, &inherited);
+        let mut pushed = pushed_down(doc, page, &inherited);
+        // A `/Rotate` of its own that can't be read, with no turn to inherit, showed the page
+        // upright: it keeps that, not the first page's turn when it is shown again.
+        if !inherited.contains(b"Rotate") && doc.get(page).as_dict().is_some_and(|d| d.contains(b"Rotate")) {
+            pushed.push((&b"Rotate"[..], Object::Int(0)));
+        }
         doc.update_dict(page, |d| {
             for (k, v) in pushed {
                 d.set(k.to_vec(), v);

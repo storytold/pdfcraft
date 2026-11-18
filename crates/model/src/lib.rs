@@ -23,12 +23,18 @@ pub struct Page {
 /// that fits in 32 bits. Anything else (null, a name, a number past 32 bits) is no value, and
 /// the page takes the one it inherits ([`overrides_inherited`]).
 pub fn rotate_value(doc: &Document, value: &Object) -> Option<i32> {
-    match &*doc.resolve(value) {
+    let read = |value: &Object| match value {
         Object::Int(i) => i32::try_from(*i).ok(),
         // `as` truncates toward zero and saturates (NaN gives 0), as the renderer's reading
         // does; the value then has to fit in 32 bits.
         Object::Real(r) => i32::try_from(*r as i64).ok(),
         _ => None,
+    };
+    // Only a reference is resolved: `Document::resolve` copies a direct value, and a large one
+    // (an array, say) needn't be copied to be refused.
+    match value {
+        Object::Ref(_) => read(&doc.resolve(value)),
+        direct => read(direct),
     }
 }
 

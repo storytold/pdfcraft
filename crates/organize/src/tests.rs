@@ -194,11 +194,32 @@ fn a_page_moved_or_copied_keeps_the_turn_it_inherited_over_its_own_unreadable_ro
         let target = pages(&doc).unwrap()[0].obj;
         assert_eq!(doc.get(target).as_dict().unwrap().get(b"Rotate"), None, "replaced, nothing inherited, {value:?}");
         assert_eq!(shown(&doc), [0, 0, 0], "replaced, nothing inherited, {value:?}");
+        // Copied, it keeps its own value: no turn inherited takes its place.
+        let mut doc = doc_a();
+        import_pages(&mut doc, &lone, &[0], 0).unwrap();
+        let copy = pages(&doc).unwrap()[0].obj;
+        assert!(doc.get(copy).as_dict().unwrap().get(b"Rotate").is_some(), "imported, nothing inherited, {value:?}");
+        assert_eq!(shown(&doc), [0, 0, 0, 0], "imported, nothing inherited, {value:?}");
         // Drawn as a form, turned upright as it is shown.
         let mut dst = Document::new_empty();
         let (_, size) = crate::page_as_form(&mut dst, &src, 0).unwrap();
         assert_eq!(size, (400.0, 300.0), "as a form, {value:?}");
     }
+    // A `/Rotate` given by a chain of 257 references, more than any reader follows and than a
+    // copy goes, is no value either: copied, the page takes its inherited turn, not a refusal.
+    let mut src = open(fixture());
+    let mut at = src.add(Object::Null);
+    for _ in 0..256 {
+        at = src.add(Object::Ref(at));
+    }
+    let page = pages(&src).unwrap()[0].obj;
+    src.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Ref(at))).unwrap();
+    let shown = |doc: &Document| shown_turns(write_full(doc, &SaveOptions::default()).unwrap());
+    assert_eq!(shown(&src), [90, 90, 90]);
+    let mut doc = doc_a();
+    import_pages(&mut doc, &src, &[0], 0).unwrap();
+    assert_eq!(shown(&doc), [90, 0, 0, 0], "imported");
+    assert_eq!(shown(&extract_pages(&src, &[0]).unwrap()), [90], "extracted");
 }
 
 #[test]

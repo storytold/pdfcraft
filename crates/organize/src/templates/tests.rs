@@ -168,24 +168,50 @@ fn showing_and_hiding_a_template_moves_its_own_page() {
     assert_eq!(templates(&hidden), [Template { name: "More".into(), hidden: true }]);
 }
 
-/// A template page whose own `/Rotate` the renderer can't read shows, in the page tree, the turn
-/// it inherits; hidden again, it keeps that turn as its own, and a copy spawned from it shows it.
+/// [`form`] with its template `More` visible, the page tree's second page: the root's own
+/// entries `root`, the first page's `first`, and the template page's own `/Rotate` `value`.
+fn visible_template(root: &str, first: &str, value: &str) -> Document {
+    let mut bodies = form_bodies().map(String::from);
+    bodies[0] = bodies[0].replace("/Templates", "/Pages");
+    bodies[1] = format!("<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 200 300] {root} >>");
+    bodies[2] = bodies[2].replace("/Type /Page", &format!("/Type /Page {first}"));
+    bodies[4] = bodies[4].replace("/Type /Template", &format!("/Type /Page /Parent 2 0 R /Rotate {value}"));
+    let doc = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(templates(&doc), [Template { name: "More".into(), hidden: false }]);
+    doc
+}
+
+/// A visible template page whose own `/Rotate` the renderer can't read shows the turn it
+/// inherits; hidden, it keeps that turn as its own, and so does a copy spawned from it or the
+/// page shown again, rather than the first page's own turn.
 #[test]
 fn a_hidden_template_keeps_the_turn_it_inherited_over_its_own_unreadable_rotate() {
     for value in ["null", "/invalid", "2147483880"] {
-        let mut bodies = form_bodies().map(String::from);
-        bodies[1] = bodies[1].replace(">>", "/Rotate 90 >>");
-        bodies[4] = bodies[4].replace("/Type /Template", &format!("/Type /Template /Rotate {value}"));
-        let mut doc = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>());
-        set_template_hidden(&mut doc, "More", false).unwrap();
-        assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 90], "{value}");
+        let mut doc = visible_template("/Rotate 90", "/Rotate 180", value);
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [180, 90], "{value}");
         set_template_hidden(&mut doc, "More", true).unwrap();
         let page: Dict = doc.get(ObjRef::new(5, 0)).as_dict().cloned().unwrap();
         assert_eq!(page.get(b"Rotate"), Some(&Object::Int(90)), "{value}");
         assert_eq!(pdfcraft_model::shown_rotation(&doc, &page), 90, "{value}");
-        // A copy spawned from it shows that turn too.
         assert_eq!(spawn_template(&mut doc, "More", 1, false).unwrap(), 1);
-        assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 90], "spawned, {value}");
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [180, 90], "spawned, {value}");
+        set_template_hidden(&mut doc, "More", false).unwrap();
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [180, 90, 90], "shown again, {value}");
+    }
+}
+
+/// With no turn to inherit, such a template page shows upright; hidden and shown again, it is
+/// still upright, rather than turned as the first page is.
+#[test]
+fn a_template_shown_upright_over_its_own_unreadable_rotate_comes_back_upright() {
+    for value in ["null", "/invalid", "2147483880"] {
+        let mut doc = visible_template("", "/Rotate 90", value);
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 0], "{value}");
+        set_template_hidden(&mut doc, "More", true).unwrap();
+        let page: Dict = doc.get(ObjRef::new(5, 0)).as_dict().cloned().unwrap();
+        assert_eq!(page.get(b"Rotate"), Some(&Object::Int(0)), "{value}");
+        set_template_hidden(&mut doc, "More", false).unwrap();
+        assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 0], "shown again, {value}");
     }
 }
 

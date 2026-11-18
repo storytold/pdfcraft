@@ -429,7 +429,10 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
 /// `page` with what its own dictionary holds now, after an edit: re-reading this one page,
 /// where walking the whole page tree again for every flattened page would be quadratic.
 /// Inherited attributes stay as they were collected, under the page's own entries, as the page
-/// walk takes them ([`pdfcraft_model::overrides_inherited`]).
+/// walk takes them ([`pdfcraft_model::overrides_inherited`]). An entry removed from the page
+/// since, or a `/Rotate` of its own that can no longer be read, keeps the value collected.
+/// Between the reads, flattening sets only the page's own `/Resources` (from the value
+/// collected) and `/Contents`, never `/Rotate` or a box.
 pub(crate) fn refreshed(doc: &Document, page: &pdfcraft_model::Page) -> pdfcraft_model::Page {
     let mut dict = page.dict.clone();
     if let Some(own) = doc.get(page.obj).as_dict() {

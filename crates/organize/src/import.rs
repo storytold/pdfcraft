@@ -248,6 +248,11 @@ fn import_pages_mapped(
             if SKIP_ON_PAGE.contains(&k.as_slice()) || (k.as_slice() == b"Resources" && resources.is_some()) {
                 continue;
             }
+            // A `/Rotate` the renderer can't read gives way to the turn inherited, set below, so
+            // it isn't copied: it may be a chain of references deeper than a copy goes.
+            if !own_counts(src, &src_dict, k) && inherited.contains(k) {
+                continue;
+            }
             if k.as_slice() == b"Annots" {
                 let list = src.resolve(v).as_array().cloned().unwrap_or_default();
                 let mut out = Vec::new();
