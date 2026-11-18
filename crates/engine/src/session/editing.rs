@@ -46,6 +46,8 @@ fn edits_pages(edit: &Edit) -> bool {
         | Edit::ReversePages { .. }
         | Edit::InsertBlankPage { .. }
         | Edit::DuplicatePages { .. }
+        | Edit::SpawnTemplate { .. }
+        | Edit::SetTemplateHidden { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
         | Edit::InsertPagesFrom { .. } => true,

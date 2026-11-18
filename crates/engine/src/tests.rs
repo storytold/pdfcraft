@@ -15787,6 +15787,7 @@ fn page_changes_are_refused_when_the_page_tree_shown_is_not_the_one_walked() {
     };
     damaged(s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).map(|_| "rotate".into()));
     damaged(s.apply(id, Edit::DeletePages { pages: vec![1] }).map(|_| "delete".into()));
+    damaged(s.apply(id, Edit::SpawnTemplate { name: "t".into(), at: 1, rename: false }).map(|_| "template".into()));
     damaged(s.extract(id, &[0]).map(|_| "extract".into()));
     damaged(s.split(id, &pdfcraft_organize::SplitBy::PageCount(1)).map(|_| "split".into()));
     assert!(s.get(id).unwrap().can_undo().is_none(), "nothing was changed");
