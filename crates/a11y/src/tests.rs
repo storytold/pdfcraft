@@ -2030,13 +2030,21 @@ fn the_type_after_the_last_mapping_allowed_is_classified() {
             .collect::<Vec<_>>()
             .join(" ")
     };
+    // Twelve lead `c0`, in object 6, to an LBody outside a list item: the one finding.
     let doc = structure_doc(&[
-        "<< /S /Document /K [ << /S /Form /K [ << /S /a0 /NS 4 0 R /K 0 >> ] >> << /S /Div /K [ << /S /b0 /NS 4 0 R /K 1 >> ] >> ] >>".into(),
-        format!("<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << {} {} >> >>", chain("a", "Lbl", 12), chain("b", "LBody", 13)),
+        "<< /S /Document /K [ << /S /Form /K [ << /S /a0 /NS 4 0 R /K 0 >> ] >> << /S /Div /K [ << /S /b0 /NS 4 0 R /K 1 >> 6 0 R ] >> ] >>".into(),
+        format!(
+            "<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << {} {} {} >> >>",
+            chain("a", "Lbl", 12),
+            chain("b", "LBody", 13),
+            chain("c", "LBody", 12)
+        ),
         "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
+        "<< /S /c0 /NS 4 0 R /K 2 >>".into(),
     ]);
     let r = checked(&doc, &[Rule::LblLBody]);
-    assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
+    let found: Vec<_> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(6)], "{:?}", r.result(Rule::LblLBody));
 }
 
 #[test]
@@ -2089,6 +2097,94 @@ fn a_namespaced_figure_finding_has_its_bounds() {
     let r = checked(&doc, &[Rule::FiguresAltText]);
     let finding = &r.result(Rule::FiguresAltText).unwrap().findings[0];
     assert_eq!((finding.object.map(|o| o.num), finding.page, finding.bbox), (Some(7), Some(0), Some([10.0, 150.0, 50.0, 170.0])));
+}
+
+#[test]
+fn a_namespaced_figure_is_listed_and_takes_alternate_text() {
+    // The figure list and the alternate-text editor see the `img` the checker reports, mapped to
+    // Figure through /RoleMapNS; saving its alternate text clears the finding.
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/img << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R /RoleMap << /Photo /Figure >> >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R 10 0 R] >>".into(),
+            "<< /S /img /NS 9 0 R /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Nums [0 [7 0 R]] >>".into(),
+            "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img /Figure >> >>".into(),
+            "<< /S /Photo /P 6 0 R /Alt (A bar) >>".into(),
+        ],
+        "",
+    );
+    let listed: Vec<_> = figures(&doc).iter().map(|f| (f.obj.num, f.bbox)).collect();
+    assert_eq!(listed, [(7, Some([10.0, 150.0, 50.0, 170.0])), (10, None)], "the role-mapped Photo still counts");
+    set_alt(&mut doc, pdfcraft_cos::ObjRef::new(7, 0), Some("A grey bar")).unwrap();
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    assert_eq!(status(&r, Rule::FiguresAltText), Status::Passed, "{:?}", r.result(Rule::FiguresAltText));
+}
+
+#[test]
+fn a_figure_in_a_form_xobject_takes_no_page_bounds_from_an_equal_id() {
+    // ISO 32000-2 Table 357: a marked-content reference with /Stm names a sequence in that
+    // stream's content. MCID 0 in the form is not MCID 0 on the page, a shape the figure doesn't hold.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 /Resources << /XObject << /X 9 0 R >> >> >>"
+                .into(),
+            stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC /X Do"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /Figure /P 6 0 R /Pg 3 0 R /K << /Type /MCR /Stm 9 0 R /MCID 0 >> >>".into(),
+            "<< /Nums [0 [6 0 R]] >>".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {}", &stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC")[3..]),
+        ],
+        "",
+    );
+    let f = figures(&doc);
+    assert_eq!((f.len(), f.first().and_then(|f| f.bbox)), (1, None));
+}
+
+#[test]
+fn a_default_namespace_title_follows_the_role_map() {
+    // ISO 32000-2 §14.8.6.1: an element without /NS is in the PDF 1.7 namespace, which has no
+    // Title (Annex M), so the root /RoleMap makes this Title an H1 and the H2 after it is in order.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /Title /H1 >> >>".into(),
+            "<< /S /Document /K [ << /S /Title /K 0 >> << /S /H2 /K 1 >> ] >>".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::HeadingNesting]);
+    assert_eq!(status(&r, Rule::HeadingNesting), Status::Passed, "{:?}", r.result(Rule::HeadingNesting));
+}
+
+#[test]
+fn a_type_that_maps_to_no_standard_one_is_no_list_item() {
+    // `item`'s mapping is the malformed `[/LI]` (no namespace), and `LI` in a namespace that is
+    // not a standard one has no mapping at all: both stop on the name LI without reaching the
+    // standard LI, so the LBody in each is outside a list item.
+    let doc = structure_doc(&[
+        "<< /S /Document /K [ << /S /L /K [ << /S /item /NS 4 0 R /K [ << /S /LBody /K 0 >> ] >> << /S /LI /NS 4 0 R /K [ << /S /LBody /K 1 >> ] >> ] >> ] >>".into(),
+        "<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << /item [/LI] >> >>".into(),
+    ]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    assert_eq!(r.result(Rule::LblLBody).unwrap().findings.len(), 2, "{:?}", r.result(Rule::LblLBody));
+}
+
+#[test]
+fn a_list_item_body_belongs_in_a_list_item_only() {
+    // ISO 32000-2 §14.8.4.8.2, Table 370: LBody is internal to LI. A label may sit in a Note too,
+    // a list item body may not.
+    let doc = structure_doc(&["<< /S /Document /K [ << /S /Note /K [ << /S /Lbl /K 0 >> 4 0 R ] >> ] >>".into(), "<< /S /LBody /K 1 >>".into()]);
+    let r = checked(&doc, &[Rule::LblLBody]);
+    let found: Vec<_> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(4)], "{:?}", r.result(Rule::LblLBody));
 }
 
 #[test]

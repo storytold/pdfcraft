@@ -160,10 +160,11 @@ fn role_target(doc: &Document, v: &Object) -> Option<(Vec<u8>, Option<Arc<Object
 /// namespace and is mapped through the tree root's `role_map`. One in another namespace is mapped
 /// through that namespace's /RoleMapNS, whose value is a type in the default namespace or a type
 /// and the namespace it is in (ISO 32000-2 §14.7.4.2, Table 356, and §14.8.6.2). In a standard
-/// namespace named by /NS, a type is standard when that namespace defines it (Annex M). The flag
-/// says the type is one of the PDF 2.0 standard namespace. A type that maps to no standard one
-/// comes back as the last type reached, with the flag unset.
-pub(crate) fn standard_type(doc: &Document, role_map: &Dict, d: &Dict, ty: &[u8]) -> (Vec<u8>, bool) {
+/// namespace named by /NS, a type is standard when that namespace defines it (Annex M); with no
+/// /NS it is the default namespace, the PDF 1.7 one (§14.8.6.1). The flag is `Some` with whether
+/// the type is one of the PDF 2.0 standard namespace, or `None` for a type that maps to no
+/// standard one, which comes back as the last type reached.
+pub(crate) fn standard_type(doc: &Document, role_map: &Dict, d: &Dict, ty: &[u8]) -> (Vec<u8>, Option<bool>) {
     let mut t = ty.to_vec();
     let mut ns = d.get(b"NS").and_then(|o| namespace(doc, o));
     // The element's own type, then the type each mapping leads to, the last one included.
@@ -173,11 +174,11 @@ pub(crate) fn standard_type(doc: &Document, role_map: &Dict, d: &Dict, ty: &[u8]
             _ => None,
         };
         let standard = match space {
-            None => STANDARD.contains(&t.as_slice()).then_some(false),
+            None => standard_in(&t, false).then_some(false),
             Some(space) => standard_namespace(doc, space).filter(|&pdf2| standard_in(&t, pdf2)),
         };
-        if let Some(pdf2) = standard {
-            return (t, pdf2);
+        if standard.is_some() {
+            return (t, standard);
         }
         if step == MAX_ROLE_STEPS {
             break;
@@ -197,7 +198,13 @@ pub(crate) fn standard_type(doc: &Document, role_map: &Dict, d: &Dict, ty: &[u8]
         t = n;
         ns = space;
     }
-    (t, false)
+    (t, None)
+}
+
+/// Whether element `d` is a Figure: its type, through the role maps ([`standard_type`]), is the
+/// standard Figure. The checker, the figure list and the alternate-text editor all ask this.
+pub(crate) fn is_figure(doc: &Document, role_map: &Dict, d: &Dict) -> bool {
+    d.name(b"S").is_some_and(|s| matches!(standard_type(doc, role_map, d, s), (t, Some(_)) if t == b"Figure"))
 }
 
 /// The tree root's /RoleMap, or an empty one.
@@ -479,8 +486,13 @@ impl Walker<'_> {
         let (ty, pdf2) = self.standard(d, s);
         // In the PDF 2.0 namespace Lbl is a general inline label: of a list item, but also of a
         // heading, a form field or a key (ISO 32000-2 §14.8.4.7.2, Table 368). Only the PDF 1.7 Lbl
-        // belongs in a list item.
-        let kind = if pdf2 && ty == b"Lbl" { Kind::Other } else { kind_of(&ty) };
+        // belongs in a list item. A type that maps to no standard one is none of the kinds, whatever
+        // name the mapping stopped at.
+        let kind = match pdf2 {
+            None => Kind::Other,
+            Some(true) if ty == b"Lbl" => Kind::Other,
+            Some(_) => kind_of(&ty),
+        };
         let attrs = if matches!(kind, Kind::Table | Kind::Td | Kind::Th) { self.attr_dicts(d) } else { Vec::new() };
         let frame = Frame {
             object,
@@ -536,7 +548,7 @@ impl Walker<'_> {
     }
 
     /// The standard type of element `d`, whose type is `ty`: [`standard_type`].
-    fn standard(&self, d: &Dict, ty: &[u8]) -> (Vec<u8>, bool) {
+    fn standard(&self, d: &Dict, ty: &[u8]) -> (Vec<u8>, Option<bool>) {
         standard_type(self.doc, &self.role_map, d, ty)
     }
 
@@ -820,7 +832,12 @@ impl Visitor for Checks {
             Kind::Li if parent != Some(Kind::L) => {
                 self.add(Rule::ListItems, e.index, || finding(e, "not in an L (list)"));
             }
-            Kind::Lbl | Kind::LBody if !matches!(parent, Some(Kind::Li | Kind::NoteOrToc)) => {
+            // A label may also sit in a TOCI, BibEntry, Note or FENote; a list item body is internal
+            // to LI only (ISO 32000-2 §14.8.4.8.2, Table 370).
+            Kind::Lbl if !matches!(parent, Some(Kind::Li | Kind::NoteOrToc)) => {
+                self.add(Rule::LblLBody, e.index, || finding(e, "not in an LI (list item)"));
+            }
+            Kind::LBody if parent != Some(Kind::Li) => {
                 self.add(Rule::LblLBody, e.index, || finding(e, "not in an LI (list item)"));
             }
             Kind::Heading(level) => {

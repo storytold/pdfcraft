@@ -136,10 +136,23 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
 
 /// The marked-content ids an element owns directly.
 fn mcids(doc: &Document, d: &Dict) -> Vec<i64> {
+    mcids_where(doc, d, |_| true)
+}
+
+/// The marked-content ids an element owns directly in its page's own content: not those of a
+/// marked-content reference with /Stm, which are ids in that stream's content (ISO 32000-2
+/// Table 357), so an equal id on the page is another sequence.
+fn page_mcids(doc: &Document, d: &Dict) -> Vec<i64> {
+    mcids_where(doc, d, |m| !m.contains(b"Stm"))
+}
+
+/// The marked-content ids an element owns directly: integers, and those of the marked-content
+/// references `keep` accepts.
+fn mcids_where(doc: &Document, d: &Dict, keep: impl Fn(&Dict) -> bool) -> Vec<i64> {
     let mut out = Vec::new();
     let mut push = |o: &Object| match &*doc.resolve(o) {
         Object::Int(n) => out.push(*n),
-        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
+        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && keep(m) => {
             if let Some(n) = m.get(b"MCID").and_then(Object::as_int) {
                 out.push(n)
             }
@@ -318,18 +331,15 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
 
 /// The figures, in document order.
 pub fn figures(doc: &Document) -> Vec<Figure> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
-    let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-    figures_where(doc, |d| d.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
-}
-
-/// The structure elements `is_figure` accepts, as [`Figure`]s with their place, in document order.
-pub(crate) fn figures_where(doc: &Document, is_figure: impl Fn(&Dict) -> bool) -> Vec<Figure> {
+    if tree_root(doc).is_none() {
+        return Vec::new();
+    }
+    let role_map = crate::structure::root_role_map(doc);
     let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let figures: Vec<(Element, Option<usize>)> = elements(doc)
         .into_iter()
-        .filter(|e| is_figure(&e.dict))
+        .filter(|e| crate::structure::is_figure(doc, &role_map, &e.dict))
         .map(|e| {
             let page = e.page.and_then(|p| index.get(&p).copied());
             (e, page)
@@ -338,7 +348,7 @@ pub(crate) fn figures_where(doc: &Document, is_figure: impl Fn(&Dict) -> bool) -
     let mut wanted: HashMap<usize, HashSet<i64>> = HashMap::new();
     for (e, page) in &figures {
         if let Some(p) = page {
-            wanted.entry(*p).or_default().extend(mcids(doc, &e.dict));
+            wanted.entry(*p).or_default().extend(page_mcids(doc, &e.dict));
         }
     }
     let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
@@ -348,20 +358,17 @@ pub(crate) fn figures_where(doc: &Document, is_figure: impl Fn(&Dict) -> bool) -
         .map(|(e, page)| {
             let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
             let on_page = page.and_then(|p| bounds.get(&p));
-            let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
+            let bbox = on_page.and_then(|b| page_mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
         })
         .collect()
 }
 
 fn check_figure(doc: &Document, obj: ObjRef) -> Result<Dict, AltError> {
-    let root = tree_root(doc).ok_or(AltError::Untagged)?;
-    let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    tree_root(doc).ok_or(AltError::Untagged)?;
+    let role_map = crate::structure::root_role_map(doc);
     let d = doc.get(obj).as_dict().cloned().ok_or(AltError::NotAFigure(obj.num))?;
-    match d.name(b"S") {
-        Some(s) if standard(doc, &role_map, s) == b"Figure" => Ok(d),
-        _ => Err(AltError::NotAFigure(obj.num)),
-    }
+    if crate::structure::is_figure(doc, &role_map, &d) { Ok(d) } else { Err(AltError::NotAFigure(obj.num)) }
 }
 
 /// Set (or, with `None` or blank text, remove) a figure's alternate text.
