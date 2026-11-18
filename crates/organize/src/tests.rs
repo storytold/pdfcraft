@@ -5010,6 +5010,17 @@ fn page_form_clips_crop_to_media_before_rotation() {
                 (270, [0., 1., -1., 0., 110., -40.], (80., 60.)),
             ],
         ),
+        // The opposite overlap takes the bottom and right edges from CropBox.
+        (
+            [10, 50, 80, 170],
+            [20., 50., 80., 150.],
+            [
+                (0, [1., 0., 0., 1., -20., -50.], (60., 100.)),
+                (90, [0., -1., 1., 0., -50., 80.], (100., 60.)),
+                (180, [-1., 0., 0., -1., 80., 150.], (60., 100.)),
+                (270, [0., 1., -1., 0., 150., -20.], (100., 60.)),
+            ],
+        ),
     ] {
         for (rotation, matrix, size) in rotations {
             for inherited in [false, true] {
