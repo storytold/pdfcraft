@@ -85,12 +85,7 @@ impl PdfCraftApp {
 
     /// Opens the PDF/A dialog on the remembered level, with nothing verified yet.
     pub(crate) fn open_pdfa(&mut self) {
-        let dialog = PdfaDialog {
-            id: dialog_id("pdfa"),
-            form: LevelForm { level: self.pdfa.level },
-            shown: self.pdfa_declared(),
-            action: None,
-        };
+        let dialog = PdfaDialog { id: dialog_id("pdfa"), form: LevelForm { level: self.pdfa.level }, shown: self.pdfa_declared(), action: None };
         // PLAN: assumed `fn open<D: StackDialog>(app: &mut PdfCraftApp, dialog: D)` (pdf-hub-w2)
         crate::dialogs::host::open(self, dialog);
     }
@@ -191,9 +186,8 @@ impl StackDialog for PdfaDialog {
                     Some(v) => {
                         let findings: Vec<Finding> = v.iter().enumerate().map(|(n, i)| finding(n as u64, i)).collect();
                         FindingsSummary::new(&findings).show(ui);
-                        FindingsList::new(tl!("PDF/A problems").to_string()).show_items(ui, &Findings::new(&findings), &mut |key, icx| {
-                            findings[*key as usize].row(&icx.words::<FindingsWords>())
-                        });
+                        FindingsList::new(tl!("PDF/A problems").to_string())
+                            .show_items(ui, &Findings::new(&findings), &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>()));
                     }
                 }
                 true

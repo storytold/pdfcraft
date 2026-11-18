@@ -5,7 +5,7 @@ use craft::ui::shell::embed::CloseDecision;
 use pdfcraft_engine::DocId;
 
 use super::PdfCraftApp;
-use super::save::SaveTarget;
+use super::SaveTarget;
 
 /// Closes the root window once the app allows it; the close reaches [`PdfCraftApp::close_requested`].
 fn close_root_window(ctx: &egui::Context) {
@@ -315,7 +315,6 @@ impl PdfCraftApp {
         self.run_guard_step(step);
     }
 
-
     /// Closes `doc`'s tab without saving (a revert keeps the tab and goes back to the saved file).
     /// Whether an OCR review held it.
     fn discard_for_guard(&mut self, doc: DocId) -> bool {
@@ -370,9 +369,8 @@ mod tests {
         let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
         let host = Host::builder(info).jobs(Arc::new(ManualJobs::new())).files(Arc::new(ScriptedFiles::new())).build();
         let wake = craft::host::Wake::none();
-        // PLAN: assumed `crate::{Clipboard, FileIntake}` and `Clipboard::new(SystemClipboard::new())` as in `AppServices::system` (pdf-hub-w1)
-        let clipboard = crate::Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
-        let (intake, _) = crate::FileIntake::new(wake.clone());
+        let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
+        let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
         let watch = craft::platform::watch::FileWatch::new(wake.clone());
         PdfCraftApp::with_host(Arc::new(host), crate::AppServices::new(wake, clipboard, None, None, intake, watch))
     }

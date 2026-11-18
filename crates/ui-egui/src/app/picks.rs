@@ -38,7 +38,12 @@ impl PdfCraftApp {
     /// longer the active one, or has been edited, is dropped and the user is told
     /// ([`Self::still_pick_target`]): use it whenever `then` edits the active document or refers
     /// to its pages or objects by position. A cancelled answer reaches `then` whatever the target.
-    pub(crate) fn pick_file(&mut self, request: PickRequest, target: Option<PickTarget>, then: impl FnOnce(&mut PdfCraftApp, Picked) + 'static) -> PickId {
+    pub(crate) fn pick_file(
+        &mut self,
+        request: PickRequest,
+        target: Option<PickTarget>,
+        then: impl FnOnce(&mut PdfCraftApp, Picked) + 'static,
+    ) -> PickId {
         let id = self.host.files().pick(request);
         self.picks.waiting.insert(id, (target, Box::new(then)));
         id
@@ -46,7 +51,12 @@ impl PdfCraftApp {
 
     /// [`Self::pick_file`] for one path: `then` gets the first chosen path, and nothing runs when
     /// the picker is cancelled. On the web the path is the browser's file name.
-    pub(crate) fn pick_first(&mut self, request: PickRequest, target: Option<PickTarget>, then: impl FnOnce(&mut PdfCraftApp, PathBuf) + 'static) -> PickId {
+    pub(crate) fn pick_first(
+        &mut self,
+        request: PickRequest,
+        target: Option<PickTarget>,
+        then: impl FnOnce(&mut PdfCraftApp, PathBuf) + 'static,
+    ) -> PickId {
         self.pick_file(request, target, move |app, picked| {
             if let Some(path) = picked.first_path() {
                 then(app, path);

@@ -127,7 +127,8 @@ pub(super) fn notices(
         }
     }
     if let Some((icon, tone, template, arg)) = signed {
-        let out = bar(tone, icon, crate::i18n::fmt(tl!(template), &[("by", &arg)])).action(NoticeAction::new(tl!("Signature panel").to_string())).show(ui);
+        let out =
+            bar(tone, icon, crate::i18n::fmt(tl!(template), &[("by", &arg)])).action(NoticeAction::new(tl!("Signature panel").to_string())).show(ui);
         return (out.action == Some(0)).then_some(Notice::Signatures);
     }
     if view.notice_dismissed {

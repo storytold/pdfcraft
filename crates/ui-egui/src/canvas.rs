@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft::behavior::{CanvasView, PointerButton, PressPhase, Selection};
-use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
 use craft::host::queue::{JobQueue, QueueOptions};
+use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
 use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, ToolHost};
 use craft::ui::contract::Show as _;
 use craft::ui::display::Text;
@@ -60,7 +60,7 @@ use page_overlays::{LinkEvent, LinkMode, PageLinks, PageOverlays, overlay_parts}
 use page_parts::{Owner, PagePart, PageParts, PagePress};
 use page_tools::{PageToolCx, page_tool};
 use pictures::{DocPages, PageRevisions, RenderReports};
-pub(crate) use selection::ToolMarks;
+pub(crate) use selection::{TextSpan, ToolMarks};
 pub use xform::PageXform;
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
@@ -866,7 +866,12 @@ struct BodyOut {
 /// Select and Link), comments (only under Select), fields, sign tabs (painted over their fields), then prepare fields,
 /// selected objects and the frame band. A later part outranks an earlier one of the same layer, so this order is the
 /// stacking order hit testing ranks on.
-fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, cx: &PageBodyCx<'_>) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
+fn page_parts_of(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    session: &PageSession,
+    cx: &PageBodyCx<'_>,
+) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
     let mut parts = Vec::new();
     // PLAN: assumed `edit_text_ui::picture_parts(out, session, doc, pages, rotation)`, `edit_text_ui::page_parts` and
     // `content_ui::page_parts` with the same shape (pdf-edit-w7, w8, w9 give no argument list).
@@ -1053,8 +1058,16 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         let selected = session.prepare.selected.as_ref().map(|(name, _)| name.as_str());
         // PLAN: assumed `CalcOrderOverlay::new(&CalcOrderView, pages, rotation, generation, selected, hovered,
         // viewport)` (pdf-forms-w12 gives `new(.., viewport: body.rect)`).
-        crate::calc_order_ui::CalcOrderOverlay::new(&session.calc_order, body.pages, cx.rotation, cx.doc.edit_generation(), selected, hovered, body.rect)
-            .show_at(ui, body.rect);
+        crate::calc_order_ui::CalcOrderOverlay::new(
+            &session.calc_order,
+            body.pages,
+            cx.rotation,
+            cx.doc.edit_generation(),
+            selected,
+            hovered,
+            body.rect,
+        )
+        .show_at(ui, body.rect);
     }
     if let Some(preview) = cx.table_preview {
         // PLAN: assumed `field_table_ui::TablePreview::new(&Preview, pages, rotation)` (pdf-forms-w11).
@@ -1148,8 +1161,10 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let show_secured_notice = app.show_secured_notice;
     // Offer to lock a just-placed signature (#2149) on the same terms the save-time question
     // asks: one is still there, saving doesn't lock it anyway, and the document isn't signed.
-    let lock_offer =
-        !app.flatten_fill_sign_on_save && app.placed_signatures.contains(&doc_id) && doc.info.annotations.iter().any(|a| a.fill_sign) && !doc.is_signed();
+    let lock_offer = !app.flatten_fill_sign_on_save
+        && app.placed_signatures.contains(&doc_id)
+        && doc.info.annotations.iter().any(|a| a.fill_sign)
+        && !doc.is_signed();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
@@ -1182,8 +1197,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
     let calc_order = preparing && crate::side_panels::panel_visible(app, crate::LeftPanel::CalculationOrder);
     // Edit a PDF: added text and images can be selected, moved and edited.
-    let editing_content = crate::side_panels::panel_visible(app, crate::LeftPanel::Tool("edit"))
-        || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
+    let editing_content =
+        crate::side_panels::panel_visible(app, crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let chosen = app.quick_tool;
     let navigation = app.navigation_options();
     let presenting = app.views[index].presenting();
@@ -1217,7 +1232,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     view.session.move_background.prepare(ui.ctx(), doc, &view.session.content, scale);
 
     let find_marks: Vec<TextMark> = view.find.as_ref().map(Find::marks).unwrap_or_default();
-    let present_at = presenting.then_some(presenter::PresentAt { current: view.view.current, display: view.view.display, rotation: view.view.rotation });
+    let present_at =
+        presenting.then_some(presenter::PresentAt { current: view.view.current, display: view.view.display, rotation: view.view.rotation });
     let border = if view.view.page_gaps { PageBorder::DropShadow } else { PageBorder::None };
     let keep = view.session.presenter.keep_pages();
     if view.momentary_options != navigation {
@@ -1286,11 +1302,11 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
-    let out = PageView::new(tl!("Pages"), &source, state, DataColor::new(paper))
-        .navigation(navigation)
-        .border(border)
-        .keep(&keep)
-        .show_at(ui, rect, |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out));
+    let out = PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
+        ui,
+        rect,
+        |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
+    );
     if let Some(canvas) = &body_out.view {
         out.adopt(&mut view.view, canvas);
     }
@@ -1301,10 +1317,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // double-click time has passed with no object clicked and no selection made (#2070).
     let now = ui.input(|i| i.time);
     let has_selection = view.session.text.selection.is_some();
-    let click = (presenting && matches!(out.canvas.press.phase, PressPhase::Release { click: true, .. })).then(|| presenter::PresentClick {
-        forward: !out.canvas.press.mods.shift,
-        clicks: if out.canvas.press.double_pressed() { 2 } else { 1 },
-    });
+    let click = (presenting && matches!(out.canvas.press.phase, PressPhase::Release { click: true, .. }))
+        .then(|| presenter::PresentClick { forward: !out.canvas.press.mods.shift, clicks: if out.canvas.press.double_pressed() { 2 } else { 1 } });
     let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
     let cancels = body_out.link.is_some() || has_selection;
     let click_turn = if presenting { view.session.presenter.click_turn(ui.ctx(), click, cancels, now, delay) } else { None };
@@ -1328,7 +1342,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if view.session.text_queue.is_none() {
         let ctx = ui.ctx().clone();
         let wake = craft::host::Wake::new(move || ctx.request_repaint());
-        view.session.text_queue = Some(JobQueue::new(app.host.jobs_shared().clone(), wake, QueueOptions { name: "text-layers", ..QueueOptions::default() }));
+        view.session.text_queue =
+            Some(JobQueue::new(app.host.jobs_shared().clone(), wake, QueueOptions { name: "text-layers", ..QueueOptions::default() }));
     }
     let (visible_pages, rest_pages) = text_demand(view, out.visible.clone(), chosen == QuickTool::Hand);
     view.want_text(&app.session, &visible_pages, &rest_pages);
@@ -1710,11 +1725,11 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
     }
 }
 
+pub(crate) mod page_box_drag;
 #[cfg(test)]
 mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
-pub(crate) mod page_box_drag;
 pub(crate) use page_box_drag::PageBoxDrag;
 pub(crate) mod page_menu;
 pub(crate) mod page_select;

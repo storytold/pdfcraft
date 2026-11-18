@@ -4,7 +4,7 @@
 use crate::PdfCraftApp;
 
 mod about;
-mod attachment_description;
+pub(crate) mod attachment_description;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod convert_colours_ui;
@@ -12,20 +12,20 @@ pub(crate) mod duplicate_field;
 pub(super) mod hairlines_ui;
 pub(crate) mod host;
 pub(super) mod marks_ui;
-mod page_dialogs;
+pub(crate) mod page_dialogs;
 pub(crate) mod page_props;
 pub(super) mod pageboxes;
 mod pin_tools;
 pub(super) mod preferences;
 pub(super) mod printer_marks_ui;
-mod properties;
-mod prompts;
+pub(crate) mod prompts;
+pub(crate) mod properties;
 pub(super) mod protect;
-mod shortcuts;
+pub(crate) mod shortcuts;
 pub(crate) mod signature;
 pub(super) mod standards_ui;
-pub(super) mod word_count_ui;
 pub(crate) mod summarize;
+pub(super) mod word_count_ui;
 
 pub(crate) use prompts::shorten_middle;
 pub(crate) use properties::PropsTab;

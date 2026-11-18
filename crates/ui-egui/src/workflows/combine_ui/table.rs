@@ -3,7 +3,9 @@ use std::time::SystemTime;
 
 use craft::behavior::{Codec, ColumnKey, ColumnWidth, DisplayOrder, EditEvent, ItemSource, NotAValue, ReorderKeys};
 use craft::theme::Tone;
-use craft::ui::contract::{Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Props as _, ReorderMove, ReorderRule, ShowCollection as _, SpaceAction};
+use craft::ui::contract::{
+    Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Props as _, ReorderMove, ReorderRule, ShowCollection as _, SpaceAction,
+};
 use craft::ui::list::{CellStatus, ListRow, RowEvent};
 use craft::ui::table::Table;
 use craft::ui::text::TextField;
@@ -32,6 +34,35 @@ fn column_of(key: SortKey) -> ColumnKey {
 
 fn sort_key_of(column: &ColumnKey) -> Option<SortKey> {
     SortKey::ALL.into_iter().find(|key| column_of(*key) == *column)
+}
+
+/// The layout the last release kept in its settings: `order`, every sort key once by its name, and
+/// optionally `widths`, one number per key in the keys' own order. `None` for anything else (a
+/// repeated key, a wrong count, a width that is not a positive number), which leaves the default.
+pub(crate) fn columns_from_legacy(value: &serde_json::Value) -> Option<ColumnLayout> {
+    let object = value.as_object()?;
+    let order =
+        object.get("order")?.as_array()?.iter().map(|name| serde_json::from_value::<SortKey>(name.clone()).ok()).collect::<Option<Vec<_>>>()?;
+    let complete = order.len() == SortKey::ALL.len() && SortKey::ALL.iter().all(|key| order.contains(key));
+    if !complete {
+        return None;
+    }
+    let widths = match object.get("widths") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(widths) => {
+            let widths = widths.as_array()?;
+            if widths.len() != SortKey::ALL.len() {
+                return None;
+            }
+            let mut pairs = Vec::new();
+            for (key, width) in SortKey::ALL.into_iter().zip(widths) {
+                let width = width.as_f64().filter(|w| w.is_finite() && *w > 0.0)?;
+                pairs.push((column_of(key), width as f32));
+            }
+            pairs
+        }
+    };
+    Some(ColumnLayout { order: order.into_iter().map(column_of).collect(), widths, hidden: Vec::new() })
 }
 
 /// A Pages cell's text: kept as typed (Combine takes pages in the order given, with repeats), refused when the

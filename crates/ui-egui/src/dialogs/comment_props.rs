@@ -4,16 +4,16 @@
 //! is a tabbed parameter dialog the app's dialog host shows; [`edited`] maps its values back to
 //! the comment's properties.
 
+use craft::host::{PickRequest, Picked};
+use craft::theme::Srgba;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
+use craft::ui::dialog::DialogResult;
 use craft::ui::patterns::form_dialogs::{
     DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, PropertiesDialog, PropertiesTab, PropertyRow, SharedRows,
 };
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::value_drag::SliderScale;
-use craft::theme::Srgba;
-use craft::host::{PickRequest, Picked};
-use craft::ui::dialog::DialogResult;
 use pdfcraft_engine::{BorderShape, CommentProps, Edit, LineEnding, NoteIcon};
 
 use crate::PdfCraftApp;
@@ -194,7 +194,8 @@ fn colour_row(key: &'static str, label: &'static str, optional: Optional, recent
                 pick.request
             }
             Optional::Border | Optional::Fill => {
-                let shown = if optional == Optional::Border { border_choice(ui, current, key, &recent) } else { fill_choice(ui, current, key, &recent) };
+                let shown =
+                    if optional == Optional::Border { border_choice(ui, current, key, &recent) } else { fill_choice(ui, current, key, &recent) };
                 if let Some(choice) = shown.choice {
                     set_optional(fields, key, choice);
                 }
@@ -287,15 +288,12 @@ fn comment_props_dialog<'b>(
     }
     for i in 0..o.endings.as_ref().map_or(0, Vec::len) {
         let options = LineEnding::ALL.into_iter().map(|l| (l.name().to_string(), ending_label(l).into())).collect();
-        let label = if i == 0 {
-            tl!("Line ending").to_string()
-        } else {
-            crate::i18n::fmt(tl!("Line ending {n}"), &[("n", &(i + 1).to_string())])
-        };
+        let label = if i == 0 { tl!("Line ending").to_string() } else { crate::i18n::fmt(tl!("Line ending {n}"), &[("n", &(i + 1).to_string())]) };
         rows.push(PropertyRow::field(Param::new(ending_key(i), label, ParamKind::choice(options, None))));
     }
     let appearance = PropertiesTab::new(tl!("Appearance"), rows);
-    let appearance = if o.restylable { appearance } else { appearance.read_only(Some(tl!("This comment's appearance can't be changed yet.").into())) };
+    let appearance =
+        if o.restylable { appearance } else { appearance.read_only(Some(tl!("This comment's appearance can't be changed yet.").into())) };
 
     let modified = o.modified.as_deref().map(pdfcraft_render::pretty_date).unwrap_or_else(|| "—".into());
     let general = PropertiesTab::new(

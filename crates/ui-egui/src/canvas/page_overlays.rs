@@ -127,7 +127,10 @@ impl PageLinks<'_> {
             }
             let tip = self.unobstructed.then(|| link.uri.clone());
             for r in &link.rects {
-                let rect = Rect::from_two_pos(self.xf.norm_to_screen(r[0] / self.xf.pw, r[1] / self.xf.ph), self.xf.norm_to_screen(r[2] / self.xf.pw, r[3] / self.xf.ph));
+                let rect = Rect::from_two_pos(
+                    self.xf.norm_to_screen(r[0] / self.xf.pw, r[1] / self.xf.ph),
+                    self.xf.norm_to_screen(r[2] / self.xf.pw, r[3] / self.xf.ph),
+                );
                 if rect.is_finite() {
                     out.push(link_part(Owner::TextLink { index }, self.page, HitShape::Rect(rect), tip.clone()));
                 }
@@ -266,7 +269,9 @@ pub(crate) fn overlay_parts(ui: &mut egui::Ui, xf: &PageXform, doc: &Document, p
         let Some(field) = form.iter().position(|f| f.name == name) else { continue };
         let on_screen = xf.user_rect(info, page, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
         let Some(tab) = sign_tab_on_page(on_screen, xf.rect, width) else { continue };
-        out.parts.push(PagePart::new(Owner::SignTab { field }, page, HitShape::Rect(tab.rect), PageLayer::Field).cursor(CursorIcon::PointingHand).passes_drag());
+        out.parts.push(
+            PagePart::new(Owner::SignTab { field }, page, HitShape::Rect(tab.rect), PageLayer::Field).cursor(CursorIcon::PointingHand).passes_drag(),
+        );
         out.tabs.push(tab);
     }
     out
@@ -434,7 +439,8 @@ impl Component for PageOverlays<'_> {
     fn style(cx: &StyleCx<'_>, _: PageOverlaysStyleKey) -> PageOverlaysStyle {
         let tokens = cx.tokens;
         let colors = &tokens.color;
-        let tones = [Tone::Neutral, Tone::Accent, Tone::Info, Tone::Good, Tone::Warn, Tone::Bad].into_iter().map(|tone| (tone, cx.tone(tone))).collect();
+        let tones =
+            [Tone::Neutral, Tone::Accent, Tone::Info, Tone::Good, Tone::Warn, Tone::Bad].into_iter().map(|tone| (tone, cx.tone(tone))).collect();
         PageOverlaysStyle {
             metrics: Metrics::new(),
             field_fill: cx.color(colors.status.info.bg),

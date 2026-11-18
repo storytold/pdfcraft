@@ -18,6 +18,11 @@ fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
     )
 }
 
+/// Whether two paths name the same file: equal, or the same once resolved on disk.
+pub(crate) fn same_file(open: &str, path: &str) -> bool {
+    craft::platform::open::same_file(std::path::Path::new(open), std::path::Path::new(path), None)
+}
+
 impl PdfCraftApp {
     /// Shows `panel` as the right panel, or closes the one showing for `None`.
     fn set_right(&mut self, panel: Option<RightPanel>) {
@@ -64,15 +69,15 @@ impl PdfCraftApp {
             match v.layout {
                 // The view opened in Default page display already.
                 L::Default => {}
-                L::SinglePage => (view.layout, view.continuous) = (canvas::PageLayout::Single, false),
-                L::SinglePageContinuous => (view.layout, view.continuous) = (canvas::PageLayout::Single, true),
-                L::TwoUp => (view.layout, view.continuous) = (canvas::PageLayout::TwoUp, false),
-                L::TwoUpContinuous => (view.layout, view.continuous) = (canvas::PageLayout::TwoUp, true),
+                L::SinglePage => (view.view.display, view.view.continuous) = (canvas::PageDisplay::Single, false),
+                L::SinglePageContinuous => (view.view.display, view.view.continuous) = (canvas::PageDisplay::Single, true),
+                L::TwoUp => (view.view.display, view.view.continuous) = (canvas::PageDisplay::TwoUp, false),
+                L::TwoUpContinuous => (view.view.display, view.view.continuous) = (canvas::PageDisplay::TwoUp, true),
                 L::TwoUpCoverPage => {
-                    (view.layout, view.continuous, view.cover) = (canvas::PageLayout::TwoUp, false, true);
+                    (view.view.display, view.view.continuous, view.view.cover) = (canvas::PageDisplay::TwoUp, false, true);
                 }
                 L::TwoUpContinuousCoverPage => {
-                    (view.layout, view.continuous, view.cover) = (canvas::PageLayout::TwoUp, true, true);
+                    (view.view.display, view.view.continuous, view.view.cover) = (canvas::PageDisplay::TwoUp, true, true);
                 }
             }
             match v.magnification {
@@ -131,7 +136,8 @@ impl PdfCraftApp {
         // A new document opens with the remembered Highlight fields, which its scripts read; the
         // session keeps the document in front's.
         let context = self.session.open_context().with_highlight(self.highlight_fields); // PLAN: `highlight_fields` on the app (pdf-canvas-w8)
-        let job = open_worker::Job { context, name: request.name.clone(), path: request.path.clone(), password: request.password, input: request.input };
+        let job =
+            open_worker::Job { context, name: request.name.clone(), path: request.path.clone(), password: request.password, input: request.input };
         self.opens.submit(token, request.priority, move |cancel| open_worker::run(job, cancel));
         self.pending_opens.push(PendingOpen {
             token,
@@ -513,10 +519,8 @@ impl PdfCraftApp {
             }
             (Ok(bytes), _) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.pick_first(
-                    PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")),
-                    None,
-                    move |app, path| match craft::atomic::atomic_write(&path, &bytes) {
+                self.pick_first(PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")), None, move |app, path| {
+                    match craft::atomic::atomic_write(&path, &bytes) {
                         Ok(()) => {
                             // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
                             // effort: a volume without alternate data streams can't carry it.
@@ -524,8 +528,8 @@ impl PdfCraftApp {
                             app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())])
                         }
                         Err(e) => app.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
-                    },
-                );
+                    }
+                });
                 #[cfg(target_arch = "wasm32")]
                 self.notify_fmt("Downloading attachments on the web arrives with M3.10 ({n} bytes ready)", &[("n", &bytes.len().to_string())]);
             }
@@ -768,12 +772,7 @@ impl PdfCraftApp {
     /// The tab already showing the file at `path` (the same path, or one that names the same
     /// file once made absolute).
     pub(crate) fn tab_showing(&self, path: &str) -> Option<usize> {
-        self.views.iter().position(|v| {
-            self.session
-                .get(v.id)
-                .and_then(|d| d.path.as_deref())
-                .is_some_and(|p| craft::platform::open::same_file(std::path::Path::new(p), std::path::Path::new(path), None))
-        })
+        self.views.iter().position(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).is_some_and(|p| same_file(p, path)))
     }
 
     /// Open a file from a recent list: focus the tab already showing it, else open it (File ▸
@@ -803,7 +802,7 @@ impl PdfCraftApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageLayout, bool)>) -> OpenOutcome {
+    fn open_path_request(&mut self, path: &str, then: Option<&'static str>, display_override: Option<(canvas::PageDisplay, bool)>) -> OpenOutcome {
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file,
         // shown at that destination once open. A path that names a file is never split.
         match pdfcraft_engine::open_parameters::split(path, |p| std::path::Path::new(p).is_file()) {
@@ -820,7 +819,7 @@ impl PdfCraftApp {
         path: &str,
         after_open: Option<pdfcraft_render::RemoteDestination>,
         then: Option<&'static str>,
-        display_override: Option<(canvas::PageLayout, bool)>,
+        display_override: Option<(canvas::PageDisplay, bool)>,
     ) -> OpenOutcome {
         // One file, one tab (#2166): a file that is open already comes to the front instead,
         // and the tool it was opened for runs on it. One still being opened is left to that.
@@ -841,11 +840,7 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Focused;
         }
-        if let Some(pending) = self
-            .pending_opens
-            .iter_mut()
-            .find(|p| p.path.as_deref().is_some_and(|p| craft::platform::open::same_file(std::path::Path::new(p), std::path::Path::new(path), None)))
-        {
+        if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
             if display_override.is_some() {
                 pending.display_override = display_override;
             }
@@ -858,11 +853,7 @@ impl PdfCraftApp {
         // The same file named again while its password is being asked for joins that prompt
         // instead of queuing a second one; a display override, a place to open at or a tool it
         // brings is kept.
-        if let Some(prompt) = self
-            .password_prompt
-            .as_mut()
-            .filter(|p| p.path.as_deref().is_some_and(|p| craft::platform::open::same_file(std::path::Path::new(p), std::path::Path::new(path), None)))
-        {
+        if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
             if display_override.is_some() {
                 prompt.display_override = display_override;
             }
@@ -924,7 +915,7 @@ impl PdfCraftApp {
 
     /// Open one native file with a transient display override, including after a password prompt.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_path_with_display(&mut self, path: &str, layout: canvas::PageLayout, continuous: bool) {
+    pub fn open_path_with_display(&mut self, path: &str, layout: canvas::PageDisplay, continuous: bool) {
         self.open_path_request(path, None, Some((layout, continuous)));
     }
 

@@ -175,11 +175,7 @@ impl DocView {
                 }
                 let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
                 let out = renderer.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
-                TextOutcome {
-                    cut: out.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated),
-                    text: out.text,
-                    error: out.error,
-                }
+                TextOutcome { cut: out.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated), text: out.text, error: out.error }
             });
         }
     }
@@ -209,7 +205,6 @@ impl DocView {
         keep.extend(rest.into_iter().take(MAX_CACHED_TEXT_PAGES));
         self.texts.retain(|p, _| keep.contains(p));
     }
-
 
     /// Device scale of a page raster: exactly the device scale, as a raster at any other scale is
     /// resampled on screen, which blurs every line and glyph (#260).

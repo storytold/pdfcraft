@@ -23,14 +23,13 @@ mod frame;
 mod input;
 mod keys;
 mod links;
-mod prefs;
-mod window;
 pub(crate) mod picks;
+mod prefs;
 pub(crate) mod reload;
 pub mod settings;
+mod window;
 
 pub(crate) use clipboard::{ObjectClipMark, copy_refused, print_refused};
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::same_file;
 pub(crate) use prefs::{MAX_AUTHOR_CHARS, date_text_for_pdf};
 
@@ -79,12 +78,11 @@ impl AppServices {
     /// `intake`.
     pub fn system(ctx: &egui::Context, intake: FileIntake) -> Self {
         let wake = wake_of(ctx);
-        // PLAN: assumed settings::recovery_dir() -> Option<PathBuf>, the data folder's recovery folder (pdf-shell-w9).
         #[cfg(not(target_arch = "wasm32"))]
         {
             let clipboard = Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
             let watch = craft::platform::watch::FileWatch::new(wake.clone());
-            Self::new(wake, clipboard, settings::recovery_dir(), None, intake, watch)
+            Self::new(wake, clipboard, recovery::prepare_platform_recovery_dir(), None, intake, watch)
         }
         // PLAN: assumed clipboard::web_clipboard(&egui::Context) -> Clipboard, the browser's event clipboard (pdf-shell-w17).
         #[cfg(target_arch = "wasm32")]
@@ -208,6 +206,8 @@ impl PdfCraftApp {
             opens: open_worker::queue(&host, wake.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             named_destinations: queue(&host, &wake, "pdfcraft-destinations"),
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_destinations: Vec::new(),
             pinned_jobs: queue(&host, &wake, "pdfcraft-pinned-folders"),
             recent_check: persist::recent_check::RecentCheck::new(queue(&host, &wake, "pdfcraft-recent-check")),
             text_copies: queue(&host, &wake, "pdfcraft-copy-text"),
@@ -232,8 +232,8 @@ impl PdfCraftApp {
             preferences: None,
             shortcuts: None,
             panes: Default::default(),
-            dock: side_panels::default_workspace(),
-            rail_side: Default::default(),
+            dock: side_panels::default_workspace(craft::behavior::DockSide::End),
+            rail_side: craft::behavior::DockSide::End,
             session: Session::new(),
             status_captions_lang: None,
             views: Vec::new(),
@@ -655,9 +655,8 @@ impl PdfCraftApp {
         self.control_logic(ctx);
         self.autosave_tick(ctx, web_time::Instant::now());
         // Reload documents whose files a build rewrote (#431).
-        // PLAN: assumed reload::watch_files(&mut PdfCraftApp, &egui::Context) at crate::platform::reload (pdf-shell-w14).
         #[cfg(not(target_arch = "wasm32"))]
-        crate::platform::reload::watch_files(self, ctx);
+        self.watch_files();
         if self.host_dirty.is_some() {
             // An OCR review not yet accepted or rejected is work the page would lose, too.
             let dirty = self.work_at_risk();
@@ -773,7 +772,6 @@ impl PdfCraftApp {
                 self.window_preferences_frame(&ctx);
                 self.process_pending_edits();
             }
-            palette::show(self, &ctx);
         }
         // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
         dialogs::show(self, ui);

@@ -162,8 +162,11 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .collect::<BTreeSet<u64>>()
                 .len();
             if bad > 0 {
-                let text =
-                    if bad == 1 { tl!("1 file needs attention").to_string() } else { crate::i18n::fmt(tl!("{n} files need attention"), &[("n", &bad.to_string())]) };
+                let text = if bad == 1 {
+                    tl!("1 file needs attention").to_string()
+                } else {
+                    crate::i18n::fmt(tl!("{n} files need attention"), &[("n", &bad.to_string())])
+                };
                 Text::new(text).tone(Tone::Bad).show(ui);
             }
         }
@@ -216,7 +219,8 @@ fn add_files(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 /// The open documents as files to combine: the main part adds every one, the menu one document.
 fn add_open_documents(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let open: Vec<(usize, String)> = app.views.iter().enumerate().filter_map(|(i, _)| crate::canvas::tab_label(app, i).map(|name| (i, name))).collect();
+    let open: Vec<(usize, String)> =
+        app.views.iter().enumerate().filter_map(|(i, _)| crate::canvas::tab_label(app, i).map(|name| (i, name))).collect();
     // `None` is every open document.
     let mut entries: Vec<Entry<Option<usize>>> = vec![Entry::new(None, tl!("All open documents"))];
     entries.extend(open.iter().map(|(i, name)| Entry::new(Some(*i), name.clone())));
@@ -248,7 +252,6 @@ fn skip_prompt(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         lines.push(crate::i18n::fmt(tl!("and {n} more"), &[("n", &more)]));
     }
     let out = Prompt::new(tl!("Leave out files that can't be read?"), tl!("These files can't be read, so they won't be in the combined PDF:"))
-
         .lines(lines.into_iter().map(Into::into))
         .answers([FooterButton::new(tl!("Combine the rest"), DialogRole::Accept), FooterButton::new(tl!("Cancel"), DialogRole::Cancel)])
         .show(ui);

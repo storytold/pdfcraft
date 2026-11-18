@@ -8,9 +8,9 @@ use std::sync::Arc;
 use craft::behavior::kurbo::BezPath;
 use craft::host::queue::{JobQueue, Priority, QueueOptions};
 use craft::host::{Jobs, Wake};
+use craft::pages::ui::PageBody;
 #[cfg(not(target_arch = "wasm32"))]
 use craft::platform::clipboard::Flavor;
-use craft::pages::ui::PageBody;
 use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::Show as _;
 
@@ -80,7 +80,13 @@ impl PagePictures {
 
     /// The pictures on `page`, or `None` while they are being found (the queue's `wake` repaints on the answer).
     // PLAN: the decisions give `get(ctx, host, wake, doc, page)`; the queue needs the host's jobs and the wake only.
-    pub(crate) fn get(&mut self, jobs: &Arc<dyn Jobs>, wake: &Wake, doc: &pdfcraft_engine::Document, page: usize) -> Option<&[pdfcraft_engine::PagePicture]> {
+    pub(crate) fn get(
+        &mut self,
+        jobs: &Arc<dyn Jobs>,
+        wake: &Wake,
+        doc: &pdfcraft_engine::Document,
+        page: usize,
+    ) -> Option<&[pdfcraft_engine::PagePicture]> {
         let key = (page, doc.edit_generation());
         self.poll();
         let known = self.ready.as_ref().is_some_and(|(k, _)| *k == key);
@@ -96,7 +102,13 @@ impl PagePictures {
         self.ready.as_ref().filter(|(k, _)| *k == key).map(|(_, pictures)| pictures.as_slice())
     }
 
-    fn start(&mut self, jobs: &Arc<dyn Jobs>, wake: &Wake, key: PictureKey, work: impl FnOnce() -> Vec<pdfcraft_engine::PagePicture> + Send + 'static) {
+    fn start(
+        &mut self,
+        jobs: &Arc<dyn Jobs>,
+        wake: &Wake,
+        key: PictureKey,
+        work: impl FnOnce() -> Vec<pdfcraft_engine::PagePicture> + Send + 'static,
+    ) {
         let queue = self.queue.get_or_insert_with(|| {
             let mut options = QueueOptions::default();
             // One search at a time: each is a full read of a page. The web has no lanes; `poll` runs the job.

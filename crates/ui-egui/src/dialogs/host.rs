@@ -116,4 +116,3 @@ fn param_ok(app: &mut PdfCraftApp, key: &str) -> Option<DialogFields> {
     let result = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id(key))?;
     result.ok().map(|r| r.fields)
 }
-

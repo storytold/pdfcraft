@@ -41,18 +41,10 @@ fn from_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
 }
 
 impl PdfCraftApp {
-    /// Sets the user's interface theme preference (Light, Dark, or System).
+    /// Sets the user's interface theme preference (Light, Dark, or System); the next frame's
+    /// [`Self::root_env`] carries it.
     pub fn set_theme_preference(&mut self, preference: ModeChoice) {
         self.theme_preference = preference;
-        if let Some(ctx) = self.ctx.clone() {
-            self.sync_theme(&ctx);
-            theme::apply(&ctx, self.theme);
-        } else {
-            self.theme = match preference {
-                ModeChoice::Dark => ThemeKind::Dark,
-                _ => ThemeKind::Light,
-            };
-        }
     }
 
     /// The app-wide reading-colours preference: sets it and applies it to every open document,
@@ -194,10 +186,7 @@ impl PdfCraftApp {
         // PLAN: assumed app field `hotbar_tools: Vec<String>` (chrome-w18)
         let hotbar = settings::Hotbar { tools: Some(self.hotbar_tools.clone()) };
         // Kept only while the preference is on.
-        let session = settings::Session {
-
-            last_session: self.reopen_last_session.then(|| json_text(&self.session_to_save())).flatten(),
-        };
+        let session = settings::Session { last_session: self.reopen_last_session.then(|| json_text(&self.session_to_save())).flatten() };
         PdfCraftSettings { layout, print, behavior, view, comment, signature, dock, recent, hotbar, session }
     }
 
