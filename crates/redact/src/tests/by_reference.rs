@@ -197,6 +197,29 @@ fn the_references_on_the_way_to_a_redacted_form_go_with_it() {
     assert!(!saved_holds(&doc, b"FORMSECRET"));
 }
 
+/// The same with an XObject the redactor doesn't read, with no `/Subtype` or one it doesn't know:
+/// placed under the mark, it goes, and so does the other page's name for it, so the saved file
+/// doesn't hold it.
+#[test]
+fn the_references_on_the_way_to_an_unread_xobject_removed_go_with_it() {
+    for subtype in ["", "/Subtype /PS"] {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /X 5 0 R >> >> >>".to_vec(),
+            stream("", b"q 100 0 0 30 20 240 cm /X Do Q"),
+            b"6 0 R".to_vec(),
+            stream(&format!("/Type /XObject {subtype}"), b"UNREADSECRET"),
+            b"null".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R /Resources << /XObject << /Y 5 0 R >> >> >>".to_vec(),
+            stream("", b""),
+        ]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| r.forms_removed), Ok(1), "{subtype}");
+        assert!(!saved_holds(&doc, b"UNREADSECRET"), "{subtype}");
+    }
+}
+
 /// A redaction mark given its `/Subtype` by reference is a mark, and its own appearance, overlay
 /// text and all, is exempt from the proof's check of what is left under it, as given directly.
 #[test]
