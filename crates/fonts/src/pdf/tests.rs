@@ -2165,3 +2165,28 @@ fn a_dropped_codespace_range_is_reported() {
     assert!(parse_cmap(b"1 begincodespacerange <00> <FFFF> endcodespacerange").2);
     assert!(!parse_cmap(b"2 begincodespacerange <0000> <FFFF> <0000> <FFFF> endcodespacerange").2);
 }
+
+/// #7679: WinAnsiEncoding's unused codes above 040 draw the bullet (ISO 32000-1 Annex D.2, note
+/// 6), and ReportLab writes its bullets at 0x7F. They read as bullets, like the bullet's own
+/// code 0x95; other encodings, `/Differences` and a ToUnicode CMap still decide for themselves.
+#[test]
+fn win_ansi_unused_codes_read_as_bullets() {
+    let read = |entries: Vec<(&str, Object)>, codes: &[u32]| {
+        let mut doc = Document::new_empty();
+        let mut all = vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name("Helvetica"))];
+        all.extend(entries);
+        let f = font(&mut doc, all);
+        let u = unicode_map(&doc, &f, false, &mut Reads::new(&doc, &mut DecodeBudget::new(usize::MAX, 0)));
+        codes.iter().map(|c| u.text(*c).unwrap_or_default().into_owned()).collect::<Vec<_>>()
+    };
+    let unused = [0x7F, 0x81, 0x8D, 0x8F, 0x90, 0x9D, 0x95];
+    assert_eq!(read(vec![("Encoding", Object::name("WinAnsiEncoding"))], &unused), ["•"; 7]);
+    let mut based = Dict::new();
+    based.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    based.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(0x7F), Object::name("A")]));
+    assert_eq!(read(vec![("Encoding", Object::Dict(based))], &[0x7F, 0x81]), ["A", "•"], "/Differences still say otherwise");
+    assert_eq!(read(vec![("Encoding", Object::name("MacRomanEncoding"))], &[0x7F]), [""], "not in MacRoman");
+    assert_eq!(read(vec![], &[0x7F]), [""], "nor in StandardEncoding");
+    // The writer keeps the bullet's own code.
+    assert_eq!(crate::win_ansi_byte('•'), Some(0x95));
+}

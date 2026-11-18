@@ -1673,6 +1673,10 @@ fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str],
     }
 }
 
+/// The codes above 040 (octal) WinAnsiEncoding leaves unused (ISO 32000-1 Annex D.2), which
+/// draw the bullet.
+const WIN_ANSI_UNUSED: [u32; 6] = [0x7F, 0x81, 0x8D, 0x8F, 0x90, 0x9D];
+
 /// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
 /// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
 fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'_>) -> Unicode {
@@ -1713,6 +1717,16 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
         for (code, u) in table.into_iter().flatten().enumerate() {
             if let Some(c) = char::from_u32(*u).filter(|_| *u != 0) {
                 out.encoding.insert(code as u32, c.to_string());
+            }
+        }
+        // ISO 32000-1 Annex D.2, note 6: in WinAnsiEncoding every unused code above 040 (octal)
+        // draws the bullet, as the standard fonts and the renderer draw it. ReportLab writes its
+        // bullets at 0x7F, so read them as bullets too, or they vanish from the editor's text
+        // and its exports (#7679). Only read: `win_ansi_byte` keeps writing a bullet as 0x95,
+        // the code the table gives it. `/Differences`, applied below, still say otherwise.
+        if base_name.as_deref() == Some(b"WinAnsiEncoding") {
+            for code in WIN_ANSI_UNUSED {
+                out.encoding.insert(code, "\u{2022}".to_owned());
             }
         }
         // A font named as Symbol or ZapfDingbats keeps reporting nothing: its names may be as
