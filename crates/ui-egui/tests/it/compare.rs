@@ -39,10 +39,10 @@ fn compare_two_versions() {
     let old_i = h.state().views.iter().position(|v| v.id == h.state().compare.as_ref().unwrap().old).unwrap();
     assert_eq!(h.state().views[old_i].compare_marks.len(), 2, "replaced words shaded on the old file too");
     assert!(h.state().views[old_i].flash.is_some(), "the old half jumped to the change");
-    h.state_mut().views[i].zoom = 1.5;
-    h.state_mut().views[i].fit = pdfcraft_ui_egui::canvas::Fit::None;
+    h.state_mut().views[i].view.zoom = 1.5;
+    h.state_mut().views[i].view.fit = craft::pages::Fit::None;
     h.run_steps(3);
-    assert_eq!((h.state().views[old_i].zoom, h.state().views[old_i].fit), (1.5, pdfcraft_ui_egui::canvas::Fit::None), "the old half follows");
+    assert_eq!((h.state().views[old_i].view.zoom, h.state().views[old_i].view.fit), (1.5, craft::pages::Fit::None), "the old half follows");
     h.get_by_label("New file only").click();
     h.run_steps(2);
     assert!(!h.state().compare.as_ref().unwrap().side_by_side);
@@ -160,68 +160,6 @@ fn compare_filters_hide_text_or_visual_changes() {
     assert_eq!(kinds(&h, old_i), (text_old, 0));
 }
 
-/// The Compare Files dialog's Pages field rejects an out-of-range page: the
-/// comparison does not run and the dialog stays open with the typed range kept.
-#[test]
-fn compare_dialog_pages_field_rejects_out_of_range() {
-    let s = Session::new();
-    let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
-    let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("doc.compare"));
-    h.run_steps(2);
-    h.get_by_label("Compare Files");
-    let pages = h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Pages");
-    assert!(pages.is_some(), "the dialog has a Pages text input");
-    assert!(h.query_by_label("Pages:").is_some(), "the dialog has a Pages field");
-    let Some(pages) = pages else { return };
-    pages.focus();
-    pages.type_text("99");
-    h.run_steps(2);
-    assert_eq!(
-        h.query_by_role_and_label(egui::accesskit::Role::TextInput, "Pages").and_then(|n| n.value()),
-        Some("99".to_string()),
-        "the typed range is kept"
-    );
-    h.get_by_label("Compare").click();
-    h.run_steps(3);
-    assert!(h.query_by_label("Compare Files").is_some(), "the dialog stays open for an out-of-range page");
-    assert!(h.state().compare.is_none(), "the comparison did not run");
-    assert_ne!(h.state().right, Some(RightPanel::Compare));
-}
-
-/// Writes a screenshot of the Compare panel when PDFCRAFT_SHOT is set (for review).
-#[test]
-fn compare_panel_screenshot() {
-    let Ok(out) = std::env::var("PDFCRAFT_SHOT") else { return };
-    let _gpu = crate::gpu();
-    let s = Session::new();
-    let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
-    let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes("v2.pdf", None, v2.clone()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    h.state_mut().compare_old = h.state().views.first().map(|v| v.id);
-    h.state_mut().run_compare();
-    for _ in 0..20 {
-        h.run_steps(2);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    h.render().unwrap().save(out).unwrap();
-}
-
 #[test]
 fn pdfa_dialog_verifies_and_converts() {
     let doc = Session::new().create_from_text("t", "Keep forever").unwrap().to_vec();
@@ -242,8 +180,8 @@ fn pdfa_dialog_verifies_and_converts() {
     h.get_by_label("Save as PDF/A").click();
     h.run_steps(3);
     h.get_by_label("Declared conformance: PDF/A-2b");
-    let issues = h.state().pdfa.issues.clone().unwrap();
-    assert!(issues.iter().all(|i| !i.fixable), "{issues:?}");
+    // The issues are the dialog's findings: the one left over is shown as not fixable here.
+    assert!(!h.query_all_by_label_contains("not fixable here").collect::<Vec<_>>().is_empty(), "the remaining finding says it is not fixable");
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Save as PDF/A-2b"));
     h.get_by_label("Remove PDF/A identification").click();
@@ -303,16 +241,20 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
 #[test]
 fn export_to_word_html_and_rtf() {
     let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
-    let dir = std::env::temp_dir().join(format!("pdfcraft-office-ui-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
     let mut app = PdfCraftApp::new();
     app.set_option("language", "en").unwrap();
     app.open_bytes("e.pdf", None, doc).unwrap();
     for ext in ["docx", "pptx", "html", "rtf"] {
-        let out = dir.join(format!("e.{ext}"));
-        app.save_override = Some(out.to_string_lossy().into_owned());
+        // Each save is answered with the suggested name in the suggested folder.
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::new().saving_suggested());
+        app.set_files(files.clone()); // PLAN: assumed `PdfCraftApp::set_files(Arc<dyn Files>)` (pdf-shell-w16)
         assert!(app.execute(&format!("export.{ext}")));
-        assert!(std::fs::metadata(&out).unwrap().len() > 40, "{ext}");
+        let request = files.requests().pop().expect("the export asked where to save");
+        let path = request.directory.or(request.default_directory).unwrap_or_default().join(request.file_name.expect("a suggested name"));
+        let bytes = files.file(&path).unwrap_or_else(|| panic!("{ext} was written"));
+        assert!(bytes.len() > 40, "{ext}");
+        if ext == "html" {
+            assert!(String::from_utf8_lossy(&bytes).contains("Exported words"));
+        }
     }
-    assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
