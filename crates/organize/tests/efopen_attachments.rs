@@ -37,18 +37,24 @@ fn r6_password_values() -> String {
 
 /// One page in the clear and one attached file encrypted with `/StdCF`, authorised by `/EFOpen`.
 fn efopen_pdf() -> Vec<u8> {
+    efopen_pdf_with("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>", &[])
+}
+
+/// [`efopen_pdf`] with `catalog` as its catalog, and `more` as objects 7, 8…
+fn efopen_pdf_with(catalog: &str, more: &[&str]) -> Vec<u8> {
     let encrypt = format!(
         "<< /Filter /Standard /V 5 /R 6 {} /P -4 /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
         r6_password_values()
     );
-    let objs = [
-        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+    let mut objs = vec![
+        catalog.to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
         "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
         "<< /Type /EmbeddedFile /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream".to_string(),
         encrypt,
     ];
+    objs.extend(more.iter().map(|o| o.to_string()));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -69,6 +75,20 @@ fn efopen_pdf() -> Vec<u8> {
 #[test]
 fn combining_does_not_copy_attachments_held_encrypted() {
     let src = Document::open(Arc::new(efopen_pdf())).unwrap();
+    assert!(src.embedded_files_locked());
+    match combine(&[("efopen.pdf", &src)]) {
+        Err(OrganizeError::Invalid(why)) => assert!(why.contains("password"), "{why}"),
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("an encrypted attachment was copied as the file"),
+    }
+}
+
+#[test]
+fn combining_does_not_copy_attachments_held_encrypted_through_the_tags() {
+    // The attached file is reached only through a structure element's associated files.
+    let catalog = "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 7 0 R /MarkInfo << /Marked true >> >>";
+    let tags = ["<< /Type /StructTreeRoot /K 8 0 R >>", "<< /Type /StructElem /S /Sect /P 7 0 R /AF [4 0 R] >>"];
+    let src = Document::open(Arc::new(efopen_pdf_with(catalog, &tags))).unwrap();
     assert!(src.embedded_files_locked());
     match combine(&[("efopen.pdf", &src)]) {
         Err(OrganizeError::Invalid(why)) => assert!(why.contains("password"), "{why}"),

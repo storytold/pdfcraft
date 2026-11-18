@@ -17,10 +17,19 @@ fn tagged_body(text: &str, mcids: &[i64]) -> String {
 /// marked content 0 and 1 of its second, and a link on its first page tagged by an object
 /// reference. Its role map sends `/Heading` to `heading_role`. `ua`: it claims PDF/UA-1.
 fn doc_tagged(p: &str, lang: &str, heading_role: &str, ua: bool) -> Document {
-    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
-               <rdf:Description rdf:about=\"\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\" pdfuaid:part=\"1\"/></rdf:RDF></x:xmpmeta>";
-    let metadata = if ua { " /Metadata 16 0 R" } else { "" };
-    let b: Vec<String> = vec![
+    open(build(&tagged_objects(p, lang, heading_role, ua.then_some("pdfuaid:part=\"1\"")), "/Root 1 0 R /Info 17 0 R"))
+}
+
+/// [`doc_tagged`]'s objects (object `n` at `n - 1`), its XMP declaring `ua` (the `pdfuaid`
+/// attributes), for a test to change before building.
+fn tagged_objects(p: &str, lang: &str, heading_role: &str, ua: Option<&str>) -> Vec<String> {
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+         <rdf:Description rdf:about=\"\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\" {}/></rdf:RDF></x:xmpmeta>",
+        ua.unwrap_or_default()
+    );
+    let metadata = if ua.is_some() { " /Metadata 16 0 R" } else { "" };
+    vec![
         format!("<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 9 0 R /MarkInfo << /Marked true >> /Lang ({lang}){metadata} >>"), // 1
         "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(),                                         // 2
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> /StructParents 0 /Annots [8 0 R] >>".into(), // 3
@@ -40,8 +49,29 @@ fn doc_tagged(p: &str, lang: &str, heading_role: &str, ua: bool) -> Document {
         format!("<< /Names [(h-{p}) 11 0 R] >>"),                                                                                 // 15
         format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len()),                           // 16
         format!("<< /Title (Part {p}) >>"),                                                                                       // 17
-    ];
-    open(build(&b, "/Root 1 0 R /Info 17 0 R"))
+    ]
+}
+
+/// The PDF/UA identification in `doc`'s XMP metadata, if any.
+fn ua_claim(doc: &Document) -> Option<String> {
+    pdfx_of(doc).xmp.filter(|x| x.contains("pdfuaid"))
+}
+
+/// The combined tree's top-level `Document` element.
+fn document_element(doc: &Document) -> Dict {
+    let root = tree_root(doc).expect("a structure tree");
+    doc.resolve(root.get(b"K").unwrap()).as_dict().cloned().unwrap()
+}
+
+/// Every element of `doc`'s structure tree, depth first.
+fn all_elements(doc: &Document) -> Vec<Dict> {
+    let mut found = Vec::new();
+    let mut stack = vec![document_element(doc)];
+    while let Some(e) = stack.pop() {
+        stack.extend(kids(doc, &e).into_iter().filter(|k| k.contains(b"S")));
+        found.push(e);
+    }
+    found
 }
 
 fn tree_root(doc: &Document) -> Option<Dict> {
@@ -241,5 +271,167 @@ fn combine_of_a_hostile_structure_tree_stays_bounded() {
     let nums = out.resolve(out.resolve(root.get(b"ParentTree").unwrap()).as_dict().unwrap().get(b"Nums").unwrap());
     for entry in nums.as_array().unwrap().chunks(2) {
         assert!(out.resolve(&entry[1]).as_array().is_none_or(|a| a.len() < 16));
+    }
+}
+
+#[test]
+fn combine_with_a_page_listed_twice_claims_no_pdfua() {
+    // Only a page's first copy is tagged: the second carries untagged content, so the result
+    // can't claim PDF/UA, by the Combiner or by grouped runs.
+    let a = doc_tagged("A", "en-US", "H1", true);
+    let listed = full_roundtrip(&combine_selected(&[("a", &a, Some(&[0, 1, 0]))]).unwrap());
+    let runs: [Run<'_>; 2] = [(0, "a", &a, Some(&[0])), (0, "a", &a, Some(&[1, 0]))];
+    let grouped = full_roundtrip(&combine_grouped(&runs).unwrap());
+    for out in [listed, grouped] {
+        assert_eq!(labels(&out), ["A1", "A2", "A1"]);
+        assert_eq!(text(&owner_of_content(&out, 0, 0), b"ID"), "h-A");
+        assert_eq!(owner_of_content(&out, 1, 1).name(b"S"), Some(&b"P"[..]));
+        assert!(!page_dict(&out, 2).contains(b"StructParents"), "the repeat is the untagged copy");
+        assert_eq!(ua_claim(&out), None);
+    }
+    // Each page once, the claim stands.
+    let once = full_roundtrip(&combine_selected(&[("a", &a, Some(&[0, 1]))]).unwrap());
+    assert!(ua_claim(&once).is_some());
+}
+
+#[test]
+fn combine_grouped_claims_pdfua_only_when_each_files_tags_follow_its_pages() {
+    let (a, b) = (doc_tagged("A", "en-US", "H1", true), doc_tagged("B", "en-US", "H1", true));
+    // B's pages come between A's: each file's tags stay together, so A2 is read before B1.
+    let split: [Run<'_>; 3] = [(0, "a", &a, Some(&[0])), (1, "b", &b, None), (0, "a", &a, Some(&[1]))];
+    let out = full_roundtrip(&combine_grouped(&split).unwrap());
+    assert_eq!(labels(&out), ["A1", "B1", "B2", "A2"]);
+    let parts = kids(&out, &document_element(&out));
+    let headings: Vec<String> = parts.iter().map(|p| text(&kids(&out, p)[0], b"ID")).collect();
+    assert_eq!(headings, ["h-A", "h-B"], "the tags are in file order");
+    assert_eq!(ua_claim(&out), None, "the tags no longer follow the pages");
+    // A's runs next to each other: the tags follow the pages, and the claim stands.
+    let together: [Run<'_>; 3] = [(0, "a", &a, Some(&[0])), (0, "a", &a, Some(&[1])), (1, "b", &b, None)];
+    let out = full_roundtrip(&combine_grouped(&together).unwrap());
+    assert_eq!(labels(&out), ["A1", "A2", "B1", "B2"]);
+    assert!(ua_claim(&out).is_some_and(|x| x.contains("<pdfuaid:part>1</pdfuaid:part>")));
+}
+
+#[test]
+fn combine_keeps_the_pdfua_2_revision() {
+    let build_ua = |p: &str, ua: &str| open(build(&tagged_objects(p, "en-US", "H1", Some(ua)), "/Root 1 0 R /Info 17 0 R"));
+    let ua2 = "pdfuaid:part=\"2\" pdfuaid:rev=\"2024\"";
+    let (a, b) = (build_ua("A", ua2), build_ua("B", ua2));
+    let xmp = ua_claim(&combine(&[("a", &a), ("b", &b)]).unwrap()).expect("a PDF/UA-2 claim");
+    assert!(xmp.contains("<pdfuaid:part>2</pdfuaid:part>") && xmp.contains("<pdfuaid:rev>2024</pdfuaid:rev>"), "{xmp}");
+    // Another revision of the part is another claim: the sources don't agree.
+    let c = build_ua("C", "pdfuaid:part=\"2\" pdfuaid:rev=\"2023\"");
+    assert_eq!(ua_claim(&combine(&[("a", &a), ("c", &c)]).unwrap()), None);
+}
+
+#[test]
+fn combine_gives_each_element_its_own_id() {
+    // Two files numbering their IDs the same way: the second's element gets a new ID, the ID
+    // tree names each element by its own, and the table headers that named it follow.
+    let mut objs = tagged_objects("A", "en-US", "H1", Some("pdfuaid:part=\"1\""));
+    objs[11] =
+        "<< /Type /StructElem /S /P /P 10 0 R /Pg 4 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] /A << /O /Table /Headers [(h-A)] >> >>".into();
+    let a = open(build(&objs, "/Root 1 0 R /Info 17 0 R"));
+    let out = full_roundtrip(&combine(&[("a", &a), ("again", &a)]).unwrap());
+    let (first, second) = (owner_of_content(&out, 0, 0), owner_of_content(&out, 2, 0));
+    assert_eq!((text(&first, b"ID"), text(&second, b"ID")), ("h-A".to_string(), "h-A-2".to_string()));
+    let ids = out.resolve(tree_root(&out).unwrap().get(b"IDTree").unwrap()).as_dict().cloned().unwrap();
+    let names = ids.get(b"Names").unwrap().as_array().unwrap().clone();
+    assert_eq!(names.len(), 4);
+    for pair in names.chunks(2) {
+        let id = pair[0].as_string().unwrap().to_text();
+        assert_eq!(text(out.resolve(&pair[1]).as_dict().unwrap(), b"ID"), id, "the ID tree names {id}'s own element");
+    }
+    let headers = |page| {
+        let para = owner_of_content(&out, page, 1);
+        let attrs = out.resolve(para.get(b"A").unwrap()).as_dict().cloned().unwrap();
+        attrs.get(b"Headers").unwrap().as_array().unwrap().iter().map(|h| h.as_string().unwrap().to_text()).collect::<Vec<_>>()
+    };
+    assert_eq!(headers(1), ["h-A"]);
+    assert_eq!(headers(3), ["h-A-2"]);
+}
+
+#[test]
+fn combine_keeps_mark_info_user_properties() {
+    let mut objs = tagged_objects("A", "en-US", "H1", None);
+    objs[0] = "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 9 0 R /MarkInfo << /Marked true /UserProperties true >> /Lang (en-US) >>".into();
+    let a = open(build(&objs, "/Root 1 0 R /Info 17 0 R"));
+    let mark_info = |out: &Document| out.resolve(catalog(out).get(b"MarkInfo").unwrap()).as_dict().cloned().unwrap();
+    let out = full_roundtrip(&combine(&[("b", &doc_tagged("B", "en-US", "H1", false)), ("a", &a)]).unwrap());
+    assert_eq!(mark_info(&out).get(b"UserProperties"), Some(&Object::Bool(true)));
+    // Without it, it isn't added.
+    let out = combine(&[("b", &doc_tagged("B", "en-US", "H1", false))]).unwrap();
+    assert!(!mark_info(&out).contains(b"UserProperties"));
+}
+
+#[test]
+fn combine_shares_one_copy_of_a_value_class_map_entries_share() {
+    // Many class names on one attribute array: copied once, not once per name.
+    let mut objs = tagged_objects("A", "en-US", "H1", None);
+    let classes: String = (0..50).map(|i| format!("/C{i} 18 0 R ")).collect();
+    objs[8] = format!("<< /Type /StructTreeRoot /K 10 0 R /ParentTree 14 0 R /ParentTreeNextKey 3 /ClassMap << {classes}>> /IDTree 15 0 R >>");
+    objs.push("[<< /O /Layout /Placement /Block >> << /O /Layout /SpaceBefore 4 >>]".into()); // 18
+    let a = open(build(&objs, "/Root 1 0 R /Info 17 0 R"));
+    let out = combine(&[("a", &a)]).unwrap();
+    let class_map = out.resolve(tree_root(&out).unwrap().get(b"ClassMap").unwrap()).as_dict().cloned().unwrap();
+    let copies: HashSet<_> = class_map.iter().map(|(_, v)| v.as_ref().expect("a reference to the copy")).collect();
+    assert_eq!(class_map.len(), 50);
+    assert_eq!(copies.len(), 1, "one copy for every name");
+}
+
+#[test]
+fn combine_drops_an_object_reference_to_a_page_left_out() {
+    // A form XObject both pages use; the figure names its rendering on the second page only.
+    let mut objs = tagged_objects("A", "en-US", "H1", None);
+    objs[2] = "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> /XObject << /Fx 18 0 R >> >> /StructParents 0 /Annots [8 0 R] >>".into();
+    objs[3] =
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> /XObject << /Fx 18 0 R >> >> /StructParents 1 >>".into();
+    objs[9] = "<< /Type /StructElem /S /Document /P 9 0 R /K [11 0 R 12 0 R 13 0 R 19 0 R] >>".into();
+    objs.push("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 0 >>\nstream\n\nendstream".into()); // 18
+    objs.push("<< /Type /StructElem /S /Figure /P 10 0 R /Alt (A figure) /K << /Type /OBJR /Obj 18 0 R /Pg 4 0 R >> >>".into()); // 19
+    let a = open(build(&objs, "/Root 1 0 R /Info 17 0 R"));
+    let out = full_roundtrip(&combine_selected(&[("a", &a, Some(&[0]))]).unwrap());
+    let kept: Vec<Vec<u8>> = all_elements(&out).iter().filter_map(|e| e.name(b"S").map(<[u8]>::to_vec)).collect();
+    assert!(kept.contains(&b"Heading".to_vec()));
+    assert!(!kept.contains(&b"Figure".to_vec()), "the figure went with its page: {kept:?}");
+    // The whole file keeps it, with its page.
+    let out = full_roundtrip(&combine(&[("a", &a)]).unwrap());
+    let figure = all_elements(&out).into_iter().find(|e| e.name(b"S") == Some(b"Figure")).expect("the figure");
+    let objr = kids(&out, &figure).pop().unwrap();
+    assert_eq!(objr.get(b"Pg").and_then(Object::as_ref), Some(pages(&out).unwrap()[1].obj));
+}
+
+#[test]
+fn combine_bounds_the_parent_tree_across_pages_and_sources() {
+    // Each page has one piece of content with the highest ID carried: a few entries in the file,
+    // an array of a million entries for each page. The arrays together stay within the budget.
+    const HIGH: i64 = 1 << 20;
+    let mut b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 9 0 R /MarkInfo << /Marked true >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >>".into(),        // 2
+    ];
+    for contents in [6, 13, 14] {
+        b.push(format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R /Resources << /Font << /F1 7 0 R >> >> >>")); // 3, 4, 5
+    }
+    b.push(tagged_body("P1", &[HIGH])); // 6
+    b.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into()); // 7
+    b.push("null".into()); // 8
+    b.push("<< /Type /StructTreeRoot /K [10 0 R 11 0 R 12 0 R] >>".into()); // 9
+    for page in 3..6 {
+        b.push(format!("<< /Type /StructElem /S /P /P 9 0 R /Pg {page} 0 R /K {HIGH} >>")); // 10, 11, 12
+    }
+    b.push(tagged_body("P2", &[HIGH])); // 13
+    b.push(tagged_body("P3", &[HIGH])); // 14
+    let src = open(build(&b, "/Root 1 0 R"));
+    let out = combine(&[("x", &src), ("y", &src)]).unwrap();
+    assert_eq!(labels(&out), ["P1", "P2", "P3", "P1", "P2", "P3"]);
+    let tree = out.resolve(tree_root(&out).unwrap().get(b"ParentTree").unwrap());
+    let nums = out.resolve(tree.as_dict().unwrap().get(b"Nums").unwrap());
+    let slots: usize = nums.as_array().unwrap().chunks(2).map(|e| out.resolve(&e[1]).as_array().map_or(0, |a| a.len())).sum();
+    assert!(slots <= 1 << 22, "{slots} parent-tree entries");
+    // The first source fits; the second's content is past the budget and stays untagged.
+    for page in 0..3 {
+        assert!(page_dict(&out, page).contains(b"StructParents"), "page {page}");
+        assert!(!page_dict(&out, page + 3).contains(b"StructParents"), "page {}", page + 3);
     }
 }

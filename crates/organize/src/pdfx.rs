@@ -90,14 +90,14 @@ impl PrintStandard {
 /// (through `map`, what the pages already brought along), and, for PDF/X, the document
 /// information entries and the XMP metadata that identify it. The output intents are copied from
 /// `src`, so a standard that declares them needs the source document (`None` otherwise).
-/// `ua`: the PDF/UA part (`pdfuaid:part`) the new document still meets, which its XMP metadata
-/// then declares too.
+/// `ua`: the PDF/UA identification (part, and revision when the sources give one) the new
+/// document still meets, which its XMP metadata then declares too.
 pub(crate) fn carry(
     dst: &mut Document,
     src: Option<&Document>,
     standard: &PrintStandard,
     map: HashMap<ObjRef, ObjRef>,
-    ua: Option<&str>,
+    ua: Option<&UaId>,
 ) -> Result<(), OrganizeError> {
     let root = dst.root().ok_or(OrganizeError::NoPageTree)?;
     if let Some(intents) = &standard.intents {
@@ -126,9 +126,9 @@ pub(crate) fn carry(
     Ok(())
 }
 
-/// The XMP packet identifying `doc` as `version` (PDF/X, with its trapping) and as PDF/UA part
-/// `ua`, with its title.
-fn packet(doc: &Document, standard: &PrintStandard, version: Option<&str>, ua: Option<&str>) -> String {
+/// The XMP packet identifying `doc` as `version` (PDF/X, with its trapping) and as `ua` (PDF/UA),
+/// with its title.
+fn packet(doc: &Document, standard: &PrintStandard, version: Option<&str>, ua: Option<&UaId>) -> String {
     let mut props = String::new();
     if let Some(t) = crate::info(doc, "Title").filter(|t| !t.trim().is_empty()) {
         props.push_str(&format!("   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n", esc(&t)));
@@ -142,8 +142,12 @@ fn packet(doc: &Document, standard: &PrintStandard, version: Option<&str>, ua: O
             props.push_str(&format!("   <pdfxid:GTS_PDFXConformance>{}</pdfxid:GTS_PDFXConformance>\n", esc(c)));
         }
     }
-    if let Some(part) = ua {
-        props.push_str(&format!("   <pdfuaid:part>{}</pdfuaid:part>\n", esc(part)));
+    if let Some(ua) = ua {
+        props.push_str(&format!("   <pdfuaid:part>{}</pdfuaid:part>\n", esc(&ua.part)));
+        // PDF/UA-2 identifies the revision too: a part without it is an incomplete claim.
+        if let Some(rev) = &ua.rev {
+            props.push_str(&format!("   <pdfuaid:rev>{}</pdfuaid:rev>\n", esc(rev)));
+        }
     }
     let ua_ns = if ua.is_some() { "\n    xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\"" } else { "" };
     format!(
@@ -181,8 +185,25 @@ fn trapped(v: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// A document's PDF/UA identification (ISO 14289): its part and the revision year of that part
+/// (`pdfuaid:rev`, which PDF/UA-2 requires).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UaId {
+    pub(crate) part: String,
+    pub(crate) rev: Option<String>,
+}
+
+impl UaId {
+    /// What `doc`'s XMP metadata (named by its `catalog`) declares, if it declares a part.
+    pub(crate) fn of(doc: &Document, catalog: &Dict) -> Option<UaId> {
+        let xmp = metadata(doc, catalog)?;
+        let part = xmp_value(&xmp, "pdfuaid:part")?;
+        Some(UaId { part, rev: xmp_value(&xmp, "pdfuaid:rev") })
+    }
+}
+
 /// The catalog's XMP metadata, as text.
-pub(crate) fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
+fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
     match &*doc.resolve(catalog.get(b"Metadata")?) {
         Object::Stream(s) => s.decoded_within(MAX_DECODED).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
@@ -191,7 +212,7 @@ pub(crate) fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
 
 /// A simple XMP property, written as an attribute (`pdfxid:GTS_PDFXVersion="PDF/X-4"`) or as an
 /// element (`<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>`).
-pub(crate) fn xmp_value(xmp: &str, key: &str) -> Option<String> {
+fn xmp_value(xmp: &str, key: &str) -> Option<String> {
     for quote in ['"', '\''] {
         let attr = format!("{key}={quote}");
         if let Some(rest) = xmp.find(&attr).and_then(|i| xmp.get(i + attr.len()..)) {

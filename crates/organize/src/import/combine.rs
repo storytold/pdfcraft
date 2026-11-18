@@ -201,8 +201,13 @@ impl Combiner {
         self.labels = labels;
         self.has_labels = has_labels;
         self.renamed_fields.extend(imported.renamed_fields);
-        let whole = pages.iter().collect::<HashSet<_>>().len() == n;
+        let distinct = pages.iter().collect::<HashSet<_>>().len();
+        let whole = distinct == n;
         self.tags.add(&mut self.out, src, &imported.page_map, &imported.objects, whole)?;
+        if distinct < pages.len() {
+            // A page listed twice is copied twice, but only its first copy is tagged.
+            self.tags.drop_claim();
+        }
         if let Some(first) = imported.pages.first() {
             let outline = source_outline(src, imported.page_map);
             self.marks.push(Mark { title: title.to_string(), page: *first, outline });
@@ -234,8 +239,8 @@ impl Combiner {
         let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, tags, .. } = self;
         let ua = tags.finish(&mut out)?;
         match standard.filter(|_| agreed) {
-            Some(first) => crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects, ua.as_deref())?,
-            None => identify_ua(&mut out, ua.as_deref())?,
+            Some(first) => crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects, ua.as_ref())?,
+            None => identify_ua(&mut out, ua.as_ref())?,
         }
         // Sources often share fonts, images and profiles (or are the same file): store them once.
         let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
@@ -247,9 +252,9 @@ impl Combiner {
     }
 }
 
-/// Without a print standard the sources agree on, the PDF/UA part `ua` the combined tags still
-/// meet (see `tags`), declared in XMP metadata of its own.
-fn identify_ua(out: &mut Document, ua: Option<&str>) -> Result<(), OrganizeError> {
+/// Without a print standard the sources agree on, the PDF/UA identification `ua` the combined tags
+/// still meet (see `tags`), declared in XMP metadata of its own.
+fn identify_ua(out: &mut Document, ua: Option<&crate::pdfx::UaId>) -> Result<(), OrganizeError> {
     match ua {
         Some(_) => crate::pdfx::carry(out, None, &crate::pdfx::PrintStandard::default(), HashMap::new(), ua),
         None => Ok(()),
@@ -315,8 +320,13 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         let imported = import_pages_mapped(&mut out, file.src, &file.pages, at, conflicts)?;
         copies.push(imported.pages.clone());
         renamed_fields.extend(imported.renamed_fields);
-        let whole = file.pages.iter().collect::<HashSet<_>>().len() == crate::page_count(file.src)?;
+        let distinct = file.pages.iter().collect::<HashSet<_>>().len();
+        let whole = distinct == crate::page_count(file.src)?;
         tags.add(&mut out, file.src, &imported.page_map, &imported.objects, whole)?;
+        if distinct < file.pages.len() {
+            // A page listed twice is copied twice, but only its first copy is tagged.
+            tags.drop_claim();
+        }
         if let Some(first) = imported.pages.first() {
             marks.push(Mark { title: file.title.to_string(), page: *first, outline: source_outline(file.src, imported.page_map) });
         }
@@ -335,6 +345,14 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     let mut order: Vec<(ObjRef, Dict)> = Vec::new();
     let mut labels = Vec::new();
     let mut has_labels = false;
+    // A file's tags stay together, in its own order. When another file's run comes between two of
+    // its runs, the tags no longer follow the pages, so the result can't claim a logical reading
+    // order (PDF/UA).
+    let mut runs_of: Vec<usize> = slices.iter().map(|(file, _, _)| *file).collect();
+    runs_of.dedup();
+    if runs_of.iter().collect::<HashSet<_>>().len() < runs_of.len() {
+        tags.drop_claim();
+    }
     for (file, start, len) in slices {
         let end = start.saturating_add(len);
         let at = order.len();
@@ -349,8 +367,8 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     rebuild(&mut out, &order)?;
     let ua = tags.finish(&mut out)?;
     match standard.filter(|_| agreed) {
-        Some((declared, src, objects)) => crate::pdfx::carry(&mut out, Some(src), &declared, objects, ua.as_deref())?,
-        None => identify_ua(&mut out, ua.as_deref())?,
+        Some((declared, src, objects)) => crate::pdfx::carry(&mut out, Some(src), &declared, objects, ua.as_ref())?,
+        None => identify_ua(&mut out, ua.as_ref())?,
     }
     let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
     crate::dedupe::dedupe_resources(&mut out, &all, false);
