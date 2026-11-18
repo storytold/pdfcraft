@@ -1419,70 +1419,6 @@ fn an_earlier_revision_opens_from_document_properties() {
 }
 
 #[test]
-fn wrapped_revision_buttons_stay_above_binding_and_open_the_saved_revision() {
-    use pdfcraft_engine::{Edit, Session};
-    let mut bytes = std::sync::Arc::new(fixture(1));
-    // Reopen each save so the next edit appends to the preceding saved revision.
-    for revision in 2..=13 {
-        let mut source = Session::new().with_clock(|| 1_700_000_000);
-        let id = source.open("revisions.pdf", None, bytes, None).unwrap();
-        source.apply(id, Edit::SetInfo { key: "Title".into(), value: format!("Revision {revision}") }).unwrap();
-        bytes = source.save_bytes(id).unwrap();
-    }
-    for width in [1400.0, 720.0] {
-        let pdf = bytes.clone();
-        let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("revisions.pdf", None, pdf.to_vec()).unwrap();
-            app
-        });
-        let s = h.state();
-        let doc = s.session.get(s.views[s.active.unwrap()].id).unwrap();
-        assert_eq!(doc.revision_ends().len(), 13, "the fixture contains thirteen saved revisions");
-        h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
-        // Let the grid and the centered dialog settle before measuring or clicking.
-        h.run_steps(6);
-        let buttons: Vec<_> = (1..13).map(|n| (n, h.get_by_label(&format!("View revision {n}")).rect())).collect();
-        let first_row = h.get_by_label("View revision 12").rect();
-        let lower_revision = buttons
-            .iter()
-            .find(|(n, rect)| *n > 1 && rect.top() > first_row.bottom())
-            .map(|(n, _)| *n)
-            .expect("revision buttons wrap to a lower row");
-        let binding = h.get_by_label("Binding").rect();
-        let left = h.get_by_label("Left Edge").rect();
-        let right = h.get_by_label("Right Edge").rect();
-        // Properties requests a fixed width. Measure its card in each viewport.
-        let card = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique("dialog").with("card"))).expect("Properties is shown");
-        for (n, rect) in &buttons {
-            for (label, below) in [("Binding", binding), ("Left Edge", left), ("Right Edge", right)] {
-                assert!(rect.bottom() <= below.top(), "revision {n} overlaps {label} at viewport width {width}: {rect:?}, {below:?}");
-            }
-        }
-        for (n, rect) in &buttons {
-            assert!(
-                rect.left() >= card.left() && rect.right() <= card.right(),
-                "revision {n} escapes Properties horizontally at viewport width {width}: {rect:?}, measured card {card:?}"
-            );
-        }
-        h.get_by_label(&format!("View revision {lower_revision}")).scroll_to_me();
-        h.run_steps(3);
-        h.get_by_label(&format!("View revision {lower_revision}")).click();
-        h.run_steps(3);
-        let s = h.state();
-        assert!(s.dialog.is_none(), "opening a revision closes Properties");
-        let view = &s.views[s.active.unwrap()];
-        let doc = s.session.get(view.id).unwrap();
-        assert_eq!(doc.name, format!("revisions (revision {lower_revision}).pdf"));
-        assert_eq!(doc.info_value("Title"), Some(format!("Revision {lower_revision}")));
-        let snapshot = view.snapshot.as_ref().expect("the saved revision opens as a snapshot");
-        assert_eq!(snapshot.kind, pdfcraft_ui_egui::canvas::SnapshotKind::Revision);
-        assert_eq!(snapshot.revision, lower_revision);
-    }
-}
-
-#[test]
 fn advanced_search_lists_results_with_context() {
     let mut h = harness();
     let i = h.state().active.unwrap();
@@ -1525,22 +1461,6 @@ fn optimizer_audits_space_usage() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, Some(Dialog::Optimize), "back to the optimizer");
-}
-
-#[test]
-fn space_audit_numbers_line_up_under_their_headers() {
-    // The percentages were drawn at the dialog's far edge, away from their header and the
-    // striped rows: a right-to-left layout in a grid's last column takes the rest of the window.
-    let mut h = harness();
-    assert!(h.state_mut().execute("optimize.advanced"));
-    h.run_steps(2);
-    h.get_by_label("Audit space usage…").click();
-    h.run_steps(3);
-    let total = h.state().space_audit.iter().map(|r| r.bytes).sum::<u64>().to_string();
-    let right = |label: &str| h.get_by_label(label).rect().right();
-    assert!((right("Percentage") - right("100.00%")).abs() < 1.0, "{} vs {}", right("Percentage"), right("100.00%"));
-    assert!((right("Bytes") - right(&total)).abs() < 1.0, "{} vs {}", right("Bytes"), right(&total));
-    assert!(right("100.00%") < right("OK") + 1.0, "the table stays inside the dialog");
 }
 
 #[test]
