@@ -11,6 +11,22 @@ pub mod folders_ui;
 
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
+fn end_min_layout(rtl: bool) -> egui::Layout {
+    if rtl {
+        egui::Layout::left_to_right(egui::Align::Min)
+    } else {
+        egui::Layout::right_to_left(egui::Align::Min)
+    }
+}
+
+fn end_center_layout(rtl: bool) -> egui::Layout {
+    if rtl {
+        egui::Layout::left_to_right(egui::Align::Center)
+    } else {
+        egui::Layout::right_to_left(egui::Align::Center)
+    }
+}
+
 /// A soft shadow that rises on hover and settles when the card is pressed.
 pub(crate) fn card_lift(ui: &egui::Ui, t: &Tokens, rect: Rect, press: theme::Press) {
     let lift = press.hover * (1.0 - press.down);
@@ -98,7 +114,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 ui.label(egui::RichText::new(tl!("Get help, share feedback and follow development on Discord.")).color(t.text_muted));
                             });
                             // Closed for this run only: the card is back on the next launch.
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            ui.with_layout(end_min_layout(crate::i18n::current().rtl()), |ui| {
                                 if icons::button(ui, "x", 24.0, false, tl!("Close")).clicked() {
                                     app.community_card_closed = true;
                                 }
@@ -154,7 +170,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let mut unpin_tool = None;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Pinned Tools")).font(theme::semibold(17.0)));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(end_center_layout(crate::i18n::current().rtl()), |ui| {
                     if widgets::ghost_button(ui, "pin", tl!("Pin a tool…")).clicked() {
                         app.dialog = Some(crate::Dialog::PinTool);
                     }
@@ -193,7 +209,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
                     if !app.recent.is_empty() {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.with_layout(end_center_layout(crate::i18n::current().rtl()), |ui| {
                             let resp = widgets::ghost_button(ui, "trash-2", tl!("Clear"));
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear Recent Files")));
                             clear = resp.on_hover_text(tl!("Clear Recent Files")).clicked();
@@ -239,9 +255,11 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 } else {
                     press.wash(ui, rect, 8, false);
                 }
+                let rtl = crate::i18n::current().rtl();
                 if hovered {
                     // Remove just this file from the list (#430); the file itself is untouched.
-                    let x_rect = Rect::from_center_size(rect.right_center() - vec2(26.0, 0.0), vec2(28.0, 28.0));
+                    let x_center = if rtl { rect.left_center() + vec2(26.0, 0.0) } else { rect.right_center() - vec2(26.0, 0.0) };
+                    let x_rect = Rect::from_center_size(x_center, vec2(28.0, 28.0));
                     let x = ui.interact(x_rect, ui.scope_id().with(("remove-recent", &r.path)), Sense::click());
                     let label = crate::i18n::fmt(tl!("Remove {name} from Recent"), &[("name", &r.name)]);
                     x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
@@ -254,25 +272,29 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                 }
                 let body = rect.translate(press.offset());
+                let icon_min = if rtl { egui::pos2(body.right() - 34.0, body.top() + 11.0) } else { body.min + vec2(10.0, 11.0) };
                 icons::paint(
                     ui,
-                    Rect::from_min_size(body.min + vec2(10.0, 11.0), vec2(24.0, 24.0)),
+                    Rect::from_min_size(icon_min, vec2(24.0, 24.0)),
                     "file-text",
                     22.0,
                     egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
                 );
-                // Room on the right for the remove button.
+                // Room at the trailing end for the remove button.
+                let (detail_pos, detail_align) =
+                    if rtl { (body.left_center() + vec2(48.0, 0.0), Align2::LEFT_CENTER) } else { (body.right_center() - vec2(48.0, 0.0), Align2::RIGHT_CENTER) };
                 let detail = ui.painter().text(
-                    body.right_center() - vec2(48.0, 0.0),
-                    Align2::RIGHT_CENTER,
+                    detail_pos,
+                    detail_align,
                     format!("{}  ·  {}", crate::i18n::trn(crate::i18n::current(), r.pages as u64, "{n} page", "{n} pages"), human_size(r.size)),
                     theme::regular(12.0),
                     t.text_muted,
                 );
                 // The name and path stop short of the page count; hovering shows the whole path.
-                let width = detail.left() - 16.0 - (body.left() + 46.0);
-                widgets::row_text(ui, body.min + vec2(46.0, 15.0), r.name.as_str(), theme::medium(13.5), t.text, width);
-                widgets::row_text(ui, body.min + vec2(46.0, 32.0), r.path.as_str(), theme::regular(11.0), t.text_faint, width);
+                let (text_x, width) =
+                    if rtl { let x = body.right() - 46.0; (x, x - (detail.right() + 16.0)) } else { let x = body.left() + 46.0; (x, detail.left() - 16.0 - x) };
+                widgets::row_text(ui, egui::pos2(text_x, body.top() + 15.0), r.name.as_str(), theme::medium(13.5), t.text, width);
+                widgets::row_text(ui, egui::pos2(text_x, body.top() + 32.0), r.path.as_str(), theme::regular(11.0), t.text_faint, width);
                 if theme::hand(resp).on_hover_text(&r.path).clicked() {
                     open = Some(r.path.clone());
                 }
