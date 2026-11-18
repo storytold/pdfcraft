@@ -30,7 +30,7 @@ use cryptoki::types::AuthPin;
 use zeroize::Zeroizing;
 
 use crate::der::{self, Tlv};
-use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey, StoreKey};
+use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey, Scheme, StoreKey};
 use crate::{Certificate, DigitalId, SignError};
 
 /// A signing identity on a token: its certificate, the issuers the token itself holds for it, and
@@ -134,10 +134,23 @@ fn env_modules() -> Vec<PathBuf> {
     std::env::split_paths(&value).filter(|p| !p.as_os_str().is_empty()).collect()
 }
 
-/// Module files to try: `PDFCRAFT_PKCS11_MODULES` when it is set (exactly those, for a caller
-/// that knows what it wants), else the middleware the usual issuers and distributions install.
-/// Only files that exist are returned unless the caller named them. Add the modules chosen in
-/// Preferences to the result.
+/// The modules named explicitly by `PDFCRAFT_PKCS11_MODULES`: a launcher's or a user's choice.
+/// Nothing is loaded here; a caller decides when to ask a module for its identities.
+pub fn configured_modules() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for p in env_modules() {
+        let p = p.canonicalize().unwrap_or(p);
+        if p.exists() && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Module files found on this machine: `PDFCRAFT_PKCS11_MODULES` when it is set (exactly those),
+/// else the middleware the usual issuers and distributions install. **A path here is only a
+/// candidate**: loading a PKCS #11 module runs its code in this process, so an interface offers
+/// these for the user to choose, and only the chosen (or explicitly named) modules are loaded.
 pub fn default_modules() -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut push = |p: PathBuf| {
@@ -501,16 +514,19 @@ impl TokenKey {
         let key = find_key(session, &self.key_id, &self.public)?;
         // The flag could not be read while the key was hidden behind the login; now it can.
         let always = self.always_authenticate || attr(session, key, AttributeType::AlwaysAuthenticate) == Some(Attribute::AlwaysAuthenticate(true));
+        let mut context_login = false;
         if always && (self.auth.is_some() || self.protected_path) {
             session.login(UserType::ContextSpecific, self.auth.as_ref())?;
+            context_login = true;
         }
         let available = ctx.get_mechanism_list(slot).unwrap_or_default();
         // A CIE (and some CNS cards) wants the PIN again for every operation even when
-        // `CKA_ALWAYS_AUTHENTICATE` isn't readable. The PIN just proved correct above, so this
-        // asks the card again with a good one and cannot burn an attempt.
+        // `CKA_ALWAYS_AUTHENTICATE` could not be read before the login. The PIN has just proved
+        // correct in the user login above, so this asks the card again with a good one: it can
+        // never spend another PIN attempt, and it is done at most once.
         let raw = match sign_with(session, &self.public, alg, msg, key, &available) {
             Ok(raw) => raw,
-            Err(CryptokiError::Pkcs11(RvError::UserNotLoggedIn, _)) if logged_in => {
+            Err(CryptokiError::Pkcs11(RvError::UserNotLoggedIn, _)) if logged_in && !context_login => {
                 if self.auth.is_none() && !self.protected_path {
                     return Err(SignError::Crypto(describe(&CryptokiError::Pkcs11(RvError::UserNotLoggedIn, cryptoki::context::Function::Sign))));
                 }
@@ -519,10 +535,23 @@ impl TokenKey {
             }
             Err(e) => return Err(e.into()),
         };
-        match &self.public {
-            PublicKey::Rsa { .. } => Ok(raw),
-            PublicKey::P256(_) | PublicKey::P384(_) => ecdsa_der(&self.public, &raw),
-            other => Err(SignError::Unsupported(format!("signing with {} keys on a token", other.describe()))),
+        let signature = match &self.public {
+            PublicKey::Rsa { .. } => raw,
+            PublicKey::P256(_) | PublicKey::P384(_) => ecdsa_der(&self.public, &raw)?,
+            other => return Err(SignError::Unsupported(format!("signing with {} keys on a token", other.describe()))),
+        };
+        // A token can hold a different key under the CKA_ID the certificate names, or answer with
+        // something that is not a signature by that key. Check the result before a PDF carries it.
+        let scheme = if matches!(self.public, PublicKey::Rsa { .. }) { Scheme::RsaPkcs1 } else { Scheme::Ecdsa };
+        match self.public.verify(scheme, alg, &alg.digest(&[msg]), &signature) {
+            Ok(true) => Ok(signature),
+            Ok(false) => Err(SignError::Crypto(
+                "the card's signature does not verify with the certificate's key: the card may hold a different key under the same ID than the certificate names"
+                    .into(),
+            )),
+            // A key PdfCraft cannot check is not a reason to refuse what the card signed.
+            Err(SignError::Unsupported(_)) => Ok(signature),
+            Err(e) => Err(e),
         }
     }
 }

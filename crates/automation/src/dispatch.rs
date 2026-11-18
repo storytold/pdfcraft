@@ -936,7 +936,7 @@ impl Automation {
             }
             "sign_smartcard_ids" => {
                 #[cfg(not(target_arch = "wasm32"))]
-                let (ids, unusable, problems) = {
+                let (modules, ids, unusable, problems) = {
                     let modules = self.pkcs11_modules(&a)?;
                     let listing = pdfcraft_engine::sign::pkcs11::identities(&modules, None);
                     let ids: Vec<Value> = listing
@@ -956,11 +956,19 @@ impl Automation {
                         .iter()
                         .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
                         .collect();
-                    (ids, unusable, listing.problems)
+                    (modules, ids, unusable, listing.problems)
                 };
                 #[cfg(target_arch = "wasm32")]
-                let (ids, unusable, problems): (Vec<Value>, Vec<Value>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
-                json!({ "count": ids.len(), "ids": ids, "unusable": unusable, "problems": problems })
+                let (modules, ids, unusable, problems): (Vec<std::path::PathBuf>, Vec<Value>, Vec<Value>, Vec<String>) =
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                json!({
+                    "count": ids.len(),
+                    "ids": ids,
+                    "unusable": unusable,
+                    "problems": problems,
+                    "modules": modules.iter().map(|m| m.to_string_lossy()).collect::<Vec<_>>(),
+                    "available_modules": pdfcraft_engine::sign::pkcs11::default_modules().iter().map(|m| m.to_string_lossy()).collect::<Vec<_>>(),
+                })
             }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,

@@ -181,7 +181,21 @@ impl Automation {
     /// reading a file.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pkcs11_modules(&self, a: &Args) -> Result<Vec<std::path::PathBuf>> {
-        let Some(value) = a.get("modules") else { return Ok(sign::pkcs11::default_modules()) };
+        // Loading a PKCS #11 module runs its code in this process, so there is no implicit
+        // loading: the call names its modules, or the environment does.
+        let Some(value) = a.get("modules") else {
+            let configured = sign::pkcs11::configured_modules();
+            if configured.is_empty() {
+                let found = sign::pkcs11::default_modules();
+                let hint = if found.is_empty() {
+                    "no module was found on this machine".to_string()
+                } else {
+                    format!("found: {}", found.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))
+                };
+                return Err(bad(format!("no PKCS #11 module configured: pass modules, or set PDFCRAFT_PKCS11_MODULES ({hint})")));
+            }
+            return Ok(configured);
+        };
         let list = value.as_array().ok_or_else(|| bad("modules must be an array of module paths"))?;
         if list.is_empty() {
             return Err(bad("modules must not be empty: name at least one module, or leave it out for the installed ones"));

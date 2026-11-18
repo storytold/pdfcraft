@@ -412,8 +412,9 @@ impl PdfCraftApp {
         }
     }
 
-    /// The PKCS #11 modules to load: the ones chosen in Configure, then the middleware installed
-    /// on the machine.
+    /// The PKCS #11 modules to load: the ones chosen in Configure or named in
+    /// `PDFCRAFT_PKCS11_MODULES`. Loading a module runs its code in this process, so the
+    /// middleware found on the machine is only ever offered, never loaded unasked.
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
     pub(crate) fn token_modules(&self) -> Vec<PathBuf> {
         let mut out: Vec<PathBuf> = Vec::new();
@@ -423,7 +424,7 @@ impl PdfCraftApp {
                 out.push(path);
             }
         }
-        for path in sign::pkcs11::default_modules() {
+        for path in sign::pkcs11::configured_modules() {
             if !out.contains(&path) {
                 out.push(path);
             }

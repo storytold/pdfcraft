@@ -57,7 +57,12 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
 
 - **Cards and USB tokens (PKCS #11).** `pkcs11` loads the card issuer's own middleware at run
   time — bit4id's `libbit4xpki.so` for an Italian CNS, `libcie-pkcs11.so` for a CIE, OpenSC or a
-  PIV vendor's module — and signs through `ExternalKey`, so the key never leaves the card.
+  PIV vendor's module — and signs through `ExternalKey`, so the key never leaves the card. A
+  module is loaded only when the caller names it (`modules`, the chosen paths, or
+  `PDFCRAFT_PKCS11_MODULES`): the paths found on a machine are candidates, because loading a
+  PKCS #11 library runs its code in this process. The token's signature is verified against the
+  certificate's key before it is returned, so a different key under the same `CKA_ID` fails here
+  instead of producing a file that validates as invalid.
   Identities are listed without logging in; a card that hides its certificates until the PIN is
   entered is listed again with it. RSA signs through `CKM_RSA_PKCS` with the `DigestInfo` built
   here (the card's own `CKM_SHA*_RSA_PKCS` when it has no raw PKCS #1), ECDSA through

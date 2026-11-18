@@ -144,6 +144,13 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 
 fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Configure a Digital ID for Signing");
+    // Middleware found on the machine but not chosen yet, collected before the draft borrows
+    // `app`: choosing one is the opt-in that runs its code.
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    let found_modules: Vec<String> = {
+        let chosen = app.token_modules();
+        sign::pkcs11::default_modules().into_iter().filter(|p| !chosen.contains(p)).map(|p| p.to_string_lossy().into_owned()).collect()
+    };
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     let mut go = false;
@@ -152,6 +159,8 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let mut browse = false;
     #[cfg_attr(any(target_arch = "wasm32", target_os = "macos"), allow(unused_mut))]
     let mut module_pick = false;
+    #[cfg_attr(any(target_arch = "wasm32", target_os = "macos"), allow(unused_mut))]
+    let mut use_module: Option<String> = None;
     widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
     widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
     ui.add_space(8.0);
@@ -227,6 +236,20 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 }
             });
         }
+        // Middleware found on the machine, offered rather than loaded: choosing it once is the
+        // opt-in that runs its code, and the choice is remembered.
+        if !found_modules.is_empty() {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tl!("Found on this machine")).small().color(t.text_muted));
+            for path in found_modules.clone() {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&path).small());
+                    if widgets::pill_button(ui, tl!("Use"), false).clicked() {
+                        use_module = Some(path.clone());
+                    }
+                });
+            }
+        }
         if widgets::pill_button(ui, tl!("Choose module…"), false).clicked() {
             module_pick = true;
         }
@@ -290,6 +313,12 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         });
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = use_module {
+        app.choose_pkcs11_module(&path);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = use_module;
     let _ = module_pick;
     close
 }
