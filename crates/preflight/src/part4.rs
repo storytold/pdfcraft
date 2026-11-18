@@ -119,11 +119,11 @@ pub(crate) fn annotation(doc: &Document, dict: &Dict, subtype: Option<&[u8]>, na
 const MAX_FIELD_DEPTH: usize = 32;
 
 /// The field type (`/FT`) of the widget `dict`: its own, or inherited from its parents (ISO 32000-2
-/// 12.7.4.1, Table 226).
+/// 12.7.4.1, Table 226). A null `/FT` is no entry (7.3.9), so it is inherited past.
 fn field_type(doc: &Document, dict: &Dict) -> Option<Vec<u8>> {
     let mut current = dict.clone();
     for _ in 0..MAX_FIELD_DEPTH {
-        if let Some(ft) = current.get(b"FT").map(|f| doc.resolve(f)) {
+        if let Some(ft) = current.get(b"FT").map(|f| doc.resolve(f)).filter(|f| !matches!(**f, Object::Null)) {
             return ft.as_name().map(<[u8]>::to_vec);
         }
         let parent = doc.resolve(current.get(b"Parent")?);
@@ -577,22 +577,32 @@ pub(crate) fn embedded_files_named(doc: &Document, catalog: &Dict, issue: &mut R
 /// 7.11.3, Table 43) and an `/AFRelationship`, its stream names a MIME type (7.11.4, Table 44),
 /// and in PDF/A-4 itself (not 4e or 4f) the file is a PDF/A file of part 1, 2 or 4: it declares
 /// one, and when that is a level [`verify`](crate::verify) checks it is verified at it
-/// ([`embedded_pdfa`]).
-pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &mut Report<'_>) {
-    let streams = spec.get(b"EF").map(|ef| doc.resolve(ef)).and_then(|ef| ef.as_dict().cloned()).unwrap_or_default();
-    let streams: Vec<_> = streams.iter().map(|(_, s)| doc.resolve(s)).collect();
+/// ([`embedded_pdfa`]). An embedded file stream is judged once per verification, however many
+/// file specifications or `/EF` entries name it: `checked` keeps the verdicts.
+pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, checked: &mut EmbeddedChecks, issue: &mut Report<'_>) {
+    let entries = spec.get(b"EF").map(|ef| doc.resolve(ef)).and_then(|ef| ef.as_dict().cloned()).unwrap_or_default();
+    let streams: Vec<_> = entries.iter().map(|(_, s)| (s.as_ref(), doc.resolve(s))).collect();
     if level == Level::A4 {
         let mut not_pdfa = false;
-        for stream in &streams {
-            match &**stream {
-                Object::Stream(s) => match embedded_pdfa(s) {
-                    Embedded::NotPdfa => not_pdfa = true,
-                    Embedded::Declares => {}
-                    Embedded::Fails(label) => {
-                        issue("6.9", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false)
+        for (at, stream) in &streams {
+            let verdict = match &**stream {
+                Object::Stream(s) => match at.and_then(|r| checked.verdicts.get(&r).copied()) {
+                    Some(known) => known,
+                    None => {
+                        let found = embedded_pdfa(s);
+                        if let Some(r) = at {
+                            checked.verdicts.insert(*r, found);
+                        }
+                        found
                     }
                 },
-                _ => not_pdfa = true,
+                _ => Embedded::NotPdfa,
+            };
+            match verdict {
+                Embedded::NotPdfa => not_pdfa = true,
+                Embedded::Declares => {}
+                Embedded::Fails(label) => issue("6.9", "An embedded file declares {} but doesn't conform to it", Some(label.to_owned()), None, false),
+                Embedded::Unchecked => checked.unchecked = true,
             }
         }
         if not_pdfa {
@@ -605,7 +615,7 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &m
     if spec.get(b"F").is_none() || spec.get(b"UF").is_none() {
         issue("6.9", "An embedded file's file specification lacks F or UF", None, None, false);
     }
-    for stream in &streams {
+    for (_, stream) in &streams {
         let Object::Stream(s) = &**stream else { continue };
         if !s.dict.name(b"Subtype").is_some_and(is_mime_type) {
             issue("6.9", "An embedded file has no MIME type (Subtype)", None, None, false);
@@ -616,16 +626,81 @@ pub(crate) fn embedded_file(doc: &Document, level: Level, spec: &Dict, issue: &m
 /// The largest embedded file [`embedded_pdfa`] opens.
 const MAX_EMBEDDED_PDF: usize = 64 << 20;
 
+/// The decoded bytes of embedded files one top-level verification reads in all, the files embedded
+/// in those included: four files of [`MAX_EMBEDDED_PDF`].
+pub(crate) const MAX_EMBEDDED_DECODED: usize = 4 * MAX_EMBEDDED_PDF;
+
+/// How many embedded files one top-level verification reads in all, the files embedded in those
+/// included. Each one read may be verified, within allowances of its own, so this bounds how many
+/// verifications one file can ask for.
+pub(crate) const MAX_EMBEDDED_READ: usize = 32;
+
 /// How many embedded files deep [`embedded_pdfa`] verifies: an embedded file's own embedded files
 /// are judged by their declaration only.
 const MAX_NESTED_VERIFY: usize = 1;
 
+/// The wording for embedded files left unread for lack of allowance, as [`EmbeddedChecks::report`]
+/// gives it.
+pub(crate) const UNCHECKED: &str = "Some embedded files weren't checked: there are more of them than one verification reads";
+
+/// What the embedded files of one top-level verification may still read, shared with the
+/// verifications of those files.
+struct EmbeddedAllowance {
+    bytes: pdfcraft_cos::DecodeBudget,
+    files: usize,
+}
+
+impl EmbeddedAllowance {
+    fn new() -> Self {
+        Self { bytes: pdfcraft_cos::DecodeBudget::new(MAX_EMBEDDED_DECODED, 0), files: MAX_EMBEDDED_READ }
+    }
+}
+
 thread_local! {
     /// How many embedded-file verifications this thread is inside.
     static NESTED_VERIFY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// What the current top-level verification's embedded files may still read.
+    static EMBEDDED_ALLOWANCE: std::cell::RefCell<EmbeddedAllowance> = std::cell::RefCell::new(EmbeddedAllowance::new());
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Embedded files [`embedded_pdfa`] read.
+    pub(crate) static EMBEDDED_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Starts a verification: a top-level one (not that of an embedded file) gets the whole embedded
+/// file allowance afresh.
+pub(crate) fn begin_verification() {
+    if NESTED_VERIFY.with(std::cell::Cell::get) == 0 {
+        EMBEDDED_ALLOWANCE.with(|a| {
+            if let Ok(mut a) = a.try_borrow_mut() {
+                *a = EmbeddedAllowance::new();
+            }
+        });
+    }
+}
+
+/// The embedded file verdicts of one verification, by stream object, and whether an embedded file
+/// was left unread for lack of allowance.
+#[derive(Default)]
+pub(crate) struct EmbeddedChecks {
+    verdicts: std::collections::HashMap<pdfcraft_cos::ObjRef, Embedded>,
+    unchecked: bool,
+}
+
+impl EmbeddedChecks {
+    /// 6.9: says, once, that embedded files went unchecked when one did. Their verdict isn't
+    /// known, so the file doesn't pass.
+    pub(crate) fn report(&self, issue: &mut Report<'_>) {
+        if self.unchecked {
+            issue("6.9", "Some embedded files weren't checked: there are more of them than one verification reads", None, None, false);
+        }
+    }
 }
 
 /// What [`embedded_pdfa`] finds an embedded file to be.
+#[derive(Clone, Copy)]
 enum Embedded {
     /// Not a PDF, or one that declares no level of PDF/A part 1, 2 or 4.
     NotPdfa,
@@ -635,6 +710,9 @@ enum Embedded {
     Declares,
     /// A PDF that declares this level and fails its verification.
     Fails(&'static str),
+    /// Not read, or not verified through, because the top-level verification's embedded files
+    /// reached [`MAX_EMBEDDED_READ`] or [`MAX_EMBEDDED_DECODED`].
+    Unchecked,
 }
 
 /// Leaves one embedded-file verification when dropped.
@@ -646,12 +724,36 @@ impl Drop for NestedGuard {
     }
 }
 
+/// The embedded file `s` decoded, charged to the top-level verification's allowance: `None` when
+/// the allowance can't pay for it, `Some(None)` when it can't be decoded within
+/// [`MAX_EMBEDDED_PDF`].
+fn read_embedded(s: &pdfcraft_cos::Stream) -> Option<Option<Vec<u8>>> {
+    EMBEDDED_ALLOWANCE.with(|a| {
+        // The cell is borrowed only here, and nothing in here reenters it; were it busy, the file
+        // would be left unchecked, not passed.
+        let Ok(mut a) = a.try_borrow_mut() else { return None };
+        if a.files == 0 {
+            return None;
+        }
+        a.files = a.files.saturating_sub(1);
+        #[cfg(test)]
+        EMBEDDED_READ.with(|n| n.set(n.get().saturating_add(1)));
+        let refused = a.bytes.refused();
+        let bytes = a.bytes.decode_within(s, MAX_EMBEDDED_PDF);
+        if a.bytes.refused() > refused {
+            return None;
+        }
+        Some(bytes.ok())
+    })
+}
+
 /// What the embedded file `s` is for PDF/A-4's 6.9: a PDF whose metadata declares PDF/A-1, 2 or 4,
 /// verified at that level where PdfCraft checks it, one embedded file deep. PDF/A-1, 2a and 2u are
 /// judged by their declaration alone.
 fn embedded_pdfa(s: &pdfcraft_cos::Stream) -> Embedded {
-    let Ok(bytes) = s.decoded_within(MAX_EMBEDDED_PDF) else { return Embedded::NotPdfa };
-    let Ok(inner) = Document::open(std::sync::Arc::new(bytes.to_vec())) else { return Embedded::NotPdfa };
+    let Some(bytes) = read_embedded(s) else { return Embedded::Unchecked };
+    let Some(bytes) = bytes else { return Embedded::NotPdfa };
+    let Ok(inner) = Document::open(std::sync::Arc::new(bytes)) else { return Embedded::NotPdfa };
     let Some((part, conformance)) = crate::declared(&inner).pdfa.filter(|(part, _)| matches!(part, 1 | 2 | 4)) else {
         return Embedded::NotPdfa;
     };
@@ -671,7 +773,15 @@ fn embedded_pdfa(s: &pdfcraft_cos::Stream) -> Embedded {
     }
     NESTED_VERIFY.with(|n| n.set(n.get().saturating_add(1)));
     let _guard = NestedGuard;
-    if crate::verify(&inner, level).is_empty() { Embedded::Declares } else { Embedded::Fails(level.label()) }
+    let found = crate::verify(&inner, level);
+    // A file whose only problem is embedded files of its own left unread isn't known to fail.
+    if found.is_empty() {
+        Embedded::Declares
+    } else if found.iter().all(|i| i.pattern == UNCHECKED) {
+        Embedded::Unchecked
+    } else {
+        Embedded::Fails(level.label())
+    }
 }
 
 /// Whether `name` has the shape of a MIME type: a type and a subtype, neither empty, around one `/`.
@@ -839,10 +949,18 @@ fn references(objs: &[Indirect], pages: &[pdfcraft_model::Page]) -> (Vec<Vec<usi
             _ => None,
         };
         for resources in [b"Resources".as_slice(), b"DR"].iter().filter_map(|key| holder?.get(key)) {
-            let resources = match resources {
-                Object::Ref(t) => object(t.num).and_then(Object::as_dict),
-                other => other.as_dict(),
-            };
+            // Through objects that only refer to another, to the resource dictionary itself.
+            let mut resources = resources;
+            for _ in 0..MAX_GROUP_DEPTH {
+                match resources {
+                    Object::Ref(t) => match object(t.num) {
+                        Some(next) => resources = next,
+                        None => break,
+                    },
+                    _ => break,
+                }
+            }
+            let resources = resources.as_dict();
             for map in RESOURCE_MAPS.iter().filter_map(|key| resources?.get(key)?.as_ref()) {
                 // Through objects that only refer to another, to the map itself, each counted.
                 let mut at = map;

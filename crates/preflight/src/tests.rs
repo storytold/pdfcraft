@@ -5,11 +5,19 @@ fn build(objs: &[&str], trailer_extra: &str) -> Document {
 }
 
 fn build_with_header(header: &[u8], objs: &[&str], trailer_extra: &str) -> Document {
+    let objs: Vec<&[u8]> = objs.iter().map(|o| o.as_bytes()).collect();
+    Document::open(std::sync::Arc::new(file_bytes(header, &objs, trailer_extra))).unwrap()
+}
+
+/// A file with the header `header` and the objects `objs`, numbered from 1.
+fn file_bytes(header: &[u8], objs: &[&[u8]], trailer_extra: &str) -> Vec<u8> {
     let mut out = header.to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
@@ -17,7 +25,7 @@ fn build_with_header(header: &[u8], objs: &[&str], trailer_extra: &str) -> Docum
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    Document::open(std::sync::Arc::new(out)).unwrap()
+    out
 }
 
 /// A page with embedded-font-free text, a note without the print flag, a link with a
@@ -2929,4 +2937,82 @@ endstream",
     let mut converted = pdfa.clone();
     let report = convert(&mut converted, Level::A3b).unwrap();
     assert!(!report.remaining.iter().any(|i| i.clause == "6.6.4"), "{:#?}", report.remaining);
+}
+
+/// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`.
+fn pdfa4_file(more: &[Vec<u8>]) -> Vec<u8> {
+    let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+        <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+        xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>4</pdfaid:part><pdfaid:rev>2020</pdfaid:rev>\
+        </rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>";
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len()).into_bytes();
+    let mut objs: Vec<&[u8]> = vec![b"<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", b"<< /Type /Pages /Kids [] /Count 0 >>", &metadata];
+    objs.extend(more.iter().map(Vec::as_slice));
+    file_bytes(b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n", &objs, "")
+}
+
+/// An embedded PDF file stream of `data`, with the stream dictionary entries `filter`.
+fn embedded_stream(filter: &str, data: &[u8]) -> Vec<u8> {
+    let mut out = format!("<< /Type /EmbeddedFile /Subtype /application#2Fpdf {filter} /Length {} >>\nstream\n", data.len()).into_bytes();
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"\nendstream");
+    out
+}
+
+/// A file specification of the embedded file stream object `stream`, which both `/F` and `/UF` of
+/// its `/EF` name.
+fn embedded_spec(stream: usize) -> Vec<u8> {
+    format!("<< /Type /Filespec /F (a.pdf) /UF (a.pdf) /AFRelationship /Data /EF << /F {stream} 0 R /UF {stream} 0 R >> >>").into_bytes()
+}
+
+/// An embedded file that many file specifications name, each through both `/F` and `/UF`, is
+/// read and verified once in a PDF/A-4 verification, and its verdict still reported.
+#[test]
+fn pdfa4_reads_a_shared_embedded_file_once() {
+    // A PDF/A-4 file that fails its verification: data follows `%%EOF`.
+    let inner = [pdfa4_file(&[]), b"junk".to_vec()].concat();
+    let specs = 50;
+    let mut more = vec![embedded_stream("", &inner)];
+    more.extend((0..specs).map(|_| embedded_spec(4)));
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    part4::EMBEDDED_READ.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 1);
+    let failing = found.iter().filter(|i| i.message == "An embedded file declares PDF/A-4 but doesn't conform to it").count();
+    assert_eq!(failing, 1, "{found:#?}");
+    assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
+
+/// A PDF/A-4 verification reads at most [`part4::MAX_EMBEDDED_READ`] embedded files and
+/// [`part4::MAX_EMBEDDED_DECODED`] bytes of them, and says, once, that the rest weren't checked.
+#[test]
+fn pdfa4_embedded_files_share_one_allowance() {
+    let inner = pdfa4_file(&[]);
+    let files = part4::MAX_EMBEDDED_READ + 8;
+    let mut more: Vec<Vec<u8>> = (0..files).map(|_| embedded_stream("", &inner)).collect();
+    more.extend((0..files).map(|i| embedded_spec(4 + i)));
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    for _ in 0..2 {
+        // The allowance is one verification's: the next starts afresh.
+        part4::EMBEDDED_READ.with(|n| n.set(0));
+        let found = verify(&doc, Level::A4);
+        assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), part4::MAX_EMBEDDED_READ);
+        assert_eq!(found.iter().filter(|i| i.clause == "6.9" && i.pattern == part4::UNCHECKED).count(), 1, "{found:#?}");
+    }
+
+    // Decoded bytes: files that each inflate to a little under a quarter of the allowance.
+    use std::io::Write;
+    let size = part4::MAX_EMBEDDED_DECODED / 4 - (1 << 20);
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&vec![0; size]).unwrap();
+    let packed = z.finish().unwrap();
+    let files = 6;
+    let mut more: Vec<Vec<u8>> = (0..files).map(|_| embedded_stream("/Filter /FlateDecode", &packed)).collect();
+    more.extend((0..files).map(|i| embedded_spec(4 + i)));
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    part4::EMBEDDED_READ.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    // Four decode whole, the fifth runs past what is left and spends it, the sixth is refused.
+    assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 6);
+    assert!(found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
 }

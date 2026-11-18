@@ -370,6 +370,23 @@ fn annotations_print_show_and_have_only_a_normal_appearance() {
     reports(&widget("/FT /Tx /AP << /N 7 0 R >> /A << /S /GoTo /D [4 0 R /Fit] >>"), Level::A4, "6.4.1", "widget annotation has an action");
 }
 
+/// A null `/FT` is no entry (ISO 32000-2 7.3.9), so a widget whose `/FT` is null takes its parent's
+/// field type: under a button its normal appearance is a dictionary of appearance states.
+#[test]
+fn a_null_field_type_is_inherited_from_the_parent() {
+    let appearance = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", b"");
+    let button = File {
+        page: "/Annots [6 0 R]".to_owned(),
+        more: vec![
+            o("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /FT null /T (w) /Rect [0 0 10 10] /F 4 /P 4 0 R /AP << /N << /Off 7 0 R >> >> >>"),
+            appearance,
+            o("<< /FT /Btn /T (choice) /Kids [6 0 R] >>"),
+        ],
+        ..with_catalog("/AcroForm << /Fields [8 0 R] >>")
+    };
+    passes(&button, Level::A4);
+}
+
 #[test]
 fn graphics_states_have_no_halftone_origin() {
     let state = |entry: &str| File {
@@ -1030,6 +1047,11 @@ fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
     assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("<< /P 12 0 R >>"), form(rgb), o("11 0 R")]), none);
     // A name map that is itself reached through an alias (10 stands for 12, which names the form /P).
     assert_eq!(two("/XObject 10 0 R", "/P Do", vec![o("12 0 R"), form(rgb), o("<< /P 11 0 R >>")]), none);
+    // A resource dictionary that is reached through an alias (form 10's /Resources is 12, which
+    // stands for 13, whose /XObject map 14 names the form /P).
+    let held = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources 12 0 R", b"/P Do");
+    let aliased = vec![held, form(rgb), o("13 0 R"), o("<< /XObject 14 0 R >>"), o("<< /P 11 0 R >>")];
+    assert_eq!(two("/XObject << /X 10 0 R >>", "/X Do", aliased), none);
     // A name map's /P that is a dictionary: a shading pattern whose shading paints DeviceRGB.
     let shading = vec![
         o("<< /P 11 0 R >>"),
