@@ -33,8 +33,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions};
 
 use support::bytes;
 use support::fixture::{
-    ALL_SAVES, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, FLAG_READONLY, Save, annot_entries, blank, blank_with_indirect_annots, dict_of, name_of,
-    num, nums, page_object_numbers, pdf, save_and_reopen, str_of,
+    ALL_SAVES, FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, FLAG_READONLY, Save, annot_entries, blank, blank_with_indirect_annots, dict_of,
+    name_of, num, nums, page_object_numbers, pdf, save_and_reopen, str_of,
 };
 
 /// A deterministic `/M` date and `/NM` id, so nothing here depends on the clock.
@@ -48,7 +48,7 @@ fn ann(page: usize, shape: Shape, contents: &str) -> NewAnnotation {
 }
 
 fn styled(page: usize, shape: Shape, contents: &str, color: [f64; 3], opacity: f64, width: f64, fill: Option<[f64; 3]>) -> NewAnnotation {
-    NewAnnotation { page, shape, style: Style { color, opacity, width, fill }, contents: contents.into(), author: "Ada".into() }
+    NewAnnotation { page, shape, style: Style { color, opacity, width, fill, ..Style::default() }, contents: contents.into(), author: "Ada".into() }
 }
 
 /// The dictionary of the `k`-th `/Annots` entry of a page.
@@ -658,8 +658,9 @@ fn reply_threads_and_the_delete_cascade_survive_every_save_path() {
         assert_eq!(str_of(&reopened, &st, b"State").as_deref(), Some("Accepted"), "{path:?}");
         assert_eq!(str_of(&reopened, &st, b"StateModel").as_deref(), Some("Review"), "{path:?}");
         assert_eq!(str_of(&reopened, &st, b"Subj").as_deref(), Some("Status"), "{path:?}");
-        // Replies are printed but keep the icon flags of a comment; no Hidden bit here.
-        assert_eq!(st.int(b"F"), Some(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE), "{path:?}");
+        // Review-state records are hidden; ordinary text replies retain their visible comment flags.
+        assert_eq!(st.int(b"F"), Some(FLAG_HIDDEN | FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE), "{path:?}");
+        assert_eq!(annot_at(&reopened, 0, 2, path).int(b"F"), Some(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE), "{path:?}: ordinary reply");
         let listed = summaries(&reopened);
         assert_eq!(listed.iter().filter(|s| s.in_reply_to.as_deref() == Some("p1")).count(), 2, "{path:?}: both replies name the parent's /NM");
         assert_eq!(listed.iter().filter(|s| s.state.as_deref() == Some("Accepted")).count(), 1, "{path:?}");
@@ -714,7 +715,7 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
         &mut doc,
         0,
         [120.0, 700.0, 240.0, 720.0],
-        &links::LinkAction::Page(2),
+        &links::LinkAction::Page { page: 2, zoom: links::LinkZoom::FitPage },
         &links::LinkStyle { visible: true, width: 2.0, dashed: true, ..Default::default() },
     )
     .expect("links to page 3");
@@ -735,7 +736,7 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
             .into_iter()
             .map(|l| {
                 let a = match l.action {
-                    links::LinkAction::Page(p) => format!("page {p}"),
+                    links::LinkAction::Page { page: p, zoom: _ } => format!("page {p}"),
                     links::LinkAction::Uri(u) => u,
                     links::LinkAction::Other(o) => format!("other:{o}"),
                 };
@@ -770,7 +771,14 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
 fn removing_all_links_keeps_comments() {
     let mut doc = blank(2);
     add_annotation(&mut doc, &ann(0, Shape::Note { at: [50.0, 700.0], icon: NoteIcon::Help }, "note"), &meta("n")).expect("adds");
-    links::add(&mut doc, 0, [200.0, 700.0, 300.0, 715.0], &links::LinkAction::Page(0), &links::LinkStyle::default()).expect("links");
+    links::add(
+        &mut doc,
+        0,
+        [200.0, 700.0, 300.0, 715.0],
+        &links::LinkAction::Page { page: 0, zoom: links::LinkZoom::FitPage },
+        &links::LinkStyle::default(),
+    )
+    .expect("links");
     let removed = links::remove_all(&mut doc, None).expect("removes all links");
     assert_eq!(removed, 1);
 
@@ -980,7 +988,7 @@ fn a_full_rewrite_into_object_streams_describes_the_same_comments_as_a_plain_tab
     assert_eq!(summaries(&plain).len(), summaries(&packed).len());
 
     // The plain-table output is bigger here: object streams compress, which is the point of them.
-    let opts = SaveOptions { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false };
+    let opts = SaveOptions { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None };
     let packed_bytes = pdfcraft_cos::write_full(&doc, &opts).expect("writes");
     assert!(
         packed_bytes.len() < pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..opts }).expect("writes").len(),
