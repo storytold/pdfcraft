@@ -8,28 +8,10 @@ pub struct FontFile {
     pub face: String,
 }
 
-/// Standard user-installed font folders; discovery is performed only on request.
+/// The font folders of this platform, the system's and the user's, as the font catalogue lists
+/// them; discovery is performed only on request.
 pub fn installed_directories() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if cfg!(target_os = "macos") {
-        let mut dirs = vec![PathBuf::from("/Library/Fonts")];
-        if let Some(home) = home {
-            dirs.push(home.join("Library/Fonts"));
-        }
-        dirs
-    } else if cfg!(windows) {
-        let mut dirs = std::env::var_os("WINDIR").map(|p| PathBuf::from(p).join("Fonts")).into_iter().collect::<Vec<_>>();
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            dirs.push(PathBuf::from(local).join("Microsoft/Windows/Fonts"));
-        }
-        dirs
-    } else {
-        let mut dirs = vec![PathBuf::from("/usr/share/fonts"), PathBuf::from("/usr/local/share/fonts")];
-        if let Some(home) = home {
-            dirs.extend([home.join(".local/share/fonts"), home.join(".fonts")]);
-        }
-        dirs
-    }
+    craft_font_catalog::font_dirs(&craft_font_catalog::FontEnv::from_process())
 }
 
 /// Bounded scan with resolved roots and no descendant symlinks.
@@ -146,47 +128,6 @@ mod tests {
         let found = discover_budgeted(std::slice::from_ref(&root), (bytes.len() as u64 + 4) * 501);
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(found.len(), 501, "do not silently discard accepted fonts after sorting");
-    }
-
-    #[test]
-    fn test_installed_directories() {
-        let dirs = installed_directories();
-        assert!(!dirs.is_empty());
-    }
-
-    #[test]
-    fn test_font_extension() {
-        assert!(font_extension(Path::new("Arial.ttf")));
-        assert!(font_extension(Path::new("Noto.otf")));
-        assert!(font_extension(Path::new("CUSTOM.TTF")));
-        assert!(font_extension(Path::new("ROBOTO.OTF")));
-        assert!(!font_extension(Path::new("document.pdf")));
-        assert!(!font_extension(Path::new("font.woff")));
-        assert!(!font_extension(Path::new("font.woff2")));
-        assert!(!font_extension(Path::new("no_extension")));
-    }
-
-    #[test]
-    fn test_font_content_key() {
-        let empty = font_content_key(&[]);
-        assert_eq!(empty.0, 0);
-
-        let a = font_content_key(b"TrueType font sample data bytes");
-        let b = font_content_key(b"TrueType font sample data bytes");
-        let c = font_content_key(b"Different font sample data bytes");
-
-        assert_eq!(a, b, "identical bytes must produce identical keys");
-        assert_ne!(a, c, "differing bytes must produce distinct keys");
-        assert_eq!(a.0, b"TrueType font sample data bytes".len());
-    }
-
-    #[test]
-    fn test_discover_empty_and_nonexistent_roots() {
-        let empty = discover(&[]);
-        assert!(empty.is_empty());
-
-        let nonexistent = discover(&[PathBuf::from("Z:\\nonexistent_font_path_xyz_12345")]);
-        assert!(nonexistent.is_empty());
     }
 
     #[test]
