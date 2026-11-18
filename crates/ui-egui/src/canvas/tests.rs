@@ -326,10 +326,7 @@ fn presenter_frame_animating(ctx: &egui::Context, v: &mut DocView, info: &DocInf
         let painter = ui.ctx().layer_painter(egui::LayerId::background());
         let at = presenter::PresentAt { current: v.view.current, display: v.view.display, rotation: v.view.rotation };
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(900.0, 400.0));
-        // PLAN: assumed `PageBody::new(rect, pages, view, pass)` (pdf-canvas-w1: the struct is non_exhaustive and has no constructor)
-        let view = craft::behavior::CanvasView::new(rect, Default::default(), 1.0);
-        let body = PageBody::new(rect, shown, view, None);
-        let asked = presenter::frame(&mut v.session.presenter, &body, at, info, &painter, now, animates, None);
+        let asked = presenter::frame(&mut v.session.presenter, presenter::Shown { pages: shown, rect }, at, info, &painter, now, animates, None);
         // The page view takes the turn on its next pass: one row on, a spread in two-page view.
         if let Some(forward) = asked.step {
             v.view.step(forward);

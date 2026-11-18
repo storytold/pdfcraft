@@ -13,7 +13,7 @@
 
 use craft::keymap::{Chord, Key};
 use craft::pages::PageDisplay;
-use craft::pages::ui::{PageBody, PlacedPage};
+use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::ToolKey;
 use craft::ui::primitives::textures::{CachedTexture, TextureState};
 use craft::ui::runtime::frame::request_repaint_after;
@@ -194,9 +194,16 @@ fn drawn(p: &PlacedPage) -> bool {
 /// the current page's transition, and report a page whose display time is up. `animates` is the
 /// Animation effects preference as it applies now. A frame applies only the state of its own pass:
 /// a second pass in one frame sees the same clock and changes nothing twice.
+/// What the presenter frame reads of the page body: the placed pages and the body's rect.
+#[derive(Clone, Copy)]
+pub(super) struct Shown<'a> {
+    pub pages: &'a [PlacedPage],
+    pub rect: Rect,
+}
+
 pub(super) fn frame(
     presenter: &mut Presenter,
-    body: &PageBody<'_>,
+    body: Shown<'_>,
     at: PresentAt,
     info: &DocInfo,
     painter: &Painter,
