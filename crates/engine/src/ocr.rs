@@ -15,14 +15,21 @@ use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{
-    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
+    ConfidenceBand, DETECTION_MODEL, Line, MergeStrategy, ModelProfile, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
     StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
 };
 
 use crate::{DocId, Edit, EditError, Session};
 
 pub mod dictionary;
+mod editable_fonts;
+#[cfg(test)]
+mod editable_nfd;
 pub(crate) mod layer;
+
+/// Languages offered by the OCR interface and tools. The built-in ocrs model remains
+/// English-only; Standard Turkish needs Tesseract with `tur`, checked at job start.
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("tr", "Turkish")];
 
 /// Bound recognition/review inputs before cloning or planning glyphs.
 pub fn validate_ocr_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>) -> Result<usize, String> {
@@ -31,7 +38,8 @@ pub fn validate_ocr_words<'a>(words: impl IntoIterator<Item = &'a PlacedWord>) -
 
 /// Which recognition engine to use. The default is ocrs, the pure-Rust engine; "Automatic" is
 /// an ensemble — ocrs reading first, Tesseract as a second opinion, merged per the strategy —
-/// when both are available.
+/// when both are available. Turkish always uses Tesseract alone, because the built-in model
+/// cannot preserve its letters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum EngineChoice {
     /// The pure-Rust ocrs engine (the default).
@@ -108,8 +116,10 @@ impl OutputMode {
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`LANGUAGES`]. Standard Turkish requires Tesseract with `tur` data.
     pub language: String,
+    /// Explicit model selection; legacy settings keep the Standard profile.
+    pub model_profile: ModelProfile,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
     /// also has text, #1028) and only the words that aren't already there are added.
@@ -195,6 +205,7 @@ impl Default for OcrSettings {
         OcrSettings {
             dpi: 300.0,
             language: "en".into(),
+            model_profile: ModelProfile::Standard,
             skip_text_pages: true,
             native_text_only: false,
             skip_text_files: false,
@@ -254,6 +265,9 @@ pub struct Recognizers {
     pub secondary: Option<Arc<dyn Recognizer>>,
 }
 
+mod word_candidates;
+pub use pdfcraft_ocr::WordCandidate;
+
 struct EngineCache {
     ocrs: Option<Arc<dyn Recognizer>>,
 }
@@ -275,6 +289,26 @@ fn ocrs_loaded() -> bool {
     ENGINES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|c| c.ocrs.is_some())
 }
 
+/// Language data a completed program probe reported. Keep this small snapshot so UI
+/// queries never call `languages()` or `model_profiles()`, which may refresh a process cache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct LanguageSupport {
+    english: bool,
+    turkish: bool,
+    turkish_extended: bool,
+}
+
+impl LanguageSupport {
+    fn for_recognizer(recognizer: &dyn Recognizer) -> Self {
+        let languages = recognizer.languages();
+        Self {
+            english: languages.iter().any(|(code, _)| code.eq_ignore_ascii_case("eng") || code.eq_ignore_ascii_case("en")),
+            turkish: languages.iter().any(|(code, _)| pdfcraft_ocr::is_turkish_language(code)),
+            turkish_extended: recognizer.model_profiles().contains(&ModelProfile::TurkishExtended),
+        }
+    }
+}
+
 /// How long a negative engine probe (no program there) is remembered. A short TTL, not
 /// forever: a tesseract installed while the app runs is found by the next job, without a
 /// restart. An engine that was found is remembered for the session.
@@ -287,6 +321,7 @@ const NEGATIVE_TTL: Duration = Duration::from_secs(30);
 struct CachedTesseract {
     key: Option<String>,
     found: Option<Arc<dyn Recognizer>>,
+    languages: LanguageSupport,
     at: Instant,
 }
 
@@ -317,7 +352,7 @@ static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// [`tesseract_engine_now`].
 #[cfg(not(target_arch = "wasm32"))]
 fn tesseract_engine(configured: Option<&str>) -> Option<Arc<dyn Recognizer>> {
-    if let Cached::Fresh(found) = cached_tesseract(configured) {
+    if let Cached::Fresh(found, _) = cached_tesseract(configured) {
         return found;
     }
     let key = configured.map(str::to_string);
@@ -326,16 +361,17 @@ fn tesseract_engine(configured: Option<&str>) -> Option<Arc<dyn Recognizer>> {
         Some(path) => pdfcraft_ocr::tesseract::TesseractCli::at(std::path::PathBuf::from(path)).map(|t| Arc::new(t) as Arc<dyn Recognizer>),
         None => pdfcraft_ocr::tesseract::TesseractCli::find().map(|t| Arc::new(t) as Arc<dyn Recognizer>),
     };
-    *TESSERACT_PROBE.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedTesseract { key, found: found.clone(), at: Instant::now() });
+    let languages = found.as_ref().map_or_else(LanguageSupport::default, |r| LanguageSupport::for_recognizer(r.as_ref()));
+    *TESSERACT_PROBE.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedTesseract { key, found: found.clone(), languages, at: Instant::now() });
     found
 }
 
 /// What the UI may know about the Tesseract probe without waiting for it.
 #[cfg(not(target_arch = "wasm32"))]
 enum Probe {
-    /// An answer: the engine, or `None` when there is none. It may be an old one that a
-    /// background probe is refreshing.
-    Known(Option<Arc<dyn Recognizer>>),
+    /// An answer: the found engine's installed language data, or `None` when there is no
+    /// engine. It may be an old answer that a background probe is refreshing.
+    Known(Option<LanguageSupport>),
     /// No answer yet: the first background probe is running (or could not be started).
     Pending,
 }
@@ -344,9 +380,9 @@ enum Probe {
 #[cfg(not(target_arch = "wasm32"))]
 enum Cached {
     /// A usable answer (see [`probe_fresh`]).
-    Fresh(Option<Arc<dyn Recognizer>>),
+    Fresh(Option<Arc<dyn Recognizer>>, LanguageSupport),
     /// A failed probe older than [`NEGATIVE_TTL`]: still the best known answer, but due again.
-    Stale(Option<Arc<dyn Recognizer>>),
+    Stale(Option<Arc<dyn Recognizer>>, LanguageSupport),
     /// Nothing for this location.
     Missing,
 }
@@ -358,8 +394,8 @@ enum Cached {
 #[cfg(not(target_arch = "wasm32"))]
 fn tesseract_engine_now(configured: Option<&str>) -> Probe {
     let known = match cached_tesseract(configured) {
-        Cached::Fresh(found) => return Probe::Known(found),
-        Cached::Stale(found) => Some(found),
+        Cached::Fresh(found, languages) => return Probe::Known(found.map(|_| languages)),
+        Cached::Stale(found, languages) => Some(found.map(|_| languages)),
         Cached::Missing => None,
     };
     if !PROBING.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -401,9 +437,9 @@ fn cache_lookup(slot: Option<&CachedTesseract>, configured: Option<&str>, now: I
     match slot {
         Some(c) if c.key.as_deref() == configured => {
             if probe_fresh(c.found.is_some(), c.at, now) {
-                Cached::Fresh(c.found.clone())
+                Cached::Fresh(c.found.clone(), c.languages)
             } else {
-                Cached::Stale(c.found.clone())
+                Cached::Stale(c.found.clone(), c.languages)
             }
         }
         _ => Cached::Missing,
@@ -536,6 +572,11 @@ fn configured_tesseract(settings: &OcrSettings) -> Option<String> {
 /// asks for. "Automatic" is an ensemble when both engines are available; a named engine that
 /// cannot start fails with its cause named.
 pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
+    validate_model_profile(settings)?;
+    let turkish = pdfcraft_ocr::is_turkish_language(&settings.language);
+    if turkish && settings.engine == EngineChoice::Ocrs {
+        return Err(turkish_ocrs_unsupported());
+    }
     // The Tesseract probe (a `--list-langs` process) runs before any static mutex is taken, so
     // recognition on other threads is never blocked behind someone's discovery. A job that
     // names its engines never starts it: only Tesseract and Automatic read anything from it,
@@ -543,6 +584,15 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
     let configured = configured_tesseract(settings);
     let tesseract =
         if matches!(settings.engine, EngineChoice::Tesseract | EngineChoice::Auto) { tesseract_engine(configured.as_deref()) } else { None };
+    let tesseract_languages = tesseract.as_ref().map(|r| LanguageSupport::for_recognizer(r.as_ref())).ok_or_else(tesseract_unavailable);
+    if turkish {
+        if let Some(why) = unavailable_with(settings, false, tesseract_languages) {
+            return Err(why);
+        }
+        let primary = tesseract.ok_or_else(|| turkish_tesseract_required(tesseract_unavailable()))?;
+        // Do not merge an English-only ocrs reading into the explicitly Turkish output.
+        return Ok(Recognizers { primary, secondary: None });
+    }
     let mut slot = ENGINES.lock().unwrap_or_else(|e| e.into_inner());
     let cache = slot.get_or_insert_with(|| EngineCache { ocrs: None });
     if cache.ocrs.is_none() {
@@ -550,6 +600,12 @@ pub fn recognizers(settings: &OcrSettings) -> Result<Recognizers, String> {
         cache.ocrs = pdfcraft_ocr::OcrsRecognizer::find().ok().map(|r| Arc::new(r) as Arc<dyn Recognizer>);
     }
     let ocrs = cache.ocrs.clone();
+    if let Some(why) = unavailable_with(settings, ocrs.is_some(), tesseract_languages.clone()) {
+        return Err(why);
+    }
+    // An Automatic English run may still use ocrs alone, but must never add a secondary
+    // that cannot read the chosen language (for example a Turkish-only installation).
+    let tesseract = tesseract.filter(|_| !english_data_required(&settings.language) || tesseract_languages.is_ok_and(|languages| languages.english));
     match settings.engine {
         EngineChoice::Ocrs => Ok(Recognizers { primary: ocrs.ok_or_else(models_missing)?, secondary: None }),
         EngineChoice::Tesseract => Ok(Recognizers { primary: tesseract.ok_or_else(tesseract_unavailable)?, secondary: None }),
@@ -599,26 +655,200 @@ pub fn available() -> bool {
 /// first Tesseract probe lands the choice reads as "still checking" (see
 /// [`engine_probe_running`], to ask for another frame meanwhile).
 pub fn engine_unavailable_reason(engine: EngineChoice) -> Option<String> {
+    settings_unavailable_reason(&OcrSettings { engine, ..Default::default() })
+}
+
+/// Whether these settings can recognize text, without loading the ocrs model weights or
+/// rendering a page. This waits for the cached Tesseract probe when the choice needs it;
+/// automation and worker threads may call it, but the UI uses [`settings_unavailable_reason`].
+/// The configured program and language are judged exactly as [`recognizers`] judges them.
+pub fn preflight(settings: &OcrSettings) -> Result<(), String> {
+    validate_model_profile(settings)?;
+    if pdfcraft_ocr::is_turkish_language(&settings.language) && settings.engine == EngineChoice::Ocrs {
+        return Err(turkish_ocrs_unsupported());
+    }
+    let tesseract = if matches!(settings.engine, EngineChoice::Auto | EngineChoice::Tesseract) {
+        let configured = configured_tesseract(settings);
+        tesseract_engine(configured.as_deref()).map(|r| LanguageSupport::for_recognizer(r.as_ref())).ok_or_else(tesseract_unavailable)
+    } else {
+        Err(tesseract_unavailable())
+    };
+    unavailable_with(settings, models_installed_cached(), tesseract).map_or(Ok(()), Err)
+}
+
+/// A settings-aware UI preflight. Returns a reason while a required program is still being
+/// checked, when its language data is missing, or when the selected engine cannot read the
+/// language. Never waits for a process and never loads model weights. A cached language
+/// snapshot keeps even an empty `--list-langs` answer from refreshing on the UI thread.
+/// Call [`engine_probe_running`] to request another frame while the background probe runs.
+pub fn settings_unavailable_reason(settings: &OcrSettings) -> Option<String> {
+    if let Err(why) = validate_model_profile(settings) {
+        return Some(why);
+    }
+    if pdfcraft_ocr::is_turkish_language(&settings.language) && settings.engine == EngineChoice::Ocrs {
+        return Some(turkish_ocrs_unsupported());
+    }
     let ocrs = models_installed_cached();
     #[cfg(not(target_arch = "wasm32"))]
-    let tesseract = {
-        let configured = std::env::var_os("PDFCRAFT_TESSERACT").map(|v| v.to_string_lossy().into_owned());
+    let tesseract = if matches!(settings.engine, EngineChoice::Auto | EngineChoice::Tesseract) {
+        let configured = configured_tesseract(settings);
         match tesseract_engine_now(configured.as_deref()) {
-            Probe::Known(Some(_)) => Ok(()),
+            Probe::Known(Some(languages)) => Ok(languages),
             Probe::Known(None) => Err(tesseract_unavailable()),
             Probe::Pending => Err(tesseract_checking()),
         }
+    } else {
+        Err(tesseract_unavailable())
     };
     #[cfg(target_arch = "wasm32")]
-    let tesseract: Result<(), String> = Err(tesseract_unavailable());
-    match engine {
+    let tesseract: Result<LanguageSupport, String> = Err(tesseract_unavailable());
+    unavailable_with(settings, ocrs, tesseract)
+}
+
+/// Shared decision for jobs, blocking tools and non-blocking UI probes. `Ok` means a
+/// Tesseract program is present; its language snapshot decides whether it can read the job.
+fn unavailable_with(settings: &OcrSettings, ocrs: bool, tesseract: Result<LanguageSupport, String>) -> Option<String> {
+    if let Err(why) = validate_model_profile(settings) {
+        return Some(why);
+    }
+    if pdfcraft_ocr::is_turkish_language(&settings.language) {
+        return match settings.engine {
+            EngineChoice::Ocrs => Some(turkish_ocrs_unsupported()),
+            EngineChoice::Tesseract | EngineChoice::Auto => match tesseract {
+                Ok(languages) if settings.model_profile == ModelProfile::TurkishExtended && languages.turkish_extended => None,
+                Ok(_) if settings.model_profile == ModelProfile::TurkishExtended => Some(extended_model_missing(settings)),
+                Ok(languages) if languages.turkish => None,
+                Ok(_) => Some(turkish_model_missing()),
+                Err(why) if settings.model_profile == ModelProfile::TurkishExtended => Some(format!("{}: {why}", extended_model_missing(settings))),
+                Err(why) => Some(turkish_tesseract_required(why)),
+            },
+        };
+    }
+    let tesseract = tesseract
+        .and_then(|languages| if !english_data_required(&settings.language) || languages.english { Ok(()) } else { Err(english_model_missing()) });
+    match settings.engine {
         EngineChoice::Ocrs => (!ocrs).then(models_missing),
         EngineChoice::Tesseract => tesseract.err(),
         EngineChoice::Auto => match (ocrs, tesseract) {
-            (true, _) | (false, Ok(())) => None,
+            (true, _) | (false, Ok(_)) => None,
             (false, Err(why)) => Some(format!("{}; {why}", models_missing())),
         },
     }
+}
+
+/// Validate a profile before discovery, loading, page rendering or mutation. Status callers
+/// choose their default engine (Automatic) before this engine-aware validation.
+pub fn validate_model_profile(settings: &OcrSettings) -> Result<(), String> {
+    settings.model_profile.validate(&settings.language).map_err(|e| e.to_string())?;
+    if settings.model_profile == ModelProfile::TurkishExtended && settings.engine == EngineChoice::Ocrs {
+        return Err("the turkish_extended model profile requires Tesseract; choose Tesseract or Automatic".into());
+    }
+    Ok(())
+}
+
+fn extended_model_missing(settings: &OcrSettings) -> String {
+    match settings.model_profile.required_packs(&settings.language) {
+        Ok(packs) => format!("the turkish_extended model profile requires every Tesseract model: {}; no Standard fallback is used", packs.join(", ")),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// The primary reader's model inventory. An effective profile means the selection passed
+/// preflight (or a job selected that reader); it is not evidence of recognition accuracy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelStatus {
+    pub requested_model_profile: ModelProfile,
+    pub effective_model_profile: Option<ModelProfile>,
+    pub model_engine: &'static str,
+    pub required_models: Vec<String>,
+    pub installed_models: Vec<String>,
+}
+
+impl Recognizers {
+    /// Describe the actual selected primary reader, without loading another engine.
+    /// May query the reader's cached language list; never call this on the UI thread.
+    pub fn model_status(&self, settings: &OcrSettings) -> Result<ModelStatus, String> {
+        validate_model_profile(settings)?;
+        model_status_for(settings, self.primary.id(), Some(self.primary.as_ref()), true)
+    }
+}
+
+/// Blocking tool inventory: no weights are loaded, no page is read, and no download occurs.
+/// The interface uses only `settings_unavailable_reason` and its completed probe snapshot.
+pub fn model_status(settings: &OcrSettings) -> Result<ModelStatus, String> {
+    validate_model_profile(settings)?;
+    let models = Models::find();
+    let needs_tesseract = settings.engine != EngineChoice::Ocrs;
+    let configured = configured_tesseract(settings);
+    let tesseract = if needs_tesseract { tesseract_engine(configured.as_deref()) } else { None };
+    let languages = tesseract.as_ref().map(|r| LanguageSupport::for_recognizer(r.as_ref())).ok_or_else(tesseract_unavailable);
+    let ready = unavailable_with(settings, models.is_some(), languages).is_none();
+    let primary = match settings.engine {
+        EngineChoice::Ocrs => "ocrs",
+        EngineChoice::Tesseract => "tesseract",
+        EngineChoice::Auto if !pdfcraft_ocr::is_turkish_language(&settings.language) && models.is_some() => "ocrs",
+        EngineChoice::Auto => "tesseract",
+    };
+    model_status_for(settings, primary, tesseract.as_deref(), ready)
+}
+
+fn model_status_for(settings: &OcrSettings, primary: &'static str, recognizer: Option<&dyn Recognizer>, ready: bool) -> Result<ModelStatus, String> {
+    let (required_models, mut installed_models) = if primary == "ocrs" {
+        let installed = Models::find()
+            .map(|m| [m.detection, m.recognition].iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let required = if installed.is_empty() {
+            vec![pdfcraft_ocr::DETECTION_MODEL.to_string(), pdfcraft_ocr::RECOGNITION_MODEL.to_string()]
+        } else {
+            installed.clone()
+        };
+        (required, installed)
+    } else {
+        let required =
+            settings.model_profile.required_packs(&settings.language).map_err(|e| e.to_string())?.into_iter().map(str::to_string).collect();
+        let installed = recognizer.map(|r| r.languages().into_iter().map(|(code, _)| code).collect::<Vec<_>>()).unwrap_or_default();
+        (required, installed)
+    };
+    installed_models.sort();
+    installed_models.dedup();
+    Ok(ModelStatus {
+        requested_model_profile: settings.model_profile,
+        effective_model_profile: ready.then_some(settings.model_profile),
+        model_engine: primary,
+        required_models,
+        installed_models,
+    })
+}
+
+fn turkish_ocrs_unsupported() -> String {
+    "the ocrs engine does not support Turkish; choose Tesseract or Automatic with Turkish (tur) language data installed".into()
+}
+
+fn turkish_model_missing() -> String {
+    "Turkish OCR requires the Turkish (tur) language data installed for tesseract".into()
+}
+
+fn english_model_missing() -> String {
+    "English OCR requires the English (eng) language data installed for tesseract".into()
+}
+
+/// Preserve library callers' other Tesseract languages: the interface offers en/tr, but
+/// `language_code` also accepts French, German, etc. Only an actual `-l eng` request needs
+/// the English snapshot (including unknown codes that the existing adapter maps to eng).
+fn english_data_required(language: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        pdfcraft_ocr::tesseract::language_code(language) == "eng"
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = language;
+        true // Tesseract is never available on the web.
+    }
+}
+
+fn turkish_tesseract_required(why: String) -> String {
+    format!("Turkish OCR requires Tesseract with Turkish (tur) language data: {why}")
 }
 
 /// Why Tesseract cannot be chosen yet: its probe is still running in the background.
@@ -699,7 +929,9 @@ impl OcrJob {
     /// blurs the letters), at most the chosen one.
     pub fn render_scale(&self, page: usize) -> f32 {
         let wanted = self.settings.dpi.clamp(72.0, 600.0) / 72.0;
-        let Some(native) = self.native.get(page).copied().flatten() else { return wanted };
+        let Some(native) = self.native.get(page).copied().flatten() else {
+            return wanted;
+        };
         // A scan whose page is larger than a sheet (often a box given in pixels, one point per
         // pixel, #1848) is measured as if shrunk to one: otherwise 1 px/pt is already its full
         // image, and no "Downsample to" choice could ask for less.
@@ -840,7 +1072,7 @@ impl OcrSteps {
             info,
             existing,
             strategy: settings.strategy,
-            options: pdfcraft_ocr::RecognizeOptions { language: settings.language.clone() },
+            options: pdfcraft_ocr::RecognizeOptions { language: settings.language.clone(), model_profile: settings.model_profile },
             output_mode: settings.output_mode,
         })
     }
@@ -933,11 +1165,11 @@ impl OcrShot {
         let mut notes = outcome.notes;
         // Only visible editable output needs display glyphs. Searchable output preserves
         // every Unicode character with empty Type3 programs and ToUnicode maps.
-        if self.output_mode == OutputMode::EditableText && !words.is_empty() {
-            let missing = pdfcraft_fonts::TextPlan::for_words(words.iter().map(|w| w.text.as_str())).missing();
-            if missing > 0 {
-                notes.push(format!("{missing} characters had no font that could show them and appear as ? in the output"));
-            }
+        if self.output_mode == OutputMode::EditableText
+            && !words.is_empty()
+            && let Err(why) = pdfcraft_fonts::TextPlan::for_editable_words(words.iter().map(|w| w.text.as_str()))
+        {
+            notes.push(format!("editable output cannot represent this page: {why}; use searchable output or correct the text"));
         }
         OcrPage { page, words, already_on_page: already.len(), skipped: None, notes }
     }
@@ -1073,12 +1305,24 @@ impl Session {
         // font is built once and shared by every page that uses it.
         let page_words: Vec<Vec<PlacedWord>> = (0..doc.info.pages.len())
             .map(|p| {
-                let Some(info) = doc.info.pages.get(p) else { return Vec::new() };
+                let Some(info) = doc.info.pages.get(p) else {
+                    return Vec::new();
+                };
                 found.iter().find(|f| f.page == p).map(|f| f.words.iter().map(|w| editable_word(w, info)).collect()).unwrap_or_default()
             })
             .collect();
         layer::validate_words(page_words.iter().flatten()).map_err(|e| e.to_string())?;
-        let mut plan = pdfcraft_fonts::TextPlan::for_words(page_words.iter().flat_map(|ws| ws.iter().map(|w| w.text.as_str())));
+        // Scalar glyph coverage cannot prove that a mark is positioned correctly. This
+        // checked constructor shapes complete supported clusters and refuses losses/budget
+        // overflow before a new output document or any font resources exist.
+        let mut plan = pdfcraft_fonts::TextPlan::for_editable_words(page_words.iter().flat_map(|ws| ws.iter().map(|w| w.text.as_str())))?;
+        for (i, word) in page_words.iter().flatten().enumerate() {
+            if plan.shaped_bounds(i).is_some() && (word.across[0].hypot(word.across[1]) <= 0.0 || word.up[0].hypot(word.up[1]) <= 0.0) {
+                // PageInfo maps through f32 display coordinates. A positive subpixel box
+                // can collapse during conversion; never report a blank cluster export as success.
+                return Err("editable OCR word geometry is too small for page-coordinate precision; use searchable output or enlarge the box".into());
+            }
+        }
         let pages: Vec<(f64, f64, pdfcraft_cos::Dict, Vec<u8>)> = (0..doc.info.pages.len())
             .map(|p| {
                 let info = doc.info.pages.get(p);
@@ -1107,8 +1351,11 @@ impl Session {
                 Some(pdfcraft_cos::Object::Ref(r)) => created.get(*r).as_array().cloned(),
                 _ => None,
             });
+        let mut editable_fonts = pdfcraft_cos::Dict::new();
         for (pi, kid) in kids.into_iter().flatten().enumerate() {
-            let pdfcraft_cos::Object::Ref(page) = kid else { continue };
+            let pdfcraft_cos::Object::Ref(page) = kid else {
+                continue;
+            };
             let _ = created.update_dict(page, |d| {
                 let mut res = d.get(b"Resources").and_then(|o| o.as_dict().cloned()).unwrap_or_default();
                 let mut fonts = res.get(b"Font").and_then(|o| o.as_dict().cloned()).unwrap_or_default();
@@ -1121,6 +1368,21 @@ impl Session {
             if page_words.get(pi).is_some_and(|ws| !ws.is_empty()) {
                 pdfcraft_edit::add_type3_fonts(&mut created, pi, &mut plan).map_err(|e| e.to_string())?;
                 let word_offset = page_words.iter().take(pi).map(Vec::len).sum();
+                if word_offset == 0 {
+                    editable_fonts = editable_fonts::register_cluster_maps(&mut created, &plan)?;
+                }
+                // All nonempty OCR pages share one full source resource for later edits.
+                created
+                    .update_dict(page, |dict| {
+                        let mut res = dict.get(b"Resources").and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+                        let mut fonts = res.get(b"Font").and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+                        for (name, font) in editable_fonts.iter() {
+                            fonts.set(name.clone(), font.clone());
+                        }
+                        res.set(b"Font".to_vec(), pdfcraft_cos::Object::Dict(fonts));
+                        dict.set(b"Resources".to_vec(), pdfcraft_cos::Object::Dict(res));
+                    })
+                    .map_err(|e| e.to_string())?;
                 let content = pdfcraft_ocr::visible_text_layer_at(&page_words[pi], &plan, word_offset);
                 let mut dict = pdfcraft_cos::Dict::new();
                 dict.set(b"PCMark".to_vec(), pdfcraft_cos::Object::name("OCR"));
@@ -1422,12 +1684,207 @@ mod tests {
     fn settings_default_to_the_ocrs_status_quo() {
         let s = OcrSettings::default();
         assert_eq!(s.engine, EngineChoice::Ocrs);
+        assert_eq!(s.model_profile, ModelProfile::Standard);
         assert_eq!(s.strategy, MergeStrategy::PrimaryOnly);
         assert_eq!(s.output_mode, OutputMode::Searchable);
         assert!(!s.auto_rotate && !s.deskew && !s.denoise && !s.binarize);
         assert_eq!(s.region, None);
         assert_eq!(s.low_confidence_threshold, 60.0);
         assert_eq!(s.tesseract_path, None, "no configured tesseract path by default: the PATH decides");
+    }
+
+    #[test]
+    fn turkish_is_offered_without_claiming_ocrs_can_read_it() {
+        assert!(LANGUAGES.contains(&("tr", "Turkish")));
+        assert!(!pdfcraft_ocr::LANGUAGES.iter().any(|(code, _)| *code == "tr"));
+        let settings = OcrSettings { language: "tr".into(), tesseract_path: Some("not/a/program".into()), ..Default::default() };
+        let error = match recognizers(&settings) {
+            Ok(_) => panic!("English-only ocrs must not read Turkish"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Turkish") && error.contains("Tesseract"), "{error}");
+    }
+
+    /// A machine can have perfectly usable English models without being able to read
+    /// Turkish. The preflight must use the requested language for every engine choice.
+    #[test]
+    fn language_preflight_never_substitutes_english_models_for_turkish() {
+        for language in ["tr", "tur", "tr-TR", "tr_TR.UTF-8"] {
+            for ocrs in [false, true] {
+                for engine in [EngineChoice::Ocrs, EngineChoice::Auto, EngineChoice::Tesseract] {
+                    let settings = OcrSettings { language: language.into(), engine, ..Default::default() };
+                    for tesseract in [
+                        Ok(LanguageSupport { english: true, turkish: true, turkish_extended: false }),
+                        Ok(LanguageSupport { english: true, turkish: false, turkish_extended: false }),
+                        Err("still checking".to_string()),
+                        Err("not installed".to_string()),
+                    ] {
+                        let ready = engine != EngineChoice::Ocrs && tesseract.as_ref().is_ok_and(|languages| languages.turkish);
+                        let why = unavailable_with(&settings, ocrs, tesseract);
+                        assert_eq!(why.is_none(), ready, "{language}, {engine:?}, ocrs={ocrs}: {why:?}");
+                        if let Some(why) = why {
+                            assert!(why.contains("Turkish") && (why.contains("tur") || why.contains("Tesseract")), "{why}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn extended_preflight_uses_its_own_snapshot_without_standard_or_ocrs_fallback() {
+        for engine in [EngineChoice::Ocrs, EngineChoice::Tesseract, EngineChoice::Auto] {
+            for ocrs in [false, true] {
+                for turkish in [false, true] {
+                    for turkish_extended in [false, true] {
+                        let settings =
+                            OcrSettings { language: "tr".into(), model_profile: ModelProfile::TurkishExtended, engine, ..Default::default() };
+                        let capabilities = LanguageSupport { english: true, turkish, turkish_extended };
+                        let why = unavailable_with(&settings, ocrs, Ok(capabilities));
+                        assert_eq!(why.is_none(), engine != EngineChoice::Ocrs && turkish_extended, "{engine:?}, {capabilities:?}: {why:?}");
+                        let standard = OcrSettings { model_profile: ModelProfile::Standard, ..settings };
+                        let why = unavailable_with(&standard, ocrs, Ok(capabilities));
+                        assert_eq!(why.is_none(), engine != EngineChoice::Ocrs && turkish, "Standard still needs tur: {why:?}");
+                    }
+                }
+                let settings = OcrSettings { language: "tr".into(), model_profile: ModelProfile::TurkishExtended, engine, ..Default::default() };
+                assert!(unavailable_with(&settings, ocrs, Err("not installed".into())).is_some(), "no built-in fallback for Extended");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_extended_settings_are_rejected_before_any_program_probe() {
+        for language in ["en", "fr"] {
+            for engine in [EngineChoice::Ocrs, EngineChoice::Tesseract, EngineChoice::Auto] {
+                let settings = OcrSettings {
+                    language: language.into(),
+                    model_profile: ModelProfile::TurkishExtended,
+                    engine,
+                    tesseract_path: Some("not/a/program".into()),
+                    ..Default::default()
+                };
+                let why = validate_model_profile(&settings).unwrap_err();
+                assert_eq!(preflight(&settings).unwrap_err(), why);
+                assert_eq!(recognizers(&settings).err(), Some(why.clone()));
+                assert_eq!(settings_unavailable_reason(&settings), Some(why));
+            }
+        }
+    }
+
+    #[test]
+    fn a_profile_capability_is_captured_even_without_standard_turkish_data() {
+        struct ExtendedOnly;
+        impl Recognizer for ExtendedOnly {
+            fn id(&self) -> &'static str {
+                "tesseract"
+            }
+            fn available(&self) -> bool {
+                true
+            }
+            fn languages(&self) -> Vec<(String, String)> {
+                vec![("script/Latin".into(), "Latin".into())]
+            }
+            fn model_profiles(&self) -> Vec<ModelProfile> {
+                vec![ModelProfile::Standard, ModelProfile::TurkishExtended]
+            }
+            fn recognize(&self, _: &pdfcraft_ocr::OcrImage, _: &pdfcraft_ocr::RecognizeOptions) -> Result<Vec<pdfcraft_ocr::Line>, OcrError> {
+                Ok(Vec::new())
+            }
+        }
+        let snapshot = LanguageSupport::for_recognizer(&ExtendedOnly);
+        assert!(!snapshot.turkish && snapshot.turkish_extended);
+        let settings =
+            OcrSettings { language: "tr".into(), engine: EngineChoice::Auto, model_profile: ModelProfile::TurkishExtended, ..Default::default() };
+        assert_eq!(unavailable_with(&settings, false, Ok(snapshot)), None);
+        let standard = OcrSettings { model_profile: ModelProfile::Standard, ..settings };
+        assert!(unavailable_with(&standard, false, Ok(snapshot)).is_some());
+    }
+
+    #[test]
+    fn language_preflight_preserves_english_automatic_fallback() {
+        for ocrs in [false, true] {
+            for engine in [EngineChoice::Ocrs, EngineChoice::Auto, EngineChoice::Tesseract] {
+                for installed in [false, true] {
+                    let tesseract = if installed {
+                        Ok(LanguageSupport { english: true, turkish: false, turkish_extended: false })
+                    } else {
+                        Err("not installed".to_string())
+                    };
+                    let settings = OcrSettings { engine, ..Default::default() };
+                    let ready = match engine {
+                        EngineChoice::Ocrs => ocrs,
+                        EngineChoice::Tesseract => installed,
+                        EngineChoice::Auto => ocrs || installed,
+                    };
+                    assert_eq!(unavailable_with(&settings, ocrs, tesseract).is_none(), ready, "{engine:?}, {ocrs}, {installed}");
+                }
+            }
+        }
+    }
+
+    /// Discovering a working program is insufficient: a Turkish-only Tesseract cannot read
+    /// English. Automatic may use the built-in English models when those are installed.
+    #[test]
+    fn language_preflight_requires_english_data_for_tesseract_and_automatic_fallback() {
+        for ocrs in [false, true] {
+            for english in [false, true] {
+                for turkish in [false, true] {
+                    for engine in [EngineChoice::Ocrs, EngineChoice::Auto, EngineChoice::Tesseract] {
+                        let settings = OcrSettings { engine, ..Default::default() };
+                        let ready = match engine {
+                            EngineChoice::Ocrs => ocrs,
+                            EngineChoice::Auto => ocrs || english,
+                            EngineChoice::Tesseract => english,
+                        };
+                        let why = unavailable_with(&settings, ocrs, Ok(LanguageSupport { english, turkish, turkish_extended: false }));
+                        assert_eq!(why.is_none(), ready, "{engine:?}, ocrs={ocrs}, eng={english}, tur={turkish}: {why:?}");
+                        if !english && engine != EngineChoice::Ocrs && !ready {
+                            assert!(why.as_deref().is_some_and(|why| why.contains("English (eng)")), "{why:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_turkish_preflight_rejects_explicit_ocrs_before_discovery() {
+        let settings = OcrSettings { language: "tr".into(), tesseract_path: Some("not/a/program".into()), ..Default::default() };
+        let why = preflight(&settings).expect_err("ocrs cannot read Turkish");
+        assert_eq!(settings_unavailable_reason(&settings).as_deref(), Some(why.as_str()));
+        assert_eq!(recognizers(&settings).err().as_deref(), Some(why.as_str()));
+        assert_eq!(settings.engine, EngineChoice::Ocrs, "an explicit engine choice stays unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turkish_auto_requires_tesseract_with_turkish_data() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pdfcraft-turkish-ocr-selector-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, code, supported) in [("turkish", "tur", true), ("english", "eng", false)] {
+            let program = dir.join(name);
+            std::fs::write(&program, format!("#!/bin/sh\nprintf '{code}\\n'\n")).unwrap();
+            let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&program, permissions).unwrap();
+            for engine in [EngineChoice::Auto, EngineChoice::Tesseract] {
+                let settings =
+                    OcrSettings { language: "tr".into(), engine, tesseract_path: Some(program.to_string_lossy().into_owned()), ..Default::default() };
+                match recognizers(&settings) {
+                    Ok(r) => {
+                        assert!(supported, "{engine:?} must refuse missing Turkish trained data");
+                        assert_eq!(r.primary.id(), "tesseract");
+                        assert!(r.secondary.is_none(), "English-only ocrs must never replace Turkish characters");
+                    }
+                    Err(error) => {
+                        assert!(!supported && error.contains("tur"), "{engine:?}: {error}")
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A configured tesseract path that is not an absolute, existing, executable file makes
@@ -1473,13 +1930,24 @@ mod tests {
     fn the_cache_lookup_keeps_a_stale_answer_and_knows_its_location() {
         let now = Instant::now();
         let old = now.checked_sub(Duration::from_secs(31)).unwrap();
-        let failed = |key: Option<&str>, at| CachedTesseract { key: key.map(str::to_string), found: None, at };
+        let failed = |key: Option<&str>, at| CachedTesseract { key: key.map(str::to_string), found: None, languages: LanguageSupport::default(), at };
         assert!(matches!(cache_lookup(None, None, now), Cached::Missing));
-        assert!(matches!(cache_lookup(Some(&failed(None, now)), None, now), Cached::Fresh(None)));
-        assert!(matches!(cache_lookup(Some(&failed(None, old)), None, now), Cached::Stale(None)));
+        assert!(matches!(cache_lookup(Some(&failed(None, now)), None, now), Cached::Fresh(None, _)));
+        assert!(matches!(cache_lookup(Some(&failed(None, old)), None, now), Cached::Stale(None, _)));
         assert!(matches!(cache_lookup(Some(&failed(Some("/x"), now)), None, now), Cached::Missing), "another location is another question");
-        let found = CachedTesseract { key: None, found: Some(Arc::new(Fake::new())), at: old };
-        assert!(matches!(cache_lookup(Some(&found), None, now), Cached::Fresh(Some(_))), "a found engine stays fresh");
+        let found = CachedTesseract {
+            key: None,
+            found: Some(Arc::new(Fake::new())),
+            languages: LanguageSupport { english: true, turkish: true, turkish_extended: false },
+            at: old,
+        };
+        assert!(
+            matches!(
+                cache_lookup(Some(&found), None, now),
+                Cached::Fresh(Some(_), LanguageSupport { english: true, turkish: true, turkish_extended: false })
+            ),
+            "a found engine and its language snapshot stay fresh"
+        );
     }
 
     /// Engine discovery never deadlocks or corrupts the cache: concurrent lookups with
@@ -2134,11 +2602,7 @@ mod tests {
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let text = crate::tests::page_texts(&out, oid)[0].clone();
-        if pdfcraft_fonts::CRAFT_FONTS.is_empty() {
-            assert!(text.contains("??????"), "{text}");
-        } else {
-            assert!(text.contains("Привет"), "{text}");
-        }
+        assert!(text.contains("Привет"), "bundled Inter covers Cyrillic even without optional fonts: {text}");
     }
 
     /// The editable output's VISIBLE layer — a Type3 run for the Cyrillic word, Helvetica for

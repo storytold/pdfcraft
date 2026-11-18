@@ -29,7 +29,7 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
 - **The tesseract process is fenced in.** The program comes from a user-configured location or
   the PATH, never from document data (the engine validates a configured path as an absolute
   path to an existing executable file before it is used). The language code is allow-listed
-  (`tesseract::language_code`, 12 codes) before anything reaches a process; the page image
+  (`tesseract::language_code`, 13 codes) before anything reaches a process; the page image
   goes to a private temp file (a fresh 0700 directory holding a 0600 file on Unix) that is
   deleted afterwards; the run has a 120 s timeout, a 64 MiB output cap and a 50 000-word
   reading cap (an incomplete reading is rejected rather than applied); every failure comes back through `OcrError` with its cause named. A configured
@@ -38,6 +38,10 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   versions print it); a failed probe is remembered for 30 s, so an install that appears later
   is found without a restart. Known limit: at the timeout or the output cap only the direct
   child is killed; a wrapper script's own children may outlive it.
+- **Renderer output is explicit and checked.** The process uses `-c tessedit_create_tsv=1`,
+  so a `TESSDATA_PREFIX` containing only installed models needs no `configs/tsv` file. Successful
+  plain-text or empty output is rejected instead of being mistaken for a zero-word reading;
+  valid blank-page TSV remains accepted. The standalone `parse_tsv` utility stays lenient.
 - **Confidence drives review.** One classifier (`band_for`) puts a word in the High
   (≥ 90), Medium (70–89) or Low (< 70) band — the review overlay's colours, the legend and the
   counts; the batch flag rule (`low_confidence`, default threshold 60) is deliberately a
@@ -77,6 +81,17 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   non-zero sides, a 10 000-pixel side cap, a 64-megapixel area cap (checked arithmetic — the
   counts come from documents, so they are untrusted), and an exact buffer length.
 
+## Turkish recognition
+
+The engine's UI/tool language list offers Turkish (`tr`) separately from the built-in ocrs
+model, which remains English-only. Turkish jobs require the external Tesseract program and
+its installed `tur` language data. Explicit ocrs + Turkish is refused, including direct
+`OcrsRecognizer::recognize` library calls; Automatic + Turkish
+uses Tesseract alone, so an English-only reading cannot replace Turkish letters in an ensemble.
+Missing Turkish data is reported before recognition. Nothing downloads or bundles Tesseract
+or its language data. Direct Tesseract callers also accept `tur` and Turkish locale forms such
+as `tr-TR` and `tr_TR.UTF-8`, always mapping them to the allow-listed `tur` process argument.
+
 ## Where it is wired
 
 The engine's `ocr` module renders pages into `OcrImage`s, runs jobs (`OcrJob::run`) and applies
@@ -102,3 +117,21 @@ Tesseract side is bounded by its allow-list and whatever its installed language 
 OCR in the browser (the tesseract module is compiled out for wasm32), the deep scan-cleanup
 options (descreen, background removal, edge-shadow removal), and editable glyph coverage
 beyond the available attributed faces.
+
+## Explicit selected-word candidates
+
+`Recognizer::word_candidates(image, options)` is a separate, manual review operation. The
+caller supplies one selected word crop; normal `recognize` calls and their process arguments
+are unchanged. Unsupported engines return an error. Tesseract composites RGBA over white,
+finds the tight ink rectangle using integer luminance `(299R + 587G + 114B) / 1000 < 245`,
+preserves the composited ink pixels, and reads white-bordered copies at 8 and 16 pixels with
+PSM 8. The input is capped at 2000 pixels per side and 4 million pixels; all discovery,
+preparation and both reads share at most 120 seconds. Each read is capped at 4 MiB of TSV,
+and candidate text at 4096 UTF-8 bytes.
+
+A read yields a `WordCandidate` only when it contains exactly one word. Both readings are
+returned independently, including disagreement or low confidence: there is no automatic
+choice, agreement gate, spelling dictionary, character removal or correction. Candidate
+`confidence` describes that crop reading and never replaces the original word's confidence.
+The caller keeps the original text, confidence and geometry until a separate explicit apply
+step. No discovery, candidate reading or application is triggered by ordinary page OCR.

@@ -9,8 +9,9 @@
 //! page content: invisible text (rendering mode 3) over each word, so the page becomes a
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
 //!
-//! Visible editable output uses [`pdfcraft_fonts::TextPlan`] and optional craft-fonts glyph
-//! outlines; unsupported visible characters become `?` and are counted. The engine's invisible
+//! Visible editable output uses [`pdfcraft_fonts::TextPlan::for_editable_words`], approved
+//! document outlines and shaped bundled-Inter Latin clusters; unsupported input is refused
+//! before export. The legacy scalar plan still counts `?` substitutions. The engine's invisible
 //! searchable layer uses empty Type3 programs and ToUnicode maps, preserving Unicode without
 //! display fonts. WinAnsi-only invisible text keeps the standard Helvetica layout here.
 //!
@@ -22,6 +23,7 @@
 
 pub mod confidence;
 pub mod merge;
+mod model_profile;
 mod ocrs;
 mod pitch;
 pub mod preprocess;
@@ -31,12 +33,20 @@ mod tiles;
 
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
+pub use model_profile::ModelProfile;
 pub use ocrs::{
     ALPHABET, DETECTION_MODEL, DETECTION_MODEL_SHA256, LANGUAGES, Models, Ocr, OcrsRecognizer, RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256,
 };
 
 pub use pdfcraft_fonts::TextPlan;
 pub use pdfcraft_fonts::helvetica_width;
+
+/// Whether a requested OCR language is Turkish. Accept its ISO codes and locale forms so an
+/// explicit `tr-TR`/`tr_TR.UTF-8` request cannot become an English reading at another layer.
+pub fn is_turkish_language(code: &str) -> bool {
+    let code = code.trim();
+    code.eq_ignore_ascii_case("tur") || code.split(['-', '_', '.']).next().is_some_and(|base| base.eq_ignore_ascii_case("tr"))
+}
 
 /// Hard cap on either side of an image any code in this crate will touch, in pixels; larger
 /// images are rejected with [`OcrError::ImageTooLarge`] instead of being processed.
@@ -174,6 +184,17 @@ impl Word {
     }
 }
 
+/// One optional reading of an explicitly selected word crop. This is a proposal, never an
+/// automatic correction. Its confidence belongs to the crop reading, not the original word.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WordCandidate {
+    pub text: String,
+    pub confidence: Option<f32>,
+    /// Symmetric white border added around the tightly bounded ink, in pixels.
+    pub padding: u32,
+    pub source: String,
+}
+
 /// A recognised line of words, in reading order.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Line {
@@ -191,13 +212,15 @@ impl Line {
 pub struct RecognizeOptions {
     /// Language code from [`LANGUAGES`] (`"en"`, `"de"`, …). Engines map it to their own codes
     /// (Tesseract: `tesseract::language_code`, allow-listed before anything reaches a process);
-    /// unknown codes fall back to the engine's default.
+    /// unknown codes keep the Standard engine default; TurkishExtended requires Turkish.
     pub language: String,
+    /// Fixed model selection, validated for the language and engine before recognition.
+    pub model_profile: ModelProfile,
 }
 
 impl Default for RecognizeOptions {
     fn default() -> Self {
-        RecognizeOptions { language: "en".into() }
+        RecognizeOptions { language: "en".into(), model_profile: ModelProfile::Standard }
     }
 }
 
@@ -212,8 +235,19 @@ pub trait Recognizer: Send + Sync {
     fn available(&self) -> bool;
     /// The languages it reads, as `(code, name)` pairs (`"en"`, `"English"`).
     fn languages(&self) -> Vec<(String, String)>;
+    /// Installed model profiles this recognizer can select per call. Older implementations
+    /// support only Standard unless they explicitly opt into additional fixed profiles.
+    fn model_profiles(&self) -> Vec<ModelProfile> {
+        vec![ModelProfile::Standard]
+    }
     /// Read the words in `image`, in reading order.
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError>;
+    /// Propose readings of a caller-selected word crop, only after an explicit review request.
+    /// The caller must retain the original text, confidence and geometry until a separate
+    /// user-approved apply operation. Unsupported engines fail rather than silently rerun OCR.
+    fn word_candidates(&self, _image: &OcrImage, _options: &RecognizeOptions) -> Result<Vec<WordCandidate>, OcrError> {
+        Err(OcrError::Recognize("this recognizer does not support selected-word candidates".into()))
+    }
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the
@@ -249,6 +283,52 @@ impl PlacedWord {
     }
 }
 
+/// A narrow, separate space after a recognised word, when its neighbour continues the same
+/// line. Original word boxes stay unchanged. CJK boundaries, overlaps, line breaks and
+/// column-sized gaps retain their existing geometry-based extraction.
+pub fn word_separator(previous: &PlacedWord, next: &PlacedWord) -> Option<PlacedWord> {
+    let cjk = |text: &str| {
+        text.chars()
+            .any(|c| matches!(c as u32, 0x1100..=0x11FF | 0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3134F))
+    };
+    if previous.text.is_empty()
+        || next.text.is_empty()
+        || previous.text.chars().next_back().is_some_and(char::is_whitespace)
+        || next.text.chars().next().is_some_and(char::is_whitespace)
+        || cjk(&previous.text)
+        || cjk(&next.text)
+    {
+        return None;
+    }
+    let (pw, nw) = (previous.across[0].hypot(previous.across[1]), next.across[0].hypot(next.across[1]));
+    let (ph, nh) = (previous.up[0].hypot(previous.up[1]), next.up[0].hypot(next.up[1]));
+    if [pw, nw, ph, nh].iter().any(|v| !v.is_finite() || *v <= 0.0) {
+        return None;
+    }
+    let u = previous.across.map(|v| v / pw);
+    let v = next.across.map(|v| v / nw);
+    if u[0] * v[0] + u[1] * v[1] <= 0.0 || (u[0] * v[1] - u[1] * v[0]).abs() > 0.15 {
+        return None;
+    }
+    let end = [previous.origin[0] + previous.across[0], previous.origin[1] + previous.across[1]];
+    let gap = (next.origin[0] - end[0]) * u[0] + (next.origin[1] - end[1]) * u[1];
+    let centre_delta = [
+        next.origin[0] - previous.origin[0] + 0.5 * (next.across[0] - previous.across[0] + next.up[0] - previous.up[0]),
+        next.origin[1] - previous.origin[1] + 0.5 * (next.across[1] - previous.across[1] + next.up[1] - previous.up[1]),
+    ];
+    let offset = centre_delta[1] * u[0] - centre_delta[0] * u[1];
+    let height = ph.max(nh);
+    if !gap.is_finite() || !offset.is_finite() || gap < 0.0 || gap >= height * 3.0 || offset.abs() >= height * 0.5 {
+        return None;
+    }
+    // A sliver carries the known boundary without stretching a word or filling a table gap.
+    let across = u.map(|v| v * ph * 0.01);
+    if (0..2).any(|i| !(end[i] + across[i] + 0.2 * previous.up[i]).is_finite()) {
+        return None;
+    }
+    Some(PlacedWord { text: " ".into(), origin: end, across, up: previous.up, confidence: None, source: String::new() })
+}
+
 /// Helvetica's ascender and descender (em fractions): a word box spans about this much.
 const BOX_EM: f64 = 0.93;
 const DESCENT: f64 = 0.21;
@@ -276,16 +356,46 @@ fn num(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
+/// Visible font sizes and scales may be much smaller than a coordinate. Four decimal
+/// places can turn a supported long/narrow word into `0 Tz`, or a small face into `0 Tf`.
+/// Keep the legacy spelling at ordinary sizes; small finite values use the same
+/// shortest, exponent-free f64 Display policy as the COS writer, without clamping.
+fn scale_num(v: f64) -> String {
+    if !v.is_finite() || v == 0.0 || v.abs() >= 0.01 {
+        return num(v);
+    }
+    v.to_string()
+}
+
+/// A standalone space uses Helvetica, already required by both layers, and never consumes
+/// an entry in the words' display-font plan. Reset scaling left by a visible word's `Tz`.
+fn write_separator(out: &mut Vec<u8>, space: &PlacedWord) -> bool {
+    let width = helvetica_width(" ", 1.0);
+    let em = space.up.map(|v| v / BOX_EM);
+    let matrix =
+        [space.across[0] / width, space.across[1] / width, em[0], em[1], space.origin[0] + DESCENT * em[0], space.origin[1] + DESCENT * em[1]];
+    // Finite word geometry can overflow when converted to Helvetica's em and baseline.
+    // Omit only that separator, before changing the output's font or horizontal scaling.
+    if !matrix.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    out.extend_from_slice(b"/PCHelv 1 Tf 100 Tz ");
+    out.extend_from_slice(matrix.map(num).join(" ").as_bytes());
+    out.extend_from_slice(b" Tm ( ) Tj\n");
+    true
+}
+
 /// One run of a word's planned characters in one Type3 font: the resource name, the codes to
-/// show (one byte per character), and the run's start as an offset in em units from the word's
+/// show (one byte per scalar or checked cluster), and the run's start as an offset in em units from the word's
 /// origin (the accumulated advances of the runs before it).
 struct PlannedRun {
     font: String,
     codes: Vec<u8>,
     start: f64,
+    actual_text: Option<String>,
 }
 
-/// The planned runs of word `i` (the same index [`pdfcraft_fonts::TextPlan::for_words`] planned
+/// The planned runs of word `i` (the same index the text plan planned
 /// the words with), or `None` when the word is drawn in Helvetica: every character has a
 /// WinAnsi code, or nothing could be planned/registered for it (the pre-Unicode output).
 fn planned_runs(plan: &pdfcraft_fonts::TextPlan, word: usize) -> Option<(Vec<PlannedRun>, f64)> {
@@ -297,9 +407,10 @@ fn planned_runs(plan: &pdfcraft_fonts::TextPlan, word: usize) -> Option<(Vec<Pla
     let mut total = 0.0;
     for &(f, code) in enc {
         let font = plan.fonts[f].name.as_str();
+        let source = plan.cluster_text(f, code);
         match runs.last_mut() {
-            Some(last) if last.font == font => last.codes.push(code),
-            _ => runs.push(PlannedRun { font: font.to_string(), codes: vec![code], start: total }),
+            Some(last) if last.font == font && last.actual_text.is_none() && source.is_none() => last.codes.push(code),
+            _ => runs.push(PlannedRun { font: font.to_string(), codes: vec![code], start: total, actual_text: source.map(str::to_string) }),
         }
         total += plan.advance(f, code);
     }
@@ -342,24 +453,36 @@ pub fn visible_text_layer_at(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPl
         {
             continue;
         }
-        let size = height / BOX_EM;
-        let runs = planned_runs(plan, word_offset.saturating_add(i));
+        let word_index = word_offset.saturating_add(i);
+        let runs = planned_runs(plan, word_index);
+        // Preserve the legacy NFC em fit for ordinary Latin accents. Only ink beyond
+        // that font envelope (e.g. stacked marks) needs a larger vertical fit, otherwise
+        // canonically equivalent NFC/NFD text would change size and baseline.
+        let shaped = plan.shaped_bounds(word_index).filter(|_| runs.is_some());
+        let bounds = shaped.filter(|b| b[1] < -0.3 || b[3] > 1.0);
+        let size = height / bounds.map_or(BOX_EM, |b| b[3] - b[1]);
+        let horizontal = runs.as_ref().map(|(_, total)| shaped.map_or((0.0, *total), |b| (b[0], b[2] - b[0])));
         // The word's natural advance at this size: Helvetica's approximation, or the exact sum
         // of the planned glyphs' widths.
-        let natural = runs.as_ref().map_or_else(|| helvetica_width(&w.text, size), |(_, total)| total * size);
-        if natural.is_nan() || natural <= 0.0 {
+        let natural = horizontal.map_or_else(|| helvetica_width(&w.text, size), |(_, span)| span * size);
+        if !natural.is_finite() || natural <= 0.0 {
             continue;
         }
         // Horizontal scaling as a percentage of the natural advance at this size, so the word
         // lands exactly on its box (100 = no scaling; a long box on a short word stretches it).
-        let tz = (across / natural * 100.0).max(1.0);
+        let tz = if shaped.is_some() { across / natural * 100.0 } else { (across / natural * 100.0).max(1.0) };
         // The baseline sits above the box's bottom edge by the descender depth.
-        let o = [w.origin[0] + vx * DESCENT * size, w.origin[1] + vy * DESCENT * size];
-        out.extend_from_slice(format!("{} Tz ", num(tz)).as_bytes());
+        let descent = bounds.map_or(DESCENT, |b| -b[1]);
+        let left = horizontal.map_or(0.0, |(left, span)| left / span);
+        let o = [w.origin[0] + vx * descent * size - w.across[0] * left, w.origin[1] + vy * descent * size - w.across[1] * left];
+        if !tz.is_finite() || o.iter().any(|v| !v.is_finite()) {
+            continue;
+        }
+        out.extend_from_slice(format!("{} Tz ", scale_num(tz)).as_bytes());
         match &runs {
             None => {
                 if current.as_ref().is_some_and(|(f, s)| f != "PCHelv" || *s != size) {
-                    out.extend_from_slice(format!("/PCHelv {} Tf ", num(size)).as_bytes());
+                    out.extend_from_slice(format!("/PCHelv {} Tf ", scale_num(size)).as_bytes());
                     current = Some(("PCHelv".to_string(), size));
                 }
                 out.extend_from_slice(format!("{} {} {} {} {} {} Tm ", num(ux), num(uy), num(vx), num(vy), num(o[0]), num(o[1])).as_bytes());
@@ -367,30 +490,50 @@ pub fn visible_text_layer_at(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPl
                 out.extend_from_slice(b" Tj\n");
             }
             Some((planned, total)) => {
+                let mut preceding_font = None;
                 for run in planned {
+                    if let Some(text) = &run.actual_text {
+                        let hex: String = text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+                        out.extend_from_slice(format!("/Span << /ActualText <FEFF{hex}> >> BDC\n").as_bytes());
+                    }
                     if current.as_ref().is_some_and(|(f, s)| *f != run.font || *s != size) {
-                        out.extend_from_slice(format!("/{} {} Tf ", run.font, num(size)).as_bytes());
+                        out.extend_from_slice(format!("/{} {} Tf ", run.font, scale_num(size)).as_bytes());
                         current = Some((run.font.clone(), size));
                     }
                     // The run's origin: the word's baseline plus the across vector scaled by
                     // the advances before this run (the stretch applies to runs alike).
-                    let frac = run.start / total;
-                    out.extend_from_slice(
-                        format!(
-                            "{} {} {} {} {} {} Tm ",
-                            num(ux),
-                            num(uy),
-                            num(vx),
-                            num(vy),
-                            num(o[0] + w.across[0] * frac),
-                            num(o[1] + w.across[1] * frac)
-                        )
-                        .as_bytes(),
-                    );
+                    let frac = run.start / horizontal.map_or(*total, |(_, span)| span);
+                    // Keep adjacent cluster Tj operations in the same text matrix. This
+                    // preserves the scalar registrar's advances without rounding each
+                    // absolute cluster origin, so NFC/NFD remain pixel-identical.
+                    if preceding_font != Some(run.font.as_str()) {
+                        out.extend_from_slice(
+                            format!(
+                                "{} {} {} {} {} {} Tm ",
+                                num(ux),
+                                num(uy),
+                                num(vx),
+                                num(vy),
+                                num(o[0] + w.across[0] * frac),
+                                num(o[1] + w.across[1] * frac)
+                            )
+                            .as_bytes(),
+                        );
+                    }
                     out.extend(pdfcraft_fonts::literal(&run.codes));
                     out.extend_from_slice(b" Tj\n");
+                    if run.actual_text.is_some() {
+                        out.extend_from_slice(b"EMC\n");
+                    }
+                    preceding_font = Some(run.font.as_str());
                 }
             }
+        }
+        if let Some(next) = words.get(i.saturating_add(1))
+            && let Some(space) = word_separator(w, next)
+            && write_separator(&mut out, &space)
+        {
+            current = Some(("PCHelv".to_string(), 1.0));
         }
     }
     out.extend_from_slice(b"ET\nQ\nEMC\n");
@@ -417,7 +560,7 @@ pub fn text_layer(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPlan) -> Vec<
         // be drawn, and a NaN or infinite one would put non-finite numbers on the page. (NaN
         // fails every comparison, so the positivity checks already refuse it; the finiteness
         // checks keep that property explicit.)
-        if width <= 0.0 || !(height > 0.0 && height.is_finite()) || !(across > 0.0 && across.is_finite()) || !w.origin.iter().all(|v| v.is_finite()) {
+        if width <= 0.0 || !(height > 0.0 && height.is_finite() && across > 0.0 && across.is_finite() && w.origin.iter().all(|v| v.is_finite())) {
             continue;
         }
         // The em square. Helvetica words: the word's own ink (cap height or x-height,
@@ -462,6 +605,12 @@ pub fn text_layer(words: &[PlacedWord], plan: &pdfcraft_fonts::TextPlan) -> Vec<
                     out.extend_from_slice(b" Tj\n");
                 }
             }
+        }
+        if let Some(next) = words.get(i.saturating_add(1))
+            && let Some(space) = word_separator(w, next)
+            && write_separator(&mut out, &space)
+        {
+            current = Some(("PCHelv".to_string(), 1.0));
         }
     }
     out.extend_from_slice(b"ET\nQ\nEMC\n");
@@ -523,6 +672,207 @@ pub fn lines_from_json(json: &str, source: &str) -> Result<Vec<Line>, OcrError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn editable_nfd_serialized_scale(source: &str, width: f64, height: f64) -> (f64, f64, f64) {
+        let mut plan = TextPlan::for_editable_words([source]).unwrap();
+        for (i, font) in plan.fonts.iter_mut().enumerate() {
+            font.name = format!("PCOcr{i}");
+        }
+        let word = PlacedWord {
+            text: source.into(),
+            origin: [20.0, 20.0],
+            across: [width, 0.0],
+            up: [0.0, height],
+            confidence: None,
+            source: "synthetic".into(),
+        };
+        let content = String::from_utf8(visible_text_layer(&[word], &plan)).unwrap();
+        let first = content.split("Tj").next().unwrap();
+        let tokens: Vec<_> = first.split_whitespace().collect();
+        let size = tokens.windows(3).rfind(|w| w[2] == "Tf").unwrap()[1];
+        let tz = tokens.windows(2).find(|w| w[1] == "Tz").unwrap()[0];
+        assert!(!size.contains(['e', 'E']) && !tz.contains(['e', 'E']), "PDF numbers cannot use exponents");
+        let size = size.parse::<f64>().unwrap();
+        let tz = tz.parse::<f64>().unwrap();
+        let matrix = tokens.windows(7).find(|w| w[6] == "Tm").unwrap();
+        assert!(matrix[..6].iter().all(|v| v.parse::<f64>().is_ok_and(f64::is_finite)));
+        (size, tz, plan.advance_of(plan.encoding(0)))
+    }
+
+    #[test]
+    fn editable_nfd_long_word_keeps_nonzero_serialized_scale_and_exact_width() {
+        let source = format!("{}a\u{301}", "a".repeat(60_000));
+        for width in [0.12, 0.24] {
+            let (size, tz, advance) = editable_nfd_serialized_scale(&source, width, 10.0);
+            assert!(size > 0.0 && size.is_finite() && tz > 0.0 && tz.is_finite(), "serialized size {size}, Tz {tz} must not collapse ink");
+            assert!((size * advance * tz / 100.0 - width).abs() < 0.000002, "serialized scale must fit the actual word width");
+        }
+    }
+
+    #[test]
+    fn editable_nfd_tiny_font_keeps_nonzero_serialized_size_and_exact_width() {
+        let (size, tz, advance) = editable_nfd_serialized_scale("a\u{301}", 0.12, 0.00000001);
+        assert!(size > 0.0 && size.is_finite() && tz > 0.0 && tz.is_finite(), "serialized size {size}, Tz {tz} must not collapse ink");
+        assert!((size * advance * tz / 100.0 - 0.12).abs() < 0.000002);
+    }
+
+    #[test]
+    fn editable_nfd_cluster_content_keeps_utf16_page_offsets_rotations_and_narrow_boxes() {
+        let text = "AI\u{307}g\u{306}Z";
+        let mut plan = TextPlan::for_editable_words(["q\u{315}\u{301}", text]).unwrap();
+        for (i, font) in plan.fonts.iter_mut().enumerate() {
+            font.name = format!("PCOcr{i}");
+        }
+        for u in [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]] {
+            let word = PlacedWord {
+                text: text.into(),
+                origin: [180.0, 20.0],
+                across: [0.01 * u[0], 0.01 * u[1]],
+                up: [-10.0 * u[1], 10.0 * u[0]],
+                confidence: None,
+                source: "synthetic".into(),
+            };
+            let content = String::from_utf8(visible_text_layer_at(&[word], &plan, 1)).unwrap();
+            assert!(content.contains("<FEFF00490307>"), "original UTF-16 I plus dot: {content}");
+            assert!(!content.contains("<FEFF007103150301>"), "page-local index must not write the preceding page");
+            assert_eq!(content.matches("/ActualText").count(), 4, "one logical cluster per code");
+            let tokens: Vec<_> = content.split_whitespace().collect();
+            let matrices: Vec<_> = tokens.windows(7).filter(|w| w[6] == "Tm").collect();
+            assert!(!matrices.is_empty(), "the cluster run has an explicit rotated matrix");
+            for matrix in matrices {
+                assert!(matrix[..6].iter().all(|v| v.parse::<f64>().is_ok_and(f64::is_finite)));
+                let actual: Vec<_> = matrix[..4].iter().map(|v| v.parse::<f64>().unwrap()).collect();
+                assert_eq!(actual, [u[0], u[1], -u[1], u[0]]);
+            }
+            let tz = tokens.windows(2).find(|w| w[1] == "Tz").unwrap()[0].parse::<f64>().unwrap();
+            assert!(tz > 0.0 && tz < 1.0, "a narrow box must not be enlarged to 1%: {tz}");
+        }
+    }
+
+    #[test]
+    fn editable_nfd_left_and_right_ink_overhang_fit_the_word_box_at_every_rotation() {
+        let mut left = false;
+        let mut right = false;
+        for source in ["j\u{301}", "q\u{315}\u{301}\u{301}", "A\u{315}"] {
+            let mut plan = TextPlan::for_editable_words([source]).unwrap();
+            for (i, font) in plan.fonts.iter_mut().enumerate() {
+                font.name = format!("PCOcr{i}");
+            }
+            let (f, c) = plan.encoding(0)[0];
+            let glyph = &plan.fonts[f].glyphs[usize::from(c) - 1].1;
+            left |= glyph.bbox[0] < 0.0;
+            right |= glyph.bbox[2] > glyph.width;
+            for u in [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]] {
+                for width in [0.01, 40.0] {
+                    let word = PlacedWord {
+                        text: source.into(),
+                        origin: [100.0, 100.0],
+                        across: u.map(|x| x * width),
+                        up: [-15.0 * u[1], 15.0 * u[0]],
+                        confidence: None,
+                        source: "synthetic".into(),
+                    };
+                    let content = String::from_utf8(visible_text_layer(&[word], &plan)).unwrap();
+                    let tokens: Vec<_> = content.split_whitespace().collect();
+                    let size = tokens.windows(3).rfind(|w| w[2] == "Tf").unwrap()[1].parse::<f64>().unwrap();
+                    let tz = tokens.windows(2).find(|w| w[1] == "Tz").unwrap()[0].parse::<f64>().unwrap() / 100.0;
+                    let tm: Vec<_> = tokens.windows(7).find(|w| w[6] == "Tm").unwrap()[..6].iter().map(|v| v.parse::<f64>().unwrap()).collect();
+                    for p in glyph.contours.iter().flatten() {
+                        let x = tm[4] + tm[0] * p[0] * size * tz + tm[2] * p[1] * size;
+                        let y = tm[5] + tm[1] * p[0] * size * tz + tm[3] * p[1] * size;
+                        let along = (x - 100.0) * u[0] + (y - 100.0) * u[1];
+                        assert!((-0.002..=width + 0.002).contains(&along), "{source:?}, {u:?}, width {width}: ink {along} escaped; {content}");
+                    }
+                }
+            }
+        }
+        assert!(left && right, "fixtures must exercise both negative left bearing and right overhang");
+    }
+
+    #[test]
+    fn searchable_word_space_with_an_overflowing_matrix_is_omitted() {
+        let first = PlacedWord {
+            text: "A".into(),
+            origin: [0.0, 1.58e308],
+            across: [1.0, 0.0],
+            up: [0.0, 1.0e308],
+            confidence: None,
+            source: "synthetic".into(),
+        };
+        let second = PlacedWord { text: "B".into(), origin: [1.0, 1.58e308], ..first.clone() };
+        assert!(word_separator(&first, &second).is_some(), "the raw separator geometry is finite");
+        let finite_matrices = |content: &[u8]| {
+            let content = std::str::from_utf8(content).unwrap();
+            let tokens: Vec<_> = content.split_whitespace().collect();
+            tokens.windows(7).filter(|w| w[6] == "Tm").all(|w| w[..6].iter().all(|v| v.parse::<f64>().is_ok_and(f64::is_finite)))
+        };
+        for word in [&first, &second] {
+            assert!(finite_matrices(&text_layer(std::slice::from_ref(word), &TextPlan::default())), "the original word's matrix stays finite");
+        }
+        let content = text_layer(&[first, second], &TextPlan::default());
+        assert!(finite_matrices(&content), "a derived separator matrix must not overflow");
+        let content = String::from_utf8(content).unwrap();
+        assert!(content.contains("(A) Tj") && content.contains("(B) Tj"));
+        assert!(!content.contains("( ) Tj"), "only the overflowing separator is omitted");
+    }
+
+    #[test]
+    fn explicit_word_spaces_are_slivers_with_bounded_line_geometry() {
+        let previous = PlacedWord {
+            text: "ab".into(),
+            origin: [20.0, 250.0],
+            across: [12.0, 0.0],
+            up: [0.0, 10.0],
+            confidence: None,
+            source: "synthetic".into(),
+        };
+        let next = PlacedWord { text: "CD".into(), origin: [36.0, 250.0], ..previous.clone() };
+        let space = word_separator(&previous, &next).unwrap();
+        assert_eq!(space.origin, [32.0, 250.0]);
+        assert_eq!(space.across, [0.1, 0.0], "the boundary does not fill the four-point word gap");
+        assert_eq!(space.up, previous.up);
+        for (why, changed) in [
+            ("next line", PlacedWord { origin: [36.0, 230.0], ..next.clone() }),
+            ("table cell", PlacedWord { origin: [80.0, 250.0], ..next.clone() }),
+            ("overlap", PlacedWord { origin: [31.0, 250.0], ..next.clone() }),
+            ("opposite direction", PlacedWord { across: [-12.0, 0.0], ..next.clone() }),
+            ("different direction", PlacedWord { across: [0.0, 12.0], ..next.clone() }),
+            ("existing space", PlacedWord { text: " CD".into(), ..next.clone() }),
+            ("CJK", PlacedWord { text: "日本".into(), ..next.clone() }),
+            ("nonfinite", PlacedWord { origin: [f64::NAN, 250.0], ..next.clone() }),
+            ("empty box", PlacedWord { across: [0.0, 0.0], ..next.clone() }),
+        ] {
+            assert!(word_separator(&previous, &changed).is_none(), "{why}");
+        }
+    }
+
+    #[test]
+    fn visible_word_spaces_do_not_shift_the_display_font_plan_offset() {
+        if pdfcraft_fonts::CRAFT_FONTS.is_empty() {
+            eprintln!("skipped: built without craft-fonts");
+            return;
+        }
+        let words: Vec<_> = [("ab", 20.0), ("CD", 32.1), ("日本", 44.2)]
+            .into_iter()
+            .map(|(text, x)| PlacedWord {
+                text: text.into(),
+                origin: [x, 20.0],
+                across: [12.0, 0.0],
+                up: [0.0, 10.0],
+                confidence: None,
+                source: String::new(),
+            })
+            .collect();
+        let mut plan = TextPlan::for_words(["previous page", "ab", "CD", "日本"]);
+        for (i, font) in plan.fonts.iter_mut().enumerate() {
+            font.name = format!("PCOcr{i}");
+        }
+        let codes: Vec<u8> = plan.encoding(3).iter().map(|&(_, c)| c).collect();
+        assert_eq!(codes.len(), 2);
+        let content = String::from_utf8(visible_text_layer_at(&words, &plan, 1)).unwrap();
+        assert_eq!(content.matches("Tm ( ) Tj").count(), 1, "one Latin word boundary: {content}");
+        assert!(content.contains(&format!("Tm {} Tj", String::from_utf8_lossy(&pdfcraft_fonts::literal(&codes)))), "{content}");
+    }
 
     #[test]
     fn places_words_through_the_mapping() {
