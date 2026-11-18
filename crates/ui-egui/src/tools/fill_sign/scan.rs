@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Color32, CornerRadius, DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, PhotoRect, Pos2, SCAN_MAX_SIDE, SavedSig, ScanError, Sense, SigDraft,
+    SignatureImage, SignaturePhoto, Stroke, Tokens, Turn, image_preview, pos2, vec2,
+};
 
 /// The Scan tab's photo, the frame around the signature and how strongly faint ink is picked up.
 #[derive(Clone, Debug, PartialEq)]

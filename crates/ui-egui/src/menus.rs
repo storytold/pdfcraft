@@ -141,9 +141,13 @@ const EDIT: &[&str] = &[
     PASTE,
     DELETE,
     SEP,
+    "comment.copy",
+    "comment.paste",
+    SEP,
     SELECT_ALL,
     SEP,
     "edit.find",
+    "edit.replace",
     "edit.advanced_search",
     SEP,
     "edit.column_select",
@@ -168,9 +172,9 @@ const DISPLAY: &[&str] = &[
     "view.fit_one_page",
 ];
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
-const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
+const PANES: &[&str] = &["view.side_panel", "view.tools_pane", "view.split"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
-const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
+const MODES: &[&str] = &["view.full_screen", "view.read_mode", crate::viewer_prefs::TOGGLE];
 const PAGES: &[&str] = &[
     "page.organize",
     SEP,
@@ -190,9 +194,11 @@ const PAGES: &[&str] = &[
     "page.crop",
     "page.boxes",
     "page.number",
+    "page.properties",
     SEP,
     "bookmark.add",
     "bookmark.from_structure",
+    "bookmark.from_text_styles",
 ];
 /// Sign ▸ Fill & Sign, with the short labels of the Fill & Sign toolbar.
 const FILL: &[(&str, &str)] = &[
@@ -254,6 +260,14 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
 }
 
 fn translate(english: &'static str) -> String {
+    // craft_menu's bar writes "⋯" (U+22EF, MIDLINE HORIZONTAL ELLIPSIS) itself, for the menu of
+    // titles that don't fit: a sentinel to translate, not an English phrase, and the only one of
+    // its four reserved labels no font this app ships or falls back to has a glyph for.
+    // MissingGlyphPolicy::Panic (egui 0.37) crashes on it. The ordinary ellipsis every other
+    // truncated label in this app already uses is in the bundled faces.
+    if english == "\u{22ef}" {
+        return "…".to_owned();
+    }
     tl!(english).to_owned()
 }
 
@@ -267,6 +281,7 @@ impl PdfCraftApp {
     /// enabled and checked state as the app is now. A modal dialog doesn't grey anything here;
     /// that is the [`Gate`]'s job ([`PdfCraftApp::menu_gate`]).
     pub fn menu_bar(&self, ctx: &egui::Context) -> MenuBar {
+        let mac = crate::commands::mac_shortcuts(ctx);
         let mut used: Vec<&str> = Vec::new();
         let list = |ids: &[&'static str], used: &mut Vec<&'static str>| -> Vec<Node> {
             ids.iter()
@@ -275,7 +290,7 @@ impl PdfCraftApp {
                         return Node::Separator;
                     }
                     used.push(id);
-                    self.menu_item(id, None)
+                    self.menu_item(id, None, mac)
                 })
                 .collect()
         };
@@ -286,7 +301,7 @@ impl PdfCraftApp {
                 // Optimize and Close.
                 let recent = matches!(&node, Node::Item(it) if it.command.id == "file.open_recent");
                 if recent {
-                    nodes.push(self.recent_menu());
+                    nodes.push(self.recent_menu(mac));
                     continue;
                 }
                 let after = match &node {
@@ -320,7 +335,7 @@ impl PdfCraftApp {
             FILL.iter()
                 .map(|&(id, label)| {
                     used.push(id);
-                    self.menu_item(id, Some(tl!(label)))
+                    self.menu_item(id, Some(tl!(label)), mac)
                 })
                 .collect(),
         )];
@@ -349,7 +364,7 @@ impl PdfCraftApp {
         view.extend(list(MODES, &mut used));
         view.push(Node::submenu(tl!("Display theme"), list(THEMES, &mut used)));
         view.push(Node::Separator);
-        view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used)));
+        view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used, mac)));
         view.extend(list(&["view.palette"], &mut used));
         let mut bar = MenuBar {
             menus: vec![
@@ -371,11 +386,11 @@ impl PdfCraftApp {
     /// One item: a registry command with its live label (Undo names the edit) and shortcut, or a
     /// menu-only one. Radio and check items get their kind here, their state from
     /// [`PdfCraftApp::menu_state`].
-    fn menu_item(&self, id: &'static str, label: Option<&str>) -> Node {
+    fn menu_item(&self, id: &'static str, label: Option<&str>, mac: bool) -> Node {
         let (english, shortcut) = match commands::command(id) {
             Some(spec) => {
                 let current = commands::current_label(spec, &self.session, self.active_ids().map(|(_, doc)| doc));
-                (crate::i18n::menu_label(id, &current), spec.shortcut.or((id == "edit.copy").then_some(crate::commands::COPY)))
+                (crate::i18n::menu_label(id, &current), spec.shortcut_for(mac).or((id == "edit.copy").then_some(crate::commands::COPY)))
             }
             None => match extra(id) {
                 Some((_, label, shortcut)) => (tl!(label).to_owned(), *shortcut),
@@ -393,7 +408,7 @@ impl PdfCraftApp {
     }
 
     /// File ▸ Open Recent: the recent files, newest first, then Clear Recent Files.
-    fn recent_menu(&self) -> Node {
+    fn recent_menu(&self, mac: bool) -> Node {
         let mut items: Vec<Node> = self
             .recent
             .iter()
@@ -401,10 +416,10 @@ impl PdfCraftApp {
             .map(|(index, r)| Item::new(CommandRef::with_params("file.open_recent", serde_json::json!({ "index": index })), r.name.clone()).into())
             .collect();
         if items.is_empty() {
-            items.push(self.menu_item(NO_RECENT, None));
+            items.push(self.menu_item(NO_RECENT, None, mac));
         } else {
             items.push(Node::Separator);
-            items.push(self.menu_item("file.clear_recent", Some(tl!("Clear Recent Files"))));
+            items.push(self.menu_item("file.clear_recent", Some(tl!("Clear Recent Files")), mac));
         }
         let label = commands::command("file.open_recent").map_or("Open Recent", |c| c.label);
         Node::submenu(crate::i18n::menu_label("file.open_recent", label), items)
@@ -412,7 +427,7 @@ impl PdfCraftApp {
 
     /// View ▸ Tools: the All tools groups, each a submenu of its ready tools that no other menu
     /// lists, sections apart.
-    fn tools_menu(&self, used: &[&str]) -> Vec<Node> {
+    fn tools_menu(&self, used: &[&str], mac: bool) -> Vec<Node> {
         TOOL_GROUPS
             .iter()
             .filter(|g| g.availability == Availability::Ready)
@@ -429,7 +444,7 @@ impl PdfCraftApp {
                             }
                             seen.push(id);
                             let label = if tool.actions.is_empty() { Some(tl!(tool.label)) } else { None };
-                            nodes.push(self.menu_item(id, label));
+                            nodes.push(self.menu_item(id, label, mac));
                         }
                     }
                 }
@@ -462,6 +477,10 @@ impl PdfCraftApp {
         let enabled_id = |id: &str| commands::command(id).is_some_and(|s| self.command_enabled(s));
         let index = param_index(command);
         let text = ctx.text_edit_focused() && matches!(command.id.as_str(), "edit.undo" | "edit.redo" | "edit.copy" | CUT | PASTE | SELECT_ALL);
+        // Objects selected together in Edit a PDF are what Copy and Cut take, and Paste brings
+        // back objects copied there.
+        let edit_objects = self.quick_tool == crate::QuickTool::EditText && !organize;
+        let doc = self.active_ids().and_then(|(_, id)| self.session.get(id));
         let enabled = text
             || match command.id.as_str() {
                 NO_RECENT => false,
@@ -474,6 +493,21 @@ impl PdfCraftApp {
                 "edit.copy" if view.is_some_and(|v| v.picked_image.is_some()) => {
                     self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_copying())
                 }
+                "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.objects.count() > 0) => {
+                    doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
+                }
+                PASTE if edit_objects && self.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
+                // Selected comments are what ⌘C copies when no text is selected, and ⌘V pastes
+                // copied ones onto the pages (#7123); the menu items send those same events.
+                // Selected text is ⌘C's first, and Prepare Form takes neither key (`clipboard_keys`).
+                "edit.copy"
+                    if !organize
+                        && !self.is_preparing()
+                        && view.is_some_and(|v| v.comments.selected.is_some() && v.selected_text().is_none_or(|t| t.is_empty())) =>
+                {
+                    enabled_id("comment.copy")
+                }
+                PASTE if !organize && !self.is_preparing() && self.comment_clipboard.is_some() => enabled_id("comment.paste"),
                 CUT => organize && enabled_id("page.cut"),
                 PASTE => organize && self.page_clipboard.is_some() && enabled_id("page.paste"),
                 SELECT_ALL | DELETE => has_doc,
@@ -491,6 +525,7 @@ impl PdfCraftApp {
             "view.read_mode" => Some(self.mode == crate::Mode::Read),
             "view.side_panel" => Some(self.right.is_some()),
             "view.tools_pane" => Some(self.left_open),
+            "view.split" => Some(self.panes.split.is_some()),
             "view.theme.system" => Some(self.theme_preference == ThemePreference::System),
             "view.theme.light" => Some(self.theme_preference == ThemePreference::Light),
             "view.theme.dark" => Some(self.theme_preference == ThemePreference::Dark),
@@ -530,7 +565,7 @@ impl PdfCraftApp {
             }
             "edit.copy" => self.menu_input.push(egui::Event::Copy),
             CUT => self.menu_input.push(egui::Event::Cut),
-            PASTE => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
+            PASTE => self.menu_pastes = self.menu_pastes.saturating_add(1),
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
@@ -656,6 +691,22 @@ mod tests {
         bar.find(command).unwrap_or_else(|| panic!("{} is in the menus", command.key()))
     }
 
+    /// The bar's own overflow-menu sentinel is not rendered as typed: no font this app ships or
+    /// falls back to has U+22EF, and egui 0.37's `MissingGlyphPolicy::Panic` crashes on it when
+    /// the menu bar is narrow enough to need it. The editing tests that narrow the window while a
+    /// paragraph is open reproduce this end to end. The other three reserved labels are plain
+    /// ASCII, so untranslated is safe for them.
+    #[test]
+    fn the_overflow_menu_sentinel_is_not_passed_through_untranslated() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let translated = translate("⋯");
+        assert_ne!(translated, "⋯", "no installed font has this glyph");
+        assert_eq!(translated, "…", "the ordinary ellipsis the rest of the app already uses");
+        for label in ["Menu", "Scroll menu up", "Scroll menu down"] {
+            assert_eq!(translate(label), label, "plain ASCII reserved labels need no substitution");
+        }
+    }
+
     #[test]
     fn every_menu_command_is_listed_once_with_its_shortcut() {
         let (app, ctx) = app(&["a.pdf"]);
@@ -671,7 +722,7 @@ mod tests {
                 continue; // A submenu of the recent files.
             }
             let it = item(&bar, &CommandRef::new(spec.id));
-            let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(crate::commands::COPY));
+            let shortcut = spec.shortcut_for(crate::commands::mac_shortcuts(&ctx)).or((spec.id == "edit.copy").then_some(crate::commands::COPY));
             assert_eq!(it.shortcut, shortcut.and_then(chord), "{} has its registry shortcut", spec.id);
         }
         // Every item runs a registry command or one of the menu's own.

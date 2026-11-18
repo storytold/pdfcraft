@@ -1,5 +1,5 @@
+use super::PdfCraftApp;
 use super::save::SaveTarget;
-use super::*;
 
 /// What the user was doing when we asked whether to save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -14,12 +14,21 @@ pub enum CloseRequest {
 }
 
 impl PdfCraftApp {
-    /// Close a tab, asking first if it has unsaved changes.
+    /// Close a tab, asking first if it has unsaved changes. A document under OCR review stays
+    /// open until the review is accepted or rejected.
     pub fn request_close_tab(&mut self, index: usize) {
-        // Text typed into a field counts as an unsaved change.
-        if self.has_unsaved_work(index)
+        if self.hold_close_for_ocr_review(index) {
+            return;
+        }
+        // Text typed into a field counts as an unsaved change. Another tab of the document (split
+        // view) keeps the document's changes open, so closing this one asks only about its own.
+        if self.asks_before_closing(index)
             && let Some(id) = self.views.get(index).map(|v| v.id)
         {
+            if self.has_twin(index) {
+                // The question is about this tab of the document (`asking_tab`).
+                self.active = Some(index);
+            }
             self.close_request = Some(CloseRequest::Tab(id));
         } else {
             self.close_tab(index);
@@ -27,7 +36,11 @@ impl PdfCraftApp {
     }
 
     /// File ▸ Close all: clean documents close at once; each one with unsaved changes asks.
+    /// While a document is under OCR review, nothing closes: the review comes forward first.
     pub fn close_all(&mut self) {
+        if self.hold_for_any_ocr_review() {
+            return;
+        }
         for i in (0..self.views.len()).rev() {
             if !self.has_unsaved_work(i) {
                 self.close_tab(i);
@@ -36,6 +49,33 @@ impl PdfCraftApp {
         if self.first_dirty().is_some() {
             self.close_request = Some(CloseRequest::All);
         }
+    }
+
+    /// A document whose OCR review is still open (a run, or a reading not yet accepted or
+    /// rejected) does not close under it: closing would leave the review with nothing to apply
+    /// to (#6485). The document comes to the front with its review, and a notice says what to
+    /// do. Whether the close was held.
+    pub(crate) fn hold_close_for_ocr_review(&mut self, index: usize) -> bool {
+        let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        if !self.ocr_verify.holds_reading_of(id) {
+            return false;
+        }
+        self.active = Some(index);
+        self.ocr_verify.open = true;
+        self.notify_tr("Accept or reject the OCR review before closing this document");
+        true
+    }
+
+    /// Close all and Quit close every document, so a document under OCR review holds them too
+    /// ([`Self::hold_close_for_ocr_review`]), even when it has no unsaved changes. Whether they
+    /// were held.
+    fn hold_for_any_ocr_review(&mut self) -> bool {
+        self.ocr_review_index().is_some_and(|i| self.hold_close_for_ocr_review(i))
+    }
+
+    /// The tab of the document whose OCR review is still open, if any.
+    fn ocr_review_index(&self) -> Option<usize> {
+        self.views.iter().position(|v| self.ocr_verify.holds_reading_of(v.id))
     }
 
     /// File ▸ Revert (after the confirmation).
@@ -51,10 +91,21 @@ impl PdfCraftApp {
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
+                    // The focus goes with them, running no exit: a script changing the document
+                    // just reverted would only make it unsaved again.
+                    view.forms.focused = None;
                     view.forms.committed = None;
                     view.forms.unbaked.clear();
                     view.pending_edit = None;
+                    // The redactions applied since the last save are discarded too. Those in the
+                    // last web download stay, so later downloads keep the `_Redacted` name.
+                    view.redactions_applied = view.redactions_downloaded;
+                    view.redactions_undone_after_save = 0;
+                    view.saved_redactions_cut_off = false;
                 }
+                // A signature placed since the last save is gone with the rest: the next save
+                // doesn't ask to lock it (#2149).
+                self.placed_signatures.remove(&id);
                 self.notify_tr("Reverted to the last saved version");
             }
             Err(e) => self.notify_error(e),
@@ -72,7 +123,7 @@ impl PdfCraftApp {
         // The next question (another dirty document) starts on Save again.
         self.save_prompt_button = Default::default();
         let index = match req {
-            CloseRequest::Tab(id) => match self.views.iter().position(|v| v.id == id) {
+            CloseRequest::Tab(id) => match self.asking_tab(id) {
                 Some(i) => i,
                 None => return, // already closed
             },
@@ -107,7 +158,7 @@ impl PdfCraftApp {
                 // document open.
                 let ctx = ctx.clone();
                 self.save_then(index, SaveTarget::InPlace, move |app| {
-                    if let Some(i) = app.views.iter().position(|v| v.id == id) {
+                    if let Some(i) = app.asking_tab(id) {
                         app.close_and_continue(&ctx, i, req);
                     }
                 });
@@ -115,12 +166,28 @@ impl PdfCraftApp {
         }
     }
 
+    /// The tab a close question about document `id` is about: the active one when it shows `id`
+    /// (in split view two tabs can), else the document's first.
+    pub(crate) fn asking_tab(&self, id: pdfcraft_engine::DocId) -> Option<usize> {
+        self.active.filter(|&a| self.views.get(a).is_some_and(|v| v.id == id)).or_else(|| self.views.iter().position(|v| v.id == id))
+    }
+
     /// Close tab `index` for a close request, then ask about the next dirty document, or quit.
-    pub(super) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+    /// The save it waited for may have taken a later frame (the user choosing where), and an OCR
+    /// review started meanwhile holds the close as it holds a new one: the document stays open,
+    /// and Quit or Close all stops there.
+    pub(crate) fn close_and_continue(&mut self, ctx: &egui::Context, index: usize, req: CloseRequest) {
+        let whole = req == CloseRequest::Quit || req == CloseRequest::All;
+        if self.hold_close_for_ocr_review(index) || (whole && self.hold_for_any_ocr_review()) {
+            if req == CloseRequest::Quit {
+                self.forget_quit_session();
+            }
+            return;
+        }
         self.close_tab(index);
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
-        if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
+        if whole && self.close_request.is_none() {
             match self.first_dirty() {
                 Some(_) => {
                     // A question about the next document is a new one.
@@ -134,9 +201,13 @@ impl PdfCraftApp {
     }
 
     /// Request a normal application exit, preserving every unsaved document until answered.
-    /// Returns false while the existing save/discard/cancel prompt needs a decision.
+    /// Returns false while the existing save/discard/cancel prompt needs a decision, or while an
+    /// OCR review is still to be accepted or rejected.
     pub(crate) fn request_quit(&mut self, ctx: &egui::Context) -> bool {
-        if self.first_dirty().is_some() {
+        if self.hold_for_any_ocr_review() {
+            ctx.request_repaint();
+            false
+        } else if self.first_dirty().is_some() {
             self.close_request = Some(CloseRequest::Quit);
             ctx.request_repaint();
             false
@@ -152,12 +223,21 @@ impl PdfCraftApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// Publish whether any document has unsaved work, for the browser's reload warning (#812).
+    /// Publish whether leaving would lose work, for the browser's reload warning (#812): a
+    /// document with unsaved changes, or an OCR review not yet accepted or rejected, which holds
+    /// Close and Quit the same way.
     pub(crate) fn sync_unsaved_flag(&self) {
-        self.unsaved_flag.store(self.first_dirty().is_some(), std::sync::atomic::Ordering::Relaxed);
+        self.unsaved_flag.store(self.work_at_risk(), std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Intercept window close while documents have unsaved changes.
+    /// Whether leaving would lose work: a document with unsaved changes, or an OCR review not yet
+    /// accepted or rejected. The browser's reload warning and the embedding page (`host_dirty`)
+    /// both hear this.
+    pub(crate) fn work_at_risk(&self) -> bool {
+        self.first_dirty().is_some() || self.ocr_review_index().is_some()
+    }
+
+    /// Intercept window close while documents have unsaved changes or an OCR review is open.
     pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
         // egui's default quit shortcut ignores extra Alt/Shift, including Ctrl+Alt+Q for '@'.
         ctx.options_mut(|o| o.quit_shortcuts.clear());
@@ -170,12 +250,20 @@ impl PdfCraftApp {
         if shortcut {
             self.request_quit(ctx);
         }
+        self.hold_close_for_unsaved(ctx);
+    }
+
+    /// The window's close: held back with the "save changes?" question while something is
+    /// unsaved. Also run after a frame whose logic panicked before `guard_quit` (#3914).
+    pub(crate) fn hold_close_for_unsaved(&mut self, ctx: &egui::Context) {
         self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        // `first_dirty` counts text typed into a field as an unsaved change.
-        if !self.allow_quit && self.first_dirty().is_some() {
+        if !self.allow_quit && self.hold_for_any_ocr_review() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        } else if !self.allow_quit && self.first_dirty().is_some() {
+            // `first_dirty` counts text typed into a field as an unsaved change.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Quit);
         } else {

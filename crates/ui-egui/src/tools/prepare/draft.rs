@@ -1,4 +1,4 @@
-use super::*;
+use super::{Calculate, FieldLook, FieldProps, FormField, FormFieldKind, Format, Validate};
 
 // ───────────────────────────────────────────────────────────────────────── Field Properties
 
@@ -128,6 +128,7 @@ pub struct FieldDraft {
     pub default: String,
     /// Check boxes and radio buttons: this widget's "on" state (export value).
     pub on_state: String,
+    pub export_value: String,
     /// 0 = auto.
     pub font_size: f64,
     /// Left, bottom, width, height in points.
@@ -140,6 +141,9 @@ pub struct FieldDraft {
     pub format: Format,
     pub validate: Validate,
     pub calculate: Calculate,
+    /// Calculate tab: the last edit of the custom script was refused for its length (said until
+    /// the next edit is taken, another calculation is chosen, or the dialog is opened again).
+    pub script_refused: bool,
     /// Every other field's name (the Calculate tab picks from them).
     pub others: Vec<String>,
     /// Actions tab: each trigger's action, and the one being added.
@@ -201,6 +205,7 @@ impl FieldDraft {
             quadding: f.quadding,
             default: f.default.first().cloned().unwrap_or_default(),
             on_state: f.widgets.get(widget).and_then(|w| w.on_state.clone()).unwrap_or_default(),
+            export_value: f.export_of(widget).unwrap_or_default().to_string(),
             font_size: da_size(&f.da),
             position: [r[0], r[1], r[2] - r[0], r[3] - r[1]],
             rotation: f.widgets.get(widget).map(|w| w.rotation).unwrap_or(0),
@@ -208,7 +213,13 @@ impl FieldDraft {
             check_style: None,
             format: f.actions.format.clone(),
             validate: f.actions.validate.clone(),
-            calculate: f.actions.calculate.clone(),
+            calculate: match (&f.actions.calculate, &f.actions.scripts.calculate) {
+                // A script that is no sum or notation is the field's custom calculation script:
+                // shown as one, and written back only when it is changed (#6630).
+                (Calculate::None, Some(js)) => Calculate::Custom(js.clone()),
+                (c, _) => c.clone(),
+            },
+            script_refused: false,
             others: Vec::new(),
             actions: Vec::new(),
             new_action: ActionDraft::default(),
@@ -252,11 +263,13 @@ impl FieldDraft {
             name: (self.name.trim() != o.name).then(|| self.name.trim().to_string()),
             tooltip: (self.tooltip != o.tooltip).then(|| self.tooltip.clone()),
             caption: (self.caption != o.caption).then(|| (self.widget, self.caption.clone())),
+            caption_all: None,
             read_only: ch(self.read_only, o.read_only),
             required: ch(self.required, o.required),
             multiline: ch(self.multiline, o.multiline),
             max_len: ((self.limit, self.max_len) != (o.limit, o.max_len)).then_some((self.limit && self.max_len > 0).then_some(self.max_len)),
             options: (self.options != o.options).then(|| self.options.clone()),
+            export_value: (self.export_value != o.export_value).then(|| (self.widget, self.export_value.clone())),
             font_size: ((self.font_size - o.font_size).abs() > 1e-6).then_some(self.font_size),
             rect: (self.position != o.position).then(|| {
                 let [x, y, w, h] = self.position;

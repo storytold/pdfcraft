@@ -1,19 +1,41 @@
+use pdfcraft_fonts::shaped_text::{is_thai, thai_refusal, thai_width};
+
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
+    Background, Context, HeaderFooter, MarkKind, MarkText, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb,
+    shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
-    place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
+    place_inside_wrapper, stream_tag, undrawable, wrapper_role,
 };
-use super::*;
+use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+
+/// Commit one complete mark operation only after every selected page succeeds. The snapshot
+/// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
+/// and document metadata are copied. Dropping a failed stage also drops removed marks, changed
+/// page/resources/backdrop dictionaries and new objects, including the allocation cursor.
+fn apply_mark_transaction(doc: &mut Document, apply: impl FnOnce(&mut Document) -> Result<(), EditError>) -> Result<(), EditError> {
+    let mut staged = doc.clone();
+    apply(&mut staged)?;
+    *doc = staged;
+    Ok(())
+}
 
 /// Add a header and footer to `pages` (0-based). With `replace`, existing headers and footers on
-/// those pages are removed first (Acrobat's Replace Existing).
+/// those pages are removed first (Acrobat's Replace Existing). The whole call is atomic:
+/// on error, the document (including earlier selected pages) is unchanged.
 pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replace, cx))
+}
+
+fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     if hf.text.iter().all(|t| t.trim().is_empty()) {
         return Err(EditError::Invalid("type the header or footer text first".into()));
+    }
+    if let Some(why) = hf.text.iter().find_map(|t| thai_refusal(t)) {
+        return Err(EditError::Invalid(why));
     }
     if let Some(c) = hf.first_undrawable() {
         return Err(undrawable(c));
@@ -57,12 +79,23 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     }
     let all = page_list(doc);
     let count = all.len();
+    let number_of = |k: usize| {
+        u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))
+    };
+    let bates_of = |k: usize| bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()));
+    // Every Thai line drawn on any page (a Bates prefix may join a template's Thai), for its fonts.
+    let mut thai_lines = std::collections::BTreeSet::new();
+    if hf.text.iter().any(|t| t.chars().any(is_thai)) {
+        for k in 0..pages.len() {
+            let (number, bates) = (number_of(k)?, bates_of(k)?);
+            thai_lines.extend(hf.text.iter().flat_map(|t| expand(t, number, count, bates, cx).lines().map(str::to_owned).collect::<Vec<_>>()));
+        }
+    }
+    let thai = MarkText::new(doc, &all, pages, thai_lines.iter().map(String::as_str))?;
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
         let (w, h) = page.display_size(doc);
-        let number =
-            u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))?;
-        let bates = bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()))?;
+        let (number, bates) = (number_of(k)?, bates_of(k)?);
         let size = hf.font_size;
         let [top, bottom, left, right] = hf.margins;
         // The page resource the face is added under: the usual name, unless the page already
@@ -75,6 +108,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         let base = hf.font.base_font(false, false);
         let resource = free_font_name(doc, &page_fonts(doc, page), preferred, base);
         let mut body: Vec<u8> = format!("BT\n/{resource} {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();
+        let mut current = None;
         let mut underlines = String::new();
         for (slot, template) in hf.text.iter().enumerate() {
             if template.trim().is_empty() {
@@ -85,7 +119,8 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
             let line_h = size * 1.2;
             for (li, line) in lines.iter().enumerate() {
                 // Centred and right-aligned text is placed by its width in the chosen face.
-                let tw = hf.font.width(line, size, false, false);
+                let face = |s: &str, size: f64| hf.font.width(s, size, false, false);
+                let tw = thai_width(line, size, face);
                 let x = match slot % 3 {
                     0 => left,
                     1 => (w - tw) / 2.0,
@@ -93,7 +128,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
                 };
                 // Headers hang below the top margin; footers sit on the bottom margin.
                 let y = if header { h - top - size * 0.8 - li as f64 * line_h } else { bottom + (lines.len() - 1 - li) as f64 * line_h };
-                body.extend(text_op(x, y, line));
+                thai.show(&mut body, line, x, y, size, &resource, |s| face(s, size), &mut current);
                 if hf.underline {
                     underlines.push_str(&format!("{} {} {} {} re f\n", n(x), n(y - size * 0.15), n(tw), n((size * 0.06).max(0.4))));
                 }
@@ -110,6 +145,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
         if !page_fonts(doc, page).contains(resource.as_bytes()) {
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
+        thai.add_to(doc, &page_list(doc)[i])?;
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
         if let Some(Some(m)) = shrinks.get(k) {
@@ -121,13 +157,21 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     Ok(())
 }
 
-/// Add a text watermark to `pages`.
+/// Add a text or picture watermark to `pages`. All selected pages, including mark replacement,
+/// form one transaction; on error, the document is unchanged.
 pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_watermark_in_place(staged, pages, wm, replace))
+}
+
+fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let text = wm.text.trim();
     if text.is_empty() && wm.source.is_none() {
         return Err(EditError::Invalid("type the watermark text first".into()));
+    }
+    if let Some(why) = wm.source.is_none().then(|| thai_refusal(text)).flatten() {
+        return Err(EditError::Invalid(why));
     }
     if let Some(c) = wm.first_undrawable() {
         return Err(undrawable(c));
@@ -150,6 +194,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     }
     let opacity = wm.opacity.clamp(0.0, 1.0);
     let lines: Vec<&str> = text.lines().collect();
+    let thai = if wm.source.is_none() { MarkText::new(doc, &page_list(doc), pages, lines.iter().copied())? } else { MarkText::default() };
     for &i in pages {
         let page = page_list(doc)[i].clone();
         let (w, h) = page.display_size(doc);
@@ -164,7 +209,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
-        let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
+        let widest = lines.iter().map(|l| thai_width(l, 1.0, helvetica_width)).fold(0.0, f64::max).max(0.01);
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
         let (s, c) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
@@ -186,21 +231,39 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
         );
         let line_h = size * 1.15;
         let total = line_h * (lines.len() as f64 - 1.0);
+        let mut current = None;
         for (li, line) in lines.iter().enumerate() {
-            let tw = helvetica_width(line, size);
-            content.extend(text_op(-tw / 2.0, total / 2.0 - li as f64 * line_h - size * 0.35, line));
+            let tw = thai_width(line, size, helvetica_width);
+            thai.show(
+                &mut content,
+                line,
+                -tw / 2.0,
+                total / 2.0 - li as f64 * line_h - size * 0.35,
+                size,
+                "PCHelv",
+                |s| helvetica_width(s, size),
+                &mut current,
+            );
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
         add_resources(doc, &page, Some(opacity), None)?;
+        thai.add_to(doc, &page_list(doc)[i])?;
         let page = &page_list(doc)[i];
         place(doc, page, MarkKind::Watermark, content, wm.behind)?;
     }
     Ok(())
 }
 
-/// Add a solid-colour background behind the content of `pages`.
+/// Add a solid-colour background behind the content of `pages`. With `bg.replace_backdrop`, a
+/// white backdrop a page paints itself is replaced first, so the background shows (see
+/// [`backdrop`]); a picture backdrop (a scan) still hides it. All selected pages, including
+/// replacement and backdrop edits, form one transaction; on error, the document is unchanged.
 pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_background_in_place(staged, pages, bg, replace))
+}
+
+fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     if replace {
@@ -208,7 +271,10 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
     }
     let opacity = if bg.opacity.is_finite() { bg.opacity.clamp(0.0, 1.0) } else { 1.0 };
     for &i in pages {
-        let page = page_list(doc)[i].clone();
+        let mut page = page_list(doc)[i].clone();
+        if bg.replace_backdrop && backdrop::replace(doc, &page)? {
+            page = page_list(doc)[i].clone();
+        }
         let (w, h) = page.display_size(doc);
         let mut content = begin(MarkKind::Background, "Background", page.view_matrix(doc));
         match &bg.source {
@@ -231,13 +297,18 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
 
 /// Remove marks of `kind` from `pages`; returns how many were removed. Wrappers left with
 /// nothing after them go too, restoring the original content list; a wrapper that content
-/// after it still relies on (another tool's appended stream) stays.
+/// after it still relies on (another tool's appended stream) stays. Removing backgrounds also
+/// turns a backdrop [`add_background`] replaced back on where that is still safe; the pages where
+/// it isn't are [`backdrops_left_off`].
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let mut removed = 0;
     for &i in pages {
         let page = &all[i];
+        if kind == MarkKind::Background {
+            backdrop::restore(doc, page)?;
+        }
         let list = contents(doc, page)?;
         let before = list.len();
         let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
