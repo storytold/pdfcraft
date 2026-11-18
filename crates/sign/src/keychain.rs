@@ -5,9 +5,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use security_framework::certificate::SecCertificate;
 use security_framework::item::{ItemClass, ItemSearchOptions, Limit, Reference, SearchResult};
 use security_framework::key::{Algorithm, SecKey};
 use security_framework::os::macos::keychain::SecKeychain;
+use security_framework::policy::SecPolicy;
+use security_framework::trust::SecTrust;
 
 use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey};
 use crate::{Certificate, DigitalId, SignError};
@@ -37,15 +40,36 @@ pub fn reference(c: &Certificate) -> String {
     format!("keychain:{}", d.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
-/// The identity a reference (or a certificate common name) names.
+/// The identity a reference (or a certificate common name) names. Its `chain` holds the
+/// issuers macOS finds for the certificate, so a signature embeds them as it does for a file's.
 pub fn find(reference_or_name: &str) -> Result<DigitalId, SignError> {
-    identities(None)?
+    let mut id = identities(None)?
         .into_iter()
         .find(|id| {
             reference(&id.certificate) == reference_or_name
                 || id.certificate.subject.common_name() == Some(reference_or_name.trim_start_matches("keychain:"))
         })
-        .ok_or_else(|| SignError::Crypto(format!("no Keychain identity {reference_or_name}")))
+        .ok_or_else(|| SignError::Crypto(format!("no Keychain identity {reference_or_name}")))?;
+    id.chain = issuers(&id.certificate);
+    Ok(id)
+}
+
+/// The certificates macOS chains `certificate` to through the user's keychains (and the
+/// system roots), without `certificate` itself. Best effort: an identity signs without them
+/// too. Nothing is fetched from the network, so signing stays offline.
+fn issuers(certificate: &Certificate) -> Vec<Certificate> {
+    let Ok(leaf) = SecCertificate::from_der(&certificate.raw) else { return Vec::new() };
+    let Ok(mut trust) = SecTrust::create_with_certificates(&[leaf], &[SecPolicy::create_x509()]) else { return Vec::new() };
+    if trust.set_network_fetch_allowed(false).is_err() {
+        return Vec::new();
+    }
+    // The chain is built even when it doesn't end at a trusted root (a private CA, an expired
+    // certificate); whether the signer is trusted is decided when the signature is validated.
+    let _ = trust.evaluate_with_error();
+    // `SecTrust::chain` needs macOS 12; PdfCraft runs on macOS 11 (packaging/macos/package.sh).
+    #[allow(deprecated)]
+    let chain: Vec<SecCertificate> = (0..trust.certificate_count()).filter_map(|i| trust.certificate_at_index(i)).collect();
+    chain.iter().map(SecCertificate::to_der).filter(|der| *der != certificate.raw).filter_map(|der| Certificate::parse(&der).ok()).collect()
 }
 
 /// The signing identities in the user's keychains (or only in the keychain file `keychain`).

@@ -5,14 +5,15 @@ use crate::filter::Filter;
 use crate::object;
 use crate::object::Dict;
 use crate::object::Name;
-use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, TYPE};
+use crate::object::dict::keys::{DECODE_PARMS, DP, F, FILTER, LENGTH, NAME, TYPE};
 use crate::object::{Array, ObjectIdentifier};
 use crate::object::{Object, ObjectLike, ObjectRefLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::trivia::is_white_space_character;
+use crate::trivia::{is_eol_character, is_regular_character, is_white_space_character};
 use crate::util::{OptionLog, find_needle};
 use alloc::borrow::Cow;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter};
 use smallvec::SmallVec;
@@ -73,38 +74,44 @@ impl<'a> Stream<'a> {
         let mut collected_filters = SmallVec::new();
         let mut collected_params = SmallVec::new();
 
+        // PdfCraft patch (30): `/DecodeParms` in either form, whichever form `/Filter` has: one filter
+        // in an array with a lone dictionary is an everyday spelling, and a lone dictionary is the
+        // first filter's. Read as the chain asks, so a long array costs no more than a short one.
+        let parms = self
+            .dict
+            .get::<Object<'_>>(DP)
+            .or_else(|| self.dict.get::<Object<'_>>(DECODE_PARMS));
+        let mut in_array = match &parms {
+            Some(Object::Array(a)) => Some(a.iter::<Object<'_>>()),
+            _ => None,
+        };
+        let mut lone = match parms {
+            Some(Object::Dict(d)) => Some(d),
+            _ => None,
+        };
+        let mut next_params = || {
+            lone.take()
+                .or_else(|| in_array.as_mut()?.next()?.into_dict())
+                .unwrap_or_default()
+        };
+
         if let Some(filter) = self
             .dict
             .get::<Name<'_>>(F)
             .or_else(|| self.dict.get::<Name<'_>>(FILTER))
             .and_then(Filter::from_name)
         {
-            let params = self
-                .dict
-                .get::<Dict<'_>>(DP)
-                .or_else(|| self.dict.get::<Dict<'_>>(DECODE_PARMS))
-                .unwrap_or_default();
-
             collected_filters.push(filter);
-            collected_params.push(params);
+            collected_params.push(next_params());
         } else if let Some(filters) = self
             .dict
             .get::<Array<'_>>(F)
             .or_else(|| self.dict.get::<Array<'_>>(FILTER))
         {
             let filters = filters.iter::<Name<'_>>().map(Filter::from_name);
-            let mut params = self
-                .dict
-                .get::<Array<'_>>(DP)
-                .or_else(|| self.dict.get::<Array<'_>>(DECODE_PARMS))
-                .map(|a| a.iter::<Object<'_>>());
 
             for filter in filters {
-                let params = params
-                    .as_mut()
-                    .and_then(|p| p.next())
-                    .and_then(|p| p.into_dict())
-                    .unwrap_or_default();
+                let params = next_params();
 
                 if let Some(filter) = filter {
                     collected_filters.push(filter);
@@ -117,6 +124,20 @@ impl<'a> Stream<'a> {
             filters: collected_filters,
             params: collected_params,
         }
+    }
+
+    /// PdfCraft patch (30): the crypt filter the stream names for itself: `/Crypt` in its chain, its
+    /// name in that filter's parameters, or `/Identity` without one (ISO 32000-2 §7.4.10).
+    fn crypt_filter(&self) -> Option<String> {
+        let FiltersAndParams { filters, params } = self.filters_and_params();
+        // A chain longer than cos decodes names none there, so it names none here either:
+        // `pdfcraft_filters::MAX_CHAIN`, and `/Crypt`.
+        if filters.len() > 9 {
+            return None;
+        }
+        let i = filters.iter().position(|f| matches!(f, Filter::Crypt))?;
+        let name = params.get(i).and_then(|p| p.get::<Name<'_>>(NAME));
+        Some(name.map_or_else(|| "Identity".to_string(), |n| n.as_str().to_string()))
     }
 
     /// Return the raw, decrypted data of the stream.
@@ -132,9 +153,13 @@ impl<'a> Stream<'a> {
                 .map(|t| t.as_ref() != b"XRef")
                 .unwrap_or(true)
         {
+            let own = self.crypt_filter();
+            let target = own
+                .as_deref()
+                .map_or(DecryptionTarget::Stream, DecryptionTarget::NamedStream);
             Cow::Owned(
                 ctx.xref()
-                    .decrypt(self.obj_id(), self.data, DecryptionTarget::Stream)
+                    .decrypt(self.obj_id(), self.data, target)
                     // TODO: MAybe an error would be better?
                     .unwrap_or_default(),
             )
@@ -241,13 +266,23 @@ impl<'a> Stream<'a> {
             .zip(filters_and_params.params.iter())
             .enumerate()
         {
+            // PdfCraft patch (30): `raw_data` decrypted the data, so there's nothing to undo, and a
+            // chain can name this thousands of times.
+            if matches!(filter, Filter::Crypt) {
+                continue;
+            }
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count).min(max);
+            // PdfCraft patch: the last filter of an image produces its rows.
+            let rows = (i + 1 == count && image_params.height > 0)
+                .then(|| usize::try_from(image_params.height).ok())
+                .flatten();
             let new = filter.apply(
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
                 limit,
+                rows,
             )?;
             current = Some(new);
         }
@@ -287,10 +322,19 @@ impl<'a> Readable<'a> for Stream<'a> {
         let offset = r.offset();
         parse_proper(r, &dict)
             .or_else(|| {
+                // PdfCraft patch (36): before searching on, which could reach a later object.
+                r.jump(offset);
+                parse_declared(r, &dict, true)
+            })
+            .or_else(|| {
                 warn!("failed to parse stream, trying to parse it manually");
 
                 r.jump(offset);
                 parse_fallback(r, &dict)
+            })
+            .or_else(|| {
+                r.jump(offset);
+                parse_declared(r, &dict, false)
             })
             .error_none("was unable to manually parse the stream")
     }
@@ -353,17 +397,33 @@ impl FilterResult<'_> {
     }
 }
 
+/// PdfCraft patch (20): the end-of-line after the `stream` keyword. Microsoft Reporting Services
+/// writes `stream \r\n`, a space before the line break, which the specification does not allow.
+/// Without this the content stream was taken to start at the space, failed to inflate, and the
+/// page rendered blank (bank statements, invoices) while other viewers showed it. Only spaces and
+/// tabs are skipped, and only when a line break follows, so stream data is never swallowed.
+fn forward_stream_eol(r: &mut Reader<'_>) -> Option<()> {
+    r.forward_while(|b| b == b' ' || b == b'\t');
+    r.forward_tag(b"\n")
+        .or_else(|| r.forward_tag(b"\r\n"))
+        // Technically not allowed, but no reason to not try it.
+        .or_else(|| r.forward_tag(b"\r"))
+}
+
 fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
     let length = dict.get::<u32>(LENGTH)?;
 
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
-    r.forward_tag(b"\n")
-        .or_else(|| r.forward_tag(b"\r\n"))
-        .or_else(|| r.forward_tag(b"\r"))?;
+    forward_stream_eol(r)?;
     let data = r.read_bytes(length as usize)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;
+    // PdfCraft patch (36): a whole token (ISO 32000-2 7.2.3), so a wrong `/Length` that stops
+    // before payload such as `endstreamer` does not end the stream there.
+    if r.tail().and_then(|t| t.first().copied()).is_some_and(is_regular_character) {
+        return None;
+    }
 
     Some(Stream::new(data, dict.clone()))
 }
@@ -376,14 +436,10 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     // A wrong `/Length` still recovers, because that keyword sits directly after the dict.
     r.skip_white_spaces_and_comments();
     r.forward_tag(b"stream")?;
-
-    r.forward_tag(b"\n")
-        .or_else(|| r.forward_tag(b"\r\n"))
-        // Technically not allowed, but no reason to not try it.
-        .or_else(|| r.forward_tag(b"\r"))?;
+    forward_stream_eol(r)?;
 
     let tail = r.tail()?;
-    let endstream_offset = find_needle(tail, b"endstream")?;
+    let endstream_offset = find_endstream_token(tail)?;
     let data_end = trim_trailing_ascii_whitespace(&tail[..endstream_offset]);
     let data = tail.get(..data_end)?;
 
@@ -392,6 +448,93 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     r.forward_tag(b"endstream")?;
 
     Some(Stream::new(data, dict.clone()))
+}
+
+/// PdfCraft patch (36): a stream with no `endstream` after it, as a producer that writes
+/// `endstrea` leaves every stream, is the bytes its `/Length` gives, "how many bytes of the PDF
+/// file are used for the stream's data" (ISO 32000-2 7.3.8.2), as other readers take it. Neither
+/// [`parse_proper`] nor [`parse_fallback`] found it, so every font and page content of such a file
+/// was lost and its pages drew blank. Only a `/Length` the data holds is read.
+///
+/// With `at_an_end`, tried before [`parse_fallback`], the `/Length` must also end where the
+/// stream would ([`at_stream_end`]): before a whole `endstream`, before a misspelt one
+/// (`endstrea`) or `endobj` where the object ends too, or at the end of the data. Otherwise the search for `endstream` would run on into a later object and take its
+/// header and data as this stream's. Without it, tried last, after the search found no
+/// `endstream` in the rest of the data, so it doesn't search again.
+fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> Option<Stream<'a>> {
+    let length = dict.get::<u32>(LENGTH)?;
+
+    r.skip_white_spaces_and_comments();
+    r.forward_tag(b"stream")?;
+    forward_stream_eol(r)?;
+    let data = r.read_bytes(usize::try_from(length).ok()?)?;
+    if at_an_end && !at_stream_end(r.tail().unwrap_or_default()) {
+        return None;
+    }
+
+    Some(Stream::new(data, dict.clone()))
+}
+
+/// PdfCraft patch (36): the first `endstream` in `data` that is a whole token (ISO 32000-2
+/// 7.2.3), not the start of payload bytes such as `endstreamer`.
+fn find_endstream_token(data: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    loop {
+        let at = from + find_needle(data.get(from..)?, b"endstream")?;
+        let end = at + b"endstream".len();
+        if !data.get(end).copied().is_some_and(is_regular_character) {
+            return Some(at);
+        }
+        from = end;
+    }
+}
+
+/// PdfCraft patch (36): whether `rest`, the data after a stream's `/Length` bytes, is where the
+/// stream ends. A whole `endstream` token is. A misspelt one (`endstrea`), an `endobj` with the
+/// `endstream` left out, or both, are only where the object ends as well, before the end of the
+/// data, another object's `N G obj` header, or `xref`, `trailer` or `startxref`: payload such as
+/// `endobj more`, where a wrong `/Length` stops, is not, and the search for `endstream` runs on.
+fn at_stream_end(rest: &[u8]) -> bool {
+    let rest = skip_trivia(rest);
+    if keyword(rest, b"endstream").is_some() {
+        return true;
+    }
+    let (rest, misspelt) = keyword(rest, b"endstrea").map_or((rest, false), |r| (skip_trivia(r), true));
+    let (rest, endobj) = keyword(rest, b"endobj").map_or((rest, false), |r| (skip_trivia(r), true));
+    if !(misspelt || endobj) {
+        return rest.is_empty();
+    }
+    rest.is_empty()
+        || [&b"xref"[..], b"trailer", b"startxref"].iter().any(|kw| keyword(rest, kw).is_some())
+        || object_header(rest)
+}
+
+/// Whether `rest` starts with an indirect object's `N G obj` header.
+fn object_header(rest: &[u8]) -> bool {
+    fn number(r: &[u8]) -> Option<&[u8]> {
+        let digits = r.iter().take_while(|b| b.is_ascii_digit()).count();
+        (digits > 0).then(|| skip_trivia(r.get(digits..).unwrap_or_default()))
+    }
+    number(rest).and_then(number).is_some_and(|r| keyword(r, b"obj").is_some())
+}
+
+/// What follows `kw` at the start of `data` when it is a whole token there.
+fn keyword<'a>(data: &'a [u8], kw: &[u8]) -> Option<&'a [u8]> {
+    data.strip_prefix(kw).filter(|tail| !tail.first().copied().is_some_and(is_regular_character))
+}
+
+/// `data` with leading white space and comments skipped.
+fn skip_trivia(mut data: &[u8]) -> &[u8] {
+    loop {
+        match data.first() {
+            Some(b) if is_white_space_character(*b) => data = data.get(1..).unwrap_or_default(),
+            Some(b'%') => {
+                let eol = data.iter().position(|b| is_eol_character(*b)).unwrap_or(data.len());
+                data = data.get(eol..).unwrap_or_default();
+            }
+            _ => return data,
+        }
+    }
 }
 
 fn trim_trailing_ascii_whitespace(data: &[u8]) -> usize {

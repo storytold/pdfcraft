@@ -21,10 +21,11 @@ workspace_version() {
     /^\[/ { in_pkg = ($0 == "[workspace.package]") ; next }
     in_pkg && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }
   ' "$ROOT/Cargo.toml"
+  return
 }
 
 VERSION="${PDFCRAFT_VERSION:-$(workspace_version)}"
-if [ -z "$VERSION" ]; then
+if [[ -z "$VERSION" ]]; then
   echo "error: could not read [workspace.package] version from $ROOT/Cargo.toml" >&2
   exit 1
 fi
@@ -32,12 +33,13 @@ export VERSION
 
 # A labelled build says so in `--version` and About (pdfcraft_engine::build_info) and in its
 # package release (packaging/linux/nfpm.yaml), so it can't be mistaken for the release.
-if [ -n "${PDFCRAFT_BUILD_LABEL:-}" ]; then
+if [[ -n "${PDFCRAFT_BUILD_LABEL:-}" ]]; then
   case "$PDFCRAFT_BUILD_LABEL" in
     *[!A-Za-z0-9.]* | .* | *.)
       echo "error: PDFCRAFT_BUILD_LABEL may hold only letters, digits and inner dots: $PDFCRAFT_BUILD_LABEL" >&2
       exit 1
       ;;
+    *) ;;
   esac
   export PDFCRAFT_BUILD_LABEL
 fi
@@ -46,7 +48,7 @@ DIST="${DIST:-$ROOT/dist/release}"
 mkdir -p "$DIST"
 export DIST
 
-if [ -z "${PDFCRAFT_BUILD_SHA:-}" ]; then
+if [[ -z "${PDFCRAFT_BUILD_SHA:-}" ]]; then
   PDFCRAFT_BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
 fi
 export PDFCRAFT_BUILD_SHA
@@ -55,25 +57,27 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
 # Emit a GitHub Actions warning (plain stderr outside Actions).
 warn() {
-  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$*"; else echo "warning: $*" >&2; fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then echo "::warning::$*"; else echo "warning: $*" >&2; fi
+  return
 }
 
 # Copy licence and readme files that exist into a package directory.
 copy_docs() {
   local dest="$1" f
   for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT NOTICE; do
-    if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$dest/"; fi
+    if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$dest/"; fi
   done
   copy_font_licences "$dest"
+  return
 }
 
 # Builds made with the optional craft-fonts input (CRAFT_FONTS_DIR, set for every release) embed
 # its fonts, so the package carries their licences: fonts/<family>/OFL.txt -> OFL-<family>.txt.
 copy_font_licences() {
   local dest="$1" f family
-  [ -n "${CRAFT_FONTS_DIR:-}" ] || return 0
+  [[ -n "${CRAFT_FONTS_DIR:-}" ]] || return 0
   for f in "$CRAFT_FONTS_DIR"/fonts/*/OFL.txt; do
-    [ -f "$f" ] || continue
+    [[ -f "$f" ]] || continue
     family="$(basename "$(dirname "$f")")"
     cp "$f" "$dest/OFL-$family.txt"
   done
@@ -90,7 +94,7 @@ stage_models() {
   dest="$(cd "$dest" && pwd)"
   (cd "$ROOT" && cargo xtask models "$dest")
   rm -f "$dest"/*.part
-  if ! ls "$dest"/*.LICENCE.txt >/dev/null 2>&1 || [ ! -s "$dest/ATTRIBUTION.txt" ]; then
+  if ! ls "$dest"/*.LICENCE.txt >/dev/null 2>&1 || [[ ! -s "$dest/ATTRIBUTION.txt" ]]; then
     echo "error: no OCR models in $dest after cargo xtask models" >&2
     exit 1
   fi
@@ -100,5 +104,7 @@ stage_models() {
 
 # Portable SHA-256 of a file (prints just the hash).
 sha256() {
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+  local file="$1"
+  if command -v sha256sum >/dev/null; then sha256sum "$file" | cut -d' ' -f1; else shasum -a 256 "$file" | cut -d' ' -f1; fi
+  return
 }
