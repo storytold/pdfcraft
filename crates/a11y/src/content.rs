@@ -136,14 +136,14 @@ impl Walk<'_> {
     }
 
     /// Form XObject `x` decoded against the budget, its /DecodeParms given by reference read too.
-    /// Walking appearances, a stream that decodes only up to damage leaves the walk cut short:
-    /// what the damage hid may select a font.
+    /// Walking appearances, a stream that decodes only up to damage, or not at all, leaves the
+    /// walk cut short: what went unread may select a font.
     fn decode(&mut self, x: &pdfcraft_cos::Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {
-        let (data, damaged) = self.budget.decode_with_damage(self.doc, x, usize::MAX)?;
-        if damaged && self.appearance {
+        let decoded = self.budget.decode_with_damage(self.doc, x, usize::MAX);
+        if self.appearance && !matches!(decoded, Ok((_, false))) {
             self.cut_short();
         }
-        Ok(data)
+        decoded.map(|(data, _)| data)
     }
 
     /// Walk one annotation appearance stream for its fonts. `res` stands in for resources the

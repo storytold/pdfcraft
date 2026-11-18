@@ -1293,6 +1293,17 @@ fn appearance_walks_follow_their_resources_their_budget_and_their_type() {
     assert_eq!(nested(3), Status::Failed);
     assert_eq!(nested(13), Status::Manual, "past the depth limit");
 
+    // An appearance that doesn't decode at all (nine filters, past the chain the decoder reads)
+    // may select any font: it can't tell either.
+    let undecodable = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Filter [{}] /Length 1 >>
+stream
+>
+endstream",
+        "/ASCIIHexDecode ".repeat(9)
+    );
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "", &undecodable)), Status::Manual, "an undecodable appearance");
+
     // An appearance state that is an image is not read as content.
     let image = format!(
         "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Resources << /Font << /F1 7 0 R >> >> /Length {} >>\nstream\n{draws}\nendstream",
