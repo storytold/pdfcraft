@@ -124,8 +124,9 @@ pub(crate) const MIN_ROW: f32 = {
     let spacing_row = 2.0 * LABEL_ICON + 2.0 * (NUMBER_MIN + PRESET_LIST + 2.0) + 8.0 + 4.0 * GAP;
     if size_row > spacing_row { size_row } else { spacing_row }
 };
-/// What can be typed: horizontal scale in percent, character spacing in points.
-const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
+/// What can be typed: horizontal scale in percent, character spacing in points. An opened
+/// paragraph's own scale is held in the first ([`Extras::SCALE_RANGE`]).
+const SCALE_RANGE: std::ops::RangeInclusive<f64> = Extras::SCALE_RANGE;
 const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
 
 /// A number as the lists show it: no trailing zeros ("1.2", "100", "-0.5").

@@ -107,11 +107,97 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
     families
 }
 
+/// A run's own horizontal scaling (`Tz`) as the preview draws it. An OCR phrase keeps its words'
+/// widths by spacing instead, as before: the rewrite sets it in the phrase's size.
+fn own_scale(line: &pdfcraft_engine::TextLine, phrase: bool) -> f32 {
+    let own = line.horizontal_scale().abs() as f32;
+    if phrase || !own.is_finite() { 1.0 } else { own.clamp(0.1, 10.0) }
+}
+
+/// The horizontal scaling a run is drawn in: the scale picked in Format text (which the rewrite
+/// gives every run), else its own.
+fn run_scale(ed: &LineEditor, line: &pdfcraft_engine::TextLine, phrase: bool) -> f32 {
+    let picked = (ed.extras.scale / 100.0) as f32;
+    if ed.extras.scale != ed.extras0.scale && picked.is_finite() { picked.clamp(0.1, 10.0) } else { own_scale(line, phrase) }
+}
+
+/// The horizontal scaling of each character of `text`, by the source run it keeps the style of.
+fn char_scales(ed: &LineEditor, block: &pdfcraft_engine::TextBlock, lines: &[pdfcraft_engine::TextLine], text: &str) -> Vec<f32> {
+    let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).collect();
+    let mut scales = vec![1.0; starts.len()];
+    let phrase = block.phrase_size().is_some();
+    for (range, index) in block.edited_spans(text) {
+        let Some(line) = lines.get(index) else { continue };
+        let scale = run_scale(ed, line, phrase);
+        let (first, end) = (starts.partition_point(|b| *b < range.start), starts.partition_point(|b| *b < range.end));
+        for slot in scales.iter_mut().take(end).skip(first) {
+            *slot = scale;
+        }
+    }
+    scales
+}
+
+/// Narrow each glyph to `scales[i]` of its laid-out width: horizontal scaling, which egui's text
+/// layout has no setting for. A glyph's quad narrows about its pen position and the glyphs after
+/// it close up, so the caret and the selection follow. Drawn at its font's own widths and pulled
+/// together by negative spacing instead, text set in `54 Tz` (TCPDF invoices) grew and overlapped
+/// once edited. `scales` has one entry per character; when the rows don't pair up with them
+/// (one glyph per character, a newline none), every glyph takes the first.
+fn squeeze(g: &mut egui::Galley, scales: &[f32]) {
+    if scales.iter().all(|s| (s - 1.0).abs() < 1e-4) {
+        return;
+    }
+    let paired = g.rows.iter().map(|p| p.row.glyphs.len().saturating_add(usize::from(p.ends_with_newline))).sum::<usize>() == scales.len();
+    let uniform = scales.first().copied().unwrap_or(1.0);
+    let mut at = 0usize;
+    for placed in &mut g.rows {
+        let row = Arc::make_mut(&mut placed.row);
+        let olds: Vec<f32> = row.glyphs.iter().map(|glyph| glyph.pos.x).collect();
+        let mut pen = olds.first().copied().unwrap_or(0.0);
+        for (k, glyph) in row.glyphs.iter_mut().enumerate() {
+            let scale = if paired { scales.get(at.saturating_add(k)).copied().unwrap_or(uniform) } else { uniform };
+            let old = olds.get(k).copied().unwrap_or(glyph.pos.x);
+            // To the next glyph: the advance with any letter spacing and kerning.
+            let step = olds.get(k.saturating_add(1)).map_or(glyph.advance_width, |next| next - old);
+            if !glyph.uv_rect.is_nothing() {
+                for vertex in row.visuals.mesh.vertices.iter_mut().skip(glyph.first_vertex as usize).take(4) {
+                    vertex.pos.x = pen + (vertex.pos.x - old) * scale;
+                }
+            }
+            glyph.pos.x = pen;
+            glyph.advance_width *= scale;
+            pen += step * scale;
+        }
+        if !olds.is_empty() {
+            row.size.x = pen.max(0.0);
+        }
+        at = at.saturating_add(olds.len()).saturating_add(usize::from(placed.ends_with_newline));
+    }
+}
+
+/// The draft's widest row laid out without wrapping, narrowed as it is drawn.
+pub(super) fn natural_width(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32) -> f32 {
+    // Built before the fonts are locked: laying out the job measures runs with them too.
+    let job = editor_job(ui, ed, text, scale, f32::INFINITY);
+    let mut galley = ui.fonts_mut(|f| f.layout_job(job));
+    if let Some((block, lines)) = &ed.source {
+        squeeze(Arc::make_mut(&mut galley), &char_scales(ed, block, lines, text));
+    }
+    galley.rows.iter().map(|placed| placed.row.size.x).fold(0.0, f32::max)
+}
+
 pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
+    // Runs are laid out at their fonts' own widths and narrowed after ([`squeeze`]), so a row
+    // wraps at `width` once narrowed. The rewrite sets the rows in their first run's scale.
+    let wrap_scale = ed
+        .source
+        .as_ref()
+        .and_then(|(block, lines)| block.lines.first().and_then(|i| lines.get(*i)).map(|line| run_scale(ed, line, block.phrase_size().is_some())))
+        .unwrap_or(1.0);
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
     // because font rounding or a fallback face measures a fraction of a pixel wider.
-    job.wrap.max_width = if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width };
+    job.wrap.max_width = if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width / wrap_scale };
     if let Some((block, lines)) = &ed.source {
         let lefts: Vec<_> = block.rows.iter().filter_map(|r| r.first().and_then(|i| lines.get(*i)).map(|l| l.rect[0])).collect();
         let left_span = lefts.iter().copied().fold(f64::NEG_INFINITY, f64::max) - lefts.iter().copied().fold(f64::INFINITY, f64::min);
@@ -160,7 +246,11 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             }
             let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / base.max(0.01)) as f32 * scale;
-            let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
+            // The source run is its own horizontal scaling of the font's widths: spacing makes up
+            // only what is left over, in the widths the run is laid out in ([`squeeze`]).
+            let own = own_scale(line, phrase.is_some());
+            let spacing =
+                if original_face { (target_width / own - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
             job.append(
                 text.get(range).unwrap_or_default(),
                 0.0,
@@ -231,6 +321,7 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
         sources.windows(2).map(|r| (r[0].0 - r[1].0).abs()).rfind(|v| *v > 0.0).unwrap_or(fallback)
     };
     let g = Arc::make_mut(&mut galley);
+    squeeze(g, &char_scales(ed, block, lines, text));
     // Which line of the text (between `\n`s) each row is on: rows aligned on their own go where
     // the rewrite will put them, in the paragraph's width.
     let mut line = 0usize;

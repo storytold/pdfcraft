@@ -157,6 +157,13 @@ impl TextLine {
     pub fn wrap_leading(&self) -> f64 {
         if self.origin.state.leading > 0.0 { self.origin.state.leading * self.origin.k } else { self.size * 1.2 }
     }
+
+    /// The horizontal scaling (`Tz` / 100) the line starts in: its glyphs are this much as wide
+    /// as its font's own. `size` is the height alone, so an editor drawing the line at `size`
+    /// needs this too. A rewrite keeps it (`paragraph_style`).
+    pub fn horizontal_scale(&self) -> f64 {
+        self.origin.state.scale
+    }
 }
 
 #[cfg(test)]

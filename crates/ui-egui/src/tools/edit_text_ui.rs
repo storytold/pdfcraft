@@ -30,9 +30,9 @@ pub(crate) use image::{
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees, turn_degrees_delta};
 #[cfg(test)]
-use layout::{DARK_EDITOR_FILL, contrast};
+use layout::{DARK_EDITOR_FILL, contrast, editor_job};
 pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
-use layout::{color32, editor_galley, editor_job, look_of, luminance, source_look, unseen};
+use layout::{color32, editor_galley, look_of, luminance, natural_width, source_look, unseen};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -232,6 +232,19 @@ pub struct Extras {
 impl Default for Extras {
     fn default() -> Self {
         Extras { underline: false, line_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
+    }
+}
+
+impl Extras {
+    /// The horizontal scales Format text's field takes, in percent.
+    pub(crate) const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
+
+    /// What paragraph `block` has: its own horizontal scale, its first run's (the rewrite sets
+    /// every row in it), not 100 %. It is held in the field's range, which the field would hold it
+    /// to when shown, so that showing it is not a change.
+    fn of(block: &pdfcraft_engine::TextBlock, lines: &[pdfcraft_engine::TextLine]) -> Self {
+        let own = block.lines.first().and_then(|i| lines.get(*i)).map(|line| line.horizontal_scale().abs() * 100.0).filter(|s| s.is_finite());
+        Extras { scale: own.map_or(100.0, |s| s.clamp(*Self::SCALE_RANGE.start(), *Self::SCALE_RANGE.end())), ..Extras::default() }
     }
 }
 
@@ -641,6 +654,7 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
     let (Some(l), Some(b)) = (lines.get(block), boxes.get(block)) else { return };
     view.image_selection = None;
     let source_lines = doc.text_lines(page);
+    let extras = Extras::of(l, &source_lines);
     let text = l.editor_text.clone();
     // Screen pixels per point, from the box's width.
     let scale = (b.width() - 4.0) / ((l.rect[2] - l.rect[0]).max(1.0) as f32);
@@ -669,8 +683,8 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         look0: look_of(l),
         family_chosen: false,
         size_chosen: false,
-        extras: Extras::default(),
-        extras0: Extras::default(),
+        extras,
+        extras0: extras,
         typing_from: None,
     });
 }
@@ -942,8 +956,7 @@ pub(crate) fn overlay(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, i
             // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
             let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
             let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
-                let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
-                let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
+                let natural = natural_width(ui, ed, &ed.text, scale);
                 natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
             } else {
                 ed.rect.width().max(1.0)
@@ -1449,6 +1462,58 @@ C", &picked
         .clear();
         assert!(sizes.len() >= 3, "a section for each word: {sizes:?}");
         assert!(sizes.iter().all(|size| (size - 11.0).abs() < 0.05), "every word at the phrase's 11 pt: {sizes:?}");
+    }
+
+    /// A paragraph set in `54 Tz` is previewed at its horizontal scale once edited: its glyphs are
+    /// narrowed as the page draws them and the rewrite keeps them, not drawn at the font's own
+    /// widths and pulled together by negative spacing (a TCPDF invoice grew and overlapped).
+    /// Format text shows its 54 %, which counts as unchanged.
+    #[test]
+    fn a_condensed_paragraph_is_previewed_at_its_horizontal_scale() {
+        let (mut app, mut ed) = preview_app();
+        let id = app.views[0].id;
+        let style = pdfcraft_engine::BlockStyle { scale: Some(54.0), ..Default::default() };
+        app.session.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: ed.text.clone(), style }).unwrap();
+        let doc = app.session.get(id).unwrap();
+        let lines = doc.text_lines(0);
+        let block = doc.text_blocks(0).into_iter().find(|b| b.text.contains("Preview text")).unwrap();
+        let line = block.lines.first().and_then(|i| lines.get(*i)).unwrap().clone();
+        assert!((line.horizontal_scale() - 0.54).abs() < 1e-6, "the rewrite drew it at 54 Tz: {}", line.horizontal_scale());
+        ed.extras = Extras::of(&block, &lines);
+        ed.extras0 = ed.extras;
+        assert!((ed.extras.scale - 54.0).abs() < 1e-6, "Format text shows 54 %: {}", ed.extras.scale);
+        // One letter changed, so the draft is drawn and has the source's length.
+        ed.original = block.editor_text.clone();
+        ed.text = ed.original.replacen("text", "test", 1);
+        ed.look = look_of(&block);
+        ed.look0 = look_of(&block);
+        ed.source = Some((block, lines));
+        assert!(ed.style().scale.is_none(), "showing the paragraph's own scale changes nothing");
+
+        let ctx = egui::Context::default();
+        let (mut ratio, mut row_width, mut natural) = (0.0, 0.0, 0.0);
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = editor_job(ui, &ed, &ed.text, 1.0, f32::INFINITY).sections[0].format.font_id.clone();
+            let quad = |galley: &egui::Galley, c: char| {
+                galley.rows.iter().find_map(|placed| {
+                    let glyph = placed.row.glyphs.iter().find(|g| g.chr == c)?;
+                    let xs: Vec<f32> = placed.row.visuals.mesh.vertices.iter().skip(glyph.first_vertex as usize).take(4).map(|v| v.pos.x).collect();
+                    Some(xs.iter().copied().fold(f32::MIN, f32::max) - xs.iter().copied().fold(f32::MAX, f32::min))
+                })
+            };
+            let own = ui.fonts_mut(|f| f.layout_no_wrap("w".into(), font, Color32::BLACK));
+            let galley = editor_galley(ui, &ed, &ed.text, 1.0, f32::INFINITY);
+            ratio = quad(&galley, 'w').unwrap() / quad(&own, 'w').unwrap();
+            row_width = galley.rows[0].row.size.x;
+            // What the editor measures to grow a single row (the fonts are locked once).
+            natural = natural_width(ui, &ed, &ed.text, 1.0);
+        })
+        .textures_delta
+        .clear();
+        assert!((ratio - 0.54).abs() < 0.02, "a glyph is drawn 54 % as wide as its font's own: {ratio}");
+        let source = (line.rect[2] - line.rect[0]) as f32;
+        assert!((row_width - source).abs() < source * 0.05, "the draft row keeps the source's width: {row_width} vs {source}");
+        assert!((natural - row_width).abs() < 0.5, "the row grows by its narrowed width: {natural} vs {row_width}");
     }
 
     #[test]
