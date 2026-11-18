@@ -1068,26 +1068,42 @@ pub(crate) fn shown_under_redactions(
     }
     let config = RenderConfig { password: password.map(Arc::from), transparent: true, ..Default::default() };
     let mut renderer = pdfcraft_render::PageRenderer::new(bytes, config);
+    // A drawing that left content out at the renderer's limits can't show the page clean.
+    let unclear = |d: &pdfcraft_render::RenderedPage| {
+        d.error.is_some() || d.width == 0 || d.height == 0 || d.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated)
+    };
     for &pi in &marked {
         let inner: Vec<[f64; 4]> = rects_of.get(&pi).into_iter().flatten().filter_map(|r| mark_interior(*r)).collect();
         let (Some(info), false) = (pages.get(pi), inner.is_empty()) else { continue };
         // Two pixels a point, the longer side at most 4096 pixels.
         let scale = 2.0_f32.min(4096.0 / info.width.max(info.height).max(1.0));
         let drawn = renderer.render(pdfcraft_render::RenderRequest { page: pi, scale, ..Default::default() });
-        if drawn.error.is_some() || drawn.width == 0 || drawn.height == 0 {
+        if unclear(&drawn) {
             return Err(RedactError::Unreadable(pi + 1).into());
         }
-        let (w, h) = (drawn.width as usize, drawn.height as usize);
-        let (sx, sy) = (drawn.width as f32 / info.width.max(1e-3), drawn.height as f32 / info.height.max(1e-3));
         // Marks that share their pixels are looked at once.
         let mut looked: std::collections::HashMap<[usize; 4], bool> = std::collections::HashMap::new();
         for r in inner {
             let (a, b) = (info.user_to_view(r[0] as f32, r[1] as f32), info.user_to_view(r[2] as f32, r[3] as f32));
-            let (x0, x1) = pixels_of(a[0].min(b[0]) * sx, a[0].max(b[0]) * sx, w);
-            let (y0, y1) = pixels_of(a[1].min(b[1]) * sy, a[1].max(b[1]) * sy, h);
-            // Any coverage counts as drawn: faint paint still holds what it shows.
-            let painted = |y: usize, x: usize| drawn.rgba.get((y * w + x) * 4 + 3).is_some_and(|alpha| *alpha > 0);
-            if *looked.entry([x0, x1, y0, y1]).or_insert_with(|| (y0..y1).any(|y| (x0..x1).any(|x| painted(y, x)))) {
+            let (lo, hi) = ([a[0].min(b[0]), a[1].min(b[1])], [a[0].max(b[0]), a[1].max(b[1])]);
+            let found = match whole_pixels(&drawn, scale, [0, 0], lo, hi) {
+                Some(px) => *looked.entry(px).or_insert_with(|| painted(&drawn, px)),
+                // No whole pixel of the page's drawing is inside it (a narrow mark, a large page):
+                // it is drawn on its own, finer, at most 4000 pixels long.
+                None => {
+                    let (dx, dy) = (hi[0] - lo[0], hi[1] - lo[1]);
+                    let fine = (4.0 / dx.min(dy)).clamp(2.0, 400.0).min(4000.0 / dx.max(dy));
+                    let corner = |v: f32| (v * fine).floor() as u32;
+                    let length = |v: f32| ((v * fine).ceil() as u32).saturating_add(2);
+                    let tile = pdfcraft_render::Tile { x: corner(lo[0]), y: corner(lo[1]), w: length(dx), h: length(dy) };
+                    let part = renderer.render(pdfcraft_render::RenderRequest { page: pi, scale: fine, tile: Some(tile), ..Default::default() });
+                    match whole_pixels(&part, fine, [tile.x, tile.y], lo, hi) {
+                        Some(px) if !unclear(&part) => painted(&part, px),
+                        _ => return Err(RedactError::Unreadable(pi + 1).into()),
+                    }
+                }
+            };
+            if found {
                 residue += 1;
             }
         }
@@ -1099,24 +1115,32 @@ pub(crate) fn shown_under_redactions(
 }
 
 /// The inner part of a mark (`r`, normalized user space) that must be drawn empty: a quarter of
-/// its smaller side in from each edge, at least 3 and at most 12 points, and the middle point of
-/// a mark under 7 points across. Redaction keeps a glyph that is less than a fifth under a mark,
-/// a glyph's paint can pass its box (an accent, an italic overhang), and anti-aliasing blurs
-/// every edge. `None` for a mark a point or less across.
+/// its smaller side in from each edge, at least 3 and at most 12 points. Of a mark under 7 points
+/// across, a band along its middle one point wide (half the mark, under 2 points). Redaction keeps
+/// a glyph that is less than a fifth under a mark, a glyph's paint can pass its box (an accent, an
+/// italic overhang), and anti-aliasing blurs every edge. `None` for a mark with no area.
 fn mark_interior(r: [f64; 4]) -> Option<[f64; 4]> {
     let side = (r[2] - r[0]).min(r[3] - r[1]);
-    let edge = (side / 4.0).clamp(3.0, 12.0).min(side / 2.0 - 0.5);
+    let edge = (side / 4.0).clamp(3.0, 12.0).min(side / 2.0 - (side / 4.0).min(0.5));
     let i = [r[0] + edge, r[1] + edge, r[2] - edge, r[3] - edge];
-    (side > 1.0 && i[2] > i[0] && i[3] > i[1]).then_some(i)
+    (side > 0.0 && i[2] > i[0] && i[3] > i[1]).then_some(i)
 }
 
-/// The pixels from `lo` to `hi` (device pixels, clamped to `0..n`): the whole ones between them,
-/// or the ones they touch when no whole one is (a narrow mark on a page drawn at under 2 pixels a
-/// point). A cast saturates, NaN to 0.
-fn pixels_of(lo: f32, hi: f32, n: usize) -> (usize, usize) {
-    let at = |v: f32| (v.max(0.0) as usize).min(n);
-    let (a, b) = (at(lo.ceil()), at(hi.floor()));
-    if a < b { (a, b) } else { (at(lo.floor()), at(hi.ceil())) }
+/// The whole pixels `[x0, x1, y0, y1]` of `drawn` inside `lo`..`hi` (view points), `None` when no
+/// whole pixel is. `drawn` is the page at `scale`, as the renderer maps it (its size is rounded
+/// up), from page pixel `at` on. A cast saturates, NaN to 0.
+fn whole_pixels(drawn: &pdfcraft_render::RenderedPage, scale: f32, at: [u32; 2], lo: [f32; 2], hi: [f32; 2]) -> Option<[usize; 4]> {
+    let px = |v: f32, from: u32, n: u32, round: fn(f32) -> f32| (round(v * scale - from as f32).max(0.0) as usize).min(n as usize);
+    let (x0, x1) = (px(lo[0], at[0], drawn.width, f32::ceil), px(hi[0], at[0], drawn.width, f32::floor));
+    let (y0, y1) = (px(lo[1], at[1], drawn.height, f32::ceil), px(hi[1], at[1], drawn.height, f32::floor));
+    (x0 < x1 && y0 < y1).then_some([x0, x1, y0, y1])
+}
+
+/// Whether any of pixels `[x0, x1, y0, y1]` of `drawn` is painted. Any coverage counts: faint paint
+/// still holds what it shows.
+fn painted(drawn: &pdfcraft_render::RenderedPage, [x0, x1, y0, y1]: [usize; 4]) -> bool {
+    let w = drawn.width as usize;
+    (y0..y1).any(|y| (x0..x1).any(|x| drawn.rgba.get((y * w + x) * 4 + 3).is_some_and(|alpha| *alpha > 0)))
 }
 
 /// A one-pixel stencil mask that paints nothing.
