@@ -864,7 +864,16 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
         let button = (!first.is_empty() && first != "Off").then(|| f.state_for_export(&first)).flatten().map(str::to_owned);
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(first),
-            FieldKind::CheckBox => button.map_or_else(|| f.check_box_value(Some(first.as_str())), FieldValue::Text),
+            // The check box setter trims a name it is given, so a state with spaces around it is
+            // named by a widget that has it: every kid with that state turns on either way.
+            FieldKind::CheckBox => match button {
+                Some(state) if state.trim() != state => match f.widgets.iter().position(|w| w.on_state.as_deref() == Some(state.as_str())) {
+                    Some(i) => FieldValue::Widget(i),
+                    None => FieldValue::Text(state),
+                },
+                Some(state) => FieldValue::Text(state),
+                None => f.check_box_value(Some(first.as_str())),
+            },
             FieldKind::Radio => FieldValue::Radio((!first.is_empty() && first != "Off").then(|| button.unwrap_or(first))),
             // XML, CSV and text hold a multi-select list's values in one cell, joined by ", "
             // (as export_data writes them); split it unless the whole cell is one option.
