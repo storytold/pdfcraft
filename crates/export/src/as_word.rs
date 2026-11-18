@@ -3,6 +3,8 @@
 //! and a section per page with that page's size. RTF writes it with craft-rtf's full writer, every
 //! page flowing.
 
+mod pictures;
+
 use super::as_docx::{MAX_MEDIA, rgb8};
 use super::as_html::{allowed, language_tag};
 use super::layout::{Image, Item, Page, Table, items};
@@ -133,11 +135,11 @@ fn styles(font: &str, language: Option<&str>) -> StyleSheet {
 }
 
 /// A paragraph holding a picture, scaled down to fit between the margins of `sec`.
-fn picture(doc: &mut Document, im: &Image, sec: &SectionProps) -> Paragraph {
+fn picture(doc: &mut Document, im: &Image, bytes: Vec<u8>, ext: &str, sec: &SectionProps) -> Paragraph {
     let text_w = f64::from((sec.page_w - sec.margin_left - sec.margin_right).max(1.0));
     let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
     let k = (text_w / w).min(1.0);
-    let media = doc.add_media(im.bytes.to_vec(), im.ext);
+    let media = doc.add_media(bytes, ext);
     let mut p = Paragraph::new();
     p.push_object(
         InlineObject::Image {
@@ -167,6 +169,10 @@ pub(crate) struct Meta<'a> {
 /// The pages as one flowing document: each page a section of its own size (so a page always
 /// starts a new one, blank pages included), its paragraphs, tables and pictures in reading order.
 pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> Document {
+    flow_doc_with_budget(pages, meta, pictures::Budget::default())
+}
+
+fn flow_doc_with_budget(pages: &[Page], meta: &Meta, mut pictures: pictures::Budget) -> Document {
     let mut doc = Document::new();
     doc.styles = std::sync::Arc::new(styles(meta.font, meta.language));
     doc.core.title = meta.title.to_string();
@@ -197,8 +203,9 @@ pub(crate) fn flow_doc(pages: &[Page], meta: &Meta) -> Document {
                 if im.bytes.is_empty() || media >= MAX_MEDIA {
                     continue;
                 }
+                let Some((bytes, ext)) = pictures.prepare(im) else { continue };
                 media += 1;
-                body.push(Block::Para(picture(&mut doc, im, &sec)));
+                body.push(Block::Para(picture(&mut doc, im, bytes, ext, &sec)));
             }
             Item::PageBreak => {
                 // The page ends its section; the next page's section starts on a new page.
