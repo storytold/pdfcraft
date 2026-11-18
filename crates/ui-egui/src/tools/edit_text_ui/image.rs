@@ -254,7 +254,8 @@ pub(crate) fn picture_controls(
 fn box_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc: &pdfcraft_engine::Document, pic: &PagePicture<'_>) -> Option<Edit> {
     let PagePicture { placed, xf, info, index, image } = *pic;
     let page = placed.page;
-    if !view.page_out_of_date(page)
+    // The page's picture is the current revision's, not a stand-in for the one before the edit.
+    if matches!(placed.picture, TextureState::Ready(_))
         && let Some(s) = view.session.image_selection.as_mut()
         && s.settled.take().is_some()
     {
@@ -547,7 +548,7 @@ pub(crate) fn picture_context(page: usize, index: Option<usize>, view: &mut DocV
 
 /// One row of the menu: whether it ran.
 fn item(ui: &mut egui::Ui, enabled: bool, label: &str) -> bool {
-    MenuItem::new(label).enabled(enabled).show(ui).ran
+    MenuItem::new(label.to_string()).enabled(enabled).show(ui).ran
 }
 
 /// What the picture menu needs to know of its target: the pictures of `page`, the selected one

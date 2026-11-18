@@ -973,7 +973,7 @@ fn width_frame(
     let info = &doc.info;
     let xf = view.page_xform(page)?;
     let open_here = view.session.line_editor.as_ref().is_some_and(|e| e.page == page);
-    if open_here || !has_edges(info, page) || view.session.objects.holds(page) || view.session.content.moving_on(page) {
+    if open_here || !has_edges(info, page) || view.session.objects.holds(page) {
         return None;
     }
     let (block, l, b) = framed?;
@@ -1199,7 +1199,6 @@ fn editor_session(
     let page = view.session.line_editor.as_ref()?.page;
     let xf = view.page_xform(page)?;
     info.pages.get(page)?;
-    let hold = view.session.objects.hold_editor;
     let (block, invisible) = {
         let ed = view.session.line_editor.as_ref()?;
         (ed.block, ed.source.as_ref().is_some_and(|(b, _)| b.invisible))
@@ -1217,9 +1216,6 @@ fn editor_session(
     let ctx = ui.ctx().clone();
     let faces = source_faces(content, doc, page);
     let ed = view.session.line_editor.as_mut()?;
-    if hold {
-        ed.focus = true;
-    }
     // Reproject the source box every frame. The page may have been zoomed, scrolled or rotated
     // while the format panel was open.
     ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
@@ -1360,7 +1356,8 @@ mod tests {
         app.open_bytes("two.pdf", None, two_paragraphs()).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
         h.run_steps(4);
-        assert!(h.state_mut().execute("edit.edit_text"));
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().execute(&ctx, "edit.edit_text"));
         h.run_steps(2);
         let blocks = |h: &egui_kittest::Harness<'static, crate::PdfCraftApp>| {
             let s = h.state();
@@ -1499,7 +1496,7 @@ mod tests {
             size_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
-            history: TypingHistory::new(Typed::of(block.text.clone(), None, vec![Vec::new(), Vec::new()])),
+            history: TypingHistory::new(Typed::of(block.text.clone(), None, vec![None, None])),
         };
         (app, ed)
     }

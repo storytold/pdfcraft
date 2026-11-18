@@ -253,6 +253,8 @@ pub(crate) fn link_edit_press(view: &mut LinkView, event: &LinkEvent) {
             view.selected = Some((page, index));
             view.context = Some((page, index));
         }
+        // Following a link is the page's (`canvas` reads it into the output); it selects nothing.
+        LinkEvent::Follow { .. } => {}
     }
 }
 
@@ -416,7 +418,7 @@ fn action(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize) {
                 zooms.push(d.zoom);
             }
             let current = zooms.iter().position(|z| *z == d.zoom).unwrap_or(0);
-            let rows = zooms.iter().enumerate().map(|(i, z)| (i, zoom_label(*z))).collect();
+            let rows: Vec<(usize, String)> = zooms.iter().enumerate().map(|(i, z)| (i, zoom_label(*z))).collect();
             let list = entries::<usize>(rows);
             Field::new(tl!("Zoom").to_string()).show(ui, |ui, _| {
                 let picked = Select::new(tl!("Zoom").to_string(), Bind::given(current), &list).enabled(!web).show(ui).value().copied();

@@ -609,7 +609,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     let Some(doc) = app.session.get(id) else { return };
     let units = app.units;
-    let page = app.views[index].current;
+    let page = app.views[index].current();
     let info = doc.info.pages.get(page).cloned();
     let state = &mut app.views[index].session.measure;
     if state.listing.as_ref().is_none_or(|(g, _)| *g != doc.edit_generation()) {
@@ -792,7 +792,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     }
     if let Some((page, annotation, reading, scale)) = select {
-        app.views[index].current = page;
+        app.views[index].go_to_page(page);
         app.views[index].session.comments.select_only((page, annotation));
         app.views[index].session.measure.reading = Some(reading);
         app.views[index].session.measure.scale = Some(scale);
