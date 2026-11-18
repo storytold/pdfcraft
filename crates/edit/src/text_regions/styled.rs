@@ -1,7 +1,7 @@
 use super::super::interp::TextState;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
-    BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
+    BlockStyle, Dict, Document, EditError, EmbeddedFace, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
     needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, row_break, source_encodes, source_family, source_program,
     source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
@@ -13,7 +13,7 @@ use super::{
 const MAX_STYLED_FALLBACK_BATCHES: usize = 64;
 
 struct FallbackGroup {
-    face: &'static CraftFont,
+    face: &'static EmbeddedFace,
     seen: std::collections::HashSet<char>,
     glyphs: Vec<Type3Glyph>,
     positions: Vec<usize>,

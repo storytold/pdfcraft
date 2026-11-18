@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use pdfcraft_cos::ObjRef;
 
-use crate::{CraftFont, GlyphOutline, craft_glyph, document_japanese_font, face_has, fits_win_ansi, win_ansi_char};
+use crate::{EmbeddedFace, GlyphOutline, craft_glyph, document_japanese_font, face_has, fits_win_ansi, win_ansi_char};
 
 /// Unique characters per Type3 font: the same bound the text-editing fallback uses, so one
 /// hostile word cannot balloon into thousands of glyph streams. A face with more characters
@@ -160,7 +160,7 @@ impl TextPlan {
     }
 
     /// Add a glyph to the face's current font (a fresh one when that font is full).
-    fn add_glyph(&mut self, face: &CraftFont, ch: char, glyph: GlyphOutline) -> Option<(usize, u8)> {
+    fn add_glyph(&mut self, face: &EmbeddedFace, ch: char, glyph: GlyphOutline) -> Option<(usize, u8)> {
         let fi = self.font_of_face(face.family)?;
         let code = self.fonts[fi].push(ch, glyph);
         Some((fi, code))
@@ -181,7 +181,7 @@ impl TextPlan {
 
     /// The code of the font's `?` stand-in, adding the glyph when the font lacks it.
     /// `prefer` is the run's current font; `None` without craft-fonts.
-    fn question_mark(&mut self, face: &CraftFont, prefer: Option<usize>) -> Option<(usize, u8)> {
+    fn question_mark(&mut self, face: &EmbeddedFace, prefer: Option<usize>) -> Option<(usize, u8)> {
         if let Some(fi) = prefer
             && let Some(code) = self.fonts[fi].glyphs.iter().position(|(c, _)| *c == '?')
         {
@@ -199,7 +199,7 @@ impl TextPlan {
 
 /// The faces that can draw document text, in preference order: the Japanese document face
 /// (serif document text) first, then the rest of the build input in manifest order.
-fn document_faces() -> Vec<&'static CraftFont> {
+fn document_faces() -> Vec<&'static EmbeddedFace> {
     let mut out = Vec::new();
     if let Some(d) = document_japanese_font() {
         out.push(d);
@@ -215,7 +215,7 @@ fn document_faces() -> Vec<&'static CraftFont> {
 /// The face for a word: the first (in preference order) whose glyphs cover every character,
 /// else the one covering the most characters (ties go to the earlier face). `None` when no
 /// face covers any character of the word.
-fn choose_face<'f>(faces: &[&'f CraftFont], word: &str, coverage: &mut Coverage) -> Option<&'f CraftFont> {
+fn choose_face<'f>(faces: &[&'f EmbeddedFace], word: &str, coverage: &mut Coverage) -> Option<&'f EmbeddedFace> {
     if let Some(f) = faces.iter().enumerate().find(|(i, f)| word.chars().all(|c| coverage.has(*i, f, c))).map(|(_, f)| *f) {
         return Some(f);
     }
@@ -238,7 +238,7 @@ struct Coverage {
 
 impl Coverage {
     /// Whether face number `i` (`face`) has `ch`; asks the font once per pair.
-    fn has(&mut self, i: usize, face: &CraftFont, ch: char) -> bool {
+    fn has(&mut self, i: usize, face: &EmbeddedFace, ch: char) -> bool {
         *self.known.entry((i, ch)).or_insert_with(|| {
             self.lookups += 1;
             face_has(face.bytes, ch)

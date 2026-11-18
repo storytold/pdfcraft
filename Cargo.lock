@@ -6258,6 +6258,7 @@ dependencies = [
 name = "pdfcraft-fonts"
 version = "0.21.1"
 dependencies = [
+ "craft-fonts-build",
  "harfrust 0.12.0",
  "pdfcraft-cos",
  "skrifa 0.44.0",

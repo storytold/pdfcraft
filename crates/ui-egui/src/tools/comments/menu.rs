@@ -71,7 +71,6 @@ pub enum CanvasAction {
     /// Give every selected comment this colour.
     Colour(Rgb),
     /// Open the host's colour picker for the Colour submenu's Other… cell; its answer colours the selected comments.
-    // PLAN: pdf-canvas-w8 maps this to `open_colour_picker` with `colour_selected_comments` as the continuation.
     ColourRequest(ColorRequest),
     /// Copy Image: image (page, index in `page_images`) to the clipboard.
     CopyImage(usize, usize),

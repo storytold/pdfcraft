@@ -37,6 +37,9 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717" }
 # The installed-font catalog the engine reads faces from (Edit ▸ Add text, font embedding).
 craft-font-catalog = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717", default-features = false }
+# The craft-fonts manifest parser and `EmbeddedFace`, the face table the interface font stack takes; already in the
+# tree through craft-ui.
+craft-fonts-build = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717", features = ["ui"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717", features = ["cos", "crypt", "filters"] }

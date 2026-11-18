@@ -127,7 +127,7 @@ fn arabic_ui_text_uses_craft_fonts() {
 /// and ష held apart by a zero-width non-joiner.
 #[test]
 fn telugu_ui_text_uses_craft_fonts() {
-    let telugu: Vec<String> = pdfcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.covers("Telu")).map(|f| f.name()).collect();
+    let telugu: Vec<String> = pdfcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.has_script("Telu")).map(|f| f.name()).collect();
     if telugu.is_empty() {
         eprintln!("skipping telugu_ui_text_uses_craft_fonts: no Telu face bundled (set CRAFT_FONTS_DIR with a Telugu face to run it)");
         return;

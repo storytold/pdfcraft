@@ -1088,9 +1088,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             crate::edit_text_ui::picture_controls(ui, body, session, cx.doc, cx.info, geo),
             crate::object_ui::object_controls(ui, body, session, cx.info, parts_out.press.as_slice(), geo),
             crate::content_ui::content_controls(ui, body, session, cx.doc, added_hovered, cx.view_key),
-            // PLAN: `paragraph_controls` paints the open paragraph through a `ContentPainterCx`, which the page body has
-            // no way to get (`PageBody` carries none; the framework's constructor is `#[doc(hidden)]`): reported.
-            crate::edit_text_ui::paragraph_controls(ui, body, content, session, cx.doc, &parts_out, geo),
+            crate::edit_text_ui::paragraph_controls(ui, body, session, cx.doc, &parts_out, geo),
         ];
         // One edit per pass, the first control's that made one, as each control's own `or` keeps its first.
         if let Some(edit) = edits.into_iter().flatten().next() {
@@ -1103,12 +1101,17 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         session.pending_edit = Some(e);
     }
     if cx.tool == QuickTool::Link {
-        crate::link_ui::link_outlines(ui, body, session, cx.doc, cx.rotation);
+        crate::link_ui::link_outlines(ui, body, &session.links, cx.doc.links(), cx.info);
     }
     if !cx.comments_hidden {
-        // PLAN: assumed `comments::overlay::show(ui, body, session, info, prefs, tool, redact_hover)` (pdf-comments-w7,
-        // L-90: the redaction hover is the user's setting, passed as a data colour).
-        crate::comments::show(ui, body, session, cx.info, cx.prefs, cx.tool, cx.redact_hover);
+        // The comment under the pointer is hit as the page's parts hit it: within the theme's reach, with its markers
+        // at the icon size. The redaction hover is the user's setting, passed as a data colour (L-90).
+        let env = Env::of(ui);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation);
+        let pick = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
+        let pointer = ui.input(|i| i.pointer.hover_pos().filter(|_| !i.pointer.any_down()));
+        let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed };
+        comments::show(ui, body, session, cx.rotation, cx.info, cx.prefs, cx.tool, hover);
     }
     if cx.calc_order {
         let hovered = match &parts_out.hovered {
@@ -1118,14 +1121,18 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             _ => None,
         };
         let selected = session.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-        crate::calc_order_ui::CalcOrderOverlay::new(&session.calc_order, cx.form, cx.info)
+        let mut overlay = crate::calc_order_ui::CalcOrderOverlay::new(&session.calc_order, cx.form, cx.info)
             .placed(body.pages)
             .rotation(cx.rotation)
             .generation(cx.doc.edit_generation())
-            .selected(selected)
-            .hovered(hovered.as_ref())
-            .viewport(body.rect)
-            .show_at(ui, body.rect);
+            .viewport(body.rect);
+        if let Some(name) = selected {
+            overlay = overlay.selected(name);
+        }
+        if let Some(focus) = &hovered {
+            overlay = overlay.hovered(focus);
+        }
+        overlay.show_at(ui, body.rect);
     }
     // The table being set up, on its page when that page is placed.
     if let Some(preview) = cx.table_preview
@@ -1512,6 +1519,16 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
         Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),
+        Some(comments::CanvasAction::CopyText(text)) => {
+            // A refused write says why itself.
+            app.put_text(&text);
+        }
+        // Other…: the picker's answer colours every selected comment, as a colour cell does.
+        Some(comments::CanvasAction::ColourRequest(request)) => {
+            app.open_colour_picker(crate::colour_picker::PickerHost::App, request, |app: &mut PdfCraftApp, ctx: &egui::Context, colour| {
+                app.colour_selected_comments(ctx, comments::to_rgb(colour));
+            });
+        }
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
