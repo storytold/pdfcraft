@@ -51,7 +51,7 @@ impl PdfCraftApp {
                 self.attachment_description = None;
                 self.apply_attachment_description(&open, &result);
             }
-            Some(DialogResult::Cancel) => self.attachment_description = None,
+            Some(_) => self.attachment_description = None,
             None => {
                 let active = self.active_ids().is_some_and(|(_, active)| active == open.doc);
                 let current = self.session.get(open.doc).is_some_and(|doc| doc.edit_generation() == open.generation);

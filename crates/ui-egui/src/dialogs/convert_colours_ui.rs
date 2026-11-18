@@ -98,7 +98,7 @@ impl PdfCraftApp {
     pub(crate) fn open_convert_colours(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views[i].current;
+        let current = self.views[i].current();
         self.convert_colours_draft.for_document(id);
         let mut fields = DialogFields::new();
         self.convert_colours_draft.write(&mut fields);
@@ -124,7 +124,7 @@ impl PdfCraftApp {
     pub(crate) fn convert_colours(&mut self) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        let pages = self.convert_colours_draft.range.pages(count, self.views[i].current, &[]);
+        let pages = self.convert_colours_draft.range.pages(count, self.views[i].current(), &[]);
         let settings = self.convert_colours_draft.settings.clone();
         let found = self.session.count_colours(id, &pages, &settings);
         if found.colours == 0 && found.images == 0 {

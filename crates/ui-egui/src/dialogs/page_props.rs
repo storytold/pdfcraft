@@ -36,7 +36,7 @@ impl PdfCraftApp {
             (order_id(TabOrder::Structure).to_string(), tl!("Use Document Structure").into()),
             (order_id(TabOrder::Annotations).to_string(), tl!("Unspecified").into()),
         ];
-        let default = draft.tab_order.map(|o| order_id(o).to_string());
+        let default = draft.before.map(|o| order_id(o).to_string());
         let params = vec![Param::new(ORDER, tl!("Tab Order"), ParamKind::radio(options, default))];
         let dialog = HostedParamDialog::new(ctx, KEY, DialogFields::new(), move |_| ParamDialog::new(KEY, tl!("Page Properties"), params.clone()));
         self.dialogs.open(dialog);

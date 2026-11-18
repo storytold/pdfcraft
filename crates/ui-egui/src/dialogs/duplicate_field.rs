@@ -12,16 +12,16 @@ use crate::PdfCraftApp;
 const FIELD: &str = "field";
 
 /// Opens Duplicate Field for the field `name`, over All pages.
-pub(crate) fn open(app: &mut PdfCraftApp, name: String) {
+pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, name: String) {
     let Some((i, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let count = doc.info.pages.len();
-    let current = app.views.get(i).map_or(0, |v| v.current);
+    let current = app.views.get(i).map_or(0, |v| v.current());
     let mut fields = DialogFields::new();
     fields.set("pages", PageRangeOptions::field_value(&PageRange::default()));
     fields.set(FIELD, name.clone());
     let line = crate::i18n::fmt(tl!("Duplicate \"{name}\" onto:"), &[("name", &name)]);
-    let dialog = HostedParamDialog::new(&app.ctx, "form.duplicate_field", fields, move |fields| {
+    let dialog = HostedParamDialog::new(ctx, "form.duplicate_field", fields, move |fields| {
         let rows = vec![PageRangeOptions::param("pages", "", count, current, PageRangeChoices::Acrobat)];
         ParamDialog::new("form.duplicate_field", tl!("Duplicate Field"), rows).title_note(line.clone()).values(Bind::bound(fields))
     });
@@ -36,7 +36,7 @@ pub(crate) fn finish(app: &mut PdfCraftApp, fields: &DialogFields) {
     let Some((i, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let count = doc.info.pages.len();
-    let current = app.views.get(i).map_or(0, |v| v.current);
+    let current = app.views.get(i).map_or(0, |v| v.current());
     let pages = range.pages(count, current, &[]);
     app.apply_edit(Edit::DuplicateField { name, pages });
 }

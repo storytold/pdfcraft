@@ -98,7 +98,7 @@ impl SplitFacts {
             Param::new("size", tl!("At most (MB)"), ParamKind::number(Some(0.05), Some(2000.0), 2.0, 0.1, 2)).enabled_when("mode", "size"),
         ];
         ParamDialog::new(SPLIT, tl!("Split document"), params)
-            .ok_label(tl!("Split"))
+            .ok_label(tl!("Split").into())
             .ok_enabled(files.is_none_or(|f| f > 1))
             .footer_note(note)
             .remember(SaveKey::new("pdfcraft.page_split"))
@@ -129,11 +129,11 @@ impl ExtractFacts {
             Param::new("delete", tl!("Delete pages after extracting"), ParamKind::bool(false)),
             Param::new("separate", tl!("Extract pages as separate files"), ParamKind::bool(false)),
         ];
-        let dialog = ParamDialog::new(EXTRACT, tl!("Extract pages"), params).ok_label(tl!("Extract")).values(Bind::bound(fields));
+        let dialog = ParamDialog::new(EXTRACT, tl!("Extract pages"), params).ok_label(tl!("Extract").into()).values(Bind::bound(fields));
         match chosen {
             Ok(pages) if pages.len() == 1 => dialog.footer_note(tl!("1 page selected.")),
             Ok(pages) => dialog.footer_note(fmt(tl!("{n} pages selected."), &[("n", &pages.len().to_string())])),
-            Err(e) => dialog.ok_enabled(false).ok_reason(e),
+            Err(e) => dialog.ok_enabled(false).ok_reason(e.into()),
         }
     }
 }
@@ -306,7 +306,7 @@ impl PdfCraftApp {
     fn split_facts(&self) -> Option<SplitFacts> {
         let (i, id) = self.active_ids()?;
         let count = self.session.get(id)?.info.pages.len();
-        let cuts = self.views[i].selected.iter().copied().filter(|p| *p > 0).collect();
+        let cuts = self.views[i].selected.items.iter().copied().filter(|p| *p > 0).collect();
         let marks = self.session.bookmark_splits(id).into_iter().map(|m| m.0).collect();
         Some(SplitFacts { count, cuts, marks })
     }
@@ -334,8 +334,8 @@ impl PdfCraftApp {
     pub fn open_rotate(&mut self, ctx: &egui::Context) {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(1, |d| d.info.pages.len());
-        let current = self.views[i].current;
-        let scope = if self.views[i].selected.is_empty() { PageScope::All } else { PageScope::Selection };
+        let current = self.views[i].current();
+        let scope = if self.views[i].selected.items.is_empty() { PageScope::All } else { PageScope::Selection };
         let range = PageRangeOptions::field_value(&PageRange { scope, ..PageRange::default() });
         self.open_page_dialog(ctx, ROTATE, vec![("pages", range)], move |fields| rotate_dialog(fields, count, current));
     }
@@ -345,7 +345,7 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(1, |d| d.info.pages.len());
         let v = &self.views[i];
-        let pages: Vec<usize> = if v.selected.is_empty() { vec![v.current] } else { v.selected.iter().copied().collect() };
+        let pages: Vec<usize> = if v.selected.items.is_empty() { vec![v.current()] } else { v.selected.items.clone() };
         let (lo, hi) = (pages.iter().min().copied().unwrap_or(0), pages.iter().max().copied().unwrap_or(0));
         let seeds = vec![("from", FieldValue::from((lo + 1) as i64)), ("to", FieldValue::from((hi + 1) as i64))];
         self.open_page_dialog(ctx, NUMBER, seeds, move |fields| number_dialog(fields, count));
@@ -380,7 +380,7 @@ impl PdfCraftApp {
                 result.remember(ctx);
                 Some(result)
             }
-            DialogResult::Cancel => None,
+            _ => None,
         }
     }
 
@@ -406,7 +406,7 @@ impl PdfCraftApp {
             && let Some((i, id)) = self.active_ids()
         {
             let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-            let base = range.pages(count, self.views[i].current, &self.views[i].target_pages());
+            let base = range.pages(count, self.views[i].current(), &self.views[i].target_pages());
 
             self.rotate_pages(degrees_of(&result.fields), base, parity_of(range.subset), orientation_of(&result.fields));
         }

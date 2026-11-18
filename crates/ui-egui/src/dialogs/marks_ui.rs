@@ -515,7 +515,7 @@ fn choice(options: impl IntoIterator<Item = (String, String)>, default: &str) ->
     ParamKind::choice(options.into_iter().map(|(id, label)| (id, label.into())).collect(), Some(default.to_string()))
 }
 
-fn percent(key: &str, label: &str, default: f64) -> Param {
+fn percent(key: &str, label: &'static str, default: f64) -> Param {
     Param::new(key, label, ParamKind::range(0.0, 100.0, default, Default::default()))
 }
 
@@ -888,7 +888,7 @@ impl PdfCraftApp {
         }
         let Some((index, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views.get(index).map_or(0, |v| v.current);
+        let current = self.views.get(index).map_or(0, |v| v.current());
         let selection = self.selected_pages(index);
         self.marks_draft.replace = replace;
         self.marks_draft.opened(kind);
@@ -932,12 +932,12 @@ impl PdfCraftApp {
         // PLAN: assumed `self.dialogs: DialogHost`, `self.host`/`self.wake` (pdf-hub-w1 note 11)
         let dialog = HostedParamDialog::new(ctx, dialog_key(kind), fields, build);
         self.dialogs.open(dialog);
-        self.marks_preview = Some(MarksPreview::new(kind, self.host.jobs_shared(), self.wake.clone()));
+        self.marks_preview = Some(MarksPreview::new(kind, self.host.jobs_shared().clone(), self.wake.clone()));
     }
 
     /// The pages (0-based) selected in view `index`.
     fn selected_pages(&self, index: usize) -> Vec<usize> {
-        self.views.get(index).map(|v| v.selected.iter().copied().collect()).unwrap_or_default()
+        self.views.get(index).map(|v| v.selected.items.iter().copied().collect()).unwrap_or_default()
     }
 
     /// One pass of the open marks dialog: answers its requests, reads its values into the draft,
@@ -1013,7 +1013,7 @@ impl PdfCraftApp {
             return;
         };
         let count = doc.info.pages.len();
-        let current = self.views.get(index).map_or(0, |v| v.current);
+        let current = self.views.get(index).map_or(0, |v| v.current());
         let selection = self.selected_pages(index);
         let source = crate::canvas::pictures::DocPages::new(&self.session, doc_id);
         let units = MarginUnits::of(self.units);
@@ -1057,7 +1057,7 @@ impl PdfCraftApp {
     fn finish_marks(&mut self, kind: MarkKind, answer: &ParamResult) {
         let Some((index, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views.get(index).map_or(0, |v| v.current);
+        let current = self.views.get(index).map_or(0, |v| v.current());
         let selection = self.selected_pages(index);
         let units = MarginUnits::of(self.units);
         read_fields(&mut self.marks_draft, &answer.fields, kind, &units);

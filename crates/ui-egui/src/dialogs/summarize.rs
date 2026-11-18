@@ -20,7 +20,7 @@ fn build(fields: &mut DialogFields) -> ParamDialog<'_> {
     let sorts = SummarySort::ALL.into_iter().map(|s| (s.name().to_string(), tl!(s.name()).into())).collect();
     let params =
         vec![Param::new(LAYOUT, tl!("Choose a layout:"), layout), Param::new(SORT, tl!("Sort comments by:"), ParamKind::choice(sorts, None))];
-    ParamDialog::command(KEY, tl!("Summarize Options"), params).values(Bind::bound(fields)).ok_label(tl!("Create PDF Comment Summary"))
+    ParamDialog::command(KEY, tl!("Summarize Options"), params).values(Bind::bound(fields)).ok_label(tl!("Create PDF Comment Summary").into())
 }
 
 impl PdfCraftApp {
@@ -38,7 +38,6 @@ impl PdfCraftApp {
         let Some(id) = self.summarize_dialog else { return };
         match self.dialogs.take_by_id::<HostedParamDialog>(id) {
             None => {}
-            Some(DialogResult::Cancel) => self.summarize_dialog = None,
             Some(DialogResult::Ok(result)) => {
                 self.summarize_dialog = None;
                 if let Some(sort) = result.fields.text(SORT).and_then(SummarySort::parse) {
@@ -46,6 +45,7 @@ impl PdfCraftApp {
                 }
                 self.summarize_comments();
             }
+            Some(_) => self.summarize_dialog = None,
         }
     }
 }
