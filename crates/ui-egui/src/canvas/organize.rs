@@ -16,6 +16,7 @@ use craft::ui::tile_grid::ThumbnailSlider;
 // `app.invert_middle_drag` because `view` is borrowed out of `app.views`.
 pub(super) struct GridCx<'a> {
     pub ui: &'a mut egui::Ui,
+    pub session: &'a pdfcraft_engine::Session,
     pub zoom: &'a mut f64,
     pub invert_middle: bool,
 }
@@ -179,8 +180,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         view.organize = false;
     }
 
-    // PLAN: assumed `DocPages::new(&Document)`, the `PageSource` over the document (pdf-canvas-w6).
-    let pages = crate::page_source::DocPages::new(doc);
+    let pages = super::pictures::DocPages::new(cx.session, view.id);
     let actions = [
         (IconId::new("rotate_ccw"), CommandRef::new("page.rotate_ccw")),
         (IconId::new("rotate_cw"), CommandRef::new("page.rotate")),
@@ -225,8 +225,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
             }
             ThumbnailEvent::ContextMenu(request) => opened = Some(request.at),
             ThumbnailEvent::Insert(at) => view.pending_action = Some(ViewAction::InsertFromFileAt(at)),
-            // PLAN: assumed `crate::insert_dropped(files: Vec<OsFile>, at: usize)` (pdf-shell-w13).
-            ThumbnailEvent::FilesDropped { insert, files, .. } => crate::insert_dropped(files, insert),
+            ThumbnailEvent::FilesDropped { insert, .. } => view.grid_gap = Some(insert),
             ThumbnailEvent::Action { page, action, .. } => {
                 view.pending_edit = match action {
                     ROTATE_CCW => Some(Edit::RotatePages { pages: vec![page], degrees: -90 }),

@@ -1,8 +1,10 @@
 //! Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image) and Fit Visible.
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
+use craft::host::PickRequest;
 use craft::pages::Fit;
 use craft::pages::ui::{GoTo, PlacedPage};
+use craft::platform::clipboard::ClipboardImage;
 use craft::print::ui::HostedPrint;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::canvas_controls::TaskBar;
@@ -222,40 +224,19 @@ impl PdfCraftApp {
             .and_then(|(_, id)| self.session.get(id))
             .map_or_else(String::new, |d| d.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string());
         let name = format!("{stem} area.png");
-        // PLAN: the save pick, the atomic write and the wasm download take the names pdf-shell-w15/w16 publish; `save_override`
-        // and `rfd` go with them.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &png) {
+        self.pick_first(PickRequest::save("snapshot").file_name(name).filter("PNG", &["png"]), None, move |app, path| {
+            match craft::atomic::atomic_write(&path, &png) {
                 Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
                 Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
-            };
-            match self.save_override.clone() {
-                Some(p) => write(self, p.into()),
-                None => {
-                    let dialog =
-                        rfd::AsyncFileDialog::new().set_title(tl!("Save as image").to_string()).add_filter("PNG", &["png"]).set_file_name(name);
-                    self.ask_one(crate::pickers::Ask::Save(dialog), None, write);
-                }
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Err(e) = crate::editing::download(&name, &png) {
-            self.notify_error(e);
-        }
+        });
     }
 
     /// Render `view_rect` (page view points) of `page` and copy it to the clipboard (and keep it
     /// in `last_snapshot`), at the current zoom or [`SNAPSHOT_MIN_SCALE`] if that is finer.
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
         let (w, h, rgba) = self.render_area(index, page, view_rect)?;
-        // PLAN: the clipboard write goes through `clipboard.write_image` of the injected clipboard (pdf-shell-w17);
-        // `system_clipboard` and `os_clipboard::with` go.
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.system_clipboard {
-            let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
-        }
+        self.clipboard.write_image(&ClipboardImage { width: w, height: h, rgba: rgba.to_vec() }).map_err(|e| e.to_string())?;
         self.last_snapshot = Some((w, h, rgba));
         self.last_snapshot_of = Some((self.views[index].id, page, view_rect));
         Ok((w, h))
