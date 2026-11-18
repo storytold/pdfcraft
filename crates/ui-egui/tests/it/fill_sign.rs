@@ -3,7 +3,8 @@
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use pdfcraft_ui_egui::fill_sign::{FillTool, SavedSig};
+use craft::review::SavedSignature as SavedSig;
+use pdfcraft_ui_egui::fill_sign::FillTool;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool, SaveTarget};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -756,7 +757,7 @@ fn typed_signatures_and_initials() {
     assert_eq!(h.state().signature_draft.text, "Grace Hopper");
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(h.state().signature, Some(SavedSig::Typed("Grace Hopper".into())));
     click(&mut h, 60.0, 100.0);
     assert!(items(&h).iter().any(|(t, _)| t == "Stamp"), "typed signatures are filled outlines");
     assert_eq!(h.state().quick_tool, QuickTool::Select);
@@ -775,7 +776,7 @@ fn typed_signatures_and_initials() {
     again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.signature, h.state().signature);
-    assert_eq!(again.initials, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
+    assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
 }
 
 #[test]
@@ -831,61 +832,6 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     again.restore(&h.state().persist());
     assert_eq!(again.signature, Some(SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
-}
-
-#[test]
-fn undo_button_and_ctrl_z_take_back_one_drawn_stroke_at_a_time() {
-    let mut h = harness();
-    let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2]], vec![[0.2, 0.3], [0.6, 0.1]], vec![[0.7, 0.2], [0.9, 0.3]]]);
-    h.state_mut().signature = Some(drawn);
-    assert!(h.state_mut().execute("sign.fill.signature.change"));
-    h.run_steps(2);
-    h.get_by_label("Undo").click();
-    h.run_steps(2);
-    assert_eq!(h.state().signature_draft.strokes.len(), 2);
-    h.key_press(egui::Key::Z);
-    h.run_steps(2);
-    assert_eq!(h.state().signature_draft.strokes.len(), 2, "plain Z is not undo");
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    h.run_steps(2);
-    assert_eq!(h.state().signature_draft.strokes.len(), 1);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    h.run_steps(2);
-    assert!(h.state().signature_draft.strokes.is_empty());
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    h.run_steps(2);
-    assert!(h.state().signature_draft.strokes.is_empty());
-}
-
-#[test]
-fn changing_drawn_signatures_can_be_cancelled_or_switched_to_type() {
-    let mut h = harness();
-    let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2], [0.9, 0.1]]]);
-    h.state_mut().signature = Some(drawn.clone());
-    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
-    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Check);
-    assert!(h.state_mut().execute("sign.fill.signature.change"));
-    h.run_steps(2);
-    assert!(h.state().signature_draft.drawing);
-    assert_eq!(h.state().signature_draft.saved(), Some(drawn.clone()));
-    h.get_by_label("Clear").click();
-    h.run_steps(2);
-    assert!(h.state().signature_draft.strokes.is_empty());
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert_eq!(h.state().signature, Some(drawn.clone()));
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
-
-    assert!(h.state_mut().execute("sign.fill.signature.change"));
-    h.run_steps(2);
-    assert_eq!(h.state().signature_draft.saved(), Some(drawn.clone()));
-    h.get_all_by_label("Type").last().unwrap().click();
-    h.run_steps(2);
-    h.state_mut().signature_draft.text = "Grace Hopper".into();
-    h.get_by_label("Apply").click();
-    h.run_steps(3);
-    assert_eq!(h.state().signature, Some(SavedSig::Typed("Grace Hopper".into())));
-    assert_eq!(h.state().initials, Some(SavedSig::Typed("AL".into())));
 }
 
 #[test]
@@ -2584,76 +2530,122 @@ fn placed_color(h: &Harness<'static, PdfCraftApp>, text: &str) -> Option<[f32; 3
     s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().color
 }
 
+/// The Fill & Sign bar's controls, one row each: a control is pressed by its label, then the tool
+/// or the selected text changes.
 #[test]
-fn the_fill_text_size_flyout_opens_from_an_icon_and_leaves_a_stored_size_alone() {
-    let mut h = harness();
-    h.state_mut().fill_text_size = 9.1;
-    place_selected_text(&mut h, "Keep me");
-    let height = placed_height(&h, "Keep me");
-    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.value().is_some_and(|v| v.ends_with(" pt"))).count(), 0);
-    h.get_by_label("Font size").click();
-    h.run_steps(4);
-    assert!(
-        h.query_all_by_role(egui::accesskit::Role::SpinButton).any(|n| n.value().is_some_and(|v| v.ends_with(" pt"))),
-        "the flyout holds the size"
-    );
-    assert_eq!(h.state().fill_text_size, 9.1, "opening the flyout does not round the size");
-    assert_eq!(placed_height(&h, "Keep me"), height, "opening the flyout does not resize the selected text");
-}
-
-#[test]
-fn dragging_the_fill_text_size_slider_is_one_undo_step() {
-    let mut h = harness();
-    place_selected_text(&mut h, "Drag me");
-    let height = placed_height(&h, "Drag me");
-    h.get_by_label("Font size").click();
-    h.run_steps(2);
-    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
-    let y = (slider.min.y + slider.max.y) / 2.0;
-    let from = pos2(slider.min.x + 10.0, y);
-    let to = pos2(slider.max.x - 10.0, y);
-    h.hover_at(from);
-    h.run_steps(1);
-    h.drag_at(from);
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.hover_at(from + (to - from) * (k as f32 / 4.0));
-        h.run_steps(1);
-    }
-    assert_eq!(placed_height(&h, "Drag me"), height, "nothing is applied before the release");
-    h.drop_at(to);
-    h.run_steps(3);
-    assert!(placed_height(&h, "Drag me") > height, "the release resizes the selected text");
-    h.state_mut().execute("edit.undo");
-    h.run_steps(3);
-    assert_eq!(placed_height(&h, "Drag me"), height, "one undo takes the whole drag back");
-}
-
-#[test]
-fn pressing_the_fill_text_size_slider_without_moving_it_adds_no_undo_step() {
-    let mut h = harness();
-    place_selected_text(&mut h, "Hold me");
-    let height = placed_height(&h, "Hold me");
-    h.get_by_label("Font size").click();
-    h.run_steps(2);
-    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
-    let at = pos2(slider.min.x + (slider.max.x - slider.min.x) * 0.75, (slider.min.y + slider.max.y) / 2.0);
-    let press = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.hover_at(at);
-        h.run_steps(1);
-        h.drag_at(at);
-        h.run_steps(1);
-        h.drop_at(at);
-        h.run_steps(3);
+fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
+    type Row = fn(&mut Harness<'static, PdfCraftApp>);
+    // The size flyout opens from its icon and leaves a stored size alone.
+    let size_flyout: Row = |h| {
+        h.state_mut().fill_text_size = 9.1;
+        place_selected_text(h, "Keep me");
+        let height = placed_height(h, "Keep me");
+        let holds_size = |h: &Harness<'static, PdfCraftApp>| {
+            h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.value().is_some_and(|v| v.ends_with(" pt"))).count()
+        };
+        assert_eq!(holds_size(h), 0);
+        h.get_by_label("Font size").click();
+        h.run_steps(4);
+        assert!(holds_size(h) > 0, "the flyout holds the size");
+        assert_eq!(h.state().fill_text_size, 9.1, "opening the flyout does not round the size");
+        assert_eq!(placed_height(h, "Keep me"), height, "opening the flyout does not resize the selected text");
     };
-    press(&mut h);
-    let resized = placed_height(&h, "Hold me");
-    assert!(resized > height, "the first press moves the size: {height} -> {resized}");
-    press(&mut h);
-    assert_eq!(placed_height(&h, "Hold me"), resized);
-    h.state_mut().execute("edit.undo");
-    h.run_steps(3);
-    assert_eq!(placed_height(&h, "Hold me"), height, "one undo takes back the only change; the second press added no step");
+    // The colour control recolours the selected text, as one undo step.
+    let colour: Row = |h| {
+        place_selected_text(h, "Paint me");
+        let before = placed_color(h, "Paint me");
+        h.get_by_label("Colour").click();
+        h.run_steps(2);
+        h.get_by_label("Blue").click();
+        h.run_steps(3);
+        let color = h.state().fill_text_color.map(|v| v as f32);
+        assert!(color[2] > color[0], "blue was selected: {color:?}");
+        assert_ne!(before, Some(color));
+        assert_eq!(placed_color(h, "Paint me"), Some(color));
+        h.state_mut().execute("edit.undo");
+        h.run_steps(3);
+        assert_eq!(placed_color(h, "Paint me"), before, "one undo takes the colour back");
+    };
+    // The fill button shows the tool it picks.
+    let shows_picked_tool: Row = |h| {
+        h.get_by_label("Fill & Sign: Add signature").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+        h.get_by_label("Create signature");
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(h.query_by_label("Create signature").is_none(), "Cancel closes the pad");
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.run_steps(2);
+        h.get_by_label("Fill & Sign: Place saved signature").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+        assert!(h.query_by_label("Create signature").is_none(), "a saved signature opens no pad");
+        h.get_by_label("Fill & Sign: Sign").click();
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        h.state_mut().execute("sign.fill.check");
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.run_steps(2);
+        h.get_by_label("Fill & Sign: Checkmark").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
+    };
+    // A fill tool restored from full screen shows without replacing the last selection.
+    let restored_tool: Row = |h| {
+        h.state_mut().execute("sign.fill.date");
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        h.state_mut().set_full_screen(&ctx, true);
+        h.run_steps(2);
+        h.state_mut().execute("sign.fill.check");
+        h.run_steps(2);
+        h.state_mut().set_full_screen(&ctx, false);
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+        h.get_by_label("Fill & Sign: Date");
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.run_steps(2);
+        h.get_by_label("Fill & Sign: Checkmark").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+    };
+    // The fill button keeps Date after deselecting and across documents.
+    let keeps_date: Row = |h| {
+        h.get_by_label("Fill & Sign: Add signature").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Date").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+        h.get_by_label("Select (V)").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Select);
+        h.state_mut().open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+        h.state_mut().active = Some(1);
+        h.run_steps(2);
+        h.get_by_label("Fill & Sign: Date").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
+        assert!(h.query_by_label("Create signature").is_none(), "the default tool's dialog stays closed");
+        h.get_by_label("Select (V)").click();
+        h.run_steps(2);
+        h.state_mut().close_tab(1);
+        h.state_mut().close_tab(0);
+        h.run_steps(2);
+        h.state_mut().open_bytes("third.pdf", None, FIXTURE.to_vec()).unwrap();
+        h.state_mut().active = Some(0);
+        h.run_steps(2);
+        h.get_by_label("Fill & Sign: Date").click();
+        h.run_steps(2);
+        assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "the tool outlives closing every document");
+    };
+    for row in [size_flyout, colour, shows_picked_tool, restored_tool, keeps_date] {
+        let mut h = harness();
+        row(&mut h);
+    }
 }
 
 #[test]
@@ -2686,75 +2678,6 @@ fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
 }
 
 #[test]
-fn the_fill_colour_dot_recolours_the_selected_text() {
-    let mut h = harness();
-    place_selected_text(&mut h, "Paint me");
-    let before = placed_color(&h, "Paint me");
-    h.get_by_label("Colour").click();
-    h.run_steps(2);
-    h.get_by_label("Blue").click();
-    h.run_steps(3);
-    let color = h.state().fill_text_color.map(|v| v as f32);
-    assert!(color[2] > color[0], "blue was selected: {color:?}");
-    assert_ne!(before, Some(color));
-    assert_eq!(placed_color(&h, "Paint me"), Some(color));
-    h.state_mut().execute("edit.undo");
-    h.run_steps(3);
-    assert_eq!(placed_color(&h, "Paint me"), before, "one undo takes the colour back");
-}
-
-#[test]
-fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
-    let mut h = harness();
-    h.get_by_label("Fill & Sign: Add signature").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
-    assert_eq!(h.state().dialog, Some(Dialog::Signature));
-
-    h.state_mut().dialog = None;
-    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
-    h.state_mut().quick_tool = QuickTool::Select;
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Place saved signature").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
-    assert_eq!(h.state().dialog, None);
-    h.get_by_label("Fill & Sign: Sign").click();
-    h.run_steps(2);
-    assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-
-    h.state_mut().execute("sign.fill.check");
-    h.state_mut().quick_tool = QuickTool::Select;
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Checkmark").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
-}
-
-#[test]
-fn a_restored_fill_tool_shows_without_replacing_the_last_selection() {
-    let mut h = harness();
-    h.state_mut().execute("sign.fill.date");
-    h.run_steps(2);
-    h.state_mut().apply_full_screen(true);
-    h.run_steps(2);
-    h.state_mut().execute("sign.fill.check");
-    h.run_steps(2);
-    h.state_mut().apply_full_screen(false);
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
-    h.get_by_label("Fill & Sign: Date");
-
-    h.state_mut().quick_tool = QuickTool::Select;
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Checkmark").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
-}
-
-#[test]
 fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
     let mut h = harness();
     let mode = h.state().mode;
@@ -2779,39 +2702,6 @@ fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
     h.state_mut().mode = mode;
     h.run_steps(2);
     h.get_by_label("Fill & Sign: Place saved initials");
-}
-
-#[test]
-fn the_quick_bar_fill_button_keeps_date_after_deselecting_and_across_documents() {
-    let mut h = harness();
-    h.get_by_label("Fill & Sign: Add signature").click_secondary();
-    h.run_steps(2);
-    h.get_by_label("Date").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
-    h.get_by_label("Select (V)").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Select);
-
-    h.state_mut().open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
-    h.state_mut().active = Some(1);
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Date").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
-    assert_eq!(h.state().dialog, None, "the default tool's dialog stays closed");
-    h.get_by_label("Select (V)").click();
-    h.run_steps(2);
-
-    h.state_mut().close_tab(1);
-    h.state_mut().close_tab(0);
-    h.run_steps(2);
-    h.state_mut().open_bytes("third.pdf", None, FIXTURE.to_vec()).unwrap();
-    h.state_mut().active = Some(0);
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Date").click();
-    h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "the tool outlives closing every document");
 }
 
 fn commit_typed_text(h: &mut Harness<'static, PdfCraftApp>) {

@@ -169,8 +169,11 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
     h.run_steps(1);
     h.drop_at(p);
     h.run_steps(4);
-    let s = h.state();
-    assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "nothing placed");
-    let toast = s.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("can't be written into the PDF yet"), "{toast}");
+    {
+        let s = h.state();
+        assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "nothing placed");
+    }
+    // PLAN: assumed shown_notice(&mut Harness) -> String (pdf-chrome-w9)
+    let notice = crate::support::shown_notice(&mut h);
+    assert!(notice.contains("can't be written into the PDF yet"), "{notice}");
 }
