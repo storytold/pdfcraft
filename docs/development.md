@@ -28,6 +28,10 @@ the low-disk artifacts, run `cargo clean --profile low-disk`.
 Building PdfCraft requires Rust 1.95 or later: the UI crate and its `egui` and `craft-ui`
 dependencies need it, and the workspace `rust-version` states the same minimum.
 
+For Windows development of a modified working tree, including pinned translations and fonts,
+see [Building a modified working tree on Windows](windows-development-build.md). Its developer
+script builds local source changes directly and does not create or publish distribution packages.
+
 ## Annotation tool pin
 
 The annotation quick bar's **Keep tool selected** pin is a shared preference, stored as the
