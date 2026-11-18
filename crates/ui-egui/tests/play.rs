@@ -20,7 +20,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use egui::{Key, Modifiers};
+use egui::accesskit::Role;
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 use serde::Deserialize;
 
@@ -69,10 +71,6 @@ enum Step {
     },
     /// Select everything in the open paragraph and type, including line breaks.
     Type {
-        text: String,
-    },
-    /// Replace the open paragraph's text without keystrokes. Prefer `type`.
-    Editor {
         text: String,
     },
     Key {
@@ -170,13 +168,6 @@ impl Step {
             }
             Step::ClickPage { x, y } => click_page(h, session, *x, *y)?,
             Step::Type { text } => type_into_paragraph(h, text)?,
-            Step::Editor { text } => {
-                let Some(editor) = h.state_mut().views.first_mut().and_then(|v| v.line_editor.as_mut()) else {
-                    return Err("no paragraph is open for typing".into());
-                };
-                editor.text.clone_from(text);
-                h.run_steps(1);
-            }
             Step::Key { key, modifiers } => {
                 let Some(key) = Key::from_name(key) else { return Err(format!("unknown key {key:?}")) };
                 h.key_press_modifiers(modifiers_of(modifiers)?, key);
@@ -187,8 +178,8 @@ impl Step {
                 // The open editor is what a click just showed. Otherwise take the shortest
                 // paragraph that contains the words, so a heading that merely mentions them
                 // does not win.
-                let actual = if let Some(open) = h.state().views.first().and_then(|v| v.line_editor.as_ref()) {
-                    open.text.clone()
+                let actual = if let Some(open) = open_editor_text(h) {
+                    open
                 } else {
                     let mut matches: Vec<_> =
                         paragraphs_full(h).into_iter().map(|p| p.editor_text).filter(|p| p.contains(contains.as_str())).collect();
@@ -235,8 +226,14 @@ impl Step {
     }
 }
 
+/// The text of the open paragraph editor: the focused multiline input's line runs, in order.
+fn open_editor_text(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    let editor = h.query_by(|n| n.role() == Role::MultilineTextInput && n.is_focused())?;
+    Some(editor.children().filter_map(|line| line.value()).collect())
+}
+
 fn type_into_paragraph(h: &mut Harness<'static, PdfCraftApp>, text: &str) -> Result<(), String> {
-    if h.state().views.first().and_then(|v| v.line_editor.as_ref()).is_none() {
+    if open_editor_text(h).is_none() {
         return Err("no paragraph is open for typing".into());
     }
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);

@@ -60,9 +60,12 @@ fn unsupported_script_buttons_leave_hidden_text_bytes_history_and_saved_pixels_u
         h.run_steps(1);
         h.drop_at(at);
         h.run_steps(3);
-        let editor = h.state_mut().views[0].line_editor.as_mut().expect("hidden text editor opens");
-        editor.selection = Some(1..2);
-        editor.focus = true;
+        // Select the second character the way a person does: Home, one step right, Shift+Right.
+        h.key_press(egui::Key::Home);
+        h.run_steps(1);
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::ArrowRight);
         h.run_steps(1);
         let before = h.state().session.get(id).unwrap().bytes.clone();
         assert!(h.state().session.get(id).unwrap().can_undo().is_none());
