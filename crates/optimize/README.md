@@ -149,8 +149,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   images and image masks stay 1-bit and lossless (averaged, thresholded at half). Anything else
   (CMYK, indexed, other bit depths, JPEG 2000, JBIG2, CCITT, colour-key masks, `/Matte` soft
   masks) is left alone and reported with why, and so is an image an annotation's appearance
-  stream or a tiling pattern also draws (the measure reads `Do` in page content and its forms,
-  not annotations, nor what a pattern paints where a fill or stroke selects it).
+  stream, a tiling pattern, a Type 3 glyph, a soft mask's group or anything else beyond the page
+  and form resources also draws (the measure reads `Do` in page content and its forms only).
 - **Discard objects:** thumbnails, alternate images, document tags, print settings, and form
   submission, import and reset actions (`/SubmitForm`, `/ImportData`, `/ResetForm`, off by
   default). The fields, links, bookmarks and pages that ran a removed action keep their other

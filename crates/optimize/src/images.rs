@@ -265,6 +265,17 @@ pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef
     ppi
 }
 
+/// [`effective_resolutions`] over `pages`, with the images among them that something other than
+/// the page and form resources the walk read may also draw ([`used_elsewhere`]: a Type 3 glyph, a
+/// soft mask's group, an appearance, a pattern, any other reference), by object number. Such a
+/// use wasn't measured, so the resolution may be too fine for it.
+pub(crate) fn resolutions_and_unmeasured_uses(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSet<u32>) {
+    let Ok((ppi, _, read)) = walk_pages(doc, pages, &mut |_| true) else { return (HashMap::new(), HashSet::new()) };
+    let images: HashSet<u32> = ppi.keys().map(|r| r.num).collect();
+    let elsewhere = used_elsewhere(doc, &images, &read);
+    (ppi, elsewhere)
+}
+
 /// What a walk of the pages found: each image's resolution, the images under remapped device
 /// spaces, and the references followed.
 type PagesWalked = (HashMap<ObjRef, f64>, HashSet<u32>, Read);

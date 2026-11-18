@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use pdfcraft_cos::{Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
 use crate::OptimizeError;
-use crate::images::{MAX_PIXELS, allowance, components, effective_resolutions, is_dct, jpeg, pixels, resample};
+use crate::images::{MAX_PIXELS, allowance, components, effective_resolutions, is_dct, jpeg, pixels, resample, resolutions_and_unmeasured_uses};
 
 /// An image is resampled only when it is more than this much finer than the target: a 310 ppi
 /// scan isn't worth recompressing for 300.
@@ -54,7 +54,10 @@ pub fn downsample_page_images(doc: &mut Document, pages: &[ObjRef], target_ppi: 
     }
     let all = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
     let here = effective_resolutions(doc, pages);
-    let everywhere = effective_resolutions(doc, &all);
+    // And anything else that refers to an image beyond the resources the walk read: a Type 3
+    // glyph, a soft mask's group, another image's alternates. The two cases above say which use
+    // it was; this catches the rest.
+    let (everywhere, elsewhere) = resolutions_and_unmeasured_uses(doc, &all);
     // The measure above reads page content and the forms it draws, not annotations: an image an
     // appearance stream draws as well may have to stay finer than the page alone says.
     let (annotated, too_deep) = annotation_images(doc, &all);
@@ -104,6 +107,10 @@ pub fn downsample_page_images(doc: &mut Document, pages: &[ObjRef], target_ppi: 
         }
         if pattern_too_deep {
             report.skipped.push(format!("{name}: a tiling pattern nests forms deeper than can be followed, so it may draw it"));
+            continue;
+        }
+        if elsewhere.contains(&r.num) {
+            report.skipped.push(format!("{name}: something besides the pages' content draws it (a Type 3 glyph, a soft mask's group or another reference), at a size that wasn't measured"));
             continue;
         }
         match resampled(doc, s, ppi, target_ppi, &mut budget) {

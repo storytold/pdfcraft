@@ -448,3 +448,79 @@ fn a_pattern_nested_beyond_the_walk_leaves_every_image_alone() {
     assert!(r.skipped.iter().any(|why| why.contains("tiling pattern") && why.contains("deeper")), "{:?}", r.skipped);
     assert_eq!(stream(&doc, img).raw, before.raw);
 }
+
+/// Add `entry` under `kind` (`Font`, `ExtGState`) as `name` to the page's resources.
+fn add_resource(doc: &mut Document, page: ObjRef, kind: &str, name: &str, entry: Object) {
+    doc.update_dict(page, |p| {
+        let mut res = p.get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+        let mut d = res.get(kind.as_bytes()).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
+        d.set(name.as_bytes().to_vec(), entry);
+        res.set(kind.as_bytes().to_vec(), Object::Dict(d));
+        p.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+}
+
+/// The walk measures `Do` in page content and forms. A Type 3 glyph draws through its font's own
+/// resources, and a soft mask's group through the graphics state; an image drawn there as well,
+/// larger than on the page, would be made too coarse for that use. Both are left alone with a
+/// reason, through the general check of what refers to an image beyond what the walk read
+/// (#5126 review).
+#[test]
+fn an_image_a_type3_glyph_or_a_soft_mask_draws_is_left_alone() {
+    for shape in ["Type 3 glyph", "soft mask group"] {
+        let mut doc = Document::new_empty();
+        let img = jpeg_image(&mut doc, 1200, 1200, 3, |_| {});
+        let p = page(&mut doc, &[("Im0", img)], "q 144 0 0 144 36 36 cm /Im0 Do Q");
+        match shape {
+            "Type 3 glyph" => {
+                // The glyph draws the image over 1000 glyph units, at 1 pt per unit: 1000 pt.
+                let glyph =
+                    doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"1000 0 0 0 1000 1000 d1 q 1000 0 0 1000 0 0 cm /Im0 Do Q".to_vec())));
+                let mut procs = Dict::new();
+                procs.set(b"a".to_vec(), Object::Ref(glyph));
+                let mut x = Dict::new();
+                x.set(b"Im0".to_vec(), Object::Ref(img));
+                let mut res = Dict::new();
+                res.set(b"XObject".to_vec(), Object::Dict(x));
+                let mut f = Dict::new();
+                f.set(b"Type".to_vec(), Object::name("Font"));
+                f.set(b"Subtype".to_vec(), Object::name("Type3"));
+                f.set(b"FontBBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1000.into(), 1000.into()]));
+                f.set(b"FontMatrix".to_vec(), Object::Array(vec![Object::Real(0.001), 0.into(), 0.into(), Object::Real(0.001), 0.into(), 0.into()]));
+                f.set(b"CharProcs".to_vec(), Object::Dict(procs));
+                f.set(
+                    b"Encoding".to_vec(),
+                    Object::Dict({
+                        let mut e = Dict::new();
+                        e.set(b"Differences".to_vec(), Object::Array(vec![97.into(), Object::name("a")]));
+                        e
+                    }),
+                );
+                f.set(b"FirstChar".to_vec(), Object::Int(97));
+                f.set(b"LastChar".to_vec(), Object::Int(97));
+                f.set(b"Widths".to_vec(), Object::Array(vec![1000.into()]));
+                f.set(b"Resources".to_vec(), Object::Dict(res));
+                let font = doc.add(Object::Dict(f));
+                add_resource(&mut doc, p, "Font", "F0", Object::Ref(font));
+            }
+            _ => {
+                let group = form(&mut doc, &[("Im0", img)], "q 288 0 0 288 0 0 cm /Im0 Do Q");
+                let mut mask = Dict::new();
+                mask.set(b"Type".to_vec(), Object::name("Mask"));
+                mask.set(b"S".to_vec(), Object::name("Luminosity"));
+                mask.set(b"G".to_vec(), Object::Ref(group));
+                let mut gs = Dict::new();
+                gs.set(b"Type".to_vec(), Object::name("ExtGState"));
+                gs.set(b"SMask".to_vec(), Object::Dict(mask));
+                add_resource(&mut doc, p, "ExtGState", "GS0", Object::Dict(gs));
+            }
+        }
+        let before = stream(&doc, img);
+
+        let r = downsample_page_images(&mut doc, &[p], 300.0).unwrap();
+        assert_eq!((r.images, r.resampled), (1, 0), "{shape}: {r:?}");
+        assert!(r.skipped.iter().any(|why| why.contains("besides the pages' content")), "{shape}: {:?}", r.skipped);
+        assert_eq!(stream(&doc, img).raw, before.raw, "{shape}: the image is as it was");
+    }
+}
