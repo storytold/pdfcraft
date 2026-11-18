@@ -1428,3 +1428,29 @@ fn a_long_bulleted_list_keeps_every_bullet_with_its_item() {
     assert_eq!(paragraphs.len(), 150, "{paragraphs:?}");
     assert!(paragraphs.iter().enumerate().all(|(n, p)| *p == format!("\u{F0B7} item {n};")), "{paragraphs:?}");
 }
+
+#[test]
+fn shared_base64_keeps_padded_unwrapped_export_bytes() {
+    for (input, expected) in
+        [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]
+    {
+        assert_eq!(base64(input.as_bytes()), expected);
+    }
+    assert_eq!(base64(&[251, 255, 255]), "+///");
+    let encoded = base64(&[255; 256]);
+    assert_eq!(encoded.len(), 344);
+    assert!(!encoded.contains(['\r', '\n']));
+    assert!(encoded.ends_with("/w=="));
+}
+
+/// Each place a picture is drawn embeds it whole in the HTML, so the places count against the
+/// media limits: past them, pictures are left out instead of multiplying one into gigabytes.
+#[test]
+fn html_bounds_the_pictures_it_embeds() {
+    let mut p = page();
+    let one = p.images[0].clone();
+    p.images = std::iter::repeat_n(one, MAX_MEDIA + 10).collect();
+    for h in [html(std::slice::from_ref(&p), "Report"), html_simple(std::slice::from_ref(&p), "Report")] {
+        assert_eq!(h.matches("<img").count(), MAX_MEDIA);
+    }
+}
