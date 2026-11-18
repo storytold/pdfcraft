@@ -185,8 +185,12 @@ pub struct DocInfo {
     pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    /// The page templates, with whether each is hidden (`this.templates`, #1429).
+    pub templates: Vec<(String, bool)>,
     pub zoom: f64,
     pub runtime_highlight: bool,
+    /// The document's layers (optional content groups), for `getOCGs`, in the viewer's order.
+    pub layers: Vec<crate::Layer>,
 }
 
 /// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
@@ -317,6 +321,9 @@ pub enum Request {
     Highlight(bool),
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `app.openDoc(cPath)`: the path as the script gave it (relative to this document's
+    /// folder). A request only: the viewer asks the user before opening any file.
+    OpenDoc(String),
     /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
     /// 1 or 2) or to save (0).
     OpenAttachment {
@@ -325,6 +332,19 @@ pub enum Request {
     },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
+    /// `template.spawn(nPage, bRename, bOverlay)` or `this.spawnPageFromTemplate(…)`: a page from
+    /// template `name` at `page` (0-based), with its fields renamed or not, or laid over `page`.
+    SpawnTemplate {
+        name: String,
+        page: usize,
+        rename: bool,
+        overlay: bool,
+    },
+    /// `template.hidden = hidden`.
+    SetTemplateHidden {
+        name: String,
+        hidden: bool,
+    },
 }
 
 /// A side panel a script can show or hide (`app.execMenuItem("ShowHideFileAttachment")`, …).
@@ -388,6 +408,12 @@ pub struct Outcome {
     pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
+    /// The timers of a document's retained realm as they stand after the run, in the order they
+    /// were set (`app.setInterval`, `app.setTimeOut`); none from a one-off run.
+    pub timers: Vec<crate::Timer>,
+    /// Layers the script turned on or off (`ocg.state`), as they are now: their places in
+    /// [`DocInfo::layers`], and whether each is on.
+    pub layers: Vec<(usize, bool)>,
 }
 
 /// Bounds that keep a script from hanging the viewer.

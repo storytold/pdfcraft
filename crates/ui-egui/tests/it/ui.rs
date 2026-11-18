@@ -751,6 +751,113 @@ fn the_integrated_title_bar_is_the_traffic_light_band() {
     assert!(home.left() >= 62.0 + 4.0, "Home {home:?} clears the traffic lights");
 }
 
+/// macOS with a right-to-left system language: AppKit mirrors the traffic lights to the right end
+/// of the title bar, and the strip mirrors with them. Home sits beside the lights, the tabs read
+/// from the right after it, then Open; Discord, shortcuts, theme and Preferences move to the far
+/// left end.
+#[cfg(target_os = "macos")]
+fn mirrored_title_bar(names: &[&'static str]) -> Harness<'static, PdfCraftApp> {
+    let names = names.to_vec();
+    harness(move |app| {
+        app.integrated_titlebar = true;
+        app.titlebar_lights_right = Some(true);
+        for name in names {
+            app.open_bytes(name, None, FIXTURE.to_vec()).unwrap();
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_integrated_title_bar_mirrors_with_traffic_lights_at_the_right() {
+    let (width, band, lights) = (1400.0, 28.0, 62.0);
+    let h = mirrored_title_bar(&["first.pdf", "last.pdf"]);
+    let rect = |label: &str| h.get_by_label(label).rect();
+    let theme = h.get_by_label_contains("Display theme:").rect();
+    for (label, r) in [
+        ("Home", rect("Home")),
+        ("first.pdf", rect("first.pdf")),
+        ("Open", rect("Open")),
+        ("Discord", rect("Discord")),
+        ("Display theme", theme),
+        ("Preferences", rect("Preferences")),
+    ] {
+        assert!(r.top() >= 0.0 && r.bottom() <= band, "{label}: {r:?} inside the {band} pt title bar");
+        assert!(r.right() <= width - lights - 4.0, "{label}: {r:?} clears the traffic lights");
+    }
+    // Home is the first thing after the lights, as it is on the left in a left-to-right system.
+    let home = rect("Home");
+    assert!(home.right() >= width - lights - 16.0, "Home {home:?} sits beside the lights");
+    // Then the tabs, read from the right, then Open.
+    assert!(rect("first.pdf").right() <= home.left(), "the first tab follows Home");
+    assert!(rect("last.pdf").right() <= rect("first.pdf").left(), "the tabs read from the right");
+    assert!(rect("first.pdf").right() >= home.left() - 12.0, "the tabs stay beside Home");
+    assert!(rect("Open").right() <= rect("last.pdf").left(), "Open follows the tabs");
+    // The other end: Preferences, theme, shortcuts and Discord, mirroring their order at the right.
+    let (preferences, help, discord) = (rect("Preferences"), rect("Keyboard shortcuts"), rect("Discord"));
+    assert!(preferences.left() < 20.0, "Preferences {preferences:?} at the far end");
+    assert!(
+        preferences.right() <= theme.left() && theme.right() <= help.left() && help.right() <= discord.left(),
+        "Preferences, theme, shortcuts, Discord"
+    );
+    assert!(discord.right() < rect("Open").left(), "Discord stays clear of Open");
+}
+
+/// Mirrored, a tab dragged to the left moves later in the order, as it reads from the right.
+#[cfg(target_os = "macos")]
+#[test]
+fn dragging_a_tab_in_the_mirrored_title_bar_follows_its_reading_order() {
+    use egui::accesskit::Role;
+    let mut h = mirrored_title_bar(&["first.pdf", "middle.pdf", "last.pdf"]);
+    let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
+    let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
+    // first.pdf past the end, which is the left.
+    let to = tab(&h, "last.pdf").left_center() - egui::vec2(20.0, 0.0);
+    drag_named_tab(&mut h, "first.pdf", to, true);
+    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[1], ids[2], ids[0]]);
+    assert!(tab(&h, "first.pdf").right() < tab(&h, "last.pdf").left(), "the strip draws the new order");
+    // last.pdf, now in the middle, to the front, which is the right.
+    let to = tab(&h, "middle.pdf").right_center() + egui::vec2(10.0, 0.0);
+    drag_named_tab(&mut h, "last.pdf", to, true);
+    assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[2], ids[1], ids[0]]);
+}
+
+/// A mirrored strip that starts to scroll (here Home shows and the window narrows) shows its
+/// reading start: the first tab beside Home, as the unmirrored strip does at its left end. It goes
+/// there once, so a step the user scrolls stands.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mirrored_strip_that_starts_to_scroll_shows_the_first_tab_beside_home() {
+    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
+    h.state_mut().active = None;
+    h.run_steps(4);
+    assert!(h.query_by_label("Scroll tabs left").is_none(), "wide, the tabs don't scroll yet");
+    h.set_size(egui::vec2(700.0, 600.0));
+    h.run_steps(6);
+    let home = h.get_by_label("Home").rect();
+    let first = h.get_by_label("first.pdf").rect();
+    assert!(first.right() <= home.left() && first.right() >= home.left() - 50.0, "first.pdf {first:?} beside Home {home:?}");
+    h.get_by_label("Scroll tabs left").click();
+    h.run_steps(6);
+    let scrolled = h.get_by_label("first.pdf").rect();
+    assert!(scrolled.left() > first.left() + 1.0, "the step stands: {first:?} -> {scrolled:?}");
+}
+
+/// Going to the reading start never hides the active tab: a document shown while the strip starts
+/// to scroll stays in view.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mirrored_strip_that_starts_to_scroll_keeps_the_active_tab_in_view() {
+    let mut h = mirrored_title_bar(&["first.pdf", "second.pdf", "third.pdf", "last.pdf"]);
+    h.run_steps(4);
+    assert_eq!(h.state().active, Some(3));
+    h.set_size(egui::vec2(700.0, 600.0));
+    h.run_steps(6);
+    let (home, open) = (h.get_by_label("Home").rect(), h.get_by_label("Open").rect());
+    let last = h.get_by_label("last.pdf").rect();
+    assert!(last.left() >= open.right() && last.right() <= home.left(), "last.pdf {last:?} between Open {open:?} and Home {home:?}");
+}
+
 #[test]
 fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
     for width in [600.0, 900.0] {
@@ -2132,4 +2239,42 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     let view = &mut h.state_mut().views[0];
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() {
+    let missing = std::env::temp_dir().join(format!("pdfcraft-recent-missing-{}", std::process::id())).join("jährlicher report.pdf");
+    assert!(!missing.exists());
+    let expected = missing.to_string_lossy().into_owned();
+    let target = expected.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // The existence check runs on a worker otherwise, which can lose the race with the
+        // fixed frame count below on a busy runner.
+        app.run_inline = true;
+        for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
+            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
+        }
+        app
+    });
+    h.run_steps(4);
+    let label = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Reveal in File Explorer" };
+    h.get_by_label("target.pdf").click_secondary();
+    h.run_steps(3);
+    assert!(!h.get_by_label(label).accesskit_node().is_disabled());
+    assert!(h.state().views.is_empty(), "right-click must not open the PDF");
+    assert_eq!(h.state().recent.len(), 2);
+    h.get_by_label(label).click();
+    h.run_steps(3);
+    assert!(h.query_by_label(label).is_none(), "choosing the action closes its menu");
+    assert!(h.state().views.is_empty(), "reveal must not open the PDF");
+    assert_eq!(h.state().active, None);
+    assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
+    assert_eq!(h.state().recent[1].path, expected);
+    assert!(
+        h.state().toast.as_ref().is_some_and(|(text, _)| text.contains("The file no longer exists")),
+        "the selected path is checked and the existing reveal error is shown"
+    );
 }

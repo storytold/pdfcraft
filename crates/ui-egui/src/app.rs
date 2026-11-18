@@ -110,6 +110,7 @@ impl PdfCraftApp {
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
+            full_screen_escape_exits: true,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -177,6 +178,8 @@ impl PdfCraftApp {
             open_prepare_gate: None,
             pinned: Default::default(),
             recent_check: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            reveal_errors: Default::default(),
             pinned_tools: Vec::new(),
             pin_tool_search: String::new(),
             toast: None,
@@ -185,6 +188,7 @@ impl PdfCraftApp {
             script_messages_dropped: 0,
             toast_dropped: 0,
             integrated_titlebar: false,
+            titlebar_lights_right: None,
             window_controls: None,
             system_title_bar: false,
             app_frame_shown: None,
@@ -609,6 +613,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.show_reveal_errors();
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
@@ -723,6 +728,7 @@ impl PdfCraftApp {
             let out = self.session.take_js_output(id);
             self.handle_js(id, out);
         }
+        self.script_tick(ctx);
         if let Some(mut control) = self.control.take() {
             control.tick(ctx, self);
             self.control = Some(control);
