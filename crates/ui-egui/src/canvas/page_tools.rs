@@ -9,8 +9,7 @@ use craft::keymap::Mods;
 use craft::pages::ui::{PageTexts, PlacedPage, TextSelectState};
 use craft::review::SavedSignature;
 use craft::ui::canvas::{
-    CanvasTool, HandTool, NavigationOptions, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer, ToolRegion,
-    ZoomTool,
+    CanvasTool, HandTool, NavigationOptions, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer, ToolRegion, ZoomTool,
 };
 use craft::ui::primitives::Draw;
 use pdfcraft_engine::{Document, Edit, FormField};
@@ -130,9 +129,9 @@ enum Arm<'a> {
     /// Redact: a text selection or a box, finished into marks.
     Redact(RedactTool<'a>),
     /// The signature rectangle of Digitally sign.
-    SignArea(SignAreaTool),
+    SignArea(SignAreaTool<'a>),
     /// Snapshot: the area to copy.
-    Snapshot(SnapshotTool<'a>),
+    Snapshot(SnapshotTool),
     /// Crop: the rectangle to crop the page to, or a double click for Set Page Boxes.
     Crop(CropTool),
 }
@@ -262,7 +261,7 @@ pub(crate) fn page_tool<'a>(
                 // and `.text(PageSelectTool)` (comments-w8 names the fields, not the constructor).
                 _ => {
                     let view = &mut session.comments;
-                    let map = comments::bridge::PageMap::new(cx.info, cx.pages, cx.rotation);
+                    let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation);
                     let annotate = CommentsTool::new(&mut view.tool, view.paste.as_mut(), map, &mut view.tool_done);
                     let annotate = if selects_text { annotate.text(select) } else { annotate };
                     Arm::Area(Box::new(annotate))
@@ -295,9 +294,7 @@ pub(crate) fn page_tool<'a>(
             };
             Arm::Area(Box::new(FillSignTool::new(&cx, input, fill)))
         }
-        QuickTool::Field(field_tool) => {
-            Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session)))
-        }
+        QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session))),
         // PLAN: assumed `AddTextTool::new(session, doc, info)` in `content_ui` (pdf-edit-w7 gives no argument list).
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.info))),
         // PLAN: pdf-edit-w10's `EditTextTool::new(view, doc, info)` takes no placed pages, which the review asked to hand over.
@@ -319,7 +316,7 @@ pub(crate) fn page_tool<'a>(
         },
         // PLAN: assumed `LinkTool::new(session, doc, info, can_modify)` (pdf-edit-w11 gives `new(view, ..)`).
         QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.doc, cx.info, cx.can_modify))),
-        QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify)),
+        QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, cx.pages, cx.info)),
         QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(cx.pages, cx.rotation, size)),
     };
     PageTool { arm, tool, selects_text, released: false, presenting: cx.presenting, presenter_keys: Vec::new() }

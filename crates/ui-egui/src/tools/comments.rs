@@ -41,7 +41,7 @@ pub(crate) use bridge::{
 use bridge::hover_tip;
 // PLAN: assumed colours exports (pdf-comments-w10): the colour pickers and buttons that `menu` exported before.
 pub use colours::{fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-pub(crate) use colours::{border_colour_button, quick_bar_colour};
+pub(crate) use colours::{RecentColours, border_colour_button, quick_bar_colour};
 pub(crate) use composer::composer;
 #[cfg(test)]
 use composer::edited_in_view;

@@ -1,6 +1,6 @@
+use craft::behavior::kurbo::{Point, Rect};
 use craft::pages::Fit;
 use craft::pages::ui::view::GoTo;
-use craft::behavior::kurbo::{Point, Rect};
 
 use super::{DestView, DocInfo, DocView, pos2};
 
@@ -175,12 +175,8 @@ impl DocView {
                 let (dw, dh) = size;
                 let (w, h) = ((ax - bx).abs() * dw, (ay - by).abs() * dh);
                 if w >= 1.0 && h >= 1.0 {
-                    let rect = Rect::new(
-                        f64::from(ax.min(bx) * dw),
-                        f64::from(ay.min(by) * dh),
-                        f64::from(ax.max(bx) * dw),
-                        f64::from(ay.max(by) * dh),
-                    );
+                    let rect =
+                        Rect::new(f64::from(ax.min(bx) * dw), f64::from(ay.min(by) * dh), f64::from(ax.max(bx) * dw), f64::from(ay.max(by) * dh));
                     self.view.go_to = Some(GoTo::Rect { page, rect, margin: 0.0 });
                 }
                 return;

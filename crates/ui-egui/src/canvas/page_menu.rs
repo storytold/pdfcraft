@@ -2,14 +2,14 @@
 
 use craft::behavior::IconId;
 use craft::ui::canvas::ContextRequest;
-use craft::ui::contract::overlay::Anchor;
 use craft::ui::contract::Show as _;
+use craft::ui::contract::overlay::Anchor;
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
 use pdfcraft_engine::Edit;
 
-use super::page_router::Owner;
-use super::{DocInfo, DocView, cached_edit_images};
+use super::page_parts::Owner;
+use super::{DocInfo, DocView};
 use crate::{QuickTool, comments};
 
 /// Default page right-click menu actions.
@@ -96,7 +96,6 @@ pub(crate) struct PageMenuCx<'a> {
     pub info: &'a DocInfo,
     pub prefs: &'a comments::CommentPrefs,
     pub rights: comments::MenuRights,
-    // PLAN: assumed `comments::RecentColours` (pdf-comments-w10)
     pub recent: &'a comments::RecentColours,
     pub tool: QuickTool,
     pub preparing: bool,
@@ -315,7 +314,7 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         && let Some((page, Owner::Picture { index, .. })) = view.menu_for
         && let Some(sel) = view.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
     {
-        let images = cached_edit_images(view, cx.doc, sel.page).to_vec();
+        let images = cx.doc.page_images(sel.page);
         // Paste lands where the menu opened, on the picture's page: another page's point means nothing there.
         let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
         let rotation = (view.rotation % 360 + cx.info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
@@ -324,7 +323,7 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
     }
     // The comment the press went to, when it is the one selected, or connected lines being drawn.
     let on_selected_comment = matches!(view.menu_for, Some((page, Owner::Comment { index, .. })) if view.comments.selected == Some((page, index)));
-    let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
+    let drawing_points = matches!(cx.tool, QuickTool::Comment(t) if t.clicks_points()) && !view.comments.tool.drawing().is_empty();
     if on_selected_comment || drawing_points {
         let tool = if let QuickTool::Comment(t) = cx.tool { Some(t) } else { None };
         pick.canvas = comments::context_rows(
@@ -343,10 +342,9 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
     }
     let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
     // On a page still being read, the picture rows appear when the answer comes.
-    let picture_under = view
-        .comments
-        .context_at
-        .and_then(|(page, at)| view.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index));
+    let picture_under = view.comments.context_at.and_then(|(page, at)| {
+        view.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index)
+    });
     // A text selection whose pages are still being read copies once they are.
     let has_text = view.selected_text().is_some() || view.selection_waits_for_text().is_some();
     let can_copy_items = cx.can_copy && (view.image_selection.is_some() || has_text || picture_under.is_some());

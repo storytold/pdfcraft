@@ -5,21 +5,22 @@
 //! Page pictures come from the page view's texture stores over [`pictures::DocPages`]; the app holds no raster.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
 use craft::behavior::{CanvasView, PointerButton, PressPhase, Selection};
-use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
 use craft::host::queue::{JobQueue, QueueOptions};
+use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
 use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, ToolHost};
 use craft::ui::contract::Show as _;
 use craft::ui::display::Text;
 use craft::ui::list::OpenSet;
 use craft::ui::primitives::TextureStatistics;
 use craft::ui::style::DataColor;
-use egui::{Color32, Rect};
+use egui::{Color32, Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
-use pdfcraft_render::{DocInfo, LinkTarget, PageText};
+use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PageText, RenderRequest, RequestKind};
 
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments};
 
@@ -331,8 +332,6 @@ pub struct PageSession {
     pub(crate) pending_text_open: Option<(usize, pdfcraft_engine::BlockKey)>,
     pub(crate) text_background: crate::edit_text_ui::TextBackground,
     pub(crate) move_background: crate::content_ui::MoveBackground,
-    /// Edit text & images: the images per page (by document generation), and the selected one.
-    pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
@@ -402,7 +401,6 @@ impl PageSession {
             pending_text_open: None,
             text_background: Default::default(),
             move_background: Default::default(),
-            edit_images: HashMap::new(),
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
@@ -866,7 +864,12 @@ struct BodyOut {
 /// Select and Link), comments (only under Select), fields, sign tabs (painted over their fields), then prepare fields,
 /// selected objects and the frame band. A later part outranks an earlier one of the same layer, so this order is the
 /// stacking order hit testing ranks on.
-fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, cx: &PageBodyCx<'_>) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
+fn page_parts_of(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    session: &PageSession,
+    cx: &PageBodyCx<'_>,
+) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
     let mut parts = Vec::new();
     // PLAN: assumed `edit_text_ui::picture_parts(out, session, doc, pages, rotation)`, `edit_text_ui::page_parts` and
     // `content_ui::page_parts` with the same shape (pdf-edit-w7, w8, w9 give no argument list).
@@ -879,8 +882,7 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, 
         links_of(session, cx, body).parts(&mut parts);
     }
     if cx.tool == QuickTool::Select && !cx.comments_hidden {
-        // PLAN: assumed `comments::bridge::parts(out, session, info, pages, rotation, unobstructed)` (pdf-comments-w8).
-        crate::comments::bridge::parts(&mut parts, session, cx.info, body.pages, cx.rotation, cx.unobstructed);
+        crate::comments::parts(&mut parts, session, cx.info, body.pages, cx.rotation, cx.unobstructed);
     }
     if !cx.preparing {
         // PLAN: assumed `forms_ui::field_parts(out, session, doc, form, pages, rotation, tool)` (pdf-forms-w7 AP-5).
@@ -939,13 +941,12 @@ fn route_press(session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>
                 session.pending_pick = None;
                 match event {
                     LinkEvent::Follow { target, javascript } => out.link = Some((target, javascript)),
-                    LinkEvent::Select { page, index, clicks } => crate::link_ui::select(session, page, index, clicks),
-                    LinkEvent::Context { page, index } => session.links.context = Some((page, index)),
+                    LinkEvent::Select { .. } | LinkEvent::Context { .. } => crate::link_ui::link_edit_press(&mut session.links, &event),
                 }
             }
         }
         // PLAN: assumed `comments::tool::part_pressed(session, info, press)` (pdf-comments-w8).
-        Owner::Comment { .. } => crate::comments::tool::part_pressed(session, cx.info, press),
+        Owner::Comment { .. } => crate::comments::part_pressed(session, cx.info, press),
         // PLAN: assumed `forms_ui::field_press(session, doc, form, press)` (pdf-forms-w5).
         Owner::Field { .. } => crate::forms_ui::field_press(session, cx.doc, cx.form, press),
         Owner::SignTab { field } => {
@@ -1043,7 +1044,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     if !cx.comments_hidden {
         // PLAN: assumed `comments::overlay::show(ui, body, session, info, prefs, tool, redact_hover)` (pdf-comments-w7,
         // L-90: the redaction hover is the user's setting, passed as a data colour).
-        crate::comments::overlay::show(ui, body, session, cx.info, cx.prefs, cx.tool, cx.redact_hover);
+        crate::comments::show(ui, body, session, cx.info, cx.prefs, cx.tool, cx.redact_hover);
     }
     if cx.calc_order {
         let hovered = match &parts_out.hovered {
@@ -1053,8 +1054,16 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         let selected = session.prepare.selected.as_ref().map(|(name, _)| name.as_str());
         // PLAN: assumed `CalcOrderOverlay::new(&CalcOrderView, pages, rotation, generation, selected, hovered,
         // viewport)` (pdf-forms-w12 gives `new(.., viewport: body.rect)`).
-        crate::calc_order_ui::CalcOrderOverlay::new(&session.calc_order, body.pages, cx.rotation, cx.doc.edit_generation(), selected, hovered, body.rect)
-            .show_at(ui, body.rect);
+        crate::calc_order_ui::CalcOrderOverlay::new(
+            &session.calc_order,
+            body.pages,
+            cx.rotation,
+            cx.doc.edit_generation(),
+            selected,
+            hovered,
+            body.rect,
+        )
+        .show_at(ui, body.rect);
     }
     if let Some(preview) = cx.table_preview {
         // PLAN: assumed `field_table_ui::TablePreview::new(&Preview, pages, rotation)` (pdf-forms-w11).
@@ -1069,8 +1078,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         None => marks,
     };
     marks.show_at(ui, body.rect);
-    // PLAN: assumed `selection::show_picked(ui, body, session, info)` (pdf-canvas-w12).
-    selection::show_picked(ui, body, session, cx.info);
+    image_pick::show_picked(ui, body, session, cx.rotation, cx.info);
     if let Some(at) = cx.present_at {
         // PLAN: `PresentFrame::hide_pointer` asks for `CursorPriority::Hidden`; the page body has no `BodyCx` to claim
         // it through, so the pointer is not hidden yet (pdf-canvas-w18).
@@ -1148,8 +1156,10 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let show_secured_notice = app.show_secured_notice;
     // Offer to lock a just-placed signature (#2149) on the same terms the save-time question
     // asks: one is still there, saving doesn't lock it anyway, and the document isn't signed.
-    let lock_offer =
-        !app.flatten_fill_sign_on_save && app.placed_signatures.contains(&doc_id) && doc.info.annotations.iter().any(|a| a.fill_sign) && !doc.is_signed();
+    let lock_offer = !app.flatten_fill_sign_on_save
+        && app.placed_signatures.contains(&doc_id)
+        && doc.info.annotations.iter().any(|a| a.fill_sign)
+        && !doc.is_signed();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
@@ -1170,7 +1180,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let unobstructed = !app.modal_open() && !app.palette_open;
     if app.views[index].organize {
         let invert_middle = app.navigation_options().invert_middle;
-        organize_grid(&mut app.views[index], doc, &mut organize::GridCx { ui, zoom: &mut app.organize_zoom, invert_middle });
+        organize_grid(&mut app.views[index], doc, &mut organize::GridCx { ui, session: &app.session, zoom: &mut app.organize_zoom, invert_middle });
         return None;
     }
     // The room under the notice bars, inside the rect the caller gave.
@@ -1182,8 +1192,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
     let calc_order = preparing && crate::side_panels::panel_visible(app, crate::LeftPanel::CalculationOrder);
     // Edit a PDF: added text and images can be selected, moved and edited.
-    let editing_content = crate::side_panels::panel_visible(app, crate::LeftPanel::Tool("edit"))
-        || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
+    let editing_content =
+        crate::side_panels::panel_visible(app, crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let chosen = app.quick_tool;
     let navigation = app.navigation_options();
     let presenting = app.views[index].presenting();
@@ -1217,7 +1227,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     view.session.move_background.prepare(ui.ctx(), doc, &view.session.content, scale);
 
     let find_marks: Vec<TextMark> = view.find.as_ref().map(Find::marks).unwrap_or_default();
-    let present_at = presenting.then_some(presenter::PresentAt { current: view.view.current, display: view.view.display, rotation: view.view.rotation });
+    let present_at =
+        presenting.then_some(presenter::PresentAt { current: view.view.current, display: view.view.display, rotation: view.view.rotation });
     let border = if view.view.page_gaps { PageBorder::DropShadow } else { PageBorder::None };
     let keep = view.session.presenter.keep_pages();
     if view.momentary_options != navigation {
@@ -1286,11 +1297,11 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
-    let out = PageView::new(tl!("Pages"), &source, state, DataColor::new(paper))
-        .navigation(navigation)
-        .border(border)
-        .keep(&keep)
-        .show_at(ui, rect, |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out));
+    let out = PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
+        ui,
+        rect,
+        |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
+    );
     if let Some(canvas) = &body_out.view {
         out.adopt(&mut view.view, canvas);
     }
@@ -1301,10 +1312,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // double-click time has passed with no object clicked and no selection made (#2070).
     let now = ui.input(|i| i.time);
     let has_selection = view.session.text.selection.is_some();
-    let click = (presenting && matches!(out.canvas.press.phase, PressPhase::Release { click: true, .. })).then(|| presenter::PresentClick {
-        forward: !out.canvas.press.mods.shift,
-        clicks: if out.canvas.press.double_pressed() { 2 } else { 1 },
-    });
+    let click = (presenting && matches!(out.canvas.press.phase, PressPhase::Release { click: true, .. }))
+        .then(|| presenter::PresentClick { forward: !out.canvas.press.mods.shift, clicks: if out.canvas.press.double_pressed() { 2 } else { 1 } });
     let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
     let cancels = body_out.link.is_some() || has_selection;
     let click_turn = if presenting { view.session.presenter.click_turn(ui.ctx(), click, cancels, now, delay) } else { None };
@@ -1328,7 +1337,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if view.session.text_queue.is_none() {
         let ctx = ui.ctx().clone();
         let wake = craft::host::Wake::new(move || ctx.request_repaint());
-        view.session.text_queue = Some(JobQueue::new(app.host.jobs_shared().clone(), wake, QueueOptions { name: "text-layers", ..QueueOptions::default() }));
+        view.session.text_queue =
+            Some(JobQueue::new(app.host.jobs_shared().clone(), wake, QueueOptions { name: "text-layers", ..QueueOptions::default() }));
     }
     let (visible_pages, rest_pages) = text_demand(view, out.visible.clone(), chosen == QuickTool::Hand);
     view.want_text(&app.session, &visible_pages, &rest_pages);
@@ -1508,10 +1518,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
         app.comment_attachment_action(doc, p, i, open);
     }
     if let Some((name, w)) = field_props {
-        crate::prepare::dialog::open(app, &name, w, crate::prepare::dialog::FieldTab::General);
+        crate::prepare::dialog::open(app, &name, w, crate::prepare::FieldTab::General);
     }
     if let Some(FieldMenu::Duplicate(name)) = field_menu {
-        crate::duplicate_field::open(app, name);
+        crate::dialogs::duplicate_field::open(app, name);
     }
     if let Some((page, rect)) = app.views[index].session.links.open_new.take() {
         app.open_link_props(page, Some(rect), None);
@@ -1710,11 +1720,11 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, requests: FrameRequ
     }
 }
 
+pub(crate) mod page_box_drag;
 #[cfg(test)]
 mod sign_tab_tests;
 #[cfg(test)]
 mod tests;
-pub(crate) mod page_box_drag;
 pub(crate) use page_box_drag::PageBoxDrag;
 pub(crate) mod page_menu;
 pub(crate) mod page_select;

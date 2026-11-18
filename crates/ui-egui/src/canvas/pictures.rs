@@ -8,7 +8,8 @@ use craft::behavior::kurbo::Size;
 use craft::pages::ui::PageSource;
 use craft::ui::primitives::textures::{LoadFailure, LoadedPicture, Revision, ThumbRender, ThumbRequest, ThumbSource};
 use egui::{Color32, ColorImage, Rect};
-use pdfcraft_engine::{DocId, DocInfo, Session};
+use pdfcraft_engine::{DocId, Session};
+use pdfcraft_render::DocInfo;
 use pdfcraft_render::{PRINT_TAG, PageRenderer, RenderConfig, RenderRequest, RenderWarning, RequestKind, Tile};
 
 use super::cache::{grayscale, texture_image};

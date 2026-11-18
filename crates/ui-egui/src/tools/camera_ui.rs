@@ -62,7 +62,7 @@ pub struct CameraDone {
 }
 
 /// The page's size in view points.
-fn page_points(placed: &PlacedPage) -> (f32, f32) {
+pub(crate) fn page_points(placed: &PlacedPage) -> (f32, f32) {
     let scale = placed.scale.max(1e-6) as f32;
     (placed.rect.width() / scale, placed.rect.height() / scale)
 }

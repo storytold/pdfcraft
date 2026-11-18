@@ -9,8 +9,8 @@ use pdfcraft_engine::rect_quad;
 use pdfcraft_render::DocInfo;
 
 use crate::QuickTool;
-use crate::canvas::{DocView, PageBoxDrag, PageSelectTool, PlacedPage, ToolMarks};
 use crate::canvas::PageXform;
+use crate::canvas::{DocView, PageBoxDrag, PageSelectTool, PlacedPage, ToolMarks};
 
 /// The smallest box, in screen points on each side, that counts as a mark.
 const LEAST_BOX: f32 = 3.0;
@@ -25,7 +25,7 @@ enum Gesture {
 }
 
 /// What a finished gesture asks the document for.
-enum RedactResult {
+pub(crate) enum RedactResult {
     /// A box on `page`, as a user-space quad.
     Area { page: usize, quad: [f64; 8] },
     /// A text selection that ended; the selection holds what to mark.
@@ -48,7 +48,16 @@ impl<'a> RedactTool<'a> {
     /// The tool over the placed pages, with the select tool that runs text selections and the
     /// test of whether a screen point is over text (the same one the I-beam uses).
     pub(crate) fn new(select: PageSelectTool<'a>, placed: &'a [PlacedPage], info: &'a DocInfo, over_text: impl Fn(Pos2) -> bool + 'a) -> Self {
-        Self { select, drag: PageBoxDrag::default(), placed, info, over_text: Box::new(over_text), gesture: Gesture::Idle, text_page: None, finished: None }
+        Self {
+            select,
+            drag: PageBoxDrag::default(),
+            placed,
+            info,
+            over_text: Box::new(over_text),
+            gesture: Gesture::Idle,
+            text_page: None,
+            finished: None,
+        }
     }
 
     /// After the host ran: hands a finished gesture to the view as a pending redaction, or as a

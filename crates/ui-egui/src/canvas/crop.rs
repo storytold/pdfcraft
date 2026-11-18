@@ -2,11 +2,10 @@
 //! rectangle; double-click a page to open Set Page Boxes for it.
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
-use craft::ui::canvas::crop::{CropShield, paint_outside};
-use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft::pages::ui::PlacedPage;
+use craft::ui::canvas::{CanvasTool, CropShield, ToolAction, ToolContext, ToolPath, ToolPointer, paint_outside};
 use craft::ui::primitives::Draw;
 use craft::ui::style::DataColor;
-use craft::pages::ui::PlacedPage;
 use pdfcraft_engine::{BoxSpec, Edit, PageBox};
 use pdfcraft_render::DocInfo;
 

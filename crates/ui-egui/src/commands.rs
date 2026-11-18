@@ -42,6 +42,14 @@ pub(crate) fn mac_shortcuts(ctx: &egui::Context) -> bool {
     ctx.os() == egui::os::OperatingSystem::Mac
 }
 
+/// How a command's chord is written in a menu row (`⌘C` or `Ctrl+C`): the registry's shortcut, and the
+/// clipboard chord for Copy, which the framework's clipboard commands own.
+pub(crate) fn chord_label(ctx: &egui::Context, id: &str) -> Option<String> {
+    let mac = mac_shortcuts(ctx);
+    let shortcut = commands::command(id)?.shortcut_for(mac).or((id == "edit.copy").then_some(COPY))?;
+    Some(shortcut.label(mac))
+}
+
 impl PdfCraftApp {
     /// Runs a command the runtime fired from a key, a menu row, the palette, a component or
     /// automation. The catalog's app-side handlers come first; every other id is a registered
@@ -923,7 +931,6 @@ impl PdfCraftApp {
             None => self.open_combine_tab(),
         }
     }
-
 }
 
 /// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From
