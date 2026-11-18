@@ -18,13 +18,14 @@ pub(crate) struct PanelResult {
     pub attachment: Option<(usize, bool)>,
     /// A layer and its new visibility.
     pub layer: Option<(usize, bool)>,
+    /// A command to run, by id.
+    pub command: Option<&'static str>,
 }
 
 /// Draw the body of side panel `panel` and apply its navigation, layer, bookmark or edit actions. The dock shows the
 /// panel's tab, header and menu.
-// PLAN: the bodies (pdf-chrome-w14, pdf-chrome-w15) take `(app, ui)` and no `BodyCx`; they need it for the memory of
-// their context-menu targets, so their owners add `cx` to the signatures and this call then passes it.
-pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>, panel: RightPanel) {
+pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>, panel: RightPanel) {
+    let ctx = ui.ctx().clone();
     let Some((index, id)) = app.active_ids() else { return };
     // PLAN: the replies line of Comments and the "{n} pages selected" note of Pages are the first line of those
     // bodies (L-86): `comments_panel::show` (pdf-comments-w12) and `pages::body` (pdf-chrome-w14) draw them.
@@ -32,7 +33,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         RightPanel::Bookmarks => super::bookmarks::body(app, ui),
         RightPanel::Pages => super::pages::body(app, ui),
         RightPanel::Layers => super::layers::show(app, ui),
-        RightPanel::Attachments => super::attachments::show(app, ui),
+        RightPanel::Attachments => super::attachments::show(app, ui, cx),
         RightPanel::Fields => super::fields::show(app, ui),
         RightPanel::Search => super::search_ui::show(app, ui),
         _ => PanelResult::default(),
@@ -44,7 +45,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         let Some(doc) = app.session.get(id) else { return };
         let view = &mut app.views[index];
         let prefs = &app.comment_prefs;
-        let sig_open = &mut app.sig_expanded;
+        let sig_open = &mut app.sig_open;
         let a11y = &mut app.a11y;
         let tags_state = &mut app.tags_state;
         let compare = &app.compare;
@@ -81,13 +82,13 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         crate::prepare::dialog::open(app, &name, widget, crate::prepare::FieldTab::General);
     }
     if let Some(a) = a11y_action {
-        app.a11y_action(index, a);
+        app.a11y_action(&ctx, index, a);
     }
     if let Some(a) = compare_action {
         app.compare_action(index, a);
     }
     match sig_action {
-        Some(crate::sign_ui::PanelAction::Validate) => app.run_command("sign.validate"),
+        Some(crate::sign_ui::PanelAction::Validate) => app.run_command(&ctx, "sign.validate"),
         Some(crate::sign_ui::PanelAction::GoTo(p)) => app.views[index].go_to_page(p),
         Some(crate::sign_ui::PanelAction::Trust(c)) => app.trust_certificate(*c),
         Some(crate::sign_ui::PanelAction::ViewCertificate(chain)) => crate::sign_ui::cert_viewer::open(app, chain),
@@ -108,7 +109,13 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         app.comment_attachment_action(id, p, i, open);
     }
     if let Some((p, i)) = app.views.get_mut(index).and_then(|v| v.session.comments.props_request.take()) {
-        app.open_comment_props(p, i);
+        app.open_comment_props(&ctx, p, i);
+    }
+    if let Some(text) = app.views.get_mut(index).and_then(|v| v.session.comments.copy_text_request.take()) {
+        app.put_text(&text);
+    }
+    if let Some(command) = result.command {
+        app.run_command(&ctx, command);
     }
     if let Some(a) = result.bookmark {
         app.bookmark_action(a);

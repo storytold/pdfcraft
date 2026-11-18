@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon, DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft::host::{PickRequest, Picked};
+use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult};
@@ -17,7 +18,6 @@ use craft::ui::pickers::ComboBox;
 use craft::ui::primitives::Draw;
 use craft::ui::sections::Section;
 use craft::ui::text::TextField;
-use craft::pages::ui::PlacedPage;
 use egui::Pos2;
 use pdfcraft_engine::{Edit, MarkFile, NewAnnotation, Shape, StampGroup, StampKind, Style};
 use pdfcraft_render::DocInfo;
@@ -301,13 +301,14 @@ pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
     let (mut choose, mut remove) = (None, None);
     Section::fixed(tl!("Custom")).id_salt("custom-stamps").show(ui, |ui, _| {
-        let out = List::new(tl!("Custom stamps"))
-            .select(SelectMode::Single)
-            .selection(Bind::bound(&mut selection))
-            .show_items(ui, &rows, &mut |key, item| match key {
+        let out = List::new(tl!("Custom stamps")).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
+            ui,
+            &rows,
+            &mut |key, item| match key {
                 PaletteKey::Heading(_) => ListRow::new(rows.text(item.at).unwrap_or_default().into_owned()).section_heading().state(item.row.clone()),
                 PaletteKey::Stamp(_) => ListRow::new(rows.text(item.at).unwrap_or_default().into_owned()).state(item.row.clone()),
-            });
+            },
+        );
         for event in out.events {
             match event {
                 CollectionEvent::Selection(SelectionChange::Set(keys)) => {
@@ -346,10 +347,9 @@ impl PdfCraftApp {
     /// Create ▸ choose a PDF or an image for a new custom stamp.
     pub(crate) fn pick_stamp_file(&mut self, ctx: &egui::Context) {
         let ctx = ctx.clone();
-        let request = PickRequest::open("stamp").title(tl!("Select a file for the stamp")).filter(
-            tl!("PDF or image"),
-            &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"],
-        );
+        let request = PickRequest::open("stamp")
+            .title(tl!("Select a file for the stamp"))
+            .filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
         self.pick_file(request, None, |app, picked| match picked {
             Picked::Paths(paths) => {
                 let Some(path) = paths.into_iter().next() else { return };
@@ -380,11 +380,7 @@ impl PdfCraftApp {
         let name = file.rsplit_once('.').map_or(file.as_str(), |(s, _)| s).to_string();
         let category = self.custom_stamps.last().map(|s| s.category.clone()).unwrap_or_else(|| "My stamps".into());
         let existing = categories(&self.custom_stamps);
-        let fields = DialogFields::from_pairs([
-            (CATEGORY, category),
-            (NAME, name),
-            (LINE, DEFAULT_LINE.to_owned()),
-        ]);
+        let fields = DialogFields::from_pairs([(CATEGORY, category), (NAME, name), (LINE, DEFAULT_LINE.to_owned())]);
         let shown_file = file.clone();
         let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| {
             ParamDialog::new(DIALOG_KEY, tl!("Create Custom Stamp"), create_params(&shown_file, &existing)).ok_enabled(fields_ok(fields))

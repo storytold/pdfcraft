@@ -165,7 +165,11 @@ impl DocView {
         let config = session.render_config(self.id).unwrap_or_default();
         let ranked = visible.iter().map(|p| (*p, Priority::VISIBLE)).chain(rest.iter().map(|p| (*p, Priority::BACKGROUND)));
         for (page, priority) in ranked {
-            if page >= self.page_count || self.session.texts.contains_key(&page) || self.session.text_failed.contains(&page) || self.session.text_queue.contains(&page) {
+            if page >= self.page_count
+                || self.session.texts.contains_key(&page)
+                || self.session.text_failed.contains(&page)
+                || self.session.text_queue.contains(&page)
+            {
                 continue;
             }
             let (bytes, config) = (doc.display.clone(), config.clone());

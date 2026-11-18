@@ -176,9 +176,7 @@ impl ScriptPromptDialog {
     /// The dialog for `prompt` of document `run`, or `None` for a message box, which the standard prompt answers.
     fn for_prompt(run: DocId, document: String, prompt: ScriptPrompt) -> Option<Self> {
         let body = match prompt {
-            ScriptPrompt::Text { title, question, password, label, default, .. } => {
-                Body::Text { title, question, label, password, text: default }
-            }
+            ScriptPrompt::Text { title, question, password, label, default, .. } => Body::Text { title, question, label, password, text: default },
             ScriptPrompt::Menu(items) => {
                 let mut nodes = Vec::new();
                 flatten(&items, 0, &mut nodes);

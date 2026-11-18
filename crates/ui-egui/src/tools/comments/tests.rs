@@ -493,7 +493,8 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
     let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
     view.session.comments.select_only((0, 1));
     view.session.comments.panel.editing = Some((ThreadId(bridge::id_of(0, 1).0), 0, "the first note".into()));
-    view.session.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
+    view.session.comments.composer =
+        Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
     let placed = [placed_page(&xf, 1.0)];
     let map = page_map(&placed, &info, 0);
@@ -561,7 +562,8 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     assert_eq!(pick_at(&annotations, over, tolerance, side, &markers), Some(bridge::id_of(0, 0)), "the highlight a press there selects");
     // PLAN: the outline shape itself is the overlay's `HoverOutline` (pdf-comments-w8); a request to w8 for an `overlay` helper
     // the test can compare against the part's annotation. The part registered at the pointer is asserted here.
-    let parts = |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side);
+    let parts =
+        |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side);
     assert_eq!(parts(&view, Some(over)).len(), 1, "one part for the comment under the pointer");
     assert!(parts(&view, None).is_empty(), "no pointer, no part");
     assert!(parts(&view, Some(Point::new(5.0, 5.0))).is_empty(), "nor where nothing would take the press");
@@ -594,8 +596,13 @@ fn an_annotation_round_trips_through_the_page_map_on_turned_and_zoomed_pages() {
         }
         let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
         let delta = Vec2::new(1.0, 0.0);
-        let moved =
-            bridge::edit(AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta }, &map, &mut view.session.comments, &info, &CommentPrefs::default());
+        let moved = bridge::edit(
+            AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta },
+            &map,
+            &mut view.session.comments,
+            &info,
+            &CommentPrefs::default(),
+        );
         let Some(Edit::MoveAnnotation { dx, dy, .. }) = moved else { panic!("{case}: a move is one MoveAnnotation, got {moved:?}") };
         let origin = map.to_doc(0, [50.0, 80.0]);
         let (from, to) = (map.to_user(0, origin), map.to_user(0, origin + delta));

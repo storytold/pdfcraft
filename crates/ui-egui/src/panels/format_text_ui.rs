@@ -763,7 +763,7 @@ mod tests {
     /// An app with one added text, "Proof", on page 0.
     fn app_with_text() -> PdfCraftApp {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
         let text = AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), size: 12.0, ..Default::default() };
         assert!(app.apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));

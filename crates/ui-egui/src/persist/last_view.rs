@@ -159,6 +159,5 @@ mod tests {
         }
         assert_eq!(zoom_text(canvas::Fit::None, 1.1), "110%");
         assert_eq!(zoom_text(canvas::Fit::None, 0.625), "62.5%");
-
     }
 }

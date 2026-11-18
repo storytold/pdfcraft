@@ -322,7 +322,8 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         return;
     }
     // The comment the press went to, when it is the one selected, or connected lines being drawn.
-    let on_selected_comment = matches!(view.session.menu_for, Some((page, Owner::Comment { index, .. })) if view.session.comments.selected == Some((page, index)));
+    let on_selected_comment =
+        matches!(view.session.menu_for, Some((page, Owner::Comment { index, .. })) if view.session.comments.selected == Some((page, index)));
     let drawing_points = matches!(cx.tool, QuickTool::Comment(t) if t.clicks_points()) && !view.session.comments.tool.drawing().is_empty();
     if on_selected_comment || drawing_points {
         let tool = if let QuickTool::Comment(t) = cx.tool { Some(t) } else { None };

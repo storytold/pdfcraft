@@ -196,7 +196,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let info = &doc.info;
     let outline = info.outline.as_slice();
     let Some(view) = app.views.get_mut(index) else { return result };
-    let current = view.current;
+    let current = view.current();
 
     if outline.is_empty() {
         Notice::new(craft::theme::variant::Tone::Neutral, tl!("This document has no bookmarks.")).show(ui);
@@ -228,7 +228,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let row_key = |key: &Vec<usize>| item_at(outline, key).map(|i| vec![i.title.clone().into()]).unwrap_or_default();
     let list = List::<Vec<usize>>::new(tl!("Bookmarks"))
         .id(list_id)
-        .tree()
+        .tree(true)
         .select(SelectMode::Single)
         .activate(ActivateOn::Click)
         .rename(editable)
@@ -317,10 +317,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 let colour = MenuItem::new(tl!("Colour")).show(ui);
                 Menu::submenu(tl!("Colour"), &colour.response).show(ui, |ui, _| {
                     let current = item.color.map(|c| c.map(f64::from));
-                    // PLAN: assumed `colours::palette(ui, label, Option<[f64; 3]>, "bookmark.colour", recent) ->
-                    // PalettePick` with `PalettePick::picked() -> Option<[f64; 3]>` (pdf-comments-w10, A-5); no
-                    // recent colours are passed.
-                    if let Some(c) = crate::comments::colours::palette(ui, tl!("Colour"), current, "bookmark.colour", &[]).picked() {
+                    if let Some(c) = crate::comments::colours::palette(ui, tl!("Colour"), current, "bookmark.colour", &app.recent_colours).picked {
                         styled = Some(BmAction::SetColor(path.clone(), c));
                     }
                 });
