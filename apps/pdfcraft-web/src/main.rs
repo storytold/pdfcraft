@@ -388,7 +388,8 @@ mod tests {
             skip_space(&mut chars);
             let mut value = String::new();
             if chars.next_if_eq(&'=').is_some() {
-                skip_space(&mut chars);
+                // Only whitespace here: `/` after `=` starts an unquoted value (`href=/a.json`).
+                while chars.next_if(|c| c.is_whitespace()).is_some() {}
                 match chars.next_if(|c| *c == '"' || *c == '\'') {
                     Some(quote) => value.extend(chars.by_ref().take_while(|c| *c != quote)),
                     None => {
@@ -423,6 +424,10 @@ mod tests {
         // HTML allows spaces around `=`, single quotes and bare values.
         assert!(has_link(r#"<link rel = "manifest" href = 'm.json' >"#, &[("rel", "manifest"), ("href", "m.json")]));
         assert!(has_link("<link rel=manifest href=m.json>", &[("rel", "manifest"), ("href", "m.json")]));
+        // A bare value keeps its leading slash, as in HTML: `/m.json` is not `m.json`.
+        let rooted = "<link rel=manifest href=/manifest.webmanifest>";
+        assert!(has_link(rooted, &[("href", "/manifest.webmanifest")]));
+        assert!(!has_link(rooted, &[("href", "manifest.webmanifest")]), "the slash is part of the value");
         // Malformed text ends instead of looping: a stray `=`, an unclosed quote, a lone name.
         for tag in [r#"<link = "x" rel="icon">"#, r#"<link rel="icon"#, "<link rel=", "<link ="] {
             let _ = links(tag);
