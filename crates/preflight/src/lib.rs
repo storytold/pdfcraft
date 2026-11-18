@@ -691,9 +691,14 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
             type3_procs(doc, d, 0, &mut read, &mut glyphs);
         }
     }
+    // A glyph is matched by number when the document accepts the generation it is referred to at,
+    // as a page's parts are above: a damaged file's object header may give it a generation other
+    // than the one `objs` carries.
+    let glyphs: std::collections::HashSet<u32> =
+        glyphs.into_iter().filter(|g| doc.accepted_generations(g.num).contains(&g.generation)).map(|g| g.num).collect();
     for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
-        if !(glyphs.contains(r) || is_content(&s.dict)) {
+        if !(glyphs.contains(&r.num) || is_content(&s.dict)) {
             continue;
         }
         match budget.decode_with_damage(doc, s, usize::MAX) {

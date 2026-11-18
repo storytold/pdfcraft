@@ -2541,3 +2541,47 @@ fn unreadable_inline_images_and_content_parts_are_reported() {
     // doesn't have.
     assert!(interpolation_said(&page("4 0 R 9 0 R 5 1 R")).is_empty());
 }
+
+/// A Type 3 glyph procedure is found by the reference in `/CharProcs` at any generation the
+/// document accepts for it: here the xref says generation 0 and the object's header says 1, and
+/// the glyph, referred to as `5 1 R`, holds an interpolated inline image. A reference at a
+/// generation the document doesn't accept leads to no glyph.
+#[test]
+fn a_type3_glyph_at_its_header_generation_is_read_for_inline_images() {
+    let glyph = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID x EI";
+    let with_ref = |r: &str| {
+        let font = format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a {r} >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+        );
+        let content = format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len());
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /T3 6 0 R >> >> >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+            content.as_str(),
+            font.as_str(),
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            // Object 5's header says generation 1; the xref below says 0.
+            let generation = if i + 1 == 5 { 1 } else { 0 };
+            out.extend_from_slice(format!("{} {generation} obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        Document::open(std::sync::Arc::new(out)).unwrap()
+    };
+    let doc = with_ref("5 1 R");
+    assert_eq!(doc.generation(5), 0, "the fixture's xref generation");
+    assert!(doc.accepted_generations(5).contains(&1), "the fixture's header generation is accepted");
+    assert_eq!(interpolation_said(&doc), ["An inline image asks to be interpolated"]);
+    assert_eq!(interpolation_said(&with_ref("5 0 R")), ["An inline image asks to be interpolated"]);
+    assert!(interpolation_said(&with_ref("5 2 R")).is_empty());
+}
