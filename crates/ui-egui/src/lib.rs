@@ -389,6 +389,9 @@ pub struct PdfCraftApp {
     pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
+    /// Preferences ▸ Esc leaves full screen (on by default). Off, only ⌘L / Ctrl+L leaves it, as
+    /// for a kiosk display; Esc still closes the find bar and the like.
+    pub full_screen_escape_exits: bool,
     /// Whether the system asked for no animations, and how the desktop app asks it.
     pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
@@ -518,6 +521,9 @@ pub struct PdfCraftApp {
     pub pinned: folders_ui::PinnedFolders,
     /// The recent files restored from settings, checked off the UI thread (#5682).
     recent_check: persist::recent_check::RecentCheck,
+    /// Failures of the Reveal worker, taken each frame and shown as a notification.
+    #[cfg(not(target_arch = "wasm32"))]
+    reveal_errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Tools pinned to Home, in user-defined order.
     pub pinned_tools: Vec<String>,
     /// Search query for the Pin a tool selection dialog.
