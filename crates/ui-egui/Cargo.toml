@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 # The framework facade with the crates the UI uses (owed by pdf-hub-w1, which owns this manifest).
-craft = { workspace = true, features = ["ui", "draw", "pages", "print", "review", "dialogs", "docpath", "font-catalog", "window", "settings", "platform", "atomic", "automation", "keymap", "menu", "quit", "web-host", "text", "text-font-picker", "font-manager", "platform-clipboard", "update", "theme-store", "imaging"] }
+craft = { workspace = true, features = ["ui", "draw", "pages", "print", "review", "dialogs", "docpath", "font-catalog", "text-font-picker", "text-find", "imaging", "window", "settings", "platform", "platform-clipboard", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
@@ -57,17 +57,12 @@ unicode-bidi = "0.3"
 skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-update = { workspace = true }
+# Help ▸ Check for updates: the facade's update crate builds only natively.
+craft = { workspace = true, features = ["update"] }
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
-# Waits for native file pickers off the UI thread (already in the tree through wgpu).
-pollster = "1.0"
-
-[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
-# Discover configured font directories without linking libfontconfig or running a subprocess.
-fontconfig-parser = "0.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
@@ -95,9 +90,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator", "RequestCache", "RequestInit", "Response", "Worker", "WorkerOptions", "WorkerType", "MessageEvent"] }
 
 [dev-dependencies]
-# The framework's test drivers (`craft::ui::testing`) for the kittest suites.
+# The fixture and suite runner the component trials drive the app's components with.
 craft = { workspace = true, features = ["ui-testing"] }
-craft-update = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 # A content stream that inflates past the renderer's limits, for the cut-content notice test.
 flate2 = { workspace = true }
