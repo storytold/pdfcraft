@@ -82,6 +82,11 @@ struct Walk<'a> {
     /// Whether any graphics state the walk listed sets such a transfer function: when a use may
     /// have been missed, every image may have been drawn under it.
     transfer_listed: bool,
+    /// False once an image may have been drawn under a graphics state the walk did not follow:
+    /// content the parser could not read whole (bytes it skipped, an inline image whose end it
+    /// guessed), or Type 3 glyphs shown where a transfer function is set or listed, which draw
+    /// with resources and states of their own.
+    states_seen: bool,
     /// The references the walk followed to reach its images, and the pages and page-tree nodes
     /// whose resources it read.
     read: Read,
@@ -132,11 +137,25 @@ impl Walk<'_> {
                 }
             }
         }
+        let type3 = resources
+            .get(b"Font")
+            .map(|f| doc.resolve(f))
+            .as_deref()
+            .and_then(Object::as_dict)
+            .is_some_and(|fonts| fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|f| f.name(b"Subtype") == Some(b"Type3"))));
+        let lists_transfer = states.iter().any(|(_, g)| transfer_of(doc, g) == Some(true));
+        let parsed = pdfcraft_content::parse(data);
+        if parsed.skipped > 0 || parsed.ambiguous_images > 0 {
+            self.states_seen = false;
+        }
         // The matrix, and whether a transfer function is in force: saved and restored by `q`/`Q`.
         let mut stack = vec![(ctm, transfer)];
-        for op in pdfcraft_content::parse(data).ops {
+        for op in parsed.ops {
             let (top, transfer) = stack.last().copied().unwrap_or((ctm, transfer));
             match op.op.as_slice() {
+                // A Type 3 glyph is a content stream of its own, drawn in the state the text is
+                // shown in; it may set another, and draw images, which this walk doesn't follow.
+                b"Tj" | b"TJ" | b"'" | b"\"" if type3 && (transfer || lists_transfer) => self.states_seen = false,
                 b"q" => stack.push((top, transfer)),
                 b"Q" if stack.len() > 1 => {
                     stack.pop();
@@ -148,8 +167,10 @@ impl Walk<'_> {
                         t.0 = m.then(&top);
                     }
                 }
+                // The operand from the end, as the renderer reads it: surplus operands before it
+                // are ignored.
                 b"gs" => {
-                    if let Some(set) = op.name(0).and_then(|n| states.get(n)).and_then(|g| transfer_of(doc, g))
+                    if let Some(set) = op.last_name().and_then(|n| states.get(n)).and_then(|g| transfer_of(doc, g))
                         && let Some(t) = stack.last_mut()
                     {
                         t.1 = set;
@@ -281,7 +302,7 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 /// decode within its budget or is damaged partway, every image is given `INFINITY` (never
 /// resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    let Ok((ppi, ..)) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
+    let Ok((ppi, ..)) = walk_pages(doc, pages, false, &mut |_| true) else { return HashMap::new() };
     ppi
 }
 
@@ -292,11 +313,13 @@ type PagesWalked = (HashMap<ObjRef, f64>, HashSet<u32>, Read, HashSet<u32>);
 /// [`effective_resolutions`], the images drawn or listed where `/DefaultGray` or `/DefaultRGB` is
 /// in force, by object number (all of them when a use may have been missed), the references
 /// followed to reach them, and the images drawn under a transfer function other than the
-/// identity, by object number (all of them when a use may have been missed and a graphics state
-/// the walk listed sets one).
+/// identity, by object number: all of them when a use may have been missed, or drawn under a
+/// state the walk did not follow, and a graphics state the walk listed sets such a function, or
+/// `doc_transfer` says one in the document does ([`lists_transfer`]): the state of what the walk
+/// skipped was not read.
 ///
 /// `tick` hears how many pages are done, and stops the walk by returning false.
-fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
+fn walk_pages(doc: &Document, pages: &[ObjRef], doc_transfer: bool, tick: &mut dyn FnMut(usize) -> bool) -> Result<PagesWalked, OptimizeError> {
     let mut walk = Walk {
         doc,
         path: Vec::new(),
@@ -309,6 +332,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
         defaults: HashSet::new(),
         transfer: HashSet::new(),
         transfer_listed: false,
+        states_seen: true,
         read: Read::default(),
     };
     for (done, p) in pages.iter().enumerate() {
@@ -332,9 +356,9 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
     if !walk.complete {
         walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
         walk.defaults.extend(walk.out.keys().map(|r| r.num));
-        if walk.transfer_listed {
-            walk.transfer.extend(walk.out.keys().map(|r| r.num));
-        }
+    }
+    if (!walk.complete || !walk.states_seen) && (walk.transfer_listed || doc_transfer) {
+        walk.transfer.extend(walk.out.keys().map(|r| r.num));
     }
     Ok((walk.out, walk.defaults, walk.read, walk.transfer))
 }
@@ -345,16 +369,47 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
 /// `/TR2 /Default`), `None` when it sets none. Samples drawn under a transfer function are mapped
 /// through it, and a steep one turns the small changes resampling or JPEG compression make to
 /// near-white samples into colour: such an image has to keep its samples as they are.
-fn transfer_of(doc: &Document, gs: &Object) -> Option<bool> {
+pub(crate) fn transfer_of(doc: &Document, gs: &Object) -> Option<bool> {
     let gs = doc.resolve(gs);
-    let gs = gs.as_dict()?;
-    let tr = gs.get(b"TR2").or_else(|| gs.get(b"TR"))?;
+    transfer_in(doc, gs.as_dict()?)
+}
+
+/// [`transfer_of`] for graphics state dictionary `gs`. An entry whose value is null is one that
+/// isn't there (ISO 32000-2 §7.3.9), so `/TR2 null` leaves `/TR` to say.
+fn transfer_in(doc: &Document, gs: &Dict) -> Option<bool> {
+    let entry = |key: &[u8]| gs.get(key).map(|o| doc.resolve(o)).filter(|o| !matches!(**o, Object::Null));
+    let tr = entry(b"TR2").or_else(|| entry(b"TR"))?;
     let identity = |o: &Object| matches!(o.as_name(), Some(b"Identity" | b"Default"));
-    let tr = doc.resolve(tr);
     Some(match &*tr {
         o if identity(o) => false,
         Object::Array(a) => !a.iter().all(|f| identity(&doc.resolve(f))),
         _ => true,
+    })
+}
+
+/// Whether some dictionary in `doc`, at any depth inside an object, sets a transfer function other
+/// than the identity ([`transfer_in`]): the graphics states of content a walk doesn't read (a form
+/// nested too deep, a Type 3 glyph's, an annotation's appearance) may be among them.
+fn lists_transfer(doc: &Document) -> bool {
+    doc.scan_objects().any(|(_, object)| {
+        // Direct objects nest finitely (the parser builds trees), so this ends.
+        let mut stack: Vec<&Object> = vec![&object];
+        while let Some(o) = stack.pop() {
+            let d = match o {
+                Object::Dict(d) => d,
+                Object::Stream(s) => &s.dict,
+                Object::Array(a) => {
+                    stack.extend(a);
+                    continue;
+                }
+                _ => continue,
+            };
+            if (d.contains(b"TR") || d.contains(b"TR2")) && transfer_in(doc, d) == Some(true) {
+                return true;
+            }
+            stack.extend(d.iter().map(|(_, v)| v));
+        }
+        false
     })
 }
 
@@ -1427,7 +1482,19 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
-    let (ppi, mut defaults, read, transfer) = walk_pages(doc, pages, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
+    let doc_transfer = lists_transfer(doc);
+    let (ppi, mut defaults, read, mut transfer) =
+        walk_pages(doc, pages, doc_transfer, &mut |done| progress(Stage::Reading { done, total: pages.len() }))?;
+    // Content the walk didn't read (a Type 3 glyph's, an annotation's appearance) may draw an image
+    // under a transfer function of its own.
+    if doc_transfer {
+        let all: HashSet<u32> = ppi.keys().map(|r| r.num).collect();
+        transfer.extend(used_elsewhere(doc, &all, &read));
+    }
+    // A picture's masks are stored again with it, or by the mask pass: those of a picture that
+    // keeps its samples stay as they are, and so does another picture naming one of them.
+    let held_masks: HashSet<u32> = ppi.keys().filter(|r| transfer.contains(&r.num)).flat_map(|r| masks_of(doc, *r)).map(|m| m.num).collect();
+    let keeps = |doc: &Document, r: ObjRef| transfer.contains(&r.num) || masks_of(doc, r).iter().any(|m| held_masks.contains(&m.num));
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
@@ -1464,7 +1531,7 @@ pub(crate) fn run(
         &pictures,
         &|doc, rest| batch_len(doc, rest, &smask_uses, holds),
         // An image drawn under a transfer function keeps its samples ([`transfer_of`]).
-        &|doc, r, ppi, budget| match transfer.contains(&r.num) {
+        &|doc, r, ppi, budget| match keeps(doc, r) {
             true => Decision::Stays { refused: false },
             false => decide(doc, r, ppi, defaults.contains(&r.num), settings, budget),
         },
@@ -1478,7 +1545,10 @@ pub(crate) fn run(
         &mut out,
         &masks,
         &|_, rest| rest.len().min(PICTURES_AT_ONCE),
-        &|doc, r, _, budget| decide_mask(doc, r, settings, budget),
+        &|doc, r, _, budget| match held_masks.contains(&r.num) {
+            true => Decision::Stays { refused: false },
+            false => decide_mask(doc, r, settings, budget),
+        },
         progress,
     )?;
     if !progress(Stage::Images { done: total, total }) {
@@ -1634,6 +1704,14 @@ fn decide_mask(doc: &Document, r: ObjRef, settings: &Settings, budget: &mut Imag
     match mono(doc, s, f64::NAN, true, &settings.mono, budget) {
         Some((new, _, _)) => Decision::Replace { image: r, before: s.raw.len(), new, resampled: false, smask: None, bits: None },
         None => Decision::Stays { refused: budget.refused() > refused },
+    }
+}
+
+/// The images picture `r` names as its masks: its soft mask and its stencil mask.
+fn masks_of(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
+    match &*doc.get(r) {
+        Object::Stream(s) => [&b"SMask"[..], b"Mask"].iter().filter_map(|k| s.dict.reference(k)).collect(),
+        _ => Vec::new(),
     }
 }
 
