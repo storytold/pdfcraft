@@ -10,7 +10,7 @@ use pdfcraft_cos::Document;
 use pdfcraft_edit::PageImage;
 use pdfcraft_preflight::{Issue, Level};
 
-use crate::Document as OpenDocument;
+use crate::{Document as OpenDocument, EditError};
 
 /// Below this, ordinary sheet printing cannot hold the picture. Large-format work sometimes can.
 const FAIL_PPI: f64 = 150.0;
@@ -133,24 +133,20 @@ impl PrintReadiness {
 
 impl OpenDocument {
     /// A print-readiness report. Reads the file and does not edit it.
-    pub fn print_readiness(&self) -> PrintReadiness {
-        match &self.editor {
-            Some(editor) => inspect(&editor.cos),
-            None => PrintReadiness {
-                pages: Vec::new(),
-                images: Vec::new(),
-                output_intents: Vec::new(),
-                fonts_not_embedded: Vec::new(),
-                pdfa_issues: Vec::new(),
-                resolution_unknown: 0,
-                findings: vec![Finding {
-                    id: "document",
-                    severity: "info",
-                    message: "The document has no object graph to measure.".into(),
-                    page: None,
-                }],
-            },
-        }
+    ///
+    /// Every part of the report reads the object graph. A document whose objects could not be
+    /// read (opened read-only) was not checked, so it is an error rather than an empty report:
+    /// "every referenced font is embedded" and "no problems found" must not be said of a file
+    /// nobody looked at.
+    pub fn print_readiness(&self) -> Result<PrintReadiness, EditError> {
+        let editor = self.editor.as_ref().ok_or_else(|| {
+            let why = self.read_only_reason.as_deref().unwrap_or("its structure could not be read");
+            EditError::Invalid(format!(
+                "the document's objects could not be read ({why}), so its page boxes, images, output intents, fonts and {} were not checked",
+                Level::A2b.label()
+            ))
+        })?;
+        Ok(inspect(&editor.cos))
     }
 }
 

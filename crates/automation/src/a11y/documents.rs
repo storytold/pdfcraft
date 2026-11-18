@@ -51,7 +51,8 @@ impl Automation {
     }
 
     pub(crate) fn print_readiness(&self, a: &Args) -> Result<Value> {
-        let report = self.doc(a)?.print_readiness();
+        // A document that could not be read was not checked: an error, never a clean report.
+        let report = self.doc(a)?.print_readiness()?;
         let findings: Vec<Value> =
             report.findings.iter().map(|f| json!({ "id": f.id, "severity": f.severity, "message": f.message, "page": f.page })).collect();
         let pages: Vec<Value> = report
