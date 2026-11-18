@@ -6,6 +6,7 @@
 //! one a key fired while it is disabled to [`PdfCraftApp::run_declined`].
 
 pub(crate) mod catalog;
+use craft::pages::PageDisplay;
 use craft::theme::ModeChoice;
 use craft::ui::runtime::commands::Fired;
 use pdfcraft_engine::Edit;
@@ -420,36 +421,39 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
-            layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
-                if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
-                    self.views[i].set_layout(layout);
+            "view.layout.single" | "view.layout.two_up" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.view.display = if id == "view.layout.single" { PageDisplay::Single } else { PageDisplay::TwoUp };
+                    v.view.go_to(v.current());
                 }
             }
             // The Continuous scrolling checkbox (an independent toggle over the base layout).
             "view.continuous" => {
-                if let Some(i) = active {
-                    let v = &mut self.views[i];
-                    v.set_continuous(!v.continuous());
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.view.continuous = !v.view.continuous;
+                    v.view.go_to(v.current());
                 }
             }
             "view.page_gaps" => {
                 if let Some(view) = active.and_then(|i| self.views.get(i)) {
-                    self.set_active_page_gaps(!view.show_page_gaps);
+                    self.set_active_page_gaps(!view.view.page_gaps);
                 }
             }
             "view.layout.cover" => {
-                if let Some(i) = active {
-                    let v = &mut self.views[i];
-                    v.set_cover(!v.cover);
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.view.cover = !v.view.cover;
+                    v.view.go_to(v.current());
                 }
             }
             "view.fit_width_scrolling" | "view.fit_one_page" => {
-                use crate::canvas::{Fit, PageLayout};
+                use crate::canvas::Fit;
                 // Fit one full page shows a single page on its own; fit width scrolls it.
                 let (continuous, fit) = if id == "view.fit_one_page" { (false, Fit::Page) } else { (true, Fit::Width) };
-                if let Some(i) = active {
-                    self.views[i].set_display(PageLayout::Single, continuous);
-                    self.views[i].set_fit(fit);
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.view.display = PageDisplay::Single;
+                    v.view.continuous = continuous;
+                    v.view.fit = fit;
+                    v.view.go_to(v.current());
                 }
             }
             "view.full_screen" => {
@@ -923,7 +927,6 @@ impl PdfCraftApp {
             None => self.open_combine_tab(),
         }
     }
-
 }
 
 /// The tab after `current` of `count` (before it when `forward` is false), wrapping around. From

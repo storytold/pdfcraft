@@ -167,11 +167,13 @@ fn route(app: &mut PdfCraftApp, end: &NoticeEnd) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflows::optimize_ui::{OptimizeKind, OptimizeProgress, OptimizeRun};
-    use crate::workflows::scan_clean_ui::{ScanCleanProgress, ScanCleanRun};
+    use crate::JobCount;
+    use crate::workflows::optimize_ui::{OptimizeKind, OptimizeRun};
+    use crate::workflows::scan_clean_ui::ScanCleanRun;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
     use pdfcraft_engine::DocId;
+    use pdfcraft_engine::optimizer::OptimizeStage;
     use std::sync::{Arc, Mutex};
 
     fn card_of(h: &Harness<'static, PdfCraftApp>, key: ProgressKey) -> toast::Card {
@@ -192,12 +194,20 @@ mod tests {
 
         let optimize = ProgressNotice { label: "Optimizing… reading the pages".into(), fraction: 0.25, cancellable: true };
         set_progress(h.state_mut(), ProgressKey::Optimize, optimize.clone());
-        set_progress(h.state_mut(), ProgressKey::ScanClean, ProgressNotice { label: "Cleaning image 1 of 4".into(), fraction: 0.1, cancellable: false });
+        set_progress(
+            h.state_mut(),
+            ProgressKey::ScanClean,
+            ProgressNotice { label: "Cleaning image 1 of 4".into(), fraction: 0.1, cancellable: false },
+        );
         h.run_steps(2);
         let first = card_of(&h, ProgressKey::Optimize).id;
 
         // Repeated calls move the one card.
-        set_progress(h.state_mut(), ProgressKey::Optimize, ProgressNotice { label: "Optimizing… image 3 of 40".into(), fraction: 0.75, cancellable: true });
+        set_progress(
+            h.state_mut(),
+            ProgressKey::Optimize,
+            ProgressNotice { label: "Optimizing… image 3 of 40".into(), fraction: 0.75, cancellable: true },
+        );
         h.run_steps(2);
         let cards = posted(&h.ctx);
         assert_eq!(cards.len(), 2, "one card per key: {cards:?}");
@@ -210,15 +220,20 @@ mod tests {
         assert!(progress(h.state(), &h.ctx, ProgressKey::ScanClean).is_some());
 
         // Both jobs are in flight; Cancel is on the Optimize card only.
-        let optimize_progress = Arc::new(Mutex::new(OptimizeProgress::default()));
-        let scan_progress = Arc::new(Mutex::new(ScanCleanProgress::default()));
-        h.state_mut().optimize_run =
-            Some(OptimizeRun { doc: DocId(1), kind: OptimizeKind::Reduce, destination: None, progress: optimize_progress.clone() });
+        let optimize_progress = Arc::new(JobCount::default());
+        let scan_progress = Arc::new(JobCount::default());
+        h.state_mut().optimize_run = Some(OptimizeRun {
+            doc: DocId(1),
+            kind: OptimizeKind::Reduce,
+            destination: None,
+            progress: optimize_progress.clone(),
+            stage: Arc::new(Mutex::new(OptimizeStage::Discarding)),
+        });
         h.state_mut().scan_clean_run = Some(ScanCleanRun { doc: DocId(1), progress: scan_progress.clone() });
         h.get_by_label("Cancel").click();
         h.run_steps(3);
-        assert!(optimize_progress.lock().unwrap().cancel, "Cancel reaches the Optimize job");
-        assert!(!scan_progress.lock().unwrap().cancel, "the ScanClean job is left running");
+        assert!(optimize_progress.cancelled(), "Cancel reaches the Optimize job");
+        assert!(!scan_progress.cancelled(), "the ScanClean job is left running");
         assert!(h.state().progress_cards.contains_key(&ProgressKey::ScanClean));
         assert!(posted(&h.ctx).iter().any(|card| card.id == card_of(&h, ProgressKey::ScanClean).id));
 

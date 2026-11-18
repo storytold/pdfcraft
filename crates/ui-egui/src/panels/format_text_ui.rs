@@ -26,9 +26,9 @@ use craft::ui::sections::Section;
 use pdfcraft_engine::text_script::Script;
 use pdfcraft_engine::{AddedText, FontFamily, TextAlign};
 
+use crate::PdfCraftApp;
 use crate::content_ui::TextDraft;
 use crate::edit_text_ui::{Extras, LineEditor, SelectionFormatting};
-use crate::PdfCraftApp;
 
 /// A font picked in the font row. The caller applies it, since keeping the paragraph's own font
 /// also means restoring the family it started with.
@@ -342,11 +342,8 @@ pub(crate) fn values(target: &Target, fmt: Option<&SelectionFormatting>, sources
 /// that is not open for typing; alignment while a paragraph selection is not tidy.
 pub(crate) fn unsupported(target: &Target) -> Vec<(FormatControl, Label)> {
     let planned = || Label::from(tl!("Planned").to_string());
-    let mut out = vec![
-        (FormatControl::BulletedList, planned()),
-        (FormatControl::NumberedList, planned()),
-        (FormatControl::ParagraphSpacing, planned()),
-    ];
+    let mut out =
+        vec![(FormatControl::BulletedList, planned()), (FormatControl::NumberedList, planned()), (FormatControl::ParagraphSpacing, planned())];
     let paragraphs = target.paragraphs();
     if target.extras().is_none() {
         out.extend([(FormatControl::Underline, planned()), (FormatControl::LineSpacing, planned()), (FormatControl::HorizontalScale, planned())]);

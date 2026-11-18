@@ -4,13 +4,15 @@
 
 use std::sync::OnceLock;
 
-use craft::ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, Scope};
+use craft::ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, Scope,
+};
 use pdfcraft_engine::commands::{self as engine, CommandSpec};
 
 use crate::menus::{self, CUT, DELETE, DOCUMENT, EXTRA, NO_RECENT, PANEL, PANELS, PASTE, SELECT_ALL};
-use craft::pages::PageDisplay;
-use crate::theme::ModeChoice;
 use crate::{Mode, PdfCraftApp, QuickTool};
+use craft::pages::PageDisplay;
+use craft::theme::ModeChoice;
 
 /// Commands only the catalog knows: id, English label and icon. Their handlers are the board's.
 const CATALOG_ONLY: &[(&str, &str, &str)] = &[
@@ -44,8 +46,8 @@ fn kind_of(id: &str) -> CommandKind {
         "view.layout.single" | "view.layout.two_up" => CommandKind::Radio { group: Some("layout".into()) },
         "view.theme.system" | "view.theme.light" | "view.theme.dark" => CommandKind::Radio { group: Some("theme".into()) },
         PANEL => CommandKind::Radio { group: Some("panel".into()) },
-        "view.continuous" | "view.page_gaps" | "view.layout.cover" | "view.full_screen" | "view.read_mode" | "view.side_panel" | "view.tools_pane"
-        | "view.split" => CommandKind::Toggle,
+        "view.continuous" | "view.page_gaps" | "view.layout.cover" | "view.full_screen" | "view.read_mode" | "view.side_panel"
+        | "view.tools_pane" | "view.split" => CommandKind::Toggle,
         _ => CommandKind::Command,
     }
 }
