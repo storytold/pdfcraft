@@ -5,12 +5,11 @@ use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, po
 use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
 use pdfcraft_render::{DocInfo, FieldKind, OutlineItem};
 
-use crate::theme::{self, Tokens};
 use crate::{LeftPanel, PdfCraftApp, RightPanel, icons};
 
 pub(super) mod all_tools_ui;
 mod attachments;
-mod bookmarks;
+pub(crate) mod bookmarks;
 pub(super) mod comments_panel;
 mod edit;
 mod fields;

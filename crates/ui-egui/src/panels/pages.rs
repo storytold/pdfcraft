@@ -1,9 +1,10 @@
-use super::{Nav, PanelResult, PanelRow, PdfCraftApp};
+use super::right::PanelResult;
+use super::{Nav, PdfCraftApp};
 use craft::behavior::GesturePhase;
 use craft::keymap::CommandRef;
 use craft::pages::ui::{PageThumbnails, ThumbnailEvent, moved_page};
 use craft::ui::contract::{Props, Show, ShowContainer};
-use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::menu::{Menu, MenuItem, PanelRow};
 use craft::ui::style::DataColor;
 
 /// The Pages panel's tools menu rows: insert a blank page or pages from a file, rotate, extract and delete. Each
@@ -28,9 +29,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let count = doc.info.pages.len();
     let Some(view) = app.views.get_mut(index) else { return result };
 
-    // PLAN: assumed `DocPageSource::new(&DocInfo, Thumbnails<usize>) -> impl PageSource` and `DocView::thumbnails()`
-    // returning a cloneable handle (pdf-canvas-w6, pdf-canvas-w8).
-    let source = crate::canvas::DocPageSource::new(&doc.info, view.thumbnails());
+    let source = crate::canvas::pictures::DocPages::new(&app.session, id);
     let before = view.thumbnail_zoom();
     let mut zoom = f64::from(before);
     let current = view.current;

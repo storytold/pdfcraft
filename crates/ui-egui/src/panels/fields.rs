@@ -151,9 +151,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         }
     }
     let rows = Rows::new(&info.fields, doc.form.as_slice());
-    let is_selected = |row: &Row<'_>| {
-        row.select.as_ref().is_some_and(|key| selection.selected.as_ref() == Some(key) || selection.also.contains(key))
-    };
+    let is_selected = |row: &Row<'_>| row.select.as_ref().is_some_and(|key| selection.selected.as_ref() == Some(key) || selection.also.contains(key));
     let shown = Selection::new(
         rows.rows.iter().filter(|r| is_selected(r)).map(|r| r.key.clone()).collect(),
         rows.rows.iter().find(|r| r.select.is_some() && r.select.as_ref() == selection.selected.as_ref()).map(|r| r.key.clone()),
@@ -169,8 +167,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 let page = if let FieldRow::Page(p) = &row.key { *p } else { None };
                 return ListRow::new(heading(info, page)).section_heading();
             };
-            let mut list_row =
-                ListRow::new(field.name.clone()).icon(IconSpec::svg(IconId::new(kind_icon(&field.kind)))).tooltip(field_tip(field));
+            let mut list_row = ListRow::new(field.name.clone()).icon(IconSpec::svg(IconId::new(kind_icon(&field.kind)))).tooltip(field_tip(field));
             if let Some(value) = &field.value {
                 list_row = list_row.optional(value.clone());
             }

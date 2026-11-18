@@ -24,7 +24,7 @@ use crate::theme::{self, Tokens};
 use crate::{QuickTool, icons};
 
 mod bridge;
-mod colours;
+pub(crate) mod colours;
 mod composer;
 mod geometry;
 mod menu;
@@ -34,7 +34,7 @@ mod state;
 mod tool;
 
 pub(crate) use bridge::{
-    PageMap, annotations, delete_selected, edit, edit_anchor, id_of, key_of, kind_of, markers, parts, pdf_date_seconds, screen_to_user_rect,
+    PageMap, annotations, delete_selected, edit, edit_anchor, id_of, key_of, kind_of, markers, parts, pdf_date_seconds, rgb8, screen_to_user_rect,
     thread_id, thread_key, tips, tips_shown,
 };
 #[cfg(test)]

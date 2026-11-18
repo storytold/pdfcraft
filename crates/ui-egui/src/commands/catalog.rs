@@ -10,9 +10,9 @@ use craft::ui::runtime::commands::{
 use pdfcraft_engine::commands::{self as engine, CommandSpec};
 
 use crate::menus::{self, CUT, DELETE, DOCUMENT, EXTRA, NO_RECENT, PANEL, PANELS, PASTE, SELECT_ALL};
-use crate::theme::ModeChoice;
 use crate::{Mode, PdfCraftApp, QuickTool};
 use craft::pages::PageDisplay;
+use craft::theme::ModeChoice;
 
 /// Commands only the catalog knows: id, English label and icon. Their handlers are the board's.
 const CATALOG_ONLY: &[(&str, &str, &str)] = &[

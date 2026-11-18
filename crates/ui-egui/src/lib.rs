@@ -240,7 +240,7 @@ pub struct PdfCraftApp {
     /// Where the side panels are docked, their sizes and which are open.
     pub dock: craft::behavior::dock::Workspace<side_panels::PanelId>,
     /// The side the rail of panel buttons sits on.
-    pub rail_side: side_panels::RailSide,
+    pub rail_side: craft::behavior::DockSide,
     pub session: Session,
     /// The interface language signature status captions were last drawn in.
     pub(crate) status_captions_lang: Option<i18n::Lang>,
