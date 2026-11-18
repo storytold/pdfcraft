@@ -96,14 +96,14 @@ impl PdfCraftApp {
         if !self.fonts_ready {
             return;
         }
-        let Some(channel) = self.control.as_mut() else { return };
         // A discarded pass is layout work, not a frame an agent can observe.
         if ctx.will_discard() {
             return;
         }
+        let document = Some(self.capture_document());
+        let Some(channel) = self.control.as_mut() else { return };
         let host = WindowHost::of(ctx);
         channel.captures.note_pass();
-        let document = Some(DocumentId::new(self.capture_epoch(), 0));
         let finished = channel.captures.issue(&host, motion::now(), document);
         channel.finish_captures(finished, &mut |_path, _png| Err("ui.screenshot writes no files; omit path".to_string()));
     }
@@ -114,8 +114,7 @@ impl PdfCraftApp {
         if self.control.is_none() {
             return;
         }
-        // PLAN: assumed field `control_epoch: u64` (pdf-hub-w1).
-        let epoch = self.input_epoch();
+        let epoch = self.input_epoch(ctx);
         if epoch != self.control_epoch {
             self.control_epoch = epoch;
             WindowHost::of(ctx).withdraw_injected(ViewportId::ROOT);
@@ -132,7 +131,6 @@ impl PdfCraftApp {
                 Err(e) => Reply::from_result(Err(e)),
             };
         }
-        // PLAN: assumed field `dialogs` holding the automation dialog registry (pdf-hub-w1).
         if let Some(result) = dialog_method(&mut self.dialogs, ctx, method, params) {
             return Reply::from_result(result);
         }

@@ -200,8 +200,7 @@ mod tests {
             let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
             let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
             let host = craft::host::Host::builder(info).jobs(jobs).build();
-            // PLAN: assumed `AppServices::detached()` (pdf-hub-w1): services with no clipboard, recovery directory, update source, intake or watch.
-            let mut app = PdfCraftApp::with_host(std::sync::Arc::new(host), crate::AppServices::detached());
+            let mut app = PdfCraftApp::for_unit_tests_on(std::sync::Arc::new(host));
             app.set_option(&egui::Context::default(), "language", "en").ok();
             app.pinned_tools = vec!["edit".into()];
             app

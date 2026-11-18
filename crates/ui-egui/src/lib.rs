@@ -295,6 +295,8 @@ pub struct PdfCraftApp {
     pub comment_prefs: comments::CommentPrefs,
     /// The colours picked last in the comment tools' colour pickers.
     pub(crate) recent_colours: comments::RecentColours,
+    /// The continuations of the colour pickers open on the dialog host.
+    pub(crate) colour_picks: colour_picker::ColourPicks,
     pub(crate) hotbar: hotbar::Hotbar,
     /// Preferences ▸ Appearance: light, dark, or as the system says.
     pub theme_preference: craft::theme::ModeChoice,
@@ -438,8 +440,8 @@ pub struct PdfCraftApp {
     launch_layout: Option<(craft::pages::PageDisplay, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     launch_display_target: Option<DocId>,
-    /// The file picks asked of the host's file service, by ticket, with what each is for.
-    pub(crate) picks: std::collections::HashMap<craft::host::PickId, FilePurpose>,
+    /// The file picks asked of the host's file service and not answered yet.
+    pub(crate) picks: app::picks::Picks,
     /// Where a save that asks first (Save As, a replace question) stands.
     pub(crate) save_flow: craft::dialogs::save::SaveFlow<DocId>,
     /// A save waiting for the answer to a question it asked.
