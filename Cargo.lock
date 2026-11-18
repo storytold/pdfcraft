@@ -1569,16 +1569,16 @@ dependencies = [
 [[package]]
 name = "craft-xfdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=aa975a4bea2a4a7b012199b081e68c1a09935969#aa975a4bea2a4a7b012199b081e68c1a09935969"
+source = "git+https://github.com/storytold/craft-libs?rev=e5f00f5bf658ef2cce7bf96fbbd769a6fff5bc72#e5f00f5bf658ef2cce7bf96fbbd769a6fff5bc72"
 dependencies = [
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=aa975a4bea2a4a7b012199b081e68c1a09935969)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e5f00f5bf658ef2cce7bf96fbbd769a6fff5bc72)",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=aa975a4bea2a4a7b012199b081e68c1a09935969#aa975a4bea2a4a7b012199b081e68c1a09935969"
+source = "git+https://github.com/storytold/craft-libs?rev=e5f00f5bf658ef2cce7bf96fbbd769a6fff5bc72#e5f00f5bf658ef2cce7bf96fbbd769a6fff5bc72"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
