@@ -1720,6 +1720,31 @@ fn xmp_value_forms_are_those_xmp_allows() {
     );
 }
 
+/// A page's `/Contents` that reaches its stream through an object that is only a reference to it
+/// (ISO 32000-2 7.3.10), alone or in an array, is that stream: the text it draws is read, and its
+/// font has to be embedded.
+#[test]
+fn page_contents_reached_through_an_alias_are_read() {
+    let fonts = |contents: &str| -> Vec<String> {
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &format!("<< /Type /Page /Parent 2 0 R /Contents {contents} /Resources << /Font << /F1 5 0 R >> >> >>"),
+                "6 0 R",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Length 24 >>\nstream\nBT /F1 12 Tf (Hi) Tj ET\nendstream",
+                "[4 0 R]",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    for contents in ["6 0 R", "4 0 R", "[4 0 R]", "7 0 R"] {
+        assert_eq!(fonts(contents), ["The font Helvetica isn't embedded"], "{contents}");
+    }
+}
+
 /// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1; ISO
 /// 19005-4, 6.2.10.4.1). A font draws when content selects it with `Tf`: one that only the form's
 /// default resources (`/AcroForm /DR`) or a default appearance string (`/DA`) name draws nothing, as
@@ -2930,7 +2955,8 @@ fn streams_use_only_standard_filters_clause_6_1_7_2() {
     }
 }
 
-/// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`.
+/// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`. With nothing
+/// more it passes verification.
 fn pdfa4_file(more: &[Vec<u8>]) -> Vec<u8> {
     let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
         <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
@@ -2939,7 +2965,14 @@ fn pdfa4_file(more: &[Vec<u8>]) -> Vec<u8> {
     let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len()).into_bytes();
     let mut objs: Vec<&[u8]> = vec![b"<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", b"<< /Type /Pages /Kids [] /Count 0 >>", &metadata];
     objs.extend(more.iter().map(Vec::as_slice));
-    file_bytes(b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n", &objs, "")
+    file_bytes(b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n", &objs, "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]")
+}
+
+/// [`pdfa4_file`] with nothing more passes, so a case built on it fails for what it adds.
+#[test]
+fn pdfa4_file_passes() {
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&[]))).unwrap();
+    assert_eq!(verify(&doc, Level::A4), []);
 }
 
 /// An embedded PDF file stream of `data`, with the stream dictionary entries `filter`.
@@ -2960,8 +2993,10 @@ fn embedded_spec(stream: usize) -> Vec<u8> {
 /// read and verified once in a PDF/A-4 verification, and its verdict still reported.
 #[test]
 fn pdfa4_reads_a_shared_embedded_file_once() {
-    // A PDF/A-4 file that fails its verification: data follows `%%EOF`.
+    // A PDF/A-4 file that fails its verification only because data follows `%%EOF`.
     let inner = [pdfa4_file(&[]), b"junk".to_vec()].concat();
+    let alone = verify(&Document::open(std::sync::Arc::new(inner.clone())).unwrap(), Level::A4);
+    assert_eq!(alone.iter().map(|i| i.clause).collect::<Vec<_>>(), ["6.1.3"], "{alone:#?}");
     let specs = 50;
     let mut more = vec![embedded_stream("", &inner)];
     more.extend((0..specs).map(|_| embedded_spec(4)));
@@ -2972,6 +3007,86 @@ fn pdfa4_reads_a_shared_embedded_file_once() {
     let failing = found.iter().filter(|i| i.message == "An embedded file declares PDF/A-4 but doesn't conform to it").count();
     assert_eq!(failing, 1, "{found:#?}");
     assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
+
+/// An embedded file stream named directly and through an object that only refers to it (ISO
+/// 32000-2 7.3.10) is one file: read once.
+#[test]
+fn pdfa4_reads_an_embedded_file_named_through_an_alias_once() {
+    let inner = [pdfa4_file(&[]), b"junk".to_vec()].concat();
+    let spec = b"<< /Type /Filespec /F (a.pdf) /UF (a.pdf) /AFRelationship /Data /EF << /F 4 0 R /UF 6 0 R >> >>".to_vec();
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&[embedded_stream("", &inner), spec, b"4 0 R".to_vec()]))).unwrap();
+    part4::EMBEDDED_READ.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 1, "{found:#?}");
+    assert_eq!(found.iter().filter(|i| i.message == "An embedded file declares PDF/A-4 but doesn't conform to it").count(), 1, "{found:#?}");
+}
+
+/// An embedded file is read with the filters it names, given by reference (ISO 32000-2 7.3.8.2),
+/// and one whose data decodes only in part isn't the file: what decoded isn't verified as if it
+/// were the whole of it.
+#[test]
+fn pdfa4_embedded_files_decode_through_indirect_filters_and_not_in_part() {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&pdfa4_file(&[])).unwrap();
+    let packed = z.finish().unwrap();
+    let embedded = |filter: &str, data: &[u8], more: Vec<Vec<u8>>| {
+        let mut objs = vec![embedded_stream(filter, data), embedded_spec(4)];
+        objs.extend(more);
+        verify(&Document::open(std::sync::Arc::new(pdfa4_file(&objs))).unwrap(), Level::A4)
+    };
+    assert_eq!(embedded("/Filter /FlateDecode", &packed, Vec::new()), []);
+    assert_eq!(embedded("/Filter 6 0 R", &packed, vec![b"/FlateDecode".to_vec()]), []);
+    assert_eq!(embedded("/Filter [6 0 R]", &packed, vec![b"/FlateDecode".to_vec()]), []);
+    // Damaged partway: a PDF/A-1b file, which is judged by its declaration, whose compressed data
+    // turns to garbage inside its last object. What decodes before the damage still declares
+    // PDF/A-1b, but it isn't the file.
+    let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+        <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+        xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>\
+        </rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>";
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len()).into_bytes();
+    // Data that doesn't compress, so the damage falls inside it.
+    let mut seed = 1u32;
+    let noise: String = (0..4000)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            char::from(b"0123456789ABCDEF"[(seed >> 16) as usize % 16])
+        })
+        .collect();
+    let filler = format!("<< /Length 4000 >>\nstream\n{noise}\nendstream").into_bytes();
+    let objs: [&[u8]; 4] = [b"<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", b"<< /Type /Pages /Kids [] /Count 0 >>", &metadata, &filler];
+    let pdfa1 = file_bytes(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", &objs, "");
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&pdfa1).unwrap();
+    let whole = z.finish().unwrap();
+    assert_eq!(embedded("/Filter /FlateDecode", &whole, Vec::new()), []);
+    let mut damaged = whole.clone();
+    let start = damaged.len().saturating_sub(800);
+    for b in damaged.get_mut(start..).unwrap() {
+        *b = 0xFF;
+    }
+    let found = embedded("/Filter /FlateDecode", &damaged, Vec::new());
+    assert!(found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+}
+
+/// 6.9: a null `/AFRelationship`, `/F` or `/UF`, written so or through a reference, is no entry
+/// (ISO 32000-2 7.3.9).
+#[test]
+fn pdfa4_null_file_specification_entries_are_absent() {
+    let spec = |entries: &str| format!("<< /Type /Filespec {entries} /EF << /F 4 0 R >> >>").into_bytes();
+    let found = |entries: &str| {
+        let objs = [embedded_stream("", &pdfa4_file(&[])), spec(entries), b"null".to_vec()];
+        verify(&Document::open(std::sync::Arc::new(pdfa4_file(&objs))).unwrap(), Level::A4).into_iter().map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert_eq!(found("/F (a.pdf) /UF (a.pdf) /AFRelationship /Data"), Vec::<String>::new());
+    for entries in ["/F (a.pdf) /UF (a.pdf) /AFRelationship null", "/F (a.pdf) /UF (a.pdf) /AFRelationship 6 0 R"] {
+        assert_eq!(found(entries), ["An embedded file has no AFRelationship"], "{entries}");
+    }
+    for entries in ["/F null /UF (a.pdf) /AFRelationship /Data", "/F (a.pdf) /UF 6 0 R /AFRelationship /Data"] {
+        assert_eq!(found(entries), ["An embedded file's file specification lacks F or UF"], "{entries}");
+    }
 }
 
 /// A PDF/A-4 verification reads at most [`part4::MAX_EMBEDDED_READ`] embedded files and
