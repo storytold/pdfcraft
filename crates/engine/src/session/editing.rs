@@ -48,7 +48,8 @@ fn deletes_pages(edit: &Edit) -> bool {
 /// Keep edits to the working copy until both the operation and its script callbacks succeed. A
 /// date typed into a field without its year takes the year of the session's clock (`cx.today`).
 fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
-    let year = i32::try_from(cx.today.0).ok();
+    // Only a clock gives a year: without one `cx.today` is the epoch it falls back to.
+    let year = cx.date.as_ref().and_then(|_| i32::try_from(cx.today.0).ok());
     let mut run = || guard(|| run_edit(next, edit, cx));
     let result = match year {
         Some(year) => pdfcraft_forms::af::with_current_year(year, run),
@@ -820,4 +821,50 @@ fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos:
         }
     }
     notices
+}
+
+#[cfg(test)]
+mod year_tests {
+    use super::{EditCtx, run_checked_edit};
+    use crate::Edit;
+    use pdfcraft_forms::FieldValue;
+
+    /// A date field (dd.mm.yyyy), its value typed as `typed` through an edit context made with
+    /// clock reading `now`, the year of `cx.today` being 1970 either way: the value stored, or why not.
+    fn typed_in(extra: &str, now: Option<i64>, typed: &str) -> Result<Vec<String>, String> {
+        let pdf = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+            .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>")
+            .obj(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (when){extra} /Rect [20 250 180 270] /P 3 0 R /DA (/Helv 10 Tf 0 g) /AA << /K << /S /JavaScript /JS (AFDate_KeystrokeEx(\"dd.mm.yyyy\");) >> /F << /S /JavaScript /JS (AFDate_FormatEx(\"dd.mm.yyyy\");) >> >> >>"))
+            .build();
+        let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf)).map_err(|e| e.to_string())?;
+        let mut cx = EditCtx::new(now, 0);
+        cx.today = (1970, 1, 1);
+        let edit = Edit::SetFieldValue { name: "when".into(), value: FieldValue::Text(typed.into()) };
+        run_checked_edit(&mut doc, &edit, &mut cx).map_err(|e| e.to_string())?;
+        Ok(pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "when").map(|f| f.value).unwrap_or_default())
+    }
+
+    fn typed(now: Option<i64>, value: &str) -> Result<Vec<String>, String> {
+        typed_in("", now, value)
+    }
+
+    /// The date written out with its year must fit the field's `/MaxLen` too: "10.10" fits 8
+    /// characters, "10.10.1970" doesn't; a limit of 10 takes it.
+    #[test]
+    fn a_completed_date_fits_the_fields_length() {
+        let e = typed_in(" /MaxLen 8", Some(0), "10.10").unwrap_err();
+        assert!(e.contains("at most 8 characters"), "{e}");
+        assert_eq!(typed_in(" /MaxLen 10", Some(0), "10.10"), Ok(vec!["10.10.1970".to_string()]));
+    }
+
+    /// Without a clock (wasm with none given) `cx.today` is the epoch it falls back to, not a
+    /// year: a date typed without its year is refused, as before. A clock that reads 1970 gives 1970.
+    #[test]
+    fn only_a_clock_gives_a_date_its_year() {
+        assert!(typed(None, "10.10").is_err(), "{:?}", typed(None, "10.10"));
+        assert_eq!(typed(Some(0), "10.10"), Ok(vec!["10.10.1970".to_string()]));
+        assert_eq!(typed(None, "10.10.2025"), Ok(vec!["10.10.2025".to_string()]), "a whole date needs no clock");
+    }
 }

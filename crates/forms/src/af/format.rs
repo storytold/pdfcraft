@@ -382,12 +382,12 @@ fn order(fmt: &str) -> Vec<Part> {
 /// Parse typed text against a date/time format (AFDate_KeystrokeEx's leniency: any
 /// separators, month names, two-digit years). `None` when it isn't a valid date.
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
-    parse_date_with(text, fmt, None)
+    parse_date_with(text, fmt, None).map(|(dt, _)| dt)
 }
 
 /// [`parse_date`], where a date typed with its day and month but without the year that follows
-/// them in `fmt` takes `year` (`None`: it isn't a date).
-fn parse_date_with(text: &str, fmt: &str, year: Option<i32>) -> Option<DateTime> {
+/// them in `fmt` takes `year` (`None`: it isn't a date). The flag says whether it did.
+fn parse_date_with(text: &str, fmt: &str, year: Option<i32>) -> Option<(DateTime, bool)> {
     let names = date_names();
     let lists: [&[&str]; 4] = [&names.months, &names.months_short, &names.days, &names.days_short];
     // Weekdays are shown, not typed (see `order`): where the format has one but none was typed, a
@@ -400,7 +400,7 @@ fn parse_date_with(text: &str, fmt: &str, year: Option<i32>) -> Option<DateTime>
 }
 
 /// [`parse_date_with`] of `english`, typed text whose month and weekday names are English.
-fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> Option<DateTime> {
+fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> Option<(DateTime, bool)> {
     let t = english.trim();
     if t.is_empty() {
         return None;
@@ -416,7 +416,10 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
     let mut nums: VecDeque<String> = VecDeque::new();
     let mut month_name: Option<u32> = None;
     let mut cur = String::new();
-    let flush = |cur: &mut String, nums: &mut VecDeque<String>, month: &mut Option<u32>| {
+    // A word that is neither a month, a weekday nor am/pm (a year in other digits, "abc"): it is
+    // left out of the date, so no year is filled in where it stands.
+    let mut unread_word = false;
+    let flush = |cur: &mut String, nums: &mut VecDeque<String>, month: &mut Option<u32>, unread: &mut bool| {
         if cur.is_empty() {
             return;
         }
@@ -424,22 +427,33 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
             nums.push_back(std::mem::take(cur));
         } else if let Some(m) = month_named(cur, names) {
             *month = Some(m);
+        } else if !ignored_word(cur, names) {
+            *unread = true;
         }
         cur.clear();
     };
+    // Where the time starts among the numbers: the first number followed by ':'.
+    let mut time_start: Option<usize> = None;
     for c in t.chars() {
         // Digits and letters form separate tokens ("5Mar" is 5 and Mar).
         let same_kind = cur.is_empty() || cur.chars().next().is_some_and(|x| x.is_ascii_digit()) == c.is_ascii_digit();
         if c.is_alphanumeric() && same_kind {
             cur.push(c);
         } else {
-            flush(&mut cur, &mut nums, &mut month_name);
+            let before = nums.len();
+            flush(&mut cur, &mut nums, &mut month_name, &mut unread_word);
+            if c == ':' && time_start.is_none() && nums.len() > before {
+                time_start = Some(before);
+            }
             if c.is_alphanumeric() {
                 cur.push(c);
             }
         }
     }
-    flush(&mut cur, &mut nums, &mut month_name);
+    flush(&mut cur, &mut nums, &mut month_name, &mut unread_word);
+    // How many numbers the time was typed with (from its hour on).
+    let time_numbers = time_start.map(|i| nums.len().saturating_sub(i));
+    let mut filled = false;
     let mut dt = DateTime { y: 0, m: 1, d: 1, hh: 0, mm: 0, ss: 0 };
     // The next number for a field. A field joined to the next one in the format ("yyyymmdd")
     // takes only its own width from a longer run of digits and leaves the rest for the next.
@@ -508,7 +522,12 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
                     // Day and month typed, nothing left for the year that follows them: the
                     // given year. A year the format puts first is never left out ("10-10" is no
                     // date for yyyy-mm-dd).
-                    Some(now) if nums.is_empty() && have_m && have_d => now,
+                    // So is a year whose place holds the time ("10/10 14:30" for m/d/yy HH:MM);
+                    // a word read as nothing there ("10.10.abc") is not.
+                    Some(now) if have_m && have_d && !tail && !unread_word && (nums.is_empty() || time_numbers == Some(nums.len())) => {
+                        filled = true;
+                        now
+                    }
                     _ => {
                         let y = i32::try_from(take(&mut nums, &mut tail)?).ok()?;
                         if y < 100 { if y < 50 { 2000 + y } else { 1900 + y } } else { y }
@@ -542,7 +561,19 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
     if dt.hh > 23 || dt.mm > 59 || dt.ss > 59 {
         return None;
     }
-    Some(dt)
+    Some((dt, filled))
+}
+
+/// A word typed in a date that [`read_date`] reads no number or month from and that says nothing
+/// a date needs: am/pm (read separately) or a weekday, which is shown, not typed.
+fn ignored_word(word: &str, names: &DateNames) -> bool {
+    let w = folded(word);
+    let weekday = |list: &[&str; 7]| list.iter().any(|d| w.chars().count() >= 2 && folded(d).trim_end_matches('.').starts_with(&w));
+    ["a", "p", "am", "pm"].contains(&w.as_str())
+        || weekday(&names.days)
+        || weekday(&names.days_short)
+        || weekday(&ENGLISH_DATE_NAMES.days)
+        || weekday(&ENGLISH_DATE_NAMES.days_short)
 }
 
 /// Format a date/time with Acrobat's date format letters.
@@ -724,14 +755,20 @@ pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String>
         // A date typed without the year that follows its day and month takes the current year
         // ([`with_current_year`]) and is stored written out in the format, so the year it took
         // stays and shows ("10.10" in dd.mm.yyyy is stored as "10.10.2026").
-        Format::Date(fmt) | Format::Time(fmt) => match parse_date(value, fmt) {
-            Some(_) => Ok(value.trim().to_string()),
-            None => CURRENT_YEAR
-                .with(std::cell::Cell::get)
-                .and_then(|year| parse_date_with(value, fmt, Some(year)))
-                .map(|dt| format_date_in(dt, fmt, &date_names()))
-                .ok_or_else(|| format!("Invalid date/time: please ensure that the date/time exists. Field [ {field} ] should match format {fmt}")),
-        },
+        // The completed date must read back as itself: a format whose fields run together with
+        // no fixed width ("dmyyyy") can't be read from "122026", so it isn't completed.
+        Format::Date(fmt) | Format::Time(fmt) => {
+            let refused = || format!("Invalid date/time: please ensure that the date/time exists. Field [ {field} ] should match format {fmt}");
+            let completed =
+                CURRENT_YEAR.with(std::cell::Cell::get).and_then(|year| parse_date_with(value, fmt, Some(year))).filter(|(_, filled)| *filled);
+            match completed {
+                Some((dt, _)) => {
+                    let written = format_date_in(dt, fmt, &date_names());
+                    if parse_date(&written, fmt) == Some(dt) { Ok(written) } else { Err(refused()) }
+                }
+                None => parse_date(value, fmt).map(|_| value.trim().to_string()).ok_or_else(refused),
+            }
+        }
         Format::Special(n) => {
             let m = SPECIAL_MASKS[(*n).min(3) as usize];
             apply_mask(m, value).filter(|s| mask_fits(m, s)).map(|_| value.trim().to_string()).ok_or_else(bad)
