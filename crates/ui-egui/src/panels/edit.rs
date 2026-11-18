@@ -55,6 +55,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g
     // Format text at the top while text is selected or being added.
     format_section(app, ui, t);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        super::tools::clear_of_scrollbar(ui);
         widgets::section_title(ui, tl!("Modify page"));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -185,6 +186,7 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens
     use pdfcraft_engine::{StampGroup, StampKind};
     ui.label(egui::RichText::new(tl!("Choose a stamp, then click on the page to place it.")).small().color(t.text_faint));
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        super::tools::clear_of_scrollbar(ui);
         for (group, title) in [
             (StampGroup::Dynamic, tl!("Dynamic")),
             (StampGroup::SignHere, tl!("Sign Here")),
@@ -404,7 +406,11 @@ impl PdfCraftApp {
     /// style at once and stays open. Text already on the page is updated with what has been typed,
     /// as one undoable change; new text waits until it is finished. Text typed after this styling
     /// starts from it too.
-    pub(crate) fn restyle_draft(&mut self, index: usize, style: pdfcraft_engine::AddedText) {
+    pub(crate) fn restyle_draft(&mut self, index: usize, mut style: pdfcraft_engine::AddedText) {
+        // A gray or CMYK ink the colour no longer shows goes now (#6440): kept, the draft would
+        // differ from the item the page reads back without it, and a later pick of the ink's
+        // look would bring it back.
+        style.drop_stale_ink();
         let Some(view) = self.views.get_mut(index) else { return };
         // Text the standard fonts can't draw stays in the box, unwritten, until it is corrected (#125).
         let blocked = view.content.blocked().is_some();

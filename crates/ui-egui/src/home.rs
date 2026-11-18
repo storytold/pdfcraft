@@ -186,27 +186,50 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 crate::folders_ui::section(app, ui);
             }
 
-            ui.add_space(26.0);
             let mut clear = false;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
-                if !app.recent.is_empty() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let resp = widgets::ghost_button(ui, "trash-2", tl!("Clear"));
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear Recent Files")));
-                        clear = resp.on_hover_text(tl!("Clear Recent Files")).clicked();
-                    });
+            // Preferences can turn the list off (#5572).
+            if app.recent_limit > 0 {
+                ui.add_space(26.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
+                    if !app.recent.is_empty() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let resp = widgets::ghost_button(ui, "trash-2", tl!("Clear"));
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear Recent Files")));
+                            clear = resp.on_hover_text(tl!("Clear Recent Files")).clicked();
+                        });
+                    }
+                });
+                ui.add_space(8.0);
+                if app.recent.is_empty() {
+                    ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
                 }
-            });
-            ui.add_space(8.0);
-            if app.recent.is_empty() {
-                ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
             }
             let mut open = None;
             let mut remove = None;
-            for r in &app.recent {
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut reveal = None;
+            for r in app.recent.iter().take(app.recent_limit) {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // The Menu key or Shift+F10 on the focused row opens the same menu a secondary
+                    // click does, under the row, so Reveal works from the keyboard.
+                    let by_key =
+                        resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Menu) || (i.modifiers.shift && i.key_pressed(egui::Key::F10)));
+                    let mut popup = egui::Popup::context_menu(&resp);
+                    if by_key {
+                        popup = popup.open_memory(egui::SetOpenCommand::Bool(true)).anchor(rect).align(egui::RectAlign::BOTTOM_START);
+                    }
+                    popup.show(|ui| {
+                        let label = if cfg!(target_os = "macos") { tl!("Reveal in Finder") } else { tl!("Reveal in File Explorer") };
+                        if ui.button(label).clicked() {
+                            reveal = Some(r.path.clone());
+                            ui.close();
+                        }
+                    });
+                }
                 let press = theme::Press::track(ui, &resp);
                 // The row, not its response: the pointer stays "in" the row over its remove button.
                 let hovered = ui.rect_contains_pointer(rect);
@@ -256,6 +279,10 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             if let Some(p) = open {
                 app.open_recent(&p);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(p) = reveal {
+                app.reveal_path(std::path::Path::new(&p));
             }
             if let Some(p) = remove {
                 app.recent.retain(|r| r.path != p);
@@ -312,8 +339,28 @@ mod tests {
         assert!(h.state().pinned_tools.is_empty());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_focused_recent_row_opens_its_reveal_menu_from_the_keyboard() {
+        use egui_kittest::kittest::Queryable;
+        for chord in [(egui::Modifiers::NONE, egui::Key::Menu), (egui::Modifiers::SHIFT, egui::Key::F10)] {
+            let mut h = review_home_harness();
+            h.state_mut().recent = vec![crate::RecentFile { name: "notes.pdf".into(), path: "/nowhere/notes.pdf".into(), pages: 2, size: 2048 }];
+            h.run_steps(3);
+            assert!(!egui::Popup::is_any_open(&h.ctx));
+            h.get_by_label("notes.pdf").focus();
+            h.run_steps(2);
+            h.key_press_modifiers(chord.0, chord.1);
+            h.run_steps(3);
+            assert!(egui::Popup::is_any_open(&h.ctx), "{chord:?} did not open the Reveal menu");
+        }
+    }
+
     #[test]
     fn translated_card_description_leaves_room_for_the_action() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let de = crate::i18n::Lang::from_code("de").unwrap();
         crate::i18n::set_current(de);
         let ctx = egui::Context::default();

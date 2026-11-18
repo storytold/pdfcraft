@@ -2,7 +2,7 @@
 //!
 //! Marked content (MCIDs) that applying redactions changed is found by comparing each MCID's
 //! operators before and after. Elements owning such content lose their alternate text, actual
-//! text and expansion (which may spell out the removed words);
+//! text, title and expansion (which may spell out the removed words), as do their ancestors;
 //! references to marked content that is now empty are dropped from the element.
 
 use std::collections::{HashMap, HashSet};
@@ -35,6 +35,14 @@ impl Marked {
 /// left are taken as changed (their descriptions go) rather than compared.
 const MAX_COMPARED: usize = 1 << 28;
 
+/// `f` of `o`, or of the object it refers to, without copying a direct one.
+fn with_held<R>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> R) -> R {
+    match o {
+        Object::Ref(_) => f(&doc.resolve(o)),
+        o => f(o),
+    }
+}
+
 fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
     let mut out = Marked::default();
     // Open sequences: the MCID with where its content starts in `ops` and the drawing operators
@@ -49,14 +57,22 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
             e.1 |= drawn > drawn_before;
         }
     };
+    // The named property lists, read once, and each name's MCID, read once: a stream can name one
+    // at every `BDC` of thousands, and reading an object again can parse it again, all of it (the
+    // document keeps an object larger than its cache only until it reads another). A direct one
+    // is read where it is.
+    let held = resources.get(b"Properties").filter(|p| matches!(p, Object::Ref(_))).map(|p| doc.resolve(p));
+    let named = held.as_deref().or_else(|| resources.get(b"Properties")).and_then(Object::as_dict);
+    let mut mcids: HashMap<Vec<u8>, Option<i64>> = HashMap::new();
     for op in pdfcraft_content::parse(data).ops {
         match op.op.as_slice() {
             b"BDC" => {
-                let id = match op.operands.get(1) {
-                    Some(Object::Name(n)) => resources.get(b"Properties").and_then(|p| {
-                        let props = doc.resolve(p);
-                        let prop = doc.resolve(props.as_dict()?.get(n)?);
-                        prop.as_dict()?.int(b"MCID")
+                // The property list is the last operand, as the renderer reads it.
+                let id = match op.back(0) {
+                    Some(Object::Name(n)) => *mcids.entry(n.to_vec()).or_insert_with(|| {
+                        let prop = named?.get(n)?;
+                        // A named property list may give its MCID by reference.
+                        with_held(doc, prop, |prop| prop.as_dict()?.get(b"MCID").and_then(|id| with_held(doc, id, Object::as_int)))
                     }),
                     Some(p) => doc.resolve(p).as_dict().and_then(|d| d.int(b"MCID")),
                     _ => None,
@@ -86,9 +102,7 @@ fn by_mcid(doc: &Document, resources: &Dict, data: &[u8]) -> Marked {
         }
         let draws = match op.op.as_slice() {
             b"Tj" | b"'" | b"\"" => op.operands.last().and_then(Object::as_string).is_some_and(|s| !s.bytes.is_empty()),
-            b"TJ" => {
-                op.operands.first().and_then(Object::as_array).is_some_and(|a| a.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty())))
-            }
+            b"TJ" => op.back(0).and_then(Object::as_array).is_some_and(|a| a.iter().any(|x| x.as_string().is_some_and(|s| !s.bytes.is_empty()))),
             b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh" | b"Do" | b"BI" => true,
             _ => false,
         };
@@ -139,7 +153,7 @@ fn mcid_of(doc: &Document, o: &Object, page: Option<ObjRef>, target: ObjRef, str
         Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
             let pg = m.get(b"Pg").and_then(Object::as_ref).or(page);
             let stm = m.get(b"Stm").and_then(Object::as_ref);
-            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| m.int(b"MCID")).flatten()
+            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| m.get(b"MCID").and_then(|id| doc.resolve(id).as_int())).flatten()
         }
         _ => None,
     }
@@ -281,7 +295,7 @@ pub(crate) fn clean_within(
         }
         doc.update_dict(r, |e| {
             if sensitive {
-                for key in [&b"Alt"[..], b"ActualText", b"E"] {
+                for key in DESCRIPTIONS {
                     e.remove(key);
                 }
             }
@@ -321,8 +335,10 @@ impl Above {
     }
 }
 
-/// The keys of an element that describe its content.
-const DESCRIPTIONS: [&[u8]; 3] = [b"Alt", b"ActualText", b"E"];
+/// The keys of an element that describe its content, and so may repeat what was removed: one
+/// policy for the element that owned it, the elements above it and elements written in place.
+/// The title (`/T`) is included, as producers often fill it with the element's text.
+const DESCRIPTIONS: [&[u8]; 4] = [b"Alt", b"ActualText", b"T", b"E"];
 
 /// Each element's parents as the walk found them: through `/K`, which `/P` may not agree with.
 struct Parents(HashMap<ObjRef, Vec<Above>>);
@@ -539,7 +555,7 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
             // An element that lost an annotation keeps no text describing it, even with other
             // kids left: a link's alternate text often repeats the URL, an annotation's its
             // comment. Elements above it may describe it too.
-            for key in [&b"Alt"[..], b"ActualText", b"T", b"E"] {
+            for key in DESCRIPTIONS {
                 e.remove(key);
             }
         })?;

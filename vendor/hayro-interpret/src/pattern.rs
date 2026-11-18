@@ -23,6 +23,10 @@ use hayro_syntax::xref::XRef;
 use kurbo::{Affine, BezPath, Rect, Shape};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// PdfCraft patch (78): the source of [`TilingPattern::instance`].
+static NEXT_TILING_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
 /// A PDF pattern.
 #[derive(Debug, Clone)]
@@ -156,6 +160,8 @@ impl CacheKey for ShadingPattern {
 #[derive(Clone)]
 pub struct TilingPattern<'a> {
     cache_key: u128,
+    /// PdfCraft patch (78): see [`Self::instance`].
+    instance: u64,
     ctx_bbox: Rect,
     /// The bbox of the tiling pattern.
     pub bbox: Rect,
@@ -233,6 +239,7 @@ impl<'a> TilingPattern<'a> {
 
         Some(Self {
             cache_key,
+            instance: NEXT_TILING_INSTANCE.fetch_add(1, Ordering::Relaxed),
             bbox,
             x_step,
             y_step,
@@ -307,6 +314,23 @@ impl<'a> TilingPattern<'a> {
         device.pop_clip_path();
 
         Some(())
+    }
+}
+
+impl TilingPattern<'_> {
+    /// PdfCraft patch (78): which setting of the pattern (`scn`/`SCN`) this is. Each setting is
+    /// numbered apart, and its copies keep the number. A coloured pattern's cell depends only on
+    /// what the setting captured (its stream, resources, settings and the bounding box then in
+    /// effect) and on the scale it is drawn at, so a renderer can draw the cell once per number
+    /// and scale for every fill of that setting. An uncoloured pattern's cell also takes the
+    /// colour and opacity of the paint, which copies can change.
+    pub fn instance(&self) -> u64 {
+        self.instance
+    }
+
+    /// Whether the pattern is coloured (`/PaintType 1`).
+    pub fn is_coloured(&self) -> bool {
+        self.is_color
     }
 }
 
