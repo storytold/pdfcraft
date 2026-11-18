@@ -32,13 +32,13 @@ impl<'a> EditTextTool<'a> {
 
     /// Something is selected that an arrow moves or Delete removes.
     fn has_selection(&self) -> bool {
-        self.view.objects.count() > 0 || self.view.image_selection.is_some() || self.view.content.selected.is_some()
+        self.view.session.objects.count() > 0 || self.view.session.image_selection.is_some() || self.view.session.content.selected.is_some()
     }
 
     /// Queue `edit` for the app to apply, when there is one.
     fn queue(&mut self, edit: Option<pdfcraft_engine::Edit>) {
         if edit.is_some() {
-            self.view.pending_edit = edit;
+            self.view.session.pending_edit = edit;
         }
     }
 }
@@ -67,7 +67,7 @@ impl CanvasTool for EditTextTool<'_> {
             return;
         }
         if let Some(start) = self.press.phase.start() {
-            object_ui::end_marquee(self.view, self.doc, self.info, start, pointer.pos);
+            object_ui::end_marquee(self.view, self.doc, self.info, start, pointer.mods, pointer.pos);
         }
     }
 

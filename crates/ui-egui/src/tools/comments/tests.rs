@@ -24,9 +24,8 @@ fn placed_page(xf: &PageXform, zoom: f64) -> PlacedPage {
 }
 
 /// The page map the app feeds `bridge` for `placed` pages shown turned `rotation` degrees.
-fn page_map<'a>(placed: &'a [PlacedPage], info: &DocInfo, rotation: u16) -> PageMap<'a> {
-    // PLAN: assumed `PageMap::new(&[PlacedPage], &DocInfo, view_rotation: u16) -> PageMap` (pdf-comments-w7 A-1).
-    PageMap::new(placed, info, rotation)
+fn page_map<'a>(placed: &'a [PlacedPage], info: &'a DocInfo, rotation: u16) -> PageMap<'a> {
+    PageMap::new(info, placed, rotation)
 }
 
 /// A kurbo rectangle as an egui one, for comparing a marker with a page's screen rectangle.
@@ -303,7 +302,7 @@ fn tools_round_trip_through_their_commands() {
         assert_eq!(CommentTool::from_command(t.command()), Some(t));
         assert!(pdfcraft_engine::commands::command(t.command()).is_some(), "{} is registered", t.command());
         let icon = supplied.icon(craft::review::ui::annotate::AnnotateCommand::of(t.tool())).expect("the app names every tool's icon");
-        assert!(craft::ui::primitives::has_icon(&craft::behavior::IconId::new(icon)), "icon {icon}");
+        assert!(craft::ui::primitives::has_icon(&craft::behavior::IconId::from(std::borrow::Cow::Owned(icon.to_string()))), "icon {icon}");
         assert!(GROUPS[t.group()].contains(&t));
     }
 }
@@ -317,7 +316,7 @@ fn an_arrow_is_created_as_a_line_with_an_open_arrow_end() {
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
     let placed = [placed_page(&xf, 1.0)];
     let map = page_map(&placed, &info, 0);
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
     let prefs = CommentPrefs::default();
     let mut created = |kind| {
         let drawn = craft::review::Annotation {
@@ -447,7 +446,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     let thread = |index: usize| ThreadId(bridge::id_of(0, index).0);
     let composer =
         |index: usize, text: &str| Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(index), text: text.into(), focus: false };
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
     view.session.comments.select_only((0, 2));
     view.session.comments.panel.editing = Some((thread(2), 0, "draft".into()));
 
@@ -456,7 +455,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     // Moving/editing in place or appending a comment at index 3 preserves the (0, 2) selection, editor and composer.
     let mut appended = info.clone();
     appended.annotations.push(annot(3, "c3"));
-    view.document_changed(&appended);
+    view.document_changed(&egui::Context::default(), &appended);
     assert_eq!(view.session.comments.selection(), vec![(0, 2)]);
     assert!(view.session.comments.panel.editing.is_some());
     assert!(view.session.comments.composer.is_some());
@@ -467,7 +466,7 @@ fn stale_comment_state_is_cleared_and_delete_never_hits_non_comment_slots() {
     view.session.comments.select_only((0, 1));
     view.session.comments.panel.editing = Some((thread(1), 0, "for c1, not c2".into()));
     view.session.comments.composer = Some(composer(1, "for c1"));
-    view.document_changed(&shifted);
+    view.document_changed(&egui::Context::default(), &shifted);
     assert!(view.session.comments.selection().is_empty());
     assert_eq!(view.session.comments.panel.editing, None);
     assert_eq!(view.session.comments.composer, None);
@@ -490,10 +489,11 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
     let annot = |index: usize| Annotation { page: 0, index, rect: [10.0, 10.0, 30.0, 30.0], ..annotation("Text", None, false) };
     let page = || PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
     let info = DocInfo { pages: vec![page(), page()], annotations: vec![annot(1), annot(2)], ..Default::default() };
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
     view.session.comments.select_only((0, 1));
     view.session.comments.panel.editing = Some((ThreadId(bridge::id_of(0, 1).0), 0, "the first note".into()));
-    view.session.comments.composer = Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
+    view.session.comments.composer =
+        Some(Composer { page: 0, at: [10.0, 10.0], kind: ComposerKind::Edit(1), text: "the first note".into(), focus: false });
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
     let placed = [placed_page(&xf, 1.0)];
     let map = page_map(&placed, &info, 0);
@@ -501,7 +501,7 @@ fn an_unnamed_shift_clears_state_for_the_old_index() {
     assert!(deleted.is_some(), "the unnamed comment is deletable");
     let mut shifted = info.clone();
     shifted.annotations = vec![annot(1)];
-    view.document_changed(&shifted);
+    view.document_changed(&egui::Context::default(), &shifted);
     assert!(view.session.comments.selection().is_empty());
     assert_eq!(view.session.comments.panel.editing, None);
     assert_eq!(view.session.comments.composer, None);
@@ -552,7 +552,7 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     let prefs = CommentPrefs::default();
     let placed = [placed_page(&xf, 1.0)];
     let map = page_map(&placed, &info, 0);
-    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
     let tolerance = map.doc_len(SLOP);
     let side = icon_side(&map);
     let over = Point::new(100.0, 100.0);
@@ -561,7 +561,8 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     assert_eq!(pick_at(&annotations, over, tolerance, side, &markers), Some(bridge::id_of(0, 0)), "the highlight a press there selects");
     // PLAN: the outline shape itself is the overlay's `HoverOutline` (pdf-comments-w8); a request to w8 for an `overlay` helper
     // the test can compare against the part's annotation. The part registered at the pointer is asserted here.
-    let parts = |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side);
+    let parts =
+        |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side);
     assert_eq!(parts(&view, Some(over)).len(), 1, "one part for the comment under the pointer");
     assert!(parts(&view, None).is_empty(), "no pointer, no part");
     assert!(parts(&view, Some(Point::new(5.0, 5.0))).is_empty(), "nor where nothing would take the press");
@@ -592,10 +593,15 @@ fn an_annotation_round_trips_through_the_page_map_on_turned_and_zoomed_pages() {
             let back = map.to_user(0, map.to_doc(0, user));
             assert!((back[0] - user[0]).abs() < 1e-6 && (back[1] - user[1]).abs() < 1e-6, "{case}: {user:?} came back as {back:?}");
         }
-        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+        let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default(), false);
         let delta = Vec2::new(1.0, 0.0);
-        let moved =
-            bridge::edit(AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta }, &map, &mut view.session.comments, &info, &CommentPrefs::default());
+        let moved = bridge::edit(
+            AnnotationEdit::Move { ids: vec![bridge::id_of(0, 0)], delta },
+            &map,
+            &mut view.session.comments,
+            &info,
+            &CommentPrefs::default(),
+        );
         let Some(Edit::MoveAnnotation { dx, dy, .. }) = moved else { panic!("{case}: a move is one MoveAnnotation, got {moved:?}") };
         let origin = map.to_doc(0, [50.0, 80.0]);
         let (from, to) = (map.to_user(0, origin), map.to_user(0, origin + delta));

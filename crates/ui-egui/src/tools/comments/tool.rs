@@ -175,16 +175,19 @@ impl CanvasTool for CommentsTool<'_> {
                 eraser_width = style.width;
             }
         }
-        let select = SelectOptions {
-            empty_press: EmptyPress::PassThrough,
-            toggle: ToggleMods::ShiftOrCommand,
-            open: OpenOn::Every,
-            shift_lock: ShiftLock::LevelOrPlumb,
-            far_nudge: FarNudge::ShiftOrCommand,
-            handles_while_drawing: HandlesWhileDrawing::Edit,
-            markup_press: MarkupPress::ClickOnly,
-        };
-        let draw = DrawOptions { ink: InkStrokes::PerStroke, erase: EraseMode::Path, eraser_radius: eraser_radius(eraser_width) };
+        // Both option types are `#[non_exhaustive]`: the app sets the fields it names over the framework's defaults.
+        let mut select = SelectOptions::default();
+        select.empty_press = EmptyPress::PassThrough;
+        select.toggle = ToggleMods::ShiftOrCommand;
+        select.open = OpenOn::Every;
+        select.shift_lock = ShiftLock::LevelOrPlumb;
+        select.far_nudge = FarNudge::ShiftOrCommand;
+        select.handles_while_drawing = HandlesWhileDrawing::Edit;
+        select.markup_press = MarkupPress::ClickOnly;
+        let mut draw = DrawOptions::default();
+        draw.ink = InkStrokes::PerStroke;
+        draw.erase = EraseMode::Path;
+        draw.eraser_radius = eraser_radius(eraser_width);
         // The options are builders over the owned tool: rebuilt from the tool taken out, its gesture kept.
         let mut built = std::mem::take(self.annotate).select_options(select).draw_options(draw);
         if self.quick == QuickTool::Comment(CommentTool::Caret)

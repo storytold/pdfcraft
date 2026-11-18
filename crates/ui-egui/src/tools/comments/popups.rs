@@ -216,7 +216,6 @@ pub(crate) fn note_popups(
             // PLAN: `Annotation::color` is f32 components in 0..=1; the window takes 8-bit.
             let color = a.color.map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
             let selected = view.session.comments.is_selected((page, a.index));
-            // PLAN: A-2 `popup_drafts: HashMap<(usize, usize), NoteDrafts>`, one per open window (lead ruling, review 1).
             let drafts: &mut NoteDrafts = view.session.comments.popup_drafts.entry((page, a.index)).or_default();
             let mut window =
                 NotePopup::new(super::bridge::id_of(page, a.index).0, owned.first().map_or("", |m| m.title.as_str()), rect, &msgs, drafts)

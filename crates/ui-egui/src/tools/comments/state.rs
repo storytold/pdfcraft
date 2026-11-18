@@ -143,8 +143,8 @@ pub struct CommentView {
     pub composer: Option<Composer>,
     /// The Comments panel's own state: search, sort, filter, folded pages, inline edit and drafts.
     pub panel: CommentsPanelState,
-    /// What is typed or being dragged in the open pop-up windows of one comment: (page, index, drafts).
-    pub popup_drafts: Option<(usize, usize, NoteDrafts)>,
+    /// What is typed or being dragged in each open pop-up window, by the comment's (page, index).
+    pub popup_drafts: HashMap<(usize, usize), NoteDrafts>,
     /// The panel should scroll the selected card into view.
     pub reveal: bool,
     /// Comment Properties was asked for from the panel: (page, index).
@@ -368,7 +368,8 @@ impl CommentView {
             .take()
             .and_then(|(thread, message, text)| moved(bridge::thread_key(thread)).map(|(p, i)| (bridge::thread_id(p, i), message, text)));
         // What is typed in a pop-up, and a window being dragged or resized, follow theirs too.
-        let drafts = self.popup_drafts.take().and_then(|(p, i, d)| moved((p, i)).map(|(p, i)| (p, i, d)));
+        let drafts: HashMap<(usize, usize), NoteDrafts> =
+            std::mem::take(&mut self.popup_drafts).into_iter().filter_map(|(key, d)| moved(key).map(|key| (key, d))).collect();
         // Other transient state still needs conservative pruning; refresh the slot snapshot too.
         self.document_changed(info);
         self.tool.selected = selected;
@@ -384,12 +385,14 @@ impl CommentView {
     pub(crate) fn history_stepped(&mut self) {
         self.clear_selection();
         self.panel.editing = None;
-        self.popup_drafts = None;
+        self.popup_drafts.clear();
     }
 
-    /// The comments the pop-ups hold unsaved text, a reply or a drag for.
+    /// The comments the pop-ups hold unsaved text, a reply or a drag for, in page order.
     pub(crate) fn popup_keys(&self) -> Vec<(usize, usize)> {
-        self.popup_drafts.iter().map(|(p, i, _)| (*p, *i)).collect()
+        let mut keys: Vec<_> = self.popup_drafts.keys().copied().collect();
+        keys.sort_unstable();
+        keys
     }
 
     /// An edit other than a deletion just ran: `before` are the comments at [`Self::popup_keys`]
@@ -402,9 +405,7 @@ impl CommentView {
             list.iter().find(|a| (a.page, a.index) == k).map(|a| (a.subtype.clone(), a.author.clone(), a.name.clone()))
         };
         let kept = |p: usize, i: usize| who(before, (p, i)).is_some_and(|w| who(after, (p, i)) == Some(w));
-        if self.popup_drafts.as_ref().is_some_and(|(p, i, _)| !kept(*p, *i)) {
-            self.popup_drafts = None;
-        }
+        self.popup_drafts.retain(|&(p, i), _| kept(p, i));
     }
 }
 
