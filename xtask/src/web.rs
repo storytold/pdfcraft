@@ -69,6 +69,7 @@ impl Worker {
     fn hashed(&self) -> Result<Hashed> {
         let mut both = self.js.clone();
         both.extend_from_slice(&self.wasm);
+        both.extend_from_slice(&self.loader);
         let hash: String = crate::assets::sha256_hex(&both).chars().take(16).collect();
         let (js, wasm, loader) = (format!("{STEM}-{hash}.js"), format!("{STEM}-{hash}_bg.wasm"), format!("{STEM}-{hash}_loader.js"));
         let glue = std::str::from_utf8(&self.js).context("the worker's script is not UTF-8")?;
@@ -117,6 +118,14 @@ mod tests {
         assert_eq!(h.files[1].1, b"\0asm one");
         // A different build gets a different name, so a cached old worker is never paired with it.
         assert_ne!(trunk_output(b"\0asm two").hashed().unwrap().loader, h.loader);
+    }
+
+    #[test]
+    fn changing_only_the_loader_invalidates_its_cached_name() {
+        let mut worker = trunk_output(b"\0asm");
+        let original_name = worker.hashed().unwrap().loader;
+        worker.loader.push(b'\n');
+        assert_ne!(worker.hashed().unwrap().loader, original_name);
     }
 
     #[test]
