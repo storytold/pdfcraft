@@ -1,11 +1,14 @@
 //! Prepare for accessibility ▸ Check for accessibility in the real shell (egui_kittest): the
 //! options dialog, the results panel, Fix, Skip Rule and the report.
 
+use std::sync::Arc;
+
+use craft::host::ScriptedFiles;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::a11y::{Rule, Status};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp, RightPanel};
+use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -60,15 +63,14 @@ fn automatic_text_tagging_opens_reviewable_tags() {
 
 #[test]
 fn checking_fixing_skipping_and_reporting() {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-a11y-ui-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let d = dir.clone();
+    let files = Arc::new(ScriptedFiles::new().saving_suggested());
+    let scripted = files.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.export_dir_override = Some(d.to_string_lossy().into_owned());
+        // PLAN: assumed `PdfCraftApp::set_files(Arc<dyn Files>)` (pdf-workflows-w13, A-6)
+        app.set_files(scripted);
         app
     });
     h.run_steps(4);
@@ -79,7 +81,7 @@ fn checking_fixing_skipping_and_reporting() {
     h.get_by_label("Document title is showing in title bar");
     h.get_by_label("Start Checking").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty());
     assert_eq!(h.state().right, Some(RightPanel::Accessibility));
     h.get_by_label("Document (3 issues)");
     h.get_by_label("Title - Failed");
@@ -90,10 +92,11 @@ fn checking_fixing_skipping_and_reporting() {
     h.run_steps(3);
     assert_eq!(status(&h, Rule::Title), Status::Passed);
     assert_eq!(h.state().a11y.previous.as_ref().unwrap().1.result(Rule::Title).unwrap().status, Status::Failed);
-    assert!(matches!(h.state().dialog, Some(Dialog::Properties(_))));
+    assert!(!h.state().dialogs.is_empty(), "Document Properties opens to edit the title");
     assert_eq!(h.state().window_title, "notes • — PdfCraft");
-    h.state_mut().dialog = None;
+    h.get_by_label("Cancel").click();
     h.run_steps(2);
+    assert!(h.state().dialogs.is_empty());
     h.get_by_label("Compare");
     h.get_by_label_contains("Title: Failed (2) → Passed (0)");
     // Skip a rule; it stays skipped when checking again.
@@ -110,12 +113,18 @@ fn checking_fixing_skipping_and_reporting() {
     h.run_steps(2);
     h.get_by_label_contains("Screen readers choose their voice");
     h.get_by_label("Primary language - Failed").click();
+    h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
     h.get_by_label("No document language is set");
     // The report.
     h.get_by_label("Report").click();
     h.run_steps(2);
-    let html = std::fs::read_to_string(dir.join("notes Accessibility Report.html")).unwrap();
+    let requests = files.requests();
+    assert_eq!(requests.len(), 1, "the report asks where to be saved once");
+    assert_eq!(requests[0].file_name.as_deref(), Some("notes Accessibility Report.html"));
+    // PLAN: assumed the scripted save lands at the suggested directory and name (pdf-workflows-w13, A-6)
+    let saved = requests[0].directory.clone().unwrap_or_default().join("notes Accessibility Report.html");
+    let html = String::from_utf8(files.file(&saved).expect("the report was written")).unwrap();
     assert!(html.contains("Accessibility Report") && html.contains("Skipped"));
 }
 
@@ -142,7 +151,7 @@ fn a_rule_skipped_in_one_document_is_not_skipped_in_another() {
     };
     assert!(h.state_mut().execute("a11y.check"));
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty(), "no options dialog while it is turned off");
     right_click(&mut h, "Tagged PDF - Failed");
     h.get_by_label("Skip Rule").click();
     h.run_steps(2);
@@ -152,7 +161,7 @@ fn a_rule_skipped_in_one_document_is_not_skipped_in_another() {
     h.run_steps(2);
     assert!(h.state_mut().execute("a11y.check"));
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty());
     assert_eq!(tagged(&h), (Status::Failed, 2), "b.pdf's own result");
     // Starting again from the options dialog forgets b.pdf's skips, not a.pdf's.
     right_click(&mut h, "Tagged PDF - Failed");
@@ -162,6 +171,7 @@ fn a_rule_skipped_in_one_document_is_not_skipped_in_another() {
     h.state_mut().a11y_options.show_dialog = true;
     assert!(h.state_mut().execute("a11y.check"));
     h.run_steps(2);
+    assert!(!h.state().dialogs.is_empty(), "the options dialog opens");
     h.get_by_label("Start Checking").click();
     h.run_steps(3);
     assert_eq!(tagged(&h), (Status::Failed, 2));
@@ -270,7 +280,9 @@ fn checker_shows_a_figure_finding_on_its_page() {
     h.run_steps(4);
     h.state_mut().run_accessibility_check();
     h.run_steps(3);
+    // The rule opens as a user opens a tree row: select it, then Right.
     h.get_by_label("Figures alternate text - Failed").click();
+    h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
     h.get_by_label_contains("Figure element on page 1: no alternate text").click();
     h.run_steps(1);
@@ -291,12 +303,14 @@ fn setting_alternate_text_figure_by_figure() {
     h.run_steps(2);
     h.get_by_label("Set Alternate Text");
     h.get_by_label("Figure 1 of 2 on page 1");
-    h.state_mut().alt_draft.texts[0] = "A grey square".into();
+    let field = h.get_by_role_and_label(Role::TextInput, "Alternate text");
+    field.focus();
+    field.type_text("A grey square");
     h.run_steps(2);
     h.get_by_label("Next figure").click();
     h.run_steps(2);
     h.get_by_label("Figure 2 of 2 on page 1");
-    h.get_by_label("Decorative figure").click();
+    h.get_by_label_contains("decorative").click();
     h.run_steps(1);
     h.get_by_label("Save & Close").click();
     h.run_steps(3);
@@ -320,10 +334,12 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
     assert!(h.state_mut().execute("a11y.tags"));
     h.run_steps(2);
     assert_eq!(h.state().right, Some(RightPanel::Tags));
-    h.get_by_label("Collapse tag").click();
+    // The list's own disclosure: Left closes the selected group, Right opens it.
+    h.get_by_label("Document · 6").click();
+    h.key_press(egui::Key::ArrowLeft);
     h.run_steps(2);
     assert!(h.query_by_label("Figure · 7").is_none());
-    h.get_by_label("Expand tag").click();
+    h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);
     h.get_by_label("Figure · 7").click();
     h.run_steps(2);
