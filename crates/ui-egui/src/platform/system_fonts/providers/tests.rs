@@ -104,6 +104,7 @@ fn last_resort_skips_invalid_oversized_and_duplicate_files() {
 fn installed_fonts_work_without_known_filenames_and_honour_opt_out() {
     const CHILD: &str = "PDFCRAFT_PROVIDER_TEST_CHILD";
     if let Ok(mode) = std::env::var(CHILD) {
+        eprintln!("checking installed-font discovery ({mode})");
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         // Remove bundled/script-specific faces to test only the installed providers.
@@ -153,8 +154,29 @@ fn installed_fonts_work_without_known_filenames_and_honour_opt_out() {
             .env("PDFCRAFT_SYSTEM_FONTS", setting)
             .output()
             .unwrap();
+        // Successful children can skip optional discovery: keep their diagnostics
+        // available in the parent test's output (with --nocapture or --show-output).
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
         assert!(output.status.success(), "{mode}: {}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn successful_installed_font_checks_forward_child_diagnostics() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "platform::system_fonts::providers::tests::installed_fonts_work_without_known_filenames_and_honour_opt_out", "--nocapture"])
+        .env_remove("PDFCRAFT_PROVIDER_TEST_CHILD")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{}\n{stderr}", String::from_utf8_lossy(&output.stdout));
+    for mode in ["enabled", "disabled"] {
+        assert!(
+            stderr.contains(&format!("checking installed-font discovery ({mode})")),
+            "child diagnostics must survive a successful check: {stderr}"
+        );
     }
 }
 
