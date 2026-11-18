@@ -31,7 +31,7 @@ pub use session::TextSession;
 
 mod blocks;
 mod editor;
-mod fallback;
+pub(crate) mod fallback;
 pub mod forms;
 mod interp;
 mod lines;
