@@ -31,11 +31,8 @@ pub const IMAGE_DPI: [f64; 3] = [150.0, 300.0, 600.0];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
-    pub printers: Vec<spool::Printer>,
     /// The unit the sheet size is shown in (Preferences).
     pub units: crate::units::Unit,
-    /// The printers are still being listed in the background (see [`PrinterSource`]).
-    pub printers_loading: bool,
     /// The user chose the printer, so a list arriving late doesn't move it to the default.
     pub printer_picked: bool,
     /// `None` = Save as PDF.
@@ -108,12 +105,8 @@ pub struct PrintDraft {
     /// The printer whose options are being read in the background (CUPS runs `lpoptions`,
     /// which a stuck CUPS can hold up; #1818). The panel says so meanwhile.
     pub driver_options_loading: Option<String>,
-    /// Properties… asked for this printer's options; the app starts the read on the next frame.
-    pub read_options_for: Option<String>,
     /// The printer whose papers and default paper are being read in the background.
     pub papers_loading: Option<String>,
-    /// A printer change requested reading papers; the app starts the read on the next frame.
-    pub read_papers_for: Option<String>,
     /// Whether each printer's driver takes two-sided settings, as read in the background for
     /// the printer picked (see [`TwoSidedSource`](super::TwoSidedSource)); `None` when it couldn't be read.
     pub two_sided: std::collections::BTreeMap<String, Option<bool>>,
@@ -125,9 +118,7 @@ pub struct PrintDraft {
 impl Default for PrintDraft {
     fn default() -> Self {
         PrintDraft {
-            printers: Vec::new(),
             units: Default::default(),
-            printers_loading: false,
             printer_picked: false,
             printer: None,
             copies: 1,
@@ -176,9 +167,7 @@ impl Default for PrintDraft {
             crops: Vec::new(),
             crop_pages: None,
             driver_options_loading: None,
-            read_options_for: None,
             papers_loading: None,
-            read_papers_for: None,
             two_sided: Default::default(),
             setups: Vec::new(),
         }
@@ -206,7 +195,7 @@ impl PrintDraft {
     /// printer's media sizes and default paper are still being read in the background off the GUI thread.
     pub fn papers_loading(&self) -> bool {
         let Some(p) = self.printer.as_deref() else { return false };
-        !self.paper_overridden && (self.papers_loading.as_deref() == Some(p) || self.read_papers_for.as_deref() == Some(p))
+        !self.paper_overridden && self.papers_loading.as_deref() == Some(p)
     }
 
     /// Reset an automatically selected custom paper to a standard preset on printer change.
@@ -429,7 +418,7 @@ impl PrintDraft {
     }
 
     /// The printer printed to last, while `printers` still lists it (#2001).
-    pub fn last_printer<'a>(&self, printers: &'a [spool::Printer]) -> Option<&'a spool::Printer> {
+    pub fn last_printer<'a>(&self, printers: &'a [craft::print::ui::Printer]) -> Option<&'a craft::print::ui::Printer> {
         let (last, _) = self.setups.first()?;
         printers.iter().find(|p| p.name == *last)
     }
@@ -523,8 +512,7 @@ impl PrintDraft {
     /// knows; on Windows it lists the queues without asking their drivers (#3554), and the answer
     /// for the printer picked arrives in [`PrintDraft::two_sided`].
     pub fn printer_two_sided(&self) -> Option<bool> {
-        let p = self.printers.iter().find(|p| self.printer.as_ref() == Some(&p.name))?;
-        p.two_sided.or_else(|| self.two_sided.get(&p.name).copied().flatten())
+        self.two_sided.get(self.printer.as_ref()?).copied().flatten()
     }
 
     /// The Two-sided choice as the chosen printer can take it: long or short edge is left out for

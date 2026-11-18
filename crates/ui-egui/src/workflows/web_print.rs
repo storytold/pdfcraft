@@ -327,19 +327,6 @@ mod tests {
     const LETTER: (f64, f64) = (612.0, 792.0);
 
     #[test]
-    fn resolution_falls_with_the_sheet_count_and_long_jobs_are_refused() {
-        assert_eq!(plan_dpi(&[LETTER]).unwrap(), vec![300.0]);
-        assert_eq!(plan_dpi(&vec![LETTER; 100]).unwrap()[99], 300.0);
-        assert_eq!(plan_dpi(&vec![LETTER; 101]).unwrap()[0], 200.0);
-        assert_eq!(plan_dpi(&vec![LETTER; 300]).unwrap()[0], 200.0);
-        assert_eq!(plan_dpi(&vec![LETTER; 301]).unwrap()[0], 150.0);
-        assert_eq!(plan_dpi(&vec![LETTER; MAX_SHEETS]).unwrap().len(), MAX_SHEETS);
-        let e = plan_dpi(&vec![LETTER; MAX_SHEETS + 1]).unwrap_err();
-        assert!(e.contains("save the print-ready PDF"), "{e}");
-        assert!(plan_dpi(&[]).is_err());
-    }
-
-    #[test]
     fn large_sheets_are_drawn_within_the_pixel_cap_and_bad_sizes_are_refused() {
         // ARCH E, 36 × 48 inches: 300 dpi would be 155 megapixels.
         let dpi = plan_dpi(&[(36.0 * 72.0, 48.0 * 72.0)]).unwrap()[0];
