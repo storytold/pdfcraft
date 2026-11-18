@@ -777,7 +777,7 @@ fn finish_sign_requests(
     if let (Some((page, rect)), QuickTool::SignArea { certify }) = (drawn, tool) {
         tool = QuickTool::Select;
         app.quick_tool = tool;
-        app.start_signing(page, Some(rect), None, certify.then_some(2));
+        app.start_signing(ctx, page, Some(rect), None, certify.then_some(2));
     }
     if let Some(field) = app.views[index].session.sign.field.take() {
         let signed = app.session.get(app.views[index].id).is_some_and(|d| d.signatures.iter().any(|s| s.field == field && s.signed));
@@ -786,7 +786,7 @@ fn finish_sign_requests(
             crate::side_panels::set_panel_visible(app, RightPanel::Signatures.into(), true);
         } else {
             let page = app.views[index].view.current;
-            app.start_signing(page, None, Some(field), None);
+            app.start_signing(ctx, page, None, Some(field), None);
         }
     }
     tool
@@ -918,9 +918,7 @@ fn page_parts_of(
 /// The links of the pages: followed under Select, edited under the Link tool.
 fn links_of<'a>(session: &'a PageSession, cx: &'a PageBodyCx<'_>, body: &'a PageBody<'_>) -> PageLinks<'a> {
     let mode = if cx.tool == QuickTool::Link { LinkMode::Edit } else { LinkMode::Follow };
-    // PLAN: assumed `PageLinks::new(mode, session, info, doc.links(), pages, rotation).text_links(on).tips(on)`
-    // (pdf-canvas-w15 names `parts` and `read` only).
-    PageLinks::new(mode, session, cx.info, cx.doc.links(), body.pages, cx.rotation).text_links(cx.text_links).tips(cx.unobstructed)
+    PageLinks::new(mode, session, cx.info, cx.doc.links(), body.pages, cx.rotation, cx.sizes).text_links(cx.text_links).tips(cx.unobstructed)
 }
 
 /// Whether `phase` is the first pass of a press of `button`.
@@ -1101,9 +1099,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         });
     }
     if cx.unobstructed && matches!(cx.tool, QuickTool::Select | QuickTool::ColumnSelect) {
-        // PLAN: assumed `selection_bar(ui, body, session, info, prefs, may_mark, can_copy)`, the old
-        // `selection_actions` arguments after `body` (pdf-canvas-w12 note 4 gives `(ui, body, view, ..)`).
-        out.copy_selected = selection::selection_bar(ui, body, session, cx.info, cx.prefs, cx.allowed && !cx.comments_hidden, cx.can_copy);
+        out.copy_selected =
+            selection::selection_bar(ui, body, session, cx.info, cx.rotation, cx.prefs, cx.allowed && !cx.comments_hidden, cx.can_copy);
     }
     if cx.unobstructed
         && let Some(page) = cx.info.pages.get(cx.current)
@@ -1241,10 +1238,22 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     let mut body_out = BodyOut::default();
     let date_text = crate::date_text_for_pdf(&app.session);
+    // The dynamic stamps' lines, filled in for now: the built-in ones write the default line, a custom stamp its own.
+    let by_line = app.session.stamp_line(crate::stamps_ui::DEFAULT_LINE, &app.comment_prefs.author);
+    let custom_line = match tool {
+        QuickTool::CustomStamp(i) => app
+            .custom_stamps
+            .get(i)
+            .and_then(|stamp| stamp.line.as_deref())
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| app.session.stamp_line(line, &app.comment_prefs.author)),
+        _ => None,
+    };
+    let custom_stamp = match tool {
+        QuickTool::CustomStamp(i) => app.custom_stamps.get(i).map(|stamp| (stamp, custom_line.as_deref())),
+        _ => None,
+    };
     let DocView { view: state, session, momentary, revisions, reports, page_sizes, .. } = &mut *view;
-    // PLAN: assumed app fields (pdf-hub-w1, pdf-forms-w5): `host_scope: HostScope`, `wake: Wake`, `fill_text_size`,
-    // `fill_text_color`, `fill_text_border`, `fill_signature`, `fill_initials`, `fill_date_text`, `stamp_by_line`,
-    // `custom_stamp_choice: Option<(CustomStamp, Option<String>)>`, `animation_effects` and `motion`.
     let tools = page_tools::PageToolCx {
         doc,
         info,
@@ -1259,7 +1268,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         presenting,
         units: app.units,
         navigation,
-        host: &app.host_scope,
+        host: &app.host,
         wake: &app.wake,
         author: &app.comment_prefs.author,
         date_text: &date_text,
@@ -1274,8 +1283,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
             signature: app.signature.as_ref(),
             initials: app.initials.as_ref(),
         },
-        by_line: &app.stamp_by_line,
-        custom_stamp: app.custom_stamp_choice.as_ref().map(|(stamp, line)| (stamp, line.as_deref())),
+        by_line: &by_line,
+        custom_stamp,
     };
     let cx = PageBodyCx {
         doc,

@@ -270,7 +270,7 @@ fn field_rows(
     Divider::horizontal().show(ui);
     let delete = if view.session.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
     if MenuItem::new(tl!(delete).to_string()).enabled(can_modify).show(ui).ran {
-        view.session.pending_edit = crate::prepare::delete_selected(view);
+        view.session.pending_edit = crate::prepare::delete_selected(&mut view.session);
     }
 }
 

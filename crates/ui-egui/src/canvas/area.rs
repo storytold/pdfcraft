@@ -260,7 +260,7 @@ pub(super) fn run_button(
         B::ImportIcon => app.choose_field_image_target(app.views[index].id, name, Some(identity)),
         B::Script(js) => {
             let id = app.views[index].id;
-            app.run_button_script_target(id, name, Some(identity), &js);
+            app.run_button_script_target(ctx, id, name, Some(identity), &js);
         }
     }
 }

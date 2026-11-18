@@ -4,20 +4,21 @@
 //! ([`PageTool::finish`]) and applied to the session ([`ToolFinish::apply`]).
 
 use craft::behavior::{CancelReason, Cursor, PointerButton};
-use craft::host::{HostScope, Wake};
+use craft::host::{Host, Wake};
 use craft::keymap::Mods;
-use craft::pages::ui::{PageTexts, PlacedPage, TextSelectState};
+use craft::pages::ui::{PageTextSource as _, PageTexts, PlacedPage, TextSelectState};
 use craft::review::SavedSignature;
 use craft::ui::canvas::{
     CanvasTool, HandTool, NavigationOptions, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer, ToolRegion, ZoomTool,
 };
 use craft::ui::primitives::Draw;
+use egui::Pos2;
 use pdfcraft_engine::{Document, Edit, FormField};
 use pdfcraft_render::DocInfo;
 
 use super::crop::{CropResult, CropTool};
 use super::page_parts::{Owner, PagePress};
-use super::page_select::PageSelectTool;
+use super::page_select::{PageSelectTool, PickSlots};
 use super::selection::DocTexts;
 use super::zoom_snap::SnapshotTool;
 use super::{PageSession, PageXform, presenter};
@@ -86,7 +87,7 @@ pub(crate) struct PageToolCx<'a> {
     /// The user's navigation choices, which the Hand and Zoom tools read.
     pub(crate) navigation: NavigationOptions,
     /// The app's Host, which the tools that run background jobs build their queues from (L-135).
-    pub(crate) host: &'a HostScope,
+    pub(crate) host: &'a Host,
     /// The app's one wake source (L-168), for those queues.
     // PLAN: pdf-canvas-w8 passes `&app.wake` (hub-w1's field); its `PageToolCx` literal has no `wake`.
     pub(crate) wake: &'a Wake,
@@ -108,6 +109,7 @@ pub(crate) struct PageToolCx<'a> {
 pub(crate) struct ToolBench<'a> {
     texts: Option<DocTexts<'a>>,
     xforms: Vec<(usize, PageXform)>,
+    map: Option<comments::PageMap<'a>>,
 }
 
 /// The tool a pass runs: the Select tool's text selection, a view tool, or a tool a page module writes.
@@ -221,7 +223,7 @@ fn select_tool<'a>(
     picked_image: &'a mut Option<PickedImage>,
     xforms: &'a [(usize, PageXform)],
 ) -> PageSelectTool<'a> {
-    PageSelectTool::new(cx.pages, texts, text, cx.info, pending_pick, picked_image, xforms, cx.doc.edit_generation())
+    PageSelectTool::new(cx.pages, texts, text, cx.info, PickSlots::new(pending_pick, picked_image), xforms, cx.doc.edit_generation())
 }
 
 /// The page tool for `chosen` this pass. The placing rule applies first ([`seen_tool`]); Fill & Sign leaves its
@@ -237,32 +239,37 @@ pub(crate) fn page_tool<'a>(
     fill: &'a mut Option<FillOutcome>,
 ) -> PageTool<'a> {
     let tool = seen_tool(session, chosen);
-    let ToolBench { texts: texts_slot, xforms } = bench;
+    let ToolBench { texts: texts_slot, xforms, map: map_slot } = bench;
     let sizes = cx.sizes;
     let size = move |page: usize| sizes.get(page).copied().unwrap_or_default();
     *xforms = cx.pages.iter().map(|placed| (placed.page, PageXform::of(placed, cx.rotation, size(placed.page)))).collect();
     let xforms: &'a [(usize, PageXform)] = xforms;
+    let map: &'a comments::PageMap<'a> = map_slot.insert(comments::PageMap::new(cx.info, cx.pages, cx.rotation));
     let selects_text = tool_selects_text(tool, cx.preparing);
     let arm = match tool {
         // Prepare a form under the Select tool: the selection rectangle and the moves of fields are Prepare's.
-        QuickTool::Select if cx.preparing => Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, session))),
+        QuickTool::Select if cx.preparing => Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, session, cx.info, xforms))),
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
             let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
             let select = select_tool(&cx, &mut session.text, texts, &mut session.pending_pick, &mut session.picked_image, xforms);
             match tool {
                 QuickTool::ColumnSelect => Arm::Select(select.column(true)),
                 QuickTool::Redact => {
-                    // PLAN: assumed `RedactTool::new(select, pages, rotation, info, allowed)` (forms-w13 gives no list).
-                    Arm::Redact(RedactTool::new(select, cx.pages, cx.rotation, cx.info, cx.can_modify))
+                    let pages = cx.pages;
+                    let over_text = move |at: Pos2| {
+                        pages
+                            .iter()
+                            .find(|placed| placed.rect.contains(at))
+                            .is_some_and(|placed| texts.app(placed.page).is_some_and(|layer| layer.glyph_box_at(placed.to_page(at)).is_some()))
+                    };
+                    Arm::Redact(RedactTool::new(select, cx.pages, cx.rotation, cx.info, over_text))
                 }
                 // Select runs the comments tool too: a hanging paste is placed by its press, and a press no comment
                 // part took goes on to the text.
-                // PLAN: assumed `CommentsTool::new(&mut AnnotateTool, Option<&mut PastePlacement>, PageMap, &mut bool)`
-                // and `.text(PageSelectTool)` (comments-w8 names the fields, not the constructor).
                 _ => {
                     let view = &mut session.comments;
                     let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation);
-                    let annotate = CommentsTool::new(&mut view.tool, view.paste.as_mut(), map, &mut view.tool_done);
+                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done);
                     let annotate = if selects_text { annotate.text(select) } else { annotate };
                     Arm::Area(Box::new(annotate))
                 }
@@ -275,7 +282,7 @@ pub(crate) fn page_tool<'a>(
             Arm::MarqueeZoom(ZoomTool::new(options))
         }
         QuickTool::Measure(t) => {
-            Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, cx.pages, cx.info, t, cx.units, cx.host, cx.wake.clone()))
+            Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, cx.info, t, cx.units, cx.author, cx.host, cx.wake.clone()))
         }
         QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, cx.pages, cx.rotation, size)),
         QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages)),
@@ -294,13 +301,13 @@ pub(crate) fn page_tool<'a>(
             };
             Arm::Area(Box::new(FillSignTool::new(&cx, input, fill)))
         }
-        QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session))),
+        QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session, cx.info, xforms))),
         // PLAN: assumed `AddTextTool::new(session, doc, info)` in `content_ui` (pdf-edit-w7 gives no argument list).
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.info))),
         // PLAN: pdf-edit-w10's `EditTextTool::new(view, doc, info)` takes no placed pages, which the review asked to hand over.
         QuickTool::EditText => Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info))),
         QuickTool::Stamp(kind) => {
-            Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), cx.pages, cx.info))
+            Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), cx.pages, cx.info, map))
         }
         QuickTool::CustomStamp(_) => match cx.custom_stamp {
             Some((stamp, line)) => Arm::Stamp(StampTool::new(
@@ -310,13 +317,14 @@ pub(crate) fn page_tool<'a>(
                 cx.author.to_owned(),
                 cx.pages,
                 cx.info,
+                map,
             )),
             // The library no longer holds the stamp: no click places one, and a drag pans as the Hand tool's.
             None => Arm::Hand(HandTool::new(cx.navigation)),
         },
         // PLAN: assumed `LinkTool::new(session, doc, info, can_modify)` (pdf-edit-w11 gives `new(view, ..)`).
         QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.doc, cx.info, cx.can_modify))),
-        QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, cx.pages, cx.info)),
+        QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, cx.pages, cx.rotation, cx.info)),
         QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(cx.pages, cx.rotation, size)),
     };
     PageTool { arm, tool, selects_text, released: false, presenting: cx.presenting, presenter_keys: Vec::new() }
@@ -370,7 +378,7 @@ impl<'a> PageTool<'a> {
             Arm::Camera(tool) => finish.camera_page = tool.moved_to(),
             Arm::Measure(mut tool) => finish.edit = tool.take_edit(),
             Arm::Stamp(mut tool) => {
-                finish.edit = tool.take_placed();
+                finish.edit = tool.placed();
                 finish.back_to_select = finish.edit.is_some();
             }
             Arm::Redact(mut tool) => finish.redaction = tool.finished(),
