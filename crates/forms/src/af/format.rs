@@ -126,9 +126,10 @@ thread_local! {
 }
 
 /// Runs `f` with `year` as the current year: a date typed with its day and month but not its year,
-/// in a format whose year follows them, is taken in that year when committed ([`keystroke`]), as
-/// Acrobat takes it. The caller passes the session's clock, so tests can fix it. The year in force
-/// before is restored afterwards, a panic in `f` included.
+/// in a format whose year follows them, is taken in that year when committed ([`keystroke`]), a
+/// modification ISO 32000-2 Table 199 lets a keystroke action make. The caller passes the
+/// session's clock, so tests can fix it. The year in force before is restored afterwards, a panic
+/// in `f` included.
 pub fn with_current_year<R>(year: i32, f: impl FnOnce() -> R) -> R {
     struct Restore(Option<i32>);
     impl Drop for Restore {
@@ -505,8 +506,8 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
             'y' => {
                 dt.y = match year {
                     // Day and month typed, nothing left for the year that follows them: the
-                    // given year, as Acrobat fills it in. A year the format puts first is never
-                    // left out ("10-10" is no date for yyyy-mm-dd).
+                    // given year. A year the format puts first is never left out ("10-10" is no
+                    // date for yyyy-mm-dd).
                     Some(now) if nums.is_empty() && have_m && have_d => now,
                     _ => {
                         let y = i32::try_from(take(&mut nums, &mut tail)?).ok()?;

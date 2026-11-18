@@ -522,9 +522,9 @@ fn a_simple_calculation_that_expands_past_the_allowance_is_not_calculated() {
 }
 
 /// A date typed with its day and month but not the year that follows them takes the current
-/// year and is stored written out in the format, as Acrobat takes it: "10.10" in dd.mm.yyyy is
-/// 10.10.<year>. One number alone, a year the format puts first, a day the year doesn't have and
-/// any date typed with no current year given stay refused; a whole date is stored as typed.
+/// year and is stored written out in the format: "10.10" in dd.mm.yyyy is 10.10.<year>. One
+/// number alone, a year the format puts first, a day the year doesn't have and any date typed with
+/// no current year given stay refused; a whole date is stored as typed.
 #[test]
 fn a_date_typed_without_its_year_takes_the_current_year() {
     let date = |fmt: &str| Format::Date(fmt.into());
