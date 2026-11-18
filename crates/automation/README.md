@@ -47,6 +47,23 @@ DeviceCMYK `k`), so text added to a print file can be 100 K black. `content_list
 
 ## Text search and cache limits
 
+`text_find` accepts `language: "tr"` for Turkish `I/ı` and `İ/i` pairs and canonical
+NFC/NFD equivalence. Accents remain significant. `case_sensitive: true` keeps case
+significant while retaining canonical equivalence in this mode; `whole_words: true`
+requires word boundaries. All three options default to the existing general search.
+
+```json
+{"doc": 1, "query": "ığdır", "language": "tr", "whole_words": true}
+```
+
+Omitting `language` or choosing `"general"` preserves the existing matching rules;
+the interface language does not select a search mode. The desktop exposes the same
+explicit **Türkçe** option in Find and Advanced Search. Normalization applies only
+to comparisons: returned text and rectangles refer to the original glyphs, including
+decomposed marks, and the document is never rewritten. Keep the same query and options
+when following `next: {start_page, skip}`. An explicit language is echoed in the response;
+omitting it keeps the legacy response shape.
+
 `text_word_count` counts the current snapshot without filling the text cache. It returns totals
 and per-page Unicode word/character counts, with optional tagged-table, tagged-code and
 image/OCR exclusions. See [word count](../../docs/word-count.md) for counting rules and limits.
@@ -343,10 +360,46 @@ For distinct PDF fields sharing a name, form_fields exposes a document-local int
 
 ## Reviewing OCR headlessly
 
+`ocr_status {language: "tr", engine: "auto"}` checks that the selected engine can read the
+selected language before rendering or recognizing a page. It returns `language`, `engine`,
+`available`, and an `unavailable` reason when the selection cannot run. For this status query,
+omitting `engine` selects `auto`; recognition tools still default to `ocrs`. With no arguments,
+`ocr_status {}` keeps its general meaning: at least one engine is installed, not that every
+listed language is ready. Its `engines` list always describes the general engine inventory.
+Standard Turkish OCR requires Tesseract with `tur` data; the built-in `ocrs` engine cannot read it.
+
+OCR settings also accept `model_profile: "standard" | "turkish_extended"`. Omitting it
+preserves Standard. The extended profile is an explicit Turkish-only Tesseract selection;
+use `language: "tr", engine: "tesseract"` (or `"auto"`). Its required external packs are
+reported by `ocr_status` and must be installed before recognition. Missing packs, an
+incompatible language/engine or an unknown profile produce an error; the app never downloads
+models or silently substitutes Standard. A profile-only status query also validates the
+default language, English, so an extended query must explicitly choose Turkish.
+
+Selected status and recognition results include `requested_model_profile`,
+`effective_model_profile`, `model_engine`, `required_models` and `installed_models`.
+An unavailable selection has a null effective profile. These fields describe the selected
+reader and model inventory; they do not certify recognition accuracy. Review recognized
+words before applying them.
+
 `ocr_words {doc, retain_review: true}` reads words without editing the document and returns
 `review`, plus pages and word boxes/confidences. Page and word positions are 1-based.
 `region` can restrict recognition to one named page, using displayed-page points. Without
 `retain_review`, word inspection remains stateless.
+
+`ocr_word_candidates {doc, review, page: 1, word: 1}` explicitly rereads one original
+word from that retained review. It returns `original` (text, original confidence, source,
+displayed-point box), separate `candidates` (text, crop confidence, padding, source and
+`confidence_scope: "word_crop"`), and `applied: false`. Candidate confidence belongs to the
+word crop and never replaces original confidence. The captured language, model and render
+settings are used; this tool accepts no settings override. Only the primary reader is called;
+an unsupported reader fails without fallback. Rendering excludes runtime system fonts and
+uses actual raster resolution, with 8 horizontal and 10 vertical pixel margins restricted to the
+original recognition region. It never changes the document or retained words, never chooses
+an alternative and never consumes the review. A stale/foreign handle or invalid page/word
+fails before reader construction. Review proposals against the page: agreement or higher
+confidence does not prove the original text is wrong. This is manual review support, not
+an automatic correction policy or an OCR quality guarantee.
 
 Apply reviewed text with `ocr_review_apply {doc, review, corrections: [{page: 1, word: 1,
 text: "Corrected"}]}`. Omitted words keep their text; empty text removes a word. Geometry
@@ -358,8 +411,114 @@ review for correction or discard. A new retained recognition replaces that docum
 handle; closing the document releases it. At most eight documents may retain reviews, with
 65,536-word/4-MiB input bounds and a 65,536-page cap.
 
+Authoring tools (`page_add_text`, `content_update`, text/choice fields, FreeText/callouts,
+Fill & Sign text, headers/footers and watermarks) preserve supported Latin NFD clusters
+without NFC normalization. The shared font plan positions their marks and retains original
+Unicode in ToUnicode/ActualText. Unsupported clusters keep explicit errors or appearance
+warnings and flatten guards. Editable OCR uses the separate checked cluster plan described below.
+
+Typed signature/initials graphics (`fill_sign_add` and a signing `graphic.text`) also
+accept supported Latin NFD clusters, shaped in Dancing Script or the existing slanted
+Inter fallback. The complete cluster uses one face. The 256-character limit counts
+Unicode scalars; unsupported, over-limit or empty-ink input returns an error before
+editing the document. These graphics are filled vector outlines, so their PDF
+appearances do not provide searchable text or a ToUnicode mapping. The UI keeps the
+original typed value in its saved-signature settings. The `nfd_signature_*`
+regressions in `src/tests/turkish_signature.rs` cover canonical ink, rotations,
+save/reopen, undo/redo, vector-only text semantics and atomic refusal. UI draft
+and saved-preference tests are separate from physical input or OS clipboard acceptance.
+
+Corrected searchable text preserves the exact Unicode input, including decomposed accents.
+The separate editable output also supports Latin bases with the shared supported
+U+0300–U+036F combining marks. Complete clusters use positioned bundled Inter outlines,
+and ToUnicode/ActualText retain the original scalar sequence without NFC normalization.
+Non-ASCII Latin words use Inter in both NFC and NFD, including WinAnsi accents; ASCII
+keeps its existing Helvetica path, and the public scalar planner and non-Latin optional
+font selection remain unchanged. This works with the optional document faces absent.
+
+Editable output is a new document with visible vector text and no copied scan image.
+Word placement handles rotated pages and mark overhang; unrepresentable, unsupported,
+orphaned or over-budget clusters fail explicitly. The checked plan retains the
+65,536-word/4-MiB, 262,144-byte row, 65,534 shaped-glyph, 33-scalar cluster,
+240-code font/2,400-code plan and bounded outline limits. A page-coordinate conversion
+that loses a positive shaped box is refused. Validation failures retain the source
+document and review handle. Output publication also refuses a target created after
+preflight, so a concurrent writer's file is preserved. A successful export consumes
+the review handle. Search matching rules are unchanged.
+
+The editable document also carries one approved full Inter source resource shared
+by its text pages. Type3 descriptors identify the source family and contain no
+font program. A uniform Latin NFD span can be retyped with that complete source;
+the shared cluster/row/glyph checks run before writing. The default paragraph-edit
+regression verifies exact Unicode after retype, undo/redo and save/reopen, and
+atomic refusal of orphan, unsupported and oversized clusters. Explicit font
+choices and mixed contextual/style boundaries keep their existing restrictions.
+
+Synthetic retained-review tests validate output fidelity;
+they do not establish OCR recognition accuracy, physical input, OS clipboard or printing
+acceptance.
+
 `ocr_dictionary {path: "ocr-dictionary-en.txt", add: ["Quartz"], remove: ["old"]}` atomically
 updates the same one-word-per-UTF-8-line format OCR Verify uses. Omit add/remove to read it.
 The explicit path honors `--root`, including symlink confinement; choose the appropriate
 per-language file used by the UI. Entries are case-insensitive and duplicate-free. Invalid
 or oversized inputs fail before writing (65,536 words, 4 MiB, at most 1,024 bytes per word).
+
+## Explicit Windows virtual-printer file output
+
+`doc_print` can explicitly send imposed sheets to the local **Microsoft Print
+to PDF** driver with `printer_output`, an explicit `as_image` choice, `copies: 1` and
+`duplex: "off"`. `true` selects GDI RGB; `false` selects DXGI in a
+[prepared Windows development build](../../docs/windows-development-build.md).
+DXGI accepts 1–64 imposed sheets in one output file; GDI accepts exactly one.
+Omitting `as_image` fails. The printer must be named. Default/other printers, driver options,
+additional copies, two-sided output, counts outside the selected mode's bound, and combining
+`path` with `printer_output` are refused. No automatic backend fallback occurs.
+Headless calls selecting Microsoft Print to PDF without `printer_output`, including
+when it resolves from `printer: "default"`, fail before entering its Save-dialog path.
+
+For GDI the sheet is rendered once at the requested 72–600 dpi. Oversize or partial
+rasters are refused instead of reducing dpi silently. Source print permissions
+still apply. A driver-settings snapshot must match paper/orientation within
+0.05 pt and cover the whole sheet. The driver writes a private staging file,
+checked against the write root on every read. Only a completed, repair-free,
+PDF with exactly the validated imposed-sheet count, up to 128 MiB, is atomically published without replacing an
+existing/racing target. The five-second file wait starts after the synchronous
+driver returns; it does not bound Windows calls or prove physical printing.
+
+The result names `backend: "windows-gdi-rgb"`, `printer_output`, `output_bytes`,
+raster geometry/dpi, and `physical_print_verified: false`. Raster output has no
+searchable text; source Unicode, bytes and undo state are preserved. For a
+vector print-ready PDF use the separate `path` output.
+
+DXGI uses Windows.Data.Pdf and the driver's validated print ticket, with an explicit
+CREATE_NEW file-backed output stream retained through job completion and a multithreaded
+Direct2D factory. It shares the bounded, repair-free, no-clobber publication
+checks above. Its result names `backend: "windows-dxgi"`, `as_image: false` and
+`physical_print_verified: false`. Windows may rasterize individual PDF elements; this
+mode does not promise searchable text or a wholly vector result. The imposed count is
+validated before export or submission and carried through output validation; missing or
+extra output pages are refused. In a stock build the
+request fails with preparation instructions. The native calls have no global deadline.
+
+~~~json
+{"tool":"doc_print","args":{"doc":1,"printer":"Microsoft Print to PDF",
+ "printer_output":"printed.pdf","as_image":true,"dpi":300,
+ "paper":"A4","copies":1,"duplex":"off"}}
+~~~
+
+The ignored real Windows test requires a fresh absolute local directory in
+`PDFCRAFT_REAL_PRINT_OUTPUT_ROOT`. Run only the exact
+`tests::printing_turkish::windows_virtual_printer_file_output_draws_turkish_nfd`
+test with `--ignored --exact`; it never chooses a default/physical printer.
+
+The separate DXGI test requires a fresh absolute local directory in
+`PDFCRAFT_REAL_DXGI_OUTPUT_ROOT`. In a prepared feature-enabled build, run exactly
+`tests::printing_dxgi::windows_dxgi_file_output_draws_nfd_without_gdi_fallback_and_preserves_source`
+with `--ignored --exact`. Its assertion requires the DXGI backend; GDI cannot pass it.
+
+The two-sheet Windows test uses the separate fresh absolute local directory
+`PDFCRAFT_REAL_DXGI_MULTIPAGE_ROOT` and exact ignored test
+`tests::printing_dxgi_multipage::windows_dxgi_multipage_writes_two_distinct_a4_pages_without_fallback_and_preserves_source`.
+It checks page order with distinct text and marker regions, NFD source/history preservation,
+complete two-page output and refusal to replace the final target.

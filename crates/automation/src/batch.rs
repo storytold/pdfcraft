@@ -37,8 +37,8 @@ impl<'a> Recipe<'a> {
                 return Err(Args::wrong("steps", "unique convert/ocr/optimize steps, with convert first when present"));
             }
         }
-        for (keys, step) in [(&["ppi", "quality"][..], "optimize"), (&["dpi", "language", "skip_text_pages"][..], "ocr")] {
-            if !steps.contains(&step) && keys.iter().any(|k| args.get(k).is_some()) {
+        for (keys, step) in [(&["ppi", "quality"][..], "optimize"), (&["dpi", "language", "engine", "model_profile", "skip_text_pages"][..], "ocr")] {
+            if !steps.contains(&step) && keys.iter().any(|k| if *k == "model_profile" { args.0.get(*k).is_some() } else { args.get(k).is_some() }) {
                 return Err(failed(format!("{} settings need the {step} step", keys.join("/"))));
             }
         }
@@ -64,7 +64,16 @@ impl<'a> Recipe<'a> {
         if args.opt_num("dpi")?.is_some_and(|dpi| !(72.0..=600.0).contains(&dpi)) {
             return Err(Args::wrong("dpi", "72 to 600"));
         }
-        Ok(Self { steps, images, mono, ocr: auto.ocr_settings(args)?, javascript: auto.session.javascript() })
+        let ocr = if steps.contains(&"ocr") {
+            let settings = auto.ocr_settings(args)?;
+            // Reject an incompatible profile before discovery or reading any source file.
+            ocr::validate_model_profile(&settings).map_err(crate::ToolError::InvalidArgs)?;
+            settings
+        } else {
+            // Convert/optimize do not discover OCR models or validate an unused OCR profile.
+            ocr::OcrSettings::default()
+        };
+        Ok(Self { steps, images, mono, ocr, javascript: auto.session.javascript() })
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -93,11 +102,13 @@ impl<'a> Recipe<'a> {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
                     let recognizers = ocr::recognizers(&self.ocr).map_err(failed)?;
+                    let models = recognizers.model_status(&self.ocr).map_err(failed)?;
                     let result =
                         ocr::recognize_file(name, bytes, None, self.ocr.clone(), &recognizers, self.javascript, |_, _| true).map_err(failed)?;
-                    log.push(
-                        json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
-                    );
+                    log.push(json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count(),
+                            "requested_model_profile":models.requested_model_profile.id(),
+                            "effective_model_profile":models.effective_model_profile.map(|p| p.id()),
+                            "model_engine":models.model_engine,"required_models":models.required_models,"installed_models":models.installed_models}));
                     bytes = result.bytes;
                     continue;
                 }
@@ -311,6 +322,24 @@ pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_ocr_retains_the_profile_and_checks_engine_compatibility_before_discovery() {
+        let auto = Automation::new();
+        let input = json!({"steps":["ocr"],"language":"tr","engine":"auto","model_profile":"turkish_extended"});
+        let args = Args(&input);
+        let recipe = Recipe::parse(&auto, &args).unwrap();
+        assert_eq!(recipe.ocr.model_profile, ocr::ModelProfile::TurkishExtended);
+        assert_eq!(recipe.ocr.engine, ocr::EngineChoice::Auto);
+        let input = json!({"steps":["ocr"],"language":"tr","engine":"ocrs","model_profile":"turkish_extended"});
+        assert!(Recipe::parse(&auto, &Args(&input)).err().unwrap().to_string().contains("requires Tesseract"));
+        let convert = json!({"steps":["convert"]});
+        assert_eq!(Recipe::parse(&auto, &Args(&convert)).unwrap().ocr.model_profile, ocr::ModelProfile::Standard);
+        let unused_null = json!({"steps":["convert"],"model_profile":null});
+        assert!(Recipe::parse(&auto, &Args(&unused_null)).is_err(), "an explicit null profile is still an unused OCR setting");
+        let selected_null = json!({"steps":["ocr"],"language":"tr","engine":"auto","model_profile":null});
+        assert!(Recipe::parse(&auto, &Args(&selected_null)).is_err(), "an explicit null profile must not become Standard");
+    }
 
     #[test]
     fn discovery_limits_fail_before_reading_another_entry() {

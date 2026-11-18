@@ -81,7 +81,15 @@ struct OcrReview {
     handle: u64,
     guard: pdfcraft_engine::ocr::OcrGuard,
     pages: Vec<pdfcraft_engine::ocr::OcrPage>,
+    settings: pdfcraft_engine::ocr::OcrSettings,
 }
+
+#[cfg(test)]
+type OcrCandidateGenerator = fn(
+    &pdfcraft_engine::ocr::OcrJob,
+    usize,
+    &pdfcraft_engine::ocr::PlacedWord,
+) -> std::result::Result<Vec<pdfcraft_engine::ocr::WordCandidate>, String>;
 
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
@@ -104,6 +112,9 @@ pub struct Automation {
     next_ocr_review: u64,
     /// What object_copy copied, for object_paste into any open document.
     objects_clipboard: Option<pdfcraft_engine::ObjectClipboard>,
+    /// Per-instance test seam; production always constructs the captured primary reader.
+    #[cfg(test)]
+    ocr_candidate_generator: Option<OcrCandidateGenerator>,
 }
 
 impl Default for Automation {
@@ -125,6 +136,8 @@ impl Automation {
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
             objects_clipboard: None,
+            #[cfg(test)]
+            ocr_candidate_generator: None,
         }
     }
 

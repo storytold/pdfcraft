@@ -27,4 +27,5 @@ mod redact_text_after_q;
 mod render_warnings;
 mod text_copy;
 mod timesheet_compat;
+mod turkish_text;
 mod unreadable_objects;

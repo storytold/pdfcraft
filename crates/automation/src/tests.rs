@@ -1,6 +1,17 @@
 use super::*;
 use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
+mod ocr_editable_nfd;
+mod ocr_turkish;
+mod ocr_turkish_extended;
+mod printing_dxgi;
+mod printing_dxgi_multipage;
+mod printing_turkish;
+mod turkish_nfd;
+mod turkish_paths;
+mod turkish_search;
+mod turkish_signature;
+
 /// `n` pages, page i showing "Page i".
 fn numbered_pages(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];

@@ -511,6 +511,8 @@ mod tests {
         const RESOLVED_BY_CALLER: &[&str] = &[
             "write_atomic",
             "write_atomic_with",
+            // ocr_review_apply resolves out before calling this private publisher.
+            "publish_editable_review",
             "read_input",
             "read_input_bytes",
             "read_model",

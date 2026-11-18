@@ -2,6 +2,7 @@ use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based, summary};
 use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
+use pdfcraft_render::text::{FindOptions, SearchLanguage};
 
 /// Default and maximum resolution for `page_render`.
 pub(crate) const DEFAULT_DPI: f64 = 96.0;
@@ -288,6 +289,16 @@ impl Automation {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
         let query = a.str("query")?;
+        let language = match a.opt_str("language")?.unwrap_or("general") {
+            "general" => SearchLanguage::General,
+            "tr" => SearchLanguage::Turkish,
+            _ => return Err(ToolError::InvalidArgs("language must be general or tr".into())),
+        };
+        let options = FindOptions {
+            language,
+            case_sensitive: a.opt_bool("case_sensitive")?.unwrap_or(false),
+            whole_words: a.opt_bool("whole_words")?.unwrap_or(false),
+        };
         let limit = usize::try_from(a.opt_int("limit")?.unwrap_or(500).max(1)).unwrap_or(usize::MAX);
         let start = match a.opt_int("start_page")? {
             None => 0,
@@ -326,7 +337,7 @@ impl Automation {
                 // One extra match proves that the caller needs a continuation. Include skipped
                 // matches on the starting page when bounding the temporary per-page result.
                 let needed = limit.saturating_sub(matches.len()).saturating_add(skip_here).saturating_add(usize::from(!stop_at_limit));
-                for (k, r) in text.find_opts_limited(query, false, false, needed).into_iter().enumerate().skip(skip_here) {
+                for (k, r) in text.find_with_options(query, options, needed).into_iter().enumerate().skip(skip_here) {
                     if matches.len() == limit {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
@@ -352,6 +363,9 @@ impl Automation {
             if stop_at_limit {
                 o.insert("stopped_at_limit".into(), stopped.into());
             }
+        }
+        if a.get("language").is_some() {
+            out["language"] = json!(if language == SearchLanguage::Turkish { "tr" } else { "general" });
         }
         Ok(out)
     }

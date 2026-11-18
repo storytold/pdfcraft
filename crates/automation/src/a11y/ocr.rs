@@ -1,12 +1,22 @@
 use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
+fn publish_editable_review(target: &std::path::Path, render: impl FnOnce() -> Result<std::sync::Arc<Vec<u8>>>) -> Result<()> {
+    let bytes = render()?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(failed)?;
+    }
+    // Rendering can outlive the existence preflight. Never replace another writer's
+    // file, and let the caller keep its retained review when publication fails.
+    crate::bates::publish_new(target, &bytes)
+}
+
 impl Automation {
     /// The settings every OCR tool shares: dpi, language, the engine/strategy choice, the four
     /// preprocessing flags, the skip flags and the output mode — each named exactly as its tool
     /// schema says. An unknown engine, strategy or mode is an honest error, never a silent
     /// fallback: a tool run must not quietly do something other than what it was asked.
     pub(crate) fn ocr_settings(&self, a: &Args) -> Result<pdfcraft_engine::ocr::OcrSettings> {
-        use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, OutputMode};
+        use pdfcraft_engine::ocr::{EngineChoice, MergeStrategy, ModelProfile, OutputMode};
         let mut settings = pdfcraft_engine::ocr::OcrSettings::default();
         if let Some(d) = a.opt_num("dpi")? {
             settings.dpi = d.clamp(72.0, 600.0) as f32;
@@ -28,6 +38,15 @@ impl Automation {
                 other => return Err(ToolError::InvalidArgs(format!("unsupported engine {other:?} (ocrs, tesseract or auto)"))),
             };
         }
+        // Args::get treats null as absent for older optional arguments. An explicitly
+        // supplied profile must be a string, so null cannot silently choose Standard.
+        if let Some(profile) = a.0.get("model_profile") {
+            let profile = profile.as_str().ok_or_else(|| Args::wrong("model_profile", "a string"))?;
+            settings.model_profile = ModelProfile::parse(profile).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+        }
+        // Engine-aware validation follows the status query's Auto default override. In
+        // particular, malformed/non-string profile values never become Standard silently.
+        settings.model_profile.validate(&settings.language).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
         settings.strategy = match a.opt_str("strategy")? {
             Some(s) => match s.trim().to_ascii_lowercase().as_str() {
                 "primary" | "primary-only" | "primary_only" => MergeStrategy::PrimaryOnly,
@@ -121,6 +140,7 @@ impl Automation {
 
     pub(crate) fn ocr_recognize_files(&mut self, a: &Args) -> Result<Value> {
         let settings = self.ocr_settings(a)?;
+        pdfcraft_engine::ocr::validate_model_profile(&settings).map_err(ToolError::InvalidArgs)?;
         let folder = self.resolve(a.str("folder")?, true)?;
         // A path that leaves the read root refuses the whole call before any work starts;
         // a file that is merely missing stays a per-file error below.
@@ -166,6 +186,7 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         // Each file opens in its own session; it keeps this one's JavaScript preference.
         let javascript = self.session.javascript();
+        let models = recognizers.model_status(&settings).map_err(failed)?;
         let mut out = Vec::new();
         let (mut ok, mut skipped_files, mut words) = (0usize, 0usize, 0usize);
         for p in paths {
@@ -210,12 +231,15 @@ impl Automation {
                 Err(e) => out.push(json!({ "path": p, "error": e })),
             }
         }
-        Ok(json!({ "files": out, "recognized": ok, "words": words, "skipped_files": skipped_files }))
+        let mut result = json!({ "files": out, "recognized": ok, "words": words, "skipped_files": skipped_files });
+        add_model_status(&mut result, &models);
+        Ok(result)
     }
 
     pub(crate) fn ocr_recognize(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::ocr::OutputMode;
         let mut settings = self.ocr_settings(a)?;
+        pdfcraft_engine::ocr::validate_model_profile(&settings).map_err(ToolError::InvalidArgs)?;
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         // Recognizing needs only permission to change the document; the words it found are
         // returned only when copying is allowed too.
@@ -266,12 +290,15 @@ impl Automation {
         // Honest up front: the engines are built (and named if they cannot be) before anything
         // is read or written.
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
+        let models = recognizers.model_status(&settings).map_err(failed)?;
         match out {
             None => {
                 let (found, out) = self.session.with_own_js_output(id, |s| s.recognize_text(id, &pages, settings)).map_err(failed)?;
                 let warnings = out.errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
-                Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
+                let mut result = json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) });
+                add_model_status(&mut result, &models);
+                Ok(with_warnings(result, warnings))
             }
             Some(out) => {
                 let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
@@ -282,11 +309,13 @@ impl Automation {
                     std::fs::create_dir_all(folder).map_err(failed)?;
                 }
                 crate::bates::publish_new(&out, &bytes)?;
-                Ok(json!({
+                let mut result = json!({
                     "out": out.to_string_lossy(),
                     "words": found.iter().map(|p| p.words.len()).sum::<usize>(),
                     "pages": Self::ocr_pages_json(&found, copy),
-                }))
+                });
+                add_model_status(&mut result, &models);
+                Ok(result)
             }
         }
     }
@@ -296,6 +325,7 @@ impl Automation {
     /// Changes nothing; needs the engines (ocr_status).
     pub(crate) fn ocr_words(&mut self, a: &Args) -> Result<Value> {
         let mut settings = self.ocr_settings(a)?;
+        pdfcraft_engine::ocr::validate_model_profile(&settings).map_err(ToolError::InvalidArgs)?;
         let pages = if a.opt_ints("pages")?.is_some() { self.pages(a, "pages")? } else { Vec::new() };
         // The word list is the document's text, word by word: refused when the document
         // forbids copying it out.
@@ -311,6 +341,7 @@ impl Automation {
             return Err(failed("at most 8 OCR reviews may be retained; discard one first"));
         }
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
+        let models = recognizers.model_status(&settings).map_err(failed)?;
         let job = self.session.ocr_job(id, &pages, settings.clone()).ok_or_else(|| failed("the document could not be read"))?;
         let infos: std::collections::HashMap<usize, pdfcraft_render::PageInfo> =
             self.session.get(id).map(|d| d.info.pages.clone()).unwrap_or_default().into_iter().enumerate().collect();
@@ -373,13 +404,75 @@ impl Automation {
             })
             .collect();
         let mut out = json!({ "words": found.iter().map(|p| p.words.len()).sum::<usize>(), "suspects": suspects, "pages": list });
+        add_model_status(&mut out, &models);
         if retain {
             self.next_ocr_review =
                 self.next_ocr_review.checked_add(1).filter(|n| *n <= i64::MAX as u64).ok_or_else(|| failed("OCR review handles exhausted"))?;
             out["review"] = json!(self.next_ocr_review);
-            self.ocr_reviews.insert(id, crate::OcrReview { handle: self.next_ocr_review, guard, pages: found });
+            self.ocr_reviews.insert(id, crate::OcrReview { handle: self.next_ocr_review, guard, pages: found, settings });
         }
         Ok(out)
+    }
+
+    /// Alternatives for one retained original word; never edit or consume the review.
+    pub(crate) fn ocr_word_candidates(&self, a: &Args) -> Result<Value> {
+        #[cfg(test)]
+        if let Some(generate) = self.ocr_candidate_generator {
+            return self.ocr_word_candidates_using(a, |job, page, word| generate(job, page, word).map_err(failed));
+        }
+        self.ocr_word_candidates_using(a, |job, page, word| {
+            let recognizers = pdfcraft_engine::ocr::recognizers(&job.settings).map_err(failed)?;
+            job.word_candidates(page, word, &recognizers).map_err(failed)
+        })
+    }
+
+    fn ocr_word_candidates_using(
+        &self,
+        a: &Args,
+        generate: impl FnOnce(&pdfcraft_engine::ocr::OcrJob, usize, &pdfcraft_engine::ocr::PlacedWord) -> Result<Vec<pdfcraft_engine::ocr::WordCandidate>>,
+    ) -> Result<Value> {
+        let id = self.doc_to_copy(a)?.id;
+        let handle = a.int("review")?;
+        let page = usize::try_from(a.int("page")?).ok().and_then(|v| v.checked_sub(1)).ok_or_else(|| Args::wrong("page", "a 1-based position"))?;
+        let index = usize::try_from(a.int("word")?).ok().and_then(|v| v.checked_sub(1)).ok_or_else(|| Args::wrong("word", "a 1-based position"))?;
+        let review = self
+            .ocr_reviews
+            .get(&id)
+            .filter(|r| i64::try_from(r.handle).ok() == Some(handle))
+            .ok_or_else(|| failed("unknown OCR review for this document; call ocr_words with retain_review"))?;
+        if let Some(why) = self.session.stale_reason(&review.guard) {
+            return Err(failed(why));
+        }
+        let word = review
+            .pages
+            .iter()
+            .find(|p| p.page == page)
+            .and_then(|p| p.words.get(index))
+            .ok_or_else(|| failed("page or word is not in this OCR review"))?;
+        // Validate identity before constructing/probing any reader; caller settings cannot
+        // replace the language, model or render parameters of the retained recognition.
+        let settings = review.settings.clone();
+        pdfcraft_engine::ocr::validate_model_profile(&settings).map_err(ToolError::InvalidArgs)?;
+        if settings.engine == pdfcraft_engine::ocr::EngineChoice::Ocrs {
+            return Err(failed("the selected OCR engine does not support word candidates"));
+        }
+        let job = self.session.ocr_job(id, &[page], settings).ok_or_else(|| failed("the document could not be read"))?;
+        let candidates = generate(&job, page, word)?;
+        let info = self.session.get(id).and_then(|d| d.info.pages.get(page)).ok_or_else(|| failed("page is not in this document"))?;
+        let points = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].map(|(a, u)| {
+            info.user_to_view(
+                (word.origin[0] + a * word.across[0] + u * word.up[0]) as f32,
+                (word.origin[1] + a * word.across[1] + u * word.up[1]) as f32,
+            )
+        });
+        let x = points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        let y = points.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+        let right = points.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+        let bottom = points.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
+        Ok(json!({"review": handle, "page": page + 1, "word": index + 1,
+            "original": {"text": word.text, "confidence": word.confidence, "source": word.source, "box": [x,y,right-x,bottom-y]},
+            "candidates": candidates.iter().map(|c| json!({"text": c.text, "confidence": c.confidence, "padding": c.padding, "source": c.source,
+                "confidence_scope": "word_crop"})).collect::<Vec<_>>(), "applied": false}))
     }
 
     /// Apply only caller corrections to retained original boxes, through the stored guard.
@@ -470,8 +563,7 @@ impl Automation {
                 if target.exists() {
                     return Err(failed(format!("out already exists ({}); choose a path that does not exist yet", target.to_string_lossy())));
                 }
-                let bytes = self.session.editable_ocr_bytes(id, &pages).map_err(failed)?;
-                write_atomic(&target, &bytes)?;
+                publish_editable_review(&target, || self.session.editable_ocr_bytes(id, &pages).map_err(failed))?;
                 json!({ "out": target.to_string_lossy(), "review": handle, "words": pages.iter().map(|p| p.words.len()).sum::<usize>() })
             }
             _ => return Err(ToolError::InvalidArgs("output_mode must be searchable or editable".into())),
@@ -519,8 +611,19 @@ impl Automation {
         Ok(json!({ "path": path.to_string_lossy(), "count": words.len(), "words": words }))
     }
 
-    pub(crate) fn ocr_status(&self) -> Result<Value> {
+    pub(crate) fn ocr_status(&self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::ocr;
+        // Validate selection before inventory discovery, including profile-only queries.
+        let selection = if a.get("language").is_some() || a.get("engine").is_some() || a.0.get("model_profile").is_some() {
+            let mut settings = self.ocr_settings(a)?;
+            if a.get("engine").is_none() {
+                settings.engine = ocr::EngineChoice::Auto;
+            }
+            ocr::validate_model_profile(&settings).map_err(ToolError::InvalidArgs)?;
+            Some(settings)
+        } else {
+            None
+        };
         let dirs: Vec<String> = ocr::Models::search_dirs().iter().map(|d| d.to_string_lossy().into_owned()).collect();
         let langs: Vec<Value> = ocr::LANGUAGES.iter().map(|(c, n)| json!({ "code": c, "name": n })).collect();
         let engines: Vec<Value> = ocr::engines_status()
@@ -539,7 +642,57 @@ impl Automation {
                 v
             })
             .collect();
-        Ok(json!({ "available": ocr::available(), "search_dirs": dirs, "languages": langs, "engines": engines }))
+        let mut out = json!({ "search_dirs": dirs, "languages": langs, "engines": engines });
+        if let Some(settings) = selection {
+            let why = ocr::preflight(&settings).err();
+            let models = ocr::model_status(&settings).map_err(failed)?;
+            add_model_status(&mut out, &models);
+            out["language"] = json!(settings.language);
+            out["engine"] = json!(settings.engine.name());
+            out["available"] = json!(why.is_none());
+            if let Some(why) = why {
+                out["unavailable"] = json!(why);
+            }
+        } else {
+            // Preserve the no-argument inventory query: it has never promised that all
+            // listed languages have models, just that at least one engine is installed.
+            out["available"] = json!(ocr::available());
+        }
+        Ok(out)
+    }
+}
+
+/// Model inventory describes the selected primary reader. A profile identifies model
+/// selection, never OCR accuracy or a promise that every glyph will be recognized.
+fn add_model_status(out: &mut Value, status: &pdfcraft_engine::ocr::ModelStatus) {
+    out["requested_model_profile"] = json!(status.requested_model_profile.id());
+    out["effective_model_profile"] = json!(status.effective_model_profile.map(|p| p.id()));
+    out["model_engine"] = json!(status.model_engine);
+    out["required_models"] = json!(status.required_models);
+    out["installed_models"] = json!(status.installed_models);
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn editable_review_publication_refuses_a_target_created_while_rendering() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("İş - Şubat.pdf");
+        assert!(!target.exists(), "the path passed the output preflight");
+        let error = publish_editable_review(&target, || {
+            // A concurrent writer may publish while expensive OCR/font generation runs.
+            std::fs::write(&target, b"concurrent file, keep these exact bytes").unwrap();
+            Ok(std::sync::Arc::new(b"new OCR output".to_vec()))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("refusing to replace"), "{error}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"concurrent file, keep these exact bytes");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "failed publication cleans its temporary output");
+        let retry = dir.path().join("new-target.pdf");
+        publish_editable_review(&retry, || Ok(std::sync::Arc::new(b"new OCR output".to_vec()))).unwrap();
+        assert_eq!(std::fs::read(retry).unwrap(), b"new OCR output");
     }
 }
 
@@ -589,5 +742,230 @@ mod shared_output_name_tests {
         let dot = shared_file_names(&targets(&["scan.pdf", "scan.pdf."]));
         assert_eq!(case.len(), if cfg!(any(windows, target_os = "macos")) { 2 } else { 0 }, "{case:?}");
         assert_eq!(dot.len(), if cfg!(windows) { 2 } else { 0 }, "{dot:?}");
+    }
+}
+
+#[cfg(test)]
+mod word_candidate_tests {
+    use super::*;
+    use pdfcraft_engine::ocr::{EngineChoice, ModelProfile, OcrPage, OcrSettings, PlacedWord, WordCandidate};
+
+    fn json_call(a: &mut Automation, name: &str, args: Value) -> Value {
+        match a.call(name, &args).unwrap().remove(0) {
+            crate::Content::Json(value) => value,
+            other => panic!("expected JSON, got {other:?}"),
+        }
+    }
+
+    fn retain(a: &mut Automation) -> pdfcraft_engine::DocId {
+        let id = pdfcraft_engine::DocId(json_call(a, "doc_create", json!({"from":"blank","width":256,"height":256}))["doc"].as_u64().unwrap());
+        let word = PlacedWord {
+            text: "ÜÛ".into(),
+            origin: [20.0, 80.0],
+            across: [40.0, 0.0],
+            up: [0.0, 20.0],
+            confidence: Some(31.25),
+            source: "original".into(),
+        };
+        let guard = a.session.ocr_guard(id).unwrap();
+        let settings = OcrSettings {
+            language: "tr".into(),
+            model_profile: ModelProfile::TurkishExtended,
+            engine: EngineChoice::Tesseract,
+            dpi: 144.0,
+            ..Default::default()
+        };
+        a.ocr_reviews.insert(
+            id,
+            crate::OcrReview {
+                handle: 1,
+                guard,
+                settings,
+                pages: vec![OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: vec![] }],
+            },
+        );
+        id
+    }
+
+    fn generate(job: &pdfcraft_engine::ocr::OcrJob, page: usize, word: &PlacedWord) -> std::result::Result<Vec<WordCandidate>, String> {
+        assert_eq!(page, 0);
+        assert_eq!(word.text, "ÜÛ");
+        assert_eq!(job.settings.language, "tr");
+        assert_eq!(job.settings.model_profile, ModelProfile::TurkishExtended);
+        assert_eq!(job.settings.dpi, 144.0);
+        // Deliberately destructive candidate: merely generating it cannot alter the word.
+        Ok(vec![WordCandidate { text: "Û".into(), confidence: Some(99.0), padding: 8, source: "fixture".into() }])
+    }
+
+    #[test]
+    fn manual_word_candidates_dispatch_preserves_review_until_explicit_correction() {
+        let mut a = Automation::new();
+        let id = retain(&mut a);
+        let bytes = a.session.get(id).unwrap().bytes.clone();
+        let original = a.ocr_reviews[&id].pages.clone();
+        a.ocr_candidate_generator = Some(generate);
+        for _ in 0..2 {
+            let out = json_call(&mut a, "ocr_word_candidates", json!({"doc":id.0,"review":1,"page":1,"word":1}));
+            assert_eq!(out["applied"], false);
+            assert_eq!(out["original"]["text"], "ÜÛ");
+            assert_eq!(out["original"]["confidence"], 31.25);
+            assert_eq!(out["candidates"][0]["text"], "Û");
+            assert_eq!(out["candidates"][0]["confidence_scope"], "word_crop");
+            assert_eq!(a.ocr_reviews[&id].pages, original);
+            assert!(std::sync::Arc::ptr_eq(&bytes, &a.session.get(id).unwrap().bytes));
+        }
+        let applied = json_call(&mut a, "ocr_review_apply", json!({"doc":id.0,"review":1,"corrections":[{"page":1,"word":1,"text":"U\u{0302}"}]}));
+        assert_eq!(applied["applied"], 1);
+        assert!(!a.ocr_reviews.contains_key(&id));
+        let found = json_call(&mut a, "text_extract", json!({"doc":id.0,"pages":[1]}));
+        assert!(found["pages"][0]["text"].as_str().unwrap().contains("U\u{0302}"));
+        json_call(&mut a, "edit_undo", json!({"doc":id.0}));
+        assert!(a.session.get(id).is_some());
+    }
+
+    #[test]
+    fn manual_word_candidates_reject_stale_foreign_and_bad_indices_before_generation() {
+        let mut a = Automation::new();
+        let id = retain(&mut a);
+        a.ocr_candidate_generator = Some(|_, _, _| panic!("must reject before generation"));
+        for (review, page, word) in [(2, 1, 1), (1, 2, 1), (1, 1, 2), (1, 0, 1), (1, 1, 0)] {
+            assert!(a.call("ocr_word_candidates", &json!({"doc":id.0,"review":review,"page":page,"word":word})).is_err());
+        }
+        let other = json_call(&mut a, "doc_create", json!({"from":"blank"}))["doc"].as_u64().unwrap();
+        assert!(a.call("ocr_word_candidates", &json!({"doc":other,"review":1,"page":1,"word":1})).is_err());
+        assert!(a.call("ocr_word_candidates", &json!({"doc":id.0,"review":1,"page":1,"word":1,"language":"en"})).is_err());
+        a.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+        let error = a.call("ocr_word_candidates", &json!({"doc":id.0,"review":1,"page":1,"word":1})).unwrap_err().to_string();
+        assert!(error.contains("changed"), "{error}");
+        assert_eq!(a.ocr_reviews[&id].pages[0].words[0].text, "ÜÛ");
+    }
+
+    #[test]
+    fn manual_word_candidates_reject_consumed_and_discarded_reviews_before_generation() {
+        for discard in [false, true] {
+            let mut a = Automation::new();
+            let id = retain(&mut a);
+            let result = json_call(&mut a, "ocr_review_apply", json!({"doc":id.0,"review":1,"discard":discard}));
+            if discard {
+                assert_eq!(result["discarded"], 1);
+            } else {
+                assert_eq!(result["applied"], 1);
+            }
+            let bytes = a.session.get(id).unwrap().bytes.clone();
+            a.ocr_candidate_generator = Some(|_, _, _| panic!("a retired review must not reach the reader"));
+            let error = a.call("ocr_word_candidates", &json!({"doc":id.0,"review":1,"page":1,"word":1})).unwrap_err();
+            assert!(matches!(error, ToolError::Failed(ref message) if message.contains("unknown OCR review")), "{error}");
+            assert!(!a.ocr_reviews.contains_key(&id));
+            assert!(std::sync::Arc::ptr_eq(&bytes, &a.session.get(id).unwrap().bytes));
+        }
+    }
+
+    #[test]
+    fn manual_word_candidates_reader_error_keeps_review_for_retry_and_explicit_apply() {
+        let mut a = Automation::new();
+        let id = retain(&mut a);
+        let bytes = a.session.get(id).unwrap().bytes.clone();
+        let original = a.ocr_reviews[&id].pages.clone();
+        a.ocr_candidate_generator = Some(|_, _, _| Err("synthetic word reader failure".into()));
+        let error = a.call("ocr_word_candidates", &json!({"doc":id.0,"review":1,"page":1,"word":1})).unwrap_err();
+        assert!(matches!(error, ToolError::Failed(ref message) if message.contains("synthetic word reader failure")), "{error}");
+        assert_eq!(a.ocr_reviews[&id].handle, 1);
+        assert_eq!(a.ocr_reviews[&id].pages, original);
+        assert!(a.session.stale_reason(&a.ocr_reviews[&id].guard).is_none());
+        assert!(std::sync::Arc::ptr_eq(&bytes, &a.session.get(id).unwrap().bytes));
+        a.ocr_candidate_generator = Some(generate);
+        let retry = json_call(&mut a, "ocr_word_candidates", json!({"doc":id.0,"review":1,"page":1,"word":1}));
+        assert_eq!(retry["candidates"][0]["text"], "Û");
+        assert_eq!(a.ocr_reviews[&id].pages, original);
+        assert!(std::sync::Arc::ptr_eq(&bytes, &a.session.get(id).unwrap().bytes));
+        let applied = json_call(&mut a, "ocr_review_apply", json!({"doc":id.0,"review":1}));
+        assert_eq!(applied["applied"], 1);
+        let text = json_call(&mut a, "text_extract", json!({"doc":id.0,"pages":[1]}));
+        assert!(text["pages"][0]["text"].as_str().unwrap().contains("ÜÛ"), "reader errors and retries must not select a candidate");
+    }
+
+    #[test]
+    fn manual_word_candidates_reject_null_invalid_and_override_arguments_before_generation() {
+        let mut a = Automation::new();
+        let id = retain(&mut a);
+        let bytes = a.session.get(id).unwrap().bytes.clone();
+        let original = a.ocr_reviews[&id].pages.clone();
+        a.ocr_candidate_generator = Some(|_, _, _| panic!("invalid arguments must not reach the reader"));
+        let valid = json!({"doc":id.0,"review":1,"page":1,"word":1});
+        let mut invalid = vec![Value::Null, json!([])];
+        for key in ["doc", "review", "page", "word"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            invalid.push(missing);
+            for value in [Value::Null, json!("1"), json!(true), json!(1.5), json!(-1)] {
+                let mut args = valid.clone();
+                args[key] = value;
+                invalid.push(args);
+            }
+        }
+        // Every recognition-setting override is refused, including explicit nulls:
+        // absent settings come only from the retained review, never caller defaults.
+        for (key, value) in [
+            ("engine", json!("ocrs")),
+            ("model_profile", json!("standard")),
+            ("dpi", json!(72)),
+            ("strategy", json!("rover")),
+            ("region", json!([0, 0, 10, 10])),
+            ("auto_rotate", json!(false)),
+            ("deskew", json!(false)),
+            ("denoise", json!(true)),
+            ("binarize", json!(true)),
+            ("skip_text_pages", json!(false)),
+            ("skip_text_files", json!(false)),
+            ("force_ocr", json!(true)),
+            ("output_mode", json!("editable")),
+        ] {
+            for value in [value, Value::Null] {
+                let mut args = valid.clone();
+                args[key] = value;
+                invalid.push(args);
+            }
+        }
+        for args in invalid {
+            let result = a.call("ocr_word_candidates", &args);
+            assert!(result.is_err(), "{args}: {result:?}");
+            assert_eq!(a.ocr_reviews[&id].pages, original);
+            assert!(std::sync::Arc::ptr_eq(&bytes, &a.session.get(id).unwrap().bytes));
+        }
+        // Failed validation does not poison a later valid request on this instance.
+        a.ocr_candidate_generator = Some(generate);
+        let retry = json_call(&mut a, "ocr_word_candidates", valid);
+        assert_eq!(retry["original"]["text"], "ÜÛ");
+    }
+
+    #[test]
+    fn manual_word_candidates_require_source_document_copy_permission_before_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut owner = Automation::new().with_root(dir.path()).unwrap();
+        let source = retain(&mut owner);
+        json_call(
+            &mut owner,
+            "doc_protect",
+            json!({"doc":source.0,"open_password":"synthetic-reader","permissions_password":"synthetic-owner","copy":false}),
+        );
+        json_call(&mut owner, "doc_save", json!({"doc":source.0,"path":"restricted.pdf"}));
+        let mut a = Automation::new().with_root(dir.path()).unwrap();
+        let id = pdfcraft_engine::DocId(
+            json_call(&mut a, "doc_open", json!({"path":"restricted.pdf","password":"synthetic-reader"}))["doc"].as_u64().unwrap(),
+        );
+        assert!(!a.session.get(id).unwrap().allows_copying());
+        // Inject only a synthetic retained recognition, since ocr_words itself correctly
+        // refuses this source. A valid current guard isolates the candidate copy gate.
+        let mut review = owner.ocr_reviews.remove(&source).unwrap();
+        review.guard = a.session.ocr_guard(id).unwrap();
+        let original = review.pages.clone();
+        a.ocr_reviews.insert(id, review);
+        let bytes = a.session.get(id).unwrap().bytes.clone();
+        a.ocr_candidate_generator = Some(|_, _, _| panic!("copy-denied source must not reach the reader"));
+        let error = a.call("ocr_word_candidates", &json!({"doc":id.0,"review":1,"page":1,"word":1})).unwrap_err();
+        assert!(matches!(error, ToolError::Failed(ref message) if message.contains("copying")), "{error}");
+        assert_eq!(a.ocr_reviews[&id].pages, original);
+        assert!(a.session.stale_reason(&a.ocr_reviews[&id].guard).is_none());
+        assert!(std::sync::Arc::ptr_eq(&bytes, &a.session.get(id).unwrap().bytes));
     }
 }
