@@ -1164,6 +1164,45 @@ fn two_page_appearances(annots1: &str, annots2: &str, appearance: &str) -> Docum
     )
 }
 
+/// An appearance's fonts are found however its text selects one and however its stream is
+/// compressed: an ExtGState's /Font through `gs` (ISO 32000-2 Table 57), and a Flate predictor
+/// given in /DecodeParms by reference, in the appearance and in a form it draws.
+#[test]
+fn appearance_fonts_are_found_through_gs_and_indirect_decode_parameters() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let encoding = |doc: &Document| status(&checked(doc, &[Rule::CharacterEncoding]), Rule::CharacterEncoding);
+    // ZapfDingbats (object 7) selected by `/GS1 gs`, with no Tf.
+    let draws = "BT /GS1 gs 4 4 Td (4) Tj ET";
+    let by_gs = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /ExtGState << /GS1 << /Font [7 0 R 12] >> >> >> /Length {} >>\nstream\n{draws}\nendstream",
+        draws.len()
+    );
+    assert_eq!(encoding(&two_page_appearances("8 0 R", "", &by_gs)), Status::Failed);
+    // Behind a PNG predictor whose parameters are an indirect dictionary: every byte after a zero.
+    let predicted = |doc: &mut Document, text: &str, resources: Dict| {
+        let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(1))])));
+        let rows: Vec<u8> = text.bytes().flat_map(|b| [0, b]).collect();
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        dict.set(b"Resources".to_vec(), Object::Dict(resources));
+        let mut s = Stream::flate(dict, &rows);
+        s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        s
+    };
+    let zadb = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"ZaDb".to_vec(), Object::Ref(ObjRef::new(7, 0)))])))]);
+    let mut doc = two_page_appearances("8 0 R", "", "null");
+    let appearance = predicted(&mut doc, "BT /ZaDb 12 Tf 4 4 Td (4) Tj ET", zadb.clone());
+    doc.set(ObjRef::new(11, 0), appearance);
+    assert_eq!(encoding(&doc), Status::Failed, "the appearance");
+    let mut doc = two_page_appearances("8 0 R", "", "null");
+    let inner = predicted(&mut doc, "BT /ZaDb 12 Tf 4 4 Td (4) Tj ET", zadb);
+    let inner = doc.add(inner);
+    let outer = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(inner))])))]);
+    let appearance = predicted(&mut doc, "/Fm Do", outer);
+    doc.set(ObjRef::new(11, 0), appearance);
+    assert_eq!(encoding(&doc), Status::Failed, "a form the appearance draws");
+}
+
 /// An appearance is read once per resource context, and again where a walk of it was cut short;
 /// one past the form depth limit, or that is not a form XObject, is no guess either way.
 #[test]
@@ -1200,6 +1239,9 @@ fn appearance_walks_follow_their_resources_their_budget_and_their_type() {
         w.set(b"AP".to_vec(), Object::Dict(ap));
     })
     .unwrap();
+    // Page 1 alone: its walk is cut short before the appearance's font, so it can't tell.
+    let first = check(&doc, &Options { rules: [Rule::CharacterEncoding].into(), pages: Some(vec![0]) });
+    assert_eq!(status(&first, Rule::CharacterEncoding), Status::Manual, "page 1 is cut short");
     assert_eq!(encoding(&doc), Status::Failed, "read again with page 2's budget");
 
     // ZapfDingbats in the fourteenth form down from the appearance: past the depth limit.

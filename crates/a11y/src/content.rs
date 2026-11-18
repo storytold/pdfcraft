@@ -135,6 +135,11 @@ impl Walk<'_> {
         pages.insert(self.page);
     }
 
+    /// Form XObject `x` decoded against the budget, its /DecodeParms given by reference read too.
+    fn decode(&mut self, x: &pdfcraft_cos::Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {
+        self.budget.decode_with_damage(self.doc, x, usize::MAX).map(|(data, _)| data)
+    }
+
     /// Walk one annotation appearance stream for its fonts. `res` stands in for resources the
     /// stream doesn't give, as for a form XObject.
     fn appearance_stream(&mut self, r: ObjRef, res: &Dict) {
@@ -149,7 +154,7 @@ impl Walk<'_> {
             self.cut_short();
             return;
         }
-        let data = match self.budget.decode(x) {
+        let data = match self.decode(x) {
             Ok(data) => data,
             Err(_) => {
                 if self.budget.exhausted() {
@@ -168,6 +173,7 @@ impl Walk<'_> {
     /// Walk a content stream; `covered`: already inside tagged or artifact content.
     fn content(&mut self, data: &[u8], res: &Dict, covered: bool, depth: usize) {
         let (fonts, xobjects, props) = (self.sub(res, b"Font"), self.sub(res, b"XObject"), self.sub(res, b"Properties"));
+        let states = self.sub(res, b"ExtGState");
         // Marked-content stack: whether each level is tagged or an artifact.
         let mut stack: Vec<bool> = Vec::new();
         let mut untagged = 0;
@@ -186,6 +192,19 @@ impl Walk<'_> {
                 }
                 b"Tf" => {
                     if let Some(r) = op.name(0).and_then(|n| fonts.get(n)).and_then(Object::as_ref) {
+                        self.scan.fonts.entry(self.page).or_default().insert(r);
+                    }
+                }
+                b"gs" => {
+                    // An ExtGState's /Font entry, an array of the font and its size, selects the
+                    // font as Tf does (ISO 32000-2 §8.4.5, Table 57).
+                    let font = op
+                        .name(0)
+                        .and_then(|n| states.get(n))
+                        .map(|g| self.doc.resolve(g))
+                        .and_then(|g| g.as_dict().and_then(|g| g.get(b"Font")).map(|f| self.doc.resolve(f)))
+                        .and_then(|f| f.as_array().and_then(|a| a.first()).and_then(Object::as_ref));
+                    if let Some(r) = font {
                         self.scan.fonts.entry(self.page).or_default().insert(r);
                     }
                 }
@@ -208,7 +227,7 @@ impl Walk<'_> {
                                 self.cut_short();
                                 continue;
                             }
-                            let data = match self.budget.decode(x) {
+                            let data = match self.decode(x) {
                                 Ok(data) => data,
                                 Err(_) => {
                                     if self.budget.exhausted() {
