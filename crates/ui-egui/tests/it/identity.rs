@@ -28,7 +28,8 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
         app
     });
     h.run_steps(4);
-    h.get_by_label_contains("Name on new comments");
+    h.get_by_label("Comment").click();
+    h.run_steps(2);
     // Replace the name in the field (the preferences scroll to it in a 900-point window).
     h.get_by_role_and_label(Role::TextInput, "Name on new comments").scroll_to_me();
     h.run_steps(4);
@@ -36,6 +37,9 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.get_by_role_and_label(Role::TextInput, "Name on new comments").type_text("Grace Hopper");
+    h.run_steps(2);
+    // The window applies its values on OK.
+    h.get_by_role_and_label(Role::Button, "OK").click();
     h.run_steps(2);
     assert_eq!(h.state().comment_prefs.author, "Grace Hopper");
     // New comments carry it. Wait for the page (and its text) to finish loading first: selecting
@@ -54,10 +58,11 @@ fn the_identity_name_signs_new_comments_and_is_remembered() {
     // It survives a restart; an empty or missing name keeps the default, and a huge one is cut.
     let mut restored = PdfCraftApp::new();
     restored.set_option("language", "en").unwrap();
-    restored.restore(&h.state().persist());
+    // PLAN: assumed `PdfCraftApp::settings_snapshot(&self) -> PdfCraftSettings` and `apply_settings(&mut self, &PdfCraftSettings)` (pdf-shell-w9); neither exists in this tree until that set lands.
+    restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.comment_prefs.author, "Grace Hopper");
-    restored.restore(r#"{"author": "  "}"#);
+    restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"author": "  "}"#).0);
     assert_eq!(restored.comment_prefs.author, "Grace Hopper");
-    restored.restore(&format!(r#"{{"author": "{}"}}"#, "x".repeat(10_000)));
+    restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(&format!(r#"{{"author": "{}"}}"#, "x".repeat(10_000))).0);
     assert_eq!(restored.comment_prefs.author.chars().count(), 200);
 }
