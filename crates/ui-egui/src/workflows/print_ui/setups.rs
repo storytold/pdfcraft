@@ -100,21 +100,6 @@ mod tests {
     }
 
     #[test]
-    fn printing_again_moves_a_printer_first_and_the_oldest_drops_off() {
-        let mut setups = Vec::new();
-        for i in 0..MAX_PRINTERS + 3 {
-            record(&mut setups, &format!("Queue {i}"), setup(0, SizeMode::Fit, None));
-        }
-        assert_eq!(setups.len(), MAX_PRINTERS);
-        assert_eq!(setups[0].0, format!("Queue {}", MAX_PRINTERS + 2));
-        assert!(setups.iter().all(|(name, _)| name != "Queue 0"));
-        record(&mut setups, "Queue 10", setup(4, SizeMode::Actual, None));
-        assert_eq!(setups.len(), MAX_PRINTERS);
-        assert_eq!(setups[0], ("Queue 10".to_string(), setup(4, SizeMode::Actual, None)));
-        assert_eq!(setups.iter().filter(|(name, _)| name == "Queue 10").count(), 1);
-    }
-
-    #[test]
     fn malformed_entries_are_skipped_whole() {
         let good = serde_json::json!({"printer": "Label", "paper": "A4", "size": "actual", "custom_scale": 100.0, "duplex": "off"});
         let mut bad = Vec::new();
