@@ -20,7 +20,7 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Weak};
 
-use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_cos::{Document, Object, PdfString, Stream};
 
 use crate::OrganizeError;
 use crate::pdfx::esc;
@@ -92,25 +92,35 @@ pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<()
 /// Whether setting the information entry `key` to `value` would leave the catalog's XMP packet
 /// stating the old value, so it must go ([`drop_packet`]): Title or Author changes, and
 /// [`sync_info`] can't keep the packet right. It leaves a packet it can't read (not UTF-8, a
-/// filter it can't decode, past [`MAX_XMP`]) or with no `rdf:RDF` as it was, and adds the new
-/// `dc:` property beside the old one where the packet declares Dublin Core under another prefix.
+/// filter it can't decode, past [`MAX_XMP`]) as it was, and a property it can't rewrite in place
+/// (an attribute with no `rdf:RDF` end tag to add an element before), and adds the new `dc:`
+/// property beside the old one where the packet declares Dublin Core under another prefix.
 /// Asked before the change, while the old value can still be read.
 ///
 /// Only Title and Author: they are what viewers that read XMP first show in their title bar and
 /// file lists, and dropping the packet also drops everything else it states.
 pub(crate) fn would_go_stale(doc: &Document, key: &str, value: &str) -> bool {
-    if !matches!(key, "Title" | "Author") || crate::info(doc, key).unwrap_or_default().trim() == value {
+    let Some((name, ns, shape)) = property(key).filter(|_| matches!(key, "Title" | "Author")) else { return false };
+    if crate::info(doc, key).unwrap_or_default().trim() == value {
         return false;
     }
     let Some(r) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|c| c.reference(b"Metadata"))) else { return false };
     let obj = doc.get(r);
     // Only a metadata stream is a packet; anything else there is left alone, as `edit_packet` does.
     matches!(&*obj, Object::Stream(_))
-        && decoded_packet(&obj).is_none_or(|xmp| !xmp.contains("</rdf:RDF>") || binds_namespace_elsewhere(&xmp, DC, "dc"))
+        && decoded_packet(&obj).is_none_or(|xmp| {
+            binds_namespace_elsewhere(&xmp, DC, "dc") || (has_property(&xmp, name) && set_property(&xmp, name, ns, shape, value).is_none())
+        })
 }
 
-/// Remove the catalog's XMP packet (see [`would_go_stale`]); `/Info` holds the values.
-pub(crate) fn drop_packet(doc: &mut Document) -> Result<(), OrganizeError> {
+/// Remove the catalog's XMP packet (see [`would_go_stale`]), after `key` changed in `/Info`. What
+/// [`crate::info`] reads from the packet for the other keys it mirrors moves to `/Info` first, so
+/// it isn't lost; a value `/Info` has already wins there.
+pub(crate) fn drop_packet(doc: &mut Document, key: &str) -> Result<(), OrganizeError> {
+    for k in crate::STANDARD_INFO_KEYS.into_iter().filter(|k| *k != key) {
+        let Some(v) = info_value(doc, k).filter(|v| crate::info(doc, k).as_ref() == Some(v)) else { continue };
+        crate::set_info_entry(doc, k.as_bytes(), Some(Object::String(PdfString::text(&v))))?;
+    }
     let Some(root) = doc.root() else { return Ok(()) };
     doc.update_dict(root, |c| {
         c.remove(b"Metadata");
