@@ -694,15 +694,17 @@ pub fn has_info(doc: &Document, key: &str) -> bool {
 /// Documents with XMP metadata also carry Title, Author, Subject, Keywords, Creator and Producer
 /// in the XMP packet, and viewers that read XMP first show its value: the packet's property is
 /// changed (or removed) to match, and a custom property is kept there as `pdfx:<key>` as Acrobat
-/// keeps it (see `xmp`).
+/// keeps it (see `xmp`). A packet that can't be edited that way is dropped when Title or Author
+/// changes, so it doesn't go on showing the old value.
 pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
     if !STANDARD_INFO_KEYS.contains(&key) {
         check_custom_key(key)?;
     }
     let value = value.trim();
+    let stale_xmp = xmp::would_go_stale(doc, key, value);
     let entry = (!value.is_empty()).then(|| Object::String(PdfString::text(value)));
     set_info_entry(doc, key.as_bytes(), entry)?;
-    xmp::sync_info(doc, key, value)
+    if stale_xmp { xmp::drop_packet(doc) } else { xmp::sync_info(doc, key, value) }
 }
 
 /// Set (or remove, with `None`) a document-information entry of any type.

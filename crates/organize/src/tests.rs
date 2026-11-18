@@ -730,14 +730,50 @@ fn document_info_edits_leave_files_without_usable_xmp_alone() {
     set_info(&mut doc, "Title", "New").unwrap();
     set_info(&mut doc, "Project", "Apollo").unwrap();
     assert_eq!(xmp_text(&save_and_reopen(&doc)), None);
-    // A packet that isn't UTF-8 is not rewritten.
+    // A packet that isn't UTF-8 is not rewritten (a Title or Author change drops it, see below).
+    // Nor is it when Title is set to what it is.
     let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
     latin1.extend_from_slice(b"<!-- \xE9 -->");
     let mut doc = doc_with_xmp(&latin1);
-    set_info(&mut doc, "Title", "New").unwrap();
+    set_info(&mut doc, "Keywords", "New").unwrap();
+    set_info(&mut doc, "Title", " Untitled 1 ").unwrap();
     let doc = save_and_reopen(&doc);
-    assert_eq!(info(&doc, "Title").as_deref(), Some("New"));
+    assert_eq!(info(&doc, "Keywords").as_deref(), Some("New"));
     assert_eq!(xmp_stream(&doc).unwrap().decoded().unwrap(), latin1);
+}
+
+/// A Title or Author change drops a packet that would go on stating the old value: one that can't
+/// be read, one without `rdf:RDF`, and one with Dublin Core under another prefix than `dc`, where
+/// the new value would go beside the old one. Viewers that read XMP first showed the old one.
+#[test]
+fn a_title_or_author_change_drops_a_packet_that_cant_be_edited() {
+    let mut latin1 = LIBREOFFICE_XMP.as_bytes().to_vec();
+    latin1.extend_from_slice(b"<!-- \xE9 -->");
+    let no_rdf = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- Untitled 1, Old Author --></x:xmpmeta>";
+    let purl = LIBREOFFICE_XMP.replace("dc:", "purl:").replace("xmlns:dc=", "xmlns:purl=");
+    let default_ns = LIBREOFFICE_XMP.replace("dc:", "").replace("xmlns:dc=", "xmlns=");
+    let unknown_filter = || {
+        let mut doc = doc_with_xmp(LIBREOFFICE_XMP.as_bytes());
+        let mut dict = xmp_stream(&doc).unwrap().dict;
+        dict.set(b"Filter".to_vec(), Object::name("NoSuchDecode"));
+        let r = catalog(&doc).reference(b"Metadata").unwrap();
+        doc.set(r, Object::Stream(pdfcraft_cos::Stream::from_raw(dict, LIBREOFFICE_XMP.as_bytes().to_vec())));
+        doc
+    };
+    for key in ["Title", "Author"] {
+        for (what, mut doc) in [
+            ("not UTF-8", doc_with_xmp(&latin1)),
+            ("a filter that can't be decoded", unknown_filter()),
+            ("no rdf:RDF", doc_with_xmp(no_rdf.as_bytes())),
+            ("Dublin Core as purl:", doc_with_xmp(purl.as_bytes())),
+            ("Dublin Core as the default namespace", doc_with_xmp(default_ns.as_bytes())),
+        ] {
+            set_info(&mut doc, key, "New").unwrap();
+            let doc = save_and_reopen(&doc);
+            assert_eq!(info(&doc, key).as_deref(), Some("New"), "{what}");
+            assert!(xmp_stream(&doc).is_none(), "{what}, {key}: the packet with the old value is still there");
+        }
+    }
 }
 
 /// Acrobat keeps each custom property in the XMP packet too, as `pdfx:<name>` (the
