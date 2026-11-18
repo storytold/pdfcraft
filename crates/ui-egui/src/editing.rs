@@ -1433,6 +1433,11 @@ mod revert_draft_tests {
         h.run_steps(3);
     }
 
+    /// The text of the notices posted since the last call.
+    fn posted(app: &mut PdfCraftApp) -> String {
+        crate::notices::texts(app, &egui::Context::default()).join("; ")
+    }
+
     fn queue_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
         app.views[index].session.forms.focus = Some(focus(text));
         let form = app.session.get(app.views[index].id).unwrap().form.clone();
@@ -1486,7 +1491,7 @@ mod revert_draft_tests {
         let fill =
             |app: &mut PdfCraftApp, text: &str| app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text(text.into()) });
         assert!(fill(&mut app, "张三"));
-        let toast = app.toast.as_ref().map(|t| t.0.clone()).expect("a notice");
+        let toast = posted(&mut app);
         assert!(toast.contains("“张” (U+5F20)") && toast.contains("other PDF viewers redraw the field"), "{toast}");
         assert_eq!(app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "name").unwrap().value, ["张三"]);
         // The shell sets the drawing language each frame; here, directly (per thread).
@@ -1494,11 +1499,11 @@ mod revert_draft_tests {
         crate::i18n::set_current(crate::i18n::Lang::from_code("zh-hans").expect("registered"));
         assert!(fill(&mut app, "李四"));
         crate::i18n::set_current(previous);
-        let toast = app.toast.as_ref().map(|t| t.0.clone()).expect("a notice");
+        let toast = posted(&mut app);
         assert!(toast.contains("此字段的字体无法显示“李”（U+674E）"), "{toast}");
-        app.toast = None;
         assert!(fill(&mut app, "Ada"));
-        assert!(app.toast.is_none(), "{:?}", app.toast);
+        let silent = posted(&mut app);
+        assert!(silent.is_empty(), "{silent:?}");
     }
 
     /// Text typed into a new text box is lost on close unless the save prompt appears; an empty
@@ -1701,7 +1706,7 @@ mod revert_draft_tests {
             matches!(&app.views[0].session.pending_edit, Some(Edit::SetFieldValue { name, value: FieldValue::Text(text) }) if name == "name" && text == "Queued draft")
         );
         assert_eq!(app.active_ids(), Some((0, source)));
-        assert_eq!(app.toast.as_ref().unwrap().0, pdfcraft_engine::EditError::NoDocument.to_string());
+        assert_eq!(posted(&mut app), pdfcraft_engine::EditError::NoDocument.to_string());
     }
 }
 
