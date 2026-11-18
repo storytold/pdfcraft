@@ -9,8 +9,9 @@ use super::{
 /// by a form without /Resources of its own, which draws through `xo` too. Such forms are read
 /// within `budget`, what is left of the page's allowance ([`resource_ops`]). Fails, as the cleanup
 /// of the fonts and properties these forms draw with does, when that can't be told: such a form
-/// doesn't decode (an image codec or a /Filter it can't run, say) or runs past `budget`, the walk
-/// passes 2,000,000 operators, or the parser can't read all of such a form or of `content`.
+/// doesn't decode (an image codec or a /Filter it can't run, say) or runs past `budget` (for the
+/// fonts' cleanup, an allowance of its own when no Type 3 font is listed), the walk passes
+/// 2,000,000 operators, or the parser can't read all of such a form or of `content`.
 /// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
 pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
@@ -357,7 +358,7 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
         // Each is one page's content or one form's, with the allowance of a page.
         for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
-                && let Some(name) = op.name(1)
+                && let Some(name) = op.last_name()
             {
                 used.insert(name.to_vec());
             }
@@ -473,7 +474,8 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 /// The operators of `content`, and of every form without /Resources of its own that it draws
 /// through `res`, nested ones too: what draws with these resources. Each such form is read once,
 /// with its `/DecodeParms` given by reference, its decoded bytes charged to `budget`, so the
-/// cleanups of one page that walk the same forms spend one allowance between them. An error
+/// cleanups of one page that walk the same forms spend one allowance between them (all but the
+/// fonts' cleanup when no Type 3 font is listed, which has one of its own). An error
 /// when that can't all be read: the parser can't read all of `content` or of such a form, the walk
 /// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`. Operators are
 /// read one at a time, so the walk stops at one past the limit rather than holding them all.
@@ -520,7 +522,7 @@ pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &
     let ops = resource_ops(doc, budget, res, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
-        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.name(1) == Some(&name))
+        if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name))
             && let Some(value) = properties.remove(&name)
         {
             retired.push(value);

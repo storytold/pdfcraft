@@ -99,8 +99,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
     }
     dialogs(app, ctx);
-    // Last, so it sits above Document Properties when Security's Unlock… asked for it.
+    // Above Document Properties when Security's Unlock… asked for it; script prompts stay on top.
     unlock(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.show_script_dialog(ctx);
 }
 
 /// Draw the active modal dialog and apply the action the user chose.
@@ -1598,7 +1600,10 @@ fn dialog_shortcuts(ui: &mut egui::Ui) -> bool {
     // keys the document view handles itself.
     let mut rows: Vec<(String, String)> = pdfcraft_engine::commands::COMMANDS
         .iter()
-        .filter_map(|c| c.shortcut.map(|k| (crate::commands::shortcut_label(ui.ctx(), k), tl!(c.label).trim_end_matches('…').to_string())))
+        .filter_map(|c| {
+            c.shortcut_for(crate::commands::mac_shortcuts(ui.ctx()))
+                .map(|k| (crate::commands::shortcut_label(ui.ctx(), k), tl!(c.label).trim_end_matches('…').to_string()))
+        })
         .collect();
     let key = |s: pdfcraft_engine::commands::Shortcut| crate::commands::shortcut_label(ui.ctx(), s);
     let pair = |a, b| format!("{} / {}", key(a), key(b));
@@ -2164,7 +2169,8 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         && let Some((i, id)) = app.active_ids()
     {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        let edit = app.boxes_draft.edit(app.views[i].current, count);
+        let units = app.session.get(id).map(|d| d.page_user_units()).unwrap_or_default();
+        let edit = app.boxes_draft.edit(app.views[i].current, count, &units);
         app.apply_edit(edit);
         app.boxes_draft.seeded = None;
     }
