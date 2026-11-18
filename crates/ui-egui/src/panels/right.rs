@@ -90,8 +90,7 @@ pub fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>
         Some(crate::sign_ui::PanelAction::Validate) => app.run_command("sign.validate"),
         Some(crate::sign_ui::PanelAction::GoTo(p)) => app.views[index].go_to_page(p),
         Some(crate::sign_ui::PanelAction::Trust(c)) => app.trust_certificate(*c),
-        // PLAN: assumed `cert_viewer::open(app, chain)` at the crate root (pdf-forms-w15).
-        Some(crate::sign_ui::PanelAction::ViewCertificate(chain)) => crate::cert_viewer::open(app, chain),
+        Some(crate::sign_ui::PanelAction::ViewCertificate(chain)) => crate::sign_ui::cert_viewer::open(app, chain),
         Some(crate::sign_ui::PanelAction::ViewSigned { len, revision }) => app.view_signed_version(len, revision),
         Some(crate::sign_ui::PanelAction::Sign(field)) => {
             let page = app.views[index].current();

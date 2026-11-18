@@ -6,12 +6,10 @@ use craft::ui::choice::Swatch;
 use craft::ui::contract::{Bind, Entry, Show};
 use craft::ui::docking::PanelSpec;
 use craft::ui::pickers::Select;
-use craft::ui::rails::{
-    DrawerGroup, DrawerKind, LastUsed, RailTool, SlotId, ToolRail, ToolSlot, ToolbarDrawer, apply_toolbar_edit,
-};
+use craft::ui::rails::{DrawerGroup, DrawerKind, LastUsed, RailTool, SlotId, ToolRail, ToolSlot, ToolbarDrawer, apply_toolbar_edit};
 use craft::ui::text::NumberField;
-use pdfcraft_engine::{Edit, Rgb};
 use pdfcraft_engine::commands::{COMMANDS, command};
+use pdfcraft_engine::{Edit, Rgb};
 use serde::{Deserialize, Serialize};
 
 use crate::fill_sign::{FILL_TOOLS, FillTool};
@@ -175,7 +173,7 @@ fn from_srgba(color: Srgba) -> Rgb {
 }
 
 /// Opens the colour picker in the main window, the window the rail's footer lives in, and runs `then` with the answer.
-fn open_picker(app: &mut PdfCraftApp, request: craft::ui::contract::ColorRequest, then: impl FnOnce(&mut PdfCraftApp, Srgba) + 'static) {
+fn open_picker(app: &mut PdfCraftApp, request: craft::ui::runtime::requests::ColorRequest, then: impl FnOnce(&mut PdfCraftApp, Srgba) + 'static) {
     // PLAN: assumed `PdfCraftApp::main_dialog_host(&self) -> DialogHost` and
     // `open_colour_picker(&mut self, DialogHost, ColorRequest, impl FnOnce(&mut PdfCraftApp, Srgba) + 'static)` (pdf-comments-w10, q180).
     let host = app.main_dialog_host();
@@ -209,10 +207,7 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         return;
     };
     let groups = drawer_groups();
-    let drawer = ToolbarDrawer::new(output.response.rect, &groups, &toolbar, output.dropped)
-        .kind(DrawerKind::Searchable)
-        .opened_by(opener)
-        .show(ui);
+    let drawer = ToolbarDrawer::new(output.response.rect, &groups, &toolbar, output.dropped).kind(DrawerKind::Searchable).opened_by(opener).show(ui);
     let defaults = slots_with(app, &[]);
     let mut edited: Option<Vec<ToolSlot<String>>> = None;
     for edit in &drawer.edits {
@@ -315,7 +310,10 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
     }
     // The border's own colour (the text's unless picked).
     if was.width > 0.0 {
-        let well = Swatch::new(tl!("Border colour").to_string(), to_srgba(was.color.unwrap_or(app.fill_text_color))).picker("hotbar.fill-border-colour").well().show(ui);
+        let well = Swatch::new(tl!("Border colour").to_string(), to_srgba(was.color.unwrap_or(app.fill_text_color)))
+            .picker("hotbar.fill-border-colour")
+            .well()
+            .show(ui);
         if let Some(request) = well.pick_color {
             let target = selected.map(|(page, index, _)| (page, index));
             open_picker(app, request, move |app: &mut PdfCraftApp, picked_colour: Srgba| {

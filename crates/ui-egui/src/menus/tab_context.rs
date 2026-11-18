@@ -208,8 +208,7 @@ mod tests {
         reveal_on_jobs(h.state_mut(), PathBuf::from("/pdfcraft-no-such-dir/missing.pdf"));
         assert_eq!(jobs.waiting(), 1, "the reveal is a job on the host");
         h.run_steps(2);
-        // PLAN: assumed `craft::ui::notices::Notices::posted(&Context) -> usize` (L-206).
-        let posted = |h: &Harness<'_, PdfCraftApp>| craft::ui::notices::Notices::posted(&h.ctx);
+        let posted = |h: &Harness<'_, PdfCraftApp>| crate::notices::posted(&h.ctx).len();
         assert_eq!(posted(&h), 0, "nothing is shown until the job ends");
         jobs.run_all();
         h.run_steps(2);

@@ -241,11 +241,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) 
         if marks > 0 {
             caption_row(
                 ui,
-                &if marks == 1 {
-                    crate::i18n::fmt(tl!("1 mark"), &[])
-                } else {
-                    crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())])
-                },
+                &if marks == 1 { crate::i18n::fmt(tl!("1 mark"), &[]) } else { crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())]) },
                 false,
             );
         }

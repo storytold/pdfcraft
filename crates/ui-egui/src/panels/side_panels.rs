@@ -5,8 +5,8 @@
 //! by earlier versions (`side_panels`, `docking`) are read once by [`migrate`].
 
 use craft::automation::dock as dock_rpc;
-use craft::behavior::{Axis, DockSide};
 use craft::behavior::dock::{Action, Column, DockEdge, DockPlacement, Group, Layout, Location, Node, Permissions, SplitSize, Target, Workspace};
+use craft::behavior::{Axis, DockSide};
 use craft::keymap::CommandRef;
 use craft::ui::contract::{Bind, BodyCx};
 use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, PanelSpec};
@@ -113,7 +113,6 @@ impl PanelId {
             Self::Tools | Self::Toolbar | Self::Document => return None,
         })
     }
-
 }
 
 impl From<RightPanel> for PanelId {
@@ -458,7 +457,9 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
     }
     let rail = match params.get("rail_side") {
         None | Some(Value::Null) => None,
-        Some(Value::String(side)) if side == "toggle" => Some(if rail_edge(app.rail_side) == DockEdge::Start { DockSide::End } else { DockSide::Start }),
+        Some(Value::String(side)) if side == "toggle" => {
+            Some(if rail_edge(app.rail_side) == DockEdge::Start { DockSide::End } else { DockSide::Start })
+        }
         Some(value) => {
             let edge = edge_param(value.as_str().unwrap_or_default(), "rail_side")?;
             Some(if edge == DockEdge::Start { DockSide::Start } else { DockSide::End })
@@ -717,7 +718,11 @@ mod tests {
                 "docked default",
                 with_side(
                     workspace(
-                        split(json!({"FixedFirst": 300.0}), tabs(&["tools"]), split(json!({"FixedSecond": 400.0}), tabs(&["canvas"]), tabs(&["inspector"]))),
+                        split(
+                            json!({"FixedFirst": 300.0}),
+                            tabs(&["tools"]),
+                            split(json!({"FixedSecond": 400.0}), tabs(&["canvas"]), tabs(&["inspector"])),
+                        ),
                         json!([]),
                         json!([]),
                     ),
@@ -730,7 +735,11 @@ mod tests {
             (
                 "tools on the right",
                 workspace(
-                    split(json!({"FixedSecond": 330.0}), tabs(&["canvas"]), split(json!({"FixedSecond": 290.0}), tabs(&["inspector"]), tabs(&["tools"]))),
+                    split(
+                        json!({"FixedSecond": 330.0}),
+                        tabs(&["canvas"]),
+                        split(json!({"FixedSecond": 290.0}), tabs(&["inspector"]), tabs(&["tools"])),
+                    ),
                     json!([]),
                     json!([]),
                 ),
@@ -751,7 +760,10 @@ mod tests {
             ),
             (
                 "tools tabbed with the inspector",
-                with_side(workspace(split(json!({"FixedSecond": 350.0}), tabs(&["canvas"]), tabs(&["inspector", "tools"])), json!([]), json!([])), "Pages"),
+                with_side(
+                    workspace(split(json!({"FixedSecond": 350.0}), tabs(&["canvas"]), tabs(&["inspector", "tools"])), json!([]), json!([])),
+                    "Pages",
+                ),
                 true,
                 DockEdge::Start,
                 true,
@@ -759,7 +771,11 @@ mod tests {
             (
                 "hidden inspector and tools",
                 with_side(
-                    workspace(tabs(&["canvas"]), json!([]), json!([["inspector", hidden_place("Right", 380.0)], ["tools", hidden_place("Right", 300.0)]])),
+                    workspace(
+                        tabs(&["canvas"]),
+                        json!([]),
+                        json!([["inspector", hidden_place("Right", 380.0)], ["tools", hidden_place("Right", 300.0)]]),
+                    ),
                     "Bookmarks",
                 ),
                 false,
@@ -768,7 +784,10 @@ mod tests {
             ),
             (
                 "version 1 value",
-                with_side(json!({"side_panels": {"version": 1, "tools_side": "right", "tools_open": true, "tools_width": 300.0, "side_width": 400.0}}), "Pages"),
+                with_side(
+                    json!({"side_panels": {"version": 1, "tools_side": "right", "tools_open": true, "tools_width": 300.0, "side_width": 400.0}}),
+                    "Pages",
+                ),
                 true,
                 DockEdge::End,
                 true,

@@ -8,9 +8,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use craft::behavior::IconId;
-use craft::review::ui::comments::{
-    CommentEdit, CommentsHeader, CommentsPanel, comments_filter_menu, comments_more_menu,
-};
+use craft::review::ui::comments::{CommentEdit, CommentsHeader, CommentsPanel, comments_filter_menu, comments_more_menu};
 use craft::review::{CommentAnchor, CommentThread, PageOrder, ReviewStatus, ReviewerStatus, ThreadId};
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Entry, Props as _, SelectMode, Show as _};
@@ -120,7 +118,6 @@ impl ThreadMap {
         self.keys.get(&thread)?.get(index).copied()
     }
 }
-
 
 fn review_status(state: &str) -> Option<ReviewStatus> {
     Some(match state {

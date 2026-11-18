@@ -71,8 +71,13 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
         });
 
         Section::fixed(tl!("Add content").to_string()).show(ui, |ui, _| {
-            let content: Vec<_> =
-                g.sections.iter().filter(|s| s.title == "Add content").flat_map(|s| s.items.iter()).filter(|i| i.command != "edit.edit_text").collect();
+            let content: Vec<_> = g
+                .sections
+                .iter()
+                .filter(|s| s.title == "Add content")
+                .flat_map(|s| s.items.iter())
+                .filter(|i| i.command != "edit.edit_text")
+                .collect();
             let shown = if app.edit_more { content.len() } else { EDIT_CONTENT_SHOWN.min(content.len()) };
             for i in content.iter().take(shown) {
                 let resp = tool_row(ui, i.icon, tl!(i.label), i.availability, !i.actions.is_empty());
@@ -169,11 +174,8 @@ impl craft::behavior::ItemSource<usize> for Stamps {}
 pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use pdfcraft_engine::{StampGroup, StampKind};
     Text::new(tl!("Choose a stamp, then click on the page to place it.").to_string()).shade(Shade::Faint).show(ui);
-    let titles = [
-        (StampGroup::Dynamic, tl!("Dynamic")),
-        (StampGroup::SignHere, tl!("Sign Here")),
-        (StampGroup::StandardBusiness, tl!("Standard Business")),
-    ];
+    let titles =
+        [(StampGroup::Dynamic, tl!("Dynamic")), (StampGroup::SignHere, tl!("Sign Here")), (StampGroup::StandardBusiness, tl!("Standard Business"))];
     // The kinds in group order, and the headers' keys after every tile's.
     let mut kinds: Vec<(StampGroup, StampKind)> = Vec::new();
     let mut groups = Vec::new();
@@ -210,7 +212,14 @@ pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 /// A stamp's chip: its colour as a tinted frame (Sign Here as a pentagon pointing left, with the label
 /// in white), the label, and the Dynamic stamps' second line.
-fn paint_chip(cx: &craft::ui::primitives::ContentPainterCx<'_>, chip: egui::Rect, group: pdfcraft_engine::StampGroup, label: &str, by: &str, col: egui::Color32) {
+fn paint_chip(
+    cx: &craft::ui::primitives::ContentPainterCx<'_>,
+    chip: egui::Rect,
+    group: pdfcraft_engine::StampGroup,
+    label: &str,
+    by: &str,
+    col: egui::Color32,
+) {
     use craft::ui::primitives::{PaintShape, StrokeWidth};
     use craft::ui::style::DataColor;
     use egui::vec2;
@@ -221,7 +230,8 @@ fn paint_chip(cx: &craft::ui::primitives::ContentPainterCx<'_>, chip: egui::Rect
     let chip = chip.shrink2(vec2(0.0, line));
     if group == StampGroup::SignHere {
         let tip = height * 0.45;
-        let pts = vec![chip.left_center(), chip.left_top() + vec2(tip, 0.0), chip.right_top(), chip.right_bottom(), chip.left_bottom() + vec2(tip, 0.0)];
+        let pts =
+            vec![chip.left_center(), chip.left_top() + vec2(tip, 0.0), chip.right_top(), chip.right_bottom(), chip.left_bottom() + vec2(tip, 0.0)];
         cx.with_draw(|draw| draw.data_fill(&PaintShape::Polygon(pts), DataColor::new(col)));
         centred_text(cx, chip.center() + vec2(tip / 2.0, 0.0), label, height * 0.28, egui::Color32::WHITE);
     } else {

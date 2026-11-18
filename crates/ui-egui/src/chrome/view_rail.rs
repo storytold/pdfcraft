@@ -1,18 +1,18 @@
 //! The view rail: the end slot's column of view controls (dock side, page display, rotation, fit, zoom, page
 //! stepping, history and the page box) for the active document.
 
-use craft::behavior::TypeRole;
-use craft::ui::buttons::IconButton;
-use craft::ui::contract::Bind;
-use craft::ui::display::Text;
+use craft::behavior::kurbo::Size;
+use craft::behavior::{DockSide, IconId};
 use craft::pages::PageDisplay;
-use craft::ui::menu::{Menu, MenuItem, Trigger};
-use craft::ui::primitives::{IconId, PopupKind};
+use craft::theme::TypeRole;
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Bind, PopupKind, Trigger};
+use craft::ui::display::Text;
+use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::text::{TextField, ZoomField, ZoomScale};
-use egui::{Size2, Ui};
+use egui::Ui;
 
 use crate::PdfCraftApp;
-use crate::hotbar::RailSide;
 
 /// Shows the rail's view cluster; nothing without an active document or a current page to view.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
@@ -20,12 +20,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     let Some(doc) = app.session.get(id) else { return };
     let page_count = doc.info.pages.len();
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-    let rail_on_right = app.rail_side == RailSide::End;
+    let rail_on_right = app.rail_side == DockSide::End;
     let Some(view) = app.views.get_mut(index) else { return };
     let current = view.current();
     // Without a current page there is nothing to view or zoom.
     let Some(page) = doc.info.pages.get(current) else { return };
-    let page_size = Size2 { width: page.width.max(1.0), height: page.height.max(1.0) };
+    let page_size = Size::new(f64::from(page.width.max(1.0)), f64::from(page.height.max(1.0)));
 
     IconButton::command(IconId::new(if rail_on_right { "panel_left" } else { "panel_right" }), "view.dock_side").show(ui);
 
