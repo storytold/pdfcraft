@@ -800,12 +800,19 @@ fn glyph_name_radix_numbers(name: &str) -> impl Iterator<Item = (u32, u32)> + '_
 /// control code (below 32), which no text shows, gives such a counter away and fails the font.
 ///
 /// A font that names every code by itself in hexadecimal (`/Differences [0 /x0 /x1 … /xff]`,
-/// TeX's dvips Type 3 fonts) has names at control codes too, but no counter: there every control
-/// code, 0 through 31, has a numbered name, and each names its code in hexadecimal (`/xa` at 10,
-/// `/x1f` at 31). A decimal counter writes `/C10` at 10, which reads 16 in hexadecimal, and a
-/// counter from code 1 leaves code 0 out. Subsets that number their glyphs in hexadecimal and
-/// happen to keep some at their own control codes (`/G0A` at 10, `/G0D` at 13), where the
-/// numbers name no characters, don't fill the block and still fail.
+/// TeX's dvips Type 3 fonts) has names at control codes too: there every control code, 0
+/// through 31, has a numbered name, and each names its code in hexadecimal (`/xa` at 10, `/x1f`
+/// at 31). A decimal counter writes `/C10` at 10, which reads 16 in hexadecimal, and a counter
+/// from code 1 leaves code 0 out. Subsets that number their glyphs in hexadecimal and happen to
+/// keep some at their own control codes (`/G0A` at 10, `/G0D` at 13), where the numbers name no
+/// characters, don't fill the block and still fail.
+///
+/// The rule does accept a counter that starts at code 0, writes its numbers in hexadecimal and
+/// fills the block: its `/Differences` (`[0 /x0 /x1 …]`) is the dvips mapping's, name for name
+/// and code for code. The guard is given only names and codes, from the Type 3 path and the
+/// Type 1 caller alike, so nothing here can tell the two apart, and such a font reads as the
+/// dvips mapping. Over 5,789 public PDFs (#7710), every font the block admits is a dvips
+/// `/x0` … `/xff` font.
 pub(crate) fn numbered_names_name_their_codes<'a>(
     names: impl IntoIterator<Item = (u8, &'a str)>,
 ) -> bool {

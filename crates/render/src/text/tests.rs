@@ -778,10 +778,10 @@ fn numbered_glyph_names_read_as_their_own_code() {
 /// (`/C1` at 233) or sits at a control code, as a first-use counter's `/C1` at 1 does. A font
 /// naming all 256 codes in hexadecimal (`/x0` … `/xff`, TeX's dvips fonts, PDFBOX-728) has names
 /// at control codes too, but it names every one of them, 0 through 31, in hexadecimal, which no
-/// counter does: "für Weierstraß" reads in full. A decimal counter `/C1` … `/C31` beside `/C174`
-/// (`/C10` at 10 reads 16 in hexadecimal), the same names from `/x1` (code 0 left out) and a
-/// hexadecimal subset keeping a few glyphs at their own control codes (`/G0A` at 10, `/G0D` at
-/// 13, `/GD9` at 0xD9) still read as nothing.
+/// decimal counter or counter from code 1 does: "für Weierstraß" reads in full. A decimal
+/// counter `/C1` … `/C31` beside `/C174` (`/C10` at 10 reads 16 in hexadecimal), the same names
+/// from `/x1` (code 0 left out) and a hexadecimal subset keeping a few glyphs at their own
+/// control codes (`/G0A` at 10, `/G0D` at 13, `/GD9` at 0xD9) still read as nothing.
 #[test]
 fn numbered_type3_glyph_names_read_as_their_own_code() {
     use lopdf::{Document, Object, Stream, dictionary};
