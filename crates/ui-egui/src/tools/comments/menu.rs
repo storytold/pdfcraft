@@ -7,11 +7,11 @@ use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::SliderField;
 
+use craft::review::ui::annotate::AnnotateWords;
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::popover::Popover;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::requests::ColorRequest;
-use craft::review::ui::annotate::AnnotateWords;
 
 // PLAN: `mod colours;` is declared in `tools/comments.rs` (pdf-comments-w7).
 use super::colours::{self, RecentColours, fill_choice, palette, to_srgba};
@@ -143,7 +143,8 @@ pub(crate) fn context_rows(ui: &mut egui::Ui, cx: CommentMenuCx<'_>) -> Option<C
             Menu::submenu_row_enabled(ui, tl!("Set status"), allowed, |ui, _| {
                 for s in [ReviewState::None, ReviewState::Accepted, ReviewState::Cancelled, ReviewState::Completed, ReviewState::Rejected] {
                     if row(ui, tl!(s.name()), true) {
-                        action = Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
+                        action =
+                            Some(CanvasAction::Edit(Box::new(Edit::SetAnnotationStatus { page, index, state: s, author: prefs.author.clone() })));
                     }
                 }
             });
@@ -246,9 +247,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     popover_from(
         ui,
         tl!("Colour"),
-        |ui| {
-            Swatch::new(tl!("Colour"), colours::to_srgba(style.color)).show(ui).response
-        },
+        |ui| Swatch::new(tl!("Colour"), colours::to_srgba(style.color)).show(ui).response,
         |ui| {
             let pick = palette(ui, tl!("Colour"), Some(style.color), "comment.tool.colour", recent);
             if let Some(c) = pick.picked {
@@ -262,9 +261,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         popover_from(
             ui,
             tl!("Fill colour"),
-            |ui| {
-                Swatch::optional(tl!("Fill colour"), Mixed::Same(style.fill.map(to_srgba))).show(ui).response
-            },
+            |ui| Swatch::optional(tl!("Fill colour"), Mixed::Same(style.fill.map(to_srgba))).show(ui).response,
             |ui| {
                 let pick = fill_choice(ui, style.fill, "comment.tool.fill", recent);
                 if let Some(f) = pick.choice {
@@ -279,9 +276,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
     popover_from(
         ui,
         tl!("Opacity"),
-        |ui| {
-            IconButton::new(IconId::new("blend")).label(tl!("Opacity")).show(ui).response
-        },
+        |ui| IconButton::new(IconId::new("blend")).label(tl!("Opacity")).show(ui).response,
         |ui| {
             let mut percent = (style.opacity * 100.0).round();
             let start = percent;
@@ -297,9 +292,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         popover_from(
             ui,
             tl!("Line thickness"),
-            |ui| {
-                IconButton::new(IconId::new("sliders-horizontal")).label(tl!("Line thickness")).show(ui).response
-            },
+            |ui| IconButton::new(IconId::new("sliders-horizontal")).label(tl!("Line thickness")).show(ui).response,
             |ui| {
                 let mut w = style.width;
                 SliderField::new(tl!("Line thickness"), Bind::bound(&mut w), tool.min_width()..=super::MAX_LINE_WIDTH).step(0.5).unit("pt").show(ui);

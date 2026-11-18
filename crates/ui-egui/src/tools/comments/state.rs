@@ -362,9 +362,11 @@ impl CommentView {
             .into_iter()
             .filter_map(|id| moved(bridge::key_of(id)).map(|(p, i)| bridge::id_of(p, i)))
             .collect();
-        let editing = self.panel.editing.take().and_then(|(thread, message, text)| {
-            moved(bridge::thread_key(thread)).map(|(p, i)| (bridge::thread_id(p, i), message, text))
-        });
+        let editing = self
+            .panel
+            .editing
+            .take()
+            .and_then(|(thread, message, text)| moved(bridge::thread_key(thread)).map(|(p, i)| (bridge::thread_id(p, i), message, text)));
         // What is typed in a pop-up, and a window being dragged or resized, follow theirs too.
         let drafts = self.popup_drafts.take().and_then(|(p, i, d)| moved((p, i)).map(|(p, i)| (p, i, d)));
         // Other transient state still needs conservative pruning; refresh the slot snapshot too.

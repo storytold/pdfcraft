@@ -44,7 +44,8 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
         ComposerKind::Edit(_) => ComposerDraft::Edit,
         _ => ComposerDraft::New,
     };
-    let output = CommentComposer::new(anchor, &mut c.text).header(tl!(title), &prefs.author).draft_kind(draft).close(ComposerClose::OnPostOrCancel).show(ui);
+    let output =
+        CommentComposer::new(anchor, &mut c.text).header(tl!(title), &prefs.author).draft_kind(draft).close(ComposerClose::OnPostOrCancel).show(ui);
     if output.cancelled {
         view.comments.composer = None;
         return None;

@@ -15,7 +15,9 @@ use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationId, Annotati
 use super::geometry::{CARET_SIZE, clamp_to, frame, is_callout, on_text, reshapable, resizable};
 use super::popups::has_popup;
 use super::state::{CommentView, Composer, ComposerKind, PageCx};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, LineEnding, NewAnnotation, PageInfo, QuickTool, Shape, tool_for};
+use super::{
+    Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, LineEnding, NewAnnotation, PageInfo, QuickTool, Shape, tool_for, tool_for_default,
+};
 // PLAN: assumed `PagePart::new(owner, page, shape: Vec<egui::Rect>, layer)` with `.passes_drag()`, `.tip(String)` and
 // `.cursor(CursorIcon)`, and `Owner::Comment { index }` (pdf-canvas-w9, `canvas/page_parts.rs`).
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart};
