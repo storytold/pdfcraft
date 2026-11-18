@@ -6,7 +6,6 @@
 //! `config.toml` and a hostile legacy file reach the same code.
 
 use super::*;
-use craft::review::{SavedSignature, SignatureImage};
 use craft::settings::{LegacyFile, SectionError, Settings};
 use craft::theme::{ModeChoice, MotionChoice};
 use craft::ui::contract::ColumnLayout;
@@ -146,8 +145,8 @@ impl Comment {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Signature {
-    pub signatures: Option<Vec<SavedSignature>>,
-    pub sign_graphic: Option<SignatureImage>,
+    pub signatures: Option<craft::review::ui::signature::SignatureSettings>,
+    pub sign_graphic: Option<crate::sign_ui::SignGraphic>,
     pub digital_ids: Option<Vec<crate::DigitalIdEntry>>,
     /// PEM text of each trusted certificate.
     pub trusted: Option<Vec<String>>,
@@ -461,6 +460,16 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// The last release's visible-signature choice: a unit name or `{"Image": "<base64 png>"}`.
+fn legacy_sign_graphic(v: &Value) -> Option<crate::sign_ui::SignGraphic> {
+    use crate::sign_ui::SignGraphic;
+    match v.as_str() {
+        Some("Name") => Some(SignGraphic::Name),
+        Some("FillSign") => Some(SignGraphic::FillSign),
+        _ => v.get("Image").and_then(crate::fill_sign::legacy_image).map(SignGraphic::Image),
+    }
+}
+
 /// The last release's settings JSON as typed settings. Values that fail to read stay at their
 /// default and are listed; the text itself failing to parse gives the defaults and one entry.
 pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
@@ -581,9 +590,10 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
 
     let signature = {
         let mut r = Reader::new(&root, Signature::KEY, &mut errors);
-        // PLAN: assumed `fill_sign::legacy_signatures(&Value) -> Vec<SavedSignature>` and `fill_sign::legacy_image(&Value) -> Option<SignatureImage>` (forms-w5)
-        let signatures = r.value("signatures").map(crate::fill_sign::legacy_signatures);
-        let sign_graphic = r.value("sign_graphic").and_then(crate::fill_sign::legacy_image);
+        // The last release kept the two slots under four top-level keys.
+        let has_slots = ["signature", "signature_text", "signature_image", "initials"].iter().any(|key| root.contains_key(*key));
+        let signatures = has_slots.then(|| crate::fill_sign::legacy_signatures(&Value::Object(root.clone())));
+        let sign_graphic = r.value("sign_graphic").and_then(legacy_sign_graphic);
         Signature {
             signatures,
             sign_graphic,

@@ -444,7 +444,8 @@ impl PdfCraftApp {
             replace_source: None,
             #[cfg(not(target_arch = "wasm32"))]
             document_fonts: None,
-            last_opened_url: None,
+            pending_urls: Vec::new(),
+            startup_superseded: false,
             community_card_closed: false,
             pending_link: None,
             pending_window: None,
@@ -604,10 +605,7 @@ impl eframe::App for PdfCraftApp {
         self.begin_logic();
         #[cfg(not(target_arch = "wasm32"))]
         self.update_logic(ctx);
-        self.guarded_frame(|app| app.logic_unguarded(ctx));
-        if self.frame_panicked {
-            self.close_after_panic(ctx);
-        }
+        self.guarded_frame(ctx, |app| app.logic_unguarded(ctx));
         self.run_close_path(ctx);
     }
 
@@ -619,7 +617,8 @@ impl eframe::App for PdfCraftApp {
         if let Some(panels) = self.file_panels.as_mut() {
             panels.pump_with(&mut self.dialogs, Some(&*frame));
         }
-        self.guarded_frame(|app| app.ui_unguarded(ui));
+        let ctx = ui.ctx().clone();
+        self.guarded_frame(&ctx, |app| app.ui_unguarded(ui));
         self.end_ui();
     }
 }
@@ -639,7 +638,7 @@ impl PdfCraftApp {
         pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.poll_pending_opens();
+            self.poll_pending_opens(ctx);
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
@@ -659,7 +658,7 @@ impl PdfCraftApp {
         self.autosave_tick(ctx, web_time::Instant::now());
         // Reload documents whose files a build rewrote (#431).
         #[cfg(not(target_arch = "wasm32"))]
-        self.watch_files();
+        self.watch_files(ctx);
         if self.host_dirty.is_some() {
             // An OCR review not yet accepted or rejected is work the page would lose, too.
             let dirty = self.work_at_risk();
@@ -680,7 +679,7 @@ impl PdfCraftApp {
             // Edit text and Add text's drags end while their input is blocked rather than wait, to
             // land wherever the pointer is once it opens again.
             if shut && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-                view.cancel_edit_text_gestures();
+                view.cancel_pointer_gestures(ctx);
             }
         }
         self.process_pending_edits();
@@ -780,7 +779,10 @@ impl PdfCraftApp {
         dialogs::show(self, ui);
         crate::notices::show(self, ui);
         // Screenshots are issued only after a settled pass that really drew the window.
-        // PLAN: assumed PdfCraftApp::control_frame_end(&mut self, &egui::Context), the control channel's capture issue after the pass (pdf-shell-w11).
-        self.control_frame_end(&ctx);
+        self.control_ui_pass(&ctx);
+        // Addresses `open_url` queued: the runtime opens them in the browser.
+        for url in self.pending_urls.drain(..) {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
     }
 }

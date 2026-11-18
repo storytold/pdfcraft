@@ -50,6 +50,7 @@ impl PdfCraftApp {
             after_open: Some(destination),
             recovered: None,
             then: None,
+            priority: craft::host::queue::Priority::NEAR,
         });
     }
 

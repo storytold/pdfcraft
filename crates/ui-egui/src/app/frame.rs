@@ -11,6 +11,8 @@ impl PdfCraftApp {
     /// a second pass of the same frame runs on what this call set and fires nothing twice.
     pub(super) fn prepare_raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.offer_pasted(raw);
+        self.set_title_bar_choice(ctx, self.title_bar_choice);
+        self.control_before_input(ctx);
         embed::before_input(ctx, |output| {
             for fired in &output.fired {
                 self.run_fired(ctx, fired);
