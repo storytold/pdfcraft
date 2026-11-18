@@ -10816,16 +10816,19 @@ fn measurement_scale_ratio_is_worded_per_point_whatever_the_user_unit() {
         pdf_of(&[
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 108 72] {attrs} >>"),
+            &format!("<< /Type /Page /Parent 2 0 R {attrs} >>"),
         ])
     };
-    std::fs::write(dir.join("unit-1.pdf"), page("")).unwrap();
-    std::fs::write(dir.join("unit-2.pdf"), page("/UserUnit 2")).unwrap();
+    std::fs::write(dir.join("unit-1.pdf"), page("/MediaBox [0 0 108 72]")).unwrap();
+    std::fs::write(dir.join("unit-2.pdf"), page("/MediaBox [0 0 108 72] /UserUnit 2")).unwrap();
+    // A page whose box doesn't start at the origin: a point is a third of a unit, and the
+    // difference of two shifted coordinates is not exactly that.
+    std::fs::write(dir.join("unit-3.pdf"), page("/MediaBox [1 0 109 72] /UserUnit 3")).unwrap();
     let mut a = auto(&dir);
     let line = json!([[24, 72], [96, 72]]);
-    for (file, factor) in [("unit-1.pdf", 2.0), ("unit-2.pdf", 4.0)] {
+    for (file, factor) in [("unit-1.pdf", 2.0), ("unit-2.pdf", 4.0), ("unit-3.pdf", 6.0)] {
         let doc = ok(&mut a, "doc_open", json!({"path":file}))["doc"].as_u64().unwrap();
-        // Without a scale the page measures true size: a point is 1/72 in on both pages.
+        // Without a scale the page measures true size: a point is 1/72 in on every page.
         assert_eq!(ok(&mut a, "measure_scale", json!({"doc":doc,"page":1}))["scale"]["ratio"], format!("1 pt = {} in", 1.0 / 72.0), "{file}");
         for args in [json!({"units_per_point":2}), json!({"points":line,"distance":144}), json!({"page_distance":1,"page_unit":"pt","distance":2})] {
             let mut args = args;
