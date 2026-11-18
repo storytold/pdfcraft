@@ -44,6 +44,8 @@ pub enum ArtifactError {
     NotATag(u32),
     #[error("the tag has child structure elements; mark a leaf tag instead")]
     HasChildren,
+    #[error("the tag's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
+    ContentElsewhere,
     #[error("the tag has no direct marked content")]
     NoMarkedContent,
     #[error("the tag has no page")]
@@ -610,6 +612,12 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     if has_child_structure(doc, &element.dict) {
         return Err(ArtifactError::HasChildren);
     }
+    // Only the page's own content is rewritten. An id in a form XObject or on another page is
+    // another sequence there, and an equal id on this page is unrelated content: refuse before
+    // anything changes (ISO 32000-2 Table 357).
+    if holds_content_elsewhere(doc, &element.dict, element.page) {
+        return Err(ArtifactError::ContentElsewhere);
+    }
     let ids: HashSet<i64> = mcids(doc, &element.dict).into_iter().collect();
     if ids.is_empty() {
         return Err(ArtifactError::NoMarkedContent);
@@ -636,6 +644,9 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     Ok(())
 }
 
+/// Whether `tag` has a structure element among its kids. /K may be an indirect reference to the
+/// array of kids, read like an inline one; a reference inside it is followed to a dictionary only,
+/// so a cycle of arrays ends there.
 fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
     fn child(doc: &Document, item: &Object) -> bool {
         match item {
@@ -645,7 +656,13 @@ fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
             _ => false,
         }
     }
-    tag.get(b"K").is_some_and(|items| child(doc, items))
+    tag.get(b"K").is_some_and(|items| match items {
+        Object::Ref(r) => match &*doc.get(*r) {
+            Object::Array(items) => items.iter().any(|item| child(doc, item)),
+            other => child(doc, other),
+        },
+        items => child(doc, items),
+    })
 }
 
 fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<Object, ArtifactError> {

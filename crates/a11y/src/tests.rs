@@ -2218,7 +2218,7 @@ fn a_figure_whose_content_is_in_a_form_xobject_is_not_marked_decorative_on_the_p
 fn kids_in_an_indirect_array_are_read_like_an_inline_array() {
     // ISO 32000-2 §7.3.10: /K may be an indirect reference to the array of kids. The Document's
     // kids, and the figure's marked content, are each in such an array.
-    let build = |figure_kids: &str| {
+    let build_with = |figure_kids: &str, document_kids: &str| {
         pdf(
             &[
                 "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
@@ -2226,7 +2226,7 @@ fn kids_in_an_indirect_array_are_read_like_an_inline_array() {
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
                 stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC /Figure << /MCID 1 >> BDC 100 100 50 30 re f EMC"),
                 "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
-                "<< /S /Document /P 5 0 R /K 9 0 R >>".into(),
+                format!("<< /S /Document /P 5 0 R /K {document_kids} >>"),
                 format!("<< /S /Figure /P 6 0 R /Pg 3 0 R /K {figure_kids} >>"),
                 "<< /Nums [0 [10 0 R 7 0 R]] >>".into(),
                 "[10 0 R 7 0 R]".into(),
@@ -2238,6 +2238,7 @@ fn kids_in_an_indirect_array_are_read_like_an_inline_array() {
             "",
         )
     };
+    let build = |figure_kids: &str| build_with(figure_kids, "9 0 R");
     let mut doc = build("11 0 R");
     // The checker reaches the figure, as the figure list does, and finds it without alternate text.
     let r = checked(&doc, &[Rule::FiguresAltText]);
@@ -2254,35 +2255,50 @@ fn kids_in_an_indirect_array_are_read_like_an_inline_array() {
     let pdfcraft_cos::Object::Stream(c) = &*c else { panic!("one content stream") };
     let text = String::from_utf8(c.decoded().unwrap()).unwrap();
     assert!(text.contains("/Artifact BMC") && text.contains("/MCID 0") && !text.contains("/MCID 1"), "{text}");
-    // An indirect array holding a form XObject's marked content is refused before anything changes.
-    let mut doc = build("12 0 R");
-    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
-    assert_eq!(mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(AltError::ContentElsewhere));
-    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page);
+    // Marking the tag an artifact reads the figure's indirect array too.
+    let mut doc = build_with("11 0 R", "[10 0 R 7 0 R]");
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert!(figures(&doc).is_empty());
+    // An indirect array holding a form XObject's marked content is refused before anything changes,
+    // by either edit: the page's own MCID 0, the paragraph's, is another sequence.
+    for document_kids in ["[10 0 R 7 0 R]", "9 0 R"] {
+        let mut doc = build_with("12 0 R", document_kids);
+        let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
+        let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
+        assert_eq!(mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(AltError::ContentElsewhere));
+        assert_eq!(mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(ArtifactError::ContentElsewhere));
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    }
 }
 
 #[test]
 fn a_figure_with_child_elements_is_not_marked_decorative() {
-    // Taking the figure out of the tree would take its Caption with it.
-    let mut doc = pdf(
-        &[
-            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
-            stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC /Caption << /MCID 1 >> BDC BT /F1 9 Tf 100 90 Td (Fig. 1) Tj ET EMC"),
-            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
-            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
-            "<< /S /Figure /P 6 0 R /Pg 3 0 R /K [0 9 0 R] >>".into(),
-            "<< /Nums [0 [7 0 R 9 0 R]] >>".into(),
-            "<< /S /Caption /P 7 0 R /Pg 3 0 R /K 1 >>".into(),
-        ],
-        "",
-    );
-    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
-    let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
-    assert_eq!(mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(AltError::HasChildren));
-    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
-    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    // Taking the figure out of the tree would take its Caption with it, whether the Caption is
+    // in an inline array of kids or an indirect one (ISO 32000-2 §7.3.10).
+    for kids in ["[0 9 0 R]", "10 0 R"] {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+                stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC /Caption << /MCID 1 >> BDC BT /F1 9 Tf 100 90 Td (Fig. 1) Tj ET EMC"),
+                "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+                "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+                format!("<< /S /Figure /P 6 0 R /Pg 3 0 R /K {kids} >>"),
+                "<< /Nums [0 [7 0 R 9 0 R]] >>".into(),
+                "<< /S /Caption /P 7 0 R /Pg 3 0 R /K 1 >>".into(),
+                "[0 9 0 R]".into(),
+            ],
+            "",
+        );
+        let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
+        let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
+        assert_eq!(mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(AltError::HasChildren), "{kids}");
+        assert_eq!(mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(ArtifactError::HasChildren), "{kids}");
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    }
 }
 
 #[test]
