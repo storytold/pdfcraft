@@ -50,8 +50,7 @@ fn thumbnails(ctx: &egui::Context) -> Thumbnails<usize> {
 /// The picture of `page` of `doc` as the store holds it, asked at `side` points on its longer
 /// side: ready, loading or failed.
 pub(super) fn page_state(app: &PdfCraftApp, ctx: &egui::Context, doc: DocId, page: usize, side: f32) -> TextureState {
-    // PLAN: assumed `DocPages::new(&Session, DocId) -> Option<DocPages<'_>>` (pdf-canvas-w10)
-    let Some(source) = DocPages::new(&app.session, doc) else { return TextureState::Missing };
+    let source = DocPages::new(&app.session, doc);
     let request = ThumbRequest::for_cell(side, ctx.pixels_per_point());
     thumbnails(ctx).state(ctx, &source, &page, &request, Priority::VISIBLE)
 }
@@ -265,7 +264,7 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut Ui, n: &mut Intents) {
     let thumbs = thumbnails(&ctx);
     let look = ThumbPaint::default().states(StateLook::Captioned);
     let size = Size::new(f64::from(info.width.max(1.0)), f64::from(info.height.max(1.0)));
-    let pixels = PixelSize { width: info.width.ceil().max(1.0) as u32, height: info.height.ceil().max(1.0) as u32 };
+    let pixels = PixelSize::new(info.width.ceil().max(1.0) as u32, info.height.ceil().max(1.0) as u32);
     let mut tool = RegionTool::new(word_shapes(app, &info, page), app.ocr_verify.region, size);
 
     // PLAN: assumed a kept `Bind<CanvasView>` lets the canvas own its view, fitted to the page when first shown (no `ToolHostResponse::view` copy).

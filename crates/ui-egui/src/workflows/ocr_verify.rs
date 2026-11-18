@@ -1171,7 +1171,7 @@ impl OcrVerify {
         let d = &app.ocr_draft;
         let pages: Vec<usize> = match d.pages {
             super::ocr_ui::OcrPages::All => Vec::new(),
-            super::ocr_ui::OcrPages::Current => vec![app.active.map_or(0, |i| app.views.get(i).map_or(0, |v| v.current))],
+            super::ocr_ui::OcrPages::Current => vec![app.active.map_or(0, |i| app.views.get(i).map_or(0, |v| v.current()))],
             super::ocr_ui::OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
         let settings = d.settings();
@@ -1268,7 +1268,7 @@ pub(crate) fn with_state(app: &mut PdfCraftApp, f: impl FnOnce(&mut OcrVerify, &
 
 /// Apply what the frame's controls asked for. The guards live in the [`OcrVerify`] methods:
 /// outside ReviewReady, Accept/Reject/Re-OCR and edits are ignored, not acted on.
-fn apply(app: &mut PdfCraftApp, n: Intents) {
+fn apply(app: &mut PdfCraftApp, ctx: &egui::Context, n: Intents) {
     with_state(app, |v, app| {
         if n.exit {
             v.open = false;
@@ -1336,7 +1336,7 @@ fn apply(app: &mut PdfCraftApp, n: Intents) {
             match v.accept_page(&mut app.session, page) {
                 Ok(count) if count > 0 => {
                     if let Some(doc) = v.doc {
-                        refresh_view(app, doc);
+                        refresh_view(app, ctx, doc);
                     }
                     app.notify_fmt(tl!("The page's words were applied as one undoable step ({n} words)"), &[("n", &count.to_string())]);
                 }
@@ -1357,7 +1357,7 @@ fn apply(app: &mut PdfCraftApp, n: Intents) {
             v.cancel();
         }
         if n.accept {
-            do_accept(v, app);
+            do_accept(v, app, ctx);
         }
         if n.reject && v.reject() {
             app.notify_tr("OCR results rejected.");
@@ -1368,13 +1368,13 @@ fn apply(app: &mut PdfCraftApp, n: Intents) {
 /// Accept: searchable mode applies the review to the open document as one undoable step;
 /// editable mode asks where to write the new `<name>_ocr.pdf`. Stale sessions and empty
 /// reviews are typed failures the user sees (the edits are kept).
-fn do_accept(v: &mut OcrVerify, app: &mut PdfCraftApp) {
+fn do_accept(v: &mut OcrVerify, app: &mut PdfCraftApp, ctx: &egui::Context) {
     let doc = v.doc;
     match app.ocr_draft.output_mode {
         OutputMode::Searchable => match v.accept(&mut app.session) {
             Ok(count) => {
                 if let Some(doc) = doc {
-                    refresh_view(app, doc);
+                    refresh_view(app, ctx, doc);
                 }
                 if count > 0 {
                     app.notify_fmt(tl!("Recognized text applied ({n} words, one undoable step)"), &[("n", &count.to_string())]);
@@ -1411,9 +1411,10 @@ fn save_editable(app: &mut PdfCraftApp, bytes: Arc<Vec<u8>>, name: String, doc: 
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // PLAN: assumed `PdfCraftApp::pick_file(&mut self, PickRequest, Option<DocId>, impl FnOnce(&mut PdfCraftApp, PathBuf) + 'static)` (pdf-shell-w14 `app/picks.rs`).
         let request = craft::host::PickRequest::save("export").filter("PDF", &["pdf"]).file_name(name.clone());
-        app.pick_file(request, None, move |app, picked: std::path::PathBuf| {
+        app.pick_file(request, None, move |app, picked| {
+            // A cancelled or unavailable picker leaves the review as it was.
+            let Some(picked) = picked.first_path() else { return };
             if is_source(&picked, &source) {
                 app.notify_tr("That is the source file; choose another destination");
                 return;
@@ -1460,11 +1461,11 @@ fn write_editable(app: &mut PdfCraftApp, target: &std::path::Path, bytes: Arc<Ve
 }
 
 /// Pull the document's changed appearance into its view after an apply.
-fn refresh_view(app: &mut PdfCraftApp, doc: DocId) {
+fn refresh_view(app: &mut PdfCraftApp, ctx: &egui::Context, doc: DocId) {
     if let Some(info) = app.session.get(doc).map(|d| d.info.clone())
         && let Some(view) = app.views.iter_mut().find(|view| view.id == doc)
     {
-        view.document_changed(&info);
+        view.document_changed(ctx, &info);
     }
 }
 
@@ -1967,9 +1968,9 @@ mod tests {
     /// save dialog never touches the review either — Accept can simply be tried again.
     #[test]
     fn editable_save_lands_and_a_failed_or_cancelled_one_keeps_the_review() {
-        // PLAN: assumed `PdfCraftApp::with_files(Arc<dyn Files>)`, an app on a host whose files are the script (pdf-shell-w13/w14); the process-wide `process_picks` is pdf-shell-w14's.
         let files = Arc::new(craft::host::ScriptedFiles::new());
-        let mut app = PdfCraftApp::with_files(files.clone());
+        let host = craft::host::Host::builder(crate::APP_INFO).files(files.clone()).build();
+        let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
         let text = app.session.create_from_text("t", "Recognize these scanned words").expect("fixture");
         let id = app.session.open("t.pdf", None, text, None).expect("fixture");
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
@@ -1983,22 +1984,22 @@ mod tests {
         // The source file as the destination is refused: nothing is written, the review stays
         // in ReviewReady with the edit, Accept is enabled again.
         files.answer(Picked::Paths(vec![PathBuf::from("t.pdf")]));
-        with_state(&mut app, do_accept);
-        app.process_picked();
+        with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
+        app.process_picks();
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "a refused destination keeps the review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "the edits are kept");
         // A cancelled save dialog: nothing is written, nothing changes.
         files.answer(Picked::Cancelled);
-        with_state(&mut app, do_accept);
-        app.process_picked();
+        with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
+        app.process_picks();
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "a cancelled save keeps the review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"));
         assert_eq!(app.ocr_verify.doc, Some(id), "the review still belongs to its document");
         // A real destination: the file lands under `<name>_ocr.pdf` and the review ends.
         let target = PathBuf::from("out/t_ocr.pdf");
         files.answer(Picked::Paths(vec![target.clone()]));
-        with_state(&mut app, do_accept);
-        app.process_picked();
+        with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
+        app.process_picks();
         assert!(files.file(&target).is_some(), "the editable copy is written");
         assert_eq!(app.ocr_verify.phase, Phase::Idle, "a successful save ends the review");
     }

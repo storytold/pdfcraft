@@ -579,8 +579,8 @@ impl PdfCraftApp {
     fn run_edit_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "edit.attach" => self.attach_file_dialog(),
-            "edit.undo" => self.undo(),
-            "edit.redo" => self.redo(),
+            "edit.undo" => self.undo(ctx),
+            "edit.redo" => self.redo(ctx),
             "edit.find" => {
                 if let Some(i) = active {
                     self.views[i].open_find();

@@ -22,9 +22,10 @@ fn duplex_to_ui(duplex: Option<spool::Duplex>) -> Option<UiDuplex> {
 
 fn duplex_from_ui(duplex: Option<UiDuplex>) -> Option<spool::Duplex> {
     duplex.map(|d| match d {
-        UiDuplex::Off => spool::Duplex::Off,
         UiDuplex::LongEdge => spool::Duplex::LongEdge,
         UiDuplex::ShortEdge => spool::Duplex::ShortEdge,
+        // One-sided, and any mode the spooler has no name for, prints one-sided.
+        _ => spool::Duplex::Off,
     })
 }
 
@@ -59,8 +60,8 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         let printers = self.sync_listed();
 
-        let current = self.views[i].current;
-        let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
+        let current = self.views[i].current();
+        let selected: Vec<usize> = self.views[i].selected.items.iter().copied().collect();
         let mut keep = std::mem::take(&mut self.print_draft);
         // Leaving Label gives back the paper it replaced (#3564), before the layout resets below.
         if keep.handling == Handling::Label {
@@ -198,6 +199,7 @@ impl PdfCraftApp {
         // PLAN: assumed HostedPrint::take_settings_clicked(&mut self) -> bool (F-1)
         let settings_clicked = dialog.take_settings_clicked();
         let step = dialog.take_preview_step();
+        let paper_px = dialog.take_paper_px();
         let ok = dialog.take_ok();
         let no_printers = dialog.state().printers.is_empty() && !dialog.state().discovering();
         if refresh {
@@ -262,7 +264,15 @@ impl PdfCraftApp {
         let thumbs = Thumbnails::<PrintPage>::in_context(ctx, "print-preview", ThumbnailOptions::new().max_side(PREVIEW_MAX_SIDE as u32));
         // PLAN: assumed DocPages::new(&Session, DocId) -> DocPages (pdf-canvas-w10)
         let pages = DocPages::new(&self.session, id);
-        let input = SheetInput { d: &self.print_draft, sizes: &sizes, labels: &labels, settings: &settings_result, sheets: &sheets, too_much_creep };
+        let input = SheetInput {
+            d: &self.print_draft,
+            sizes: &sizes,
+            labels: &labels,
+            settings: &settings_result,
+            sheets: &sheets,
+            too_much_creep,
+            paper_px,
+        };
         let (sheet, pager) = sheet::build(input, &thumbs, &pages, ctx);
         let d = &self.print_draft;
         let new_fields = body::fields_from_draft(d);

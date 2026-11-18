@@ -230,7 +230,8 @@ pub(crate) fn pass(app: &mut PdfCraftApp) {
             }
             open_list(app, Some(name));
         }
-        Some(DialogResult::Cancel) => open_list(app, None),
+        // Any answer but OK leaves the editor and returns to the list, as Cancel does.
+        Some(_) => open_list(app, None),
         None => {}
     }
 }

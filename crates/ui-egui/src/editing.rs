@@ -315,7 +315,7 @@ impl PdfCraftApp {
     }
 
     /// Undo the last change: to the Combine files list while its tab shows, else the document.
-    pub fn undo(&mut self) {
+    pub fn undo(&mut self, ctx: &egui::Context) {
         // While a polygon, cloud or run of connected lines is being drawn, Undo takes back its
         // last point instead of the last finished edit.
         if let Some((i, _)) = self.active_ids()
@@ -324,7 +324,7 @@ impl PdfCraftApp {
             return;
         }
         if self.combine_showing() {
-            self.combine_history_step(true);
+            self.combine_history_step(ctx, true);
         } else if !self.undo_in_page_box() {
             self.history_step(true);
         }
@@ -345,9 +345,9 @@ impl PdfCraftApp {
         false
     }
 
-    pub fn redo(&mut self) {
+    pub fn redo(&mut self, ctx: &egui::Context) {
         if self.combine_showing() {
-            self.combine_history_step(false);
+            self.combine_history_step(ctx, false);
         } else if !self.redo_in_page_box() {
             self.history_step(false);
         }

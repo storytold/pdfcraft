@@ -77,9 +77,10 @@ fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
     let duplicate = app.combine_draft.last().unwrap().id;
     app.combine_apply(RowAction::RemoveFile(duplicate));
     assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[false, false]);
-    app.combine_history_step(true);
+    let ctx = egui::Context::default();
+    app.combine_history_step(&ctx, true);
     assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[true, true, true]);
-    app.close_combine_tab();
+    app.close_combine_tab(&ctx);
     assert!(app.combine_tab.duplicate_warnings(&app.combine_draft).is_empty());
 }
 
@@ -113,7 +114,7 @@ fn every_read_of_a_file_is_new_even_after_undo() {
     let added = app.combine_draft[0].auth;
     assert!(app.combine_unlock_rows(&[0], "pw"));
     let first = app.combine_draft[0].auth;
-    app.combine_history_step(true);
+    app.combine_history_step(&egui::Context::default(), true);
     assert_eq!(app.combine_draft[0].auth, added, "undo brings back the file as it was read");
     assert!(app.combine_unlock_rows(&[0], "owner"));
     let second = app.combine_draft[0].auth;
