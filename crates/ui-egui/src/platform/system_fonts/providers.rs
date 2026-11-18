@@ -12,19 +12,11 @@ use std::sync::{Arc, OnceLock};
 use egui::{FallbackRequest, FontData, FontInsert, FontPriority, FontProvider, InsertFontFamily};
 
 pub(crate) fn install(ctx: &egui::Context, locale: &str) {
-    let providers: Vec<Arc<dyn FontProvider>> = if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
-        Vec::new()
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        craft_ui::fonts::install_font_providers(ctx, None, Vec::new());
     } else {
-        let mut providers: Vec<Arc<dyn FontProvider>> = Vec::new();
-        if let Some(system) = craft_ui::fonts::system_font_provider(locale) {
-            providers.push(Arc::new(craft_ui::fonts::RegularWeight::new(system)));
-        }
-        providers.push(Arc::new(Unifont { load: installed_unifont, faces: OnceLock::new() }));
-        providers
-    };
-    // Language changes reinstall fonts. Replace the providers instead of accumulating them;
-    // an empty list also removes previously installed providers when the opt-out is set.
-    ctx.set_font_providers(providers);
+        craft_ui::fonts::install_font_providers(ctx, Some(locale), vec![Arc::new(Unifont { load: installed_unifont, faces: OnceLock::new() })]);
+    }
 }
 
 struct Unifont {
@@ -33,6 +25,10 @@ struct Unifont {
 }
 
 impl FontProvider for Unifont {
+    fn is_last_resort(&self) -> bool {
+        true
+    }
+
     fn font_for(&self, request: &FallbackRequest<'_>) -> Option<FontInsert> {
         let c = request.cluster.chars().next()?;
         self.faces.get_or_init(self.load).iter().enumerate().find_map(|(slot, data)| {
@@ -107,7 +103,11 @@ fn load_files(paths: Vec<PathBuf>) -> Vec<FontData> {
         if !seen.insert(path.clone()) {
             continue;
         }
-        let Ok(file) = std::fs::File::open(&path) else { continue };
+        let Ok(meta) = path.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(file) = open_font(&path) else { continue };
         let limit = (super::MAX_BYTES as usize).min(remaining);
         let Ok(meta) = file.metadata() else { continue };
         if !meta.is_file() || meta.len() > limit as u64 {
@@ -124,6 +124,18 @@ fn load_files(paths: Vec<PathBuf>) -> Vec<FontData> {
         faces.push(FontData::from_owned(bytes));
     }
     faces
+}
+
+fn open_font(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        // The path can become a FIFO after metadata(). Nonblocking open prevents waiting
+        // for its writer; load_files still verifies the opened handle is a regular file.
+        use rustix::fs::{Mode, OFlags};
+        Ok(rustix::fs::open(path, OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())?.into())
+    }
+    #[cfg(not(unix))]
+    std::fs::File::open(path)
 }
 
 #[cfg(test)]
