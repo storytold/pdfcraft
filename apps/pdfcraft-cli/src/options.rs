@@ -10,11 +10,11 @@ pub(crate) struct OptionSpec {
     pub(crate) takes_value: bool,
 }
 
-/// The options whose value is a file or folder. Only these refuse a value that is another
+/// The options whose value is a file, folder or port. Only these refuse a value that is another
 /// option: a file named `--password` is never what was meant, while a password can be anything
 /// (`--password --page` is a password of `--page`, which tests/text.rs pins), and so can a title.
 /// The way to name a file that does start with `-` is `./--name`, as `--root` already offered.
-const PATH_VALUE_OPTIONS: [&str; 6] = ["--out", "--out-dir", "--json", "--root", "--control", "--script"];
+const PATH_VALUE_OPTIONS: [&str; 7] = ["--out", "--out-dir", "--json", "--root", "--control", "--control-token-file", "--script"];
 
 /// Whether a token can be the value of a path option. Another option cannot: `--out --password`
 /// used to write the PDF to a file called `--password` and exit 0 (photocraft#6944).
@@ -119,7 +119,12 @@ pub(crate) const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--report", takes_value: false },
 ];
 
-pub(crate) const UI_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--control", takes_value: true }, OptionSpec { name: "--out", takes_value: true }];
+pub(crate) const UI_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--control", takes_value: true },
+    OptionSpec { name: "--control-token", takes_value: true },
+    OptionSpec { name: "--control-token-file", takes_value: true },
+    OptionSpec { name: "--out", takes_value: true },
+];
 
 #[cfg(feature = "mcp")]
 pub(crate) const MCP_OPTIONS: &[OptionSpec] =

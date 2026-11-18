@@ -45,8 +45,8 @@ finish-args:
   # passed by path (the command line, Open Recent, "Save" next to the original) work there.
   - --filesystem=xdg-documents
   - --filesystem=xdg-download
-  # Network: Help ▸ Check for updates reaches GitHub. The optional --control channel still listens
-  # on 127.0.0.1 inside the sandbox.
+  # Network: Help ▸ Check for updates reaches GitHub. The optional `--control <PORT>` channel
+  # (token-authenticated) still listens on 127.0.0.1 inside the sandbox.
   - --share=network
   # Deliberately not granted: home/host filesystem access. No CUPS socket either: printing
   # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print

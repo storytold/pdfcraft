@@ -329,21 +329,23 @@ Edits stay in memory, undoable, until `doc_save`. Saving to the same file append
 
 ### Driving the app itself
 
-Start the desktop app with `pdfcraft --control ~/.pdfcraft-control.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
+Start the desktop app with `pdfcraft --control 4242 --control-token-file ~/.pdfcraft-token` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token, which the app writes to the token file, where only you can read it.
 
-Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, or one that another user owns, or that another user or a group such as Administrators can read or write: on macOS, Linux and FreeBSD by its owner and mode (the app writes it with mode 600), on Windows by its owner and access list (the app gives it one with only you and SYSTEM on it). The app doesn't start if it can't write the file. On Windows, cmd.exe doesn't expand `~`: use `%USERPROFILE%\.pdfcraft-control.json` there.
+Keep the token file in a folder only you can write. `pdfcraft-cli ui` refuses a token file that is not a regular file or that a group or other users can read: on macOS, Linux and FreeBSD by its mode (the app writes it with mode 600), on Windows by its owner and access list (the app gives it one with only you and SYSTEM on it). The port comes from your own `--control` flag, so no file can send the token to another user's listener. On Windows, cmd.exe doesn't expand `~`: use `%USERPROFILE%\.pdfcraft-token` there.
 
 ```sh
-pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # find widgets
-pdfcraft-cli ui --control ~/.pdfcraft-control.json click label="Organize pages"
-pdfcraft-cli ui --control ~/.pdfcraft-control.json key key=K modifiers='["command"]'
-pdfcraft-cli ui --control ~/.pdfcraft-control.json command id=comment.square   # pick a tool, then draw:
-pdfcraft-cli ui --control ~/.pdfcraft-control.json drag from='[400,300]' to='[600,420]'
-pdfcraft-cli ui --control ~/.pdfcraft-control.json screenshot --out window.png
-pdfcraft-cli ui --control ~/.pdfcraft-control.json resize width=1200 height=800
-pdfcraft-cli ui --control ~/.pdfcraft-control.json focus label="Read"
-pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect focused=true
-pdfcraft-cli ui --control ~/.pdfcraft-control.json quit
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token inspect query=rotate      # find widgets
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token click label="Organize pages"
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token key key=K modifiers='["command"]'
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token command id=comment.square   # pick a tool, then draw:
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token click x=400 y=300 hold=true
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token move x=600 y=420
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token release
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token screenshot --out window.png
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token resize width=1200 height=800
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token focus label="Read"
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token inspect focused=true
+pdfcraft-cli ui --control 4242 --control-token-file ~/.pdfcraft-token quit
 ```
 
 `ui.panel` opens, closes or sizes a side panel: `{"panel":"tools"|"side","open":true|false,"width":320}`.

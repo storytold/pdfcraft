@@ -43,7 +43,7 @@ fn usage_lists_mcp_only_when_built_with_it() {
     assert_eq!(stdout.contains("--compact"), cfg!(feature = "mcp"), "{stdout}");
     // The lines around it are still there.
     assert!(stdout.contains("pdfcraft-cli run    --script steps.json"), "{stdout}");
-    assert!(stdout.contains("pdfcraft-cli ui     --control FILE"), "{stdout}");
+    assert!(stdout.contains("pdfcraft-cli ui     --control PORT"), "{stdout}");
 }
 
 #[cfg(not(feature = "mcp"))]
