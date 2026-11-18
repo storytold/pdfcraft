@@ -1,182 +1,528 @@
-//! The side panels around the page: the Tools pane, the rail and the open side panel
-//! ([`crate::RightPanel`]), drawn with craft-ui task panes ([`craft_ui::panes`]).
+//! The dock around the page: the Tools panel, the toolbar rail and the eleven side panels
+//! ([`crate::RightPanel`]) as panels of one [`Workspace`], shown by a [`DockArea`].
 //!
-//! On the right, outermost first: the rail, the Tools pane when Preferences ▸ Tools panel side is
-//! Right, then the side panel, then the page. Panes are docked only; their widths are resizable
-//! and saved with the preferences.
+//! The workspace is the one record of which panels are open and where they sit. Settings written
+//! by earlier versions (`side_panels`, `docking`) are read once by [`migrate`].
 
-use std::ops::RangeInclusive;
-
-use craft_ui::panes::{Edge, PaneContent, PaneHost, PaneLabels, PaneRequest, PaneState, SidePolicy};
+use craft::automation::dock as dock_rpc;
+use craft::behavior::{Axis, DockSide};
+use craft::behavior::dock::{Action, Column, DockEdge, DockPlacement, Group, Layout, Location, Node, Permissions, SplitSize, Target, Workspace};
+use craft::keymap::CommandRef;
+use craft::ui::contract::{Bind, BodyCx};
+use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, PanelSpec};
+use craft::ui::menu::PanelRow;
+use craft::ui::patterns::dock::DockArea;
+use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Mode, PdfCraftApp};
+use crate::{LeftPanel, Mode, PdfCraftApp, RightPanel};
 
-/// Default width of the Tools pane.
-pub const TOOLS_WIDTH: f32 = 272.0;
-/// Default width of the side panel.
-pub const SIDE_WIDTH: f32 = 330.0;
-/// The Tools pane's own margins, left and right (14 pt each, and a pt of border), around what a panel lays out.
-const TOOLS_GUTTERS: f32 = 30.0;
-/// No narrower than Format text's widest row, so nothing in it is cut off.
-const TOOLS_RANGE: RangeInclusive<f32> = (crate::format_text_ui::MIN_ROW + TOOLS_GUTTERS)..=520.0;
-const SIDE_RANGE: RangeInclusive<f32> = 260.0..=520.0;
-/// Version of the saved `side_panels` value.
-const VERSION: u64 = 1;
 /// Deepest split tree the old layout migration walks; the old renderer allowed far fewer.
 const MAX_DEPTH: usize = 32;
 
-/// The two panes [`PaneHost`] draws.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Pane {
-    Tools,
-    /// The open [`crate::RightPanel`].
-    Side,
-}
-
-impl Pane {
-    pub fn parse(id: &str) -> Option<Self> {
-        match id {
-            "tools" => Some(Self::Tools),
-            "side" => Some(Self::Side),
-            _ => None,
-        }
-    }
-
-    fn range(self) -> RangeInclusive<f32> {
-        match self {
-            Self::Tools => TOOLS_RANGE,
-            Self::Side => SIDE_RANGE,
-        }
-    }
-}
-
-/// Preferences ▸ Tools panel side.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A panel of the dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ToolsSide {
-    #[default]
-    Left,
-    Right,
+pub enum PanelId {
+    /// The tool panels (All tools, a tool's options).
+    Tools,
+    /// The rail of panel buttons and page navigation.
+    Toolbar,
+    /// The page area: the document canvas, which no action closes or moves.
+    Document,
+    /// [`RightPanel::Comments`].
+    Comments,
+    /// [`RightPanel::Bookmarks`].
+    Bookmarks,
+    /// [`RightPanel::Pages`].
+    Pages,
+    /// [`RightPanel::Fields`].
+    Fields,
+    /// [`RightPanel::Layers`].
+    Layers,
+    /// [`RightPanel::Attachments`].
+    Attachments,
+    /// [`RightPanel::Signatures`].
+    Signatures,
+    /// [`RightPanel::Accessibility`].
+    Accessibility,
+    /// [`RightPanel::Tags`].
+    Tags,
+    /// [`RightPanel::Search`].
+    Search,
+    /// [`RightPanel::Compare`].
+    Compare,
 }
 
-/// The saved side panel layout. Which side panel is open stays in `PdfCraftApp::right` and the
-/// Tools pane's open state in `PdfCraftApp::left_open`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SidePanels {
-    /// The one setting that places the Tools pane; [`SidePanels::tools_edge`] is its only reader
-    /// in the layout.
-    pub tools_side: ToolsSide,
-    pub rail_side: ToolsSide,
-    pub tools_width: f32,
-    pub side_width: f32,
-}
+/// The side panels, in the order the rail lists them.
+const SIDE: [PanelId; 11] = [
+    PanelId::Comments,
+    PanelId::Bookmarks,
+    PanelId::Pages,
+    PanelId::Fields,
+    PanelId::Layers,
+    PanelId::Attachments,
+    PanelId::Signatures,
+    PanelId::Accessibility,
+    PanelId::Tags,
+    PanelId::Search,
+    PanelId::Compare,
+];
 
-impl Default for SidePanels {
-    fn default() -> Self {
-        Self { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: TOOLS_WIDTH, side_width: SIDE_WIDTH }
-    }
-}
-
-/// A width from settings or automation: finite, within the pane's limits.
-fn clamp_width(pane: Pane, width: f64) -> Option<f32> {
-    let range = pane.range();
-    width.is_finite().then(|| (width as f32).clamp(*range.start(), *range.end()))
-}
-
-/// What [`restore`] read from the saved preferences.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Restored {
-    pub panels: SidePanels,
-    /// `None`: not saved; keep the default.
-    pub tools_open: Option<bool>,
-    /// An old layout had the side panel closed.
-    pub side_closed: bool,
-}
-
-impl SidePanels {
-    pub fn tools_on_right(&self) -> bool {
-        self.tools_side == ToolsSide::Right
-    }
-
-    fn tools_edge(&self) -> Edge {
-        match self.tools_side {
-            ToolsSide::Left => Edge::Start,
-            ToolsSide::Right => Edge::End,
+impl PanelId {
+    /// The name `ui.panel` and the panel's toggle command use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tools => "tools",
+            Self::Toolbar => "toolbar",
+            Self::Document => "document",
+            Self::Comments => "comments",
+            Self::Bookmarks => "bookmarks",
+            Self::Pages => "pages",
+            Self::Fields => "fields",
+            Self::Layers => "layers",
+            Self::Attachments => "attachments",
+            Self::Signatures => "signatures",
+            Self::Accessibility => "accessibility",
+            Self::Tags => "tags",
+            Self::Search => "search",
+            Self::Compare => "compare",
         }
     }
 
-    /// Whether the navigation rail is docked on the right side of the window.
-    pub fn rail_on_right(&self) -> bool {
-        self.rail_side == ToolsSide::Right
+    /// The panel `name` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Tools, Self::Toolbar].into_iter().chain(SIDE).find(|panel| panel.name() == name)
     }
 
-    /// Return the layout [`Edge`] (`Start` or `End`) where the navigation rail and side panel dock.
-    pub fn rail_edge(&self) -> Edge {
-        match self.rail_side {
-            ToolsSide::Left => Edge::Start,
-            ToolsSide::Right => Edge::End,
-        }
-    }
-
-    pub fn width(&self, pane: Pane) -> f32 {
-        match pane {
-            Pane::Tools => self.tools_width,
-            Pane::Side => self.side_width,
-        }
-    }
-
-    fn set_width(&mut self, pane: Pane, width: f32) {
-        let Some(width) = clamp_width(pane, f64::from(width)) else { return };
-        match pane {
-            Pane::Tools => self.tools_width = width,
-            Pane::Side => self.side_width = width,
-        }
-    }
-
-    /// The saved value (`side_panels` in the preferences).
-    pub fn to_json(&self, tools_open: bool) -> Value {
-        json!({
-            "version": VERSION,
-            "tools_side": self.tools_side,
-            "rail_side": self.rail_side,
-            "tools_open": tools_open,
-            "tools_width": self.tools_width,
-            "side_width": self.side_width,
+    /// The side panel this is, `None` for Tools and the toolbar.
+    pub fn side(self) -> Option<RightPanel> {
+        Some(match self {
+            Self::Comments => RightPanel::Comments,
+            Self::Bookmarks => RightPanel::Bookmarks,
+            Self::Pages => RightPanel::Pages,
+            Self::Fields => RightPanel::Fields,
+            Self::Layers => RightPanel::Layers,
+            Self::Attachments => RightPanel::Attachments,
+            Self::Signatures => RightPanel::Signatures,
+            Self::Accessibility => RightPanel::Accessibility,
+            Self::Tags => RightPanel::Tags,
+            Self::Search => RightPanel::Search,
+            Self::Compare => RightPanel::Compare,
+            Self::Tools | Self::Toolbar | Self::Document => return None,
         })
     }
+
 }
 
-/// Reads the side panel layout from saved preferences: `side_panels`, else the old `docking`
-/// value, else the defaults. Nothing in it is an error: a malformed or unknown value gives the
-/// defaults.
-pub fn restore(saved: &Value) -> Restored {
-    let defaults = Restored { panels: SidePanels::default(), tools_open: None, side_closed: false };
-    if let Some(value) = saved.get("side_panels") {
-        if value.get("version").and_then(Value::as_u64) != Some(VERSION) {
-            return defaults;
+impl From<RightPanel> for PanelId {
+    /// The panel of side panel `panel`.
+    fn from(panel: RightPanel) -> Self {
+        match panel {
+            RightPanel::Comments => Self::Comments,
+            RightPanel::Bookmarks => Self::Bookmarks,
+            RightPanel::Pages => Self::Pages,
+            RightPanel::Fields => Self::Fields,
+            RightPanel::Layers => Self::Layers,
+            RightPanel::Attachments => Self::Attachments,
+            RightPanel::Signatures => Self::Signatures,
+            RightPanel::Accessibility => Self::Accessibility,
+            RightPanel::Tags => Self::Tags,
+            RightPanel::Search => Self::Search,
+            RightPanel::Compare => Self::Compare,
         }
-        let mut panels = SidePanels::default();
-        if let Some(side) = value.get("tools_side").and_then(|v| serde_json::from_value::<ToolsSide>(v.clone()).ok()) {
-            panels.tools_side = side;
-        }
-        if let Some(side) = value.get("rail_side").and_then(|v| serde_json::from_value::<ToolsSide>(v.clone()).ok()) {
-            panels.rail_side = side;
-        }
-        if let Some(width) = value.get("tools_width").and_then(Value::as_f64).and_then(|w| clamp_width(Pane::Tools, w)) {
-            panels.tools_width = width;
-        }
-        if let Some(width) = value.get("side_width").and_then(Value::as_f64).and_then(|w| clamp_width(Pane::Side, w)) {
-            panels.side_width = width;
-        }
-        return Restored { panels, tools_open: value.get("tools_open").and_then(Value::as_bool), side_closed: false };
     }
-    let Some(mut restored) = saved.get("docking").and_then(migrate) else { return defaults };
-    if let Some(open) = saved.get("docking_left_open").and_then(Value::as_bool) {
-        restored.tools_open = Some(open);
+}
+
+impl From<LeftPanel> for PanelId {
+    /// Every left panel is a view of the Tools panel.
+    fn from(_: LeftPanel) -> Self {
+        Self::Tools
     }
-    restored
+}
+
+/// What may happen to `panel`. Tools and the toolbar never collapse to icons and never share their column; the page
+/// area is protected; every other panel may close.
+fn permissions(panel: &PanelId) -> Permissions {
+    match panel {
+        PanelId::Document => Permissions::PROTECTED,
+        PanelId::Tools | PanelId::Toolbar => Permissions::ALL.collapses(false).shares_column(false),
+        _ => Permissions::ALL,
+    }
+}
+
+/// The edge of the rail's dock; the rail is on the start or the end side, never above or below.
+fn rail_edge(side: DockSide) -> DockEdge {
+    if side == DockSide::Start { DockEdge::Start } else { DockEdge::End }
+}
+
+/// Share of the window the start dock takes.
+const START_SHARE: f32 = 0.2;
+/// Share of the rest the page area takes beside the end dock.
+const PAGE_SHARE: f32 = 0.8;
+
+/// The arrangement of a new install: Tools at the start edge, the toolbar at the rail's edge, the page area between
+/// the docks, and every side panel closed, remembered as a column after the toolbar's.
+pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
+    let single = |panel| Column::new(vec![Group::new(vec![panel], 0)]);
+    let (tools, toolbar) = (single(PanelId::Tools), single(PanelId::Toolbar));
+    let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![toolbar, tools], Vec::new()) } else { (vec![tools], vec![toolbar]) };
+    let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
+    let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
+    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
+    workspace.hidden = SIDE.iter().map(|panel| (*panel, Location::new(Some(PanelId::Toolbar), DockPlacement::column(true)))).collect();
+    workspace
+}
+
+/// The window edge whose dock holds `panel`, `None` when it is closed or floating.
+fn edge_of(workspace: &Workspace<PanelId>, panel: PanelId) -> Option<DockEdge> {
+    let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout.root.iter().map(|node| (node, 0)).collect();
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_DEPTH {
+            continue;
+        }
+        match node {
+            Node::Split { first, second, .. } => {
+                pending.push((&**first, depth + 1));
+                pending.push((&**second, depth + 1));
+            }
+            Node::Dock { side, columns, .. } => {
+                if columns.iter().any(|column| column.panels().any(|p| *p == panel)) {
+                    return Some(*side);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn edge_name(edge: Option<DockEdge>) -> &'static str {
+    if edge == Some(DockEdge::End) { "right" } else { "left" }
+}
+
+/// The side panel that is open, if any.
+fn open_side(workspace: &Workspace<PanelId>) -> Option<PanelId> {
+    SIDE.into_iter().find(|panel| workspace.layout.contains(panel))
+}
+
+/// The tab label of a side panel: its name, and the count of what it lists where it has one.
+fn side_label(app: &PdfCraftApp, panel: RightPanel) -> String {
+    let title = match panel {
+        RightPanel::Comments => "Comments",
+        RightPanel::Bookmarks => "Bookmarks",
+        RightPanel::Pages => "Pages",
+        RightPanel::Fields => "Fields",
+        RightPanel::Layers => "Layers",
+        RightPanel::Attachments => "Attachments",
+        RightPanel::Signatures => "Signatures",
+        RightPanel::Accessibility => "Accessibility Checker",
+        RightPanel::Tags => "Tags",
+        RightPanel::Search => "Search",
+        RightPanel::Compare => "Compare",
+    };
+    let count = app.active_ids().and_then(|(_, id)| {
+        let doc = app.session.get(id)?;
+        let info = &doc.info;
+        match panel {
+            RightPanel::Comments => Some(crate::comments_panel::count(info)),
+            RightPanel::Pages => Some(info.pages.len()),
+            RightPanel::Fields => Some(info.fields.len()),
+            RightPanel::Layers => Some(info.layer_order.iter().filter(|r| matches!(r.item, pdfcraft_render::LayerItem::Layer(_))).count()),
+            RightPanel::Attachments => Some(info.attachments.len()),
+            RightPanel::Signatures => Some(doc.signatures.iter().filter(|s| s.signed).count()),
+            RightPanel::Compare => app.compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len()),
+            RightPanel::Bookmarks | RightPanel::Accessibility | RightPanel::Tags | RightPanel::Search => None,
+        }
+    });
+    let title = crate::i18n::t(title);
+    match count {
+        Some(n) => format!("{title} ({n})"),
+        None => title.to_owned(),
+    }
+}
+
+/// The dock's panels over the app in one pass.
+struct Panels<'a> {
+    app: &'a mut PdfCraftApp,
+    ctx: egui::Context,
+}
+
+impl DockPanels<PanelId> for Panels<'_> {
+    fn spec(&self, panel: &PanelId) -> PanelSpec {
+        if *panel == PanelId::Toolbar {
+            return crate::hotbar::panel_spec(&*self.app, &self.ctx);
+        }
+        if *panel == PanelId::Document {
+            return PanelSpec::new(crate::i18n::t("Document").to_owned()).canvas();
+        }
+        let label = match panel.side() {
+            Some(side) => side_label(self.app, side),
+            None if self.app.left == LeftPanel::CalculationOrder => crate::i18n::t("Calculation order").to_owned(),
+            None => crate::i18n::t("Tools").to_owned(),
+        };
+        PanelSpec::new(label).command(CommandRef::with_params("view.panel", json!({ "panel": panel.name() })))
+    }
+
+    fn permissions(&self, panel: &PanelId) -> Permissions {
+        permissions(panel)
+    }
+
+    fn body(&mut self, panel: &PanelId, ui: &mut Ui, cx: &mut BodyCx<'_>) {
+        match panel {
+            PanelId::Tools => crate::panels::left_panel(self.app, ui),
+            // The rail and the page area are their groups' `group_view`.
+            PanelId::Toolbar | PanelId::Document => {}
+            side => {
+                if let Some(side) = side.side() {
+                    super::right::panel_body(self.app, ui, cx, side);
+                }
+            }
+        }
+    }
+
+    fn group_view(&mut self, panels: &[PanelId], _active: usize, ui: &mut Ui, at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
+        // Measuring is the dock's; a shown view takes the rect it is given.
+        let GroupAt::Show(rect) = at else { return None };
+        if panels.contains(&PanelId::Toolbar) {
+            crate::hotbar::show_rail(self.app, ui);
+        } else if panels.contains(&PanelId::Document) {
+            // The expanded All tools view covers the page area but keeps the docks.
+            if self.app.mode == Mode::AllTools && self.app.all_tools_full {
+                crate::all_tools_ui::show(self.app, ui);
+            } else {
+                crate::panes::page_area(self.app, ui);
+            }
+        } else {
+            return None;
+        }
+        Some(rect.height())
+    }
+
+    fn group_header(&mut self, panels: &[PanelId], active: usize, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
+        let Some(panel) = panels.get(active) else { return };
+        match panel {
+            // PLAN: assumed `calc_order_ui::header(ui)` (pdf-forms-w12).
+            PanelId::Tools => {
+                if self.app.left == LeftPanel::CalculationOrder {
+                    crate::calc_order_ui::header(ui);
+                }
+            }
+            PanelId::Bookmarks => super::bookmarks::header(self.app, ui),
+            PanelId::Comments => self.comments_header(ui),
+            _ => {}
+        }
+    }
+
+    fn panel_rows(&mut self, panel: &PanelId) -> Vec<PanelRow> {
+        match panel {
+            PanelId::Pages => super::pages::tools_menu(&*self.app),
+            PanelId::Layers => super::layers::menu_rows(&*self.app),
+            PanelId::Bookmarks => super::bookmarks::options_menu(&*self.app),
+            _ => Vec::new(),
+        }
+    }
+}
+
+impl Panels<'_> {
+    fn comments_header(&mut self, ui: &mut Ui) {
+        let Some((index, id)) = self.app.active_ids() else { return };
+        let command = {
+            let Some(doc) = self.app.session.get(id) else { return };
+            crate::comments_panel::header(ui, doc, &mut self.app.views[index], &self.app.comment_prefs)
+        };
+        if let Some(command) = command {
+            self.app.run_command(command);
+        }
+    }
+}
+
+/// The permissions alone, for the automation method that applies a dock action without drawing the dock.
+struct Rules;
+
+impl DockPanels<PanelId> for Rules {
+    fn spec(&self, panel: &PanelId) -> PanelSpec {
+        PanelSpec::new(panel.name())
+    }
+
+    fn permissions(&self, panel: &PanelId) -> Permissions {
+        permissions(panel)
+    }
+
+    fn body(&mut self, _panel: &PanelId, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+}
+
+/// Draws the dock. Call after the top bars and before the central panel.
+///
+/// The area gets a copy of the workspace and reports every change of the pass; they are applied to `app.dock` here,
+/// the area's own actions first, then the ones the bodies requested. A pass applies only what it reported.
+pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
+    let active = app.active.is_some();
+    let read = app.mode == Mode::Read;
+    // The expanded All tools view covers the panels but keeps the rail.
+    let expanded = app.mode == Mode::AllTools && app.all_tools_full;
+    let workspace = app.dock.clone();
+    let mut panels = Panels { ctx: ui.ctx().clone(), app: &mut *app };
+    // Home and Combine have no side panel and no rail, and Read mode hides the tools, not the navigation panels.
+    let shown = |panel: &PanelId| match panel {
+        PanelId::Document => true,
+        PanelId::Toolbar => active,
+        PanelId::Tools => !read && !expanded,
+        _ => active && !expanded,
+    };
+    let output = DockArea::new("Dock", Bind::given(workspace), &mut panels, DockConfig::default().native_windows(false))
+        .hide(HidePanels::Except(&shown))
+        .show(ui);
+    for action in output.actions.into_iter().chain(output.requested) {
+        // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
+        drop(app.dock.apply(action, false, permissions));
+    }
+    if let Some(panel) = open_side(&app.dock).and_then(PanelId::side) {
+        app.last_right = panel;
+    }
+}
+
+/// What `ui.panel` and `ui.state` report.
+pub fn state(app: &PdfCraftApp) -> Value {
+    let side = open_side(&app.dock);
+    json!({
+        "tools_side": edge_name(edge_of(&app.dock, PanelId::Tools)),
+        "tools_open": app.dock.layout.contains(&PanelId::Tools),
+        "rail_side": edge_name(Some(rail_edge(app.rail_side))),
+        "side_open": side.is_some(),
+        "side_panel": side.and_then(PanelId::side).map(|r| format!("{r:?}")),
+    })
+}
+
+/// The reply when the dock does not allow a change to a panel.
+fn refused() -> String {
+    crate::i18n::t("The dock does not allow that change to this panel").to_owned()
+}
+
+/// Opens or closes `panel` in the workspace, the one write path for panel visibility.
+fn show_panel(app: &mut PdfCraftApp, panel: PanelId, visible: bool) -> Result<(), String> {
+    let fallback = (panel != PanelId::Toolbar && app.dock.layout.contains(&PanelId::Toolbar)).then_some(PanelId::Toolbar);
+    app.dock.set_visible(panel, visible, fallback, false, permissions).map_err(|_| refused())
+}
+
+/// Opens or closes `panel`, telling the user when the dock refuses.
+pub(crate) fn set_panel_visible(app: &mut PdfCraftApp, panel: PanelId, visible: bool) {
+    if let Err(error) = show_panel(app, panel, visible) {
+        app.notify(error);
+    }
+}
+
+/// Moves the column holding `panel` to the `edge` dock.
+fn move_to_edge(app: &mut PdfCraftApp, panel: PanelId, edge: DockEdge) -> Result<(), String> {
+    if !app.dock.layout.contains(&panel) {
+        return Err(format!("open the {} panel first", panel.name()));
+    }
+    if edge_of(&app.dock, panel) == Some(edge) {
+        return Ok(());
+    }
+    app.dock.apply(Action::move_column(panel, Target::new_dock(edge)), false, permissions).map(drop).map_err(|_| refused())
+}
+
+/// Puts the rail, and the side panels that share its edge, on `side`.
+pub(crate) fn set_rail_side(app: &mut PdfCraftApp, side: DockSide) -> Result<(), String> {
+    let edge = rail_edge(side);
+    for panel in [PanelId::Toolbar].into_iter().chain(SIDE) {
+        if app.dock.layout.contains(&panel) {
+            move_to_edge(app, panel, edge)?;
+        }
+    }
+    app.rail_side = side;
+    Ok(())
+}
+
+fn edge_param(value: &str, key: &str) -> Result<DockEdge, String> {
+    match value {
+        "left" => Ok(DockEdge::Start),
+        "right" => Ok(DockEdge::End),
+        _ => Err(format!("{key} must be left or right")),
+    }
+}
+
+/// `ui.panel {panel, open?, edge?}`, `ui.panel {rail_side}` and `ui.dock.reset` (`reset`).
+///
+/// A request is checked whole before anything changes. Panel sizes are not parameters: they are the dock's, set by
+/// dragging a divider or by `ui.dock.apply`.
+pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Value, String> {
+    if reset {
+        app.dock = default_workspace(app.rail_side);
+        return Ok(json!({ "side_panels": state(app) }));
+    }
+    if params.get("width").is_some_and(|width| !width.is_null()) {
+        return Err("panel sizes are set by dragging a divider or by ui.dock.apply".into());
+    }
+    let rail = match params.get("rail_side") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(side)) if side == "toggle" => Some(if rail_edge(app.rail_side) == DockEdge::Start { DockSide::End } else { DockSide::Start }),
+        Some(value) => {
+            let edge = edge_param(value.as_str().unwrap_or_default(), "rail_side")?;
+            Some(if edge == DockEdge::Start { DockSide::Start } else { DockSide::End })
+        }
+    };
+    let panel = match params.get("panel") {
+        None | Some(Value::Null) if rail.is_some() => None,
+        value => {
+            let name = value.and_then(Value::as_str).ok_or("panel must be \"tools\", \"toolbar\", \"side\" or a side panel's name")?;
+            Some(if name == "side" {
+                PanelId::from(app.last_right)
+            } else {
+                PanelId::parse(name).ok_or("panel must be \"tools\", \"toolbar\", \"side\" or a side panel's name")?
+            })
+        }
+    };
+    let open = match params.get("open") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_bool().ok_or("open must be a boolean")?),
+    };
+    let edge = match params.get("edge") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(edge_param(value.as_str().unwrap_or_default(), "edge")?),
+    };
+    if let Some(panel) = panel {
+        if let Some(open) = open {
+            show_panel(app, panel, open)?;
+        }
+        if let Some(edge) = edge {
+            move_to_edge(app, panel, edge)?;
+        }
+    }
+    if let Some(side) = rail {
+        set_rail_side(app, side)?;
+    }
+    Ok(json!({ "side_panels": state(app) }))
+}
+
+/// `ui.dock.apply {action}`: one dock action applied to the workspace under the panels' permissions.
+pub fn dock_method(app: &mut PdfCraftApp, method: &str, params: &Value) -> Option<Result<Value, String>> {
+    dock_rpc::dock_method(&mut app.dock, &Rules, false, method, params)
+}
+
+/// The dock's layout for `ui.inspect`.
+pub fn dock_inspect(app: &PdfCraftApp) -> Value {
+    dock_rpc::inspect(&app.dock)
+}
+
+/// What [`migrate`] read from settings written before the dock.
+pub(crate) struct Migrated {
+    /// The arrangement the old layout stood for.
+    pub workspace: Workspace<PanelId>,
+    /// The side the old rail was on.
+    pub rail_side: DockSide,
+}
+
+/// The old layout's facts, from either old format.
+struct Old {
+    tools_right: bool,
+    rail: DockSide,
+    tools_open: bool,
+    tools_width: Option<f64>,
+    side_open: bool,
+    side_width: Option<f64>,
 }
 
 /// Where the old docking tree held a panel.
@@ -265,199 +611,83 @@ fn old_panel(old: &Value, panel: &str) -> (bool, bool, Option<f64>) {
     (right, false, size)
 }
 
-/// Reads the old docking layout (craft-ui's `Workspace`) as plain JSON. `None` when it has no
-/// document view, which the old layout always held.
-fn migrate(old: &Value) -> Option<Restored> {
-    find(old.get("layout")?.get("root")?, "canvas", 0)?;
-    let mut panels = SidePanels::default();
-    let (tools_right, tools_open, tools_width) = old_panel(old, "tools");
-    let (_, side_open, side_width) = old_panel(old, "inspector");
-    if tools_right {
-        panels.tools_side = ToolsSide::Right;
+/// The `side_panels` value of version 1.
+fn read_side_panels(value: &Value) -> Option<Old> {
+    if value.get("version").and_then(Value::as_u64) != Some(1) {
+        return None;
     }
-    if let Some(width) = tools_width.and_then(|w| clamp_width(Pane::Tools, w)) {
-        panels.tools_width = width;
-    }
-    if let Some(width) = side_width.and_then(|w| clamp_width(Pane::Side, w)) {
-        panels.side_width = width;
-    }
-    Some(Restored { panels, tools_open: Some(tools_open), side_closed: !side_open })
-}
-
-/// What `ui.panel` and `ui.state` report.
-pub fn state(app: &PdfCraftApp) -> Value {
-    let panels = &app.side_panels;
-    json!({
-        "tools_side": panels.tools_side,
-        "tools_open": app.left_open,
-        "tools_width": panels.tools_width,
-        "side_open": app.right.is_some(),
-        "side_panel": app.right.map(|r| format!("{r:?}")),
-        "side_width": panels.side_width,
+    let text = |key: &str| value.get(key).and_then(Value::as_str);
+    let width = |key: &str| value.get(key).and_then(Value::as_f64);
+    Some(Old {
+        tools_right: text("tools_side") == Some("right"),
+        rail: if text("rail_side") == Some("left") { DockSide::Start } else { DockSide::End },
+        tools_open: value.get("tools_open").and_then(Value::as_bool).unwrap_or(true),
+        tools_width: width("tools_width"),
+        side_open: true,
+        side_width: width("side_width"),
     })
 }
 
-/// `ui.panel {panel, open?, width?}` and `ui.dock.reset` (`reset`).
-pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Value, String> {
-    if reset {
-        app.side_panels = SidePanels::default();
-        app.left_open = true;
-        return Ok(json!({ "side_panels": state(app) }));
-    }
-    let pane = Pane::parse(params.get("panel").and_then(Value::as_str).ok_or("panel must be \"tools\" or \"side\"")?)
-        .ok_or("panel must be \"tools\" or \"side\"")?;
-    let open = match params.get("open") {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_bool().ok_or("open must be a boolean")?),
-    };
-    let width = match params.get("width") {
-        None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_f64().and_then(|w| clamp_width(pane, w)).ok_or("width must be a finite number")?),
-    };
-    if let Some(width) = width {
-        app.side_panels.set_width(pane, width);
-    }
-    match (pane, open) {
-        (Pane::Tools, Some(open)) => app.left_open = open,
-        (Pane::Side, Some(true)) if app.right.is_none() => app.toggle_side_panel(),
-        (Pane::Side, Some(false)) if app.right.is_some() => app.choose_right_panel(None),
-        _ => {}
-    }
-    Ok(json!({ "side_panels": state(app) }))
+/// The old `docking` value (craft-ui's `Workspace`) as plain JSON. `None` when it has no document view, which the
+/// old layout always held.
+fn read_docking(saved: &Value) -> Option<Old> {
+    let old = saved.get("docking")?;
+    find(old.get("layout")?.get("root")?, "canvas", 0)?;
+    let (tools_right, tools_open, tools_width) = old_panel(old, "tools");
+    let (_, side_open, side_width) = old_panel(old, "inspector");
+    Some(Old {
+        tools_right,
+        rail: DockSide::End,
+        tools_open: saved.get("docking_left_open").and_then(Value::as_bool).unwrap_or(tools_open),
+        tools_width,
+        side_open,
+        side_width,
+    })
 }
 
-struct Content<'a> {
-    app: &'a mut PdfCraftApp,
-}
-
-impl PaneContent<Pane> for Content<'_> {
-    fn title(&self, pane: &Pane) -> String {
-        crate::i18n::t(match pane {
-            Pane::Tools => "Tools",
-            Pane::Side => "Inspector",
-        })
-        .to_owned()
+/// The workspace `old` stands for, with its pixel widths when `widths`.
+fn build(old: &Old, right: Option<RightPanel>, widths: bool) -> Option<Workspace<PanelId>> {
+    let mut workspace = default_workspace(old.rail);
+    let apply = |workspace: &mut Workspace<PanelId>, action| workspace.apply(action, false, permissions).ok();
+    if old.tools_right {
+        apply(&mut workspace, Action::move_column(PanelId::Tools, Target::new_dock(DockEdge::End)))?;
     }
-
-    fn body(&mut self, ui: &mut egui::Ui, pane: &Pane) {
-        match pane {
-            Pane::Tools => crate::panels::left_panel(self.app, ui),
-            Pane::Side => {
-                ui.data_mut(|data| data.insert_temp(egui::Id::unique("pdfcraft-inspector-body"), ui.max_rect()));
-                crate::panels::right_panel(self.app, ui);
-            }
+    let side = right.filter(|_| old.side_open).map(PanelId::from);
+    if let Some(side) = side {
+        workspace.set_visible(side, true, Some(PanelId::Toolbar), false, permissions).ok()?;
+    }
+    if !old.tools_open {
+        workspace.set_visible(PanelId::Tools, false, None, false, permissions).ok()?;
+    }
+    if widths {
+        if let (true, Some(width)) = (old.tools_open, old.tools_width) {
+            apply(&mut workspace, Action::resize_column(PanelId::Tools, width as f32))?;
+        }
+        if let (Some(side), Some(width)) = (side, old.side_width) {
+            apply(&mut workspace, Action::resize_column(side, width as f32))?;
         }
     }
-
-    fn default_state(&self, pane: &Pane) -> PaneState {
-        state_of(&self.app.side_panels, *pane)
-    }
-
-    fn size_range(&self, pane: &Pane) -> RangeInclusive<f32> {
-        pane.range()
-    }
-
-    fn movable(&self, _pane: &Pane) -> bool {
-        false
-    }
-
-    fn title_bar(&self, _pane: &Pane) -> bool {
-        // Both panels draw their own header and Close.
-        false
-    }
+    Some(workspace)
 }
 
-/// Return the docked [`PaneState`] (edge and width) for `pane`.
-fn state_of(panels: &SidePanels, pane: Pane) -> PaneState {
-    let edge = match pane {
-        Pane::Tools => panels.tools_edge(),
-        Pane::Side => panels.rail_edge(),
+/// Reads the layout of settings written before the dock: `side_panels`, else the older `docking`, with the side panel
+/// that was open in `docking_right`. Nothing in it is an error: a malformed or unknown value gives `None`, and the
+/// caller takes [`default_workspace`]. A width the dock refuses is dropped and the rest kept.
+pub(crate) fn migrate(saved: &Value) -> Option<Migrated> {
+    let old = match saved.get("side_panels") {
+        Some(value) => read_side_panels(value)?,
+        None => read_docking(saved)?,
     };
-    PaneState::docked(edge, panels.width(pane))
-}
-
-/// The panes that show this frame, outermost first on a shared edge.
-fn open_panes(app: &PdfCraftApp) -> Vec<Pane> {
-    let mut open = Vec::new();
-    // Read mode hides the tools, not the navigation panes.
-    if app.left_open && app.mode != Mode::Read {
-        open.push(Pane::Tools);
-    }
-    // Home and Combine files have no side panel; the choice is kept for the next document.
-    if app.active.is_some() && app.right.is_some() {
-        open.push(Pane::Side);
-    }
-    open
-}
-
-/// Width of a pane's resize edge that takes the pointer, right of its border.
-const RESIZE_GRIP: f32 = 4.0;
-
-/// Moves each open pane's resize edge to the right of its border (#5730).
-///
-/// The host centres the edge on the border and widens it, so it reaches over whatever ends left
-/// of the border. egui puts a vertical scrollbar at the right of its area, so that is the
-/// scrollbar of the page beside a right-docked pane, or of the Inspector beside a right-docked
-/// Tools pane, and its right half became the edge. Right of a border starts the next area, never
-/// with a scrollbar: a right-docked pane's own scrollbar is at its far side, and a left-docked
-/// pane keeps a gutter left of its border.
-///
-/// The edge is the host's widget registered again with a smaller rect; egui keeps the last rect
-/// for the next frame's hit test, and the layer is the one the host used.
-fn keep_resize_edges_off_scrollbars(ui: &mut egui::Ui, host: egui::Id, open: &[Pane]) {
-    for pane in open {
-        let id = host.with(("pane", *pane)).with("resize");
-        // An inert edge (bad geometry) senses no drag: leave it so.
-        let Some(edge) = ui.ctx().read_response(id).filter(|r| r.sense.senses_drag() && r.rect.is_positive()) else { continue };
-        let border = edge.rect.center().x;
-        let grip = egui::Rect::from_x_y_ranges(border..=border + RESIZE_GRIP, edge.rect.y_range());
-        ui.new_child(egui::UiBuilder::new().layer_id(edge.layer_id)).interact(grip, id, egui::Sense::drag());
-    }
-}
-
-/// Draws the rail and the open panes. Call after the top bars and before the central panel.
-pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    if let Some(panel) = app.right {
-        app.last_right = panel;
-    }
-    // The rail first: it is the outermost panel on the right.
-    if app.active.is_some() {
-        crate::chrome::right_rail(app, ui);
-    }
-    // The expanded All tools view covers the panes.
-    if app.mode == Mode::AllTools && app.all_tools_full {
-        return;
-    }
-    let open = open_panes(app);
-    if open.is_empty() {
-        return;
-    }
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let labels = PaneLabels { resize: crate::i18n::t("Resize panels").to_owned(), ..PaneLabels::default() };
-    let panels = app.side_panels;
-    // Columns: both panes may share the right edge, Tools outermost, as `open` lists them.
-    let host = egui::Id::unique("pdfcraft-side-panels");
-    let output = PaneHost::new(host)
-        .policy(SidePolicy::Columns)
-        .f6(false)
-        .labels(labels)
-        .frame(egui::Frame::NONE.fill(t.panel))
-        .body_margin(egui::Margin::ZERO)
-        .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app });
-
-    keep_resize_edges_off_scrollbars(ui, host, &open);
-    for request in output.requests {
-        match request {
-            PaneRequest::Resize(pane, width) => app.side_panels.set_width(pane, width),
-            PaneRequest::Close(Pane::Tools) => app.left_open = false,
-            PaneRequest::Close(Pane::Side) => app.choose_right_panel(None),
-            _ => {}
-        }
-    }
+    let right = saved.get("docking_right").and_then(|v| serde_json::from_value::<Option<RightPanel>>(v.clone()).ok()).flatten();
+    let workspace = build(&old, right, true).or_else(|| build(&old, right, false))?;
+    Some(Migrated { workspace, rail_side: old.rail })
 }
 
 #[cfg(test)]
 mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
     use super::*;
 
     fn tabs(panels: &[&str]) -> Value {
@@ -472,81 +702,96 @@ mod tests {
         json!({"docking": {"layout": {"root": root, "floating": floating}, "hidden": hidden}})
     }
 
-    /// The old default layout, as craft-ui 5c874d5 serialized it.
-    fn docked(tools: f64, inspector: f64) -> Value {
-        workspace(
-            split(json!({"FixedFirst": tools}), tabs(&["tools"]), split(json!({"FixedSecond": inspector}), tabs(&["canvas"]), tabs(&["inspector"]))),
-            json!([]),
-            json!([]),
-        )
+    fn with_side(mut saved: Value, panel: &str) -> Value {
+        saved["docking_right"] = json!(panel);
+        saved
+    }
+
+    /// An old layout migrates to the panels' edges and open state, whatever the old widths were.
+    #[test]
+    fn an_old_saved_layout_migrates_to_the_dock_workspace() {
+        let hidden_place = |side: &str, size: f64| json!({"floating": null, "anchor": "canvas", "placement": {"Split": side}, "size": {"FixedSecond": size}, "stack": null, "sibling": ["canvas"]});
+        // (case, saved, Tools open, Tools edge, side panel open)
+        let cases = [
+            (
+                "docked default",
+                with_side(
+                    workspace(
+                        split(json!({"FixedFirst": 300.0}), tabs(&["tools"]), split(json!({"FixedSecond": 400.0}), tabs(&["canvas"]), tabs(&["inspector"]))),
+                        json!([]),
+                        json!([]),
+                    ),
+                    "Bookmarks",
+                ),
+                true,
+                DockEdge::Start,
+                true,
+            ),
+            (
+                "tools on the right",
+                workspace(
+                    split(json!({"FixedSecond": 330.0}), tabs(&["canvas"]), split(json!({"FixedSecond": 290.0}), tabs(&["inspector"]), tabs(&["tools"]))),
+                    json!([]),
+                    json!([]),
+                ),
+                true,
+                DockEdge::End,
+                false,
+            ),
+            (
+                "floated tools",
+                workspace(
+                    split(json!({"FixedSecond": 360.0}), tabs(&["canvas"]), tabs(&["inspector"])),
+                    json!([{"panels": ["tools"], "active": 0, "rect": [10.0, 20.0, 300.0, 400.0]}]),
+                    json!([]),
+                ),
+                true,
+                DockEdge::Start,
+                false,
+            ),
+            (
+                "tools tabbed with the inspector",
+                with_side(workspace(split(json!({"FixedSecond": 350.0}), tabs(&["canvas"]), tabs(&["inspector", "tools"])), json!([]), json!([])), "Pages"),
+                true,
+                DockEdge::Start,
+                true,
+            ),
+            (
+                "hidden inspector and tools",
+                with_side(
+                    workspace(tabs(&["canvas"]), json!([]), json!([["inspector", hidden_place("Right", 380.0)], ["tools", hidden_place("Right", 300.0)]])),
+                    "Bookmarks",
+                ),
+                false,
+                DockEdge::End,
+                false,
+            ),
+            (
+                "version 1 value",
+                with_side(json!({"side_panels": {"version": 1, "tools_side": "right", "tools_open": true, "tools_width": 300.0, "side_width": 400.0}}), "Pages"),
+                true,
+                DockEdge::End,
+                true,
+            ),
+        ];
+        for (name, saved, tools_open, edge, side_open) in cases {
+            let migrated = migrate(&saved).unwrap_or_else(|| panic!("{name}: not migrated"));
+            assert_eq!(migrated.workspace.layout.contains(&PanelId::Tools), tools_open, "{name}: Tools open");
+            if tools_open {
+                assert_eq!(edge_of(&migrated.workspace, PanelId::Tools), Some(edge), "{name}: Tools edge");
+            }
+            let side = [PanelId::Bookmarks, PanelId::Pages].into_iter().any(|p| migrated.workspace.layout.contains(&p));
+            assert_eq!(side, side_open, "{name}: side panel open");
+            assert_eq!(migrated.rail_side, DockSide::End, "{name}: rail side");
+        }
+        let left = migrate(&json!({"side_panels": {"version": 1, "rail_side": "left"}})).expect("migrates");
+        assert_eq!(left.rail_side, DockSide::Start);
     }
 
     #[test]
-    fn docked_default_keeps_widths() {
-        let restored = restore(&docked(300.0, 400.0));
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: 300.0, side_width: 400.0 });
-        assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
-    }
-
-    #[test]
-    fn tools_on_the_right_moves_right() {
-        // `set_tools_on_right` put Tools to the right of the Inspector.
-        let old = workspace(
-            split(json!({"FixedSecond": 330.0}), tabs(&["canvas"]), split(json!({"FixedSecond": 290.0}), tabs(&["inspector"]), tabs(&["tools"]))),
-            json!([]),
-            json!([]),
-        );
-        let restored = restore(&old);
-        assert_eq!(restored.panels.tools_side, ToolsSide::Right);
-        assert_eq!(restored.panels.rail_side, ToolsSide::Right);
-        assert_eq!(restored.panels.tools_width, 290.0);
-        // The Inspector's own split fixes Tools' width, not its.
-        assert_eq!(restored.panels.side_width, SIDE_WIDTH);
-    }
-
-    #[test]
-    fn floated_tools_docks_left_and_stays_open() {
-        let old = workspace(
-            split(json!({"FixedSecond": 360.0}), tabs(&["canvas"]), tabs(&["inspector"])),
-            json!([{"panels": ["tools"], "active": 0, "rect": [10.0, 20.0, 300.0, 400.0]}]),
-            json!([]),
-        );
-        let restored = restore(&old);
-        assert_eq!(
-            restored.panels,
-            SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: TOOLS_WIDTH, side_width: 360.0 }
-        );
-        assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
-    }
-
-    #[test]
-    fn tools_tabbed_with_the_inspector_docks_both() {
-        let old = workspace(split(json!({"FixedSecond": 350.0}), tabs(&["canvas"]), tabs(&["inspector", "tools"])), json!([]), json!([]));
-        let restored = restore(&old);
-        assert_eq!(restored.panels.tools_side, ToolsSide::Left);
-        assert_eq!(restored.panels.rail_side, ToolsSide::Right);
-        assert_eq!((restored.panels.tools_width, restored.panels.side_width), (TOOLS_WIDTH, SIDE_WIDTH));
-        assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
-    }
-
-    #[test]
-    fn a_hidden_inspector_stays_closed_and_hidden_tools_keeps_its_side() {
-        let old = workspace(
-            tabs(&["canvas"]),
-            json!([]),
-            json!([
-                ["inspector", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 380.0}, "stack": null, "sibling": ["canvas"]}],
-                ["tools", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 300.0}, "stack": null, "sibling": ["canvas"]}]
-            ]),
-        );
-        let restored = restore(&old);
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, rail_side: ToolsSide::Right, tools_width: 300.0, side_width: 380.0 });
-        assert_eq!((restored.tools_open, restored.side_closed), (Some(false), true));
-    }
-
-    #[test]
-    fn malformed_values_give_the_defaults() {
-        let defaults = Restored { panels: SidePanels::default(), tools_open: None, side_closed: false };
+    fn malformed_values_give_the_default_workspace() {
+        let default = default_workspace(DockSide::End);
+        let take = |saved: &Value| migrate(saved).map_or_else(|| default.clone(), |m| m.workspace);
         for saved in [
             json!({"docking": "not a layout"}),
             json!({"docking": {"layout": [1, 2]}}),
@@ -554,38 +799,43 @@ mod tests {
             json!({"side_panels": {"version": 2, "tools_side": "right"}}),
             json!({"side_panels": "right"}),
         ] {
-            let restored = restore(&saved);
-            assert_eq!(restored, defaults, "{saved}");
+            assert_eq!(take(&saved), default, "{saved}");
         }
-        // Non-finite and out-of-range widths fall back or clamp; an unknown side keeps Left.
-        let restored = restore(&json!({"side_panels": {"version": 1, "tools_side": "up", "tools_width": 9000.0, "side_width": "x"}}));
-        assert_eq!(
-            restored.panels,
-            SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: 520.0, side_width: SIDE_WIDTH }
-        );
         // Deep trees are cut off rather than walked.
         let mut deep = tabs(&["tools"]);
         for _ in 0..200 {
             deep = split(json!({"Ratio": 0.5}), tabs(&["canvas"]), deep);
         }
-        assert_eq!(restore(&workspace(deep, json!([]), json!([]))).panels.tools_side, ToolsSide::Left);
+        assert_eq!(take(&workspace(deep, json!([]), json!([]))), default);
     }
 
+    fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            setup(&mut app);
+            app
+        });
+        h.run_steps(6);
+        h
+    }
+
+    fn tools_x(h: &Harness<'static, PdfCraftApp>) -> f32 {
+        h.get_by_label("Expand all tools").rect().center().x
+    }
+
+    /// A panel moved to the other edge is there again in a new app restored from the saved settings.
     #[test]
     fn saved_value_round_trips() {
-        let panels = SidePanels { tools_side: ToolsSide::Right, rail_side: ToolsSide::Left, tools_width: 300.0, side_width: 410.0 };
-        let restored = restore(&json!({ "side_panels": panels.to_json(false) }));
-        assert_eq!(restored, Restored { panels, tools_open: Some(false), side_closed: false });
-    }
-
-    #[test]
-    fn rail_side_placement_and_restore() {
-        let mut panels = SidePanels::default();
-        assert_eq!(panels.rail_side, ToolsSide::Right);
-        assert_eq!(panels.rail_edge(), Edge::End);
-        panels.rail_side = ToolsSide::Left;
-        assert_eq!(panels.rail_edge(), Edge::Start);
-        let restored = restore(&json!({"side_panels": {"version": 1, "rail_side": "left"}}));
-        assert_eq!(restored.panels.rail_side, ToolsSide::Left);
+        let default = harness(|_| {});
+        assert!(tools_x(&default) < 700.0, "Tools start at the left");
+        let mut moved = harness(|app| {
+            command(app, false, &json!({"panel": "tools", "edge": "right"})).unwrap();
+        });
+        moved.run_steps(3);
+        assert!(tools_x(&moved) > 700.0);
+        let snapshot = moved.state().settings_snapshot();
+        let restored = harness(move |app| app.apply_settings(&snapshot));
+        assert!(tools_x(&restored) > 700.0);
     }
 }
