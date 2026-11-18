@@ -56,14 +56,8 @@ fn page_texts(app: &PdfCraftApp) -> Vec<String> {
         .collect()
 }
 
-fn copy_modifier(h: &Harness<'static, PdfCraftApp>, copying: bool) -> Modifiers {
-    if !copying {
-        Modifiers::NONE
-    } else if h.ctx.os() == egui::os::OperatingSystem::Mac {
-        Modifiers::ALT
-    } else {
-        Modifiers::CTRL
-    }
+fn copy_modifier(_h: &Harness<'static, PdfCraftApp>, copying: bool) -> Modifiers {
+    if copying { Modifiers::ALT } else { Modifiers::NONE }
 }
 
 fn start_drag(h: &mut Harness<'static, PdfCraftApp>, copying: bool) -> (Pos2, Modifiers) {
@@ -178,11 +172,12 @@ fn replacing_a_document_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
     let (to, modifiers) = start_drag(&mut h, false);
     let bytes = document("Replacement");
+    let ctx = h.ctx.clone();
     let app = h.state_mut();
     let id = app.views[0].id;
     app.session.reload(id, bytes).unwrap();
     let info = &app.session.get(id).unwrap().info;
-    app.views[0].document_replaced(info);
+    app.views[0].document_replaced(&ctx, info);
     let expected = ["Replacement 1", "Replacement 2", "Replacement 3", "Replacement 4"];
     assert_eq!(page_texts(h.state()), expected, "the new content replaces all four pages before release");
     h.run_steps(2);
