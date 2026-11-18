@@ -994,7 +994,7 @@ fn streams_use_the_standard_filters_and_only_the_identity_crypt_filter() {
     // No external file, nor its filters or their parameters on their own (ISO 32000-2 Table 5); a
     // null value is no entry (7.3.9).
     for entry in ["/F (data.bin)", "/FFilter /FlateDecode", "/FDecodeParms << >>"] {
-        reports(&image(entry), Level::A4, "6.1.6.1", "refers to an external file");
+        reports(&image(entry), Level::A4, "6.1.6.1", "has an external-file entry");
     }
     passes(&image("/F null /FFilter null /FDecodeParms null"), Level::A4);
 }
@@ -1113,4 +1113,133 @@ fn forms_reached_through_an_alias_or_named_p_are_judged_on_their_page() {
         two("/XObject 10 0 R", "/P Do", vec![o("<< /P 11 0 R >>"), form("1 0 0 0 k 0 0 10 10 re f")]),
         ["DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile"]
     );
+}
+
+/// 6.10: configuration names are text strings (ISO 32000-2 8.11.4.2, Table 99), so two are the
+/// same when they decode to the same text (7.9.2.2), however each is written.
+#[test]
+fn optional_content_names_are_compared_as_text() {
+    let layers = |properties: &str| File {
+        more: vec![o("<< /Type /OCG /Name (L) >>")],
+        ..with_catalog(&format!("/OCProperties << /OCGs [6 0 R] {properties} >>"))
+    };
+    // (Layers) in PDFDocEncoding and in UTF-16BE with its byte order mark.
+    reports(&layers("/D << /Name (Layers) >> /Configs [<< /Name <FEFF004C00610079006500720073> >>]"), Level::A4, "6.10", "same Name");
+    passes(&layers("/D << /Name (Layers) >> /Configs [<< /Name <FEFF004C0061007900650072> >>]"), Level::A4);
+}
+
+/// 6.2.3: output intents past the number one verification reads aren't known to follow the rule,
+/// so the file doesn't pass.
+#[test]
+fn output_intents_past_the_limit_are_reported_as_not_checked() {
+    let plain = "<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (x) >>";
+    let external = "<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (x) /DestOutputProfileRef << >> >>";
+    let many: String = (0..4096).map(|_| plain).collect::<Vec<_>>().join(" ");
+    passes(&with_catalog(&format!("/OutputIntents [{many}]")), Level::A4);
+    reports(&with_catalog(&format!("/OutputIntents [{many} {external}]")), Level::A4, "6.2.3", "output intents weren't checked");
+}
+
+/// 6.7.2.1: the header is the processing instruction whose target is `xpacket` (XML 1.0 2.6), and
+/// another instruction before it is skipped whole, whatever it holds.
+#[test]
+fn the_xpacket_header_is_found_by_its_target() {
+    let text = String::from_utf8(packet("4", Some("2020"), None)).unwrap();
+    let sized = text.replacen("?>", " bytes=\"10\"?>", 1);
+    for before in ["<?xpacket-note ok?>", "<?tool <!-- ?>", "<?tool <?xpacket bytes=\"1\"?>"] {
+        reports(&File { packet: format!("{before}{sized}").into_bytes(), ..File::default() }, Level::A4, "6.7.2.1", "bytes or encoding attribute");
+    }
+    passes(&File { packet: format!("<?tool <?xpacket bytes=\"1\"?>{text}").into_bytes(), ..File::default() }, Level::A4);
+}
+
+/// 6.7.2.1: many comments before the `xpacket` header are each read once. A search from every
+/// comment on to the header would read some 10^11 bytes here, and take half a minute rather than a
+/// tenth of a second; the bound leaves a hundredfold for slower machines.
+#[test]
+fn many_comments_before_the_xpacket_header_are_read_once() {
+    let text = String::from_utf8(packet("4", Some("2020"), None)).unwrap();
+    let sized = text.replacen("?>", " bytes=\"10\"?>", 1);
+    let comments = "<!---->".repeat(300_000);
+    let file = File { packet: format!("{comments}{sized}").into_bytes(), ..File::default() };
+    let started = std::time::Instant::now();
+    reports(&file, Level::A4, "6.7.2.1", "bytes or encoding attribute");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
+}
+
+/// 6.2.3: an ICC profile's tag data follows its tag table (ICC.1 7.1, 7.3.4): a tag whose data
+/// starts inside the header or the table is a profile cut short, not an output or monitor profile.
+#[test]
+fn an_output_intent_profile_tag_inside_the_header_is_no_profile() {
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) /DestOutputProfile 6 0 R >>]";
+    let mut moved = icc::srgb();
+    // The first tag's offset, after the 128-byte header and the 4-byte tag count.
+    if let Some(offset) = moved.get_mut(136..140) {
+        offset.copy_from_slice(&0u32.to_be_bytes());
+    }
+    reports(&File { more: vec![stream("/N 3", &moved)], ..with_catalog(intent) }, Level::A4, "6.2.3", "isn't an output or monitor profile");
+    passes(&File { more: vec![srgb_profile()], ..with_catalog(intent) }, Level::A4);
+}
+
+/// 6.1.3 (ISO 32000-2 7.5.5): a file whose only `%%EOF` doesn't start a line has no end-of-file
+/// marker.
+#[test]
+fn a_file_without_an_end_of_file_line_is_reported() {
+    let good = bytes(&File::default());
+    let at = good.windows(7).rposition(|w| w == b"\n%%EOF\n").unwrap();
+    let mut spaced = good.get(..at).unwrap().to_vec();
+    spaced.extend_from_slice(b"\n %%EOF\nmore");
+    let found = verify(&open(spaced), Level::A4);
+    assert!(found.iter().any(|i| i.clause == "6.1.3" && i.message.contains("no end-of-file marker")), "{found:#?}");
+    passes(&File::default(), Level::A4);
+}
+
+/// 6.2.4.3: the PDF/A output intent's colour space is its profile's (the ICC header, ICC.1 7.2.6),
+/// as 6.2.3 classes it, whatever the stream's `/N` says.
+#[test]
+fn the_output_intent_is_judged_by_its_profiles_header() {
+    let intent = "/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile 6 0 R >>]";
+    let drawn = |content: &'static str, profile: Vec<u8>| File { content, more: vec![profile], ..with_catalog(intent) };
+    let cmyk = "0 0 0 1 k 0 0 10 10 re f";
+    let rgb = "1 0 0 rg 0 0 10 10 re f";
+    // An sRGB profile whose stream says /N 4 is still an RGB profile, on the page and in the catalog.
+    reports(&drawn(cmyk, stream("/N 4", &icc::srgb())), Level::A4, "6.2.4.3", "isn't a CMYK profile");
+    passes(&drawn(rgb, stream("/N 4", &icc::srgb())), Level::A4);
+    let on_page = File { content: cmyk, more: vec![stream("/N 4", &icc::srgb())], ..with_page(intent) };
+    reports(&on_page, Level::A4, "6.2.4.3", "isn't a CMYK profile");
+    passes(&drawn(cmyk, profile_of(4, b"CMYK")), Level::A4);
+}
+
+/// A page's `/Contents` followed through more aliases than are followed (ISO 32000-2 7.3.10) is
+/// content not read: the file doesn't pass on what wasn't read.
+#[test]
+fn page_content_past_the_alias_limit_is_reported_as_not_read() {
+    let chained = |aliases: usize, array: bool| {
+        let mut objects = vec![
+            o("<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>"),
+            o("<< /Type /Pages /Kids [4 0 R] /Count 1 >>"),
+            stream("/Type /Metadata /Subtype /XML", &packet("4", Some("2020"), None)),
+            o("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R /Resources << /Font << /F1 5 0 R >> >> >>"),
+            o("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+        ];
+        // Objects 6 on are each a reference to the next; the last is the content stream, which
+        // paints DeviceRGB and shows text with font 5, which isn't embedded.
+        objects.extend((0..aliases).map(|i| o(&format!("{} 0 R", i + 7))));
+        if array {
+            objects.push(o(&format!("[{} 0 R]", aliases + 7)));
+        }
+        objects.push(stream("", b"1 0 0 rg 0 0 10 10 re f BT /F1 12 Tf (x) Tj ET"));
+        verify(&open(raw("%PDF-2.0", &objects, "", b"")), Level::A4)
+    };
+    let unembedded = |found: &[Issue]| found.iter().any(|i| i.message.contains("isn't embedded"));
+    for array in [false, true] {
+        let near = chained(4, array);
+        assert!(near.iter().any(|i| i.clause == "6.2.4.3" && i.message.contains("no PDF/A output intent")), "{near:#?}");
+        assert!(unembedded(&near), "{near:#?}");
+        // Past the limit, whether a stream or an array of them lies beyond, the font counts as
+        // drawing and the colour as not read.
+        for aliases in [33, 40] {
+            let far = chained(aliases, array);
+            assert!(far.iter().any(|i| i.clause == "6.2.4.3" && i.message.contains("could not be read")), "{aliases} {array}: {far:#?}");
+            assert!(unembedded(&far), "{aliases} {array}: {far:#?}");
+        }
+    }
 }
