@@ -136,6 +136,18 @@ impl Scale {
         out.validate()?;
         Ok(out)
     }
+    /// This scale with its ratio worded per display point: one point on the page stands for
+    /// `per_point` of the unit. [`Scale::new`] and [`Scale::calibrate`] take the factor per
+    /// user-space unit and word it as that, which reads `/UserUnit` times too big on a page
+    /// whose user-space unit is not a point. The stored factors do not change.
+    pub fn worded_per_point(mut self, per_point: f64) -> Result<Self> {
+        if !per_point.is_finite() || per_point <= 0.0 {
+            return Err(invalid("a scale needs a finite, positive length per point"));
+        }
+        self.ratio = format!("1 pt = {per_point} {}", self.unit);
+        self.validate()?;
+        Ok(self)
+    }
     pub fn validate(&self) -> Result<()> {
         for f in [self.x, self.y, self.distance_factor, self.area_factor] {
             if !f.is_finite() || !(1e-12..=1e12).contains(&f) {
@@ -681,7 +693,7 @@ pub fn scale_at_or(doc: &Document, page_index: usize, at: Point, per_point: f64,
             }
         }
     }
-    Scale::new(p.user_unit(doc) * per_point, unit, 2)
+    Scale::new(p.user_unit(doc) * per_point, unit, 2)?.worded_per_point(per_point)
 }
 /// Add a named rectangular viewport. Existing viewports are preserved in drawing order.
 pub fn set_scale(doc: &mut Document, page_index: usize, bbox: [f64; 4], name: &str, scale: &Scale) -> Result<()> {
