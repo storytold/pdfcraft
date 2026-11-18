@@ -263,6 +263,9 @@ fn the_catalog_version_is_2_n() {
     reports(&with_catalog("/Version /1.7"), Level::A4, "6.1.12", "version 1.7, not 2.0 to 2.9");
     reports(&with_catalog("/Version (2.0)"), Level::A4, "6.1.12", "something other than a name");
     passes(&with_catalog("/Version /2.0"), Level::A4);
+    // A null version, direct or through a reference, is no version (ISO 32000-2 7.3.9).
+    passes(&with_catalog("/Version null"), Level::A4);
+    passes(&File { more: vec![o("null")], ..with_catalog("/Version 6 0 R") }, Level::A4);
 }
 
 #[test]
@@ -887,6 +890,10 @@ fn the_catalog_holds_none_of_what_pdfa4_leaves_out() {
     passes(&layers("/D << /Name (Default) >> /Configs [<< /Name (Other) >>]"), Level::A4);
     reports(&layers("/D << >>"), Level::A4, "6.10", "has no Name");
     reports(&layers("/D << /Name (A) >> /Configs [<< /Name (A) >>]"), Level::A4, "6.10", "same Name");
+    // Configurations past the limit aren't read, and the file doesn't pass on what wasn't read.
+    let named: String = (0..4096).map(|i| format!("<< /Name (C{i}) >>")).collect();
+    passes(&layers(&format!("/D << /Name (D) >> /Configs [{named}]")), Level::A4);
+    reports(&layers(&format!("/D << /Name (D) >> /Configs [{named} << >>]")), Level::A4, "6.10", "configurations weren't checked");
 }
 
 #[test]
@@ -951,6 +958,16 @@ fn streams_use_the_standard_filters_and_only_the_identity_crypt_filter() {
     reports(&image("/Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]"), Level::A4, "6.1.6.2", "other than Identity");
     passes(&image("/Filter [/Crypt] /DecodeParms [<< /Name /Identity >>]"), Level::A4);
     passes(&image("/Filter /Crypt"), Level::A4);
+    // A null Name, direct or through a reference, is no Name: the Identity default (7.3.9).
+    passes(&image("/Filter /Crypt /DecodeParms << /Name null >>"), Level::A4);
+    for name in ["null", "/Identity"] {
+        let mut by_reference = image("/Filter [/Crypt] /DecodeParms [<< /Name 7 0 R >>]");
+        by_reference.more.push(o(name));
+        passes(&by_reference, Level::A4);
+    }
+    let mut by_reference = image("/Filter [/Crypt] /DecodeParms [<< /Name 7 0 R >>]");
+    by_reference.more.push(o("/StdCF"));
+    reports(&by_reference, Level::A4, "6.1.6.2", "other than Identity");
 }
 
 #[test]
