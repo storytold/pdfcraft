@@ -78,20 +78,32 @@ pub fn wasm(_: &[String]) -> anyhow::Result<()> {
         .filter(|c| matches!(layers::classify(&c.name), Some(layers::Class::Layer(_) | layers::Class::Standalone(_))))
         .map(|c| c.name)
         .collect();
-    let mut failed = Vec::new();
+    // One call over every crate: they share one dependency build, and `--keep-going` reports
+    // each failing crate instead of stopping at the first.
+    let mut c = cargo();
+    c.args(["check", "--target", "wasm32-unknown-unknown", "--keep-going"]);
     for pkg in &set {
-        let mut c = cargo();
-        c.args(["check", "--target", "wasm32-unknown-unknown", "-p", pkg]);
-        if run(c, &format!("cargo check --target wasm32-unknown-unknown -p {pkg}")).is_err() {
-            failed.push(pkg.clone());
-        }
+        c.args(["-p", pkg]);
     }
-    if failed.is_empty() {
-        println!("wasm32: {} crates ok", set.len());
-        Ok(())
+    run(c, &format!("cargo check --target wasm32-unknown-unknown --keep-going ({} crates)", set.len()))?;
+    println!("wasm32: {} crates ok", set.len());
+    Ok(())
+}
+
+/// The workspace tests. Unit and integration tests run under cargo-nextest when it is installed
+/// (one process per test, so the run is not held up by its slowest binary), else under
+/// `cargo test`; doctests run separately because nextest does not run them. Examples are left
+/// out of the test build: clippy `--all-targets` already checks that they compile.
+pub fn test(_: &[String]) -> anyhow::Result<()> {
+    let targets = ["--workspace", "--lib", "--bins", "--tests"];
+    let nextest = cargo().args(["nextest", "--version"]).output().is_ok_and(|o| o.status.success());
+    if nextest {
+        run_args(&[&["nextest", "run", "--no-fail-fast"][..], &targets].concat())?;
     } else {
-        bail!("wasm32 check failed for: {}", failed.join(", "))
+        eprintln!("test: cargo-nextest is not installed, using cargo test (cargo install cargo-nextest --locked)");
+        run_args(&[&["test", "--no-fail-fast"][..], &targets].concat())?;
     }
+    run_args(&["test", "--workspace", "--doc"])
 }
 
 pub fn ci(_: &[String]) -> anyhow::Result<()> {
@@ -99,10 +111,12 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
     let steps: Vec<Step> = vec![
         ("fmt", Box::new(|| run_args(&["fmt", "--all", "--", "--check"]))),
         ("clippy", Box::new(|| run_args(&["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))),
-        ("test", Box::new(|| run_args(&["test", "--workspace"]))),
+        ("cli-no-default-features", Box::new(|| run_args(&["check", "-p", "pdfcraft-cli", "--no-default-features"]))),
+        ("test", Box::new(|| test(&[]))),
+        ("i18n-report", Box::new(|| i18n_report(&["--workspace".to_string()]))),
         ("layers", Box::new(|| layers(&[]))),
         ("wasm", Box::new(|| wasm(&[]))),
-        ("assets", Box::new(|| crate::assets::run(&[]))),
+        ("license-check", Box::new(|| crate::license_check::run(&[]))),
         ("deny", Box::new(|| deny(&[]))),
         ("parity", Box::new(|| crate::parity::run(&[]))),
     ];
@@ -114,6 +128,36 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         }
     }
     println!("\nCI: all {} steps passed", steps.len());
+    Ok(())
+}
+
+/// `cargo xtask i18n-report`: the strings each interface language has no translation for, as
+/// counts and the first few keys, from the UI crate's `translation_gaps_report` test. It always
+/// passes: a missing string shows in English. `--workspace` runs the test from the workspace
+/// test build, which `xtask ci` has just made; without it only the UI crate is built.
+pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
+    const TEST: &str = "i18n::tests::translation_gaps_report";
+    const START: &str = "=== translation gaps ===";
+    const END: &str = "=== end of translation gaps ===";
+    let scope: &[&str] = if args.iter().any(|a| a == "--workspace") { &["--workspace"] } else { &["-p", "pdfcraft-ui-egui"] };
+    let mut c = cargo();
+    c.arg("test").args(scope).args(["--lib", "--quiet", "--", TEST, "--exact", "--nocapture"]).stderr(std::process::Stdio::inherit());
+    eprintln!("$ cargo test {} --lib --quiet -- {TEST} --exact --nocapture", scope.join(" "));
+    let out = match c.output() {
+        Ok(out) => out,
+        Err(e) => {
+            println!("i18n-report: no report, cargo test did not start: {e}");
+            return Ok(());
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: Vec<&str> = stdout.lines().skip_while(|l| *l != START).skip(1).take_while(|l| *l != END).collect();
+    if report.is_empty() {
+        println!("i18n-report: no report (cargo test exited with {})", out.status);
+    }
+    for line in report {
+        println!("{line}");
+    }
     Ok(())
 }
 
@@ -279,6 +323,37 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A new folder in the temporary directory that only this user can open (0700 on Unix), removed
+/// when dropped, on success and on error alike.
+struct PrivateDir(PathBuf);
+
+impl PrivateDir {
+    fn new(prefix: &str) -> anyhow::Result<Self> {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        for attempt in 0..100u32 {
+            let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{attempt}", std::process::id()));
+            // Only Unix sets a mode on the builder.
+            #[cfg_attr(not(unix), allow(unused_mut))]
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            // `create`, not `create_all`: a name that is already there is never used.
+            match builder.create(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("create {}", path.display())),
+            }
+        }
+        bail!("no unused temporary folder name for {prefix}")
+    }
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Compare our rendering against Poppler's, page 1 of every PDF in a directory.
 ///
 /// This is the measured half of the fidelity gap (`docs/gaps.md` gap 12): until it exists, every
@@ -324,7 +399,10 @@ pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
         .collect();
     files.sort();
 
-    let out_pam = std::env::temp_dir().join(format!("pdfcraft-render-oracle-{}.pam", std::process::id()));
+    // The page's pixels go into a folder only this user can open, made for this run (never an
+    // existing one, which another user could have put a link in), and removed with it.
+    let private = PrivateDir::new("pdfcraft-render-oracle")?;
+    let out_pam = private.0.join("page.pam");
     let (mut scores, mut sizes_differed, mut ours_failed, mut theirs_failed) = (Vec::new(), 0usize, 0usize, 0usize);
     let mut worst: Vec<(f64, String)> = Vec::new();
     for file in files.iter().take(limit) {
@@ -366,7 +444,7 @@ pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
             Err(_) => sizes_differed = sizes_differed.saturating_add(1),
         }
     }
-    let _ = std::fs::remove_file(&out_pam);
+    drop(private);
 
     if scores.is_empty() {
         bail!(
@@ -507,7 +585,23 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{f1, order_score, root, word_sequence, words};
+    use super::{PrivateDir, f1, order_score, root, word_sequence, words};
+
+    /// Each run gets a new folder of its own, private to the user, gone when the run ends.
+    #[test]
+    fn the_oracle_folder_is_new_private_and_removed() {
+        let (a, b) = (PrivateDir::new("pdfcraft-private-test").unwrap(), PrivateDir::new("pdfcraft-private-test").unwrap());
+        assert_ne!(a.0, b.0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let path = a.0.clone();
+        std::fs::write(path.join("page.pam"), b"x").unwrap();
+        drop(a);
+        assert!(!path.exists());
+    }
 
     /// The two scores answer different questions, and the point of adding the second one is the
     /// first row: F1 cannot tell a page from the same page read backwards.

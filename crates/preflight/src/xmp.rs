@@ -3,6 +3,182 @@
 
 use pdfcraft_cos::Document;
 
+/// The largest XMP packet read; a larger one is treated as missing.
+pub(crate) const MAX_XMP_BYTES: usize = 8 * 1024 * 1024;
+/// Namespace URIs of the PDF/A and PDF/UA identification schemas.
+pub(crate) const PDFA_ID: &str = "http://www.aiim.org/pdfa/ns/id/";
+pub(crate) const PDFUA_ID: &str = "http://www.aiim.org/pdfua/ns/id/";
+
+/// Read an identification property by its expanded XML name, not its arbitrary prefix. A packet
+/// that is not well-formed XML (an undeclared prefix, an illegal character) or is too deep or wide
+/// to parse safely is read by the conventional prefix (`pdfaid:`, `pdfuaid:`) instead, as before.
+pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<String> {
+    if xmp.len() > MAX_XMP_BYTES {
+        return None;
+    }
+    match parsed_identifier(xmp, namespace, local) {
+        Ok(found) => found,
+        Err(()) => {
+            let prefix = match namespace {
+                PDFA_ID => "pdfaid",
+                PDFUA_ID => "pdfuaid",
+                _ => return None,
+            };
+            value(xmp, &format!("{prefix}:{local}"))
+        }
+    }
+}
+
+/// Namespace scope tracking for `craft_xml::El` trees.
+#[derive(Clone)]
+pub(crate) struct NsScope<'a>(Vec<(&'a str, &'a str)>);
+
+impl<'a> NsScope<'a> {
+    pub(crate) fn root() -> Self {
+        Self(vec![("xml", "http://www.w3.org/XML/1998/namespace")])
+    }
+
+    pub(crate) fn child(&self, el: &'a craft_xml::El) -> Self {
+        let mut next = self.0.clone();
+        next.extend(el.ns_decls());
+        Self(next)
+    }
+
+    pub(crate) fn el_ns(&self, el: &craft_xml::El) -> Option<&'a str> {
+        let prefix = el.prefix();
+        self.0.iter().rfind(|(p, _)| *p == prefix).map(|(_, u)| *u).filter(|u| !u.is_empty())
+    }
+
+    pub(crate) fn attr_ns(&self, attr_name: &str) -> Option<&'a str> {
+        let (prefix, _) = attr_name.split_once(':')?;
+        if prefix == "xmlns" {
+            return None;
+        }
+        self.0.iter().rfind(|(p, _)| *p == prefix).map(|(_, u)| *u).filter(|u| !u.is_empty())
+    }
+
+    pub(crate) fn attr(&self, el: &'a craft_xml::El, ns: &str, local: &str) -> Option<&'a str> {
+        el.attrs.iter().find_map(|(k, v)| {
+            let (_, l) = k.split_once(':')?;
+            (l == local && self.attr_ns(k) == Some(ns)).then_some(v.as_str())
+        })
+    }
+
+    pub(crate) fn is(&self, el: &craft_xml::El, ns: &str, local: &str) -> bool {
+        el.local() == local && self.el_ns(el) == Some(ns)
+    }
+}
+
+/// `xmp` parsed within the depth, attribute and node limits; `None` when it can't be.
+pub(crate) fn parse(xmp: &str) -> Option<craft_xml::El> {
+    if !xml_limits_ok(xmp) {
+        return None;
+    }
+    let options = craft_xml::Options { doctype: craft_xml::Doctype::Reject, ..craft_xml::Options::default() }
+        .strict()
+        .with_limits(craft_xml::Limits { max_depth: 1024, max_nodes: 100_000, max_attrs_total: 100_000, ..craft_xml::Limits::DEFAULT });
+    options.parse(xmp.as_bytes()).ok()
+}
+
+/// [`identifier`] through an XML parser; `Err` when the packet can't be parsed within the limits.
+fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
+    fn walk<'a>(el: &'a craft_xml::El, parent: &NsScope<'a>, namespace: &str, local: &str) -> Result<Option<String>, ()> {
+        let scope = parent.child(el);
+        let el_prefix = el.prefix();
+        if !el_prefix.is_empty() && el_prefix != "xml" && scope.el_ns(el).is_none() {
+            return Err(());
+        }
+        for (k, _) in &el.attrs {
+            if let Some((prefix, _)) = k.split_once(':')
+                && !matches!(prefix, "xml" | "xmlns")
+                && scope.attr_ns(k).is_none()
+            {
+                return Err(());
+            }
+        }
+        if let Some(value) = scope.attr(el, namespace, local) {
+            return Ok(Some(value.trim().to_owned()));
+        }
+        if scope.is(el, namespace, local) {
+            return Ok(Some(el.text().trim().to_owned()));
+        }
+        for child in el.elements() {
+            if let Some(found) = walk(child, &scope, namespace, local)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+    let root = parse(xmp).ok_or(())?;
+    walk(&root, &NsScope::root(), namespace, local)
+}
+
+/// Reject deep XML and start tags with too many attributes before parsing.
+/// Each unquoted `=` in a valid start tag introduces an attribute, including namespace bindings.
+/// Every `b[i]` and `hay[p..]` below is guarded by `i < b.len()` / `p < hay.len()`.
+fn xml_limits_ok(text: &str) -> bool {
+    fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
+    }
+    let b = text.as_bytes();
+    let (mut i, mut depth, mut total_attributes) = (0usize, 0usize, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+        } else if b[i..].starts_with(b"<!--") {
+            i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
+        } else if b[i..].starts_with(b"<?") {
+            i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
+        } else if b[i..].starts_with(b"<!") {
+            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
+        } else if b[i..].starts_with(b"</") {
+            depth = depth.saturating_sub(1);
+            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
+        } else {
+            depth += 1;
+            if depth > 1024 {
+                return false;
+            }
+            // Skip the rest of the start tag, over any quoted attribute value, and remember its last
+            // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
+            // is read rather than a level left open.
+            i += 1;
+            let mut quote = 0u8;
+            let mut last = 0u8;
+            let mut attributes = 0usize;
+            while i < b.len() {
+                let c = b[i];
+                if quote != 0 {
+                    if c == quote {
+                        quote = 0;
+                    }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'>' {
+                    i += 1;
+                    break;
+                } else if c == b'=' {
+                    attributes += 1;
+                    total_attributes += 1;
+                    if attributes > 128 || total_attributes > 4096 {
+                        return false;
+                    }
+                    last = c;
+                } else if !c.is_ascii_whitespace() {
+                    last = c;
+                }
+                i += 1;
+            }
+            if last == b'/' {
+                depth -= 1;
+            }
+        }
+    }
+    true
+}
+
 /// The value of a simple XMP property, written either as an attribute (`pdfaid:part="2"`) or
 /// as an element (`<pdfaid:part>2</pdfaid:part>`, or inside an `rdf:Alt`/`rdf:Seq`).
 pub fn value(xmp: &str, key: &str) -> Option<String> {
@@ -41,7 +217,7 @@ fn esc(s: &str) -> String {
 /// A PDF date (`D:YYYYMMDDHHmmSSOHH'mm'`) as an XMP (ISO 8601) date.
 pub fn iso_date(pdf: &str) -> Option<String> {
     let d = pdf.trim().trim_start_matches("D:");
-    let digits: String = d.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = d.chars().take_while(char::is_ascii_digit).collect();
     if digits.len() < 4 {
         return None;
     }
@@ -51,7 +227,7 @@ pub fn iso_date(pdf: &str) -> Option<String> {
     let tz = match rest.chars().next() {
         Some('Z') | None => "Z".to_string(),
         Some(sign @ ('+' | '-')) => {
-            let t: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+            let t: String = rest[1..].chars().filter(char::is_ascii_digit).collect();
             format!("{sign}{}:{}", t.get(0..2).unwrap_or("00"), t.get(2..4).unwrap_or("00"))
         }
         _ => "Z".to_string(),
@@ -131,5 +307,30 @@ mod tests {
         assert_eq!(iso_date("D:20240105").as_deref(), Some("2024-01-05T00:00:00Z"));
         assert_eq!(iso_date("D:20240105120000Z").as_deref(), Some("2024-01-05T12:00:00Z"));
         assert_eq!(iso_date("junk"), None);
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn attribute_and_namespace_budgets_bound_parser_work() {
+        let prefix = r#"<root xmlns:a="http://www.aiim.org/pdfa/ns/id/" a:part="2" "#;
+        let attrs = |count| (0..count).map(|i| format!("x{i}=\"v=1\" ")).collect::<String>();
+        let at_limit = format!("{prefix}{}/>", attrs(126));
+        assert_eq!(identifier(&at_limit, PDFA_ID, "part").as_deref(), Some("2"));
+        let over_limit = format!("{prefix}{}/>", attrs(127));
+        assert_eq!(identifier(&over_limit, PDFA_ID, "part"), None);
+        let namespaces = (0..129).map(|i| format!("xmlns:n{i}=\"urn:{i}\" ")).collect::<String>();
+        assert_eq!(identifier(&format!("<root {namespaces}/>"), PDFA_ID, "part"), None);
+        let many_elements = format!("<root>{}</root>", r#"<n a="v"/>"#.repeat(4097));
+        assert!(!xml_limits_ok(&many_elements));
+        // Not well-formed (the prefix is never declared): read by the conventional prefix, as before.
+        let undeclared = r#"<rdf:Description pdfaid:part="3" pdfaid:conformance="u"/>"#;
+        assert_eq!(identifier(undeclared, PDFA_ID, "part").as_deref(), Some("3"));
+        assert_eq!(identifier(undeclared, PDFA_ID, "conformance").as_deref(), Some("u"));
+        let over_bytes = format!("<root>{}</root>", " ".repeat(8 * 1024 * 1024));
+        assert_eq!(identifier(&over_bytes, PDFA_ID, "part"), None);
     }
 }
