@@ -146,7 +146,11 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             let name = font_name(doc, t, taken);
             let font = standard_font(t);
             let mut fonts = Dict::new();
-            fonts.set(name.clone().into_bytes(), Object::Dict(font));
+            // Reusing a matching name must preserve its existing indirect reference as well
+            // as its appearance. Only new names need a resource entry in the merge.
+            if !taken.contains(name.as_bytes()) {
+                fonts.set(name.clone().into_bytes(), Object::Dict(font));
+            }
             let face_or_new = |has: fn(char) -> bool, face: bool| t.text.chars().any(has) && (face || !existing);
             if t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())

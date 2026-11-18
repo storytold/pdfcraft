@@ -1155,6 +1155,37 @@ fn added_text_preserves_an_occupied_font_name() {
     }
 }
 
+#[test]
+fn added_text_reuses_an_indirect_matching_font() {
+    let mut doc = fixture();
+    let page = pdfcraft_model::pages(&doc)[2].obj;
+    let mut matching = Dict::new();
+    matching.set(b"Type".to_vec(), Object::name("Font"));
+    matching.set(b"Subtype".to_vec(), Object::name("Type1"));
+    matching.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    matching.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    let matching = Object::Ref(doc.add(Object::Dict(matching)));
+    let mut fonts = Dict::new();
+    fonts.set(b"PCFHelvetica".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(8, 0)));
+    fonts.set(b"PCFHelvetica1".to_vec(), matching.clone());
+    let mut resources = Dict::new();
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    let mut text = AddedText { text: "Added".into(), rect: [72.0, 500.0, 300.0, 550.0], ..Default::default() };
+    add_content(&mut doc, 2, &Content::Text(text.clone())).unwrap();
+    for value in ["Updated", "Again"] {
+        text.text = value.into();
+        update_content(&mut doc, 2, 0, &Content::Text(text.clone())).unwrap();
+        doc = reopen(&doc);
+        let p = &pdfcraft_model::pages(&doc)[2];
+        let resources = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(resources.as_dict().unwrap().get(b"Font").unwrap());
+        assert_eq!(fonts.as_dict().unwrap().get(b"PCFHelvetica1"), Some(&matching));
+        assert_eq!(fonts.as_dict().unwrap().len(), 2);
+        assert!(streams(&doc, 2).join("\n").contains("/PCFHelvetica1 12 Tf"));
+    }
+}
+
 fn tagged_dictionary(tag: &str, added: Option<Object>) -> Dict {
     let mut dict = Dict::new();
     dict.set(b"PCMark".to_vec(), Object::name(tag));
