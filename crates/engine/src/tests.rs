@@ -1201,6 +1201,98 @@ fn reset_layers_returns_to_the_files_visibility() {
     assert!(!s.reset_layers(DocId(999)));
 }
 
+/// #7411: a full Save As renumbers the objects (the layer groups move from 9 and 10 to the lowest
+/// free numbers); the open document keeps the layer the user hid hidden, and the other shown.
+#[test]
+fn a_full_save_as_keeps_the_layer_choices_of_the_open_document() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    // Objects 5 to 8 are not used, so a rewrite closes the gap.
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let hidden = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let (red, blue) = colours(&s);
+    assert!(red > 100 && blue > 100, "both layers show as the file opens: {red} red, {blue} blue");
+    assert!(s.set_layer_visible(id, 0, false));
+    assert_eq!(colours(&s).0, 0, "the red rectangle is hidden");
+    let before = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+
+    let after = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    assert_ne!(before, after, "the rewrite renumbered the layer groups");
+    assert_eq!(hidden(&s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)]);
+    let (red, blue) = colours(&s);
+    assert_eq!(red, 0, "the page is still drawn without the red rectangle");
+    assert!(blue > 100, "and with the blue one: {blue}");
+}
+
+/// #7411: undo history survives the full Save As, whose renumbering the restored graph does not
+/// share. Undo and redo carry the user's layer choices over by name, so the layer hidden before the
+/// save stays hidden in the layer list and in the pixels, and the renderer's overrides name the
+/// numbers the restored graph has.
+#[test]
+fn undo_and_redo_after_a_full_save_as_keep_the_hidden_layer_hidden() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let layers = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let ids = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap();
+    assert!(s.set_layer_visible(id, 0, false));
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+    let saved_ids = ids(&s);
+    let expect_red_hidden = |s: &Session, step: &str| {
+        assert_eq!(layers(s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)], "{step}: the layer list");
+        let (red, blue) = colours(s);
+        assert_eq!((red, blue > 100), (0, true), "{step}: the pixels show the blue rectangle only");
+    };
+    expect_red_hidden(&s, "after the save");
+
+    s.undo(id).unwrap();
+    assert_ne!(ids(&s), saved_ids, "undo brings back the numbers from before the save");
+    expect_red_hidden(&s, "after undo");
+    s.redo(id).unwrap();
+    assert_eq!(ids(&s), saved_ids, "redo brings back the numbers the save wrote");
+    expect_red_hidden(&s, "after redo");
+    // Choices made after the trip still apply to the numbers now in use.
+    assert!(s.set_layer_visible(id, 0, true));
+    assert!(colours(&s).0 > 100, "the red rectangle shows again when asked for");
+}
+
 #[test]
 fn edits_to_unknown_documents_are_rejected() {
     let (mut s, _) = session_with(1);
