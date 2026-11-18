@@ -408,7 +408,10 @@ fn merge_page(
         return Ok(0);
     }
     let parsed = parse(&data);
-    if parsed.skipped > 0 {
+    // Nor one with an inline image whose end is a guess (no `EI` the renderer finds): the
+    // renderer reads nothing after it, so what the parser read there (a `gs`, say) is not what
+    // the page draws, and a rewrite that ends the image with an `EI` would draw it.
+    if parsed.skipped > 0 || parsed.ambiguous_images > 0 {
         return Ok(0);
     }
     let ops = parsed.ops;

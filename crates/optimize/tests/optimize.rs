@@ -6087,6 +6087,34 @@ fn the_masks_of_a_picture_under_a_transfer_function_stay_as_they_are() {
     assert_eq!(mask.decoded().unwrap(), vec![0xF0; 150 * 1200], "with the same samples");
 }
 
+/// A stencil mask that is the `/Mask` of a picture drawn under a transfer function, and that the
+/// page also paints on its own (ISO 32000-2 8.9.6.2 and 8.9.6.3), stays as it is: compressing or
+/// resampling it as a picture would change the picture's mask too. The picture's `/Mask` is a
+/// reference the page walk does not follow, so in a document that sets a transfer function the
+/// mask counts as drawn where the walk can't see, under one.
+#[test]
+fn a_held_stencil_mask_the_page_also_paints_stays_as_it_is() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200, 480);
+    let text = bilevel(w, h, false);
+    let stencil = mono_image(&mut doc, w, h, &text, None, &[("ImageMask", Object::Bool(true))]);
+    let picture = image(&mut doc, 200, 80, 3, false, None);
+    let mut with_mask = stream(&doc, picture);
+    with_mask.dict.set(b"Mask".to_vec(), Object::Ref(stencil));
+    doc.set(picture, Object::Stream(with_mask));
+    let p = page(&mut doc, &[("A", picture), ("M", stencil)], "q /Tr gs 300 0 0 120 20 660 cm /A Do Q q 0 0.4 0.8 rg 300 0 0 120 320 660 cm /M Do Q");
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let before = stream(&doc, picture).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, picture).raw, before, "A, drawn under the transfer function: {report:?}");
+    // Drawn by name alone, the stencil would be stored again as Group 4
+    // (`a_pictures_one_bit_masks_are_stored_again`).
+    let mask = stream(&doc, stencil);
+    assert_ne!(mask.dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "A's stencil mask, painted on its own as well: {report:?}");
+    assert_eq!((mask.dict.int(b"Width"), decoded_image(&doc, &mask).unwrap()), (Some(w as i64), text), "with the same samples");
+}
+
 /// Strips drawn under a transfer function aren't merged: merging resamples them to the finest
 /// strip's resolution. The same strips without it are (`the_fewest_strips_that_make_a_picture_are_merged`).
 #[test]
@@ -6102,6 +6130,38 @@ fn strips_drawn_under_a_transfer_function_are_not_merged() {
     set_states(&mut doc, p, states, None);
     let r = optimize(&mut doc, &keep).unwrap();
     assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+}
+
+/// Nor are strips on a page with an inline image whose end is a guess (no `EI` after it, so the
+/// renderer reads no image and nothing after it): what the parser read after it is not what the
+/// page draws, and the rewritten page, which would end the image with an `EI`, would draw it.
+#[test]
+fn strips_beside_an_ambiguous_inline_image_are_not_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let last = MIN_FRAGMENTS - 1;
+    let (mut doc, _) =
+        printed_page(MIN_FRAGMENTS as _, |_| false, |r, s| if r == last { format!("{s}BI /W 4 /H 1 /BPC 8 /CS /G ID abc") } else { s });
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
+}
+
+/// `Do` names its XObject with the operand from the end, as the renderer reads it: an image drawn
+/// under a transfer function by `/Other /Im Do` keeps its samples, though drawn once before
+/// without one.
+#[test]
+fn an_image_named_by_the_last_do_operand_keeps_its_samples_under_a_transfer_function() {
+    let mut doc = Document::new_empty();
+    let im = image(&mut doc, 1200, 1200, 3, false, None);
+    let p = page(&mut doc, &[("Im", im)], "q 144 0 0 144 36 600 cm /Im Do Q q /Tr gs 144 0 0 144 36 300 cm /Other /Im Do Q");
+    let states = inverting_states(&mut doc);
+    set_states(&mut doc, p, states, None);
+    let before = stream(&doc, im).raw;
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, im).raw, before, "drawn under the transfer function by its last operand: {report:?}");
 }
 
 fn dict_of(entries: impl IntoIterator<Item = (Vec<u8>, Object)>) -> Dict {

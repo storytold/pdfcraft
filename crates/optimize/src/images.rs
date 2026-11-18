@@ -176,8 +176,9 @@ impl Walk<'_> {
                         t.1 = set;
                     }
                 }
+                // The operand from the end, as for `gs`.
                 b"Do" => {
-                    let Some(name) = op.name(0) else { continue };
+                    let Some(name) = op.last_name() else { continue };
                     let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { continue };
                     let obj = doc.get(r);
                     let Object::Stream(s) = &*obj else { continue };
