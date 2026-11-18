@@ -2407,7 +2407,7 @@ fn content_streams_use_only_defined_operators_clause_6_2_2() {
     let type3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> /Resources << >> >>";
     assert_eq!(content_findings("", "/Resources << /Font << /F 5 0 R >> >>", "BT /F 1 Tf (a) Tj ET", &[type3, &glyph]), unknown);
     // A keyword read only after the parser skipped a damaged operand isn't judged.
-    assert_eq!(content_findings("", "/Resources << >>", "q <41!> Q", &[]), none);
+    assert_eq!(content_findings("", "/Resources << >>", "q <41!> UnknownOperator Q", &[]), none);
     // Nor one after a number written wrong, or a non-finite number printed as a word.
     assert_eq!(content_findings("", "/Resources << >>", "0 0.0.75 1 1 re f UnknownOperator", &[]), none);
     assert_eq!(content_findings("", "/Resources << >>", "BT Infinity Tz UnknownOperator ET", &[]), none);
@@ -2628,4 +2628,39 @@ fn a_shared_glyph_is_read_for_a_font_without_resources_too_clause_6_2_2() {
     for page in ["BT /A 1 Tf (a) Tj /B 1 Tf (a) Tj ET", "BT /B 1 Tf (a) Tj /A 1 Tf (a) Tj ET"] {
         assert_eq!(content_findings("", "/Resources 5 0 R", page, &[resources, &a, &b, &glyph]), said, "{page}");
     }
+}
+
+/// Content past damage is not followed: a name it uses isn't looked up for the association
+/// finding, and the form it would draw isn't read from there. A page part that is there but can't
+/// be read ends the page's content: the parts after it aren't read without it, while a part that
+/// isn't there holds nothing and the next one is read.
+#[test]
+fn content_past_damage_or_an_unreadable_part_is_not_followed_clause_6_2_2() {
+    let unknown = ["Content uses the operator UnknownOperator, which ISO 32000 doesn't define"];
+    let page = ["A page refers to resources by name but has no Resources dictionary of its own"];
+    let form = content("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << >>", "q UnknownOperator Q");
+    let inherited = "/Resources << /XObject << /X 5 0 R >> >>";
+    // The page inherits its resources: `/X Do` alone gives both findings.
+    let mut both: Vec<String> = unknown.iter().chain(page.iter()).map(|s| s.to_string()).collect();
+    both.sort();
+    let mut found = content_findings(inherited, "", "/X Do", &[&form]);
+    found.sort();
+    assert_eq!(found, both);
+    // After a damaged number, neither.
+    assert!(content_findings(inherited, "", "0 0.0.75 1 1 re f /X Do", &[&form]).is_empty());
+    // With its own resources, the form isn't read past the damage either.
+    assert!(content_findings("", inherited, "0 0.0.75 1 1 re f /X Do", &[&form]).is_empty());
+    assert_eq!(content_findings("", inherited, "/X Do", &[&form]), unknown);
+
+    let parts = |list: &str| {
+        let unreadable = content("/Filter /NoSuchDecode", "abc");
+        let last = content("", "UnknownOperator");
+        let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Contents [{list}] /Resources << >> >>");
+        let objs =
+            ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", page.as_str(), unreadable.as_str(), last.as_str()];
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.2").map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert!(parts("4 0 R 5 0 R").is_empty());
+    assert_eq!(parts("9 0 R 5 0 R"), unknown);
+    assert_eq!(parts("5 0 R"), unknown);
 }

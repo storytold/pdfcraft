@@ -12,7 +12,9 @@
 //! A stream is reported for the second only when a name it uses is found in resources it took
 //! from elsewhere: a name no dictionary defines is a missing resource, not a missing dictionary.
 //! An operator is judged only while the stream reads cleanly: once the parser skips bytes, or a
-//! number is written wrong (`0.0.75`, `Infinity`), what follows may be the rest of the damage.
+//! number is written wrong (`0.0.75`, `Infinity`), what follows may be the rest of the damage, so
+//! it is neither judged nor followed to the content it would draw. A page part that can't be read
+//! ends the page's content there, as it may leave a comment or a string open.
 //!
 //! The content read is what the pages draw: their contents, and through them the form XObjects
 //! `Do` paints, the glyph procedures of the Type 3 fonts `Tf` selects, or the graphics states `gs`
@@ -105,7 +107,15 @@ pub(crate) fn check(doc: &Document) -> Findings {
         let mut data = Vec::new();
         for part in &parts {
             // Each part is read on every page and every time it is listed, as the page draws it.
-            let Some(bytes) = walk.data(part) else { continue };
+            let Some(bytes) = walk.data(part) else {
+                // A part that isn't a stream (a reference to a missing object is null, ISO 32000-2
+                // 7.3.10) holds nothing. One that is but can't be read may end inside a comment or
+                // a string that the next part goes on with, so what follows isn't read.
+                if matches!(&*doc.resolve(part), Object::Stream(_)) {
+                    break;
+                }
+                continue;
+            };
             // A part read again isn't decoded again, so the read budget bounds what is joined.
             if walk.read.saturating_add(data.len()).saturating_add(bytes.len()) > MAX_READ {
                 break;
@@ -268,16 +278,17 @@ impl Walk<'_> {
             entries.as_dict()?.get(name).cloned()
         };
         let mut unassociated = false;
-        // Once the stream turns out damaged (bytes the parser had to skip, a number written
-        // wrong), what follows may be the rest of a damaged operand rather than an operator: the
-        // stream isn't judged on it.
-        let mut damaged = false;
         let mut ops = pdfcraft_content::ops(data);
         while let Some(op) = ops.next() {
             let kw = op.op.as_slice();
-            // An operator is written in printable ASCII; other bytes are data, not content.
-            damaged = damaged || ops.skipped() > 0 || damaged_numbers(data, &op) || !kw.iter().all(u8::is_ascii_graphic);
-            if !OPERATORS.contains(&kw) && self.found.undefined.is_none() && !damaged {
+            // Once the stream turns out damaged (bytes the parser had to skip, a number written
+            // wrong, a keyword that isn't printable ASCII, which is data rather than content),
+            // what follows may be the rest of a damaged operand rather than an operator: the
+            // stream isn't judged on it, nor is the content it would draw read from here.
+            if ops.skipped() > 0 || damaged_numbers(data, &op) || !kw.iter().all(u8::is_ascii_graphic) {
+                break;
+            }
+            if !OPERATORS.contains(&kw) && self.found.undefined.is_none() {
                 self.found.undefined = Some(escaped(kw));
             }
             // A name the stream's own resources would have to define, found only in those of the
