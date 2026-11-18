@@ -478,7 +478,7 @@ pub(super) fn extract_page(doc: &Document, page: &Dict, ctx: &Ctx, regions: &[[f
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut ex = Extractor { doc, ctx, regions, out: Extracted { shown_in: vec![0; regions.len()], ..Extracted::default() }, stack: Vec::new() };
     ex.scope(&data, &res, Matrix::IDENTITY, 0, true)?;
-    let rotation = pdfcraft_model::rotation(doc, page);
+    let rotation = crate::rendered_rotation(doc, page);
     for a in annots_of(doc, page) {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
         let Some(ap) = d.get(b"AP").and_then(|x| doc.resolve(x).as_dict().cloned()) else { continue };
@@ -527,7 +527,8 @@ pub(crate) fn appearance_matrix(doc: &Document, ap: &Stream, rect: &[f64]) -> Op
 }
 
 /// [`appearance_matrix`], then the turn the renderer gives an annotation `annot` with the NoRotate
-/// flag on a page turned `rotation` degrees (ISO 32000-2 §12.5.3): where the appearance is drawn.
+/// flag on a page it shows turned `rotation` degrees ([`crate::rendered_rotation`], ISO 32000-2
+/// §12.5.3): where the appearance is drawn.
 pub(crate) fn drawn_appearance_matrix(doc: &Document, annot: &Dict, ap: &Stream, rect: &[f64], rotation: i64) -> Option<Matrix> {
     let m = appearance_matrix(doc, ap, rect)?;
     let [x0, y0, x1, y1] = rect[..] else { return None };

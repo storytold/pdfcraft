@@ -69,7 +69,7 @@ impl Geo<'_> {
     /// output means what it paints can't be vouched for.
     fn appearances(&mut self, page: &Dict, res: &Dict) {
         let doc = self.doc;
-        let rotation = pdfcraft_model::rotation(doc, page);
+        let rotation = crate::rendered_rotation(doc, page);
         for a in crate::annots_of(doc, page) {
             // A direct dictionary has no reference of its own; it is checked like an indirect
             // one (what its appearance paints does not depend on how it is stored).
