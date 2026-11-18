@@ -87,7 +87,7 @@ fn wrapping_handles_odd_widths_and_input() {
 /// ones left out, with the interface fonts.
 fn on_screen(text: &str) -> Vec<String> {
     let ctx = egui::Context::default();
-    ctx.set_fonts(crate::theme::font_definitions());
+    crate::fonts::ui_fonts(crate::i18n::Lang::EN).install(&ctx);
     let mut shown = Vec::new();
     let output = ctx.run_ui(egui::RawInput::default(), |ui| {
         for line in wrap(text, |_| true) {

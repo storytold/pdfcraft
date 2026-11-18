@@ -1,7 +1,7 @@
 //! Duplicate Field: copies a form field onto the pages a range names.
 
-use craft::pages::ui::range::{PageRangeChoices, PageRangeOptions};
 use craft::pages::PageRange;
+use craft::pages::ui::range::{PageRangeChoices, PageRangeOptions};
 use craft::ui::contract::Bind;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, ParamDialog};
 use pdfcraft_engine::Edit;

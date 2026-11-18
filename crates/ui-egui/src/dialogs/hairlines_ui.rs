@@ -8,8 +8,8 @@ use craft::pages::PageRange;
 use craft::pages::ui::{PageRangeChoices, PageRangeOptions};
 use craft::ui::contract::Bind;
 use craft::ui::dialog::dialog_id;
-use craft::ui::runtime::env::Label;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
+use craft::ui::runtime::env::Label;
 
 use crate::PdfCraftApp;
 use crate::pageboxes::unit_kind;
@@ -89,7 +89,10 @@ impl PdfCraftApp {
         let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
             let pages = PageRangeOptions::value(fields, "range").unwrap_or_default().pages(count, current, &[]);
             let ready = !pages.is_empty() && fields.number("width").is_some_and(|w| w > 0.0);
-            ParamDialog::new(KEY, tl!("Fix hairlines"), params(count, current, unit)).values(Bind::bound(fields)).ok_label(Label::from(tl!("Fix"))).ok_enabled(ready)
+            ParamDialog::new(KEY, tl!("Fix hairlines"), params(count, current, unit))
+                .values(Bind::bound(fields))
+                .ok_label(Label::from(tl!("Fix")))
+                .ok_enabled(ready)
         });
         crate::dialogs::host::open(self, dialog);
     }

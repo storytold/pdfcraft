@@ -1,4 +1,6 @@
-use super::{Reply, Value, json};
+use serde_json::json;
+
+use super::{Reply, Value};
 
 impl crate::PdfCraftApp {
     /// Cancel any in-progress pointer gesture in every open view.
@@ -78,7 +80,8 @@ impl crate::PdfCraftApp {
         let cards = craft::ui::runtime::toast::cards(ctx, &craft::ui::runtime::env::WindowKey::main());
         let notice = cards.last().map(|card| card.toast.message.as_str().to_string());
         // PLAN: assumed `card.toast.progress: Option<f32>` is readable; L-206(2) names `Notices::progress(key)` as the reader (pdf-chrome-w19).
-        let progress = cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
+        let progress =
+            cards.iter().rev().find_map(|card| card.toast.progress.map(|f| json!({ "label": card.toast.message.as_str(), "fraction": f })));
         let dock = crate::side_panels::state(self);
         json!({
             "side_panels": dock.clone(),

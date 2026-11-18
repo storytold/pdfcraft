@@ -29,6 +29,9 @@ pub struct ActionOutcome {
     pub message: String,
 }
 
+/// The queue of Action Wizard runs: one at a time, each answering with its summary.
+pub(crate) type ActionJobs = craft::host::queue::JobQueue<(), ActionOutcome>;
+
 /// An action being created or edited, and the step the Add Step choice offers.
 #[derive(Clone, Default, PartialEq)]
 struct ActionDraft {
@@ -260,7 +263,6 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         self.run_action_into(action, files, PathBuf::new());
         #[cfg(not(target_arch = "wasm32"))]
-
         self.pick_first(PickRequest::folder("action.results").title(tl!("Choose a folder for the results")), None, move |app, dir| {
             app.run_action_into(action, files, dir)
         });

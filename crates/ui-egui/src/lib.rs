@@ -104,7 +104,6 @@ pub(crate) mod icons;
 pub(crate) mod notices;
 
 pub use app::settings;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::same_file;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
 use canvas::crop;
@@ -113,14 +112,12 @@ use canvas::page_parts;
 pub use canvas::scroll_speed;
 use canvas::signature_drag;
 use canvas::zoom_snap;
-use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::convert_colours_ui;
 use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
-use dialogs::palette;
 use dialogs::printer_marks_ui;
 use dialogs::protect;
 use dialogs::standards_ui;
@@ -139,7 +136,6 @@ pub use persist::last_view;
 pub use persist::paper;
 use persist::recovery;
 pub use persist::units;
-use platform::file_filter;
 #[cfg(target_os = "macos")]
 use platform::macos_association;
 #[cfg(not(target_arch = "wasm32"))]
@@ -179,6 +175,7 @@ use workflows::compare_ui;
 use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
+pub(crate) use workflows::job_count::JobCount;
 use workflows::js_dialogs;
 use workflows::js_ui;
 #[cfg(target_arch = "wasm32")]
@@ -213,6 +210,13 @@ struct PendingOpen {
     ready: Option<open_worker::ResultKind>,
 }
 
+/// A named destination being looked up in a document.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingDestination {
+    doc: DocId,
+    name: String,
+}
+
 pub struct PdfCraftApp {
     /// The app's services: jobs, files, settings sections, commands. Every queue is built from it.
     pub(crate) host: std::sync::Arc<craft::host::Host>,
@@ -223,7 +227,6 @@ pub struct PdfCraftApp {
     /// The native file panels the host's file service asks through; pumped every pass.
     #[cfg(not(target_arch = "wasm32"))]
     file_panels: Option<craft::dialogs::service::FilePanels>,
-    // PLAN: assumed settings::Store, the opened settings store, and PdfCraftApp::{apply_settings, attach_settings, save_settings} (pdf-shell-w9).
     /// The settings store the preferences are read from and written to.
     pub(crate) settings: Option<settings::Store>,
     /// The dialogs, prompts and notices the app has open, and their results.
@@ -236,7 +239,6 @@ pub struct PdfCraftApp {
     pub(crate) shortcuts: Option<dialogs::shortcuts::ShortcutsSession>,
     /// Split view (`panes`); which pane shows each tab is its view's.
     pub panes: panes::Panes,
-    // PLAN: assumed side_panels::{PanelId, RailSide, default_workspace, right_of} (pdf-chrome-w1, L-136).
     /// Where the side panels are docked, their sizes and which are open.
     pub dock: craft::behavior::dock::Workspace<side_panels::PanelId>,
     /// The side the rail of panel buttons sits on.
@@ -292,7 +294,7 @@ pub struct PdfCraftApp {
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
     /// The colours picked last in the comment tools' colour pickers.
-    pub(crate) recent_colours: crate::colour_picker::RecentColours,
+    pub(crate) recent_colours: comments::RecentColours,
     pub(crate) hotbar: hotbar::Hotbar,
     /// Preferences ▸ Appearance: light, dark, or as the system says.
     pub theme_preference: craft::theme::ModeChoice,
@@ -425,7 +427,10 @@ pub struct PdfCraftApp {
     /// Named destinations being looked up off the UI thread: reading a large document's name tree
     /// takes a noticeable moment.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) named_destinations: Queue<(DocId, String), Option<(usize, pdfcraft_render::DestView)>>,
+    pub(crate) named_destinations: Queue<DocId, Option<(usize, pdfcraft_render::DestView)>>,
+    /// The documents a lookup in `named_destinations` is for, and the name asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_destinations: Vec<PendingDestination>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
@@ -433,11 +438,10 @@ pub struct PdfCraftApp {
     launch_layout: Option<craft::pages::PageDisplay>,
     #[cfg(not(target_arch = "wasm32"))]
     launch_display_target: Option<DocId>,
-    // PLAN: assumed HashMap<PickId, FilePurpose> and editing::save::{SaveFlow, PendingSave} (pdf-shell-w14).
     /// The file picks asked of the host's file service, by ticket, with what each is for.
     pub(crate) picks: std::collections::HashMap<craft::host::PickId, FilePurpose>,
     /// Where a save that asks first (Save As, a replace question) stands.
-    pub(crate) save_flow: editing::save::SaveFlow,
+    pub(crate) save_flow: craft::dialogs::save::SaveFlow<DocId>,
     /// A save waiting for the answer to a question it asked.
     pub(crate) pending_save: Option<editing::save::PendingSave>,
     /// Folders pinned to Home, and what they held when last listed.
@@ -489,8 +493,7 @@ pub struct PdfCraftApp {
     /// Scan & OCR: the Recognize Text choices and the running job.
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
-    // PLAN: assumed workflows::JobCount, a batch's shared done/total count (pdf-workflows-w14, pdf-print-ocr-w6).
-    pub ocr_batch: Option<std::sync::Arc<workflows::JobCount>>,
+    pub ocr_batch: Option<std::sync::Arc<JobCount>>,
     /// Pages being recognized, by document.
     pub(crate) ocr_runs: Queue<DocId, Result<Vec<pdfcraft_engine::ocr::OcrPage>, String>>,
     /// Recognize Text in Multiple Files: the batch's summary.
@@ -518,8 +521,7 @@ pub struct PdfCraftApp {
     panic_next: Option<frame_guard::FramePart>,
     /// Action Wizard: the user's actions and the running action.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
-    pub action_run: Option<std::sync::Arc<workflows::JobCount>>,
-    // PLAN: assumed the queue aliases actions_ui::ActionJobs, export_ui::ExportJobs, optimize_ui::{OptimizeJobs, SpaceAuditJobs} (pdf-workflows-w14).
+    pub action_run: Option<std::sync::Arc<JobCount>>,
     pub(crate) action_jobs: actions_ui::ActionJobs,
     /// Standards ▸ PDF/A: the level.
     pub pdfa: standards_ui::PdfaState,
@@ -553,7 +555,7 @@ pub struct PdfCraftApp {
     /// The Combine files tab: whether it is open, shown, its selection and undo history.
     pub combine_tab: combine_ui::CombineTab,
     /// The Combine files table's column order and widths (kept in the settings).
-    pub combine_columns: craft::ui::contract::collection::ColumnLayout,
+    pub combine_columns: craft::ui::contract::ColumnLayout,
     /// Combine files as thumbnails or as the table (kept in the settings).
     pub combine_view: combine_ui::CombineView,
     /// How large the Combine grid draws its cards (1.0 = the usual; kept in the settings).
@@ -573,7 +575,7 @@ pub struct PdfCraftApp {
     /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
     pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
     pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
-    pub(crate) scan_cleans: Queue<DocId, Result<scan_clean_ui::ScanCleaned, pdfcraft_engine::EditError>>,
+    pub(crate) scan_cleans: Queue<DocId, Result<pdfcraft_engine::scan_clean::ScanCleaned, pdfcraft_engine::EditError>>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
     /// Copied comments (XFDF), to paste into this or another document (M14).
@@ -644,7 +646,7 @@ pub struct PdfCraftApp {
     /// Export dialog settings.
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.
-    export_status: Option<std::sync::Arc<workflows::JobCount>>,
+    export_status: Option<std::sync::Arc<JobCount>>,
     pub(crate) export_jobs: export_ui::ExportJobs,
     /// The saved Fill & Sign signature and initials (drawn, typed or an image).
     pub signature: Option<craft::review::SavedSignature>,
@@ -669,14 +671,13 @@ pub struct PdfCraftApp {
     pub text_style: pdfcraft_engine::AddedText,
     /// Edit a PDF shows its More tools.
     pub(crate) edit_more: bool,
-    // PLAN: assumed files::{ReplaceSource, InstalledFonts, FontFile} (pdf-workflows-w13).
     /// The file Replace pages takes its pages from, once picked.
-    pub(crate) replace_source: Option<std::sync::Arc<files::ReplaceSource>>,
+    pub(crate) replace_source: Option<std::sync::Arc<dialogs::page_dialogs::ReplaceSource>>,
     /// The fonts installed on this machine, for Add text and font embedding (desktop).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) document_fonts: Option<files::InstalledFonts>,
     /// The installed fonts being listed off the UI thread.
-    pub(crate) font_scan: Queue<(), Vec<files::FontFile>>,
+    pub(crate) font_scan: Queue<(), Vec<pdfcraft_engine::text_fonts::FontFile>>,
     /// The last web link the app asked the system to open (tests and automation).
     pub last_opened_url: Option<String>,
     /// The home screen's community card was closed; it comes back next launch (not remembered).

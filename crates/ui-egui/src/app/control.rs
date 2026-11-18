@@ -478,7 +478,7 @@ impl PdfCraftApp {
                     Some(name) => (name.to_string(), 0),
                     None => self.views[i].prepare.selected.clone().ok_or("select a field first, or name one: field-properties:NAME")?,
                 };
-                prepare::dialog::open(self, &name, widget, prepare::dialog::FieldTab::General);
+                prepare::dialog::open(self, &name, widget, prepare::FieldTab::General);
             }
             "none" => {
                 self.cancel_dialogs();

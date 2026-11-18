@@ -15,7 +15,9 @@ use craft::ui::display::Text;
 use craft::ui::list::ListRow;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamTab, SharedRows};
 use craft::ui::table::Table;
-use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, Preset, QUALITIES, Settings, SpaceCategory, SpaceUse};
+use pdfcraft_engine::optimize::{
+    Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, Preset, QUALITIES, Settings, SpaceCategory, SpaceUse,
+};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -76,7 +78,12 @@ struct Toggle {
 }
 
 static TOGGLES: [Toggle; 20] = [
-    Toggle { tab: 1, key: "linksactionsscripts", label: "Discard all links, actions and JavaScript", effect: Effect::Discard(Hidden::LinksActionsScripts) },
+    Toggle {
+        tab: 1,
+        key: "linksactionsscripts",
+        label: "Discard all links, actions and JavaScript",
+        effect: Effect::Discard(Hidden::LinksActionsScripts),
+    },
     Toggle {
         tab: 1,
         key: "discard_alternate_images",
@@ -451,8 +458,11 @@ fn audit_lines(rows: &[SpaceUse]) -> Vec<AuditLine> {
         .filter(|r| r.bytes > 0)
         .map(|r| {
             // "Patterns" also names the redaction search patterns ("模式"); the audit's PDF graphics objects need their own key.
-            let description =
-                if r.category == SpaceCategory::Patterns { tl!("Patterns (graphics objects)").to_string() } else { tl!(r.category.label()).to_string() };
+            let description = if r.category == SpaceCategory::Patterns {
+                tl!("Patterns (graphics objects)").to_string()
+            } else {
+                tl!(r.category.label()).to_string()
+            };
             AuditLine { description, bytes: r.bytes.to_string(), percentage: format!("{:.2}%", r.percent) }
         })
         .collect();
@@ -526,7 +536,6 @@ pub(crate) fn open_space_audit(app: &mut PdfCraftApp, ctx: &egui::Context, from_
         ParamDialog::new(key, tl!("Space Audit"), vec![audit_row(rows.clone())]).read_only(true).values(Bind::bound(fields))
     });
     if from_optimizer {
-
         crate::dialogs::host::open_over(app, dialog.instance(AUDIT_INSTANCE), dialog_id(OPTIMIZE_KEY));
     } else {
         crate::dialogs::host::open(app, dialog);
@@ -595,6 +604,9 @@ pub struct OptimizeRun {
 
 /// The queue of optimization runs, keyed by document: one run per document, and one at a time by the app's own rule.
 pub(crate) type OptimizeJobs = JobQueue<DocId, Result<Optimized, EditError>>;
+
+/// The queue of space audits, keyed by document and edit generation (a newer edit supersedes an older audit).
+pub(crate) type SpaceAuditJobs = JobQueue<(DocId, u64), Vec<pdfcraft_engine::optimize::SpaceUse>>;
 
 /// The notice's text for a stage.
 fn stage_label(stage: OptimizeStage) -> String {

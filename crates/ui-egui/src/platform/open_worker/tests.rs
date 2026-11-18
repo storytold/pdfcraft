@@ -16,8 +16,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
-use crate::canvas::PageLayout;
 use crate::PdfCraftApp;
+use crate::canvas::PageDisplay;
 
 fn fixture(pages: usize) -> Vec<u8> {
     let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
@@ -98,7 +98,8 @@ impl Rig {
         let (host_jobs, host_files) = (jobs.clone(), files.clone());
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_cc| {
             let (rx, slot) = parts.lock().expect("setup slot").take().expect("built once");
-            let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs.clone()).files(host_files.clone()).build();
+            let host =
+                Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs.clone()).files(host_files.clone()).build();
             let mut app = PdfCraftApp::with_host(Arc::new(host));
             *slot.lock().expect("sender slot") = Some(app.intake.sender());
             app.set_option("language", "en").expect("language preference");
@@ -178,9 +179,9 @@ impl Rig {
         self.h.run_steps(2);
     }
 
-    fn layout_of(&self, name: &str) -> Option<(PageLayout, bool)> {
+    fn layout_of(&self, name: &str) -> Option<(PageDisplay, bool)> {
         let app = self.h.state();
-        app.views.iter().find(|v| app.session.get(v.id).is_some_and(|d| d.name == name)).map(|v| (v.layout, v.continuous))
+        app.views.iter().find(|v| app.session.get(v.id).is_some_and(|d| d.name == name)).map(|v| (v.view.display, v.view.continuous))
     }
 }
 
@@ -468,7 +469,9 @@ fn tool_picker_keeps_picked_recipient_when_other_open_is_ready() {
 /// A tool chosen for a file opens with it whether the file is a PDF, text, or locked.
 #[test]
 fn inline_tool_open_keeps_its_command_for_pdf_conversion_and_password_retry() {
-    for (extension, bytes, locked) in [("pdf", fixture(2), false), ("txt", b"Synthetic text for the tool".to_vec(), false), ("pdf", encrypted_fixture(), true)] {
+    for (extension, bytes, locked) in
+        [("pdf", fixture(2), false), ("txt", b"Synthetic text for the tool".to_vec(), false), ("pdf", encrypted_fixture(), true)]
+    {
         let mut rig = Rig::empty();
         let file = TempFile::new("table", extension, &bytes);
         rig.choose("export.text", &file);
@@ -530,23 +533,23 @@ fn launch_layout_waits_for_cli_opens_and_preserves_restored_tabs() {
         if layout_first {
             rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
         }
-        rig.h.state_mut().open_path_with_display(&a.path(), PageLayout::Single, false);
-        rig.h.state_mut().open_path_with_display(&b.path(), PageLayout::Single, false);
+        rig.h.state_mut().open_path_with_display(&a.path(), PageDisplay::Single, false);
+        rig.h.state_mut().open_path_with_display(&b.path(), PageDisplay::Single, false);
         if !layout_first {
             rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
         }
         rig.release();
         assert_eq!(rig.layout_of("existing.pdf"), Some(restored), "the restored tab is not targeted");
-        assert_ne!(rig.layout_of(&b.name()), Some((PageLayout::TwoUp, false)), "the layout waits for the last flagged open");
+        assert_ne!(rig.layout_of(&b.name()), Some((PageDisplay::TwoUp, false)), "the layout waits for the last flagged open");
         rig.release();
-        assert_eq!(rig.layout_of(&b.name()), Some((PageLayout::TwoUp, false)), "the last settled open gets the layout");
-        assert_eq!(rig.layout_of(&a.name()), Some((PageLayout::Single, false)));
+        assert_eq!(rig.layout_of(&b.name()), Some((PageDisplay::TwoUp, false)), "the last settled open gets the layout");
+        assert_eq!(rig.layout_of(&a.name()), Some((PageDisplay::Single, false)));
         assert_eq!(rig.layout_of("existing.pdf"), Some(restored));
         // A later open does not inherit it.
         let c = TempFile::new("layout-c", "pdf", &fixture(1));
         rig.h.state_mut().open_path(&c.path());
         rig.release();
-        assert_ne!(rig.layout_of(&c.name()), Some((PageLayout::TwoUp, false)));
+        assert_ne!(rig.layout_of(&c.name()), Some((PageDisplay::TwoUp, false)));
     }
 }
 
@@ -557,13 +560,13 @@ fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
     rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
     // A read that fails.
     let missing = std::env::temp_dir().join(format!("pdfcraft-missing-{}.pdf", std::process::id()));
-    rig.h.state_mut().open_path_with_display(&missing.to_string_lossy(), PageLayout::Single, false);
+    rig.h.state_mut().open_path_with_display(&missing.to_string_lossy(), PageDisplay::Single, false);
     rig.release();
     assert_eq!(rig.layout_of("existing.pdf"), Some(restored));
     // A password prompt that is cancelled.
     rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
     let locked = TempFile::new("layout-locked", "pdf", &encrypted_fixture());
-    rig.h.state_mut().open_path_with_display(&locked.path(), PageLayout::Single, false);
+    rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
     rig.release();
     assert!(rig.password_dialog());
     rig.press("Cancel");
@@ -572,7 +575,7 @@ fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
     let next = TempFile::new("layout-next", "pdf", &fixture(1));
     rig.h.state_mut().open_path(&next.path());
     rig.release();
-    assert_ne!(rig.layout_of(&next.name()), Some((PageLayout::TwoUp, false)));
+    assert_ne!(rig.layout_of(&next.name()), Some((PageDisplay::TwoUp, false)));
 }
 
 #[test]
@@ -581,10 +584,10 @@ fn flagged_startup_opens_wait_for_password_ownership_before_the_first_frame() {
     rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
     let locked = TempFile::new("flag-locked", "pdf", &encrypted_fixture());
     let plain = TempFile::new("flag-plain", "pdf", &fixture(1));
-    rig.h.state_mut().open_path_with_display(&locked.path(), PageLayout::Single, false);
+    rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
     // Naming the locked file again joins its open instead of queuing a second one.
-    rig.h.state_mut().open_path_with_display(&locked.path(), PageLayout::Single, false);
-    rig.h.state_mut().open_path_with_display(&plain.path(), PageLayout::Single, false);
+    rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
+    rig.h.state_mut().open_path_with_display(&plain.path(), PageDisplay::Single, false);
     assert_eq!(rig.jobs.waiting(), 2);
     rig.release();
     assert!(rig.password_dialog());
@@ -599,8 +602,8 @@ fn flagged_startup_opens_wait_for_password_ownership_before_the_first_frame() {
     rig.h.run_steps(2);
     assert_eq!(rig.tabs(), 2);
     assert!(!rig.password_dialog(), "no second prompt appears");
-    assert_eq!(rig.layout_of(&locked.name()), Some((PageLayout::Single, false)));
-    assert_eq!(rig.layout_of(&plain.name()), Some((PageLayout::TwoUp, false)), "the layout lands on the last settled open");
+    assert_eq!(rig.layout_of(&locked.name()), Some((PageDisplay::Single, false)));
+    assert_eq!(rig.layout_of(&plain.name()), Some((PageDisplay::TwoUp, false)), "the layout lands on the last settled open");
 }
 
 #[test]
@@ -652,18 +655,20 @@ fn file_open_converts_an_office_document_on_the_worker() {
 }
 
 fn synthetic_docx() -> Vec<u8> {
-    let mut zip = Vec::new();
+    let mut writer = craft::zip::Writer::new();
     {
-        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip));
-        let options = zip::write::SimpleFileOptions::default();
         for (name, body) in [
-            ("[Content_Types].xml", "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>"),
-            ("word/document.xml", "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>"),
+            (
+                "[Content_Types].xml",
+                "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>",
+            ),
+            (
+                "word/document.xml",
+                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>Synthetic</w:t></w:r></w:p></w:body></w:document>",
+            ),
         ] {
-            writer.start_file(name, options).expect("start zip entry");
-            std::io::Write::write_all(&mut writer, body.as_bytes()).expect("write zip entry");
+            writer.add(name, body.as_bytes(), craft::zip::Compression::Deflated).expect("add zip entry");
         }
-        writer.finish().expect("finish zip");
     }
-    zip
+    writer.finish().expect("finish zip")
 }

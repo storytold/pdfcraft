@@ -9,13 +9,13 @@ use std::sync::{
 use craft::host::Wake;
 use craft::host::queue::{Cancel, JobQueue, Priority, QueueOptions};
 use craft::theme::variant::Tone;
+use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Shade, Spinner, Text};
 use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::notices::{Notice, NoticeLayout};
-use craft::ui::choice::Checkbox;
 use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::sections::{DialogRole, FooterButton};
 use craft::ui::style::TypeRole;
@@ -62,16 +62,7 @@ pub(crate) struct WordCountDialog {
 
 impl WordCountDialog {
     fn new(options: WordCountOptions, queue: JobQueue<u64, Result<Report, String>>, wake: Wake) -> Self {
-        WordCountDialog {
-            id: dialog_id("word-count"),
-            options,
-            key: None,
-            queue,
-            serial: 0,
-            wake,
-            done: Arc::new(AtomicUsize::new(0)),
-            shown: None,
-        }
+        WordCountDialog { id: dialog_id("word-count"), options, key: None, queue, serial: 0, wake, done: Arc::new(AtomicUsize::new(0)), shown: None }
     }
 
     /// Whether the count for the current key has finished (with a report or an error).
@@ -125,49 +116,49 @@ impl StackDialog for WordCountDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
         let WordCountDialog { options, shown, done, .. } = self;
         let close = FooterButton::new(tl!("Close").to_string(), DialogRole::Cancel);
-        let out = FormDialog::new(tl!("Word count").to_string(), Bind::bound(options))
-            .shaped(|d| d.buttons([close]))
-            .show(ui, |ui, _, o| {
-                Checkbox::new(Bind::bound(&mut o.current_page)).label(tl!("Current page only").to_string()).show(ui);
-                Checkbox::new(Bind::bound(&mut o.options.exclude_tables)).label(tl!("Exclude tagged tables").to_string()).show(ui);
-                Checkbox::new(Bind::bound(&mut o.options.exclude_code)).label(tl!("Exclude tagged code blocks").to_string()).show(ui);
-                Checkbox::new(Bind::bound(&mut o.options.exclude_images)).label(tl!("Exclude image/OCR text").to_string()).show(ui);
-                Text::new(tl!("Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.").to_string())
-                    .role(TypeRole::Caption)
-                    .shade(Shade::Muted)
-                    .show(ui);
-                match shown {
-                    Some(Ok(report)) => {
-                        for (label, value) in [
-                            (tl!("Words"), report.total.words),
-                            (tl!("Characters"), report.total.characters),
-                            (tl!("Characters without spaces"), report.total.characters_without_spaces),
-                            (tl!("Pages counted"), report.pages.len()),
-                        ] {
-                            Field::new(label.to_string()).show(ui, |ui, _| {
-                                Text::new(value.to_string()).show(ui);
-                            });
-                        }
-                        if report.pages_without_text > 0 {
-                            Text::new(tl!("Some pages contain no countable text. Scanned images need OCR first.").to_string()).show(ui);
-                        }
-                        if report.unclassified_structure {
-                            Text::new(tl!("Some content could not be classified safely and was kept in the count.").to_string()).show(ui);
-                        }
-                    }
-                    Some(Err(error)) => {
-                        Notice::new(Tone::Bad, error.clone()).layout(NoticeLayout::Inline).show(ui);
-                    }
-                    None => {
-                        Row::new().show(ui, |ui, _| {
-                            Spinner::new().show(ui);
-                            let n = done.load(Ordering::Relaxed);
-                            Text::new(crate::i18n::fmt(tl!("Counting words… {n} pages read"), &[("n", &n.to_string())])).show(ui);
+        let out = FormDialog::new(tl!("Word count").to_string(), Bind::bound(options)).shaped(|d| d.buttons([close])).show(ui, |ui, _, o| {
+            Checkbox::new(Bind::bound(&mut o.current_page)).label(tl!("Current page only").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut o.options.exclude_tables)).label(tl!("Exclude tagged tables").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut o.options.exclude_code)).label(tl!("Exclude tagged code blocks").to_string()).show(ui);
+            Checkbox::new(Bind::bound(&mut o.options.exclude_images)).label(tl!("Exclude image/OCR text").to_string()).show(ui);
+            Text::new(
+                tl!("Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.").to_string(),
+            )
+            .role(TypeRole::Caption)
+            .shade(Shade::Muted)
+            .show(ui);
+            match shown {
+                Some(Ok(report)) => {
+                    for (label, value) in [
+                        (tl!("Words"), report.total.words),
+                        (tl!("Characters"), report.total.characters),
+                        (tl!("Characters without spaces"), report.total.characters_without_spaces),
+                        (tl!("Pages counted"), report.pages.len()),
+                    ] {
+                        Field::new(label.to_string()).show(ui, |ui, _| {
+                            Text::new(value.to_string()).show(ui);
                         });
                     }
+                    if report.pages_without_text > 0 {
+                        Text::new(tl!("Some pages contain no countable text. Scanned images need OCR first.").to_string()).show(ui);
+                    }
+                    if report.unclassified_structure {
+                        Text::new(tl!("Some content could not be classified safely and was kept in the count.").to_string()).show(ui);
+                    }
                 }
-                true
-            });
+                Some(Err(error)) => {
+                    Notice::new(Tone::Bad, error.clone()).layout(NoticeLayout::Inline).show(ui);
+                }
+                None => {
+                    Row::new().show(ui, |ui, _| {
+                        Spinner::new().show(ui);
+                        let n = done.load(Ordering::Relaxed);
+                        Text::new(crate::i18n::fmt(tl!("Counting words… {n} pages read"), &[("n", &n.to_string())])).show(ui);
+                    });
+                }
+            }
+            true
+        });
         out.closed.map(|_| DialogResult::Cancel)
     }
 }
@@ -177,7 +168,8 @@ impl PdfCraftApp {
     pub(crate) fn open_word_count(&mut self) {
         // PLAN: assumed `self.wake: Wake` (pdf-hub-w1, `AppServices::wake`)
         let wake = self.wake.clone();
-        let queue = JobQueue::new(self.host.jobs_shared().clone(), wake.clone(), QueueOptions { lanes: 1, name: "word-count", ..QueueOptions::default() });
+        let queue =
+            JobQueue::new(self.host.jobs_shared().clone(), wake.clone(), QueueOptions { lanes: 1, name: "word-count", ..QueueOptions::default() });
         let dialog = WordCountDialog::new(self.word_count_options, queue, wake);
         crate::dialogs::host::open(self, dialog);
     }
