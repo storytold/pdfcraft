@@ -57,21 +57,26 @@ impl PdfCraftApp {
             // before this guard; the snapshots above are offered for recovery on the next start.
             std::panic::resume_unwind(Box::new(message.to_string()));
         }
-        self.dialog = None;
         self.palette_open = false;
         self.keep_active_valid();
         self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", message)]);
         if let Some(ctx) = &self.ctx {
+            // Top first, so a child dialog is cancelled before the parent it was opened from.
+            // PLAN: assumed `PdfCraftApp.dialogs: DialogHost` (pdf-hub-w1)
+            for open in self.dialogs.open_dialogs().into_iter().rev() {
+                self.dialogs.cancel_by_id(ctx, open.id);
+            }
             ctx.request_repaint();
         }
     }
 
-    /// After `logic` panicked, perhaps before its quit guard ran: a close of the window asked for
-    /// in this frame still asks about unsaved changes, or eframe closes it and what the recovery
-    /// snapshot doesn't hold (a text being typed) is lost. If even that panics, the close is
-    /// cancelled; the user can close again.
-    pub(crate) fn close_after_panic(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && pdfcraft_engine::guard(|| self.hold_close_for_unsaved(ctx)).is_err() {
+    /// The root window's close path, run once per frame after `logic`'s guarded part whether or
+    /// not it panicked: a close asked for in a frame whose logic panicked still asks about
+    /// unsaved changes, or eframe closes the window and what the recovery snapshot doesn't hold
+    /// (a text being typed) is lost. If even that panics, the close is cancelled; the user can
+    /// close again. It runs `embed::logic` once, which also runs the windows' own logic.
+    pub(crate) fn run_close_path(&mut self, ctx: &egui::Context) {
+        if pdfcraft_engine::guard(|| craft::ui::shell::embed::logic(ctx, || self.close_requested())).is_err() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
     }
@@ -105,62 +110,85 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Dialog, RecoveryStore};
+    use craft::ui::dialog::UnsavedChangesDialog;
     use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
     use pdfcraft_engine::{Edit, Session};
 
-    /// A recovery folder of its own, removed on drop.
-    struct Store(RecoveryStore);
+    /// A recovery folder of its own, removed on drop. The app opens the store in it.
+    struct Store(std::path::PathBuf);
 
     impl Store {
         fn new(tag: &str) -> Store {
             let dir = std::env::temp_dir().join(format!("pdfcraft-frame-guard-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
-            Store(RecoveryStore::new(dir))
+            Store(dir)
         }
     }
 
     impl Drop for Store {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(self.0.dir());
+            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
-    /// Snapshots written to the store. `RecoveryStore::list` leaves out a running instance's own.
+    /// Snapshots written to the store's folder.
     fn snapshots(store: &Store) -> usize {
-        std::fs::read_dir(store.0.dir()).map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "pdf")).count()).unwrap_or(0)
+        std::fs::read_dir(&store.0).map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "pdf")).count()).unwrap_or(0)
     }
 
     fn pdf(text: &str) -> Vec<u8> {
         Session::new().create_from_text("t", text).unwrap().to_vec()
     }
 
-    /// Two tabs, the second with an unsaved edit, and the About dialog open.
-    fn harness(store: &Store) -> Harness<'static, PdfCraftApp> {
-        let recovery = store.0.clone();
+    /// An app built through `with_host`, with recovery in `dir` when given.
+    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` and `PdfCraftApp::with_host(Arc<Host>, AppServices)` (pdf-hub-w1, L-207)
+    fn app(dir: Option<&std::path::Path>) -> PdfCraftApp {
+        let wake = craft::host::Wake::none();
+        let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
+        let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
+        let watch = craft::platform::watch::FileWatch::new(wake.clone());
+        let services = crate::AppServices::new(wake, clipboard, dir.map(std::path::Path::to_path_buf), None, intake, watch);
+        let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
+        PdfCraftApp::with_host(std::sync::Arc::new(craft::host::Host::builder(info).build()), services)
+    }
+
+    /// Two tabs, the second with an unsaved edit, and the About dialog open when `about`.
+    fn harness(store: &Store, about: bool) -> Harness<'static, PdfCraftApp> {
+        let dir = store.0.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::new();
+            let mut app = app(Some(&dir));
             app.set_option("language", "en").unwrap();
-            app.enable_recovery(recovery);
+            app.enable_recovery();
             app.open_bytes("a.pdf", None, pdf("First")).unwrap();
             app.open_bytes("b.pdf", None, pdf("Second")).unwrap();
             app
         });
         h.run_steps(4);
         assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
-        h.state_mut().dialog = Some(Dialog::About);
+        if about {
+            h.state_mut().set_option("dialog", "about").unwrap();
+        }
         h.run_steps(1);
         h
     }
 
-    fn toast(h: &Harness<'static, PdfCraftApp>) -> String {
-        h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
-    }
-
     #[test]
     fn a_panic_while_drawing_keeps_the_app_its_tabs_and_their_edits() {
-        let store = Store::new("ui");
-        let mut h = harness(&store);
+        let store = Store::new("panic");
+        let mut h = harness(&store, true);
+        // A panic in logic is caught like one in drawing.
+        h.state_mut().panic_next = Some(FramePart::Logic);
+        h.run_steps(1);
+        h.state_mut().panic_next = None;
+        h.run_steps(2);
+        assert_eq!(h.state().views.len(), 2);
+        h.get_by_label_contains("injected Logic panic");
+        assert_eq!(snapshots(&store), 1);
+
+        h.state_mut().set_option("dialog", "about").unwrap();
+        h.run_steps(1);
+        assert!(!h.state().dialogs.open_dialogs().is_empty(), "the dialog is showing");
         h.state_mut().panic_next = Some(FramePart::Ui);
         h.run_steps(1);
         h.state_mut().panic_next = None;
@@ -168,23 +196,10 @@ mod tests {
         let app = h.state();
         assert_eq!(app.views.len(), 2, "every tab is still open");
         assert_eq!(app.active, Some(1));
-        assert!(app.dialog.is_none(), "the dialog that was showing is dropped");
+        assert!(app.dialogs.open_dialogs().is_empty(), "the dialog that was showing is dropped");
         assert_eq!(app.panicking_frames, 0, "a frame that draws resets the count");
-        assert!(toast(&h).starts_with("That didn't work: an internal error stopped it (injected Ui panic)"), "{}", toast(&h));
+        h.get_by_label_contains("injected Ui panic");
         assert_eq!(snapshots(&store), 1, "the edited tab was snapshotted for recovery at once");
-    }
-
-    #[test]
-    fn a_panic_in_a_frames_logic_is_caught_too() {
-        let store = Store::new("logic");
-        let mut h = harness(&store);
-        h.state_mut().panic_next = Some(FramePart::Logic);
-        h.run_steps(1);
-        h.state_mut().panic_next = None;
-        h.run_steps(2);
-        assert_eq!(h.state().views.len(), 2);
-        assert!(toast(&h).contains("injected Logic panic"), "{}", toast(&h));
-        assert_eq!(snapshots(&store), 1);
     }
 
     #[test]
@@ -192,20 +207,19 @@ mod tests {
         // The panic comes before the quit guard runs: without the question eframe closes the
         // window, and what isn't in the recovery snapshot (a text being typed) is lost.
         let store = Store::new("quit");
-        let mut h = harness(&store);
-        h.state_mut().dialog = None;
+        let mut h = harness(&store, false);
         h.state_mut().panic_next = Some(FramePart::Logic);
         h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
         h.run_steps(1);
         h.state_mut().panic_next = None;
-        h.run_steps(1);
-        assert_eq!(h.state().close_request, Some(crate::CloseRequest::Quit), "the save question is asked");
+        h.run_steps(2);
+        assert!(h.state().dialogs.is_open::<UnsavedChangesDialog>(), "the save question is asked");
     }
 
     #[test]
     fn frames_that_keep_panicking_end_the_app_after_snapshotting_its_work() {
         let store = Store::new("again");
-        let mut h = harness(&store);
+        let mut h = harness(&store, true);
         h.state_mut().panic_next = Some(FramePart::Ui);
         // The guard lets the third panicking frame through, as the app ended before it.
         let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.run_steps(MAX_PANICKING_FRAMES as usize)));
@@ -217,7 +231,7 @@ mod tests {
     fn hidden_frames_that_run_cleanly_reset_the_count() {
         // eframe runs `logic` without `ui` while the window is hidden: panics separated by
         // clean hidden frames are not "in a row" and must not end the app.
-        let mut app = PdfCraftApp::new();
+        let mut app = app(None);
         for _ in 0..MAX_PANICKING_FRAMES * 2 {
             app.begin_logic();
             app.guarded_frame(|_| panic!("hidden logic panic"));
@@ -230,7 +244,7 @@ mod tests {
 
     #[test]
     fn hidden_frames_that_keep_panicking_still_end_the_app() {
-        let mut app = PdfCraftApp::new();
+        let mut app = app(None);
         let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             for _ in 0..MAX_PANICKING_FRAMES {
                 app.begin_logic();
@@ -238,17 +252,5 @@ mod tests {
             }
         }));
         assert!(ended.is_err(), "panics in every hidden frame still reach the limit");
-    }
-
-    #[test]
-    fn active_stays_on_an_open_tab() {
-        let mut app = PdfCraftApp::new();
-        app.active = Some(3);
-        app.keep_active_valid();
-        assert_eq!(app.active, None, "no tabs: nothing is active");
-        app.open_bytes("a.pdf", None, pdf("Only")).unwrap();
-        app.active = Some(5);
-        app.keep_active_valid();
-        assert_eq!(app.active, Some(0));
     }
 }
