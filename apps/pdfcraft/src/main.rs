@@ -38,6 +38,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 mod apple_events;
 mod compositor_gpu;
 mod decorations;
+mod display_backend;
 mod logging;
 #[cfg(target_os = "windows")]
 mod motion;
@@ -247,6 +248,9 @@ fn main() -> eframe::Result {
     let may_hand_off = startup.may_hand_off();
     let startup::Arguments { files, options, control_file, create_images, combine, two_paged, .. } = startup;
     let integrated = cfg!(target_os = "macos");
+    // Linux and the BSDs: X11 through XWayland on a Wayland desktop, for file drops, when it
+    // answers (src/display_backend.rs). Chosen once, so the frame and both runs below agree.
+    let backend = display_backend::from_env();
     // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
     let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
     migrate_legacy_folders();
@@ -275,7 +279,7 @@ fn main() -> eframe::Result {
         single_instance::Claim::Alone => None,
     };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged };
+    let launch = Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged, backend };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -285,7 +289,7 @@ fn main() -> eframe::Result {
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
         "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
+        native_options(launch.integrated, launch.window_controls.is_some(), first, launch.backend),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
@@ -303,7 +307,7 @@ fn main() -> eframe::Result {
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
+                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow, launch.backend),
                 app_creator(
                     launch,
                     started,
@@ -343,7 +347,7 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 }
 
 /// The window and renderer settings for one run.
-fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
+fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer, backend: display_backend::Backend) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
@@ -374,16 +378,12 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
     // Set explicitly, so the renderer never depends on which one eframe defaults to.
     let mut native = eframe::NativeOptions { viewport, persistence_path, renderer, ..Default::default() };
-    #[cfg(all(unix, not(target_os = "macos")))]
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; PDFCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("PDFCRAFT_WAYLAND").is_none() {
-        native.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
-    }
+    // manager showed a "no" cursor; `backend` is X11 there when XWayland answers.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    display_backend::apply(backend, &mut native);
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let _ = backend;
     // PdfCraft installs its own last-resort system face (`PDFCRAFT_SYSTEM_FONTS`); eframe's
     // provider would read every installed face, including proprietary ones, into every UI pass.
     native.system_font_fallback = false;
@@ -406,6 +406,8 @@ struct Launch {
     /// The window buttons the app draws, when the desktop leaves the frame to it.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
     two_paged: bool,
+    /// The windowing backend both runs start on.
+    backend: display_backend::Backend,
 }
 
 /// Whether the window is a native Wayland one (not X11 or XWayland).
@@ -468,7 +470,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged } = launch;
+    let Launch { files, options, control_file, create_images, combine, integrated, window_controls, two_paged, backend: _ } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
