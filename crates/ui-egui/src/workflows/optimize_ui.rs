@@ -331,11 +331,12 @@ fn follow_edits(dialog: &mut HostedParamDialog) {
 }
 
 fn bool_row(key: impl Into<String>, label: &str, default: bool) -> Param {
-    Param::new(key, tl!(label), ParamKind::bool(default))
+    Param::new(key, tl!(label).to_string(), ParamKind::bool(default))
 }
 
 fn ppi_row(block: &str, field: &str, label: &str, default: f64) -> Param {
-    Param::new(key(block, field), tl!(label), ParamKind::int(Some(9), Some(2400), default.round() as i64)).enabled_when(key(block, DOWNSAMPLE), true)
+    Param::new(key(block, field), tl!(label).to_string(), ParamKind::int(Some(9), Some(2400), default.round() as i64))
+        .enabled_when(key(block, DOWNSAMPLE), true)
 }
 
 fn choice(options: Vec<(String, String)>, default: &str) -> ParamKind {
@@ -347,7 +348,7 @@ fn image_rows(block: &str, title: &str, defaults: &ImageSettings) -> Vec<Param> 
     let jpeg = FieldValue::Text("jpeg".into());
     let options = [("jpeg", "JPEG"), ("flate", tl!("ZIP")), ("retain", tl!("Retain existing"))];
     vec![
-        Param::section(tl!(title)),
+        Param::section(tl!(title).to_string()),
         bool_row(key(block, DOWNSAMPLE), "Bicubic downsampling to", defaults.downsample),
         ppi_row(block, TARGET_PPI, "Resolution (ppi)", defaults.target_ppi),
         ppi_row(block, ABOVE_PPI, "For images above (ppi)", defaults.above_ppi),
@@ -537,7 +538,7 @@ pub(crate) fn open_space_audit(app: &mut PdfCraftApp, ctx: &egui::Context, from_
         ParamDialog::new(key, tl!("Space Audit"), vec![audit_row(rows.clone())]).read_only(true).values(Bind::bound(fields))
     });
     if from_optimizer {
-        crate::dialogs::host::open_over(app, dialog.instance(AUDIT_INSTANCE), dialog_id(OPTIMIZE_KEY));
+        crate::dialogs::host::open_over(app, dialog.instance(AUDIT_INSTANCE));
     } else {
         crate::dialogs::host::open(app, dialog);
     }
@@ -773,9 +774,9 @@ mod tests {
         progress.set(3, 10);
         let stage = Arc::new(Mutex::new(OptimizeStage::Images { done: 3, total: 10 }));
         let (p, s) = (progress.clone(), stage.clone());
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
             let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option("language", "en").unwrap();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
             app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();
             app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p, stage: s });

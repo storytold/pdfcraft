@@ -200,12 +200,10 @@ fn paper_section(d: &PrintDraft, sizes: &[(f64, f64)], units: Unit, no_printers:
         papers.insert(0, ("detecting".to_owned(), lbl(tl!("Detecting paper…"))));
         separator += 1;
     }
-    let mut paper_kind = ParamKind::choice(papers, Some(d.paper.to_string()));
+    let mut paper = Param::new("paper", row_label(tl!("Paper:")), ParamKind::choice(papers, Some(d.paper.to_string())));
     if !d.custom_papers.is_empty() {
-        // PLAN: assumed ParamKind choice .separated_at(usize) (F-2)
-        paper_kind = paper_kind.separated_at(separator);
+        paper = paper.separated_at(separator);
     }
-    let mut paper = Param::new("paper", row_label(tl!("Paper:")), paper_kind);
     if detecting {
         paper = paper.disabled_option("detecting", lbl(tl!("The printer's paper sizes are still being read")));
     }

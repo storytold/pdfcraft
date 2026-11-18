@@ -565,7 +565,7 @@ mod review13_ui_tests {
             assert_ne!(new, old);
             let new_before = app.session.save_bytes(new).unwrap();
             app.compare_old = Some(old);
-            app.run_compare();
+            app.run_compare(&egui::Context::default());
             assert!(app.compare.as_ref().unwrap().side_by_side);
             app.printer_source = Some(std::sync::Arc::new(Vec::new));
             app.start_ui_script(old, &format!("var comparisonKept=42;{request}"), None, None);

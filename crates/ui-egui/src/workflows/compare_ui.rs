@@ -100,22 +100,22 @@ pub(crate) fn open_compare_dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ];
         let reason = if chosen.is_none() { tl!("Open the older version first") } else { tl!("Enter valid page numbers") };
         ParamDialog::new(DIALOG_KEY, tl!("Compare Files").to_string(), params)
-            .ok_label(tl!("Compare").to_string())
+            .ok_label(tl!("Compare").into())
             .ok_enabled(chosen.is_some() && pages_ok)
-            .ok_reason(reason.to_string())
+            .ok_reason(reason.into())
             .footer_note(tl!("Text is compared word by word; the differences are shown on the new file.").to_string())
     };
     crate::dialogs::host::open(app, HostedParamDialog::new(ctx, DIALOG_KEY, fields, build));
 }
 
 /// Once per frame: when the Compare Files dialog answered OK, runs the comparison it asked for.
-pub(crate) fn pass(app: &mut PdfCraftApp) {
+pub(crate) fn pass(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id(DIALOG_KEY)) else { return };
     let chosen = result.fields.text("old").unwrap_or_default();
     let Some(old) = app.views.iter().map(|v| v.id).find(|id| option_key(*id) == chosen) else { return };
     app.compare_old = Some(old);
     app.compare_pages = result.fields.text("pages").unwrap_or_default().to_owned();
-    app.run_compare();
+    app.run_compare(ctx);
 }
 
 /// The text a change shows in the list.
@@ -221,7 +221,7 @@ impl PdfCraftApp {
     }
 
     /// Compare the chosen older document with the active one and show the differences.
-    pub fn run_compare(&mut self) {
+    pub fn run_compare(&mut self, ctx: &egui::Context) {
         let Some((i, new)) = self.active_ids() else { return };
         let Some(old) = self.compare_old else { return };
         let count = self.views.get(i).map_or(0, |v| v.page_count());
@@ -237,7 +237,7 @@ impl PdfCraftApp {
                 }
                 let n = result.changes.len();
                 // Side by side when the old version is open in a tab and the window has the room.
-                let side_by_side = self.views.iter().any(|v| v.id == old) && self.ctx.as_ref().is_none_or(|c| c.content_rect().width() >= 1000.0);
+                let side_by_side = self.views.iter().any(|v| v.id == old) && ctx.content_rect().width() >= 1000.0;
                 self.compare = Some(crate::compare_ui::CompareState {
                     old,
                     new,
@@ -251,7 +251,7 @@ impl PdfCraftApp {
                     show_visual: true,
                 });
                 self.shade_compare(i);
-                self.right = Some(RightPanel::Compare);
+                self.set_right(Some(RightPanel::Compare));
                 self.notify(if n == 0 {
                     tl!("The text is the same").to_string()
                 } else if n == 1 {
@@ -264,7 +264,7 @@ impl PdfCraftApp {
         }
     }
 
-    pub(crate) fn compare_action(&mut self, index: usize, a: PanelAction) {
+    pub(crate) fn compare_action(&mut self, ctx: &egui::Context, index: usize, a: PanelAction) {
         let Some(s) = self.compare.as_mut() else { return };
         let (old, new, pages) = (s.old, s.new, s.pages.clone());
         match a {
@@ -295,7 +295,7 @@ impl PdfCraftApp {
             PanelAction::Mark => match self.session.mark_differences_of(old, new, &pages) {
                 Ok(n) => {
                     if let Some(info) = self.session.get(new).map(|d| d.info.clone()) {
-                        self.views[index].document_changed(&info);
+                        self.views[index].document_changed(ctx, &info);
                     }
                     self.notify(if n == 1 {
                         tl!("Added 1 comment").to_string()
@@ -319,7 +319,7 @@ impl PdfCraftApp {
                 if let Some(oi) = self.views.iter().position(|v| v.id == old) {
                     self.views[oi].session.compare_marks.clear();
                 }
-                self.right = None;
+                self.set_right(None);
             }
         }
     }

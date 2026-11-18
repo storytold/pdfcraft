@@ -108,7 +108,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
         });
     });
 
-    apply(app, n);
+    apply(app, &ctx, n);
 }
 
 /// With no reading in hand (before a run, or after a review was accepted or rejected), the
@@ -120,7 +120,7 @@ fn follow_active_document(app: &mut PdfCraftApp) {
     }
     let active = app.active_ids();
     app.ocr_verify.doc = active.map(|(_, id)| id);
-    app.ocr_verify.current = active.and_then(|(i, _)| app.views.get(i)).map_or(0, |view| view.current);
+    app.ocr_verify.current = active.and_then(|(i, _)| app.views.get(i)).map_or(0, |view| view.current());
 }
 
 /// The Engine choice is probed in the background; the screen asks for frames until the answer
@@ -166,7 +166,7 @@ fn engine_entries() -> Vec<Entry<EngineChoice>> {
     .map(|(choice, label, what)| {
         let entry = Entry::new(choice, label);
         match pdfcraft_engine::ocr::engine_unavailable_reason(choice) {
-            Some(reason) => entry.disabled_reason(crate::i18n::t(&reason)),
+            Some(reason) => entry.disabled_reason(crate::i18n::t(&reason).to_string()),
             None => entry.description(what),
         }
     })

@@ -19,6 +19,7 @@ fn lbl(text: impl AsRef<str>) -> Label {
 }
 
 /// What the layout of this pass says, for [`build`].
+#[derive(Clone, Copy)]
 pub(super) struct SheetInput<'a> {
     /// The draft; `d.sheet` is already clamped to `sheets`.
     pub d: &'a PrintDraft,
@@ -32,6 +33,8 @@ pub(super) struct SheetInput<'a> {
     pub sheets: &'a [Sheet],
     /// Creep within its field's range was still too much for the booklet.
     pub too_much_creep: bool,
+    /// The page box the preview drew last pass, in physical pixels; `None` before it is drawn.
+    pub paper_px: Option<[u32; 2]>,
 }
 
 /// The preview for the sheet `d.sheet` of `sheets`, and the pager under it.
@@ -44,7 +47,7 @@ pub(super) fn build(
     source: &dyn ThumbSource<PrintPage>,
     ctx: &egui::Context,
 ) -> (PrintSheet, Option<PanePager>) {
-    let SheetInput { d, sizes, labels, settings, sheets, too_much_creep } = input;
+    let SheetInput { d, sizes, labels, settings, sheets, too_much_creep, paper_px } = input;
     let count = sheets.len();
     let pager = PanePager { shown: d.sheet + 1, count, shown_label: None, back: d.sheet > 0, next: d.sheet + 1 < count, unit: PagerUnit::Sheet };
     let paper = vec2(d.paper_size().0 as f32, d.paper_size().1 as f32);
@@ -56,23 +59,24 @@ pub(super) fn build(
             Label::default(),
         ),
         (Ok(_), None) => PrintSheet::message(paper, lbl(tl!("No sheets")), Label::default()),
-        (Ok(_), Some(shown)) => shown_sheet(d, sizes, labels, shown, thumbs, source, ctx),
+        (Ok(_), Some(shown)) => shown_sheet(input, shown, thumbs, source, ctx),
     };
     (sheet, Some(pager))
 }
 
 fn shown_sheet(
-    d: &PrintDraft,
-    sizes: &[(f64, f64)],
-    labels: &[String],
+    input: SheetInput<'_>,
     shown: &Sheet,
     thumbs: &Thumbnails<PrintPage>,
     source: &dyn ThumbSource<PrintPage>,
     ctx: &egui::Context,
 ) -> PrintSheet {
+    let SheetInput { d, sizes, labels, paper_px, .. } = input;
     let ppp = ctx.pixels_per_point();
     let on_sheet: Vec<usize> = shown.placed.iter().map(|p| p.page).collect();
-    let rasters = preview_rasters(d, sizes, labels, ppp, ctx.input(|i| i.max_texture_side) as f32);
+    // The preview drew its page box in physical pixels; the rasters are sized from it in points.
+    let pane = paper_px.map(|[w, h]| vec2(w as f32 / ppp, h as f32 / ppp));
+    let rasters = preview_rasters(d, sizes, labels, ppp, ctx.input(|i| i.max_texture_side) as f32, pane);
     let mut states: HashMap<usize, TextureState> = HashMap::new();
     for (page, scale) in rasters {
         let Some(&size) = sizes.get(page) else { continue };

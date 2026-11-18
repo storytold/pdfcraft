@@ -109,7 +109,7 @@ impl PdfCraftApp {
     pub fn open_enhance_scan(&mut self, ctx: &egui::Context) {
         let Some((vi, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(1, |d| d.info.pages.len().max(1));
-        let current = self.views.get(vi).map_or(0, |v| v.current);
+        let current = self.views.get(vi).map_or(0, |v| v.current());
         let draft = self.scan_clean_draft.clone();
         let fields = DialogFields::from_pairs([
             ("pages", PageRangeOptions::field_value(&draft.range)),
@@ -150,7 +150,7 @@ impl PdfCraftApp {
             return;
         }
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
-        let current = self.views.get(vi).map_or(0, |v| v.current);
+        let current = self.views.get(vi).map_or(0, |v| v.current());
         let d = &self.scan_clean_draft;
         let pages = d.range.pages(count, current, &[]);
         // The engine reads an empty list as every page, so a range that picks none must not reach it.

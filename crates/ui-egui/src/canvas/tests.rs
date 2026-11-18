@@ -643,7 +643,7 @@ fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph(
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.undo_depth(), depth + 1, "both pages are one undo step");
     assert_ne!(doc.bytes, before, "the text changed");
-    h.state_mut().undo();
+    h.state_mut().undo(&egui::Context::default());
     let doc = h.state().session.get(id).unwrap();
     assert_eq!((doc.undo_depth(), &doc.bytes), (depth, &before), "one undo puts both pages back");
 }

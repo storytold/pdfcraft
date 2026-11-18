@@ -69,7 +69,7 @@ fn image_import_dialog(ctx: &egui::Context, count: usize) -> HostedParamDialog {
         ];
         ParamDialog::new(IMAGES_DIALOG, tl!("Create PDF from Images"), params)
             .values(Bind::bound(fields))
-            .ok_label(tl!("Create"))
+            .ok_label(tl!("Create").into())
             .footer_note(tl!("DPI sets the printed page size without resampling the image."))
     })
 }
@@ -415,11 +415,9 @@ mod tests {
     /// An app on `files` and `jobs` with `notes.pdf` open, in a harness.
     fn reducing(files: Arc<dyn Files>, jobs: Arc<ManualJobs>, source: Vec<u8>) -> Harness<'static, PdfCraftApp> {
         let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).jobs(jobs).build());
-        // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
-        let services = crate::AppServices::new(craft::host::Wake::none(), None, None, None, None, None);
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-            let mut app = PdfCraftApp::with_host(host, services);
-            app.set_option("language", "en").unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+            let mut app = PdfCraftApp::for_unit_tests_on(host);
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
             app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
             app.open_bytes("notes.pdf", None, source).unwrap();
             app
