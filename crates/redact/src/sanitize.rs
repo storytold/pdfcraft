@@ -898,7 +898,7 @@ fn last_ref(doc: &Document, mut r: ObjRef) -> ObjRef {
 /// flattening kept), and the actions of those that stay when links, actions and scripts go. A
 /// reply that stays to one that goes (`/IRT`, ISO 32000-2 §12.5.6.2) loses its `/IRT` and `/RT`,
 /// which would keep what it answered, and so an attachment's file or a link's address, in a full
-/// save: it stays as a comment of its own.
+/// save: it stays as an annotation of its own.
 fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> Result<(), RedactError> {
     // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
     // ones, and ones with nothing to draw), which still hold their field's value and parent.
@@ -927,10 +927,9 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         .filter_map(|a| a.as_ref())
         .filter(|&r| {
             removed.contains(&r)
-                || doc
-                    .get(r)
-                    .as_dict()
-                    .is_some_and(|d| d.name(b"Subtype") == Some(b"Popup") && named(doc, d, b"Parent").is_some_and(|x| removed.contains(&x)))
+                || doc.get(r).as_dict().is_some_and(|d| {
+                    crate::subtype(doc, d).as_deref() == Some(b"Popup") && named(doc, d, b"Parent").is_some_and(|x| removed.contains(&x))
+                })
         })
         .collect();
     for p in pages {
@@ -940,6 +939,11 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
             let Some(r) = a.as_ref() else {
                 match doc.resolve(&a).as_dict().cloned() {
                     Some(d) if drop_annot(&d) => {}
+                    // A pop-up goes with the annotation its `/Parent` names, as one held by
+                    // reference does.
+                    Some(d)
+                        if crate::subtype(doc, &d).as_deref() == Some(b"Popup")
+                            && named(doc, &d, b"Parent").is_some_and(|x| removed.contains(&x)) => {}
                     Some(mut d) if named(doc, &d, b"IRT").is_some_and(|x| gone.contains(&x)) => {
                         d.remove(b"IRT");
                         d.remove(b"RT");
