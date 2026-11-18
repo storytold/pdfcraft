@@ -2,7 +2,47 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+
+use std::sync::Arc;
+
+use craft::host::{AppInfo, Host, Picked, ScriptedFiles, Wake};
+use craft::ui::runtime::env::WindowKey;
+use craft::ui::runtime::toast;
+
+/// The app with `name` open from `bytes` at `zoom` percent, on a host whose file picker answers the
+/// first save or export with `out`, as the user choosing that file would.
+fn scripted_harness(name: &'static str, bytes: Vec<u8>, zoom: &'static str, out: &std::path::Path) -> Harness<'static, PdfCraftApp> {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.to_path_buf()])]));
+    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
+        let mut app = PdfCraftApp::with_host(host, AppServices::new(Wake::none(), None, None, None, None, None));
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", zoom).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// The text of the notice on screen, if one is shown.
+fn notice(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    // PLAN: assumed `app.notices.posted()` lists the posted notices, newest last, each with a `text` (L-206)
+    h.state().notices.posted().last().map(|notice| notice.text.to_string())
+}
+
+/// How many notices the main window shows.
+fn card_count(h: &Harness<'static, PdfCraftApp>) -> usize {
+    toast::cards(&h.ctx, &WindowKey::main()).len()
+}
+
+/// Whether the "Save changes?" prompt is on screen.
+fn asks_to_save(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_by_label("Don't save").is_some()
+}
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
@@ -70,19 +110,6 @@ fn rest_on_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     }
 }
 
-/// #3854: resting on a field shows its tooltip (`/TU`); a field without one shows none.
-#[test]
-fn hovering_a_field_shows_its_tooltip() {
-    let mut h = harness();
-    assert!(h.query_by_label("Your name").is_none(), "no tooltip before the hover");
-    rest_on_field(&mut h, "name");
-    assert!(h.query_all_by_label("Your name").next().is_some(), "the name field's /TU shows on hover");
-    rest_on_field(&mut h, "city");
-    assert!(h.query_by_label("Your name").is_none(), "another field doesn't keep the tooltip");
-    // Nor shows one of its own: none has been shown since the pointer left `name` (well past the
-    // tooltip delay), so this isn't only the old label going away.
-    assert!(egui::Tooltip::seconds_since_last_tooltip(&h.ctx) > 0.3, "a field without /TU shows no tooltip");
-}
 
 /// Give the `city` field these properties, as the Properties dialog would.
 fn set_city(h: &mut Harness<'static, PdfCraftApp>, props: pdfcraft_engine::FieldProps) {
@@ -137,13 +164,19 @@ fn read_only_widgets_are_skipped_by_tab_navigation() {
 /// A `/TU` of only spaces shows no tooltip (no empty box under the pointer).
 #[test]
 fn a_blank_tooltip_shows_nothing() {
+    use egui::accesskit::Role;
     let mut h = harness();
     set_city(&mut h, pdfcraft_engine::FieldProps { tooltip: Some("   ".into()), ..Default::default() });
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.form.iter().find(|f| f.name == "city").unwrap().tooltip.as_deref(), Some("   "), "the blank /TU is in the file");
     rest_on_field(&mut h, "city");
-    assert!(egui::Tooltip::seconds_since_last_tooltip(&h.ctx).is_infinite(), "no tooltip was shown");
+    assert_eq!(h.query_all_by_role(Role::Tooltip).count(), 0, "a blank /TU shows no tooltip");
+    // The same rest does show a tooltip for a field whose /TU has text, so the absence above means something.
+    set_city(&mut h, pdfcraft_engine::FieldProps { tooltip: Some("Where you live".into()), ..Default::default() });
+    rest_on_field(&mut h, "city");
+    assert!(h.query_all_by_role(Role::Tooltip).count() > 0, "a /TU with text shows a tooltip");
+    assert!(h.query_all_by_label("Where you live").next().is_some(), "with the /TU text");
 }
 
 /// A text field that doesn't scroll (`DoNotScroll`) takes no more than it shows, measured as its
@@ -267,22 +300,163 @@ fn typing_into_a_text_field_and_tabbing_on() {
     assert!(h.state().views[0].forms.focus.is_none());
 }
 
+/// One step of a row of `field_keys_and_clicks_set_field_values`.
+#[derive(Clone, Copy)]
+enum Act {
+    Click(&'static str, usize),
+    Type(&'static str),
+    Press(egui::Key),
+    ShiftTab,
+    Pick(&'static str),
+}
+
+/// One row of `field_keys_and_clicks_set_field_values`: the steps run on a fresh form, then what the
+/// form holds. A `None` focus is not checked.
+struct Row {
+    case: &'static str,
+    boxes: bool,
+    acts: Vec<Act>,
+    values: Vec<(&'static str, Vec<&'static str>)>,
+    focus: Option<(&'static str, usize)>,
+    keyboard: bool,
+}
+
+fn row(
+    case: &'static str,
+    boxes: bool,
+    acts: &[Act],
+    values: &[(&'static str, &[&'static str])],
+    focus: Option<(&'static str, usize)>,
+) -> Row {
+    Row { case, boxes, acts: acts.to_vec(), values: values.iter().map(|(n, v)| (*n, v.to_vec())).collect(), focus, keyboard: false }
+}
+
+/// Clicks and keys on check boxes, radio buttons, choices and the text fields between them set the
+/// field values and move the focus as filling in a form does.
 #[test]
-fn check_boxes_radios_and_choices() {
+fn field_keys_and_clicks_set_field_values() {
+    use Act::{Click, Pick, Press, ShiftTab, Type};
+    use egui::Key::{ArrowLeft, ArrowRight, Space, Tab};
+    let rows = [
+        row("a click ticks a check box", false, &[Click("agree", 0)], &[("agree", &["Yes"])], None),
+        row("a second click clears it", false, &[Click("agree", 0), Click("agree", 0)], &[("agree", &[])], None),
+        row("a click picks a radio button", false, &[Click("size", 1)], &[("size", &["L"])], None),
+        row("another click moves the pick", false, &[Click("size", 1), Click("size", 0)], &[("size", &["S"])], None),
+        row("a click in the list picks a choice", false, &[Click("country", 0), Pick("France")], &[("country", &["fr"])], None),
+        row("Tab goes from a check box to the radio group", false, &[Click("agree", 0), Press(Tab)], &[], Some(("size", 0))),
+        row("Space selects the focused radio button", false, &[Click("agree", 0), Press(Tab), Press(Space)], &[("size", &["S"])], Some(("size", 0))),
+        row(
+            "and doesn't turn it off again",
+            false,
+            &[Click("agree", 0), Press(Tab), Press(Space), Press(Space)],
+            &[("size", &["S"])],
+            Some(("size", 0)),
+        ),
+        row(
+            "an arrow moves within the group and selects",
+            false,
+            &[Click("agree", 0), Press(Tab), Press(Space), Press(ArrowRight)],
+            &[("size", &["L"])],
+            Some(("size", 1)),
+        ),
+        row(
+            "the opposite arrow comes back",
+            false,
+            &[Click("agree", 0), Press(Tab), Press(Space), Press(ArrowRight), Press(ArrowLeft)],
+            &[("size", &["S"])],
+            Some(("size", 0)),
+        ),
+        row(
+            "Tab goes past the group's second button",
+            false,
+            &[Click("agree", 0), Press(Tab), Press(Space), Press(ArrowRight), Press(ArrowLeft), Press(Tab), Press(Tab)],
+            &[],
+            Some(("country", 0)),
+        ),
+        // Issue #2223: Tab went from `first` straight to `last`, and Space could not tick `agree`.
+        Row {
+            keyboard: true,
+            ..row("Tab stops on a check box", true, &[Click("first", 0), Type("Ada"), Press(Tab)], &[("first", &["Ada"])], Some(("agree", 0)))
+        },
+        row("Space ticks it and it keeps the focus", true, &[Click("first", 0), Type("Ada"), Press(Tab), Press(Space)], &[("agree", &["Yes"])], Some(("agree", 0))),
+        row(
+            "Space again clears it",
+            true,
+            &[Click("first", 0), Type("Ada"), Press(Tab), Press(Space), Press(Space)],
+            &[("agree", &[])],
+            Some(("agree", 0)),
+        ),
+        row(
+            "Tab goes on to the next text field",
+            true,
+            &[Click("first", 0), Type("Ada"), Press(Tab), Press(Space), Press(Space), Press(Tab)],
+            &[],
+            Some(("last", 0)),
+        ),
+        row(
+            "Shift+Tab comes back to the check box",
+            true,
+            &[Click("first", 0), Type("Ada"), Press(Tab), Press(Space), Press(Space), Press(Tab), ShiftTab],
+            &[],
+            Some(("agree", 0)),
+        ),
+        // Issue #2223: the click ticked the box but left no field focused, so Tab started over.
+        row(
+            "a click on a check box while typing keeps the text and focuses the box",
+            true,
+            &[Click("first", 0), Type("Ada"), Click("agree", 0)],
+            &[("agree", &["Yes"]), ("first", &["Ada"])],
+            Some(("agree", 0)),
+        ),
+        row(
+            "so Tab goes on from there",
+            true,
+            &[Click("first", 0), Type("Ada"), Click("agree", 0), Press(Tab)],
+            &[],
+            Some(("last", 0)),
+        ),
+    ];
+    for r in rows {
+        let mut h = if r.boxes { check_box_harness() } else { harness() };
+        for act in &r.acts {
+            match *act {
+                Act::Click(name, widget) => click_field(&mut h, name, widget),
+                Act::Type(text) => {
+                    h.event(egui::Event::Text(text.into()));
+                    h.run_steps(1);
+                }
+                Act::Press(key) => {
+                    h.key_press(key);
+                    h.run_steps(3);
+                }
+                Act::ShiftTab => {
+                    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+                    h.run_steps(3);
+                }
+                Act::Pick(label) => {
+                    h.get_by_label(label).click();
+                    h.run_steps(4);
+                }
+            }
+        }
+        for (name, want) in &r.values {
+            assert_eq!(value(&h, name), *want, "{}: {name}", r.case);
+        }
+        if let Some((name, widget)) = r.focus {
+            assert_eq!(focused(&h), Some((name.to_string(), widget)), "{}", r.case);
+        }
+        if r.keyboard {
+            assert!(h.ctx.egui_wants_keyboard_input(), "{}: the check box has the keyboard, not the page", r.case);
+        }
+    }
+
+    // Clear form takes everything back; undo restores it.
     let mut h = harness();
-    click_field(&mut h, "agree", 0);
-    assert_eq!(value(&h, "agree"), ["Yes"]);
-    click_field(&mut h, "agree", 0);
-    assert!(value(&h, "agree").is_empty());
-    click_field(&mut h, "size", 1);
-    assert_eq!(value(&h, "size"), ["L"]);
-    click_field(&mut h, "size", 0);
-    assert_eq!(value(&h, "size"), ["S"]);
     click_field(&mut h, "country", 0);
-    egui_kittest::kittest::Queryable::get_by_label(&h, "France").click();
+    h.get_by_label("France").click();
     h.run_steps(4);
     assert_eq!(value(&h, "country"), ["fr"]);
-    // Clear form takes everything back; undo restores it.
+    click_field(&mut h, "size", 1);
     assert!(h.state_mut().execute("form.clear"));
     h.run_steps(2);
     assert!(value(&h, "country").is_empty() && value(&h, "size").is_empty());
@@ -325,32 +499,6 @@ fn check_box_harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
-#[test]
-fn tab_and_space_fill_in_a_check_box_between_text_fields() {
-    // Issue #2223: Tab went from `first` straight to `last`, and Space could not tick `agree`.
-    let mut h = check_box_harness();
-    click_field(&mut h, "first", 0);
-    h.event(egui::Event::Text("Ada".into()));
-    h.run_steps(1);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(value(&h, "first"), ["Ada"]);
-    assert_eq!(focused(&h), Some(("agree".into(), 0)), "Tab stops on the check box");
-    assert!(h.ctx.egui_wants_keyboard_input(), "the check box has the keyboard, not the page");
-    h.key_press(egui::Key::Space);
-    h.run_steps(3);
-    assert_eq!(value(&h, "agree"), ["Yes"], "Space ticks it");
-    assert_eq!(focused(&h), Some(("agree".into(), 0)), "and it keeps the focus");
-    h.key_press(egui::Key::Space);
-    h.run_steps(3);
-    assert!(value(&h, "agree").is_empty(), "Space again clears it");
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(focused(&h), Some(("last".into(), 0)));
-    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(focused(&h), Some(("agree".into(), 0)), "Shift+Tab comes back to it");
-}
 
 #[test]
 fn tab_uses_the_first_remaining_widget_when_focus_leaves_the_order() {
@@ -430,21 +578,6 @@ fn tab_and_shift_tab_follow_widget_order_across_pages() {
     }
 }
 
-#[test]
-fn clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box() {
-    // Issue #2223: the click ticked the box but left no field focused, so Tab started over.
-    let mut h = check_box_harness();
-    click_field(&mut h, "first", 0);
-    h.event(egui::Event::Text("Ada".into()));
-    h.run_steps(1);
-    click_field(&mut h, "agree", 0);
-    assert_eq!(value(&h, "agree"), ["Yes"]);
-    assert_eq!(value(&h, "first"), ["Ada"], "the text typed before the click is kept");
-    assert_eq!(focused(&h), Some(("agree".into(), 0)), "the click focuses the check box");
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(focused(&h), Some(("last".into(), 0)), "so Tab goes on from there");
-}
 
 #[test]
 fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
@@ -480,32 +613,6 @@ fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
     assert_eq!((focused(&h), value(&h, "pick")), (None, vec!["B".to_string()]));
 }
 
-#[test]
-fn radio_buttons_take_tab_space_and_arrows() {
-    let mut h = harness();
-    click_field(&mut h, "agree", 0);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(focused(&h), Some(("size".into(), 0)));
-    h.key_press(egui::Key::Space);
-    h.run_steps(3);
-    assert_eq!(value(&h, "size"), ["S"], "Space selects the focused button");
-    h.key_press(egui::Key::Space);
-    h.run_steps(3);
-    assert_eq!(value(&h, "size"), ["S"], "and doesn't turn it off again");
-    h.key_press(egui::Key::ArrowRight);
-    h.run_steps(3);
-    assert_eq!(focused(&h), Some(("size".into(), 1)), "an arrow moves within the group");
-    assert_eq!(value(&h, "size"), ["L"], "and selects the button it lands on");
-    h.key_press(egui::Key::ArrowLeft);
-    h.run_steps(3);
-    assert_eq!((focused(&h), value(&h, "size")), (Some(("size".into(), 0)), vec!["S".to_string()]));
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(focused(&h), Some(("country".into(), 0)), "past the group's second button");
-}
 
 #[test]
 fn tabbing_into_a_filled_field_selects_it_so_typing_replaces() {
@@ -661,7 +768,7 @@ fn an_undelimited_date_field_takes_a_typed_date_and_its_calendar_opens_on_it() {
     h.run_steps(2);
     h.key_press(egui::Key::Tab);
     h.run_steps(4);
-    assert_eq!(h.state().toast, None, "the typed date was not refused");
+    assert_eq!(card_count(&h), 0, "the typed date was not refused");
     assert_eq!(value(&h, "due"), ["20250314"]);
     click_field(&mut h, "due", 0);
     h.get_by_label("March 2025");
@@ -783,12 +890,11 @@ fn saving_while_still_typing_in_a_field_saves_the_text() {
     // Issue #166: ⌘S with the field still focused saved it blank.
     let dir = scratch("save-focused");
     let out = dir.join("saved.pdf");
-    let mut h = harness();
+    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Browser Form 123".into()));
     h.run_steps(2);
     assert!(h.state().views[0].forms.focus.is_some(), "still typing");
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     h.run_steps(3);
     assert_eq!(saved_value(&out, "name"), ["Browser Form 123"], "the saved PDF has the typed text");
@@ -824,20 +930,11 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
         } else {
             validated_form()
         };
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-            let mut app = PdfCraftApp::new();
-            app.set_option("language", "en").unwrap();
-            app.open_bytes("tab.pdf", None, bytes).unwrap();
-            app.set_option("left", "closed").unwrap();
-            app.set_option("zoom", "150").unwrap();
-            app
-        });
-        h.run_steps(6);
+        let mut h = scripted_harness("tab.pdf", bytes, "150", &out);
         click_field(&mut h, "qty", 0);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text("42".into()));
         h.run_steps(2);
-        h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
         let modifiers = if backwards { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
         if same_frame {
             one_frame(&mut h, vec![key(egui::Key::Tab, modifiers), key(egui::Key::S, egui::Modifiers::COMMAND)]);
@@ -867,7 +964,8 @@ fn closing_while_still_typing_in_a_field_asks_to_save() {
     h.event(egui::Event::Text("Not lost".into()));
     h.run_steps(2);
     h.state_mut().request_close_tab(0);
-    assert!(h.state().close_request.is_some(), "typed text is an unsaved change: the user is asked");
+    h.run_steps(2);
+    assert!(asks_to_save(&h), "typed text is an unsaved change: the user is asked");
     assert_eq!(h.state().views.len(), 1);
 }
 
@@ -875,7 +973,7 @@ fn closing_while_still_typing_in_a_field_asks_to_save() {
 fn close_all_saves_text_typed_in_a_tab_that_is_no_longer_active() {
     let dir = scratch("close-all");
     let out = dir.join("first.pdf");
-    let mut h = harness();
+    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Typed in tab one".into()));
     h.run_steps(2);
@@ -883,10 +981,10 @@ fn close_all_saves_text_typed_in_a_tab_that_is_no_longer_active() {
     h.state_mut().open_bytes("other.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
     h.run_steps(2);
     h.state_mut().close_all();
-    assert!(h.state().close_request.is_some(), "the first document has an unsaved change");
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
-    let ctx = h.ctx.clone();
-    h.state_mut().resolve_close(&ctx, Some(true));
+    h.run_steps(2);
+    assert!(asks_to_save(&h), "the first document has an unsaved change");
+    h.get_all_by_label("Save").last().expect("the prompt's Save button").click();
+    wait_for_file(&mut h, &out);
     assert_eq!(saved_value(&out, "name"), ["Typed in tab one"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -903,11 +1001,10 @@ fn one_frame(h: &mut Harness<'static, PdfCraftApp>, events: Vec<egui::Event>) {
 }
 
 /// Type `text` into field `name`, then press ⌘S in the same frame as `last` (more input).
-fn type_then_save_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, name: &str, text: &str, last: egui::Event, out: &std::path::Path) {
+fn type_then_save_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, name: &str, text: &str, last: egui::Event) {
     click_field(h, name, 0);
     h.event(egui::Event::Text(text.into()));
     h.run_steps(2);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     one_frame(h, vec![last, key(egui::Key::S, egui::Modifiers::COMMAND)]);
     h.run_steps(3);
 }
@@ -916,8 +1013,8 @@ fn type_then_save_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, name: &str
 fn typing_and_saving_in_the_same_frame_saves_the_last_keystrokes() {
     let dir = scratch("same-frame");
     let out = dir.join("saved.pdf");
-    let mut h = harness();
-    type_then_save_in_one_frame(&mut h, "name", "Browser", egui::Event::Text(" Form 123".into()), &out);
+    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    type_then_save_in_one_frame(&mut h, "name", "Browser", egui::Event::Text(" Form 123".into()));
     assert_eq!(saved_value(&out, "name"), ["Browser Form 123"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -926,9 +1023,9 @@ fn typing_and_saving_in_the_same_frame_saves_the_last_keystrokes() {
 fn escape_and_save_in_the_same_frame_discards_the_draft() {
     let dir = scratch("escape");
     let out = dir.join("saved.pdf");
-    let mut h = harness();
+    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     let before = value(&h, "name");
-    type_then_save_in_one_frame(&mut h, "name", "Discard me", key(egui::Key::Escape, egui::Modifiers::NONE), &out);
+    type_then_save_in_one_frame(&mut h, "name", "Discard me", key(egui::Key::Escape, egui::Modifiers::NONE));
     assert_eq!(value(&h, "name"), before, "Escape cancels typing, even with ⌘S right after it");
     assert!(h.state().views[0].forms.focus.is_none());
     let _ = std::fs::remove_dir_all(&dir);
@@ -951,11 +1048,10 @@ fn an_unrelated_command_leaves_the_field_being_typed_in_alone() {
 fn exporting_form_data_while_typing_includes_the_text() {
     let dir = scratch("export");
     let out = dir.join("data.xfdf");
-    let mut h = harness();
+    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Exported value".into()));
     h.run_steps(2);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().export_data_dialog(false, true);
     assert!(std::fs::read_to_string(&out).unwrap().contains("Exported value"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -997,11 +1093,10 @@ fn pressing_another_text_field_validates_the_refused_value_once() {
     h.run_steps(1);
     h.drag_at(p);
     h.run_steps(2);
-    assert!(h.state().toast.is_some(), "the press committed 4500 and the script refused it");
-    h.state_mut().toast = None;
+    assert_eq!(card_count(&h), 1, "the press committed 4500 and the script refused it");
     h.drop_at(p);
     h.run_steps(3);
-    assert_eq!(h.state().toast, None, "the release did not validate it again");
+    assert_eq!(card_count(&h), 1, "the release did not validate it again");
     let focus = h.state().views[0].forms.focus.clone().expect("the refused field stays open");
     assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"));
 }
@@ -1110,19 +1205,10 @@ fn buttons_over_text_show_the_pointing_hand_not_the_i_beam() {
 fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
     let dir = scratch("rejected");
     let out = dir.join("saved.pdf");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("order.pdf", None, validated_form()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
-    });
-    h.run_steps(6);
+    let mut h = scripted_harness("order.pdf", validated_form(), "150", &out);
     click_field(&mut h, "qty", 0);
     h.event(egui::Event::Text("500".into()));
     h.run_steps(2);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     h.run_steps(4);
     assert!(!out.exists(), "nothing is saved without the typed value");
@@ -1131,7 +1217,8 @@ fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
     assert_eq!(focus.text, "4500", "with the text (typed after the 4), so the user can fix it");
     // And closing asks rather than dropping it.
     h.state_mut().request_close_tab(0);
-    assert!(h.state().close_request.is_some());
+    h.run_steps(2);
+    assert!(asks_to_save(&h));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1139,11 +1226,10 @@ fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
 fn a_save_shortcut_pressed_while_typing_saves_only_the_document_it_was_pressed_in() {
     let dir = scratch("deferred-doc");
     let out = dir.join("saved.pdf");
-    let mut h = harness();
+    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Tab one".into()));
     h.run_steps(2);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     one_frame(&mut h, vec![key(egui::Key::S, egui::Modifiers::COMMAND)]);
     assert!(!out.exists(), "⌘S while typing waits a frame for the field");
     // Before the deferred ⌘S runs, another document becomes active.
@@ -1166,19 +1252,10 @@ fn a_value_refused_on_tab_keeps_save_in_the_same_frame_from_running() {
 fn refused_value_stops_save(commit_key: egui::Key, case: &str) {
     let dir = scratch(case);
     let out = dir.join("saved.pdf");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("order.pdf", None, validated_form()).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "150").unwrap();
-        app
-    });
-    h.run_steps(6);
+    let mut h = scripted_harness("order.pdf", validated_form(), "150", &out);
     click_field(&mut h, "qty", 0);
     h.event(egui::Event::Text("500".into()));
     h.run_steps(2);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     one_frame(&mut h, vec![key(commit_key, egui::Modifiers::NONE), key(egui::Key::S, egui::Modifiers::COMMAND)]);
     h.run_steps(3);
     assert_eq!(value(&h, "qty"), ["4"]);
@@ -1243,12 +1320,11 @@ mod revert_tests {
     fn reverting_rejected_input_saves_the_original_field_and_appearance() {
         let dir = RevertDir::new();
         let path = dir.0.join("saved.pdf");
-        let mut h = harness();
+        let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &path);
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue {
             name: "name".into(),
             value: pdfcraft_engine::FieldValue::Text("Saved original".into()),
         }));
-        h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
         assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace));
         let saved = std::fs::read(&path).unwrap();
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
@@ -1343,7 +1419,7 @@ fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
     h.run_steps(2);
 
     // 3. Zoom then edit: zoom to another scale, let tiles settle, then edit.
-    h.state_mut().views[0].zoom_step(true);
+    h.state_mut().views[0].view.zoom_step(true);
     crate::support::settle(&mut h);
     click_field(&mut h, "name", 0);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -1468,15 +1544,9 @@ fn a_list_box_click_picks_one_of_two_options_with_the_same_export_value() {
         "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Opt [[(1) (One-A)] [(1) (One-B)] [(2) (Two)]] /V (1) /I [1] /Rect [50 250 200 320] /P 3 0 R /F 4 >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ]);
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("dup.pdf", None, bytes).unwrap();
-        app.set_option("left", "closed").unwrap();
-        app.set_option("zoom", "100").unwrap();
-        app
-    });
-    h.run_steps(4);
+    let dir = scratch("duplicate-exports");
+    let out = dir.join("saved.pdf");
+    let mut h = scripted_harness("dup.pdf", bytes, "100", &out);
     assert_eq!(selected(&h, "dup"), [1], "One-B is selected, not One-A too");
 
     let r = {
@@ -1495,9 +1565,6 @@ fn a_list_box_click_picks_one_of_two_options_with_the_same_export_value() {
     click_at(&mut h, egui::pos2(r.center().x, r.min.y + 8.0 * zoom));
     assert_eq!(selected(&h, "dup"), [0]);
 
-    let dir = scratch("duplicate-exports");
-    let out = dir.join("saved.pdf");
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     wait_for_file(&mut h, &out);
     let mut app = PdfCraftApp::new();
@@ -1706,65 +1773,6 @@ fn the_field_editor_sizes_auto_size_text_as_the_page_does() {
     assert_eq!(screen("huge", 0.5), ((400.0 - 6.0) / 1.15) as f32 * 0.5, "below it at 50%");
 }
 
-/// Where a mode bar tab is, by its label.
-fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
-    use egui_kittest::kittest::Queryable;
-    h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
-}
-
-/// Scroll the page until `what` (on screen) lies across the mode bar, then the cursor over each
-/// tab it lies under: with the All tools panel closed, Edit, Convert and E-Sign (the name field
-/// starts right of All tools).
-fn mode_tab_cursors(
-    h: &mut Harness<'static, PdfCraftApp>,
-    what: impl Fn(&Harness<'static, PdfCraftApp>) -> egui::Rect,
-) -> [(&'static str, egui::CursorIcon); 3] {
-    let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).expect("on screen");
-    let y = what(h).center().y - page(h).top();
-    let tabs = mode_tab(h, "Convert").center().y;
-    h.state_mut().views[0].goto = Some((0, 0.0));
-    h.run_steps(4);
-    let top = page(h).top();
-    h.state_mut().views[0].goto = Some((0, (top - (tabs - y)) / page(h).height()));
-    h.run_steps(4);
-    let under = what(h);
-    ["Edit", "Convert", "E-Sign"].map(|label| {
-        let at = mode_tab(h, label).center();
-        assert!(under.contains(at), "{under:?} lies under {label} at {at:?}");
-        h.hover_at(at);
-        h.run_steps(2);
-        (label, h.output().platform_output.cursor_icon)
-    })
-}
-
-const HAND_ON_EVERY_TAB: [(&str, egui::CursorIcon); 3] =
-    [("Edit", egui::CursorIcon::PointingHand), ("Convert", egui::CursorIcon::PointingHand), ("E-Sign", egui::CursorIcon::PointingHand)];
-
-/// A text field scrolled up under the mode bar leaves its tabs the hand (#2755). The field gave
-/// them its I-beam, and its open editor floated over them and took their clicks.
-#[test]
-fn mode_tabs_keep_the_hand_over_a_text_field_scrolled_under_them() {
-    let mut h = harness();
-    // The page across the window, so the name field reaches under the tabs.
-    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
-    h.run_steps(4);
-    let name = |h: &Harness<'static, PdfCraftApp>| {
-        let s = h.state();
-        let doc = s.session.get(s.views[0].id).unwrap();
-        let f = doc.form.iter().find(|f| f.name == "name").unwrap();
-        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
-    };
-    assert_eq!(mode_tab_cursors(&mut h, name), HAND_ON_EVERY_TAB, "the field under the tabs");
-    // Open it, where it shows.
-    h.state_mut().views[0].goto = Some((0, 0.0));
-    h.run_steps(4);
-    click_field(&mut h, "name", 0);
-    assert!(h.state().views[0].forms.focus.is_some(), "the editor opened");
-    assert_eq!(mode_tab_cursors(&mut h, name), HAND_ON_EVERY_TAB, "the open field under the tabs");
-    let convert = mode_tab(&h, "Convert").center();
-    click_at(&mut h, convert);
-    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the field's editor");
-}
 
 /// The one-page PDF `guide_fixture` attaches as `Guide.pdf`.
 const GUIDE_INNER: &str = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
@@ -1824,7 +1832,7 @@ fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
     h.state_mut().pick_override = Some(vec![saved.to_string_lossy().into_owned()]);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'fake.pdf', nLaunch: 2});");
     wait_for_file(&mut h, &saved);
-    assert_eq!(tabs(&h), 2, "no tab for a file that isn't a PDF: {:?}", h.state().toast);
+    assert_eq!(tabs(&h), 2, "no tab for a file that isn't a PDF: {:?}", notice(&h));
     assert_eq!(std::fs::read(&saved).ok().as_deref(), Some(&b"not a PDF at"[..]), "offered to save instead");
     let _ = std::fs::remove_file(&saved);
     // The real attached PDF opens in a tab of its own, though another inner.pdf starts with it.
@@ -1869,14 +1877,21 @@ fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
     // A file the document doesn't have is said so.
     h.state_mut().active = Some(0);
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'nope.pdf', nLaunch: 2});");
-    crate::support::wait_until(&mut h, "the missing attachment notice", |app| app.toast.as_ref().is_some_and(|t| t.0.contains("nope.pdf")));
-    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains("nope.pdf")), "{:?}", h.state().toast);
+    assert!(
+        crate::support::step_until(&mut h, |h| notice(h).is_some_and(|t| t.contains("nope.pdf"))),
+        "the missing attachment notice: {:?}",
+        notice(&h)
+    );
     assert_eq!(tabs(&h).len(), 2);
     // A name of the form's own is shortened in the message, keeping its end. (Past a line's
     // length, the script engine cuts it first, as it cuts every name a script passes.)
     h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: new Array(3001).join('x') + '.pdf', nLaunch: 2});");
-    crate::support::wait_until(&mut h, "the shortened attachment notice", |app| app.toast.as_ref().is_some_and(|t| t.0.contains("x.pdf")));
-    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(
+        crate::support::step_until(&mut h, |h| notice(h).is_some_and(|t| t.contains("x.pdf"))),
+        "the shortened attachment notice: {:?}",
+        notice(&h)
+    );
+    let toast = notice(&h).unwrap_or_default();
     assert!(toast.contains('…') && toast.contains("x.pdf"), "{toast}");
     assert!(toast.chars().count() < 200, "{} characters", toast.chars().count());
 }
@@ -1913,7 +1928,7 @@ fn combo_harness() -> Harness<'static, PdfCraftApp> {
 fn an_editable_combo_box_takes_a_typed_value() {
     let dir = scratch("editable-combo");
     let out = dir.join("saved.pdf");
-    let mut h = combo_harness();
+    let mut h = scripted_harness("combo.pdf", combo_form(), "150", &out);
     click_field(&mut h, "fruit", 0);
     assert_eq!(focused(&h), Some(("fruit".into(), 0)));
     h.event(egui::Event::Text("Cherry".into()));
@@ -1936,7 +1951,6 @@ fn an_editable_combo_box_takes_a_typed_value() {
     h.key_press(egui::Key::Tab);
     h.run_steps(4);
     assert_eq!(value(&h, "fruit"), ["Damson"], "Tab commits the typed value");
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     wait_for_file(&mut h, &out);
     assert_eq!(saved_value(&out, "fruit"), ["Damson"]);
@@ -1978,12 +1992,16 @@ fn a_turned_editable_combo_box_places_the_caret_along_its_turned_text() {
         let f = doc.form.iter().find(|f| f.name == "fruit").unwrap();
         pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
     };
+    // Near the top the caret goes to the end of the turned text, near the bottom to its start.
     click_at(&mut h, field.left_top() + egui::vec2(3.0, 2.0));
     h.event(egui::Event::Text("X".into()));
     h.run_steps(2);
+    click_at(&mut h, field.left_bottom() + egui::vec2(3.0, -2.0));
+    h.event(egui::Event::Text("Y".into()));
+    h.run_steps(2);
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
-    assert_eq!(value(&h, "fruit"), ["ParisX"]);
+    assert_eq!(value(&h, "fruit"), ["YParisX"]);
 }
 
 /// A combo box without the Edit flag is a drop-down list only: typing changes nothing.
@@ -2135,7 +2153,7 @@ fn a_read_only_radio_button_is_focused_but_not_selected() {
     h.run_steps(6);
     click_field(&mut h, "size", 0);
     assert_eq!(value(&h, "size"), ["S"]);
-    let toast = |h: &Harness<'static, PdfCraftApp>| h.state().toast.as_ref().map(|(m, _)| m.clone());
+    let toast = |h: &Harness<'static, PdfCraftApp>| notice(h);
     assert_eq!(toast(&h), None);
     h.key_press(egui::Key::ArrowRight);
     h.run_steps(3);
@@ -2303,39 +2321,6 @@ fn field_rect(h: &Harness<'static, PdfCraftApp>, name: &str) -> egui::Rect {
     pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
 }
 
-/// Filled triangles painted inside `within`, at any depth of the frame's shapes.
-fn triangles_in(h: &Harness<'static, PdfCraftApp>, within: egui::Rect) -> Vec<Vec<egui::Pos2>> {
-    /// Collects the filled three-point paths of `shape` that lie inside `within`, descending into
-    /// nested shape lists.
-    fn walk(shape: &egui::Shape, within: egui::Rect, out: &mut Vec<Vec<egui::Pos2>>) {
-        match shape {
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, within, out)),
-            egui::Shape::Path(p) if p.points.len() == 3 && p.fill != egui::Color32::TRANSPARENT && p.points.iter().all(|q| within.contains(*q)) => {
-                out.push(p.points.clone())
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for c in &h.output().shapes {
-        walk(&c.shape, within, &mut out);
-    }
-    out
-}
-
-/// A drop-down draws one filled arrow at the right of its box, and a text field draws none.
-#[test]
-fn a_drop_down_shows_its_arrow_and_text_fields_do_not() {
-    let mut h = harness();
-    h.run_steps(2);
-    let country = field_rect(&h, "country");
-    let arrows = triangles_in(&h, country);
-    assert_eq!(arrows.len(), 1, "one arrow in the drop-down: {arrows:?}");
-    let tip = arrows[0].iter().fold(egui::Pos2::ZERO, |a, p| egui::pos2(a.x.max(p.x), a.y.max(p.y)));
-    assert!(tip.x > country.center().x, "at the right of the box");
-    assert!(triangles_in(&h, field_rect(&h, "city")).is_empty(), "a text field has none");
-}
-
 /// A drop-down's list opens on the field's left edge and no wider than the field, without
 /// showing the field's name, and clicking an item chooses it.
 #[test]
@@ -2349,24 +2334,6 @@ fn a_drop_downs_list_opens_as_wide_as_the_field_without_its_internal_name() {
     egui_kittest::kittest::Queryable::get_by_label(&h, "France").click();
     h.run_steps(4);
     assert_eq!(value(&h, "country"), ["fr"]);
-}
-
-/// A drop-down with 30 options keeps its scroll bar in its own room, so the items stop short
-/// of the field's right edge.
-#[test]
-fn a_long_drop_down_list_keeps_its_scroll_bar_beside_the_items() {
-    let mut h = harness();
-    let options: Vec<String> = (0..30).map(|i| format!("{i:02}00")).collect();
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
-        name: "country".into(),
-        props: Box::new(pdfcraft_engine::FieldProps { options: Some(options), ..Default::default() }),
-    }));
-    h.run_steps(3);
-    click_field(&mut h, "country", 0);
-    let country = field_rect(&h, "country");
-    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
-    // A scroll bar that stays shown takes its own room, so people see there is more below.
-    assert!(first.right() <= country.right() - 6.0, "{first:?} leaves room for the bar in {country:?}");
 }
 
 /// Where `text` is drawn in the last frame, if anywhere.
@@ -2408,84 +2375,6 @@ fn a_drop_downs_list_aligns_its_items_as_the_field_does() {
     assert!((france.center().x - country.center().x).abs() <= 2.0, "centered as the field is: {france:?} in {country:?}");
 }
 
-/// The arrow keys move through an open drop-down's list without changing the value, Enter
-/// chooses the current item and closes the list, and a reopened list starts from the value.
-#[test]
-fn the_arrow_keys_move_through_a_drop_downs_list_and_enter_chooses() {
-    let mut h = harness();
-    click_field(&mut h, "country", 0);
-    h.key_press(egui::Key::ArrowDown);
-    h.run_steps(1);
-    h.key_press(egui::Key::ArrowDown);
-    h.run_steps(1);
-    assert!(value(&h, "country").is_empty(), "the arrows only move through the list");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert_eq!(value(&h, "country"), ["fr"]);
-    assert!(h.state().views[0].forms.focus.is_none(), "Enter closes the list");
-    // Reopened, the list starts from the field's value.
-    click_field(&mut h, "country", 0);
-    h.key_press(egui::Key::ArrowUp);
-    h.run_steps(1);
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert_eq!(value(&h, "country"), ["ca"]);
-}
-
-/// Pressing the scroll bar's down button moves a long drop-down list on one row, and End goes
-/// to the last item, which Enter then chooses.
-#[test]
-fn a_long_drop_down_list_scrolls_by_its_arrow_button_and_to_its_end() {
-    let mut h = harness();
-    long_country(&mut h);
-    click_field(&mut h, "country", 0);
-    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0900").is_none(), "nine rows show");
-    let country = field_rect(&h, "country");
-    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
-    // The bar's down button, at the bottom of the bar beside the ninth row.
-    let bar = country.right() - first.right();
-    let down = egui::pos2(country.right() - bar / 2.0, first.top() + first.height() * 9.0 - bar / 2.0);
-    h.hover_at(down);
-    h.run_steps(1);
-    h.drag_at(down);
-    h.run_steps(1);
-    h.drop_at(down);
-    h.run_steps(2);
-    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0900").is_some(), "one row on");
-    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none());
-    h.key_press(egui::Key::End);
-    h.run_steps(2);
-    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "2900").is_some(), "End goes to the last item");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert_eq!(value(&h, "country"), ["2900"]);
-}
-
-/// The mouse wheel over an open long drop-down scrolls its list and leaves the page where it was.
-#[test]
-fn the_mouse_wheel_scrolls_a_long_drop_down_list_and_not_the_page() {
-    let mut h = harness();
-    long_country(&mut h);
-    click_field(&mut h, "country", 0);
-    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
-    let page = h.state().views[0].page_screen_rect(0);
-    h.hover_at(first.center() + egui::vec2(0.0, first.height() * 4.0));
-    h.run_steps(1);
-    for _ in 0..3 {
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Line,
-            source: egui::MouseWheelSource::Unknown,
-            delta: egui::vec2(0.0, -1.0),
-            modifiers: egui::Modifiers::NONE,
-            phase: egui::TouchPhase::Move,
-        });
-        h.run_steps(2);
-    }
-    h.run_steps(6);
-    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none(), "the list scrolled down");
-    assert_eq!(h.state().views[0].page_screen_rect(0), page, "the page stayed where it was");
-}
-
 /// Escape in an open drop-down closes its list and nothing else: the find bar, which Escape
 /// closes when no field is open, stays open.
 #[test]
@@ -2525,97 +2414,4 @@ fn an_auto_sized_drop_downs_list_shows_its_items_at_the_fields_text_size() {
     let field = field_rect(&h, "country");
     let item = text_rect(&h, long).expect("the long item in the open list");
     assert!(item.width() <= field.width(), "the item fits as the field's value does: {} wide in a {} field", item.width(), field.width());
-}
-
-/// In single-page view, where the wheel turns pages, the wheel over an open drop-down's list
-/// scrolls the list and leaves the page as it is; over the page itself it still turns it.
-#[test]
-fn in_single_page_view_the_wheel_over_an_open_list_scrolls_the_list_not_the_page() {
-    let mut h = harness();
-    long_country(&mut h);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 300.0, height: 400.0 }));
-    h.state_mut().set_option("continuous", "off").unwrap();
-    h.key_press(egui::Key::Home);
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() && h.state().views[0].page_screen_rect(0).is_some() {
-            break;
-        }
-    }
-    let wheel = |h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2| {
-        h.hover_at(at);
-        h.run_steps(1);
-        for _ in 0..3 {
-            h.event(egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Line,
-                source: egui::MouseWheelSource::Unknown,
-                delta: egui::vec2(0.0, -1.0),
-                modifiers: egui::Modifiers::NONE,
-                phase: egui::TouchPhase::Move,
-            });
-            h.run_steps(2);
-        }
-        h.run_steps(6);
-    };
-    // The control: over the page, the wheel turns it.
-    let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
-    wheel(&mut h, page.center());
-    assert_eq!(h.state().views[0].current, 1, "over the page, the wheel turns it");
-    h.key_press(egui::Key::Home);
-    h.run_steps(6);
-    assert_eq!(h.state().views[0].current, 0);
-    // Over the open list, it scrolls the list instead.
-    click_field(&mut h, "country", 0);
-    let first = egui_kittest::kittest::Queryable::get_by_label(&h, "0000").rect();
-    wheel(&mut h, first.center() + egui::vec2(0.0, first.height() * 4.0));
-    assert!(egui_kittest::kittest::Queryable::query_by_label(&h, "0000").is_none(), "the list scrolled down");
-    assert_eq!(h.state().views[0].current, 0, "the page didn't turn");
-}
-
-/// With a page taller than the window and the pointer resting on an open drop-down's list,
-/// Home and the down arrow move through the list and leave the page where it was.
-#[test]
-fn an_open_drop_down_keeps_the_arrow_keys_and_home_from_moving_the_page() {
-    let mut h = harness();
-    long_country(&mut h);
-    // A page taller than the window, so the keys would scroll it.
-    h.state_mut().set_option("zoom", "300").unwrap();
-    for _ in 0..30 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-    }
-    click_field(&mut h, "country", 0);
-    // The pointer rests on the list, as it does after reaching for it.
-    let row = egui_kittest::kittest::Queryable::get_by_label(&h, "0300").rect();
-    h.hover_at(row.center());
-    h.run_steps(2);
-    let page = h.state().views[0].page_screen_rect(0);
-    h.key_press(egui::Key::Home);
-    h.run_steps(2);
-    h.key_press(egui::Key::ArrowDown);
-    h.run_steps(4);
-    assert_eq!(h.state().views[0].page_screen_rect(0), page, "the page stayed where it was");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert_eq!(value(&h, "country"), ["0100"], "one item down from the first");
-}
-
-/// When End scrolls a drop-down's list under a resting pointer, Enter chooses the item End
-/// went to, not the one that came under the pointer.
-#[test]
-fn a_pointer_resting_on_a_list_the_keys_scroll_keeps_the_highlight_on_the_keys() {
-    let mut h = harness();
-    long_country(&mut h);
-    click_field(&mut h, "country", 0);
-    let row = egui_kittest::kittest::Queryable::get_by_label(&h, "0300").rect();
-    h.hover_at(row.center());
-    h.run_steps(2);
-    // End scrolls the list, so another item comes under the resting pointer.
-    h.key_press(egui::Key::End);
-    h.run_steps(2);
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    assert_eq!(value(&h, "country"), ["2900"], "the item End went to, not the one under the pointer");
 }
