@@ -65,6 +65,21 @@ pub struct CertificateList {
 
 impl CertificateList {
     pub fn parse(bytes: &[u8]) -> Result<CertificateList, SignError> {
+        let parsed = craft_pkcs7::revocation::CertificateList::parse(bytes).map_err(crate::der::app_error)?.into_parts();
+        Ok(Self {
+            tbs: parsed.tbs,
+            sig_alg: parsed.sig_alg,
+            signature: parsed.signature,
+            issuer_raw: parsed.issuer_raw,
+            this_update: parsed.this_update,
+            next_update: parsed.next_update,
+            revoked: parsed.revoked,
+        })
+    }
+
+    // Retained parity oracle: original CRL parser by Justin John (4d0078aeff).
+    #[cfg(test)]
+    fn parse_legacy(bytes: &[u8]) -> Result<CertificateList, SignError> {
         if bytes.is_empty() || bytes.len() > MAX_EVIDENCE {
             return Err(bad("CRL is empty or exceeds the 2 MiB limit"));
         }
@@ -181,7 +196,7 @@ impl OcspResponse {
             return Err(bad("OCSP response is empty or exceeds the 2 MiB limit"));
         }
         let resp = Tlv::parse_all(bytes)?.expect(tag::SEQUENCE, "OCSPResponse")?.children()?;
-        let status = resp.first().ok_or_else(|| bad("missing responseStatus"))?.u64()?;
+        let status = resp.first().ok_or_else(|| bad("missing responseStatus"))?.enumerated()?;
         if status != 0 {
             return Err(bad(format!("responder reported an error (status {status})")));
         }
@@ -305,5 +320,46 @@ impl OcspResponse {
             CertStatus::Revoked(at) => RevocationStatus::Revoked { at },
             CertStatus::Unknown => RevocationStatus::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod shared_crl_tests {
+    use super::*;
+    use crate::der;
+
+    #[test]
+    fn shared_crl_parser_matches_retained_app_reader() {
+        let date = Time { year: 2026, month: 6, day: 15, hour: 12, minute: 0, second: 0 };
+        let algorithm = DigestAlg::Sha256.algorithm();
+        let tbs = der::seq(&[
+            &der::int(1),
+            &algorithm,
+            &der::seq(&[]),
+            &date.encode(),
+            &date.encode(),
+            &der::seq(&[&der::seq(&[&der::uint(&[0x80]), &date.encode()])]),
+        ]);
+        let valid = der::seq(&[&tbs, &algorithm, &der::bit_string(&[1, 2, 3])]);
+        let compare = |bytes: &[u8]| match (CertificateList::parse(bytes), CertificateList::parse_legacy(bytes)) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(
+                    (a.tbs, a.sig_alg, a.signature, a.issuer_raw, a.this_update, a.next_update, a.revoked),
+                    (b.tbs, b.sig_alg, b.signature, b.issuer_raw, b.this_update, b.next_update, b.revoked)
+                );
+            }
+            (Err(a), Err(b)) => assert_eq!(format!("{a:?}"), format!("{b:?}")),
+            _ => panic!("shared and retained CRL parsers disagree"),
+        };
+        for end in 0..=valid.len() {
+            compare(&valid[..end]);
+        }
+        for i in 0..valid.len() {
+            let mut mutated = valid.clone();
+            mutated[i] ^= 0x80;
+            compare(&mutated);
+        }
+        compare(&vec![0; MAX_EVIDENCE]);
+        compare(&vec![0; MAX_EVIDENCE + 1]);
     }
 }
