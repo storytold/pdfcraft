@@ -152,6 +152,47 @@ f
         assert!(iter.next().is_none());
     }
 
+    /// PdfCraft patch (28): a twelve-ink DeviceN colour's `scn` keeps all twelve operands, and
+    /// the instructions after it are still read (#4260). The eleventh operand ended the stream.
+    #[test]
+    fn scn_with_twelve_components_keeps_them_all() {
+        let input = b"1 2 3 4 5 6 7 8 9 10 11 12 scn 0 0 10 10 re f";
+        let mut iter = TypedIter::new(input);
+
+        match iter.next() {
+            Some(TypedInstruction::NonStrokeColorNamed(NonStrokeColorNamed(nums, None))) => {
+                let expected = (1..=12).map(Number::from_i32).collect::<Vec<_>>();
+                assert_eq!(nums.as_slice(), expected.as_slice());
+            }
+            other => panic!("unexpected instruction: {other:?}"),
+        }
+        assert!(matches!(iter.next(), Some(TypedInstruction::RectPath(_))));
+        assert!(matches!(iter.next(), Some(TypedInstruction::FillPathNonZero(_))));
+        assert!(iter.next().is_none());
+    }
+
+    /// PdfCraft patch (28): past the operand cap the oldest operands are dropped, in order, and
+    /// the operator reads the ones nearest to it.
+    #[test]
+    fn operands_past_the_cap_keep_the_latest_in_order() {
+        let mut input = String::new();
+        for i in 0..600 {
+            input.push_str(&format!("{i} "));
+        }
+        input.push_str("scn 0 1 0 rg");
+        let mut iter = TypedIter::new(input.as_bytes());
+
+        match iter.next() {
+            Some(TypedInstruction::NonStrokeColorNamed(NonStrokeColorNamed(nums, None))) => {
+                let expected = (344..600).map(Number::from_i32).collect::<Vec<_>>();
+                assert_eq!(nums.as_slice(), expected.as_slice());
+            }
+            other => panic!("unexpected instruction: {other:?}"),
+        }
+        assert!(matches!(iter.next(), Some(TypedInstruction::NonStrokeColorDeviceRgb(_))));
+        assert!(iter.next().is_none());
+    }
+
     #[test]
     fn scn() {
         let input = b"

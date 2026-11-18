@@ -7,28 +7,35 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(test)]
+mod cjk_scripts;
 mod craft;
 pub mod embedding;
 mod encodings;
 pub mod fallback;
 pub mod pdf;
+pub mod plan;
 mod script;
+pub mod shaped_text;
 mod shaping;
 pub mod source_shaping;
 mod std14;
 mod std14_metrics;
 pub use craft::{
-    CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_hebrew_font, document_japanese_font, document_japanese_font_for_style,
-    document_japanese_fonts_for_style, document_thai_font, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_hebrew_fonts, ui_japanese_fonts,
-    ui_telugu_fonts, ui_thai_fonts,
+    CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
+    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
+    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
+pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
-    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
+    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,
+    script_missing, script_outline,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, face_glyph, hebrew_has, latin_has, shape_arabic, shape_hebrew, shape_latin, shape_thai,
+    shaped_glyph, thai_has,
 };
-pub use std14::Std14;
+pub use std14::{Match as Std14Match, Std14};
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
 ///
@@ -51,6 +58,18 @@ pub fn cjk_width(s: &str, size: f64) -> f64 {
         .sum()
 }
 
+/// Approximate advance of `s` in Inter Regular at `size` points.
+pub fn inter_width(s: &str, size: f64) -> f64 {
+    use skrifa::MetadataProvider as _;
+    let Ok(font) = skrifa::FontRef::new(INTER_REGULAR) else { return helvetica_width(s, size) };
+    let loc = skrifa::instance::LocationRef::default();
+    let upem = font.metrics(skrifa::instance::Size::unscaled(), loc).units_per_em.max(1) as f64;
+    let scale = size / upem;
+    let charmap = font.charmap();
+    let advances = font.glyph_metrics(skrifa::instance::Size::unscaled(), loc);
+    s.chars().map(|c| charmap.map(c).and_then(|gid| advances.advance_width(gid)).unwrap_or(0.0) as f64 * scale).sum()
+}
+
 /// East Asian wide and full-width characters (Unicode UAX #11 W and F, by block).
 fn is_wide(c: char) -> bool {
     matches!(c,
@@ -69,32 +88,64 @@ fn is_wide(c: char) -> bool {
     )
 }
 
-/// Greedy line breaking within `width` points (paragraphs split on newlines; words longer
+/// Greedy line breaking within `width` points (paragraphs split on line breaks, where CRLF counts as one; words longer
 /// than a line are broken by character).
 pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
     wrap_with(text, size, width, helvetica_width)
 }
 
 /// [`wrap`], measuring with `measure` (for example [`cjk_width`]).
+///
+/// A line measures as the sum of its words, the spaces between them and the characters of a broken
+/// word, each measured once, so the work stays linear in `text` however much fits on a line.
 pub fn wrap_with(text: &str, size: f64, width: f64, measure: impl Fn(&str, f64) -> f64) -> Vec<String> {
     let mut lines = Vec::new();
-    for para in text.split(['\n', '\r']) {
+    let space = measure(" ", size);
+    // A CRLF pair is one break, a lone CR or LF is one break each.
+    for para in text.replace("\r\n", "\n").split(['\n', '\r']) {
         let mut line = String::new();
+        let mut line_width = 0.0;
+        // No word is on the line yet; an empty word (a leading space) still starts it.
+        let mut fresh = true;
         for word in para.split(' ') {
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if measure(&candidate, size) <= width || line.is_empty() && measure(word, size) <= width {
-                line = candidate;
+            let word_width = measure(word, size);
+            let candidate = if fresh { word_width } else { line_width + space + word_width };
+            if candidate <= width {
+                if !fresh {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_width = candidate;
+                fresh = false;
                 continue;
             }
-            if !line.is_empty() {
+            // Indentation alone is not a line: drop it before an over-long word.
+            if line.trim().is_empty() {
+                line.clear();
+            } else {
                 lines.push(std::mem::take(&mut line));
             }
-            for ch in word.chars() {
-                if !line.is_empty() && measure(&format!("{line}{ch}"), size) > width {
-                    lines.push(std::mem::take(&mut line));
+            line_width = 0.0;
+            // Broken between characters, but never before a Thai mark: it stays on its letter.
+            let mut start = 0;
+            let mut units = Vec::new();
+            for (i, ch) in word.char_indices().skip(1) {
+                if !shaped_text::joins_previous(ch) {
+                    units.extend(word.get(start..i));
+                    start = i;
                 }
-                line.push(ch);
             }
+            units.extend(word.get(start..).filter(|u| !u.is_empty()));
+            for unit in units {
+                let unit_width = measure(unit, size);
+                if !line.is_empty() && line_width + unit_width > width {
+                    lines.push(std::mem::take(&mut line));
+                    line_width = 0.0;
+                }
+                line.push_str(unit);
+                line_width += unit_width;
+            }
+            fresh = line.is_empty();
         }
         lines.push(line);
     }
@@ -236,6 +287,16 @@ pub fn set_undrawn_mark(d: &mut pdfcraft_cos::Dict, c: Option<char>) {
     }
 }
 
+/// The byte used by Unicode text plans, from the shared WinAnsi table (tabs become spaces).
+pub fn win_ansi_char(c: char) -> Option<u8> {
+    if c == '\t' { Some(b' ') } else { win_ansi_byte(c) }
+}
+
+/// Whether every character can be represented without substitution in WinAnsi.
+pub fn fits_win_ansi(s: &str) -> bool {
+    s.chars().all(win_ansi_encodable)
+}
+
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.
 pub fn literal(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + 2);
@@ -255,6 +316,38 @@ pub fn literal(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrap_keeps_leading_spaces() {
+        assert_eq!(wrap("    indented", 11.0, 500.0), ["    indented"]);
+        assert_eq!(wrap("  a b\n c", 11.0, 500.0), ["  a b", " c"]);
+        assert_eq!(wrap("", 11.0, 500.0), [""]);
+        // A single leading space before a word that must be broken leaves no blank first line.
+        let broken = wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
+        assert!(broken.len() > 1 && broken.iter().all(|l| !l.is_empty()), "{broken:?}");
+        // So does indentation of two or more spaces: no whitespace-only line, same as one space.
+        let broken = wrap("  abcdefghijklmnopqrstuvwxyz", 11.0, 40.0);
+        assert!(broken.len() > 1 && broken.iter().all(|l| !l.trim().is_empty()), "{broken:?}");
+        assert_eq!(broken, wrap(" abcdefghijklmnopqrstuvwxyz", 11.0, 40.0));
+    }
+
+    #[test]
+    fn a_broken_thai_word_keeps_its_marks_on_their_letters() {
+        // Every character one point wide: "น้ำ" (three characters) is one unit, never split.
+        let lines = wrap_with("น้ำปั้นบุญฤทธิ์", 1.0, 2.0, |s, _| s.chars().count() as f64);
+        assert_eq!(lines.concat(), "น้ำปั้นบุญฤทธิ์");
+        assert_eq!(lines, ["น้ำ", "ปั้", "น", "บุ", "ญฤ", "ท", "ธิ์"]);
+        assert!(lines.iter().all(|l| l.chars().next().is_some_and(|c| !shaped_text::joins_previous(c))), "{lines:?}");
+    }
+
+    #[test]
+    fn crlf_is_one_line_break() {
+        assert_eq!(wrap("a\r\nb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\rb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\nb", 12.0, 100.0), ["a", "b"]);
+        assert_eq!(wrap("a\r\n\r\nb", 12.0, 100.0), ["a", "", "b"]);
+        assert_eq!(wrap("a\n\rb", 12.0, 100.0), ["a", "", "b"]);
+    }
 
     #[test]
     fn win_ansi_encodability_matches_the_encoder() {
@@ -290,6 +383,14 @@ mod tests {
         // Another value under the key is not a character: no mark.
         d.set(UNDRAWN_MARK.to_vec(), pdfcraft_cos::Object::Bool(true));
         assert_eq!(undrawn_mark(&d), None);
+    }
+
+    #[test]
+    fn inter_width_measures_latin_extended_and_ascii() {
+        assert!(inter_width("Luka Petravić", 12.0) > 0.0);
+        assert_eq!(inter_width("", 12.0), 0.0);
+        let w = inter_width("čžšć", 10.0);
+        assert!(w > 10.0 && w < 100.0);
     }
 
     #[test]
@@ -390,5 +491,21 @@ mod tests {
         assert_eq!(cjk_width("A", 10.0), helvetica_width("A", 10.0));
         let lines = wrap_with("日本語のテキストは文字単位で折り返されます", 10.0, 45.0, cjk_width);
         assert!(lines.len() > 3 && lines.iter().all(|l| cjk_width(l, 10.0) <= 45.0), "{lines:?}");
+    }
+
+    /// Wrapping measures each word and character a bounded number of times, however many fit on a line.
+    #[test]
+    fn wrapping_measures_each_word_a_few_times() {
+        let measured = std::cell::Cell::new(0usize);
+        let measure = |s: &str, size: f64| {
+            measured.set(measured.get() + s.len());
+            helvetica_width(s, size)
+        };
+        let text = format!("{} {}", "word ".repeat(5_000), "x".repeat(5_000));
+        let lines = wrap_with(&text, 1.0, 13_000.0, measure);
+        assert_eq!(lines.len(), 2, "the words fit on one line, the long word on another");
+        assert!(measured.get() <= 4 * text.len(), "{} bytes measured", measured.get());
+        let narrow = wrap_with(&text, 10.0, 100.0, helvetica_width);
+        assert!(narrow.iter().all(|l| helvetica_width(l, 10.0) <= 100.0), "{narrow:?}");
     }
 }

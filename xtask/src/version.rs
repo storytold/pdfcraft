@@ -15,12 +15,21 @@ pub fn read(manifest: &str) -> Result<String, String> {
     Ok(v)
 }
 
-/// `manifest` with the workspace version replaced; everything else is byte-for-byte unchanged.
+/// `manifest` with the workspace version replaced, together with the matching `version` of every
+/// path dependency in `[workspace.dependencies]` (the workspace's own crates, which must agree
+/// with it or `cargo update` refuses them); everything else is byte-for-byte unchanged.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
+    let old = read(manifest)?;
     let (idx, _) = find_line(manifest)?;
+    let (old_pin, new_pin) = (format!("version = \"{old}\""), format!("version = \"{new}\""));
     let mut out = String::with_capacity(manifest.len() + 8);
+    let mut in_deps = false;
     for (i, line) in manifest.split_inclusive('\n').enumerate() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_deps = t == "[workspace.dependencies]";
+        }
         if i == idx {
             let eol = if line.ends_with("\r\n") {
                 "\r\n"
@@ -30,6 +39,8 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
                 ""
             };
             out.push_str(&format!("version = \"{new}\"{eol}"));
+        } else if in_deps && line.contains("path = \"") && line.contains(&old_pin) {
+            out.push_str(&line.replace(&old_pin, &new_pin));
         } else {
             out.push_str(line);
         }
@@ -129,6 +140,18 @@ mod tests {
         assert_eq!(read(&out).unwrap(), "1.2.3-rc.1");
         assert_eq!(out, MANIFEST.replace("version = \"0.1.0\"", "version = \"1.2.3-rc.1\""));
         assert!(out.contains("foo = { version = \"1\" }"));
+    }
+
+    #[test]
+    fn moves_the_workspace_crates_pins_with_it() {
+        let manifest = "[workspace.package]\nversion = \"0.1.0\"\n\n[workspace.dependencies]\n\
+                        own = { path = \"crates/own\", version = \"0.1.0\" }\n\
+                        dep = { version = \"0.1.0\" }\n\
+                        other = { path = \"crates/other\", version = \"0.2\" }\n";
+        let out = replace(manifest, "0.2.0").unwrap();
+        assert!(out.contains("own = { path = \"crates/own\", version = \"0.2.0\" }"), "{out}");
+        assert!(out.contains("dep = { version = \"0.1.0\" }"), "a registry dependency keeps its version");
+        assert!(out.contains("other = { path = \"crates/other\", version = \"0.2\" }"));
     }
 
     #[test]

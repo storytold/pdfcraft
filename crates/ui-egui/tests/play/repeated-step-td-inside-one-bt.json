@@ -1,0 +1,9 @@
+{
+  "name": "repeated step Td inside one BT",
+  "content": "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj 0 -27.6 Td (Two) Tj 0 -27.6 Td (Three) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 90, "y": 676}},
+    {"expect_editor": {"contains": "Two", "text": "One\nTwo\nThree"}}
+  ]
+}
