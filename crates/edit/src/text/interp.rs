@@ -10,6 +10,9 @@ pub(super) struct TextState {
     pub(crate) word_spacing: f64,
     pub(crate) scale: f64,
     pub(super) leading: f64,
+    /// The font's vertical advance per unit of font size (`/DW2`'s w1) when the font captured
+    /// here writes vertically (§9.7.4.3); `None` when horizontal (see [`Ts`]).
+    pub(crate) vertical: Option<f64>,
     pub(crate) rise: f64,
     pub(crate) fill: Vec<Op>,
     /// The text rendering mode (`Tr`); 3 is invisible text, as in an OCR layer over a scan.
@@ -29,6 +32,7 @@ impl TextState {
     /// top of the page, after its content wrapped in `q`/`Q`.
     pub(crate) fn initial() -> Self {
         TextState {
+            vertical: None,
             font: None,
             char_spacing: 0.0,
             word_spacing: 0.0,
@@ -47,6 +51,7 @@ impl TextState {
 
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
+            vertical: ts.vertical,
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
             char_spacing: ts.char_spacing,
             word_spacing: ts.word_spacing,
@@ -367,7 +372,7 @@ pub(super) struct Ts {
     pub(super) gs: Gs,
     /// The font's vertical advance per unit of font size (`/DW2`'s w1, normally −1) when its
     /// CMap writes vertically (`WMode 1`, §9.7.4.3): each glyph then moves the pen down, not right.
-    pub(super) vertical: Option<f64>,
+    pub(crate) vertical: Option<f64>,
     /// Why the font's writing mode couldn't be read (a broken or cyclic CMap). Its text is then
     /// listed as horizontal, but the lines in it are refused for editing.
     pub(super) unreadable: Option<Rc<str>>,

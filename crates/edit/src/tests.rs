@@ -1767,7 +1767,7 @@ fn odd_arabic_text_never_panics() {
 
 /// One page with Helvetica (WinAnsi) and subsets of Arial: `/F2` and `/F3` are two subsets of the
 /// same font, as Word writes a font split across several resources, and `/F4` repeats Helvetica.
-fn text_page(content: &str) -> Document {
+pub(crate) fn text_page(content: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -7921,6 +7921,159 @@ fn justified_text_in_a_composite_font_fills_each_row_with_adjustments_after_its_
     assert!(ops.iter().all(|o| !o.is("Tf") || o.operands.first().and_then(|n| n.as_name()) == Some(b"F1".as_slice())), "{ops:?}");
     assert!(ops.iter().any(|o| o.is("TJ")), "{ops:?}");
     assert!(ops.iter().filter(|o| o.is("Tw")).all(|o| o.operands.first().and_then(|n| n.as_f64()) == Some(0.0)), "{ops:?}");
+    // The explicit displacements keep the row's logical text, so the spaces read back (#4514).
+    let flat = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains("/Span <</ActualText"), "the explicit spaces keep the logical text: {flat}");
+}
+
+/// The composite-font page the composite tests share: one page whose only font is a synthetic
+/// Type0 with two-byte codes for ASCII, so word spacing cannot reach its spaces.
+fn composite_page(content: &str) -> Document {
+    let mut doc = text_page(content);
+    let unicode = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"1 begincodespacerange <0000> <ffff> endcodespacerange 1 beginbfrange <0020> <007e> <0020> endbfrange",
+    )));
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        (
+            b"DescendantFonts".to_vec(),
+            Object::Array(vec![Object::Dict(Dict::from_iter([
+                (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+                (b"DW".to_vec(), Object::Int(500)),
+            ]))]),
+        ),
+    ]);
+    let p = pdfcraft_model::pages(&doc)[0].obj;
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+        (
+            b"DescendantFonts".to_vec(),
+            Object::Array(vec![Object::Dict(Dict::from_iter([
+                (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+                (b"DW".to_vec(), Object::Int(500)),
+            ]))]),
+        ),
+    ]);
+    let resources = Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"F1".to_vec(), Object::Dict(font.clone())), (b"F2".to_vec(), Object::Dict(font))])))]);
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    doc
+}
+
+/// Review round 6 on #7343: the source's own word spacing (`Tw`) applies only to the single-byte
+/// code 32, so a composite font's spaces keep the source's spacing and take only the justification
+/// stretch, whatever the source's `Tw` says (#7213).
+#[test]
+fn a_composite_fonts_source_word_spacing_does_not_reach_its_spaces() {
+    let hex = |s: &str| s.bytes().map(|b| format!("00{b:02x}")).collect::<String>();
+    // A plain replacement keeps the line's own drawing: the source's `Tw` stays where it was and
+    // no displacement restates it for the two-byte spaces.
+    let mut doc = composite_page(&format!("BT 2 Tw /F1 10 Tf 100 700 Td <{}> Tj ET", hex("ab cd")));
+    text::replace_line(&mut doc, 0, 0, "ab cd").unwrap();
+    let doc = reopen(&doc);
+    let flat = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(!flat.contains("] TJ"), "the source drawing is kept as it was: {flat}");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "ab cd", "{flat}");
+    // Justified across two runs, the spaces' stretch is the same whatever the source's `Tw` was,
+    // and the rows still read the same.
+    let justified = |tw: f64| {
+        let mut doc = composite_page(&format!(
+            "BT {tw} Tw /F1 10 Tf 12 TL 100 700 Td <{}> Tj T* <{}> Tj T* <{}> Tj T* <{}> Tj ET",
+            hex("a abc a abc a abc a abc a abc"),
+            hex("abc abc abc abc abc abc abc abc abc abc abc abc abc"),
+            hex("abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc"),
+            hex("cd")
+        ));
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { align: Some(added::Align::Justify), ..Default::default() }).unwrap();
+        let doc = reopen(&doc);
+        let adjustments = pdfcraft_content::parse(&page_content_bytes(&doc, 0))
+            .ops
+            .into_iter()
+            .filter(|o| o.is("TJ"))
+            .map(|o| {
+                let mut out = Vec::new();
+                pdfcraft_content::write_op(&o, &mut out);
+                String::from_utf8_lossy(&out).into_owned()
+            })
+            .collect::<Vec<_>>();
+        (
+            adjustments,
+            text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(),
+            String::from_utf8_lossy(&page_content_bytes(&doc, 0)).split_whitespace().collect::<Vec<_>>().join(" "),
+        )
+    };
+    let (without, plain_text, _) = justified(0.0);
+    let (with, tw_text, content) = justified(2.0);
+    assert_eq!(plain_text, tw_text, "the rows read the same: {plain_text:?} vs {tw_text:?}");
+    assert_eq!(without, with, "the source's `Tw` adds nothing to the spaces' stretch: {with:?}");
+    assert!(!with.is_empty(), "the justified rows stretch on their two-byte spaces: {with:?} rows {plain_text:?} content {content}");
+}
+
+/// Review round 7 on #7343: a naturally justified styled paragraph — composite-font runs in
+/// several fonts on the edited row, a source `Tw`, and rows that only reach their measure by
+/// stretched spaces — keeps its measure when a word is edited: the row is redrawn run by run in
+/// its own fonts, the following run keeps its position, and the stretch is never the source's
+/// `Tw` (#7213).
+#[test]
+fn a_justified_styled_paragraphs_composite_spaces_take_the_stretch_alone() {
+    let hex = |s: &str| s.bytes().map(|b| format!("00{b:02x}")).collect::<String>();
+    // 5 pt glyphs, 5 pt spaces: the edited row is two composite runs in different fonts whose
+    // stretched space reaches the measure at 300, row 2 is one composite run at the same measure
+    // and row 3 is short, so the paragraph reads as justified with its measure at 300.
+    let content = |tw: &str| {
+        let t = |s: &str| format!("<{}>", hex(s));
+        format!(
+            "BT {tw} Tw 15 TL 100 700 Td /F1 10 Tf 5 Tc {} Tj 0 Tc [-1000] TJ /F2 10 Tf 5 Tc {} Tj 0 Tc T* /F2 10 Tf 5 Tc {} Tj 0 Tc T* /F1 10 Tf {} Tj ET",
+            t("abcd "),
+            t("efgh ijkl mnop"),
+            t("abcd efgh ijkl mnopq"),
+            t("abcd")
+        )
+    };
+    let probe = |tw: f64| {
+        let mut doc = composite_page(&content(&format!("{tw}")));
+        let before = text::text_lines(&doc, 0).unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some("abcd efgh ijkl nopq\nabcd efgh ijkl mnopq\nabcd"), &text::BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        // The edited row is redrawn with its following run in the font it was drawn with, next to
+        // the run the edit redrew.
+        assert!(bytes.matches("/F2").count() >= 2, "the edited row keeps its following run: {bytes}");
+        (before, text::text_lines(&doc, 0).unwrap())
+    };
+    let rows = |lines: &[text::TextLine]| {
+        let mut rights: Vec<(f64, [f64; 4])> =
+            lines.iter().map(|l| (l.rect[1], [l.rect[0], l.rect[1], l.rect[2].round(), l.rect[3]])).collect();
+        rights.sort_by(|a, b| b.0.total_cmp(&a.0));
+        rights
+    };
+    let (before, after) = probe(2.0);
+    // The source paragraph is justified: its first two rows reach one right edge and the last
+    // falls short of it.
+    assert_eq!(rows(&before).iter().map(|(b, r)| (b.round(), (r[0].round(), r[2].round()))).collect::<Vec<_>>(),
+        vec![(698.0, (100.0, 300.0)), (683.0, (100.0, 300.0)), (668.0, (100.0, 120.0))], "the source rows: {before:?}");
+    // The edit keeps the paragraph's shape: the edited row is redrawn stretched back to the
+    // measure, and the rows around it keep their own geometry.
+    let edited = rows(&after).iter().filter(|(b, _)| *b == 697.5).map(|(_, r)| [r[0], r[1], r[2].round(), r[3]]).collect::<Vec<_>>();
+    assert_eq!(edited, vec![[100.0, 697.5, 300.0, 709.0]], "the edited row stretches back to its measure: {after:?}");
+    assert_eq!(rows(&after), rows(&before), "the rewrite preserves every row's geometry: {after:?}");
+    // The following run still starts where the edited run and one stretched space put it.
+    let following = after.iter().find(|l| l.rect[1] == 697.5).unwrap().ink[1][0];
+    assert!((following - 152.6316).abs() < 0.01, "the following run keeps its position: {following} {after:?}");
+    // The source's `Tw` never joins the stretch: the same edit on a page without one lays the
+    // rows and the runs inside them out identically.
+    let (plain_before, plain_after) = probe(0.0);
+    let inks = |lines: &[text::TextLine]| lines.iter().map(|l| (l.rect[1], l.ink.clone())).collect::<Vec<_>>();
+    assert_eq!(inks(&plain_after), inks(&after), "the source's `Tw` adds nothing to the stretch: {plain_after:?}");
+    assert_eq!(rows(&plain_before), rows(&before), "the source rows read the same without the `Tw`");
 }
 
 #[test]
@@ -11541,6 +11694,198 @@ fn a_justified_paragraph_from_the_editor_fills_its_rows() {
     let right = row("One")[2];
     assert!((row("eight")[2] - right).abs() < 1.0, "the second row is stretched: {:?} vs {right}", row("eight"));
     assert!(row("end")[2] < right - 20.0, "the last row isn't");
+}
+
+/// A justified paragraph with a hanging indent — a spec clause "A." over rows set in from it — is
+/// one block: an edit inside it re-lays the row it reaches justified back to the measure, at the
+/// indent, and leaves the rows it doesn't reach with their own operators (#7213).
+#[test]
+fn an_edit_in_a_justified_hanging_indent_paragraph_keeps_its_justify_and_indent() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    assert_eq!(block.rows.len(), 4, "the clause is one paragraph, not one box per line: {:?}", block.editor_text);
+    let before = rows_of(&doc);
+    let interior = before.iter().find(|(t, r)| t.starts_with("two") && (r[0] - 86.0).abs() < 0.5).map(|(_, r)| r[2]).unwrap_or_else(|| {
+        panic!(
+            "before: {before:?}; blocks {:?}",
+            text::text_blocks(&doc, 0).unwrap().iter().map(|b| (b.text.clone(), b.rows.len())).collect::<Vec<_>>()
+        )
+    });
+
+    // Deleting a word from an interior row: the row is re-laid at the indent and stretched back to
+    // the measure; the rows the edit doesn't reach keep their own operators.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[1] = draft_rows[1].replacen("three ", "", 1);
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    let edited = after.iter().find(|(t, _)| t == "two four five six").unwrap_or_else(|| panic!("{:?}", after));
+    assert!((edited.1[0] - 86.0).abs() < 0.5, "the edited row keeps the indent: {:?}", edited.1);
+    assert!((edited.1[2] - interior).abs() < 1.0, "the edited row is justified again: {:?} vs {interior}", edited.1);
+    let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert_eq!(bytes.matches("(two three four five six) Tj").count(), 1, "the untouched row keeps its operators:\n{bytes}");
+    assert!(bytes.contains("(end) Tj"), "the last row keeps its operators:\n{bytes}");
+    assert_eq!(bytes.matches("(two four five six)").count(), 1, "{bytes}");
+}
+
+/// Adding words to the first row of that paragraph wraps the overflow at the indent — not under
+/// the "A." label — and pushes the rows after it down by a leading instead of drawing over them
+/// (#7213).
+#[test]
+fn words_added_to_a_justified_hanging_indent_paragraph_wrap_at_the_indent() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+    let at = |text: &str, n: usize| {
+        let mut rows: Vec<[f64; 4]> = before.iter().filter(|(t, _)| t.starts_with(text)).map(|(_, r)| *r).collect();
+        rows.sort_by(|a, b| b[1].total_cmp(&a[1]));
+        rows.get(n).copied().unwrap_or_else(|| panic!("{text}: {before:?}"))
+    };
+
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[0].push_str(" seven");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    assert_eq!(after.len(), 5, "the overflow is its own row: {after:?}");
+    let seven = after.iter().find(|(t, _)| t.starts_with("seven")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((seven[0] - 86.0).abs() < 0.5, "the overflow wraps at the indent, not under the label: {seven:?}");
+    assert!((seven[1] - at("two", 0)[1]).abs() < 0.5, "the overflow takes the row below the first: {seven:?}");
+    // The rows after the wrap move down a leading each; none of them stays where the overflow now
+    // sits, and the label stays on the margin.
+    let first = after.iter().find(|(t, _)| t.starts_with("A.")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((first[0] - 72.0).abs() < 0.5 && (first[1] - at("A.", 0)[1]).abs() < 0.5, "the label keeps its place: {first:?}");
+    let mut moved: Vec<f64> = after.iter().filter(|(t, _)| t.starts_with("two")).map(|(_, r)| r[1]).collect();
+    assert_eq!(moved.len(), 2, "{after:?}");
+    moved.sort_by(|a, b| b.total_cmp(a));
+    for (n, was) in [0usize, 1].into_iter().enumerate() {
+        assert!((moved[n] - (at("two", was)[1] - 12.0)).abs() < 0.5, "row {n} moves down a leading: {:?} vs {:?}", moved, at("two", was));
+    }
+    let end = after.iter().find(|(t, _)| t.starts_with("end")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((end[1] - (at("end", 0)[1] - 12.0)).abs() < 0.5, "the last row moves down too: {end:?}");
+}
+
+/// A first-line indent leaves the first row wrapping at the measure its own left edge leaves, so
+/// its text cannot run past the paragraph's right edge (#7213).
+#[test]
+fn a_first_line_indent_wraps_at_its_own_measure() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 86 700 Tm (one two three) Tj -14 -12 Td (one two three four) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("one")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    assert_eq!(block.rows.len(), 3, "the indented clause is one paragraph: {:?}", block.editor_text);
+    let before = rows_of(&doc);
+    let measure_right = before.iter().map(|(_, r)| r[2]).fold(f64::MIN, f64::max);
+
+    // A word wide enough to pass the first row's own measure but not the paragraph's: under a
+    // revert to the paragraph-wide first-row measure, the whole row would fit and not wrap.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[0].push_str(" eeee");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    assert_eq!(after.len(), 4, "the long word is its own row: {after:?}");
+    let fragment = after.iter().find(|(t, _)| t.starts_with("one two three")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((fragment[0] - 86.0).abs() < 0.5, "the fragment keeps the first-line indent: {fragment:?}");
+    assert!(fragment[2] <= measure_right + 0.5, "the fragment ends within the measure: {fragment:?} vs {measure_right}");
+    let overflow = after.iter().find(|(t, _)| t.starts_with("eee")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((overflow[0] - 72.0).abs() < 0.5, "the overflow wraps at the rest left edge: {overflow:?}");
+    assert!((overflow[1] - (fragment[1] - 12.0)).abs() < 0.5, "the overflow sits a leading below: {overflow:?}");
+    let end = after.iter().find(|(t, _)| t.starts_with("end")).unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((end[1] - (at_first(&before, "end")[1] - 12.0)).abs() < 0.5, "the last row moves down too: {end:?}");
+}
+
+/// A rewritten justified row with a space outside its words still ends at its measure: the
+/// leading space takes its share of the stretch like the gaps between the words do (#7213).
+#[test]
+fn a_justified_row_with_a_leading_space_still_reaches_its_measure() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+    let interior = before.iter().find(|(t, r)| t.starts_with("two") && (r[0] - 86.0).abs() < 0.5).map(|(_, r)| r[2]).unwrap();
+
+    // A leading space on the edited row: if only the words' gaps divided the stretch, the leading
+    // space would take a share too and the row would run past its measure.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[1] = format!(" {}", &draft_rows[1]);
+    draft_rows[1] = draft_rows[1].replacen("three ", "", 1);
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    let edited = after.iter().find(|(t, _)| t.trim_start() == "two four five six").unwrap_or_else(|| panic!("{:?}", after)).1;
+    assert!((edited[2] - interior).abs() < 0.5, "the row with a leading space reaches its measure: {:?} vs {interior}", edited);
+}
+
+fn at_first(before: &[(String, [f64; 4])], text: &str) -> [f64; 4] {
+    before.iter().find(|(t, _)| t.starts_with(text)).unwrap_or_else(|| panic!("{before:?}")).1
+}
+
+/// Joining rows of the justified hanging-indent paragraph into one that wraps still hangs the
+/// wrapped rows at the indent: the wrap is a continuation of the draft row even though the draft
+/// no longer pairs with the source rows (#7213).
+#[test]
+fn a_wrap_in_a_joined_row_keeps_the_hanging_indent() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (A. two three four five six) Tj 14 -12 Td (two three four five six) Tj 0 -12 Td (two three four five six) Tj 0 -12 Td (end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("A.")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+
+    // The last three source rows joined into one draft row with enough text to wrap four times:
+    // the draft no longer pairs with the source rows, and the last wrapped row has no source row
+    // left to take its rectangle from.
+    let mut words: Vec<String> = block.editor_text.split('\n').skip(1).flat_map(|r| r.split_whitespace().map(str::to_string)).collect();
+    words.push("end.".into());
+    words.extend(["and", "more", "words", "to", "wrap"].map(str::to_string));
+    let draft_rows = vec![block.editor_text.split('\n').next().unwrap().to_string(), words.join(" ")];
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    assert_eq!(after.len(), 5, "the joined row wraps into four: {after:?}");
+    let hung = after.iter().filter(|(t, r)| !t.starts_with("A.") && (r[0] - 86.0).abs() < 0.5).count();
+    assert_eq!(hung, 4, "every wrapped row keeps the indent, not the source rows' own edges: {after:?}");
+    let mut baselines: Vec<f64> = after.iter().filter(|(t, _)| !t.starts_with("A.")).map(|(_, r)| r[1]).collect();
+    baselines.sort_by(|a, b| b.total_cmp(a));
+    for pair in baselines.windows(2) {
+        assert!((pair[0] - pair[1] - 12.0).abs() < 0.5, "the wrapped rows step a leading: {baselines:?}");
+    }
+    assert!((baselines[0] - at_first(&before, "two")[1]).abs() < 0.5, "the wrap starts at the joined row's own position: {baselines:?}");
+}
+
+/// An edit that wraps the short last row of a justified paragraph makes its first fragment
+/// nonfinal: the fragment stretches to the paragraph's measure like any interior row, instead of
+/// staying as ragged as the short row it came from (#7213).
+#[test]
+fn a_justified_last_row_that_wraps_stretches_to_the_measure() {
+    let content = "BT /F1 10 Tf 12 TL 1 0 0 1 72 700 Tm (alpha beta gamma delta epsilon zeta) Tj 0 -12 Td (alpha beta gamma delta epsilon zeta) Tj 0 -12 Td (eta end) Tj ET";
+    let rows_of =
+        |doc: &Document| -> Vec<(String, [f64; 4])> { text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.rect)).collect() };
+    let mut doc = text_page(content);
+    let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.contains("alpha")).unwrap();
+    let block = text::text_blocks(&doc, 0).unwrap()[index].clone();
+    let before = rows_of(&doc);
+    let measure_right = before.iter().map(|(_, r)| r[2]).fold(f64::MIN, f64::max);
+
+    // One unbreakable long word pushes the last row over its measure; its first fragment is left
+    // well short of it and must stretch back.
+    let mut draft_rows: Vec<String> = block.editor_text.split('\n').map(str::to_string).collect();
+    draft_rows[2].push_str(" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    text::rewrite_block(&mut doc, 0, index, Some(&draft_rows.join("\n")), &text::BlockStyle::default()).unwrap();
+    let after = rows_of(&reopen(&doc));
+    let fragment = after.iter().find(|(t, _)| t == "eta end").unwrap_or_else(|| panic!("{after:?}")).1;
+    assert!((fragment[2] - measure_right).abs() < 1.0, "the wrapped last row's fragment is justified: {:?} vs {measure_right}", fragment);
+    assert!((fragment[0] - 72.0).abs() < 0.5, "the fragment keeps the margin: {fragment:?}");
 }
 
 /// An alignment for a row the draft doesn't have names no row: a one-row title given one for a
@@ -15595,3 +15940,11 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }
+// round 3
+// round 4
+// round 5
+// r5b
+// r5c
+// r5d
+// r5e
+// r6a

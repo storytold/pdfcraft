@@ -725,7 +725,10 @@ fn styled_break_before(chars: &[StyledChar]) -> Vec<bool> {
 
 fn wrap_styled_rows(
     chars: &[StyledChar],
-    width: f64,
+    // The measure a row may fill: the paragraph's first row's own (a hanging or first-line indent
+    // leaves it shorter or longer than the rest), and the rest rows' one. The first argument is the
+    // draft row the row being built belongs to, the second whether it continues an earlier row.
+    width: impl Fn(usize, bool) -> f64,
     measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
     let break_before = styled_break_before(chars);
@@ -742,6 +745,9 @@ fn wrap_styled_rows(
     // Logical draft rows drive per-paragraph alignment independently of soft wraps.
     let mut row_lines: Vec<usize> = Vec::new();
     let mut draft_line = 0usize;
+    // Whether the row being built is the first one of its draft row (a wrap makes the next one a
+    // continuation, which wraps at the rest measure, not the first row's).
+    let mut first_of_line = true;
     let mut row_start = 0;
     let mut row = Vec::new();
     let mut row_width = 0.0;
@@ -762,6 +768,7 @@ fn wrap_styled_rows(
             draft_line = draft_line.saturating_add(1);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            first_of_line = true;
             at += 1;
             row_start = at;
             continue;
@@ -775,7 +782,8 @@ fn wrap_styled_rows(
         }
         let word = chars.get(at..end).unwrap_or_default();
         let word_width = measure(word)?;
-        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
+        let measure_width = width(draft_line, !first_of_line);
+        if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > measure_width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
                 row.pop();
@@ -789,6 +797,7 @@ fn wrap_styled_rows(
             row_lines.push(draft_line);
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            first_of_line = false;
             row_start = at;
         }
         row.extend_from_slice(word);
@@ -803,6 +812,39 @@ fn wrap_styled_rows(
         rows.push(row);
     }
     Ok((rows, row_ranges, row_lines, row_soft, row_gap))
+}
+
+/// Wraps the draft rows at each row's own measure (#7213): a hanging indent leaves continuations
+/// wrapping at the rest measure, a first-line indent leaves the first row wrapping at the measure
+/// its own left edge leaves, and a paragraph with no indent wraps at `width`, which lets a row
+/// grow into the column.
+fn wrap_draft_rows(
+    block: &TextBlock,
+    lines: &[TextLine],
+    chars: &[StyledChar],
+    style: &BlockStyle,
+    width: f64,
+    measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
+) -> Result<WrappedStyledRows, EditError> {
+    let rest_left =
+        rest_left_of(block, lines).unwrap_or_else(|| block.rows.first().and_then(|row| row_rect(row, lines)).map(|r| r[0]).unwrap_or(block.rect[0]));
+    let measure_right = block.rows.iter().filter_map(|row| row_rect(row, lines)).map(|r| r[2]).fold(f64::MIN, f64::max);
+    let first_left = block.rows.first().and_then(|row| row_rect(row, lines)).map(|r| r[0]).unwrap_or(block.rect[0]);
+    // A first-line indent leaves the first row starting right of the rest rows: it wraps at the
+    // measure its own left edge leaves, not at `width`, or its text would run past the paragraph's
+    // right edge (#7213).
+    let first_measure = if first_left > rest_left + 0.5 { width.min((measure_right - first_left).max(1.0)) } else { width };
+    let rest_measure = if rest_left > block.rect[0] + 0.5 { width.min((measure_right - rest_left).max(1.0)) } else { width };
+    let row_measure = |draft_line: usize, continuation: bool| {
+        if style.width.is_some() {
+            width
+        } else if draft_line == 0 && !continuation {
+            first_measure
+        } else {
+            rest_measure
+        }
+    };
+    wrap_styled_rows(chars, row_measure, measure)
 }
 
 fn apply_range_styles<'a>(
@@ -1283,8 +1325,11 @@ fn shape_source(doc: &Document, fonts: &Dict, thai: &ThaiShaping, name: &str, te
 }
 
 /// For each output row (a range of the draft's characters), whether it is exactly the source row
-/// at the same position: the same characters, none of them inserted or changed by the edit.
-fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>]) -> Vec<bool> {
+/// at the same draft row: the same characters, none of them inserted or changed by the edit.
+/// A wrap the edit causes puts extra output rows between the draft's rows, so an output row is
+/// paired with its source row through `row_lines` (the draft row it belongs to), not through its
+/// own position.
+fn untouched_rows(block: &TextBlock, draft: &str, row_lines: &[usize], rows: &[std::ops::Range<usize>]) -> Vec<bool> {
     let old: Vec<char> = block.editor_text.chars().collect();
     let new: Vec<char> = draft.chars().collect();
     let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
@@ -1308,18 +1353,53 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         }
     }
     source_rows.push(start..old.len());
-    // A line break inside a source run would pair editor rows with the wrong visual rows.
-    if source_rows.len() != block.rows.len() {
+    // A line break inside a source run would pair editor rows with the wrong visual rows, and a
+    // draft whose rows are not the paragraph's own has no source row to keep.
+    if source_rows.len() != block.rows.len() || new.iter().filter(|c| **c == '\n').count() != old.iter().filter(|c| **c == '\n').count() {
         return vec![false; rows.len()];
     }
     rows.iter()
         .enumerate()
         .map(|(r, range)| {
-            source_rows.get(r).is_some_and(|source| {
+            source_rows.get(*row_lines.get(r).unwrap_or(&r)).is_some_and(|source| {
                 !range.is_empty() && range.len() == source.len() && range.clone().zip(source.clone()).all(|(i, j)| origin(i) == Some(j))
             })
         })
         .collect()
+}
+
+/// Whether an existing multi-row paragraph is justified: every row but the last ends at one right
+/// edge (within half an em), the last ends short of it, and the measure is wide enough to be one
+/// (the guard [`break_gap`] uses). A rewrite that re-lays a row of such a paragraph without the
+/// stretch leaves it ragged and shifts the rows around it (#7213). Two rows are not enough to
+/// judge: the one interior row defines the right edge whatever the alignment, so a short last row
+/// next to a longer one would read as justified.
+fn source_is_justified(block: &TextBlock, lines: &[TextLine]) -> bool {
+    if block.rows.len() < 3 {
+        return false;
+    }
+    let rects: Vec<[f64; 4]> = block.rows.iter().filter_map(|row| row_rect(row, lines)).collect();
+    if rects.len() != block.rows.len() {
+        return false;
+    }
+    let size = block.size.max(1.0);
+    let right = rects.iter().map(|r| r[2]).fold(f64::MIN, f64::max);
+    let left = rects.iter().map(|r| r[0]).fold(f64::MAX, f64::min);
+    let last_short = right - rects.last().map(|r| r[2]).unwrap_or(right) > size;
+    let interior_full = rects[..rects.len() - 1].iter().all(|r| right - r[2] < size * 0.5);
+    let wide_enough = right - left >= size * 8.0;
+    last_short && interior_full && wide_enough
+}
+
+/// The left edge the paragraph's rows after its first sit on: a hanging indent puts them right of
+/// the first row, a first-line indent left of it. Rows of a rewrite that continue an earlier row
+/// are laid out from here, so a wrap keeps the indent instead of sliding under the label (#7213).
+fn rest_left_of(block: &TextBlock, lines: &[TextLine]) -> Option<f64> {
+    if block.rows.len() < 2 {
+        return None;
+    }
+    let left = block.rows.iter().skip(1).filter_map(|row| row_rect(row, lines)).map(|r| r[0]).fold(f64::MAX, f64::min);
+    (left.is_finite()).then_some(left)
 }
 
 fn segment_underline_runs(
@@ -1609,6 +1689,52 @@ fn draft_sources(block: &TextBlock, draft: &str, style: &BlockStyle) -> Result<V
     Ok(style.sources.clone())
 }
 
+/// Which output rows keep their source operators: the ones the draft left character for character
+/// in the source row they re-lay. A row aligned on its own is reached; so is any row a wrap the
+/// edit introduced has moved from where its source operators sit. Also returns whether the draft's
+/// rows pair with the paragraph's own (the edit added or removed none) and, when they do, how many
+/// output rows each draft row produced.
+fn kept_source_rows(
+    block: &TextBlock,
+    draft: &str,
+    style: &BlockStyle,
+    row_lines: &[usize],
+    row_ranges: &[std::ops::Range<usize>],
+    rows: &[Vec<StyledChar>],
+    source_count: usize,
+) -> (Vec<bool>, bool, Vec<usize>) {
+    // The draft's rows pair with the paragraph's own while the edit added or removed none; a wrap
+    // within a draft row then puts extra output rows between them.
+    let paired = draft.split('\n').count() == block.rows.len();
+    let mut per_draft_row = vec![0usize; block.rows.len().max(1)];
+    if paired {
+        for line in row_lines {
+            if let Some(slot) = per_draft_row.get_mut(*line) {
+                *slot = slot.saturating_add(1);
+            }
+        }
+    }
+    let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let kept = if plain {
+        untouched_rows(block, draft, row_lines, row_ranges)
+            .into_iter()
+            .zip(rows)
+            .zip(row_lines)
+            .enumerate()
+            .map(|(r, ((same, row), line))| {
+                // A draft row that produced more or fewer output rows than its own, or one before
+                // it that did, has moved this row from where its source operators sit.
+                let shifted =
+                    paired && ((0..*line).any(|d| per_draft_row.get(d) != Some(&1)) || (r > 0 && row_lines.get(r.saturating_sub(1)) == Some(line)));
+                same && !shifted && row.iter().all(|c| c.1 < source_count) && style.aligns.get(*line).copied().flatten().is_none()
+            })
+            .collect()
+    } else {
+        vec![false; rows.len()]
+    };
+    (kept, paired, per_draft_row)
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -1722,27 +1848,28 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    // The paragraph's first row may fill a different measure from the rest (a hanging or first-line
+    // indent): each wraps at its own, so a continuation cannot run past the measure's right edge
+    // and an indented first row cannot wrap later than its own measure allows (#7213). A paragraph
+    // with no indent keeps wrapping at `width`, which lets a row grow into the column.
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_draft_rows(block, lines, &chars, style, width, measure)?;
     let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
-    // aligned on its own is reached; the rows around it are not.
-    let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
-    let mut kept = if plain {
-        untouched_rows(block, draft, &row_ranges)
-            .into_iter()
-            .zip(&rows)
-            .zip(&row_lines)
-            .map(|((same, row), line)| same && row.iter().all(|c| c.1 < source_count) && style.aligns.get(*line).copied().flatten().is_none())
-            .collect()
-    } else {
-        vec![false; rows.len()]
-    };
-    let kept_lines: std::collections::HashSet<usize> =
-        kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
+    // aligned on its own is reached; the rows around it are not. A wrap the edit introduces
+    // pushes the rows after it down, so those stop keeping their operators too.
+    let (mut kept, paired, per_draft_row) = kept_source_rows(block, draft, style, &row_lines, &row_ranges, &rows, source_count);
+    let kept_lines: std::collections::HashSet<usize> = kept
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| **k)
+        .filter_map(|(r, _)| block.rows.get(if paired { *row_lines.get(r).unwrap_or(&r) } else { r }))
+        .flatten()
+        .copied()
+        .collect();
     // The rewrite is placed after the last rewritten row unless a text-show operator there
     // would make a kept following row depend on that position.
     let anchor = rewrite_anchor(block, lines, first, &ops, &kept_lines, &mut kept);
@@ -1797,13 +1924,29 @@ pub(crate) fn rewrite_styled_block(
     let initial = TextState::initial();
     let drawn_from = if over { &initial } else { after };
     let mut baseline = first.origin.baseline;
+    // Where each source row's rewrite sits: the paragraph's rows after its first hang at their own
+    // left edge (#7213), and a wrap the edit introduces pushes the rows after it down by their own
+    // step. `row_lines` pairs an output row with the draft row — and so the source row — it belongs
+    // to, which a wrap puts out of step with the output row's own position.
+    let justified = source_is_justified(block, lines);
+    let rest_left =
+        rest_left_of(block, lines).unwrap_or_else(|| block.rows.first().and_then(|row| row_rect(row, lines)).map(|r| r[0]).unwrap_or(first.rect[0]));
+    let measure_right = block.rows.iter().filter_map(|row| row_rect(row, lines)).map(|r| r[2]).fold(f64::MIN, f64::max);
     for (row_index, row) in rows.iter().enumerate() {
-        let anchor = block.rows.get(row_index).and_then(|r| r.first()).and_then(|i| lines.get(*i));
+        let source_row = if paired { row_lines.get(row_index).copied().unwrap_or(row_index) } else { row_index };
+        // A soft wrap makes this output row continue the one before it, whatever the draft-row
+        // pairing: rows the wrapper inserted sit at the rest left edge even when the edit joined
+        // or split the source rows and `row_lines` no longer pairs them (#7213).
+        let continuation = row_index > 0 && row_soft.get(row_index).copied().unwrap_or(false);
+        let anchor = if continuation { None } else { block.rows.get(source_row).and_then(|r| r.first()).and_then(|i| lines.get(*i)) };
         if style.line_spacing.is_none()
             && style.size.is_none()
             && let Some(anchor) = anchor
         {
-            baseline = anchor.origin.baseline;
+            // Rows a wrap inserted before this source row push it down by their own step; a draft
+            // row that lost its output rows pulls the ones after it up.
+            let inserted = if paired { per_draft_row.iter().take(source_row).map(|c| *c as isize - 1).sum::<isize>().max(0) } else { 0 };
+            baseline = anchor.origin.baseline - inserted as f64 * row_step(style, anchor.size, source_leading);
         }
         let anchor = anchor.unwrap_or(first);
         if kept.get(row_index).copied().unwrap_or(false) {
@@ -1817,10 +1960,30 @@ pub(crate) fn rewrite_styled_block(
         let w = measured.get(row_index).copied().unwrap_or(0.0);
         // The row's own alignment, or the paragraph's.
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
-        let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
-        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
-        let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
+        let natural = style.width.is_none() && asked.is_none();
+        // Every space the row shows takes an equal share of the stretch, leading and trailing ones
+        // included: the divisor must count the same spaces the emission and the advance do, or a
+        // row with spaces outside its words would run past its measure (#7213).
+        let space_count = row.iter().filter(|c| c.0 == ' ').count();
+        // A justified paragraph's rewritten rows stretch back to their measure; the last row does
+        // not, and neither does a row aligned on its own (#7213). The measure is the paragraph's
+        // right edge, not the source row's own width: a wrap can make the first fragment of a
+        // short last source row nonfinal, and that fragment stretches to the measure like any
+        // interior row.
+        let stretch = justified && natural && row_index.saturating_add(1) < rows.len() && space_count > 0;
+        // A row that stretches to its measure starts at its left edge: a centered start would push
+        // the stretched row past the measure (#7213).
+        let align = asked.unwrap_or(if centered && !stretch { crate::added::Align::Center } else { crate::added::Align::Left });
+        let original_rect = if continuation {
+            // A row that continues an earlier one sits on the paragraph's rest left edge, not on
+            // the first row's: a wrap keeps the hanging indent (#7213).
+            [rest_left, block.rect[1], measure_right.max(rest_left), block.rect[3]]
+        } else {
+            block.rows.get(source_row).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect)
+        };
+        let left = if natural { original_rect[0] } else { block.rect[0] };
+        let available = if natural { original_rect[2] - original_rect[0] } else { width };
+        let justified_measure = (measure_right - left).max(available);
         let mut x = left
             + match align {
                 crate::added::Align::Center => (available - w) / 2.0,
@@ -1846,6 +2009,13 @@ pub(crate) fn rewrite_styled_block(
             if !shaped_runs.contains_key(&(row_index, pos)) {
                 state.scale *= calibration.get(&item.1).copied().unwrap_or(1.0);
             }
+            // Justified: the row's spaces take up what is left of its measure. The stretch goes
+            // through the text state's word spacing, as the source's own did; the state's scale is
+            // the one this run is drawn with, calibration included. A space the font shows any
+            // other way than the single-byte code 32 takes the stretch alone, through
+            // `source_show`'s explicit displacement: the source's own word spacing never reached it.
+            let stretch_share = if stretch { (justified_measure - w).max(0.0) / (space_count as f64 * state.scale * source.origin.k) } else { 0.0 };
+            state.word_spacing += stretch_share;
             if let Some([r, g, b]) = overrides.get(&item.1).and_then(|r| r.color).or(style.color) {
                 state.fill = vec![Op::new("rg", vec![n(r), n(g), n(b)])];
             }
@@ -1884,8 +2054,16 @@ pub(crate) fn rewrite_styled_block(
                     spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
                     state.char_spacing,
                     state.word_spacing,
+                    stretch_share,
+                    state.vertical,
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
+                // `source_show` emits the stretched word spacing at each space of this run, so the
+                // next run and the underline follow the spacing, not the cached natural width.
+                if stretch {
+                    let spaces_in_segment = string.matches(' ').count() as f64;
+                    segment_width += spaces_in_segment * (justified_measure - w).max(0.0) / space_count as f64;
+                }
             }
             // A space reassigned onto a neighbour keeps that neighbour's grouping key, and its
             // own style for the underline. Stroke each run of one underline style separately.

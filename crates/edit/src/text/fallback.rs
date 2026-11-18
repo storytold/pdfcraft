@@ -720,7 +720,7 @@ pub(crate) fn source_space(doc: &Document, fonts: &Dict, metrics: &Metrics) -> f
 
 pub(crate) fn source_width(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> f64 {
     if let Some(bytes) = metrics.encode(text) {
-        // PDF word spacing applies only to single-byte code 32, even for a Unicode space.
+        // Word spacing applies only to the single-byte code 32 (§9.3.3), even for a Unicode space.
         return metrics
             .codes(&bytes)
             .iter()
@@ -754,25 +754,71 @@ pub(super) fn source_character_advance(metrics: &Metrics, ch: char, size: f64, c
     Some(metrics.codes(&bytes).iter().map(|(code, _)| metrics.width(*code) * size + char_spacing).sum())
 }
 
-pub(crate) fn source_show(metrics: &Metrics, text: &str, size: f64, space: f64, char_spacing: f64, word_spacing: f64) -> Result<Vec<Op>, EditError> {
-    if let Some(bytes) = metrics.encode(text) {
-        return Ok(vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])]);
-    }
-    let adjustment = -1000.0 * (space + (char_spacing + word_spacing) / size);
-    if !adjustment.is_finite() {
-        return Err(EditError::Invalid("the source font's space advance is invalid".into()));
-    }
+/// `word_spacing` is what a single-byte code 32 space takes through `Tw` (the source's own word
+/// spacing plus the justification stretch); `space_stretch` is the stretch a space shown any other
+/// way takes through an explicit displacement, since `Tw` does not reach it. `vertical` is the
+/// font's `/DW2` w1 when its CMap writes vertically (§9.7.4.3): the displacement then moves the
+/// pen along the column by `w1`, not along the baseline by the glyph's width.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn source_show(
+    metrics: &Metrics,
+    text: &str,
+    size: f64,
+    space: f64,
+    char_spacing: f64,
+    word_spacing: f64,
+    space_stretch: f64,
+    vertical: Option<f64>,
+) -> Result<Vec<Op>, EditError> {
     let mut out = Vec::new();
-    for (i, word) in text.split(' ').enumerate() {
-        if i > 0 {
-            out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
+    let mut explicit = false;
+    if let Some(bytes) = metrics.encode(text) {
+        if space_stretch != 0.0
+            && metrics.codes(&bytes).iter().any(|&(code, len)| !metrics.is_space(code, len) && metrics.text_of(code).as_deref() == Some(" "))
+        {
+            explicit = true;
+            let mut array: Vec<Object> = Vec::new();
+            let mut chunk: Vec<u8> = Vec::new();
+            let mut cursor = 0;
+            for (code, len) in metrics.codes(&bytes) {
+                if !metrics.is_space(code, len) && metrics.text_of(code).as_deref() == Some(" ") {
+                    if !chunk.is_empty() {
+                        array.push(Object::String(PdfString::literal(std::mem::take(&mut chunk))));
+                    }
+                    let advance = vertical.unwrap_or_else(|| metrics.width(code));
+                    let adjustment = -1000.0 * (advance + (char_spacing + space_stretch) / size);
+                    if !adjustment.is_finite() {
+                        return Err(EditError::Invalid("the source font's space advance is invalid".into()));
+                    }
+                    array.push(pdfcraft_content::num(adjustment));
+                } else {
+                    chunk.extend_from_slice(&bytes[cursor..cursor + len]);
+                }
+                cursor += len;
+            }
+            if !chunk.is_empty() {
+                array.push(Object::String(PdfString::literal(chunk)));
+            }
+            out.push(Op::new("TJ", vec![Object::Array(array)]));
+        } else {
+            return Ok(vec![Op::new("Tj", vec![Object::String(PdfString::literal(bytes))])]);
         }
-        if !word.is_empty() {
-            let bytes = metrics.encode(word).ok_or_else(|| EditError::Invalid("the source font cannot show the replacement text".into()))?;
-            out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+    } else {
+        let adjustment = -1000.0 * (space + (char_spacing + word_spacing) / size);
+        if !adjustment.is_finite() {
+            return Err(EditError::Invalid("the source font's space advance is invalid".into()));
+        }
+        for (i, word) in text.split(' ').enumerate() {
+            if i > 0 {
+                out.push(Op::new("TJ", vec![Object::Array(vec![pdfcraft_content::num(adjustment)])]));
+            }
+            if !word.is_empty() {
+                let bytes = metrics.encode(word).ok_or_else(|| EditError::Invalid("the source font cannot show the replacement text".into()))?;
+                out.push(Op::new("Tj", vec![Object::String(PdfString::literal(bytes))]));
+            }
         }
     }
-    if out.iter().any(|op| op.is("Tj")) {
+    if explicit || out.iter().any(|op| op.is("Tj")) {
         let logical = crate::bidi::to_logical(&if metrics.visual_order { crate::indic::to_logical(text) } else { text.to_owned() });
         let mut properties = Dict::new();
         properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&logical)));
@@ -826,5 +872,45 @@ mod tests {
         assert_eq!(runs[1], Type3Run { name: "PCLat".into(), bytes: vec![2], spacing: Some(0.0) }, "the selector draws at spacing zero");
         let runs = type3_encode(&fallback, "\u{FE0F}").expect("a lone selector keeps its empty glyph rather than failing");
         assert_eq!(runs, vec![Type3Run { name: "PCLat".into(), bytes: vec![2], spacing: Some(0.0) }]);
+    }
+
+    /// Review round 6 on #7343: in a vertical font the explicit displacement of a two-byte space
+    /// moves the pen along the column by the font's w1, not across the baseline by the glyph's
+    /// width, and keeps the logical text (§9.4.4, §9.7.4.3).
+    #[test]
+    fn a_vertical_fonts_space_moves_the_pen_along_its_column() {
+        let mut doc = crate::tests::text_page("BT ET");
+        let unicode = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"1 begincodespacerange <0000> <ffff> endcodespacerange 3 beginbfchar <0020> <0020> <0041> <0041> <0042> <0042> endbfchar",
+        )));
+        let font = Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Font")),
+            (b"Subtype".to_vec(), Object::name("Type0")),
+            (b"BaseFont".to_vec(), Object::name("SyntheticCID")),
+            (b"Encoding".to_vec(), Object::name("Identity-H")),
+            (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+            (
+                b"DescendantFonts".to_vec(),
+                Object::Array(vec![Object::Dict(Dict::from_iter([
+                    (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+                    (b"DW".to_vec(), Object::Int(600)),
+                ]))]),
+            ),
+        ]);
+        let m = Metrics::from_dict(&doc, &font);
+        let out = source_show(&m, "A B", 10.0, 0.33, 0.0, 0.0, 1.0, Some(-0.88)).unwrap();
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(out[0].is("BDC") && out[2].is("EMC"), "the logical text keeps the space: {out:?}");
+        let properties = out[0].operands[1].as_dict().unwrap();
+        assert_eq!(properties.get(b"ActualText").and_then(|o| o.as_string()).map(|s| s.to_text()), Some("A B".to_string()), "{out:?}");
+        assert!(out[1].is("TJ"), "{out:?}");
+        // w1 −0.88 plus the 1 pt stretch over 10 pt: the pen moves 8.8 down and 1 further.
+        let array = out[1].operands[0].as_array().unwrap();
+        assert_eq!(array.iter().filter(|o| o.as_f64() == Some(780.0)).count(), 1, "{out:?}");
+        // Across the baseline, the space's own width takes the stretch instead.
+        let out = source_show(&m, "A B", 10.0, 0.33, 0.0, 0.0, 1.0, None).unwrap();
+        let array = out.iter().find(|o| o.is("TJ")).map(|o| o.operands[0].as_array().unwrap().clone()).unwrap();
+        assert_eq!(array.iter().filter(|o| o.as_f64() == Some(-700.0)).count(), 1, "{out:?}");
     }
 }
