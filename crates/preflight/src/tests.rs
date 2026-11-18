@@ -2508,3 +2508,36 @@ fn unreadable_content_is_reported_for_inline_images() {
     // Readable content says nothing.
     assert!(interpolation_said(&drawing("0 0 1 1 re f", "", &[])).is_empty());
 }
+
+/// An inline image whose parameters can't be read, or a content part that is there but can't be
+/// read, may hold an interpolated image: the report says the content was not read in full. A
+/// part that isn't there holds nothing.
+#[test]
+fn unreadable_inline_images_and_content_parts_are_reported() {
+    let unreadable = ["Some content could not be read for inline images"];
+    // The stray `7` leaves the image's parameters unreadable.
+    assert_eq!(interpolation_said(&drawing("q BI /W 1 /H 1 /BPC 8 /CS /G /I true 7 ID x EI Q", "", &[])), unreadable);
+    // An interpolated image that was read is still reported as such.
+    let content = "BI /W 1 /H 1 /CS /G /BPC 8 /I true ID \u{0} EI q BI /W 1 /H 1 /BPC 8 /CS /G 7 ID x EI Q";
+    assert_eq!(interpolation_said(&drawing(content, "", &[])), ["An inline image asks to be interpolated"]);
+    // A page whose second part is an object that is there but can't be read.
+    let content = "0 0 1 1 re f";
+    let first = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let page = |parts: &str| {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Contents [{parts}] >>");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            page.as_str(),
+            first.as_str(),
+            "<< /Odd Key(x) >>",
+        ];
+        build(&objs, "")
+    };
+    let doc = page("4 0 R 5 0 R");
+    assert!(doc.try_get(5).is_err(), "the fixture's object 5 can't be read");
+    assert_eq!(interpolation_said(&doc), unreadable);
+    // Parts that aren't there: an unknown object, and the unreadable one at a generation it
+    // doesn't have.
+    assert!(interpolation_said(&page("4 0 R 9 0 R 5 1 R")).is_empty());
+}

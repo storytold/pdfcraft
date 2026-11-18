@@ -625,9 +625,23 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
     let mut found = InlineImages::default();
     let mut budget = pdfcraft_cos::DecodeBudget::new(max, usize::MAX);
     let interpolates = |image: &Dict| [b"I".as_slice(), b"Interpolate"].iter().any(|k| matches!(image.get(k), Some(Object::Bool(true))));
-    // Only content with the `BI` operator holds inline images: the rest isn't parsed.
-    let holds = |data: &[u8]| {
-        data.windows(2).any(|w| w == b"BI") && pdfcraft_content::ops(data).any(|op| op.inline.as_ref().is_some_and(|(image, _)| interpolates(image)))
+    // Only content with the `BI` operator holds inline images: the rest isn't parsed. An inline
+    // image whose parameters the parser cannot read, or whose end it guesses, may be such an image
+    // (or hide one after it), so the content then counts as not read in full.
+    let holds = |data: &[u8], found: &mut InlineImages| {
+        if !data.windows(2).any(|w| w == b"BI") {
+            return false;
+        }
+        let mut ops = pdfcraft_content::ops(data);
+        let interpolated = ops.by_ref().any(|op| op.inline.as_ref().is_some_and(|(image, _)| interpolates(image)));
+        found.incomplete |= ops.ambiguous_images() > 0;
+        interpolated
+    };
+    // A part that is there but cannot be read may hold such an image; one that isn't there (a
+    // reference to a free or unknown object, or at a generation the object doesn't have) is
+    // null (ISO 32000-2 7.3.10) and holds nothing.
+    let part = |r: ObjRef| {
+        if doc.accepted_generations(r.num).contains(&r.generation) { doc.try_get(r.num) } else { Ok(std::sync::Arc::new(Object::Null)) }
     };
     // Each page's `/Contents`, its parts joined; pages sharing the same parts are read once.
     let mut sequences = std::collections::HashSet::new();
@@ -645,7 +659,11 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
         }
         let mut data = Vec::new();
         for r in parts {
-            let Object::Stream(s) = &*doc.get(r) else { continue };
+            let Ok(o) = part(r) else {
+                found.incomplete = true;
+                continue;
+            };
+            let Object::Stream(s) = &*o else { continue };
             // The document's parameters, given by reference too; a stream damaged partway gives
             // what decoded before the damage, and the rest may hold such an image.
             match budget.decode_with_damage(doc, s, usize::MAX) {
@@ -659,7 +677,7 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
                 Err(_) => found.incomplete = true,
             }
         }
-        if holds(&data) {
+        if holds(&data, &mut found) {
             found.interpolate = true;
             return found;
         }
@@ -681,7 +699,7 @@ fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max:
         match budget.decode_with_damage(doc, s, usize::MAX) {
             Ok((data, damaged)) => {
                 found.incomplete |= damaged;
-                if holds(&data) {
+                if holds(&data, &mut found) {
                     found.interpolate = true;
                     return found;
                 }
