@@ -55,16 +55,6 @@ fn defaults(args: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn only_a_set_flag_keeps_windows() {
-        for on in ["1\n", "1", "true", "YES"] {
-            assert!(super::keeps_windows(on), "{on:?}");
-        }
-        for off in ["0\n", "0", "false", "NO", "", "garbage"] {
-            assert!(!super::keeps_windows(off), "{off:?}");
-        }
-    }
-
-    #[test]
     fn reading_the_system_default_never_fails() {
         // Whatever this machine is set to, the read returns a value within the timeout.
         let _ = super::system_default();

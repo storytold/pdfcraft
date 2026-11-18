@@ -7,11 +7,11 @@
 //! format". Handling it ourselves needs Objective-C class declarations, i.e. `unsafe`, which this
 //! workspace forbids. The audited `fmv-macos-events` crate (also used by PhotoCraft) wraps exactly
 //! that, an `NSAppleEventManager` handler registered before Finder's launch event that leaves
-//! winit's delegate alone, behind a safe main-thread API. This module adapts it to the
-//! [`OsEvent`]s that the UI polls every frame.
+//! winit's delegate alone, behind a safe main-thread API. This module forwards its events to the
+//! app's file intake and quit handling.
 
+use craft::platform::open::IntakeSender;
 use fmv_macos_events::{Event, Inbox, Registration};
-use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
 pub struct AppleEvents {
@@ -27,20 +27,27 @@ impl AppleEvents {
         Self { _registration: registration, inbox }
     }
 
-    /// The queue the UI drains (`PdfCraftApp::os_events`); events arriving later wake `ctx`.
-    pub fn connect(&self, ctx: &egui::Context) -> OsEventsFn {
-        let ctx = ctx.clone();
-        self.inbox.set_wake(move || ctx.request_repaint());
+    /// Forwards the events to the app: opened documents go to `sender`, a quit goes to the quit
+    /// menu's handler on `ctx`. Events arriving later wake `ctx`.
+    ///
+    /// The inbox belongs to the main thread (it is not `Send`, and drains inside its own wake
+    /// would borrow it twice), so the returned function does the forwarding: the frame calls it
+    /// once per frame on the main thread.
+    // PLAN: pdf-hub-w1 calls the returned function once per frame (it replaces the `OsEventsFn` poll).
+    pub fn connect(&self, sender: IntakeSender, ctx: &egui::Context) -> Box<dyn Fn()> {
+        let wake = ctx.clone();
+        self.inbox.set_wake(move || wake.request_repaint());
         let inbox = self.inbox.clone();
+        let ctx = ctx.clone();
         Box::new(move || {
-            inbox
-                .drain()
-                .into_iter()
-                .map(|e| match e {
-                    Event::Open(paths) => OsEvent::Open(paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect()),
-                    Event::Quit => OsEvent::Quit,
-                })
-                .collect()
+            for event in inbox.drain() {
+                match event {
+                    Event::Open(paths) => sender.open(paths),
+                    Event::Quit => {
+                        craft::quit::on_menu_event(&ctx, craft::quit::QUIT_MENU_ID);
+                    }
+                }
+            }
         })
     }
 }
