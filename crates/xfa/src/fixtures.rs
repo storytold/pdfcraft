@@ -854,6 +854,19 @@ pub fn shell(xdp: &str) -> Vec<u8> {
     assemble(objs)
 }
 
+/// [`shell`] with `/XFA` as an array of named packets, each in a stream of its own.
+pub fn array_shell(packets: &[(&str, &str)]) -> Vec<u8> {
+    let refs: Vec<String> = packets.iter().enumerate().map(|(i, (name, _))| format!("({name}) {} 0 R", i + 5)).collect();
+    let mut objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA [{}] /Fields [] >> >>", refs.join(" ")).into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    objs.extend(packets.iter().map(|(_, text)| format!("<< /Length {} >>\nstream\n{text}\nendstream", text.len()).into_bytes()));
+    assemble(objs)
+}
+
 /// [`shell`] with usage rights: the catalog's `/Perms` holds a `/UR3` signature (a stand-in
 /// dictionary, nothing verifies it), beside `others` (`/DocMDP 6 0 R`, say: object 6 is a
 /// signature dictionary too). `indirect` puts `/Perms` in an object of its own.

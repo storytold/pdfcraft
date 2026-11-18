@@ -8006,3 +8006,25 @@ two"
         assert_eq!(tree, before, "{structured}");
     }
 }
+
+#[test]
+fn an_array_forms_data_is_read_from_its_datasets_packet() {
+    let xdp_open = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\">";
+    let template = "<template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template>";
+    let data = |datasets: &str| -> Option<String> {
+        let pdf = fixtures::array_shell(&[("preamble", xdp_open), ("template", template), ("datasets", datasets), ("postamble", "</xdp:xdp>")]);
+        let doc = Document::open(Arc::new(pdf)).unwrap();
+        let whole = crate::read_packets(&doc).unwrap().and_then(|p| parse_datasets(&p.xdp));
+        let d = crate::data_of(&doc);
+        assert_eq!(d, whole, "the same tree as from the whole XDP");
+        d?.text_at(&som_to_path("form1[0].name[0]")).map(str::to_string)
+    };
+    let own =
+        "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form1><name>Ada</name></form1></xfa:data></xfa:datasets>";
+    assert_eq!(data(own).as_deref(), Some("Ada"));
+    // The prefix is declared on the XDP envelope only, as some producers write it.
+    assert_eq!(data("<xfa:datasets><xfa:data><form1><name>Bo &amp; Cy</name></form1></xfa:data></xfa:datasets>").as_deref(), Some("Bo & Cy"));
+    // No template packet: no data, as before.
+    let pdf = fixtures::array_shell(&[("datasets", own)]);
+    assert_eq!(crate::data_of(&Document::open(Arc::new(pdf)).unwrap()), None);
+}
