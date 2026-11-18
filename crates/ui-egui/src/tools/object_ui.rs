@@ -3,16 +3,20 @@
 
 use std::collections::HashMap;
 
-use egui::{Color32, Pos2, Rect, Stroke};
+use craft::behavior::CursorIcon;
+use craft::behavior::hit::HitShape;
+use craft::behavior::item_marquee::MarqueeSelect;
+use craft::behavior::kurbo::BezPath;
+use craft::behavior::press::{PressPhase, PressStart};
+use craft::pages::ui::PageBody;
+use craft::ui::canvas_controls::SelectionOutline;
+use craft::ui::contract::Show as _;
+use egui::{Pos2, Rect, Ui, Vec2};
 use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageToolContext, PageXform};
-use crate::page_cursor::Layer;
-use crate::page_keys::PageKeys;
-use crate::page_router::{Hit, ObjectsPart, Owner, PagePress};
-
-const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+use crate::canvas::{DocView, PageXform};
+use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
 
 #[derive(Default)]
 pub(crate) struct ObjectSelection {
@@ -20,31 +24,16 @@ pub(crate) struct ObjectSelection {
     cache: HashMap<usize, Result<Vec<EditableObject>, String>>,
     page: Option<usize>,
     selected: Vec<EditableObject>,
-    gesture: Option<Gesture>,
     /// Expected geometry after our own edit, for remapping indexes that grouping can change.
     pending: Option<Vec<EditableObject>>,
     pub notice: Option<String>,
-    pub hold_editor: bool,
     input_blocked: bool,
     /// A paragraph (page, block) to select once the document is at hand: Esc in the inline
     /// editor asks for it, and the next `prepare` selects it.
     select_paragraph: Option<(usize, usize)>,
 }
 
-#[derive(Clone, Copy)]
-struct Gesture {
-    start: Pos2,
-    now: Pos2,
-    marquee: bool,
-    additive: bool,
-}
-
 impl ObjectSelection {
-    /// Clear any object-selection gesture.
-    pub(crate) fn cancel_pointer_gesture(&mut self) {
-        self.gesture = None;
-    }
-
     pub fn count(&self) -> usize {
         self.selected.len()
     }
@@ -87,25 +76,21 @@ impl ObjectSelection {
         self.input_blocked
     }
 
-    /// The objects selected together are on `page`, or a gesture of theirs runs there: the hover
-    /// outlines of what lies under them wait.
+    /// The objects selected together are on `page`: the hover outlines of what lies under them wait.
     pub(crate) fn holds(&self, page: usize) -> bool {
-        self.page == Some(page) && (!self.selected.is_empty() || self.gesture.is_some())
+        self.page == Some(page) && !self.selected.is_empty()
     }
 
     /// A preview belongs to the active, focused document. Returning from another tab or a
     /// modal must not turn a release that happened elsewhere into a document edit.
     pub fn set_input_blocked(&mut self, blocked: bool) {
         self.input_blocked = blocked;
-        if blocked {
-            self.gesture = None;
-        }
     }
 
-    fn clear(&mut self) {
+    /// Forget the selection.
+    pub(crate) fn clear(&mut self) {
         self.page = None;
         self.selected.clear();
-        self.gesture = None;
         self.pending = None;
         self.select_paragraph = None;
     }
@@ -117,8 +102,7 @@ impl ObjectSelection {
         self.select_paragraph = Some((page, block));
     }
 
-    pub fn prepare(&mut self, doc: &Document, enabled: bool, ctx: &egui::Context, keys: PageKeys) {
-        self.hold_editor = false;
+    pub fn prepare(&mut self, doc: &Document, enabled: bool) {
         if !enabled {
             self.clear();
             return;
@@ -126,7 +110,6 @@ impl ObjectSelection {
         let generation = doc.edit_generation();
         if self.generation != Some(generation) {
             self.cache.clear();
-            self.gesture = None;
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, expected)| {
                 let inventory = doc.editable_objects(page).ok()?;
@@ -156,10 +139,6 @@ impl ObjectSelection {
             // A refused edit keeps the generation and the original selection.
             self.pending = None;
         }
-        if self.page.is_some() && keys.take(ctx, egui::Key::Escape) {
-            self.clear();
-        }
-        // After the Escape check: the Esc that closed the editor must not clear what it selected.
         if let Some((page, block)) = self.select_paragraph.take()
             && let Ok(objects) = self.inventory(doc, page)
             && let Some(object) = objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
@@ -194,17 +173,6 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
-/// A menu is open (the page's, or another popup): the objects selected together leave the pointer
-/// alone, and a press with Shift or ⌘ is not theirs.
-pub(crate) fn menu_open(ui: &egui::Ui, resp: &egui::Response) -> bool {
-    resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx())
-}
-
-/// Whether `modifiers` make a press add to the objects selected together, or take from them.
-pub(crate) fn adds(modifiers: egui::Modifiers) -> bool {
-    modifiers.shift || modifiers.ctrl || modifiers.command
-}
-
 fn single(view: &DocView, page: usize) -> Option<ObjectTarget> {
     if let Some((_, index)) = view.content.selected.filter(|(p, _)| *p == page) {
         Some(ObjectTarget { kind: ObjectKind::Added, index })
@@ -219,7 +187,6 @@ fn leave_single(view: &mut DocView) {
     view.content.selected = None;
     view.image_selection = None;
     view.line_editor = None;
-    view.block_drag = None;
 }
 
 /// ⌘A in Edit a PDF: every object on the current page selected together, as Acrobat selects
@@ -241,23 +208,6 @@ pub(crate) fn select_all(view: &mut DocView, doc: &Document) {
     }
 }
 
-/// What of the objects lies under `p` on `page`: the objects selected together (a drag moves
-/// them), or the frame around the paragraph open for typing (`open`: its box on screen), which
-/// takes hold of the box as in Acrobat: a click selects it, a drag moves it, its text keeps the
-/// caret.
-pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, p: Pos2) -> Option<Hit> {
-    // Past the page's edge is no object's: the next page lies there.
-    if !xf.rect.contains(p) {
-        return None;
-    }
-    let s = &view.objects;
-    if s.page == Some(page) && !s.selected.is_empty() && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
-    {
-        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection }, Layer::Placed, egui::CursorIcon::Move));
-    }
-    open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
-}
-
 /// The object under `p` among the page's `objects`: added content over text over pictures, so a
 /// page-sized background picture does not hide editable labels or added notes, and within each
 /// kind the last, as the single-item tools take it.
@@ -268,313 +218,272 @@ fn object_at(xf: &PageXform, info: &DocInfo, page: usize, objects: &[EditableObj
         .map(|o| o.target)
 }
 
-/// What a press with Shift or ⌘ at `p` takes on `page` in Edit text, whatever lies there: the
-/// object under it among the page's `objects` ([`ObjectSelection::inventory`]), which it adds to
-/// the objects selected together or takes out of them, or none, where it starts an area selection
-/// that adds to them. Held while text being typed is open, and refused on a page whose objects
-/// can't be selected together. `None` off the page and outside the pages' visible area (`clip`).
-pub(crate) fn modified_hit(
-    view: &DocView,
-    xf: &PageXform,
-    info: &DocInfo,
-    page: usize,
-    objects: &Result<Vec<EditableObject>, String>,
-    clip: Rect,
-    p: Pos2,
-) -> Option<Hit> {
-    if !xf.rect.contains(p) || !clip.contains(p) {
-        return None;
-    }
-    let part = if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
-        ObjectsPart::Held
-    } else {
-        match objects {
-            Ok(objects) => ObjectsPart::Toggle(object_at(xf, info, page, objects, p)),
-            Err(_) => ObjectsPart::Refused,
-        }
-    };
-    Some(Hit::new(Owner::Objects { part }, Layer::Editor, egui::CursorIcon::Default))
-}
-
-/// The objects selected together, on one page, told what the press is to it (`press`). Returns
-/// true while they own the interaction: while input is blocked, while a press with Shift or ⌘ is
-/// held ([`modified_hit`]), and while objects on this page are selected or a gesture of theirs
-/// runs. Ordinary presses on a paragraph, a picture or added content still reach their own tools.
-/// A text draft is finished or discarded through its editor.
-pub(crate) fn page_input(cx: PageToolContext<'_>, press: PagePress, view: &mut DocView) -> bool {
-    let PageToolContext { ui, resp, ptr, page, .. } = cx;
-    if view.objects.input_blocked {
-        return true;
-    }
-    if menu_open(ui, resp) {
+/// A press with Shift or ⌘ at `p` on `page`, whatever lies there: the object under it among the
+/// page's objects joins the objects selected together or leaves them. Returns whether the press was
+/// taken: by that toggle, by the notice that text being typed must be finished first, or by the
+/// notice that the page's objects can't be selected together. `false` where no object lies (the
+/// press starts an area selection that adds to them) and off the page.
+pub(crate) fn modified_press_at(view: &mut DocView, doc: &Document, info: &DocInfo, page: usize, xf: &PageXform, p: Pos2) -> bool {
+    if !xf.rect.contains(p) {
         return false;
-    }
-    match press {
-        // Text being typed keeps the keyboard, and its editor stays open, until the button is up.
-        PagePress::Mine(Owner::Objects { part: ObjectsPart::Held }) => {
-            view.objects.hold_editor = true;
-            if ptr.pressed().is_some() {
-                view.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
-            }
-            return true;
-        }
-        PagePress::Mine(Owner::Objects { part: ObjectsPart::Refused }) => {
-            if ptr.pressed().is_some() {
-                view.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
-            }
-            return true;
-        }
-        _ => {}
     }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
-        return false;
-    }
-    // Delete or Backspace removes the selected objects on this page as one edit,
-    // like Edit::DeletePages removes pages. The key is consumed even when the pointer
-    // is off the page, because canvas keys belong to the selection while it exists.
-    if view.objects.page == Some(page)
-        && !view.objects.selected.is_empty()
-        && view.objects.gesture.is_none()
-        && view.pending_edit.is_none()
-        && !ui.ctx().egui_wants_keyboard_input()
-    {
-        let deleted = cx.keys.take(ui.ctx(), egui::Key::Delete) || cx.keys.take(ui.ctx(), egui::Key::Backspace);
-        if deleted {
-            view.pending_edit = Edit::delete_objects(page, view.objects.selected.iter().map(|o| o.target).collect());
-            return true;
-        }
-    }
-    let mut selection = std::mem::take(&mut view.objects);
-    let result = input(&mut selection, cx, press, view);
-    view.objects = selection;
-    result
-}
-
-fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, view: &mut DocView) -> bool {
-    let PageToolContext { ui, resp, xf, ptr, page, doc, .. } = cx;
-    let pointer = ptr.pos;
-    let (pressed, down) = (ptr.pressed().is_some(), ptr.primary_down);
-    let info = &doc.info;
-    if s.page == Some(page)
-        && let Some(mut gesture) = s.gesture
-    {
-        if let Some(p) = pointer {
-            gesture.now = p;
-        }
-        if !down {
-            if !gesture.marquee && gesture.start.distance(gesture.now) <= 3.0 && resp.double_clicked() {
-                s.clear();
-                return false;
-            }
-            s.gesture = None;
-            if gesture.marquee {
-                let area = Rect::from_two_pos(gesture.start, gesture.now).intersect(xf.rect);
-                if !gesture.additive {
-                    s.selected.clear();
-                }
-                if area.width() > 3.0
-                    && area.height() > 3.0
-                    && let Ok(objects) = s.inventory(doc, page)
-                {
-                    let candidates: Vec<_> = objects.into_iter().filter(|o| area.intersects(screen(xf, info, page, o))).collect();
-                    let mut selected = s.selected.clone();
-                    for object in candidates {
-                        if !selected.iter().any(|o| o.target == object.target) {
-                            selected.push(object);
-                        }
-                    }
-                    if selected.len() <= MAX_MOVE_OBJECTS {
-                        s.selected = selected;
-                    } else {
-                        s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
-                    }
-                }
-                if s.selected.is_empty() {
-                    s.clear();
-                }
-            } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
-                let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
-                match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
-                    Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
-                    Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
-                }
-            }
-        } else {
-            s.gesture = Some(gesture);
-        }
-        view.cursor.claim(Layer::Drag, if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
+        view.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
-        return s.page == Some(page) && !s.selected.is_empty();
+    let objects = match view.objects.inventory(doc, page) {
+        Ok(objects) => objects,
+        Err(_) => {
+            view.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
+            return true;
+        }
     };
-    // Nor a press another page holds, on the row of pixels pages share with the gaps hidden: it may
-    // have just selected something there.
-    if !pressed || press == PagePress::Elsewhere {
-        return s.page == Some(page) && !s.selected.is_empty();
-    }
-    let Ok(objects) = s.inventory(doc, page) else { return false };
-    // What the press was on ([`hit`], [`modified_hit`]).
-    match press {
-        // With Shift or ⌘: the object it was on joins the selection or leaves it, and on none an
-        // area selection adds to it.
-        PagePress::Mine(Owner::Objects { part: ObjectsPart::Toggle(target) }) => {
-            if s.page != Some(page) {
-                s.clear();
-                s.page = Some(page);
-                if let Some(single) = single(view, page)
-                    && let Some(object) = objects.iter().find(|o| o.target == single)
-                {
-                    s.selected.push(object.clone());
-                }
-            }
-            match target.and_then(|t| objects.iter().find(|o| o.target == t)) {
-                Some(object) => {
-                    if let Some(index) = s.selected.iter().position(|o| o.target == object.target) {
-                        s.selected.remove(index);
-                    } else if s.selected.len() < MAX_MOVE_OBJECTS {
-                        s.selected.push(object.clone());
-                    } else {
-                        s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
-                    }
-                }
-                None => s.gesture = Some(Gesture { start: p, now: p, marquee: true, additive: true }),
-            }
-            leave_single(view);
-            view.current = page;
-            return true;
-        }
-        // The selection moves.
-        PagePress::Mine(Owner::Objects { part: ObjectsPart::Selection }) => {
-            s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
-            return true;
-        }
-        // The frame of the paragraph open for typing selects its box (for the arrow keys) and
-        // moves it.
-        PagePress::Mine(Owner::Objects { part: ObjectsPart::Frame }) => {
-            if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
-                && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
-            {
-                s.clear();
-                s.page = Some(page);
-                s.selected.push(object.clone());
-                s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
-                leave_single(view);
-                view.current = page;
-                return true;
-            }
-        }
-        _ => {}
-    }
-    s.clear();
-    // A press on something (a paragraph, its edge reaching past its box #2276, a picture, added
-    // content) is its own; only one nobody holds starts an area selection.
-    if press != PagePress::Free {
+    let Some(object) = object_at(xf, info, page, &objects, p).and_then(|t| objects.iter().find(|o| o.target == t)) else {
         return false;
+    };
+    if view.objects.page != Some(page) {
+        let single = single(view, page).and_then(|t| objects.iter().find(|o| o.target == t)).cloned();
+        view.objects.clear();
+        view.objects.page = Some(page);
+        view.objects.selected.extend(single);
+    }
+    let s = &mut view.objects;
+    if let Some(index) = s.selected.iter().position(|o| o.target == object.target) {
+        s.selected.remove(index);
+    } else if s.selected.len() < MAX_MOVE_OBJECTS {
+        s.selected.push(object.clone());
+    } else {
+        s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
     }
     leave_single(view);
-    s.page = Some(page);
-    s.gesture = Some(Gesture { start: p, now: p, marquee: true, additive: false });
     view.current = page;
     true
 }
 
-/// Whether `p` is on the frame drawn around a paragraph open for typing (`r`, screen): just
-/// outside the text, where a press would otherwise close the paragraph.
-fn on_frame(r: Rect, p: Pos2) -> bool {
-    r.expand(2.0 + crate::edit_text_ui::FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
+/// A press with Shift or ⌘ on an object of its page: the object joins the selection or leaves it.
+/// Called before the families' handlers, since a modified press is the objects' whatever lies under it.
+/// Returns whether the press was taken.
+// PLAN: contract A-6 gives `Option<Edit>`; a modified press never makes an edit and the caller needs to know it was taken
+pub(crate) fn modified_press(view: &mut DocView, doc: &Document, info: &DocInfo, press: &PagePress) -> bool {
+    let Some(xf) = view.page_xform(press.page) else { return false };
+    match press.phase.start() {
+        Some(start) if matches!(press.phase, PressPhase::Down { .. }) => modified_press_at(view, doc, info, press.page, &xf, start.origin),
+        _ => false,
+    }
 }
 
-/// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
-/// as in Acrobat. They are taken before the view turns the page with them.
-pub(crate) fn nudge_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, doc: &Document) {
-    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
+/// An area selection begins on `page`: the single selections of the families let go. The sweep itself is the
+/// press's span, read from each pass's press phase.
+pub(crate) fn begin_marquee(view: &mut DocView, page: usize) {
+    leave_single(view);
+    view.current = page;
+}
+
+/// The swept rectangle on screen while the press `phase` drags, whatever it started from.
+pub(crate) fn marquee_rect(phase: &PressPhase) -> Option<Rect> {
+    match phase {
+        PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => Some(Rect::from_two_pos(start.origin, *pos)),
+        _ => None,
+    }
+}
+
+/// The area selection that began at `start` ends at `pos`: what it swept becomes the selection as its mode
+/// says (Shift adds, ⌘ or Ctrl toggles, none replaces), when it is over 3 points each way. A smaller sweep
+/// (a click) sweeps nothing: it clears the selection, or with Shift or ⌘ leaves it as it was. A double click
+/// within 3 points clears. More than [`MAX_MOVE_OBJECTS`] keeps the selection and says so.
+pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, start: PressStart, pos: Pos2) {
+    let Some((page, xf)) = view.page_xforms().into_iter().find(|(_, xf)| xf.rect.contains(start.origin)) else { return };
+    let base = view.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
+    let mut sweep = MarqueeSelect::begin(start.origin, start.mods, base);
+    sweep.update(pos);
+    let rect = sweep.rect();
+    if start.clicks >= 2 && rect.min.distance(rect.max) <= 3.0 {
+        view.objects.clear();
         return;
     }
-    let image = view.image_selection.as_ref().filter(|s| !s.dragging()).map(|s| (s.page, s.index));
-    let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
-    let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
-    let Some(xf) = view.page_xform(page) else { return };
-    use egui::Key;
-    let mut step = egui::Vec2::ZERO;
-    // Only an arrow pressed alone or with Shift, judged by each press's own modifiers (the
-    // frame's can differ when a key is let go in the same frame). Alt+← / Alt+→ go back and
-    // forward through the view history (#3632) and Ctrl/⌘+← / → turn the page, both in
-    // `canvas::shortcuts`.
-    keys.take_presses(ctx, |key, modifiers| {
-        if modifiers.alt || modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
-            return false;
+    let Ok(objects) = view.objects.inventory(doc, page) else {
+        view.objects.clear();
+        return;
+    };
+    let area = rect.intersect(xf.rect);
+    let sweeps = area.width() > 3.0 && area.height() > 3.0;
+    let items = objects.iter().filter(|_| sweeps).map(|o| (o.target, screen(&xf, info, page, o)));
+    let targets = sweep.selection(items);
+    if targets.len() > MAX_MOVE_OBJECTS {
+        view.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into());
+        return;
+    }
+    let selected: Vec<EditableObject> = targets.iter().filter_map(|t| objects.iter().find(|o| o.target == *t).cloned()).collect();
+    view.objects.clear();
+    if !selected.is_empty() {
+        view.objects.page = Some(page);
+        view.objects.selected = selected;
+    }
+}
+
+/// The four strips round `r` (screen, a paragraph open for typing) where a press would otherwise
+/// close the paragraph: just outside the text, up to the frame's reach.
+fn frame_band(r: Rect) -> [Rect; 4] {
+    let inner = r.expand(2.0);
+    let outer = r.expand(2.0 + crate::edit_text_ui::FRAME_REACH);
+    [
+        Rect::from_min_max(outer.min, Pos2::new(outer.max.x, inner.min.y)),
+        Rect::from_min_max(Pos2::new(outer.min.x, inner.max.y), outer.max),
+        Rect::from_min_max(Pos2::new(outer.min.x, inner.min.y), Pos2::new(inner.min.x, inner.max.y)),
+        Rect::from_min_max(Pos2::new(inner.max.x, inner.min.y), Pos2::new(outer.max.x, inner.max.y)),
+    ]
+}
+
+/// `rect` (screen) as a closed path in document units, through the canvas's view.
+fn outline_path(body: &PageBody<'_>, rect: Rect) -> BezPath {
+    let [a, b, c, d] = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()].map(|p| body.view.to_doc(p));
+    let mut path = BezPath::new();
+    path.move_to(a);
+    path.line_to(b);
+    path.line_to(c);
+    path.line_to(d);
+    path.close_path();
+    path
+}
+
+/// The paragraph open for typing on `page` with no changes yet: its frame takes hold of the box.
+fn open_block(view: &DocView, page: usize) -> Option<usize> {
+    view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
+}
+
+/// The controls of the objects selected together on each page shown: an outline per object (and one
+/// round them all when there are several), a part per object that a drag moves, and the frame band
+/// of the paragraph open for typing. A drag shows the outlines offset by this pass's `presses` of the parts;
+/// its release is [`objects_press`]'s.
+// PLAN: contract A-6 has no `presses` parameter; the live drag offset is read from the pass's presses of the
+// parts (pdf-canvas-w9 calls this with the `PagePress`es `PageParts` reported)
+pub(crate) fn object_controls(
+    ui: &mut Ui,
+    body: &PageBody<'_>,
+    view: &mut DocView,
+    doc: &Document,
+    info: &DocInfo,
+    presses: &[PagePress],
+) -> Option<Edit> {
+    for placed in body.pages {
+        let page = placed.page;
+        let Some(xf) = view.page_xform(page) else { continue };
+        if let Some(block) = open_block(view, page)
+            && let Ok(objects) = view.objects.inventory(doc, page)
+            && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        {
+            for band in frame_band(screen(&xf, info, page, object)) {
+                PagePart::new(Owner::Frame { block }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move).show(ui);
+            }
         }
-        let direction = match key {
-            Key::ArrowLeft => egui::vec2(-1.0, 0.0),
-            Key::ArrowRight => egui::vec2(1.0, 0.0),
-            Key::ArrowUp => egui::vec2(0.0, -1.0),
-            Key::ArrowDown => egui::vec2(0.0, 1.0),
-            _ => return false,
-        };
-        step += direction * if modifiers.shift { 10.0 } else { 1.0 };
-        true
-    });
-    if step == egui::Vec2::ZERO {
-        return;
+        let s = &view.objects;
+        if s.page != Some(page) || s.selected.is_empty() {
+            continue;
+        }
+        let offset = presses
+            .iter()
+            .filter(|p| p.page == page && matches!(p.owner, Owner::Objects | Owner::Frame { .. }))
+            .find_map(|p| match &p.phase {
+                PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => Some(*pos - start.origin),
+                _ => None,
+            })
+            .unwrap_or(Vec2::ZERO);
+        let rects: Vec<Rect> = s.selected.iter().map(|o| screen(&xf, info, page, o)).collect();
+        let shown: Vec<BezPath> = rects.iter().map(|r| outline_path(body, r.translate(offset))).collect();
+        SelectionOutline::solid(tl!("Selected object"), &shown).show(ui);
+        if rects.len() > 1 {
+            let union = rects.iter().fold(Rect::NOTHING, |u, r| u.union(*r)).translate(offset).expand(4.0);
+            let group = [outline_path(body, union)];
+            SelectionOutline::faint(tl!("Selected objects"), &group).show(ui);
+        }
+        for rect in rects {
+            PagePart::new(Owner::Objects, page, HitShape::Rect(rect), PageLayer::Placed).cursor(CursorIcon::Move).show(ui);
+        }
     }
+    None
+}
+
+/// A press of a part [`object_controls`] registered: the objects selected together, or the frame of
+/// the paragraph open for typing, which selects its box and moves it. The drag shows the move; the
+/// release past 3 points returns it as one edit, and one within 3 changes nothing.
+pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, press: &PagePress) -> Option<Edit> {
+    let page = press.page;
+    match press.phase {
+        PressPhase::Down { .. } => {
+            if let Owner::Frame { block } = press.owner {
+                let object = view
+                    .objects
+                    .inventory(doc, page)
+                    .ok()
+                    .and_then(|objects| objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block }));
+                let object = object?;
+                view.objects.clear();
+                view.objects.page = Some(page);
+                view.objects.selected.push(object);
+                leave_single(view);
+                view.current = page;
+            }
+            None
+        }
+        PressPhase::Release { start, pos, .. } => {
+            if start.origin.distance(pos) <= 3.0 || view.pending_edit.is_some() {
+                return None;
+            }
+            let xf = view.page_xform(page)?;
+            let (a, b) = (xf.screen_to_view(start.origin), xf.screen_to_view(pos));
+            match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
+                Ok(offset) => Some(view.objects.move_by(page, offset)),
+                Err(_) => {
+                    view.objects.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into());
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
+    // `info` is the page geometry every press handler takes; the move itself needs none.
+}
+
+/// An arrow key moves the selected objects, else the selected picture, a point (`far`: ten points), as
+/// in Acrobat. `direction` is a unit vector on screen. Nothing while an edit waits to be applied.
+pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bool) -> Option<Edit> {
+    if view.pending_edit.is_some() {
+        return None;
+    }
+    let image = view.image_selection.as_ref().map(|s| (s.page, s.index));
+    let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty());
+    let page = objects.or(image.map(|(page, _)| page))?;
+    let xf = view.page_xform(page)?;
+    let step = direction * if far { 10.0 } else { 1.0 };
     // A point on screen, whatever the zoom and the view's rotation: one screen pixel's step in
     // view space, at unit length.
     let c = xf.rect.center();
-    let unit = |d: egui::Vec2| {
+    let unit = |d: Vec2| {
         let (a, b) = (xf.screen_to_view(c), xf.screen_to_view(c + d));
         let v = egui::vec2(b.0 - a.0, b.1 - a.1);
-        if v.length() > 0.0 { v / v.length() } else { egui::Vec2::ZERO }
+        if v.length() > 0.0 { v / v.length() } else { Vec2::ZERO }
     };
     let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
-    let Ok(offset) = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]) else { return };
+    let offset = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]).ok()?;
     if objects.is_some() {
-        view.pending_edit = Some(view.objects.move_by(page, offset));
-    } else if let Some((page, index)) = image
-        && let Some(r) = doc.page_images(page).get(index).map(|im| im.rect)
-    {
-        let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
-        view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Move(rect) });
+        return Some(view.objects.move_by(page, offset));
     }
+    let (page, index) = image?;
+    let r = doc.page_images(page).get(index).map(|im| im.rect)?;
+    let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
+    Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Move(rect) })
 }
 
-/// Delete (or Backspace) removes the selected objects, as in Acrobat: a paragraph selected by its
-/// frame, or everything an area selection took, goes at once instead of one typed character at a
-/// time.
-pub(crate) fn delete_keys(ctx: &egui::Context, keys: PageKeys, view: &mut DocView) {
-    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() || view.objects.gesture.is_some() {
-        return;
+/// Delete removes the selected objects, as in Acrobat: a paragraph selected by its frame, or
+/// everything an area selection took, goes at once instead of one typed character at a time.
+pub(crate) fn delete(view: &DocView) -> Option<Edit> {
+    if view.pending_edit.is_some() {
+        return None;
     }
-    let Some(page) = view.objects.page.filter(|_| !view.objects.selected.is_empty()) else { return };
-    use egui::Key;
-    if !(keys.take(ctx, Key::Delete) || keys.take(ctx, Key::Backspace)) {
-        return;
-    }
+    let (page, targets) = view.objects.selection()?;
     // The selection stays until the edit applies: `prepare` clears it when the document changes,
     // and a refused delete (text used as a clipping path) leaves it selected.
-    view.pending_edit = Edit::delete_objects(page, view.objects.selected.iter().map(|o| o.target).collect());
-}
-
-pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
-    if selection.page != Some(page) {
-        return;
-    }
-    let delta = selection.gesture.filter(|g| !g.marquee).map_or(egui::Vec2::ZERO, |g| g.now - g.start);
-    let mut union = Rect::NOTHING;
-    for object in &selection.selected {
-        let rect = screen(xf, info, page, object).translate(delta);
-        painter.rect_filled(rect, 0.0, BLUE.gamma_multiply(0.05));
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.5, BLUE), egui::StrokeKind::Outside);
-        union = union.union(rect);
-    }
-    if selection.selected.len() > 1 {
-        painter.rect_stroke(union.expand(4.0), 0.0, Stroke::new(1.0, BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
-    }
-    if let Some(g) = selection.gesture.filter(|g| g.marquee) {
-        let area = Rect::from_two_pos(g.start, g.now).intersect(xf.rect);
-        painter.rect_filled(area, 0.0, BLUE.gamma_multiply(0.08));
-        painter.rect_stroke(area, 0.0, Stroke::new(1.0, BLUE), egui::StrokeKind::Outside);
-    }
+    Edit::delete_objects(page, targets)
 }
 
 /// Keep the UI refusal actionable and translated; headless callers retain the detailed error.
@@ -609,65 +518,5 @@ mod tests {
     fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
         assert!(matches!(Edit::delete_objects(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
         assert!(Edit::delete_objects(0, Vec::new()).is_none());
-    }
-
-    /// Selecting content objects on a page and pressing Delete must queue one edit that removes
-    /// them: `page_input` selects and moves content objects but never consumes Delete or
-    /// Backspace, so pressing Delete currently does nothing (issue #3780).
-    #[test]
-    fn delete_key_removes_selected_object() {
-        use crate::canvas::page_pointer::PagePointer;
-        use crate::{PdfCraftApp, canvas::ViewDefaults};
-        use pdfcraft_engine::{DocId, ImageEdit};
-        use pdfcraft_render::PageInfo;
-
-        let mut app = PdfCraftApp::new();
-        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
-        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
-        let doc = app.session.get(app.views[0].id).unwrap();
-
-        let info = pdfcraft_render::DocInfo {
-            pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
-            ..Default::default()
-        };
-        let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
-        view.objects.page = Some(0);
-        view.objects.selected.push(EditableObject {
-            target: ObjectTarget { kind: ObjectKind::Image, index: 0 },
-            rect: [50.0, 60.0, 100.0, 110.0],
-            content_type: "image",
-            text: None,
-        });
-
-        let ctx = egui::Context::default();
-        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)), rot: 0, pw: 800.0, ph: 600.0 };
-        let ptr = PagePointer { pos: None, ..Default::default() };
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                events: vec![egui::Event::Key {
-                    key: egui::Key::Delete,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ui| {
-                let resp = ui.interact(ui.available_rect_before_wrap(), egui::Id::unique("page"), egui::Sense::click());
-                page_input(
-                    PageToolContext { ui, resp: &resp, xf: &xf, ptr: &ptr, page: 0, doc, info: &info, keys: Default::default() },
-                    PagePress::Free,
-                    &mut view,
-                );
-            },
-        );
-        output.textures_delta.clear();
-
-        assert!(
-            matches!(&view.pending_edit, Some(Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete })),
-            "pressing Delete with one object selected must queue that object's deletion as one edit"
-        );
     }
 }
