@@ -182,7 +182,28 @@ impl PdfCraftApp {
             .or_else(|| self.run_edit_command(id, active))
             .or_else(|| self.run_form_command(id, active))
             .or_else(|| self.run_secure_command(id, active))
+            .or_else(|| self.run_assistant_command(id))
             .unwrap_or(false)
+    }
+
+    /// All tools ▸ AI assistant (Summarize, Ask about this document, Translate): this copy's local
+    /// assistant answers them in its side panel. Choosing one is the person turning it on.
+    fn run_assistant_command(&mut self, id: &str) -> Option<bool> {
+        let what = id.strip_prefix("ai.")?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.assistant.request(what) {
+                return None;
+            }
+            self.right = Some(crate::RightPanel::Assistant);
+            Some(true)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = what;
+            self.notify("The assistant is available in the desktop app only.");
+            Some(false)
+        }
     }
 
     fn run_file_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {

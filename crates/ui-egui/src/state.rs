@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// The optional local document assistant: summaries and questions with page citations.
+    Assistant,
 }
 
 /// Quick-action bar tools (the vertical floating strip).

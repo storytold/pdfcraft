@@ -9831,11 +9831,11 @@ title = "AI provider interface (local model or own endpoint), off by default"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
+status = "partial"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/assistant/src/tests.rs::user_selected_answer_language_controls_questions_and_summaries"]
+notes = "Native read-only prototype with optional Ollama, compatible API, Claude Code and Codex; user-selected Spanish/English answers. Automation-tool registration and cross-platform acceptance pending; see crates/assistant/README.md."
 
 [[feature]]
 id = "misc.ai-summary"
@@ -9843,11 +9843,11 @@ title = "Summarize a document"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["ai.summary"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/assistant/src/tests.rs::user_selected_answer_language_controls_questions_and_summaries"]
+notes = "Native read-only prototype with optional Ollama, compatible API, Claude Code and Codex; user-selected Spanish/English answers. Automation-tool registration and cross-platform acceptance pending; see crates/assistant/README.md."
 
 [[feature]]
 id = "misc.ai-ask"
@@ -9855,11 +9855,11 @@ title = "Ask questions with citations to pages"
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["ai.ask"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/assistant/src/tests.rs::user_selected_answer_language_controls_questions_and_summaries"]
+notes = "Native read-only prototype with optional Ollama, compatible API, Claude Code and Codex; user-selected Spanish/English answers. Automation-tool registration and cross-platform acceptance pending; see crates/assistant/README.md."
 
 [[feature]]
 id = "misc.ai-conversational-edit"

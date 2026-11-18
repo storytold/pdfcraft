@@ -228,6 +228,8 @@ impl PdfCraftApp {
             sign_draft: None,
             presign: None,
             digital_ids: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            assistant: Default::default(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
             ocr_draft: ocr_ui::OcrDraft::default(),
@@ -593,6 +595,10 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.right != Some(crate::RightPanel::Assistant) {
+            self.assistant.cancel_running();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
         #[cfg(not(target_arch = "wasm32"))]

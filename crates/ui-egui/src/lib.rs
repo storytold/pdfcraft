@@ -88,6 +88,8 @@ use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
+mod assistant_ui;
 mod frame_guard;
 mod hooks;
 mod persist;
@@ -619,6 +621,8 @@ pub struct PdfCraftApp {
     pub(crate) presign: Option<(DocId, usize)>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) assistant: assistant_ui::AssistantState,
     /// Signatures panel: expanded entries (field names).
     pub sig_expanded: Vec<String>,
     /// Accessibility Checker: options, the last check, and rules skipped by hand.
