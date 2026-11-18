@@ -226,37 +226,7 @@ impl PageText {
         if inside.is_some() {
             return inside;
         }
-        // (glyph, distance, centre distance). `total_cmp` ranks NaN last, so a glyph with a broken
-        // box never wins over a real one.
-        let mut on_row: Option<(usize, f32, f32)> = None;
-        let mut any: Option<(usize, f32, f32)> = None;
-        let closer = |best: Option<(usize, f32, f32)>, d: f32, c: f32| best.is_none_or(|(_, b, bc)| d.total_cmp(&b).then(c.total_cmp(&bc)).is_lt());
-        for (i, g) in self.glyphs.iter().enumerate() {
-            let dx = if x < g.rect[0] {
-                g.rect[0] - x
-            } else if x > g.rect[2] {
-                x - g.rect[2]
-            } else {
-                0.0
-            };
-            let dy = if y < g.rect[1] {
-                g.rect[1] - y
-            } else if y > g.rect[3] {
-                y - g.rect[3]
-            } else {
-                0.0
-            };
-            let c = centre_distance(g);
-            if dy == 0.0 && closer(on_row, dx, c) {
-                on_row = Some((i, dx, c));
-            }
-            // Prefer the same line: vertical distance weighs more.
-            let d = dx + dy * 3.0;
-            if closer(any, d, c) {
-                any = Some((i, d, c));
-            }
-        }
-        match (on_row, any) {
+        match self.closest(x, y, |_, _| true) {
             // The point sits in the leading right beside another line (within half its height), and
             // a gutter parts it from the row level with it: that row is another column's.
             (Some((r, _, _)), Some((i, _, _))) if r != i => {
@@ -275,6 +245,120 @@ impl PageText {
             }
             (on_row, any) => on_row.or(any).map(|(i, _, _)| i),
         }
+    }
+
+    /// Of the glyphs `keep` passes, the one nearest to a view-space point in the row level with it,
+    /// and the nearest in any row, vertical distance weighing more: each as (glyph, distance,
+    /// centre distance), a tie going to the glyph whose centre is closer.
+    fn closest(&self, x: f32, y: f32, keep: impl Fn(usize, &TextGlyph) -> bool) -> (Option<Closest>, Option<Closest>) {
+        // `total_cmp` ranks NaN last, so a glyph with a broken box never wins over a real one.
+        let mut on_row: Option<Closest> = None;
+        let mut any: Option<Closest> = None;
+        let closer = |best: Option<Closest>, d: f32, c: f32| best.is_none_or(|(_, b, bc)| d.total_cmp(&b).then(c.total_cmp(&bc)).is_lt());
+        for (i, g) in self.glyphs.iter().enumerate().filter(|(i, g)| keep(*i, g)) {
+            let dx = if x < g.rect[0] {
+                g.rect[0] - x
+            } else if x > g.rect[2] {
+                x - g.rect[2]
+            } else {
+                0.0
+            };
+            let dy = if y < g.rect[1] {
+                g.rect[1] - y
+            } else if y > g.rect[3] {
+                y - g.rect[3]
+            } else {
+                0.0
+            };
+            let (cx, cy) = (g.quad.iter().map(|q| q[0]).sum::<f32>() / 4.0, g.quad.iter().map(|q| q[1]).sum::<f32>() / 4.0);
+            let c = (cx - x).powi(2) + (cy - y).powi(2);
+            if dy == 0.0 && closer(on_row, dx, c) {
+                on_row = Some((i, dx, c));
+            }
+            // Prefer the same line: vertical distance weighs more.
+            let d = dx + dy * 3.0;
+            if closer(any, d, c) {
+                any = Some((i, d, c));
+            }
+        }
+        (on_row, any)
+    }
+
+    /// Index of the glyph that a drag from glyph `anchor` reaches at a view-space point: the
+    /// nearest one ([`Self::nearest`]), except where that is across the gutter between the
+    /// anchor's column and the next column of running text and the pointer has not crossed that
+    /// gutter. Then it is the nearest glyph of the anchor's column: past the end of a line, below
+    /// a paragraph or beside a figure the pointer is still in its column, and in the gutter it
+    /// has not left it, until it is over the next column. The next column's line is often the
+    /// nearer text there, in the half of a gutter a few points wide and beside a line that falls
+    /// short of it, and would otherwise take the drag across (#2387). Between the cells of a
+    /// table the nearest glyph stays.
+    pub fn nearest_from(&self, anchor: usize, x: f32, y: f32) -> Option<usize> {
+        let hit = self.nearest(x, y)?;
+        Some(self.kept_in_column(anchor, hit, x, y).unwrap_or(hit))
+    }
+
+    /// The glyph of the anchor's column nearest to a point that has not crossed the gutter beside
+    /// that column, when [`Self::nearest`] found `hit` across it (see [`Self::nearest_from`]).
+    fn kept_in_column(&self, anchor: usize, hit: usize, x: f32, y: f32) -> Option<usize> {
+        let (a, h) = (self.glyphs.get(anchor)?, self.glyphs.get(hit)?);
+        // Over the next column's text the drag has gone there. The space that ends a line reaches
+        // into the gutter, and is not text to be over.
+        if quad_contains(&h.quad, x, y) && !h.text.trim().is_empty() {
+            return None;
+        }
+        // The hit's line lies wholly right or left of the anchor's: another column.
+        let ((a0, a1), (h0, h1)) = (self.line_span(anchor)?, self.line_span(hit)?);
+        let leftward = h0 >= a1;
+        if !leftward && h1 > a0 {
+            return None;
+        }
+        let (start, gap) = if leftward { (a0, (a1, h0)) } else { (h0, (h1, a0)) };
+        // The gutter between them, as the layout finds it ([`gutter_in`]) from the lines around the
+        // pointer or, where a figure, a formula or the end of a column leaves too few there, from
+        // those around where the drag began.
+        let lines = self.line_boxes();
+        let barcodes = self.barcode_lines();
+        let pieces = lines.iter().filter(|(l, _)| !barcodes.contains(l)).map(|(_, r)| Piece { x0: r[0], ink: r[2], cy: (r[1] + r[3]) / 2.0 });
+        let height = self.text_height()?;
+        let mut work = usize::MAX;
+        let (g0, g1) = [y, (a.rect[1] + a.rect[3]) / 2.0].into_iter().find_map(|cy| gutter_in(pieces.clone(), start, gap, cy, height, &mut work))?;
+        // Past the gutter the pointer is in the next column, beside its text there too.
+        let crossed = if leftward { x > g1 } else { x < g0 };
+        if crossed {
+            return None;
+        }
+        // The anchor's column: the glyphs on its side of the gutter, but for the lines that end
+        // before the anchor's line starts (or start after it ends), which are a column further on.
+        let middle = (g0 + g1) / 2.0;
+        let spans: HashMap<u32, (f32, f32)> = lines.iter().map(|&(l, r)| (l, (r[0], r[2]))).collect();
+        let in_column = |i: usize, g: &TextGlyph| {
+            ((g.rect[0] + g.rect[2]) / 2.0 < middle) == leftward
+                && self.line_of.get(i).and_then(|l| spans.get(l)).is_none_or(|&(l0, l1)| if leftward { l1 > a0 } else { l0 < a1 })
+        };
+        let (on_row, any) = self.closest(if leftward { x.min(g0) } else { x.max(g1) }, y, in_column);
+        on_row.or(any).map(|(i, _, _)| i)
+    }
+
+    /// Each line's visible text, in reading order: the line and the box around its ink.
+    fn line_boxes(&self) -> Vec<(u32, [f32; 4])> {
+        let mut lines: Vec<(u32, [f32; 4])> = Vec::new();
+        for (g, &l) in self.glyphs.iter().zip(&self.line_of).filter(|(g, _)| !g.text.trim().is_empty()) {
+            match lines.last_mut() {
+                Some((id, bb)) if *id == l => union(bb, &g.rect),
+                _ => lines.push((l, g.rect)),
+            }
+        }
+        lines
+    }
+
+    /// The height of the page's text: the median height of its visible glyphs. A heading or a
+    /// superscript under the pointer is not the measure of the columns around it.
+    fn text_height(&self) -> Option<f32> {
+        let mut heights: Vec<f32> =
+            self.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect[3] - g.rect[1]).filter(|h| *h > 0.0).collect();
+        heights.sort_by(f32::total_cmp);
+        heights.get(heights.len() / 2).copied()
     }
 
     /// The word around glyph `i` as its first and last glyph (double-click): it stops at word
@@ -535,10 +619,12 @@ impl PageText {
     }
 
     /// Whether a column gutter lies between `x0` and `x1` (either order) in the rows whose
-    /// centres lie between `top` and `bottom`: a vertical strip at least `width` wide that no
-    /// glyph of those rows crosses, with at least two lines of text on each side of it between
-    /// `x0` and `x1`, or beyond either when the strip reaches it (columns' baselines need not
-    /// line up). The gap a justified line leaves between two words has only that line beyond it.
+    /// centres lie between `top` and `bottom`, whose text is `width` high: a vertical strip at
+    /// least [`GUTTER_MIN`] heights wide that no glyph of those rows crosses, but for the spaces
+    /// that end a line, which reach into the gutter. At least two lines of text stand on each
+    /// side of it between `x0` and `x1`, or beyond either when the strip reaches it (columns'
+    /// baselines need not line up). The gap a justified line leaves between two words has only
+    /// that line beyond it.
     fn gutter_between(&self, x0: f32, x1: f32, top: f32, bottom: f32, width: f32) -> bool {
         self.gutter_strip(x0, x1, top, bottom, width).is_some()
     }
@@ -546,13 +632,26 @@ impl PageText {
     /// [`Self::gutter_between`]'s gutter, as its left and right edges.
     fn gutter_strip(&self, x0: f32, x1: f32, top: f32, bottom: f32, width: f32) -> Option<(f32, f32)> {
         let (lo, hi) = (x0.min(x1), x0.max(x1));
-        if !(hi - lo >= width && width > 0.0) {
+        // The narrowest strip that is a gutter: columns set close together are less than a line height apart (#2387).
+        let narrowest = width * GUTTER_MIN;
+        if !(hi - lo >= narrowest && width > 0.0) {
             return None;
         }
         let centre = |g: &TextGlyph| (g.rect[1] + g.rect[3]) / 2.0;
-        // The rows' glyphs as (centre, left, right), top to bottom.
-        let mut rows: Vec<(f32, f32, f32)> =
-            self.glyphs.iter().filter(|g| (top..=bottom).contains(&centre(g))).map(|g| (centre(g), g.rect[0], g.rect[2])).collect();
+        // The rows' glyphs as (centre, left, right), top to bottom, without the spaces that start or end a line:
+        // the space between two words is part of its line, the one after its last word reaches into the gutter.
+        let mut rows: Vec<(f32, f32, f32)> = Vec::new();
+        let mut i = 0;
+        while let Some(&line) = self.line_of.get(i) {
+            let end = i + self.line_of.get(i..).map_or(1, |rest| rest.iter().take_while(|l| **l == line).count()).max(1);
+            let glyphs = self.glyphs.get(i..end).unwrap_or_default();
+            let visible = |g: &TextGlyph| !g.text.trim().is_empty();
+            if let (Some(first), Some(last)) = (glyphs.iter().position(visible), glyphs.iter().rposition(visible)) {
+                let inner = glyphs.get(first..=last).unwrap_or_default();
+                rows.extend(inner.iter().filter(|g| (top..=bottom).contains(&centre(g))).map(|g| (centre(g), g.rect[0], g.rect[2])));
+            }
+            i = end;
+        }
         rows.sort_by(|a, b| a.0.total_cmp(&b.0));
         // Two lines of text on each side of the strip g0..g1: glyphs whose centres lie within half
         // a width of the previous one's (rows is sorted by centre) are on its line.
@@ -578,12 +677,12 @@ impl PageText {
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut covered = lo;
         for (s0, s1) in spans {
-            if s0 - covered >= width && parted(covered, s0) {
+            if s0 - covered >= narrowest && parted(covered, s0) {
                 return Some((covered, s0));
             }
             covered = covered.max(s1);
         }
-        (hi - covered >= width && parted(covered, hi)).then_some((covered, hi))
+        (hi - covered >= narrowest && parted(covered, hi)).then_some((covered, hi))
     }
 
     /// Whether the lines between `top` and `bottom` on each side of the gutter `g0..g1` are
@@ -751,6 +850,9 @@ impl PageText {
     }
 }
 
+/// A glyph near a point (`PageText::closest`): its index, its distance and its centre's distance.
+type Closest = (usize, f32, f32);
+
 /// Line heights above and below a point (or a one-row drag) looked over for a gutter.
 const GUTTER_ROWS: f32 = 4.0;
 /// The share of a row selection's visual rows that must have cells side by side for the rows to be
@@ -780,7 +882,7 @@ pub use layout::layout;
 #[cfg(test)]
 use layout::{from_upright, to_upright};
 use layout::{is_rtl, union};
-use order::barcode_rows;
+use order::{GUTTER_MIN, Piece, barcode_rows, gutter_in};
 #[cfg(test)]
 use order::{Run, Scratch, Seg, collide, restarts_run};
 

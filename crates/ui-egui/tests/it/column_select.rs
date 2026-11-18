@@ -213,6 +213,68 @@ fn a_drag_ending_between_the_columns_selects_the_rows() {
     assert_eq!(text(&h).as_deref(), Some("Name\nApple\nPear"));
 }
 
+/// Two columns of running text 9 pt apart, closer than a line is high, as a word processor's
+/// two-column layout sets them (#2387): five lines of 10 pt Courier each, 6 pt a glyph, the left
+/// column's fourth line a short one.
+fn narrow_columns() -> Vec<u8> {
+    let column = |x: u32, lines: &[&str]| {
+        let lines: String = lines.iter().map(|line| format!("({line}) Tj T* ")).collect();
+        format!("BT /F1 10 Tf 12 TL {x} 250 Td {lines}ET ")
+    };
+    let content = format!("{}{}", column(20, &NARROW_LEFT), column(179, &NARROW_RIGHT));
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+const NARROW_LEFT: [&str; 5] =
+    ["The left column of a page", "set in two columns whose", "lines sit level with each", "other one.", "narrower than a text line"];
+const NARROW_RIGHT: [&str; 5] =
+    ["while the right column of", "the page starts close by,", "nine points further along", "and reads after the whole", "left column has been read"];
+
+/// A drag down the left of two columns set 9 pt apart stays in its column until the pointer has
+/// crossed the gutter: in the half of the gutter nearer the right column, and in the white after
+/// a line that falls short of the gutter. The nearest glyph is the right column's there, and
+/// reading order would run on to it through the rest of the left column. Over the right
+/// column's text the drag does go there.
+#[test]
+fn a_drag_stays_in_its_column_until_the_pointer_crosses_a_narrow_gutter() {
+    let mut h = opened("columns.pdf", narrow_columns());
+    // The first glyph of each line, in reading order: the left column's lines, then the right one's.
+    let mut starts = Vec::new();
+    let mut glyphs = 0;
+    for line in NARROW_LEFT.iter().chain(&NARROW_RIGHT) {
+        starts.push(glyphs);
+        glyphs += line.len();
+    }
+    let rect = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_rect(0, g).expect("glyph on screen");
+    let from = glyph(&h, 0) - vec2(4.0, 0.0);
+    // The gutter, from the end of the left column's first line to the start of the right one's.
+    let (g0, g1) = (rect(&h, starts[1] - 1).right(), rect(&h, starts[5]).left());
+    // Level with a row: a sixth of the gutter before the right column's line, and in the white
+    // after the short fourth line, the gutter's width before the gutter.
+    for (row, x) in [(2, g1 - (g1 - g0) / 6.0), (3, g1 - (g1 - g0) / 6.0), (3, g0 - (g1 - g0))] {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(60);
+        let level = rect(&h, starts[5 + row]).center().y;
+        drag(&mut h, from, egui::pos2(x, level), Modifiers::NONE);
+        assert_eq!(text(&h), Some(NARROW_LEFT[..=row].join("\n")), "beside line {} at {x}", row + 1);
+    }
+    h.key_press(egui::Key::Escape);
+    h.run_steps(60);
+    let over = glyph(&h, starts[7]);
+    drag(&mut h, from, over, Modifiers::NONE);
+    assert_eq!(text(&h), Some([NARROW_LEFT.join("\n"), NARROW_RIGHT[..2].join("\n"), "n".into()].join("\n")), "over the right column");
+}
+
 /// Two article columns, the right one a line shorter: its last glyph, the end of reading order,
 /// sits above the left column's last line.
 fn uneven_columns() -> Vec<u8> {

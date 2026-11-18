@@ -830,7 +830,11 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
         && let Some(mut selection) =
             view.selection.filter(|selection| selection.page == gesture.page || (selecting && matches!(selection.span, Span::Run { .. })))
     {
-        let hit = text.nearest(gesture.vx, gesture.vy);
+        // On the page the drag started on it stays in its column until the pointer has crossed the gutter beside it.
+        let hit = match selection.span {
+            Span::Run { anchor, .. } if selection.page == gesture.page => text.nearest_from(anchor, gesture.vx, gesture.vy),
+            _ => text.nearest(gesture.vx, gesture.vy),
+        };
         match selection.span {
             Span::Run { .. } if clicks >= 2 => {
                 if let Some(hit) = hit {
