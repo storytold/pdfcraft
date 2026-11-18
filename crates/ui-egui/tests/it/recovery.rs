@@ -266,19 +266,24 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     let _ = Modifiers::NONE;
 }
 
-/// Extract pages, Summarize comments and Combine open their result as a new document, which isn't
-/// encrypted. Made from a password-protected PDF, its snapshot would hold the protected content in
-/// plain text, so it is not autosaved. Made from an unprotected PDF, it still is.
+/// Content of a PDF opened or unlocked with a non-empty password isn't encrypted once it leaves
+/// that document: Extract pages (also from such an extract or after the permissions password),
+/// Summarize comments, Combine, an attachment opened in its own tab, pages pasted elsewhere. None
+/// of these is autosaved. From an unprotected PDF, each is. An edited plain document in the same
+/// store is autosaved every time, so an empty store can't pass for an exclusion.
 #[test]
-fn documents_made_from_a_protected_pdf_are_not_autosaved() {
+fn content_of_a_protected_pdf_is_not_autosaved_in_plain_text() {
+    let mut leaks = Vec::new();
     for protected in [true, false] {
-        for how in ["extract", "summary", "combine"] {
+        for how in ["extract", "summary", "combine", "re-extract", "unlock", "attachment", "paste"] {
             let tag = format!("{how}-{protected}");
             let s = store(&format!("made-{tag}"));
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.enable_recovery(s.clone());
-            let source = if protected { encrypted(fixture(2), "pw") } else { fixture(2) };
+            // "unlock": no open password; the permissions password is entered once it is open.
+            let open_password = if how == "unlock" { "" } else { "pw" };
+            let source = if protected { encrypted(fixture(2), open_password) } else { fixture(2) };
             if how == "combine" {
                 app.use_files(FilePurpose::Combine, vec![("secret.pdf".into(), source), ("plain.pdf".into(), fixture(1))]);
                 if protected {
@@ -287,34 +292,54 @@ fn documents_made_from_a_protected_pdf_are_not_autosaved() {
                 app.combine_staged();
             } else {
                 app.open_bytes("secret.pdf", None, source).unwrap();
-                if protected {
+                if protected && how != "unlock" {
                     app.submit_password(Some("pw".into()));
                 }
-                assert_eq!(app.views.len(), 1, "{tag}");
-                if how == "extract" {
+                let id = app.views[0].id;
+                match how {
+                    "summary" => {
+                        let shape = Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment };
+                        let style = Style::default_for(&shape);
+                        let note = NewAnnotation { page: 0, shape, style, contents: "Secret note".into(), author: String::new() };
+                        assert!(app.apply_edit(Edit::AddAnnotation(note)), "{tag}");
+                        app.summarize_comments();
+                    }
+                    "attachment" => {
+                        assert!(app.apply_edit(Edit::AddAttachment { name: "inner.pdf".into(), bytes: fixture(1), description: None, mime: None }));
+                        app.attachment_action(id, 0, true);
+                        assert!(app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }), "{tag}");
+                    }
+                    _ => {
+                        if how == "unlock" {
+                            app.session.unlock(id, "owner").unwrap();
+                        }
+                        app.extract_selection();
+                    }
+                }
+                if how == "re-extract" {
                     app.extract_selection();
-                } else {
-                    let shape = Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment };
-                    let style = Style::default_for(&shape);
-                    let note = NewAnnotation { page: 0, shape, style, contents: "Secret note".into(), author: String::new() };
-                    assert!(app.apply_edit(Edit::AddAnnotation(note)), "{tag}");
-                    app.summarize_comments();
+                } else if how == "paste" {
+                    app.copy_pages(false);
+                    app.open_bytes("plain.pdf", None, fixture(1)).unwrap();
+                    app.paste_pages();
                 }
             }
             let (name, dirty) = app.views.last().and_then(|v| app.session.get(v.id)).map(|d| (d.name.clone(), d.dirty)).unwrap_or_default();
-            assert!(dirty && name != "secret.pdf", "{tag}: the new document opened ({name})");
+            assert!(dirty && name != "secret.pdf", "{tag}: the document holding the content is open and unsaved ({name})");
+            app.open_bytes("control.pdf", None, fixture(1)).unwrap();
+            assert!(app.apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }), "{tag}");
             app.autosave_now();
             let snapshots = s.list();
+            assert!(snapshots.iter().any(|m| m.name == "control.pdf"), "{tag}: the control document has no snapshot");
             if protected {
-                for m in &snapshots {
-                    assert!(m.encrypted, "{tag}: {} was autosaved in plain text", m.name);
-                }
+                leaks.extend(snapshots.iter().filter(|m| !m.encrypted && m.name != "control.pdf").map(|m| format!("{tag}: {}", m.name)));
             } else {
                 assert!(snapshots.iter().any(|m| m.name == name), "{tag}: {name} has no snapshot");
             }
             s.clear();
         }
     }
+    assert!(leaks.is_empty(), "autosaved in plain text: {leaks:?}");
 }
 
 /// #813: cancelling the password prompt of a recovered snapshot must not hand its path and

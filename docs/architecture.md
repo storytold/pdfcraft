@@ -51,9 +51,10 @@ The PDF object graph *is* the model (`crates/engine/README.md` §The editing mod
 4. Saves are incremental and atomic. A full rewrite happens only where it must: redaction, PDF/A
    conversion, print imposition, a changed password, Save As to another file (garbage-collected,
    unless the document is signed).
-5. Autosave and crash recovery keep encrypted documents encrypted, and never autosave a document
-   made from one (Extract pages, Summarize comments, Combine), which isn't. Signed documents are
-   protected from rewrites.
+5. Autosave and crash recovery keep encrypted documents encrypted, and never autosave an
+   unencrypted document that holds content of a PDF opened or unlocked with a non-empty password
+   (Extract pages, Summarize comments, Combine, an attachment, pasted pages). Signed documents
+   are protected from rewrites.
 
 ## Rendering and text
 

@@ -318,6 +318,7 @@ impl PdfCraftApp {
                 auth: 0,
                 notes: Vec::new(),
                 origin_note: note,
+                protected: open_doc.is_some_and(|d| self.holds_protected_content(d)),
                 open_doc,
                 checked: None,
             };
@@ -477,7 +478,7 @@ impl PdfCraftApp {
         let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> =
             files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone(), Some(f.range.clone()).filter(|r| !r.trim().is_empty()))).collect();
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
-        let from_protected = passwords.iter().flatten().any(|p| !p.is_empty());
+        let from_protected = files.iter().any(|f| f.protected || f.password().is_some_and(|p| !p.is_empty()));
         match self.session.combine_grouped(&sources, &groups, &passwords) {
             Ok(bytes) => {
                 self.close_combine_tab();

@@ -10,9 +10,10 @@
 //! asks where, starting at that path, and later saves write where the user chose (#3923).
 //!
 //! Encrypted documents are stored encrypted (the working file is), so recovery never writes
-//! plaintext of a protected document to disk. A document made from one (Extract pages, Summarize
-//! comments, Combine) isn't encrypted, so it is not autosaved at all. The web build has no
-//! recovery store yet.
+//! plaintext of a protected document to disk. A document that holds content of a PDF opened or
+//! unlocked with a non-empty password but isn't encrypted (Extract pages, Summarize comments,
+//! Combine, an attachment opened in a tab, pages pasted from one) is not autosaved at all. The
+//! web build has no recovery store yet.
 //!
 //! On Unix the folder is owner-only (`0o700`), so other accounts on the machine can't read the
 //! snapshots of documents that aren't encrypted.
@@ -365,6 +366,25 @@ impl PdfCraftApp {
                 // older snapshot to fall back on.
                 self.session.autosave_failed(snap.doc);
             }
+        }
+    }
+
+    /// Whether `doc` holds content of a PDF opened or unlocked with a non-empty password: it is
+    /// one (opened with its open password, or its permissions password entered), or it is kept out
+    /// of autosave for holding such content.
+    pub(crate) fn holds_protected_content(&self, doc: pdfcraft_engine::DocId) -> bool {
+        self.no_autosave.contains(&doc)
+            || self.session.get(doc).is_some_and(|d| {
+                // `password` is what the renderer opens it with: empty after the permissions password.
+                d.password.as_deref().is_some_and(|p| !p.is_empty()) || d.security_summary().is_some_and(|s| s.owner)
+            })
+    }
+
+    /// `doc` now holds content of `source` (an attachment of it, pages pasted from it): if that is
+    /// protected content, `doc` is not autosaved from now on.
+    pub(crate) fn takes_content_from(&mut self, doc: pdfcraft_engine::DocId, source: pdfcraft_engine::DocId) {
+        if self.holds_protected_content(source) {
+            self.no_autosave.insert(doc);
         }
     }
 

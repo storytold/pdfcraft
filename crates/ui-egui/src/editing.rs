@@ -801,6 +801,9 @@ impl PdfCraftApp {
             field_conflicts,
         }) {
             self.views[i].select_pages(&(at..at + count).collect::<Vec<_>>());
+            if let Some(id) = self.views.get(i).map(|v| v.id) {
+                self.takes_content_from(id, clip.from);
+            }
         }
     }
 
