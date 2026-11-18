@@ -1,8 +1,9 @@
 //! Push buttons run their actions (Reset form, Named, …) without a JavaScript engine.
 
+use craft::print::ui::HostedPrint;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// Two pages; page 1 has a text field "name" (filled), a Reset button, a Next page button and a
 /// Print button (a JavaScript one-liner).
@@ -70,8 +71,9 @@ fn buttons_reset_navigate_and_print() {
         assert!(doc.form.iter().find(|f| f.name == "name").unwrap().value.is_empty(), "Reset form cleared the field");
     }
     click_field(&mut h, "print");
-    assert_eq!(h.state().dialog, Some(Dialog::Print), "this.print() opens the Print dialog");
-    h.state_mut().dialog = None;
+    assert!(h.state().dialogs.is_open::<HostedPrint>(), "this.print() opens the Print dialog");
+    let ctx = h.ctx.clone();
+    h.state_mut().dialogs.cancel::<HostedPrint>(&ctx);
     h.run_steps(2);
     // A document's Save named action never writes the file unasked (PdfCraft's XFA buttons
     // use SaveAs, which opens the Save As dialog, as a script's `execMenuItem` does): the
