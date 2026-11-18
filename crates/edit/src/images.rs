@@ -1698,9 +1698,17 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
                     "grouped Form artwork can be moved, resized, rotated, flipped or deleted; replacing it with a bitmap is not supported".into(),
                 ));
             }
-            let name = format!("PCImg{}", r.num);
             let mut res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
             let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+            let base = format!("PCImg{}", r.num);
+            let mut name = base.clone();
+            let mut suffix = 0usize;
+            // Resource names need not match object numbers. Never redirect another placement
+            // using an occupied name, but reuse a name already pointing to this replacement.
+            while xo.get(name.as_bytes()).is_some_and(|o| o.as_ref() != Some(*r)) {
+                suffix = suffix.saturating_add(1);
+                name = format!("{base}{suffix}");
+            }
             xo.set(name.clone().into_bytes(), Object::Ref(*r));
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             resources = Some(res);
