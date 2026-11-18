@@ -31,6 +31,8 @@ pub enum Tool {
     Perimeter,
     Area,
     Calibrate,
+    /// Geospatial location: the latitude and longitude under the pointer on a map page.
+    Geo,
 }
 impl Tool {
     pub fn name(self) -> &'static str {
@@ -39,6 +41,7 @@ impl Tool {
             Self::Perimeter => "perimeter",
             Self::Area => "area",
             Self::Calibrate => "calibrate",
+            Self::Geo => "geo",
         }
     }
     pub fn from_name(s: &str) -> Option<Self> {
@@ -47,6 +50,7 @@ impl Tool {
             "perimeter" => Some(Self::Perimeter),
             "area" => Some(Self::Area),
             "calibrate" => Some(Self::Calibrate),
+            "geo" => Some(Self::Geo),
             _ => None,
         }
     }
@@ -60,6 +64,10 @@ impl Tool {
 }
 /// The snapping geometry of one page read by a queued job: (page, edit generation, geometry or why not).
 type PathsRead = (usize, u64, Result<measure::snap::Geometry, String>);
+/// Most pages whose geospatial registration is kept at once.
+const GEO_PAGES: usize = 4;
+/// A page's geospatial registration (or why it couldn't be read) as of an edit generation.
+type GeoCache = (usize, u64, Result<measure::geo::GeoPage, String>);
 
 pub struct MeasureView {
     pub points: Vec<Point>,
@@ -97,6 +105,12 @@ pub struct MeasureView {
     pending_read: Option<(usize, u64)>,
     /// Saved measurements per edit generation, for the panel.
     listing: Option<(u64, Result<measure::Listing, String>)>,
+    /// The geospatial registration of the last few pages pointed at or shown.
+    geo: Vec<GeoCache>,
+    /// The location under the pointer with the Geospatial location tool (none off a map).
+    pub location: Option<measure::geo::Location>,
+    /// The location last clicked with the Geospatial location tool.
+    pub pinned: Option<measure::geo::Location>,
 }
 impl Default for MeasureView {
     fn default() -> Self {
@@ -126,6 +140,9 @@ impl Default for MeasureView {
             reads: None,
             pending_read: None,
             listing: None,
+            geo: Vec::new(),
+            location: None,
+            pinned: None,
         }
     }
 }
@@ -294,6 +311,28 @@ fn start_read(state: &mut MeasureView, doc: &Document, page: usize, generation: 
     false
 }
 
+/// The geospatial registration of `page` as it is now, read once per edit.
+fn geo_of<'a>(geo: &'a mut Vec<GeoCache>, doc: &Document, page: usize) -> &'a Result<measure::geo::GeoPage, String> {
+    let generation = doc.edit_generation();
+    geo.retain(|(_, g, _)| *g == generation);
+    let index = match geo.iter().position(|(p, _, _)| *p == page) {
+        Some(i) => i,
+        None => {
+            if geo.len() >= GEO_PAGES {
+                drop(geo.remove(0));
+            }
+            geo.push((page, generation, doc.geo_page(page)));
+            geo.len() - 1
+        }
+    };
+    // `index` is in range: found above, or the entry just pushed.
+    match geo.get(index) {
+        Some((_, _, read)) => read,
+        None => &NO_GEO,
+    }
+}
+static NO_GEO: Result<measure::geo::GeoPage, String> = Ok(measure::geo::GeoPage { viewports: Vec::new() });
+
 /// Whether a click may place a point: with snapping on, not while the drawing is being read, as
 /// the point would land unsnapped.
 fn takes_clicks(state: &MeasureView) -> bool {
@@ -351,6 +390,10 @@ impl<'a> MeasureTool<'a> {
         let displayed = self.pages.to_page(page, screen)?;
         let mut point = self.pages.to_user(page, displayed);
         let mut snap = None;
+        // The Geospatial location tool reads the point as it is: no snapping, no 45-degree turn.
+        if self.tool == Tool::Geo {
+            return Some((page, point, None));
+        }
         if self.view.snap_enabled {
             let [vx, vy] = self.doc.measurement_to_view(page, point).ok()?;
             if let Some((snapped, kind)) =
@@ -400,10 +443,47 @@ impl<'a> MeasureTool<'a> {
     fn finish(&mut self, page: usize) {
         finish(self.view, &mut self.edit, self.doc, page, self.tool, &self.author, self.units);
     }
+
+    /// Where the page point under the pointer is on the Earth, if it is on a map.
+    fn geo_location(&mut self) -> Option<measure::geo::Location> {
+        let (page, point, _) = self.hover?;
+        match geo_of(&mut self.view.geo, self.doc, page) {
+            Ok(geo) => geo.locate(point),
+            Err(_) => None,
+        }
+    }
+
+    /// The latitude and longitude beside the pointer, on a panel so they read over map imagery.
+    fn paint_location(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        let (Some(style), Some(location), Some((page, point, _))) = (cx.style(), &self.view.location, self.hover) else { return };
+        if cx.pointer.is_none() {
+            return;
+        }
+        let Some(at) = self.pages.to_screen(page, self.pages.to_doc(page, point)) else { return };
+        let ink = style.color(style.tokens.color.text.normal);
+        let back = style.color(style.tokens.color.surface.canvas);
+        let line = cx.slop * 2.0;
+        let width = (cx.rect.right() - at.x - cx.slop * 2.0).clamp(0.0, 260.0);
+        let panel = egui::Rect::from_min_size(at + egui::vec2(cx.slop * 2.0, cx.slop * 2.0), egui::vec2(width, line * 2.0 + cx.slop));
+        draw.fill(&PaintShape::Rect(panel, egui::CornerRadius::same(3)), back);
+        let text_at = panel.min + egui::vec2(cx.slop * 0.5, cx.slop * 0.5);
+        for (i, text) in [&location.dms, &location.decimal].into_iter().enumerate() {
+            let top = text_at + egui::vec2(0.0, line * i as f32);
+            draw.text(egui::Rect::from_min_size(top, egui::vec2(width, line)), &TextRun::new(text.clone()).color(ink));
+        }
+    }
 }
 
 impl CanvasTool for MeasureTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        // The Geospatial location tool only reads the page, so it needs no permission: a click
+        // keeps the location under the pointer.
+        if self.tool == Tool::Geo {
+            self.hover = self.locate(pointer.pos, cx);
+            self.view.location = self.geo_location();
+            self.view.pinned = self.view.location.clone();
+            return ToolAction::Done;
+        }
         if !self.doc.allows_annotation() {
             return ToolAction::Ignored;
         }
@@ -455,11 +535,16 @@ impl CanvasTool for MeasureTool<'_> {
 
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         self.hover = self.locate(pointer.pos, cx);
+        if self.tool == Tool::Geo {
+            self.view.location = self.geo_location();
+            return;
+        }
         self.refresh_reading();
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
         self.view.cancel();
+        self.view.location = None;
         self.hover = None;
     }
 
@@ -492,6 +577,10 @@ impl CanvasTool for MeasureTool<'_> {
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        if self.tool == Tool::Geo {
+            self.paint_location(draw, cx);
+            return;
+        }
         let (Some(style), Some(page)) = (cx.style(), self.view.page) else { return };
         if self.view.points.is_empty() {
             return;
@@ -537,6 +626,9 @@ impl CanvasTool for MeasureTool<'_> {
     }
 
     fn command_form(&self) -> ToolPath {
+        if self.tool == Tool::Geo {
+            return ToolPath::Command("the measure_geo automation tool");
+        }
         ToolPath::Command("the Measure panel's Apply scale and Export commands")
     }
 }
@@ -644,6 +736,9 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     Field::new(tl!("Label")).id_salt("measure-label").show(ui, |ui, _| {
         TextField::new(tl!("Label"), Bind::bound(&mut state.label)).show(ui);
     });
+    if geo_section(ui, state, doc, page, current == Some(Tool::Geo)) {
+        tool = Some(Tool::Geo);
+    }
     Checkbox::new(Bind::bound(&mut state.snap_enabled)).label(tl!("Snap to drawing")).show(ui);
     if state.snap_enabled {
         Checkbox::new(Bind::bound(&mut state.snaps.endpoints)).label(tl!("Endpoints")).show(ui);
@@ -821,6 +916,66 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         export_csv(app);
     }
 }
+/// The Geospatial location part of the panel: the page's coordinate system, the location under
+/// the pointer and the one clicked. Shown while the tool is on, on a map page, or while a location
+/// is kept (it stays to copy). Whether the tool was picked.
+fn geo_section(ui: &mut egui::Ui, state: &mut MeasureView, doc: &Document, page: usize, on: bool) -> bool {
+    let mut systems: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut unusable: Vec<String> = Vec::new();
+    let (georeferenced, error) = match geo_of(&mut state.geo, doc, page) {
+        Ok(geo) => {
+            for v in &geo.viewports {
+                match &v.kind {
+                    measure::geo::ViewportKind::Geo(r) => {
+                        if !systems.contains(&r.crs.name) {
+                            systems.push(r.crs.name.clone());
+                        }
+                        if let Some(note) = r.note.as_ref().filter(|n| !notes.contains(n)) {
+                            notes.push(note.clone());
+                        }
+                    }
+                    measure::geo::ViewportKind::Unsupported(why) => unusable.push(why.clone()),
+                    measure::geo::ViewportKind::Other => {}
+                }
+            }
+            (geo.georeferenced(), None)
+        }
+        Err(e) => (false, Some(e.clone())),
+    };
+    if !on && !georeferenced && unusable.is_empty() && state.pinned.is_none() {
+        return false;
+    }
+    let picked = Button::new(tl!("Geospatial location")).show(ui).clicked() && !on;
+    if let Some(e) = error {
+        Notice::new(Tone::Bad, e).show(ui);
+    } else if !georeferenced {
+        Notice::new(Tone::Neutral, tl!("This page has no geospatial information.")).show(ui);
+    } else {
+        let mut lines = Vec::new();
+        if on {
+            lines.push(tl!("Point at the map to read its latitude and longitude. Click to keep a location.").to_string());
+        }
+        Notice::new(Tone::Neutral, crate::i18n::fmt(tl!("Coordinate system: {name}"), &[("name", &systems.join(", "))])).lines(lines).show(ui);
+        if !notes.is_empty() {
+            Notice::new(Tone::Warn, tl!("Approximate: the map's projection isn't supported yet.")).lines(notes).show(ui);
+        }
+    }
+    if !unusable.is_empty() {
+        Notice::new(Tone::Warn, crate::i18n::fmt(tl!("Unusable map areas: {n}"), &[("n", &unusable.len().to_string())])).lines(unusable).show(ui);
+    }
+    if let Some(l) = state.location.as_ref().filter(|_| on) {
+        Notice::new(Tone::Neutral, tl!("Under the pointer")).lines([l.dms.clone(), l.decimal.clone()]).show(ui);
+    }
+    if let Some(l) = &state.pinned {
+        Notice::new(Tone::Neutral, tl!("Kept location")).lines([l.dms.clone(), l.decimal.clone()]).show(ui);
+        if Button::new(tl!("Copy")).show(ui).clicked() {
+            ui.ctx().copy_text(l.decimal.clone());
+        }
+    }
+    picked
+}
+
 /// The saved measurements as the list's item source, keyed by position.
 struct MeasurementRows(usize);
 

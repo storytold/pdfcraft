@@ -4529,11 +4529,11 @@ title = "Geospatial location and measuring"
 area = "E"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["measure.geo"]
+tools = ["measure_geo"]
+evidence = ["crates/measure/src/geo/tests.rs::a_utm_viewport_is_fitted_in_the_projected_plane", "crates/measure/src/geo/tests.rs::utm_matches_the_published_example_and_round_trips", "crates/measure/src/geo/tests.rs::lambert_matches_snyders_worked_example_and_round_trips", "crates/measure/src/geo/tests.rs::unusable_geospatial_dictionaries_are_reported_with_a_reason", "crates/automation/tests/it/geo_location.rs::a_map_page_reports_latitude_and_longitude_both_ways", "crates/ui-egui/tests/it/geo_location.rs::pointing_at_a_map_reads_and_keeps_its_latitude_and_longitude"]
+notes = "Geospatial location: the Geospatial location tool shows the latitude and longitude (degrees-minutes-seconds and decimal) under the pointer on a page viewport with an ISO 32000-2 geospatial measure dictionary (/Subtype /GEO: GPTS, LPTS, Bounds, GCS by EPSG code or WKT 1/2), and a click keeps one to copy; measure_geo also finds the page point of a latitude and longitude. Transverse Mercator (UTM and WKT), Lambert Conformal Conic (1SP/2SP) and Web Mercator are fitted in the projected plane; other projections fall back to a direct latitude/longitude fit marked approximate. Partial: no geospatial distance/area measuring, no display in the DCS or other coordinate formats (UTM, MGRS), no Find a location search box in the UI, no georegistered images (an image XObject's /Measure, /PtData) or the older OGC/TerraGo LGIDict encoding, no datum transformation between systems, and interop with Acrobat- and GDAL-authored GeoPDFs is untested (synthetic fixtures only)."
 
 [[feature]]
 id = "comment.shared-review"
