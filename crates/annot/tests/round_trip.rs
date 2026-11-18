@@ -988,13 +988,7 @@ fn a_full_rewrite_into_object_streams_describes_the_same_comments_as_a_plain_tab
     assert_eq!(summaries(&plain).len(), summaries(&packed).len());
 
     // The plain-table output is bigger here: object streams compress, which is the point of them.
-    let opts = SaveOptions {
-        mod_date: None,
-        id_seed: 0x5052_494E_5443_5241,
-        object_streams: true,
-        drop_unlinked: false,
-            id_entropy: None,
-        };
+    let opts = SaveOptions { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None };
     let packed_bytes = pdfcraft_cos::write_full(&doc, &opts).expect("writes");
     assert!(
         packed_bytes.len() < pdfcraft_cos::write_full(&doc, &SaveOptions { object_streams: false, ..opts }).expect("writes").len(),
