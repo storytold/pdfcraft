@@ -515,7 +515,8 @@ mod tests {
         let mut host = NativeWindows::new(app());
         let mut child = app();
         child.copy_shared_settings_from(&host.root);
-        child.set_option("language", "fr").unwrap();
+        // Without craft-i18n only auto and en are offered; flip away from the helper's "en".
+        child.set_option("language", "auto").unwrap();
         child.set_option("theme", "dark").unwrap();
         child.set_option("date-format", "yyyy-mm-dd").unwrap();
         child.session.set_date_language(Some("fr")).unwrap();
@@ -541,7 +542,7 @@ mod tests {
         host.root.copy_shared_settings_from(&child);
         let mut next = app();
         next.copy_shared_settings_from(&host.root);
-        assert_eq!(next.language, "fr");
+        assert_eq!(next.language, "auto");
         assert_eq!(next.recent_limit, 7);
         assert_eq!(next.hotbar.tools, ["edit.edit_text"]);
         assert_eq!(next.hotbar.button_size, 48.0);
@@ -569,7 +570,7 @@ mod tests {
         let mut storage = Storage::default();
         host.save(&mut storage);
         let saved: serde_json::Value = serde_json::from_str(&eframe::Storage::get_string(&storage, "pdfcraft").unwrap()).unwrap();
-        assert_eq!(saved["language"], "fr");
+        assert_eq!(saved["language"], "auto");
         assert_eq!(saved["always_default_view"], true);
         assert_eq!(saved["organize_zoom"], 1.25);
         assert_eq!(saved["print_paper"], pdfcraft_engine::print::PAPERS[1].0);
