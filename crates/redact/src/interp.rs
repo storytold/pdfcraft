@@ -342,7 +342,8 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 /// predefined CMap that does (`V`, or a name ending in `-V`: Identity-V and the like), or an
 /// embedded CMap stream whose `/WMode`, given directly or by reference, is 1 (ISO 32000-2 §9.7.5).
 /// The redaction proof's text reader asks it too, so the two agree on which fonts write
-/// vertically.
+/// vertically where a font's `/Subtype` is given directly: the proof reads it as written before
+/// it asks.
 pub(crate) fn is_vertical(doc: &Document, font: &Dict) -> bool {
     // `/Subtype` may be written by reference (#6750).
     let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
