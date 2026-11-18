@@ -898,7 +898,9 @@ impl PdfCraftApp {
         let fields = opening_fields(&self.marks_draft, kind, &units);
         let base = self.marks_draft.clone();
         let heading = title(kind, replace);
-        let build = move |fields: &mut DialogFields| {
+        // Passed inline: a closure made apart from the call gets one lifetime for its argument and result.
+        // PLAN: assumed `self.dialogs: DialogHost`, `self.host`/`self.wake` (pdf-hub-w1 note 11)
+        let dialog = HostedParamDialog::new(ctx, dialog_key(kind), fields, move |fields: &mut DialogFields| {
             let mut draft = base.clone();
             read_fields(&mut draft, fields, kind, &units);
             let has_file = fields.text("file.path").is_some_and(|p| !p.is_empty());
@@ -928,9 +930,7 @@ impl PdfCraftApp {
                 dialog = dialog.ok_reason(reason.clone().into());
             }
             dialog
-        };
-        // PLAN: assumed `self.dialogs: DialogHost`, `self.host`/`self.wake` (pdf-hub-w1 note 11)
-        let dialog = HostedParamDialog::new(ctx, dialog_key(kind), fields, build);
+        });
         self.dialogs.open(dialog);
         self.marks_preview = Some(MarksPreview::new(kind, self.host.jobs_shared().clone(), self.wake.clone()));
     }

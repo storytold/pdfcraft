@@ -609,7 +609,7 @@ impl PreferencesModel for Prefs<'_> {
         self.host.run(ui);
         let answered = self.answers.lock().map(|mut queue| std::mem::take(&mut *queue)).unwrap_or_default();
         for (key, colour) in answered {
-            self.set_color(&key, colour.to_rgba());
+            self.set_color(&key, colour);
         }
     }
 

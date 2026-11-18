@@ -116,18 +116,37 @@ pub fn posted(ctx: &egui::Context) -> Vec<toast::Card> {
     toast::cards(ctx, &WindowKey::main())
 }
 
+/// Posts the notices and applies the progress requests queued since the last pass, in the order they were made.
+pub(crate) fn post_queued(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    // No PdfCraft notice sets a dismiss key, so nothing is ever silenced and the list is empty.
+    for notice in std::mem::take(&mut app.posted_notices) {
+        app.notices.post(ctx, &notice, &[]);
+    }
+    for request in std::mem::take(&mut app.progress_requests) {
+        apply(app, ctx, request);
+    }
+}
+
+/// The text of every card shown in `ctx` after the app's queue is posted into it, oldest first: a card's title, then its
+/// message.
+#[cfg(test)]
+pub(crate) fn texts(app: &mut PdfCraftApp, ctx: &egui::Context) -> Vec<String> {
+    post_queued(app, ctx);
+    posted(ctx)
+        .iter()
+        .map(|card| {
+            let title = card.toast.title.as_ref().map(|t| t.as_str().to_owned());
+            [title, Some(card.toast.message.as_str().to_owned())].into_iter().flatten().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n")
+        })
+        .collect()
+}
+
 /// Posts the queued notices, collects how the notices ended and acts on them: a progress card's Cancel reaches its
 /// job. Called once per pass. The ends are taken from the center's session state, so a second pass in the same frame
 /// sees none of the first's.
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    // No PdfCraft notice sets a dismiss key, so nothing is ever silenced and the list is empty.
-    for notice in std::mem::take(&mut app.posted_notices) {
-        app.notices.post(&ctx, &notice, &[]);
-    }
-    for request in std::mem::take(&mut app.progress_requests) {
-        apply(app, &ctx, request);
-    }
+    post_queued(app, &ctx);
     let ends = app.notices.clone().show(ui).ends;
     for end in ends {
         route(app, &end);

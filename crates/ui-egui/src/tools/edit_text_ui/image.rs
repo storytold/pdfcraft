@@ -7,11 +7,12 @@ use craft::draw::ui::transform::{RotateZone, TransformBox};
 use craft::imaging::ui::transform_preview::{PreviewMap, PreviewPixels, PreviewTextures, TransformPreview};
 use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::buttons::Button;
-use craft::ui::canvas::{CropOutside, CropOverlay};
+use craft::ui::canvas::{CropApply, CropOutside, CropOverlay};
 use craft::ui::canvas_controls::{SelectionOutline, TaskBar};
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
+use craft::ui::primitives::textures::TextureState;
 
 pub(crate) use pdfcraft_content::Matrix;
 
@@ -360,9 +361,12 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, pic
         }
         return None;
     }
-    // PLAN: framework gap F-9: `CropOverlayOutput::apply` does not say it was an away click, so the selection stays after one.
-    if done || shown.apply {
+    if done || shown.apply.is_some() {
         apply_crop_mode(view, image);
+        // A click away lets the selection go; Enter and a double click keep it.
+        if shown.apply == Some(CropApply::Away) {
+            view.session.image_selection = None;
+        }
     } else if (cancel || shown.discard)
         && let Some(s) = view.session.image_selection.as_mut()
     {

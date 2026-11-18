@@ -467,7 +467,7 @@ fn number<T: Value>(
             Mixed::Same(v) => Mixed::Same(Some(to(v))),
             _ => Mixed::Mixed,
         };
-        let mut field = NumberField::new(tl!(label).to_owned(), Bind::bound_mixed(&mut typed)).range(range);
+        let mut field = NumberField::new(tl!(label).to_owned(), Bind::bound_mixed(&mut typed)).range(range.clone());
         if let Some(unit) = unit {
             field = field.unit(unit);
         }

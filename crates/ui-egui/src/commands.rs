@@ -317,7 +317,7 @@ impl PdfCraftApp {
             .or_else(|| self.run_view_command(ctx, id, active))
             .or_else(|| self.run_page_command(ctx, id, active, targets))
             .or_else(|| self.run_edit_command(ctx, id, active))
-            .or_else(|| self.run_form_command(id, active))
+            .or_else(|| self.run_form_command(ctx, id, active))
             .or_else(|| self.run_secure_command(ctx, id, active))
             .unwrap_or(false)
     }
@@ -752,7 +752,7 @@ impl PdfCraftApp {
         Some(true)
     }
 
-    fn run_form_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
+    fn run_form_command(&mut self, ctx: &egui::Context, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "form.fields" => self.choose_right_panel(Some(RightPanel::Fields)),
             "form.calculation_order" => {
@@ -792,7 +792,7 @@ impl PdfCraftApp {
             }
             "sign.certify_invisible" => {
                 let page = active.and_then(|i| self.views.get(i)).map_or(0, |v| v.current());
-                self.start_signing(page, None, None, Some(2));
+                self.start_signing(ctx, page, None, None, Some(2));
             }
             "sign.validate" => {
                 let certs = self.session.trusted_certificates().to_vec();
@@ -810,10 +810,10 @@ impl PdfCraftApp {
                 if let Some((_, id)) = self.active_ids()
                     && self.session.get(id).is_some_and(|d| d.form.is_empty() && d.editable())
                 {
-                    self.detect_fields();
+                    self.detect_fields(ctx);
                 }
             }
-            "form.detect" => self.detect_fields(),
+            "form.detect" => self.detect_fields(ctx),
             "form.field.properties" => {
                 if let Some((name, w)) = active.and_then(|i| self.views[i].session.prepare.selected.clone()) {
                     crate::prepare::dialog::open(self, &name, w, crate::prepare::FieldTab::General);
@@ -897,7 +897,7 @@ impl PdfCraftApp {
                     }
                 }
             }
-            "redact.pages" => crate::redact_ui::dialogs::open_pages(self),
+            "redact.pages" => crate::redact_ui::dialogs::open_pages(self, ctx),
             "redact.search" => {
                 self.redact_search.found = None;
                 self.redact_search_open = true;

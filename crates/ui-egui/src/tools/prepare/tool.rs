@@ -137,7 +137,7 @@ impl<'a> PrepareTool<'a> {
         out
     }
 
-    fn finish_draw(&mut self, drag: PageBoxDrag, origin: Pos2) {
+    fn finish_draw(&mut self, mut drag: PageBoxDrag, origin: Pos2) {
         let Some(tool) = self.tool else { return };
         // PLAN: assumed `PageBoxDrag::release(min: f32) -> Option<(usize, Rect)>` (pdf-canvas-w18 note 7)
         let Some((page, rect)) = drag.release(CLICK_SIZE) else { return };
