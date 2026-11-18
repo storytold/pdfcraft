@@ -2004,6 +2004,11 @@ fn a_symbolic_type1_font_maps_through_its_built_in_glyph_names() {
             Some(name) => assert_eq!(found, [format!("Font {name} on page 1 doesn't map its characters to Unicode")], "{content}"),
         }
     }
+    // After the form that sets F2, the page's `<CA>` is F1's unreadable geqslant: both fonts are
+    // reported, F1 only if its font is back after `Do`.
+    let r = checked(&symbolic_type1_doc("BT /F1 12 Tf ET /Y Do BT <CA> Tj ET", math, other), &[Rule::CharacterEncoding]);
+    let found: Vec<&str> = r.result(Rule::CharacterEncoding).unwrap().findings.iter().map(|f| f.message.as_str()).collect();
+    assert_eq!(found, ["ABCDEF+Test-Math", "GHIJKL+Other-Math"].map(|name| format!("Font {name} on page 1 doesn't map its characters to Unicode")));
     // A program built on StandardEncoding has Latin names; one without an encoding has none, and
     // nor has a font whose program isn't embedded.
     let standard = checked(&symbolic_type1_doc("BT /F1 12 Tf (A) Tj ET", "/Encoding StandardEncoding def", other), &[Rule::CharacterEncoding]);
