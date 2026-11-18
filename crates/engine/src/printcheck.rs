@@ -281,7 +281,11 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
     for (i, page) in pages.iter().enumerate() {
         let page_no = (i + 1) as u32;
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
-            for image in placed {
+            // Placements are in user units, `/UserUnit` points each (as for the forms below).
+            let u = page.user_unit(doc);
+            for mut image in placed {
+                image.matrix = image.matrix.map(|v| v * u);
+                image.rect = image.rect.map(|v| v * u);
                 if let Some(ppi) = placed_ppi(&image) {
                     if let Some(object) = image.object {
                         seen.insert((page_no, object));
@@ -437,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn box_sizes_and_bleed_follow_the_pages_user_unit() {
+    fn box_sizes_bleed_and_images_follow_the_pages_user_unit() {
         let mut doc = Document::new_empty();
         let img = image(&mut doc, 600, 600);
         let p = page(&mut doc, "Im", img, "q 72 0 0 72 36 36 cm /Im Do Q");
@@ -446,7 +450,12 @@ mod tests {
             d.set(b"TrimBox".to_vec(), Object::Array(vec![1.into(), 1.into(), 611.into(), 791.into()]));
         })
         .unwrap();
-        let page = &inspect(&doc).pages[0];
+        let report = inspect(&doc);
+        // 600 px across 72 units of 2 pt (2 in) is 300 ppi, on a picture 50.8 mm wide.
+        let im = report.images.iter().find(|i| i.name == "Im").unwrap();
+        assert!((im.ppi - 300.0).abs() < 0.01, "{}", im.ppi);
+        assert!((im.size_mm[0] - 50.8).abs() < 0.01, "{:?}", im.size_mm);
+        let page = &report.pages[0];
         // 612 x 792 user units of 2 points each.
         assert!((page.media_mm[0] - 612.0 * 2.0 * 25.4 / 72.0).abs() < 1e-9, "{:?}", page.media_mm);
         assert!((page.bleed_margin_mm[0] - 2.0 * 25.4 / 72.0).abs() < 1e-9, "{:?}", page.bleed_margin_mm);
