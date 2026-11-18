@@ -10,6 +10,7 @@
 pub mod cms;
 pub mod der;
 pub mod dss;
+#[cfg(test)]
 mod ec512;
 pub mod graphic;
 #[cfg(target_os = "macos")]
@@ -18,7 +19,6 @@ pub mod keys;
 pub mod pdf;
 pub mod pkcs12;
 pub mod revocation;
-mod rsa_pad;
 pub mod status_layers;
 pub mod timestamp;
 #[cfg(target_os = "windows")]

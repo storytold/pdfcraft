@@ -1645,6 +1645,7 @@ fn command_list_reports_enablement_and_tools() {
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let list = ok(&mut a, "command_list", json!({ "doc": doc }));
     let find = |id: &str| list["commands"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap().clone();
+    assert_eq!(find("comment.list")["shortcut"], if cfg!(target_os = "macos") { json!(null) } else { json!("Ctrl+M") });
     assert_eq!(find("page.rotate")["tool"], "page_rotate");
     assert_eq!(find("page.rotate")["enabled"], true);
     assert_eq!(find("edit.undo")["enabled"], false);
@@ -7077,6 +7078,32 @@ fn tab_order_and_field_appearance_through_tools() {
         a.call("form_set_props", &json!({ "doc": doc, "field": "A", "appearance": { "style": "wavy" } })),
         Err(ToolError::InvalidArgs(_))
     ));
+}
+
+/// #7429: an import that took some values and had the form refuse another says which one in its own
+/// response (a CLI or MCP caller need not call `doc_info`); one the form refused whole still fails;
+/// one the form took whole carries an empty list.
+#[test]
+fn form_data_import_response_names_the_fields_the_form_refused() {
+    let dir = workdir("import-refused");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "combo", "rect": [20, 60, 180, 82], "name": "Choice", "options": ["A", "B"] }),
+    );
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Notes" }));
+    std::fs::write(dir.join("whole.xml"), "<fields><Notes>hello</Notes></fields>").unwrap();
+    std::fs::write(dir.join("mixed.xml"), "<fields><Choice>INVALID</Choice><Notes>again</Notes></fields>").unwrap();
+    std::fs::write(dir.join("refused.xml"), "<fields><Choice>INVALID</Choice></fields>").unwrap();
+    let r = ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "whole.xml" }));
+    assert_eq!(r["import_repairs"], json!([]), "{r}");
+    let r = ok(&mut a, "doc_import_data", json!({ "doc": doc, "path": "mixed.xml" }));
+    let repairs = r["import_repairs"].as_array().unwrap();
+    assert!(repairs.len() == 1 && repairs[0].as_str().unwrap().contains("\"Choice\"") && !repairs[0].as_str().unwrap().contains("Notes"), "{r}");
+    let e = err(&mut a, "doc_import_data", json!({ "doc": doc, "path": "refused.xml" }));
+    assert!(e.to_string().contains("nothing was imported") && e.to_string().contains("\"Choice\""), "{e}");
 }
 
 #[test]
