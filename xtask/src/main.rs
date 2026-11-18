@@ -10,9 +10,11 @@ mod gates;
 mod layers;
 mod license_check;
 mod macos_integration;
+mod netcheck;
 mod parity;
 mod screenshots;
 mod version;
+mod web;
 
 type Command = fn(&[String]) -> anyhow::Result<()>;
 
@@ -36,6 +38,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("fuzz", "Mutation fuzzing of open/render/edit/save in child processes; findings in fuzz-out/ (--time 300)", fuzz::run),
     ("parity", "Validate parity/acrobat-features.toml against the registry, tools and tests; report progress (--json, --partial)", parity::run),
     (
+        "netcheck",
+        "Record which network-capable crates the batch crates can reach in Cargo.lock, and fail on any reachable pair not in xtask/baselines/network-crates.json",
+        netcheck::run,
+    ),
+    (
         "macos-integration",
         "Report macOS bundle, Quick Look, Spotlight and PDF integration diagnostics without mutating system state",
         macos_integration::run,
@@ -49,6 +56,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),
+    (
+        "web-worker-link",
+        "Hash the web build's OCR worker files and name the worker in index.html (a Trunk post-build hook runs it)",
+        web::worker_link,
+    ),
 ];
 
 fn version_cmd(args: &[String]) -> anyhow::Result<()> {

@@ -100,6 +100,9 @@ struct Interp<'h> {
     /// burning a core to the loop limit).
     #[cfg(not(target_arch = "wasm32"))]
     deadline: Option<std::time::Instant>,
+    /// `deadline` passed and stopped the script: the run reports as abandoned.
+    #[cfg(not(target_arch = "wasm32"))]
+    out_of_time: bool,
 }
 
 type R<T> = Result<T, String>;
@@ -109,7 +112,7 @@ type R<T> = Result<T, String>;
 /// Run a FormCalc `script` for `event` on the form `root`, as [`crate::xfa::run_xfa`] runs a
 /// JavaScript one.
 pub fn run_formcalc(script: &str, event: &XfaEvent, doc: &XfaDoc, root: &XfaNode, limits: Limits) -> XfaOutcome {
-    run_formcalc_at(script, event, doc, root.clone(), limits, None)
+    run_formcalc_at(script, event, doc, std::sync::Arc::new(root.clone()), false, limits, None)
 }
 
 /// [`run_formcalc`] on an owned form, giving up at `deadline` (the clock is read every
@@ -118,7 +121,8 @@ pub(crate) fn run_formcalc_at(
     script: &str,
     event: &XfaEvent,
     doc: &XfaDoc,
-    root: XfaNode,
+    root: std::sync::Arc<XfaNode>,
+    reuse: bool,
     limits: Limits,
     deadline: Option<std::time::Duration>,
 ) -> XfaOutcome {
@@ -133,7 +137,7 @@ pub(crate) fn run_formcalc_at(
         Ok(b) => b,
         Err(e) => return XfaOutcome { error: Some(e), ..Default::default() },
     };
-    let mut host = XHost::new(root, &event.target, doc);
+    let mut host = XHost::new(root, reuse, &event.target, doc);
     #[cfg(target_arch = "wasm32")]
     let _ = deadline;
     let mut interp = Interp {
@@ -150,6 +154,8 @@ pub(crate) fn run_formcalc_at(
         exited: false,
         #[cfg(not(target_arch = "wasm32"))]
         deadline: deadline.and_then(|d| std::time::Instant::now().checked_add(d)),
+        #[cfg(not(target_arch = "wasm32"))]
+        out_of_time: false,
     };
     let mut out = XfaOutcome::default();
     match interp.block(&body) {
@@ -164,6 +170,19 @@ pub(crate) fn run_formcalc_at(
         }
         Err(e) => out.error = Some(e),
     }
+    // The caller stops waiting at the same time limit, so which of the two notices first is
+    // down to the scheduler. The outcome must not depend on it: stopped by the clock, the run
+    // reports what an abandoned one does, the error and no changes. Keeping the changes made
+    // it a race: a loop adding rows until the clock stopped it left the form unchanged on one
+    // run and 1000 rows longer on the next (each laid out again, tens of seconds).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (true, Some(d)) = (interp.out_of_time, deadline) {
+        return XfaOutcome {
+            error: Some(format!("the script ran longer than {:.1} s and was abandoned", d.as_secs_f64())),
+            abandoned: true,
+            ..Default::default()
+        };
+    }
     out.notes = host.notes();
     out.effects = host.effects;
     out.console = host.console;
@@ -177,7 +196,7 @@ pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: X
     // FormCalc has no engine to start: its time (and its own deadline) begins at once.
     run_within("pdfcraft-formcalc", timeout, move |started| {
         started();
-        run_formcalc_at(&script, &event, &doc, root, limits, Some(timeout))
+        run_formcalc_at(&script, &event, &doc, std::sync::Arc::new(root), false, limits, Some(timeout))
     })
 }
 
@@ -244,5 +263,43 @@ mod tests {
         assert_eq!(num_text(1e20), "100000000000000000000");
         assert_eq!(num_text(-1e20), "-100000000000000000000");
         assert_eq!(num_text(f64::MAX).len(), 309);
+    }
+
+    #[test]
+    fn decode_xml_and_html_entities() {
+        let eval = |script: &str| {
+            let root = XfaNode::default();
+            let out = run_formcalc(script, &XfaEvent::default(), &XfaDoc::default(), &root, Limits::default());
+            assert!(out.error.is_none(), "{:?}", out.error);
+            out.result.unwrap_or_default()
+        };
+
+        // `&apos;` in both xml and html
+        assert_eq!(eval(r#"Decode("It&apos;s &lt;ok&gt; &amp; &quot;fine&quot;", "xml")"#), "It's <ok> & \"fine\"");
+        assert_eq!(eval(r#"Decode("It&apos;s", "html")"#), "It's");
+
+        // Decimal and hex numeric character references (case-insensitive #x/#X and hex digits, leading zeros)
+        assert_eq!(eval(r#"Decode("&#65;&#x42;&#X43;&#00068;&#x00065;&#x20AC;&#x1F600;", "xml")"#), "ABCDe€😀");
+        assert_eq!(eval(r#"Decode("&#65;&#x42;&#X43;&#x00E9;", "html")"#), "ABCé");
+
+        // Invalid / surrogate / out-of-range / zero / malformed numeric references stay literal without panicking
+        assert_eq!(
+            eval(r#"Decode("&#0; &#xD800; &#xDFFF; &#x110000; &#99999999999999999999; &#; &#x; &#65 &#x4G; &;", "xml")"#),
+            "&#0; &#xD800; &#xDFFF; &#x110000; &#99999999999999999999; &#; &#x; &#65 &#x4G; &;"
+        );
+
+        // Single-pass decoding: `&amp;lt;` and `&#38;lt;` must decode to `&lt;`, never `<`
+        assert_eq!(eval(r#"Decode("&amp;lt; &amp;#65; &#38;lt; &#x26;apos;", "xml")"#), "&lt; &#65; &lt; &apos;");
+        assert_eq!(eval(r#"Decode("&amp;nbsp; &#38;eacute;", "html")"#), "&nbsp; &eacute;");
+
+        // HTML named entities decode in "html" mode but remain literal in "xml" mode
+        assert_eq!(eval(r#"Decode("caf&eacute;&nbsp;&copy;&euro;&mdash;&alpha;&Omega;&hearts;", "html")"#), "café\u{00A0}©€—αΩ♥");
+        assert_eq!(eval(r#"Decode("caf&eacute;&nbsp;&copy;&euro;", "xml")"#), "caf&eacute;&nbsp;&copy;&euro;");
+        // Case sensitivity of HTML named entities (`&Eacute;` vs `&eacute;`, `&Prime;` vs `&prime;`, `&Dagger;` vs `&dagger;`)
+        assert_eq!(eval(r#"Decode("&Eacute;&eacute;&Prime;&prime;&Dagger;&dagger;&bogus;", "html")"#), "Éé″′‡†&bogus;");
+        // Non-ASCII characters after `&` or `&#` and long runs of `&` without `;`
+        assert_eq!(eval(r#"Decode("&é; &#é; &#xé; &amp;é", "html")"#), "&é; &#é; &#xé; &é");
+        let amps = "&".repeat(5_000);
+        assert_eq!(eval(&format!(r#"Decode("{amps}&apos;", "xml")"#)), format!("{amps}'"));
     }
 }

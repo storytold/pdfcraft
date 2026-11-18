@@ -424,8 +424,12 @@ fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
             "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽãõçâêôàÃÕÇÂÊÔÀñÑüÜäÄöÖőűßæøåÆØÅ„“¿¡«»…ґҐєЄіІїЇәғқңөұүһӘҒҚҢӨҰҮҺđĐạảấầẩẫậắằẳẵặếềểễệọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ",
         );
         for line in catalog.lines().filter(|l| !l.starts_with('#')) {
-            if let Some(translation) = line.split('\t').nth(2) {
-                text.extend(translation.chars().filter(|c| !c.is_whitespace()));
+            let mut columns = line.split('\t').skip(1);
+            if let (Some(source), Some(translation)) = (columns.next(), columns.next()) {
+                // Every letter is checked. A symbol the row's English text has too (the menu path
+                // arrow `▸`, say) is drawn however English draws it, so it is not this catalog's
+                // to cover.
+                text.extend(translation.chars().filter(|c| !c.is_whitespace() && (c.is_alphanumeric() || !source.contains(*c))));
             }
         }
         for name in ["Inter", "Inter-Medium", "Inter-SemiBold", "JetBrainsMono"] {

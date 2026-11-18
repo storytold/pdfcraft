@@ -6,7 +6,7 @@ use crate::page::Pages;
 use crate::page::cached::CachedPages;
 use crate::reader::Reader;
 use crate::sync::Arc;
-use crate::xref::{XRef, XRefError, fallback, root_xref};
+use crate::xref::{XRef, XRefError, cut_off_update_follows, fallback, root_xref};
 
 pub use crate::crypto::DecryptionError;
 use crate::metadata::Metadata;
@@ -17,6 +17,8 @@ pub struct Pdf {
     header_version: PdfVersion,
     pages: CachedPages,
     data: PdfData,
+    /// PdfCraft patch: (hayro-syntax (45)) see [`Pdf::rebuilt_unlinked_update`].
+    rebuilt_unlinked_update: bool,
 }
 
 /// An error that occurred while loading a PDF file.
@@ -47,8 +49,41 @@ impl Pdf {
         let data = data.into();
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
-        let xref = match root_xref(data.clone(), password) {
-            Ok(x) => x,
+        // PdfCraft patch: (hayro-syntax (43)) a last update cut off before its trailer is read by
+        // rebuilding the table from object headers, the latest definition of each object
+        // winning, as the document model reads such a file. Only when that finds no page is the
+        // older table the last `startxref` names read instead (a file cut short in the middle of
+        // the update, whose new page tree names pages that are not there).
+        // The table the last `startxref` names is read first either way: a wrong password is
+        // refused through it, and the rebuilt table must be encrypted exactly when it is, so a
+        // rebuild that missed the encryption dictionary is not taken.
+        let root = root_xref(data.clone(), password);
+        if let Err(XRefError::Encryption(e)) = root {
+            return Err(LoadPdfError::Decryption(e));
+        }
+        let root_encrypted = root.as_ref().ok().map(|(x, _)| x.is_encrypted());
+        // PdfCraft patch: (hayro-syntax (45)) said of the file whichever table is kept, as
+        // `pdfcraft-cos` says it under the same conditions.
+        let rebuilt_unlinked_update = root.as_ref().is_ok_and(|(_, rebuilt)| *rebuilt);
+        if cut_off_update_follows(data.as_ref())
+            && let Some(xref) = fallback(data.clone(), password)
+                .filter(|x| root_encrypted.is_none_or(|e| e == x.is_encrypted()))
+        {
+            let xref = Arc::new(xref);
+            if let Some(pages) = CachedPages::new(xref.clone())
+                && !pages.get().is_empty()
+            {
+                return Ok(Self {
+                    xref,
+                    header_version: version,
+                    pages,
+                    data,
+                    rebuilt_unlinked_update,
+                });
+            }
+        }
+        let xref = match root {
+            Ok((x, _)) => x,
             Err(e) => match e {
                 XRefError::Unknown => {
                     fallback(data.clone(), password).ok_or(LoadPdfError::Invalid)?
@@ -65,7 +100,15 @@ impl Pdf {
             header_version: version,
             pages,
             data,
+            rebuilt_unlinked_update,
         })
+    }
+
+    /// PdfCraft patch: (hayro-syntax (45)) whether the newest cross-reference section has no
+    /// `/Prev`, so the page tree in the revisions before it could only be found by rebuilding the
+    /// table from the file's objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.rebuilt_unlinked_update
     }
 
     /// Return the number of objects present in the PDF file.
