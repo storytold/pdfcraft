@@ -474,6 +474,9 @@ fn a_pdf_1_5_transition_raises_an_earlier_file_to_1_5() {
         set(&mut doc, &[0], Some(style));
         let doc = save_and_reopen(&doc);
         assert_eq!((doc.version(), catalog_version(&doc).as_deref()), ("1.4", Some("1.5")), "{style}");
+        // The saved file has both the transition and the version it needs.
+        let t = page_dict(&doc, 0).get(b"Trans").and_then(|o| o.as_dict()).expect("/Trans").clone();
+        assert_eq!(t.name(b"S"), Some(style.as_bytes()), "{style}");
     }
     for style in ["Split", "Blinds", "Box", "Wipe", "Dissolve", "Glitter", "R"] {
         let mut doc = with_header(b"1.4");
@@ -487,6 +490,19 @@ fn a_pdf_1_5_transition_raises_an_earlier_file_to_1_5() {
     let mut doc = with_header(b"1.7");
     set(&mut doc, &[0], Some("Fade"));
     assert_eq!(catalog_version(&doc), None, "a 1.7 header is later");
+    // A version asked of a full save doesn't change the header an in-place save keeps (#7707 review).
+    let mut doc = with_header(b"1.4");
+    doc.set_version("1.7");
+    set(&mut doc, &[0], Some("Fade"));
+    assert_eq!(catalog_version(&save_and_reopen(&doc)).as_deref(), Some("1.5"), "the kept header says 1.4");
+    // A catalog `/Version` that isn't a version declares nothing; `/1.10` is later than `/1.5`.
+    for (said, after) in [("Latest", "1.5"), ("1.", "1.5"), ("1.10", "1.10")] {
+        let mut doc = with_header(b"1.4");
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name(said))).unwrap();
+        set(&mut doc, &[0], Some("Fade"));
+        assert_eq!(catalog_version(&doc).as_deref(), Some(after), "/Version /{said}");
+    }
     // A catalog that already says a later version keeps it.
     let mut doc = with_header(b"1.4");
     let root = doc.root().unwrap();
