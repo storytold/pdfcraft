@@ -9990,6 +9990,28 @@ fn pdfa_through_tools() {
 }
 
 #[test]
+fn print_readiness_keeps_form_image_dimensions_through_tools() {
+    let dir = workdir("print-readiness-form-images");
+    std::fs::write(dir.join("form.pdf"), table_in_a_form_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let r = ok(&mut a, "print_readiness", json!({ "doc": doc }));
+    let images = r["images"].as_array().unwrap();
+    assert_eq!(images.len(), 2, "{r}");
+    for (name, pixels, points, ppi) in [("object 7 0 R", 4, [100.0, 30.0], 2.88), ("object 9 0 R", 2, [60.0, 40.0], 2.4)] {
+        let image = images.iter().find(|image| image["name"] == name).unwrap();
+        assert_eq!(image["pixels"], json!([pixels, pixels]));
+        for (axis, pt) in points.into_iter().enumerate() {
+            assert!((image["size_mm"][axis].as_f64().unwrap() - pt * 25.4 / 72.0).abs() < 1e-6, "{image}");
+        }
+        assert!((image["ppi"].as_f64().unwrap() - ppi).abs() < 1e-6, "{image}");
+    }
+    assert_eq!(r["resolution_unknown"], 0);
+    assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before);
+}
+
+#[test]
 fn print_readiness_through_tools() {
     let dir = workdir("print-readiness");
     let mut a = auto(&dir);

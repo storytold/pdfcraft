@@ -72,7 +72,7 @@ struct Walk<'a> {
     budget: DecodeBudget,
     /// False once a use may have been missed (depth or work limit).
     complete: bool,
-    out: HashMap<ObjRef, f64>,
+    out: HashMap<ObjRef, ImageMeasurement>,
     /// Images drawn or listed at least once where `/DefaultGray` or `/DefaultRGB` is in force, by
     /// object number: a reference with another generation reaches the same image.
     defaults: HashSet<u32>,
@@ -150,8 +150,18 @@ impl Walk<'_> {
                             let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
                             if w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6 {
                                 let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
-                                let e = self.out.entry(r).or_insert(f64::INFINITY);
-                                *e = e.min(ppi);
+                                let measurement = ImageMeasurement {
+                                    ppi,
+                                    pixels: [
+                                        s.dict.int(b"Width").and_then(|n| n.try_into().ok()).unwrap_or(0),
+                                        s.dict.int(b"Height").and_then(|n| n.try_into().ok()).unwrap_or(0),
+                                    ],
+                                    size_pt: [sx, sy],
+                                };
+                                let e = self.out.entry(r).or_insert(measurement);
+                                if ppi < e.ppi {
+                                    *e = measurement;
+                                }
                             }
                             if defaults {
                                 self.defaults.insert(r.num);
@@ -261,13 +271,30 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 /// decode within its budget or is damaged partway, every image is given `INFINITY` (never
 /// resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    let Ok((ppi, ..)) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
-    ppi
+    image_measurements(doc, pages).into_iter().map(|(r, image)| (r, image.ppi)).collect()
+}
+
+/// An image's lowest-resolution placement, with dimensions from that same use.
+#[derive(Clone, Copy, Debug)]
+pub struct ImageMeasurement {
+    /// Minimum pixels per inch over both axes and all uses; infinity if the walk was incomplete.
+    pub ppi: f64,
+    /// Pixel dimensions, or zero for a dimension outside the supported `u32` range.
+    pub pixels: [u32; 2],
+    /// Length of each transformed image axis in physical points, including the page's UserUnit.
+    pub size_pt: [f64; 2],
+}
+
+/// Like [`effective_resolutions`], retaining the dimensions of the lowest-ppi placement.
+/// On a tie the first placement wins. Dimensions must not be used when `ppi` is not finite.
+pub fn image_measurements(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, ImageMeasurement> {
+    let Ok((images, ..)) = walk_pages(doc, pages, &mut |_| true) else { return HashMap::new() };
+    images
 }
 
 /// What a walk of the pages found: each image's resolution, the images under remapped device
 /// spaces, and the references followed.
-type PagesWalked = (HashMap<ObjRef, f64>, HashSet<u32>, Read);
+type PagesWalked = (HashMap<ObjRef, ImageMeasurement>, HashSet<u32>, Read);
 
 /// [`effective_resolutions`], the images drawn or listed where `/DefaultGray` or `/DefaultRGB` is
 /// in force, by object number (all of them when a use may have been missed), and the references
@@ -306,7 +333,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef], tick: &mut dyn FnMut(usize) -> b
         walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false);
     }
     if !walk.complete {
-        walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
+        walk.out.values_mut().for_each(|v| v.ppi = f64::INFINITY);
         walk.defaults.extend(walk.out.keys().map(|r| r.num));
     }
     Ok((walk.out, walk.defaults, walk.read))
@@ -1397,7 +1424,7 @@ pub(crate) fn run(
             _ => None,
         })
         .collect();
-    let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).collect();
+    let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).map(|(r, image)| (r, image.ppi)).collect();
     refs.sort_by_key(|(r, _)| (r.num, r.generation));
     // Then the pictures' masks of one bit a sample, each once ([`decide_mask`]).
     let mask_refs = picture_masks(doc, &refs);

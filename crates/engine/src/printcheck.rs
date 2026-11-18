@@ -297,16 +297,22 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
             }
         }
         // Images drawn inside a form XObject are not listed above. Their resolution is the
-        // smallest use on this page, which is what the optimizer already measures.
-        for (object, ppi) in pdfcraft_optimize::effective_resolutions(doc, &[page.obj]) {
+        // lowest-ppi use on this page, which is what the optimizer already measures.
+        for (object, image) in pdfcraft_optimize::image_measurements(doc, &[page.obj]) {
             if seen.contains(&(page_no, object)) {
                 continue;
             }
-            if !ppi.is_finite() {
+            if !image.ppi.is_finite() || image.pixels.contains(&0) || image.size_pt.iter().any(|n| !n.is_finite()) {
                 unknown = unknown.saturating_add(1);
                 continue;
             }
-            out.push(DrawnImage { page: page_no, name: format!("object {object}"), ppi, pixels: [0, 0], size_mm: [0.0, 0.0] });
+            out.push(DrawnImage {
+                page: page_no,
+                name: format!("object {object}"),
+                ppi: image.ppi,
+                pixels: image.pixels,
+                size_mm: image.size_pt.map(mm),
+            });
         }
     }
     out.sort_by(|a, b| a.page.cmp(&b.page).then(a.name.cmp(&b.name)).then(a.ppi.total_cmp(&b.ppi)));
@@ -400,6 +406,51 @@ mod tests {
         })
         .unwrap();
         r
+    }
+
+    #[test]
+    fn form_image_dimensions_follow_the_lowest_resolution_placement() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 8, 8);
+        let mut resources = Dict::new();
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(img));
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut form = Dict::new();
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 720.into(), 400.into()]));
+        form.set(b"Resources".to_vec(), Object::Dict(resources));
+        let form = doc.add(Object::Stream(Stream::from_raw(form, b"q 720 0 0 400 0 0 cm /Im Do Q".to_vec())));
+        // A smaller second use must not replace the dimensions of the lowest-ppi use.
+        page(&mut doc, "Fm", form, "/Fm Do q 0.5 0 0 0.5 0 0 cm /Fm Do Q");
+        let turned = page(&mut doc, "Fm", form, "q 0 1 -1 0 800 0 cm /Fm Do Q");
+        doc.update_dict(turned, |d| d.set(b"UserUnit".to_vec(), Object::Int(2))).unwrap();
+        let mut outer = Dict::new();
+        outer.set(b"Subtype".to_vec(), Object::name("Form"));
+        outer.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 720.into(), 400.into()]));
+        outer.set(b"Matrix".to_vec(), Object::Array(vec![0.into(), 2.into(), Object::Real(-0.5), 0.into(), 200.into(), 0.into()]));
+        // No Resources: the nested form inherits its caller's /Fm entry.
+        let outer = doc.add(Object::Stream(Stream::from_raw(outer, b"/Fm Do".to_vec())));
+        let nested = page(&mut doc, "Fm", form, "/Outer Do");
+        doc.update_dict(nested, |d| {
+            let mut res = d.get(b"Resources").unwrap().as_dict().unwrap().clone();
+            let mut x = res.get(b"XObject").unwrap().as_dict().unwrap().clone();
+            x.set(b"Outer".to_vec(), Object::Ref(outer));
+            res.set(b"XObject".to_vec(), Object::Dict(x));
+            d.set(b"Resources".to_vec(), Object::Dict(res));
+        })
+        .unwrap();
+
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 3);
+        for (image, (scale_x, scale_y)) in report.images.iter().zip([(1.0, 1.0), (2.0, 2.0), (2.0, 0.5)]) {
+            assert_eq!(image.pixels, [8, 8]);
+            assert!((image.ppi - 0.8 / scale_x).abs() < 1e-6);
+            assert!((image.size_mm[0] - 254.0 * scale_x).abs() < 1e-6);
+            assert!((image.size_mm[1] - mm(400.0) * scale_y).abs() < 1e-6);
+        }
+        assert_eq!(report.resolution_unknown, 0);
+        assert!(report.text().contains("8 × 8 px, 254.0 × 141.1 mm"));
     }
 
     #[test]
