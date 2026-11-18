@@ -942,3 +942,13 @@ fn the_custom_picker_is_as_wide_as_the_swatch_grid() {
     // At egui's default width the whole picker is about 200 pt, short of this.
     assert!(below >= grid_width + 60.0, "the picker's square is as wide as the grid: {below:.1} pt below the swatches, grid {grid_width:.1} pt");
 }
+
+#[test]
+fn insert_text_icon_is_distinct_from_edit_text_and_matches_its_command() {
+    let insert = CommentTool::Caret.icon();
+    let edit = pdfcraft_engine::commands::command("edit.edit_text").unwrap().icon;
+    let command = pdfcraft_engine::commands::command("comment.caret").unwrap().icon;
+    assert_ne!(insert, edit, "adjacent tools need distinct icons");
+    assert_eq!(insert, command, "the annotation toolbar and command use the same icon");
+    assert!(crate::widgets::icons::exists(insert));
+}
