@@ -82,14 +82,14 @@ fn half_points(size: f64) -> i64 {
 }
 
 /// The body text size: the size carrying the most characters.
-pub(crate) fn body_size(objects: &[Evidence]) -> Option<f64> {
+pub(crate) fn body_size<'a>(objects: impl IntoIterator<Item = &'a Evidence>) -> Option<f64> {
     body_style(objects).map(|(size, _)| size)
 }
 
 /// The size carrying the most characters, and whether most of them are bold.
-fn body_style(objects: &[Evidence]) -> Option<(f64, bool)> {
+fn body_style<'a>(objects: impl IntoIterator<Item = &'a Evidence>) -> Option<(f64, bool)> {
     let mut by_size: HashMap<i64, (usize, usize)> = HashMap::new();
-    for e in objects.iter().filter(|e| e.chars > 0) {
+    for e in objects.into_iter().filter(|e| e.chars > 0) {
         let entry = by_size.entry(half_points(e.size)).or_default();
         entry.0 = entry.0.saturating_add(e.chars);
         if e.bold {
@@ -413,6 +413,14 @@ mod tests {
         assert_eq!(found[1].text, "one two three");
         assert_eq!(found[2], Evidence::default());
         assert_eq!(found.len(), 3);
+    }
+
+    #[test]
+    fn an_origin_past_f64_leaves_no_extent() {
+        // Two translations near f64::MAX add up to infinity; the text is kept, its position is not.
+        let far = format!("{}.0", "9".repeat(308));
+        let found = walk(format!("q 1 0 0 1 {far} 0 cm BT /F1 10 Tf 1 0 0 1 {far} 0 Tm (far) Tj ET Q").as_bytes());
+        assert_eq!((found[0].text.as_str(), found[0].extent), ("far", None));
     }
 
     #[test]

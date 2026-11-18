@@ -396,9 +396,8 @@ fn write_structure(
 
 /// The edge each planned text object repeats at, for running text, per page and span.
 fn running(plans: &[Plan]) -> Vec<Vec<Option<Edge>>> {
-    let all: Vec<Evidence> = plans.iter().flat_map(|p| p.evidence.iter().cloned()).collect();
     let pages: Vec<PageText<'_>> = plans.iter().map(|p| PageText { frame: p.frame, objects: &p.evidence }).collect();
-    autotag_running::find(&pages, autotag_roles::body_size(&all))
+    autotag_running::find(&pages, autotag_roles::body_size(plans.iter().flat_map(|p| &p.evidence)))
 }
 
 /// The running headers, footers and page numbers [`autotag_text`] would mark as artifacts, in page

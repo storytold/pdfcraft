@@ -180,6 +180,31 @@ fn autotag_text_assigns_roles_past_running_headers() {
     assert_eq!(kinds, ["Document", "H1", "P", "P"]);
 }
 
+/// A page whose only text is running text has nothing in the parent tree and gets no
+/// `StructParents`; the next tagged page takes the next key.
+#[test]
+fn autotag_text_gives_a_page_of_running_text_alone_no_struct_parents() {
+    let header = "BT /F1 9 Tf 72 760 Td (Annual report) Tj ET";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(header),
+            stream(&format!("{header} BT /F1 12 Tf 72 640 Td (Body) Tj ET")),
+            FONT.into(),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, headers: 2, footers: 0 });
+    let keys: Vec<Option<i64>> = pdfcraft_model::pages(&doc).iter().map(|p| p.dict.get(b"StructParents").and_then(Object::as_int)).collect();
+    assert_eq!(keys, [None, Some(0)]);
+    assert_eq!(status(&check(&doc, &Options::default()), Rule::TaggedContent), Status::Passed);
+}
+
 #[test]
 fn autotag_text_leaves_a_single_page_header_tagged() {
     let mut doc = pdf(

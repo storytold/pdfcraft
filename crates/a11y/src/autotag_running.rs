@@ -67,9 +67,11 @@ pub(crate) fn find(pages: &[PageText<'_>], body: Option<f64>) -> Vec<Vec<Option<
         if distinct < needed {
             continue;
         }
+        // `Chapter 1`, `Chapter 2`: a numbered heading, unless it is only the number.
         let texts_differ = best.windows(2).any(|w| matches!(w, [a, b] if a.evidence.text != b.evidence.text));
         let heading_sized = body.is_some_and(|body| best.iter().all(|m| m.evidence.size >= body * HEADING_SIZE_RATIO));
-        if texts_differ && heading_sized {
+        let worded = best.iter().all(|m| m.evidence.letters && normalise(&m.evidence.text) != "#");
+        if texts_differ && heading_sized && worded {
             continue;
         }
         for m in best {
@@ -308,6 +310,11 @@ mod tests {
         assert_eq!(found, [[None], [None]]);
         let found = run(&[vec![big("Annual report")], vec![big("Annual report")]], Some(10.0));
         assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]], "the same large text on every page is still a header");
+        let number = |text: &str| Evidence { letters: false, ..big(text) };
+        let found = run(&[vec![number("12")], vec![number("13")]], Some(10.0));
+        assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]], "a large page number is still a page number");
+        let found = run(&[vec![big("xii")], vec![big("xiii")]], Some(10.0));
+        assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]], "so is a large roman one");
     }
 
     #[test]
@@ -319,5 +326,28 @@ mod tests {
         let pages = [PageText { frame: turned, objects: &objects }, PageText { frame: turned, objects: &objects }];
         assert_eq!(find(&pages, None), [[Some(Edge::Top)], [Some(Edge::Top)]]);
         assert_eq!(run(&[objects.clone(), objects], None), [[None], [None]], "upright, it sits mid-page");
+        // Upside down the displayed top is the user-space bottom; turned 270° it is the right edge.
+        let upside = Frame { rotation: 180, ..turned };
+        let low = vec![line("Upside down", 30.0)];
+        assert_eq!(
+            find(&[PageText { frame: upside, objects: &low }, PageText { frame: upside, objects: &low }], None),
+            [[Some(Edge::Top)], [Some(Edge::Top)]]
+        );
+        let left = Frame { rotation: 270, ..turned };
+        let right = vec![Evidence { extent: Some([590.0, 300.0, 600.0, 300.0]), ..line("Turned left", 0.0) }];
+        assert_eq!(
+            find(&[PageText { frame: left, objects: &right }, PageText { frame: left, objects: &right }], None),
+            [[Some(Edge::Top)], [Some(Edge::Top)]]
+        );
+    }
+
+    #[test]
+    fn the_bands_follow_the_crop_box() {
+        // Cropped to y 100..892, text at 860 is in the top band and text at 760 is not.
+        let cropped = Frame { rotation: 0, crop: [0.0, 100.0, 612.0, 892.0] };
+        let objects = vec![line("Inside", 860.0), line("Below the band", 760.0)];
+        let pages = [PageText { frame: cropped, objects: &objects }, PageText { frame: cropped, objects: &objects }];
+        assert_eq!(find(&pages, None), [[Some(Edge::Top), None], [Some(Edge::Top), None]]);
+        assert_eq!(run(&[objects.clone(), objects], None)[0], [None, Some(Edge::Top)], "against the media box it is the other way");
     }
 }
