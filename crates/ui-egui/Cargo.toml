@@ -10,6 +10,8 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+# The framework facade with the crates the UI uses (owed by pdf-hub-w1, which owns this manifest).
+craft = { workspace = true, features = ["ui", "pages", "print", "review", "dialogs", "docpath", "font-catalog", "window", "settings", "platform", "atomic", "automation", "keymap", "menu", "quit", "web-host"] }
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).

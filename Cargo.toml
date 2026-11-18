@@ -12,6 +12,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
+# The framework facade: every framework crate is reached through it (contract head); its features pick the crates.
+craft = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717", default-features = false }
 craft-markdown = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "527c2750e37fb8bf576dc9a9e07ffc60b9d63717" }
 # Small, revision-bound UI drafts; the existing engine remains the owner of PDF edits/history.
 edit-session = { path = "vendor/edit-session", version = "=0.1.0-alpha.2" }
@@ -196,6 +198,7 @@ vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
 
 [patch."https://github.com/storytold/craft-libs"]
+craft = { path = "../craft-libs/crates/craft" }
 craft-cms = { path = "../craft-libs/crates/cms" }
 craft-codepage = { path = "../craft-libs/crates/codepage" }
 craft-csv = { path = "../craft-libs/crates/csv" }
