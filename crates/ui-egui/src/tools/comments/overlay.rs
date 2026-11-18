@@ -5,6 +5,7 @@ use craft::review::ui::annotate::{AnnotationOverlay, BodyPaint};
 use craft::review::{Annotation as Marked, AnnotationId, AnnotationKind, HandleRule};
 use craft::ui::canvas::ToolContext;
 use craft::ui::canvas_controls::{HoverOutline, HoverShape};
+use craft::ui::contract::Show as _;
 use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
 use craft::ui::style::{DataColor, StyleColor};
 use egui::{Color32, Pos2, Rect, vec2};
@@ -39,12 +40,13 @@ pub(crate) fn show(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
     view: &DocView,
+    rotation: u16,
     info: &DocInfo,
     prefs: &CommentPrefs,
     tool: QuickTool,
     hover: Hover<'_, '_>,
 ) {
-    let map = PageMap::new(body.pages, info);
+    let map = PageMap::new(info, body.pages, rotation);
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
     let markers = bridge::markers(info, &map, hover.pick.1);
@@ -63,7 +65,11 @@ pub(crate) fn show(
                 on_page.push(a);
             }
         }
-        AnnotationOverlay::new(tl!("Comments"), &on_page, &selected).bodies(BodyPaint::Only(&settling_ids)).live(in_flight.as_ref()).show(ui);
+        let mut overlay = AnnotationOverlay::new(tl!("Comments"), &on_page, &selected).bodies(BodyPaint::Only(&settling_ids));
+        if let Some(edit) = &in_flight {
+            overlay = overlay.live(edit);
+        }
+        overlay.show(ui);
         let Some(at) = hover.pointer.filter(|p| idle && page.rect.contains(*p)) else { continue };
         let at = page.to_page(at);
         let (tolerance, icon_side) = hover.pick;

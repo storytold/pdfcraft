@@ -42,7 +42,8 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
     commands.push(HeaderCommand::new(IconId::new("settings"), "app.preferences"));
     let shown = Panel::new(title).titled().commands(commands).actions([HeaderAction::Close]).show(ui, |ui, _| {
         // Several objects selected: how many, and how to move them. Acrobat's panel has no idle hint.
-        let count = app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].session.objects.count());
+        let count =
+            app.active_ids().filter(|_| app.quick_tool == crate::QuickTool::EditText).map_or(0, |(i, _)| app.views[i].session.objects.count());
         if count > 0 {
             Text::new(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} object selected", "{n} objects selected")).show(ui);
             Text::new(tl!("Drag the selection to move it. Esc clears the selection.").to_string()).show(ui);
@@ -113,7 +114,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
         app.select_tool(id);
     }
     if let Some(cmd) = run {
-        app.run_command(cmd);
+        app.run_command(&ui.ctx().clone(), cmd);
     }
 }
 
@@ -363,7 +364,7 @@ impl PdfCraftApp {
             d.style = pdfcraft_engine::AddedText { aligns: std::mem::take(&mut d.style.aligns), ..updated };
             // The page has the box's text: its typing history restarts from it, even when the
             // restyle left the text as it was, so a Redo can't put undone typing back.
-            let now = crate::edit_text_ui::Typed::of(d.text.clone(), d.selection.clone(), vec![d.style.aligns.clone()]);
+            let now = crate::edit_text_ui::Typed::of(d.text.clone(), d.selection.clone(), d.style.aligns.clone());
             d.history.restart(now);
         }
     }
@@ -378,7 +379,7 @@ impl PdfCraftApp {
             {
                 ed.refresh_source(block, doc.text_lines(ed.page));
                 // The page has the paragraph's text: its typing history restarts from it.
-                let now = crate::edit_text_ui::Typed::of(ed.text.clone(), ed.selection.clone(), vec![ed.look.aligns.clone()]);
+                let now = crate::edit_text_ui::Typed::of(ed.text.clone(), ed.selection.clone(), ed.look.aligns.clone());
                 ed.history.restart(now);
             }
         }

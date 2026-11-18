@@ -94,7 +94,7 @@ pub(crate) struct CommentMenuCx<'a> {
 }
 
 fn row(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
-    MenuItem::new(label).enabled(enabled).show(ui).ran
+    MenuItem::new(label.to_string()).enabled(enabled).show(ui).ran
 }
 
 /// Rows of the canvas context menu for the selected comment (or the page), inside `Menu::context`.
@@ -230,7 +230,7 @@ pub(crate) struct QuickBarPick {
 fn popover_from(ui: &mut egui::Ui, label: &str, opener: impl FnOnce(&mut egui::Ui) -> egui::Response, body: impl FnOnce(&mut egui::Ui)) {
     let resp = opener(ui);
     let mut body = Some(body);
-    Popover::new(label, Bind::kept()).overlay(|o| o.opened_by(&resp, Trigger::Click)).show(ui, |ui, _| {
+    Popover::new(label.to_string(), Bind::kept()).overlay(|o| o.opened_by(&resp, Trigger::Click)).show(ui, |ui, _| {
         if let Some(body) = body.take() {
             body(ui);
         }

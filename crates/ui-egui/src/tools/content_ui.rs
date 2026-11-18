@@ -551,7 +551,7 @@ impl<'a> AddTextTool<'a> {
     fn start_box(&mut self, page: usize, at: Pos2) {
         let Some(frame) = PageFrame::of_page(self.pages, &self.doc.info, page) else { return };
         let added = self.doc.added();
-        let cv = &mut self.view.content;
+        let cv = &mut self.view.session.content;
         // Text that can't be drawn stays where it is being typed (#125).
         if cv.hold_blocked() {
             return;
@@ -571,7 +571,7 @@ impl<'a> AddTextTool<'a> {
         draft.focus = true;
         cv.draft = Some(draft);
         if typed.is_some() {
-            self.view.pending_edit = typed;
+            self.view.session.pending_edit = typed;
         }
     }
 }
@@ -986,7 +986,8 @@ fn draft_session(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc
     let zoom = placed.scale as f32;
     let page_width = f64::from(doc.info.pages.get(page)?.width);
     let editor_id = egui::Id::new(("added-text-editor", view.view_key()));
-    let background_ready = view.session.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| view.session.text_background.ready_added(page, index));
+    let background_ready =
+        view.session.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| view.session.text_background.ready_added(page, index));
     let cv = &mut view.session.content;
     let draft = cv.draft.as_mut().filter(|d| d.page == page)?;
     let font = crate::edit_text_ui::editor_font(&draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));
@@ -1206,7 +1207,7 @@ impl crate::PdfCraftApp {
         let request = craft::host::PickRequest::open("image")
             .title(title)
             .filter(tl!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
-        let target = self.active_ids().map(|(_, id)| id.into());
+        let target = self.pick_target(self.active_ids().map(|(_, id)| id));
         self.pick_first(request, target, move |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
             Ok(bytes) => {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1397,7 +1398,7 @@ impl crate::PdfCraftApp {
     /// Place image `bytes` in the middle of the current page and select it.
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
-        let page = self.views[i].current;
+        let page = self.views[i].current();
         let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
@@ -1585,7 +1586,7 @@ impl crate::PdfCraftApp {
                 Some((added_idx, pasted_idx))
             });
             if let Some(v) = self.views.get_mut(i) {
-                v.current = page;
+                v.go_to_page(page);
                 v.session.content.selected = selection.map(|(added, _)| (page, added));
                 v.session.content.select_added = v.session.content.selected;
                 v.session.image_selection = selection.map(|(_, image)| crate::edit_text_ui::ImageSelection::at(page, image));
@@ -1623,7 +1624,8 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, img: &pdfcraft_engine::AddedImage) 
                 let (cx, cy, w, h) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, r[2] - r[0], r[3] - r[1]);
                 i.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
             };
-            let button = |ui: &mut egui::Ui, icon: &'static str, label: &str| IconButton::new(IconId::new(icon)).label(label).show(ui).clicks > 0;
+            let button =
+                |ui: &mut egui::Ui, icon: &'static str, label: &str| IconButton::new(IconId::new(icon)).label(label.to_string()).show(ui).clicks > 0;
             if button(ui, "rotate-ccw", tl!("Rotate counterclockwise")) {
                 turn(&mut i, 1);
                 out = Some(ImageAction::Update(AddedContent::Image(i.clone())));

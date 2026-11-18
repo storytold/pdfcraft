@@ -73,7 +73,7 @@ impl<'a> PageMap<'a> {
     /// A user-space point of `page` in the page's displayed units.
     pub(crate) fn to_doc(&self, page: usize, user: [f64; 2]) -> Point {
         match self.info.pages.get(page) {
-            Some(p) => view_point(p, self.rotation, [user[0] as f32, user[1] as f32]),
+            Some(p) => turned_point(p, self.rotation, [user[0] as f32, user[1] as f32]),
             None => Point::new(user[0], user[1]),
         }
     }
@@ -81,7 +81,7 @@ impl<'a> PageMap<'a> {
     /// A displayed point of `page` in the page's user space.
     pub(crate) fn to_user(&self, page: usize, at: Point) -> [f64; 2] {
         match self.info.pages.get(page) {
-            Some(p) => user_point(p, self.rotation, at),
+            Some(p) => unturned_point(p, self.rotation, at),
             None => [at.x, at.y],
         }
     }
@@ -130,6 +130,33 @@ fn view_point(page: &PageInfo, user: [f32; 2]) -> Point {
 
 fn user_point(page: &PageInfo, at: Point) -> [f64; 2] {
     let u = page.view_to_user(at.x as f32, at.y as f32);
+    [f64::from(u[0]), f64::from(u[1])]
+}
+
+/// A user-space point as the displayed point of a page the view turns clockwise by `rotation` degrees.
+fn turned_point(page: &PageInfo, rotation: u16, user: [f32; 2]) -> Point {
+    let [x, y] = page.user_to_view(user[0], user[1]);
+    let (w, h) = (page.width, page.height);
+    let (a, b) = match rotation {
+        90 => (h - y, x),
+        180 => (w - x, h - y),
+        270 => (y, w - x),
+        _ => (x, y),
+    };
+    Point::new(f64::from(a), f64::from(b))
+}
+
+/// The user-space point under the displayed point `at` of a page the view turns clockwise by `rotation` degrees.
+fn unturned_point(page: &PageInfo, rotation: u16, at: Point) -> [f64; 2] {
+    let (a, b) = (at.x as f32, at.y as f32);
+    let (w, h) = (page.width, page.height);
+    let (x, y) = match rotation {
+        90 => (b, h - a),
+        180 => (w - a, h - b),
+        270 => (w - b, a),
+        _ => (a, b),
+    };
+    let u = page.view_to_user(x, y);
     [f64::from(u[0]), f64::from(u[1])]
 }
 
@@ -345,11 +372,18 @@ pub(crate) fn parts(
         Cursor::System(icon) => icon,
         _ => CursorIcon::Default,
     };
-    let part = PagePart::new(Owner::Comment { index: key_of(id).1 }, page, screen_shapes, PageLayer::Comment).passes_drag().cursor(icon);
-    match tips(info, prefs, tool).into_iter().find(|(t, _)| *t == id) {
-        Some((_, tip)) => vec![part.tip(tip)],
-        None => vec![part],
-    }
+    let tip = tips(info, prefs, tool).into_iter().find(|(t, _)| *t == id).map(|(_, tip)| tip);
+    // A part has one shape: a markup's lines are one part each, which a press resolves to the same comment.
+    screen_shapes
+        .into_iter()
+        .map(|shape| {
+            let part = PagePart::new(Owner::Comment { index: key_of(id).1 }, page, shape, PageLayer::Comment).passes_drag().cursor(icon);
+            match &tip {
+                Some(tip) => part.tip(tip.clone()),
+                None => part,
+            }
+        })
+        .collect()
 }
 
 fn engine(info: &DocInfo, page: usize, index: usize) -> Option<&Annotation> {
