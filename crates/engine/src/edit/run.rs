@@ -15,6 +15,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ReversePages { .. }
         | Edit::InsertBlankPage { .. }
         | Edit::DuplicatePages { .. }
+        | Edit::SpawnTemplate { .. }
+        | Edit::SetTemplateHidden { .. }
         | Edit::ReplacePages { .. }
         | Edit::SetPageBox { .. }
         | Edit::SetTransition { .. }
@@ -196,6 +198,30 @@ fn note_skipped(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report
     ));
 }
 
+/// Up to the first five of `names`, quoted and joined, then how many more there are.
+fn listed_names(names: &[String]) -> String {
+    let shown: Vec<String> = names.iter().take(5).map(|n| format!("\"{}\"", skipped_text(n))).collect();
+    match names.len().saturating_sub(shown.len()) {
+        0 => shown.join(", "),
+        more => format!("{}; and {more} more", shown.join(", ")),
+    }
+}
+
+/// What a form-data import took from a file that also gave values the form refused (a value its
+/// field can't hold, such as an option it doesn't list): the repair log names the fields, so a
+/// partial import is said, not slipped in.
+fn note_rejected(doc: &mut pdfcraft_cos::Document, report: &pdfcraft_xfdf::Report) {
+    if report.rejected.is_empty() {
+        return;
+    }
+    let count = report.rejected.len();
+    doc.note_repair(format!(
+        "imported form data without the value{} the form refused for {}",
+        if count == 1 { "" } else { "s" },
+        listed_names(&report.rejected)
+    ));
+}
+
 /// At most this many characters of one skipped comment's description in the repair log.
 const SKIPPED_CHARS: usize = 200;
 
@@ -253,6 +279,11 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// The marks the edit's applied redactions took out (a batch's included), as they were when
+    /// each apply ran, for the renderer's check.
+    /// Each applied mark with the page object it was drawn on, which a later page move changes the
+    /// index of but not the identity.
+    pub(crate) redaction_marks: Vec<(pdfcraft_cos::ObjRef, pdfcraft_redact::Mark)>,
     /// What the edit's applied redactions left as it was that still holds the removed text.
     pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
     /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
@@ -310,6 +341,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_marks: Vec::new(),
             redaction_elsewhere: None,
             redaction_identification: pdfcraft_redact::Identification::default(),
             prepared: None,
@@ -529,7 +561,21 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
         Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
-        Edit::DuplicatePages { pages, at } => pdfcraft_organize::duplicate_pages(doc, pages, *at)?,
+        Edit::DuplicatePages { pages, at } => {
+            // A copy of a page cannot be tied back to the marks an earlier redaction of this edit
+            // applied: text put back under a mark would sit on the copy, unchecked. Fail closed.
+            if !cx.redaction_marks.is_empty() {
+                return Err(EditError::Invalid(
+                    "a batch that applies redactions can't also copy pages: the copies can't be checked against the marks; the document was not changed"
+                        .into(),
+                ));
+            }
+            pdfcraft_organize::duplicate_pages(doc, pages, *at)?
+        }
+        Edit::SpawnTemplate { name, at, rename } => {
+            pdfcraft_organize::spawn_template(doc, name, *at, *rename)?;
+        }
+        Edit::SetTemplateHidden { name, hidden } => pdfcraft_organize::set_template_hidden(doc, name, *hidden)?,
         Edit::ReplacePages { pages, name, bytes, src_pages } => {
             let src = crate::sources::open_source_into(name, bytes, doc)?;
             pdfcraft_organize::replace_pages(doc, pages, &src, src_pages)?;
@@ -565,7 +611,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, top: None })
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, left: None, top: None })
                 .collect();
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
@@ -991,8 +1037,15 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
+            let model = pdfcraft_model::pages(doc);
+            cx.redaction_marks.extend(
+                pdfcraft_redact::marks(doc)
+                    .into_iter()
+                    .filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page)))
+                    .filter_map(|m| model.get(m.page).map(|p| (p.obj, m))),
+            );
             let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
-            cx.redaction_overlays = report.overlays;
+            cx.redaction_overlays.extend(report.overlays);
             cx.redaction_elsewhere = Some(report.still_holding);
             cx.redaction_identification = report.identification;
         }
@@ -1040,7 +1093,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     let mut data = doc.clone();
                     match pdfcraft_xfdf::import(&mut data, bytes) {
                         Ok(report) => {
+                            // The importer hands back what the form refused. When that is all the
+                            // file gave, nothing was imported: say so, and leave the document
+                            // (and its Undo and Redo) as it was.
+                            if report.fields == 0 && report.comments == 0 && !report.rejected.is_empty() {
+                                return Err(pdfcraft_xfdf::DataError::Refused(listed_names(&report.rejected)).into());
+                            }
                             note_skipped(&mut data, &report);
+                            note_rejected(&mut data, &report);
                             *doc = data;
                         }
                         Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
@@ -1102,7 +1162,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 encrypt_metadata: p.encrypt_metadata,
                 seed,
             };
-            doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            // RC4-40 and RC4-128 are refused by `set_encryption` (RFC 7465); the legacy
+            // entry point is only for a file that must stay readable by a reader without AES.
+            if params.algorithm.is_legacy() {
+                doc.set_encryption_legacy(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            } else {
+                doc.set_encryption(&params).map_err(|e| EditError::Protection(e.to_string()))?;
+            }
         }
         Edit::RemoveProtection => {
             if doc.output_handler().is_none() {
