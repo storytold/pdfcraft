@@ -5132,6 +5132,7 @@ dependencies = [
  "plist",
  "pollster 1.0.1",
  "proptest",
+ "resvg",
  "rfd",
  "rustix 1.1.6",
  "serde",

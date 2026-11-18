@@ -194,6 +194,7 @@ impl PdfCraftApp {
         // a custom paper is stored by the name it was given.
         let d = &self.print_draft;
         v["print_paper"] = serde_json::json!((d.paper < d.paper_count()).then(|| d.paper_name()));
+        v["brand"] = self.brand.to_json();
         let size = self.print_draft.paper_size();
         v["print_paper_size"] = serde_json::json!([size.0, size.1]);
         v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
@@ -264,6 +265,7 @@ impl PdfCraftApp {
         if let Some(on) = v["system_title_bar"].as_bool() {
             self.system_title_bar = on;
         }
+        self.brand.restore(&v["brand"]);
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;
         }

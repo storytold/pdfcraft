@@ -34,6 +34,7 @@ macro_rules! tl_ctx {
         $crate::i18n::tr_ctx($crate::i18n::current(), $context, $s)
     };
 }
+pub mod brand;
 pub mod canvas;
 mod chrome;
 mod image_engine;
@@ -551,6 +552,9 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
     /// winit's frame instead of drawing the header bar (#1001).
     pub system_title_bar: bool,
+    /// Preferences ▸ Show in the tab strip: the app's or the user's logo and name at the strip's
+    /// left end, for a window whose strip is its title bar.
+    pub brand: brand::Brand,
     /// Whether the window currently has the app's header bar (`None` until the first frame).
     app_frame_shown: Option<bool>,
     pub password_prompt: Option<PasswordPrompt>,
