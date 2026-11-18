@@ -323,7 +323,7 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         let at = view.session.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
         let rotation = (view.view.rotation % 360 + cx.info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
         let menu = crate::edit_text_ui::PictureMenu { images: &images, page: sel.page, hit: sel.index, can_paste: cx.can_paste_image, at, rotation };
-        pick.image = crate::edit_text_ui::picture_menu(ui, view, &menu);
+        pick.image = crate::edit_text_ui::picture_menu(ui, &mut view.session, &menu);
         return;
     }
     // The comment the press went to, when it is the one selected, or connected lines being drawn.

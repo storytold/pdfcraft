@@ -17,7 +17,7 @@ use pdfcraft_engine::{Document, Edit, EditableObject, MAX_MOVE_OBJECTS, ObjectKi
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, PageGeometry, PageSession, PageXform};
 
 #[derive(Default)]
 pub(crate) struct ObjectSelection {
@@ -174,20 +174,20 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
-fn single(view: &DocView, page: usize) -> Option<ObjectTarget> {
-    if let Some((_, index)) = view.session.content.selected.filter(|(p, _)| *p == page) {
+fn single(session: &PageSession, page: usize) -> Option<ObjectTarget> {
+    if let Some((_, index)) = session.content.selected.filter(|(p, _)| *p == page) {
         Some(ObjectTarget { kind: ObjectKind::Added, index })
-    } else if let Some(s) = view.session.image_selection.as_ref().filter(|s| s.page == page) {
+    } else if let Some(s) = session.image_selection.as_ref().filter(|s| s.page == page) {
         Some(ObjectTarget { kind: ObjectKind::Image, index: s.index })
     } else {
-        view.session.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block })
+        session.line_editor.as_ref().filter(|e| e.page == page).map(|e| ObjectTarget { kind: ObjectKind::Text, index: e.block })
     }
 }
 
-fn leave_single(view: &mut DocView) {
-    view.session.content.selected = None;
-    view.session.image_selection = None;
-    view.session.line_editor = None;
+fn leave_single(session: &mut PageSession) {
+    session.content.selected = None;
+    session.image_selection = None;
+    session.line_editor = None;
 }
 
 /// ⌘A in Edit a PDF: every object on the current page selected together, as Acrobat selects
@@ -195,17 +195,18 @@ fn leave_single(view: &mut DocView) {
 /// objects can't be selected together, or has too many, says so and keeps what was selected.
 pub(crate) fn select_all(view: &mut DocView, doc: &Document) {
     let page = view.current();
-    match view.session.objects.inventory(doc, page) {
-        Ok(objects) if objects.len() > MAX_MOVE_OBJECTS => view.session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into()),
+    let session = &mut view.session;
+    match session.objects.inventory(doc, page) {
+        Ok(objects) if objects.len() > MAX_MOVE_OBJECTS => session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into()),
         Ok(objects) => {
-            view.session.objects.clear();
+            session.objects.clear();
             if !objects.is_empty() {
-                leave_single(view);
-                view.session.objects.page = Some(page);
-                view.session.objects.selected = objects;
+                leave_single(session);
+                session.objects.page = Some(page);
+                session.objects.selected = objects;
             }
         }
-        Err(_) => view.session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into()),
+        Err(_) => session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into()),
     }
 }
 
@@ -224,31 +225,31 @@ fn object_at(xf: &PageXform, info: &DocInfo, page: usize, objects: &[EditableObj
 /// taken: by that toggle, by the notice that text being typed must be finished first, or by the
 /// notice that the page's objects can't be selected together. `false` where no object lies (the
 /// press starts an area selection that adds to them) and off the page.
-pub(crate) fn modified_press_at(view: &mut DocView, doc: &Document, info: &DocInfo, page: usize, xf: &PageXform, p: Pos2) -> bool {
+pub(crate) fn modified_press_at(session: &mut PageSession, doc: &Document, info: &DocInfo, page: usize, xf: &PageXform, p: Pos2) -> bool {
     if !xf.rect.contains(p) {
         return false;
     }
-    if view.session.content.draft.is_some() || view.session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
-        view.session.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
+    if session.content.draft.is_some() || session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
+        session.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
         return true;
     }
-    let objects = match view.session.objects.inventory(doc, page) {
+    let objects = match session.objects.inventory(doc, page) {
         Ok(objects) => objects,
         Err(_) => {
-            view.session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
+            session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
             return true;
         }
     };
     let Some(object) = object_at(xf, info, page, &objects, p).and_then(|t| objects.iter().find(|o| o.target == t)) else {
         return false;
     };
-    if view.session.objects.page != Some(page) {
-        let single = single(view, page).and_then(|t| objects.iter().find(|o| o.target == t)).cloned();
-        view.session.objects.clear();
-        view.session.objects.page = Some(page);
-        view.session.objects.selected.extend(single);
+    if session.objects.page != Some(page) {
+        let single = single(session, page).and_then(|t| objects.iter().find(|o| o.target == t)).cloned();
+        session.objects.clear();
+        session.objects.page = Some(page);
+        session.objects.selected.extend(single);
     }
-    let s = &mut view.session.objects;
+    let s = &mut session.objects;
     if let Some(index) = s.selected.iter().position(|o| o.target == object.target) {
         s.selected.remove(index);
     } else if s.selected.len() < MAX_MOVE_OBJECTS {
@@ -256,8 +257,8 @@ pub(crate) fn modified_press_at(view: &mut DocView, doc: &Document, info: &DocIn
     } else {
         s.notice = Some(tl!("Select at most 1000 objects at a time.").into());
     }
-    leave_single(view);
-    view.go_to_page(page);
+    leave_single(session);
+    session.pending_page = Some((page, None));
     true
 }
 
@@ -265,19 +266,19 @@ pub(crate) fn modified_press_at(view: &mut DocView, doc: &Document, info: &DocIn
 /// Called before the families' handlers, since a modified press is the objects' whatever lies under it.
 /// Returns whether the press was taken.
 // PLAN: contract A-6 gives `Option<Edit>`; a modified press never makes an edit and the caller needs to know it was taken
-pub(crate) fn modified_press(view: &mut DocView, doc: &Document, info: &DocInfo, press: &PagePress) -> bool {
-    let Some(xf) = view.page_xform(press.page) else { return false };
+pub(crate) fn modified_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> bool {
+    let Some(xf) = session.page_xform(press.page, geo) else { return false };
     match press.phase.start() {
-        Some(start) if matches!(press.phase, PressPhase::Down { .. }) => modified_press_at(view, doc, info, press.page, &xf, start.origin),
+        Some(start) if matches!(press.phase, PressPhase::Down { .. }) => modified_press_at(session, doc, info, press.page, &xf, start.origin),
         _ => false,
     }
 }
 
 /// An area selection begins on `page`: the single selections of the families let go. The sweep itself is the
 /// press's span, read from each pass's press phase.
-pub(crate) fn begin_marquee(view: &mut DocView, page: usize) {
-    leave_single(view);
-    view.go_to_page(page);
+pub(crate) fn begin_marquee(session: &mut PageSession, page: usize) {
+    leave_single(session);
+    session.pending_page = Some((page, None));
 }
 
 /// The swept rectangle on screen while the press `phase` drags, whatever it started from.
@@ -292,18 +293,26 @@ pub(crate) fn marquee_rect(phase: &PressPhase) -> Option<Rect> {
 /// says (Shift adds, ⌘ or Ctrl toggles, none replaces), when it is over 3 points each way. A smaller sweep
 /// (a click) sweeps nothing: it clears the selection, or with Shift or ⌘ leaves it as it was. A double click
 /// within 3 points clears. More than [`MAX_MOVE_OBJECTS`] keeps the selection and says so.
-pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, start: PressStart, mods: Mods, pos: Pos2) {
-    let Some((page, xf)) = view.page_xforms().into_iter().find(|(_, xf)| xf.rect.contains(start.origin)) else { return };
-    let base = view.session.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
+pub(crate) fn end_marquee(
+    session: &mut PageSession,
+    doc: &Document,
+    info: &DocInfo,
+    start: PressStart,
+    mods: Mods,
+    pos: Pos2,
+    geo: PageGeometry<'_>,
+) {
+    let Some((page, xf)) = session.page_xforms(geo).into_iter().find(|(_, xf)| xf.rect.contains(start.origin)) else { return };
+    let base = session.objects.selection().filter(|(on, _)| *on == page).map(|(_, targets)| targets).unwrap_or_default();
     let mut sweep = MarqueeSelect::begin(start.origin, mods, base);
     sweep.update(pos);
     let rect = sweep.rect();
     if start.clicks >= 2 && rect.min.distance(rect.max) <= 3.0 {
-        view.session.objects.clear();
+        session.objects.clear();
         return;
     }
-    let Ok(objects) = view.session.objects.inventory(doc, page) else {
-        view.session.objects.clear();
+    let Ok(objects) = session.objects.inventory(doc, page) else {
+        session.objects.clear();
         return;
     };
     let area = rect.intersect(xf.rect);
@@ -311,14 +320,14 @@ pub(crate) fn end_marquee(view: &mut DocView, doc: &Document, info: &DocInfo, st
     let items = objects.iter().filter(|_| sweeps).map(|o| (o.target, screen(&xf, info, page, o)));
     let targets = sweep.selection(items);
     if targets.len() > MAX_MOVE_OBJECTS {
-        view.session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into());
+        session.objects.notice = Some(tl!("Select at most 1000 objects at a time.").into());
         return;
     }
     let selected: Vec<EditableObject> = targets.iter().filter_map(|t| objects.iter().find(|o| o.target == *t).cloned()).collect();
-    view.session.objects.clear();
+    session.objects.clear();
     if !selected.is_empty() {
-        view.session.objects.page = Some(page);
-        view.session.objects.selected = selected;
+        session.objects.page = Some(page);
+        session.objects.selected = selected;
     }
 }
 
@@ -348,8 +357,8 @@ fn outline_path(body: &PageBody<'_>, rect: Rect) -> BezPath {
 }
 
 /// The paragraph open for typing on `page` with no changes yet: its frame takes hold of the box.
-fn open_block(view: &DocView, page: usize) -> Option<usize> {
-    view.session.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
+fn open_block(session: &PageSession, page: usize) -> Option<usize> {
+    session.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
 }
 
 /// The controls of the objects selected together on each page shown: an outline per object (and one
@@ -358,11 +367,18 @@ fn open_block(view: &DocView, page: usize) -> Option<usize> {
 /// its release is [`objects_press`]'s.
 // PLAN: contract A-6 has no `presses` parameter; the live drag offset is read from the pass's presses of the
 // parts (pdf-canvas-w9 calls this with the `PagePress`es `PageParts` reported)
-pub(crate) fn object_controls(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocView, info: &DocInfo, presses: &[PagePress]) -> Option<Edit> {
+pub(crate) fn object_controls(
+    ui: &mut Ui,
+    body: &PageBody<'_>,
+    session: &mut PageSession,
+    info: &DocInfo,
+    presses: &[PagePress],
+    geo: PageGeometry<'_>,
+) -> Option<Edit> {
     for placed in body.pages {
         let page = placed.page;
-        let Some(xf) = view.page_xform(page) else { continue };
-        let s = &view.session.objects;
+        let xf = geo.xform_of(placed);
+        let s = &session.objects;
         if s.page != Some(page) || s.selected.is_empty() {
             continue;
         }
@@ -389,12 +405,19 @@ pub(crate) fn object_controls(ui: &mut Ui, body: &PageBody<'_>, view: &mut DocVi
 /// The parts of the objects selected together on each page shown: one per object that a drag moves, and the frame
 /// band of the paragraph open for typing. [`object_controls`] draws their outlines and [`objects_press`] takes their
 /// presses.
-pub(crate) fn page_parts(out: &mut Vec<PagePart>, view: &mut DocView, doc: &Document, info: &DocInfo, pages: &[PlacedPage]) {
+pub(crate) fn page_parts(
+    out: &mut Vec<PagePart>,
+    session: &mut PageSession,
+    doc: &Document,
+    info: &DocInfo,
+    pages: &[PlacedPage],
+    geo: PageGeometry<'_>,
+) {
     for placed in pages {
         let page = placed.page;
-        let Some(xf) = view.page_xform(page) else { continue };
-        if let Some(block) = open_block(view, page)
-            && let Ok(objects) = view.session.objects.inventory(doc, page)
+        let xf = geo.xform_of(placed);
+        if let Some(block) = open_block(session, page)
+            && let Ok(objects) = session.objects.inventory(doc, page)
             && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
         {
             out.extend(
@@ -402,7 +425,7 @@ pub(crate) fn page_parts(out: &mut Vec<PagePart>, view: &mut DocView, doc: &Docu
                     .map(|band| PagePart::new(Owner::Frame { block }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move)),
             );
         }
-        let s = &view.session.objects;
+        let s = &session.objects;
         if s.page != Some(page) || s.selected.is_empty() {
             continue;
         }
@@ -417,36 +440,35 @@ pub(crate) fn page_parts(out: &mut Vec<PagePart>, view: &mut DocView, doc: &Docu
 /// A press of a part [`object_controls`] registered: the objects selected together, or the frame of
 /// the paragraph open for typing, which selects its box and moves it. The drag shows the move; the
 /// release past 3 points returns it as one edit, and one within 3 changes nothing.
-pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, press: &PagePress) -> Option<Edit> {
+pub(crate) fn objects_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> Option<Edit> {
     let page = press.page;
     match press.phase {
         PressPhase::Down { .. } => {
             if let Owner::Frame { block } = press.owner {
-                let object = view
-                    .session
+                let object = session
                     .objects
                     .inventory(doc, page)
                     .ok()
                     .and_then(|objects| objects.into_iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block }));
                 let object = object?;
-                view.session.objects.clear();
-                view.session.objects.page = Some(page);
-                view.session.objects.selected.push(object);
-                leave_single(view);
-                view.go_to_page(page);
+                session.objects.clear();
+                session.objects.page = Some(page);
+                session.objects.selected.push(object);
+                leave_single(session);
+                session.pending_page = Some((page, None));
             }
             None
         }
         PressPhase::Release { start, pos, .. } => {
-            if start.origin.distance(pos) <= 3.0 || view.session.pending_edit.is_some() {
+            if start.origin.distance(pos) <= 3.0 || session.pending_edit.is_some() {
                 return None;
             }
-            let xf = view.page_xform(page)?;
+            let xf = session.page_xform(page, geo)?;
             let (a, b) = (xf.screen_to_view(start.origin), xf.screen_to_view(pos));
             match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
-                Ok(offset) => Some(view.session.objects.move_by(page, offset)),
+                Ok(offset) => Some(session.objects.move_by(page, offset)),
                 Err(_) => {
-                    view.session.objects.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into());
+                    session.objects.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into());
                     None
                 }
             }
@@ -458,14 +480,14 @@ pub(crate) fn objects_press(view: &mut DocView, doc: &Document, info: &DocInfo, 
 
 /// An arrow key moves the selected objects, else the selected picture, a point (`far`: ten points), as
 /// in Acrobat. `direction` is a unit vector on screen. Nothing while an edit waits to be applied.
-pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bool) -> Option<Edit> {
-    if view.session.pending_edit.is_some() {
+pub(crate) fn nudge(session: &mut PageSession, doc: &Document, direction: Vec2, far: bool, geo: PageGeometry<'_>) -> Option<Edit> {
+    if session.pending_edit.is_some() {
         return None;
     }
-    let image = view.session.image_selection.as_ref().map(|s| (s.page, s.index));
-    let objects = view.session.objects.page.filter(|_| !view.session.objects.selected.is_empty());
+    let image = session.image_selection.as_ref().map(|s| (s.page, s.index));
+    let objects = session.objects.page.filter(|_| !session.objects.selected.is_empty());
     let page = objects.or(image.map(|(page, _)| page))?;
-    let xf = view.page_xform(page)?;
+    let xf = session.page_xform(page, geo)?;
     let step = direction * if far { 10.0 } else { 1.0 };
     // A point on screen, whatever the zoom and the view's rotation: one screen pixel's step in
     // view space, at unit length.
@@ -478,7 +500,7 @@ pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bo
     let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
     let offset = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]).ok()?;
     if objects.is_some() {
-        return Some(view.session.objects.move_by(page, offset));
+        return Some(session.objects.move_by(page, offset));
     }
     let (page, index) = image?;
     let r = doc.page_images(page).get(index).map(|im| im.rect)?;
@@ -488,11 +510,11 @@ pub(crate) fn nudge(view: &mut DocView, doc: &Document, direction: Vec2, far: bo
 
 /// Delete removes the selected objects, as in Acrobat: a paragraph selected by its frame, or
 /// everything an area selection took, goes at once instead of one typed character at a time.
-pub(crate) fn delete(view: &DocView) -> Option<Edit> {
-    if view.session.pending_edit.is_some() {
+pub(crate) fn delete(session: &PageSession) -> Option<Edit> {
+    if session.pending_edit.is_some() {
         return None;
     }
-    let (page, targets) = view.session.objects.selection()?;
+    let (page, targets) = session.objects.selection()?;
     // The selection stays until the edit applies: `prepare` clears it when the document changes,
     // and a refused delete (text used as a clipping path) leaves it selected.
     Edit::delete_objects(page, targets)

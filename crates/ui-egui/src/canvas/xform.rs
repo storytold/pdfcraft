@@ -2,9 +2,48 @@ use craft::pages::ui::PlacedPage;
 use egui::{Color32, Pos2, Rect, pos2};
 use pdfcraft_render::DocInfo;
 
-use super::DocView;
+use super::{DocView, PageSession};
+
+/// What the page body's functions read from the view besides the [`PageSession`]: every page's size, the view's
+/// rotation and the document area on screen. The page view holds the view state while the body runs, so the body
+/// reads these values before and hands them on.
+#[derive(Clone, Copy)]
+pub(crate) struct PageGeometry<'a> {
+    /// Every page's size in view space, by page index, unturned by the view (`DocView::page_sizes`).
+    pub(crate) sizes: &'a [(f32, f32)],
+    /// The view's rotation, in degrees clockwise.
+    pub(crate) rotation: u16,
+    /// The document area on screen.
+    pub(crate) viewport: Rect,
+}
+
+impl PageGeometry<'_> {
+    /// The transform of a placed page, with the view's rotation and the page's size as the view reads it.
+    pub(crate) fn xform_of(&self, placed: &PlacedPage) -> PageXform {
+        // A page the list no longer has (an edit since the pass) maps as a unit page; `of` keeps the size positive.
+        let size = self.sizes.get(placed.page).copied().unwrap_or((1.0, 1.0));
+        PageXform::of(placed, self.rotation, size)
+    }
+}
+
+impl PageSession {
+    /// Where `page` is drawn in the last pass (this pass's while the page body runs), with its coordinate mapping.
+    pub(crate) fn page_xform(&self, page: usize, geo: PageGeometry<'_>) -> Option<PageXform> {
+        self.placed.iter().find(|p| p.page == page).map(|p| geo.xform_of(p))
+    }
+
+    /// Where the pages are on screen in the last pass, with their transforms.
+    pub(crate) fn page_xforms(&self, geo: PageGeometry<'_>) -> Vec<(usize, PageXform)> {
+        self.placed.iter().map(|p| (p.page, geo.xform_of(p))).collect()
+    }
+}
 
 impl DocView {
+    /// The page sizes, rotation and document area of the last pass, as the page body's functions read them.
+    pub(crate) fn geometry(&self) -> PageGeometry<'_> {
+        PageGeometry { sizes: &self.page_sizes, rotation: self.view.rotation, viewport: self.viewport }
+    }
+
     /// Where `page` is drawn on screen in the last pass (`None` when it was not on screen).
     pub fn page_screen_rect(&self, page: usize) -> Option<Rect> {
         self.session.placed.iter().find(|p| p.page == page).map(|p| p.rect)
@@ -28,19 +67,12 @@ impl DocView {
 
     /// Where `page` is drawn in the last pass (this pass's while the page body runs), with its coordinate mapping.
     pub fn page_xform(&self, page: usize) -> Option<PageXform> {
-        self.session.placed.iter().find(|p| p.page == page).map(|p| self.xform_of(p))
+        self.session.page_xform(page, self.geometry())
     }
 
     /// Where the pages are on screen in the last pass, with their transforms.
     pub(crate) fn page_xforms(&self) -> Vec<(usize, PageXform)> {
-        self.session.placed.iter().map(|p| (p.page, self.xform_of(p))).collect()
-    }
-
-    /// The transform of a placed page, with the view's rotation and the page's size as the view reads it.
-    fn xform_of(&self, placed: &PlacedPage) -> PageXform {
-        // A page the list no longer has (an edit since the pass) maps as a unit page; `of` keeps the size positive.
-        let size = self.page_sizes.get(placed.page).copied().unwrap_or((1.0, 1.0));
-        PageXform::of(placed, self.view.rotation, size)
+        self.session.page_xforms(self.geometry())
     }
 }
 

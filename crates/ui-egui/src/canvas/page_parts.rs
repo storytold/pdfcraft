@@ -244,8 +244,8 @@ pub(crate) struct PagePartsOutput {
     pub(crate) press: Option<PagePress>,
     /// A key the focused part was given: a form field's toggle, its arrows, Enter or typed text.
     pub(crate) key: Option<(Owner, Intent)>,
-    /// The part under the pointer this pass.
-    pub(crate) hovered: Option<Owner>,
+    /// The part under the pointer this pass, and its page.
+    pub(crate) hovered: Option<(Owner, usize)>,
     /// The part focus arrived on this pass (Tab, a focus request or a click): a form field opens on it.
     pub(crate) focused: Option<(Owner, usize)>,
 }
@@ -276,7 +276,7 @@ pub(crate) struct PageParts<'a> {
 struct Report {
     press: Option<PagePress>,
     key: Option<(Owner, Intent)>,
-    hovered: Option<Owner>,
+    hovered: Option<(Owner, usize)>,
     focused: Option<(Owner, usize)>,
 }
 
@@ -383,7 +383,7 @@ impl Component for PageParts<'_> {
             let Some(result) = cx.part_if_declared(at) else { continue };
             let (press, hovered) = (result.press, result.hovered);
             if hovered && self.report.hovered.is_none() {
-                self.report.hovered = Some(part.owner);
+                self.report.hovered = Some((part.owner, part.page));
             }
             if press.phase.is_press() && self.report.press.is_none() {
                 self.report.press = Some(PagePress { owner: part.owner, page: part.page, phase: press.phase, mods: press.mods });
