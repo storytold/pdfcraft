@@ -194,3 +194,7 @@ sync_github_name = false
 
 [people.enriquemelzer-bit]
 sync_github_name = true
+
+[people.ExMonsterJoker]
+real_name = "Aris Akbar P"
+sync_github_name = true
