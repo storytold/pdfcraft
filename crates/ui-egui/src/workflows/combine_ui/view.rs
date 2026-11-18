@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use craft::behavior::IconId;
-use craft::theme::{Tone, Variant};
+use craft::theme::variant::{Tone, Variant};
 use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::{Button, IconButton, SplitButton};
 use craft::ui::choice::Segmented;

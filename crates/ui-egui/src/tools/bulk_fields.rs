@@ -23,7 +23,7 @@ use egui::{Context, Ui};
 use pdfcraft_engine::{BorderStyle, CheckStyle, DocId, Edit, FieldFont, FieldLookPatch, FieldProps, FormFieldKind, field_flags};
 use serde_json::{Value as Json, json};
 
-use crate::colours::{self, RecentColours};
+use crate::comments::colours::{self, RecentColours};
 use crate::{PdfCraftApp, prepare};
 
 /// One property shown by the dialog. `apply` is explicit: merely opening the dialog, or
@@ -424,13 +424,7 @@ fn apply(app: &mut PdfCraftApp, draft: &Draft) -> Result<(), Label> {
 /// One property: a group box whose check box is `apply`, enclosing the control, which binds the value as a `Mixed`.
 /// An edit makes a mixed value concrete. `unknown` shows the control as mixed while the row is not applied, for a value the
 /// control cannot show.
-fn row<T: Value>(
-    ui: &mut Ui,
-    label: &str,
-    c: &mut Change<T>,
-    unknown: bool,
-    control: impl FnOnce(&mut Ui, &mut Mixed<T>),
-) {
+fn row<T: Value>(ui: &mut Ui, label: &str, c: &mut Change<T>, unknown: bool, control: impl FnOnce(&mut Ui, &mut Mixed<T>)) {
     let Change { value, mixed, apply } = c;
     let hidden = unknown && !*apply;
     GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
@@ -599,7 +593,8 @@ fn appearance(ui: &mut Ui, d: &mut Draft, recent: &RecentColours, request: &mut 
 /// The Options tab: what applies to the kind of field selected.
 fn options(ui: &mut Ui, d: &mut Draft) {
     if d.text_fields || d.choice_fields {
-        let aligns: Vec<Entry<i64>> = [(0, "Left"), (1, "Center"), (2, "Right")].into_iter().map(|(v, label)| Entry::new(v, tl!(label).to_owned())).collect();
+        let aligns: Vec<Entry<i64>> =
+            [(0, "Left"), (1, "Center"), (2, "Right")].into_iter().map(|(v, label)| Entry::new(v, tl!(label).to_owned())).collect();
         choose(ui, "Alignment:", &mut d.align, &aligns);
     }
     if d.text_fields {

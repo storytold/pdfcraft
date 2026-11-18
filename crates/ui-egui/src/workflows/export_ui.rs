@@ -17,8 +17,9 @@ use craft::ui::runtime::env::Label;
 use craft::ui::value_drag::SliderScale;
 use pdfcraft_engine::export::{ExportSource, Exporter, ImageFormat};
 
+use super::job_count::JobCount;
+use crate::PdfCraftApp;
 use crate::notices::{self, ProgressKey, ProgressNotice};
-use crate::{JobCount, PdfCraftApp};
 
 /// The queue of exports, keyed by document, each answering with its summary line.
 pub(crate) type ExportJobs = craft::host::queue::JobQueue<crate::DocId, String>;

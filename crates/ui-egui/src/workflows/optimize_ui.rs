@@ -24,8 +24,9 @@ use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 // PLAN: assumed `crate::JobCount` (pdf-print-ocr-w6), `crate::notices::{ProgressKey, ProgressNotice, set_progress, end_progress}` (pdf-chrome-w19),
 // `crate::dialogs::host::{open, open_over}(app, dialog[, parent])` (pdf-hub-w2) and the facade paths above (`craft::ui::patterns::form_dialogs`, `craft::ui::table`,
 // `craft::ui::display::Text::show`, `Table::show_items(..).response`).
+use super::job_count::JobCount;
+use crate::PdfCraftApp;
 use crate::notices::{self, ProgressKey, ProgressNotice};
-use crate::{JobCount, PdfCraftApp};
 
 /// The dialog's key; its answer is read back by [`pass`].
 pub(crate) const OPTIMIZE_KEY: &str = "optimize";

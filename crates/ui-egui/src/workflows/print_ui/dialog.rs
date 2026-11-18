@@ -2,16 +2,15 @@
 
 use craft::print::ui::{Destination, DriverControls, Duplex as UiDuplex, HostedPrint, PrintLayout, Settings, State};
 use craft_ui::patterns::form_dialogs::PagerStep;
-use craft_ui::runtime::env::Label;
 use craft_ui::primitives::{ThumbnailOptions, Thumbnails};
+use craft_ui::runtime::env::Label;
 use pdfcraft_engine::print::{self, spool};
 
 use super::draft::{Handling, PrintDraft, Which};
 use super::sheet::SheetInput;
 use super::{PREVIEW_MAX_SIDE, PrintStart, body, default_printer, listed_printers, offered, offered_printers, sheet, still_looking};
 use crate::PdfCraftApp;
-// PLAN: assumed `DocPages` and `PrintPage { page, grayscale }` (pdf-canvas-w10)
-use crate::canvas::{DocPages, PrintPage};
+use crate::canvas::pictures::{DocPages, PrintPage};
 
 fn duplex_to_ui(duplex: Option<spool::Duplex>) -> Option<UiDuplex> {
     duplex.map(|d| match d {

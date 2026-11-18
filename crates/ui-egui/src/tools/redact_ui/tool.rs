@@ -2,6 +2,7 @@
 //! it ends), a press on free page space draws a box that becomes one mark.
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon};
+use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 use egui::Pos2;
@@ -10,7 +11,8 @@ use pdfcraft_render::DocInfo;
 
 use crate::QuickTool;
 use crate::canvas::PageXform;
-use crate::canvas::{DocView, PageBoxDrag, PageSelectTool, PlacedPage, ToolMarks};
+use crate::canvas::page_select::PageSelectTool;
+use crate::canvas::{DocView, PageBoxDrag, ToolMarks};
 
 /// The smallest box, in screen points on each side, that counts as a mark.
 const LEAST_BOX: f32 = 3.0;

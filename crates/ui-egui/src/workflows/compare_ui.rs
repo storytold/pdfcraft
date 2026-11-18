@@ -5,7 +5,7 @@
 use craft::behavior::{IconId, Selection, keyed};
 use craft::pages::ui::{Lead, PageRangeField, SyncedViews, SyncedViewsState};
 use craft::pages::{format_pages, parse_pages};
-use craft::theme::Tone;
+use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Segmented};
 use craft::ui::contract::{Bind, Entry, Pad, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
@@ -187,11 +187,20 @@ pub(crate) fn panel(ui: &mut egui::Ui, state: &Option<CompareState>, id: DocId) 
         let order: Vec<usize> = (0..c.changes.len()).filter(|_| s.show_text).take(2000).collect();
         let mut selection = Selection::new(s.selected.into_iter().collect(), s.selected, s.selected);
         let rows = keyed(&order, |i| *i);
-        List::new(tl!("Differences").to_string()).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(ui, &rows, &mut |key, item| {
-            let Some(ch) = c.changes.get(*key) else { return ListRow::new(String::new()) };
-            let detail = crate::i18n::fmt(tl!("{kind} · page {p}"), &[("kind", kind_label(ch.kind).as_str()), ("p", &(ch.new.page + 1).to_string())]);
-            ListRow::new(change_text(ch)).detail(detail).hue(DataColor::new(colour(ch.kind)), HueTarget::Icon).icon(IconSpec::svg(IconId::new("square"))).state(item.row.clone())
-        });
+        List::new(tl!("Differences").to_string()).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
+            ui,
+            &rows,
+            &mut |key, item| {
+                let Some(ch) = c.changes.get(*key) else { return ListRow::new(String::new()) };
+                let detail =
+                    crate::i18n::fmt(tl!("{kind} · page {p}"), &[("kind", kind_label(ch.kind).as_str()), ("p", &(ch.new.page + 1).to_string())]);
+                ListRow::new(change_text(ch))
+                    .detail(detail)
+                    .hue(DataColor::new(colour(ch.kind)), HueTarget::Icon)
+                    .icon(IconSpec::svg(IconId::new("square")))
+                    .state(item.row.clone())
+            },
+        );
         if let Some(picked) = selection.items.first().copied().filter(|p| Some(*p) != s.selected) {
             action = Some(PanelAction::Select(picked));
         }
@@ -379,18 +388,22 @@ pub(crate) fn compare_area(app: &mut PdfCraftApp, old: usize, new: usize, ui: &m
     let Some(mut pair) = app.compare.as_mut().map(|c| std::mem::take(&mut c.views)) else { return };
     let left = crate::i18n::fmt(tl!("Old file: {name}"), &[("name", &names[0])]);
     let right = crate::i18n::fmt(tl!("New file: {name}"), &[("name", &names[1])]);
-    SyncedViews::new(tl!("Comparison").to_string(), &mut pair).captions(left, right).halves(ui, (&mut states.0, &mut states.1), |ui, rect, state, half| {
-        let index = if half == Lead::Left { old } else { new };
-        // The app draws through its own view state: the pair's state for this half stands in for it during the draw.
-        if let Some(v) = app.views.get_mut(index) {
-            std::mem::swap(&mut v.view, state);
-        }
-        let output = crate::canvas::document_area_at(app, index, rect, ui);
-        if let Some(v) = app.views.get_mut(index) {
-            std::mem::swap(&mut v.view, state);
-        }
-        output
-    });
+    SyncedViews::new(tl!("Comparison").to_string(), &mut pair).captions(left, right).halves(
+        ui,
+        (&mut states.0, &mut states.1),
+        |ui, rect, state, half| {
+            let index = if half == Lead::Left { old } else { new };
+            // The app draws through its own view state: the pair's state for this half stands in for it during the draw.
+            if let Some(v) = app.views.get_mut(index) {
+                std::mem::swap(&mut v.view, state);
+            }
+            let output = crate::canvas::document_area_at(app, index, rect, ui);
+            if let Some(v) = app.views.get_mut(index) {
+                std::mem::swap(&mut v.view, state);
+            }
+            output
+        },
+    );
     // A half can close its own tab while it draws (#3915): each is found again by id.
     for (id, state) in ids.into_iter().zip([states.0, states.1]) {
         if let Some(v) = app.views.iter_mut().find(|v| v.id == id) {

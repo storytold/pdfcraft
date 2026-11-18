@@ -146,7 +146,8 @@ fn options_dialog(fields: &mut DialogFields, pages: usize, current: usize) -> Pa
         Param::new("category", tl!("Category:"), ParamKind::choice(categories, Some(category_id(Category::Document)))),
     ];
     for rule in Rule::ALL {
-        params.push(Param::new(rule_key(rule), tl!(rule.description()), ParamKind::bool(true)).visible_when("category", category_id(rule.category())));
+        params
+            .push(Param::new(rule_key(rule), tl!(rule.description()), ParamKind::bool(true)).visible_when("category", category_id(rule.category())));
     }
     params.push(
         Param::custom("rules.all", tl!("Rules"), |ui, fields, _| {
@@ -310,11 +311,7 @@ fn result_lines(report: &Report, collapsed: &BTreeSet<Category>, expanded: &BTre
 /// What opening a finding does: its tag when it has one, else its page.
 fn finding_action(report: &Report, rule: Rule, index: usize) -> Option<PanelAction> {
     let f = report.result(rule)?.findings.get(index)?;
-    if let Some(object) = f.object {
-        Some(PanelAction::GoToTag(object, f.page, f.bbox))
-    } else {
-        f.page.map(|p| PanelAction::GoTo(p, f.bbox))
-    }
+    if let Some(object) = f.object { Some(PanelAction::GoToTag(object, f.page, f.bbox)) } else { f.page.map(|p| PanelAction::GoTo(p, f.bbox)) }
 }
 
 /// The summary line over the results.
