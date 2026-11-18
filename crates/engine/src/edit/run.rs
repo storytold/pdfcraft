@@ -203,6 +203,25 @@ fn check_import_permission(p: Option<&pdfcraft_cos::Permissions>, comments: bool
     Ok(())
 }
 
+/// The comments on the document's pages when the opening password allows neither comments nor
+/// changes to the document (Table 22, bits 6 and 4), for [`keep_comments`]; `None` otherwise.
+fn comments_without_permission(
+    p: Option<&pdfcraft_cos::Permissions>,
+    doc: &pdfcraft_cos::Document,
+) -> Option<std::collections::HashSet<pdfcraft_cos::ObjRef>> {
+    p.filter(|p| !(p.annotate() || p.modify())).map(|_| page_comments(doc))
+}
+
+/// Refuses an edit that removed one of the comments `before` held ([`comments_without_permission`]).
+fn keep_comments(before: Option<std::collections::HashSet<pdfcraft_cos::ObjRef>>, doc: &pdfcraft_cos::Document) -> Result<(), EditError> {
+    match before {
+        Some(before) if !before.is_subset(&page_comments(doc)) => {
+            Err(EditError::NotPermitted("removing its comments, which laying the form out again for this data would do"))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The comments on the document's pages: every annotation in a page's `/Annots` other than a
 /// widget or a link, by object.
 fn page_comments(doc: &pdfcraft_cos::Document) -> std::collections::HashSet<pdfcraft_cos::ObjRef> {
@@ -1129,19 +1148,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     // Laying the form out again replaces its pages' annotations with the ones it
                     // generates, so a comment on them goes too: without the permission to comment
                     // (or change the document), the import is refused rather than taking it.
-                    let comments_before = cx.permissions.as_ref().filter(|p| !(p.annotate() || p.modify())).map(|_| page_comments(doc));
+                    let comments_before = comments_without_permission(cx.permissions.as_ref(), doc);
                     let r = pdfcraft_xfa::import_data(doc, &text, expect_root.as_deref(), cx.xfa_datasets)
                         .map_err(|e| EditError::Write(e.to_string()))?;
                     cx.xfa_datasets = r.stream.or(cx.xfa_datasets);
                     cx.xfa_out.errors.extend(r.warnings);
                     cx.xfa_out.console.push(format!("Imported XFA data: {} node(s)", r.nodes));
                     xfa_after_data_change(doc, cx, true)?;
-                    if let Some(before) = comments_before {
-                        let after = page_comments(doc);
-                        if !before.is_subset(&after) {
-                            return Err(EditError::NotPermitted("removing its comments, which laying the form out again for this data would do"));
-                        }
-                    }
+                    keep_comments(comments_before, doc)?;
                 }
                 Some(Err(why)) if !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => return Err(EditError::Invalid(why)),
                 _ => {
