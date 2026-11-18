@@ -428,6 +428,40 @@ fn a_fields_entry_that_is_one_field_is_read_as_a_list_of_it() {
     assert!(whole, "a null /Kids holds none");
 }
 
+/// A new signature field joins a `/Fields` that is one field dictionary, by reference or written
+/// in place, without taking its place: the saved form still lists the field tree it had.
+#[test]
+fn a_new_signature_field_keeps_a_fields_entry_that_is_one_field() {
+    let (id, opts) = signer();
+    for fields in ["4 0 R", "<< /T (top) /Kids [5 0 R] >>"] {
+        let pdf = Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields {fields} >> >>"))
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R] >>")
+            .obj("<< /T (top) /Kids [5 0 R] >>")
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [10 10 110 60] /P 3 0 R /Parent 4 0 R >>");
+        let signed = sign(&Document::open(Arc::new(pdf.build())).unwrap(), &id, &opts).unwrap();
+        let doc = Document::open(Arc::new(signed)).unwrap();
+        let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap();
+        let form = catalog.get(b"AcroForm").map(|f| doc.resolve(f).as_ref().clone()).unwrap();
+        let list = form.as_dict().and_then(|f| f.get(b"Fields")).map(|l| doc.resolve(l).as_ref().clone()).unwrap();
+        let names: Vec<Vec<u8>> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| {
+                doc.resolve(f).as_dict().and_then(|d| {
+                    d.get(b"T").and_then(|t| match t {
+                        Object::String(s) => Some(s.bytes.clone()),
+                        _ => None,
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(names, [b"top".to_vec(), b"Signature1".to_vec()], "{fields}");
+    }
+}
+
 /// A kid with no /T is not always a widget. One with kids of its own is a field node, walked and
 /// adding nothing to the names below it, so the signed field under it is listed. A signature
 /// field and widget in one, unnamed under a field that isn't a signature field, cuts the walk
