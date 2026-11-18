@@ -521,9 +521,9 @@ impl PdfCraftApp {
         self.run_focus_scripts(ctx, i);
         self.run_field_triggers(ctx, i);
         match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
-            Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(ctx),
-            Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(ctx, Some(at)),
-            Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(ctx),
+            Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
+            Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),
+            Some(crate::canvas::ViewAction::ReplacePages) => self.replace_pages_dialog(),
             Some(crate::canvas::ViewAction::Save) => {
                 self.save_active(ctx, SaveTarget::InPlace);
             }
@@ -878,7 +878,7 @@ impl PdfCraftApp {
     /// user has been told why, so the typing isn't lost and the caller can stop.
     fn apply_queued_edit(&mut self, ctx: &egui::Context, i: usize) -> bool {
         let Some(edit) = self.views.get_mut(i).and_then(|v| v.session.pending_edit.take()) else { return true };
-        let signature = self.views.get_mut(i).is_some_and(|v| std::mem::take(&mut v.session.fill_signature));
+        let signature_page = self.views.get_mut(i).and_then(|v| v.session.fill_signature.take());
         let doc_id = self.views.get(i).map(|v| v.id);
         let committed = self.views.get_mut(i).and_then(|v| v.session.forms.committed.take());
         let typed = match (&edit, &committed) {
@@ -886,7 +886,9 @@ impl PdfCraftApp {
             _ => false,
         };
         if self.apply_edit(ctx, edit) {
-            if signature && let Some(id) = doc_id {
+            if signature_page.is_some()
+                && let Some(id) = doc_id
+            {
                 self.placed_signatures.insert(id);
                 // A new signature shows the Lock now notice again, even if the last was dismissed.
                 if let Some(view) = self.views.get_mut(i) {
@@ -1435,7 +1437,7 @@ mod revert_draft_tests {
     fn queue_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
         app.views[index].session.forms.focus = Some(focus(text));
         let form = app.session.get(app.views[index].id).unwrap().form.clone();
-        crate::forms_ui::commit(&mut app.views[index], &form);
+        crate::forms_ui::commit(&mut app.views[index].session, &form);
         assert!(app.views[index].session.forms.committed.is_some() && app.views[index].session.pending_edit.is_some());
     }
 

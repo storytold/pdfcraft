@@ -302,8 +302,9 @@ pub struct PageSession {
     pub(crate) presenter: presenter::Presenter,
     /// An edit requested by the view (organize toolbar, keys), applied by the app this frame.
     pub pending_edit: Option<Edit>,
-    /// The pending edit is a Fill & Sign signature or initials: the app notes the document as signed once it applies.
-    pub(crate) fill_signature: bool,
+    /// The pending edit is a Fill & Sign signature or initials placed on this page: once it applies, the app notes
+    /// the document as signed and selects the new mark there.
+    pub(crate) fill_signature: Option<usize>,
     /// The page a press or key made the current one (Edit text's objects selected on it, a radio button stepped to),
     /// with the user-space rectangle on it to scroll into view (a field Tab moved to), gone to by the app after the
     /// pass: the page view holds the view state while the body runs.
@@ -398,7 +399,7 @@ impl PageSession {
             compare_marks: Vec::new(),
             presenter: Default::default(),
             pending_edit: None,
-            fill_signature: false,
+            fill_signature: None,
             pending_page: None,
             pending_redaction: None,
             redaction_refused: false,
@@ -1589,7 +1590,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         generation,
     } = requests;
     if let Some((page, at)) = app.views[index].session.comments.attach_at.take() {
-        app.attach_file_comment(ctx, page, at);
+        app.attach_file_comment(page, at);
     }
     if let Some((p, i)) = open_props {
         app.open_comment_props(ctx, p, i);
@@ -1643,7 +1644,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
         app.views[index].session.pending_edit = edit;
     }
     match image_action {
-        Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(ctx, page, index),
+        Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),
         Some(crate::edit_text_ui::ImageAction::Save(page, index)) => app.save_page_image(page, index),
         Some(crate::edit_text_ui::ImageAction::Copy(page, index)) => {
             app.copy_page_image(page, index);
@@ -1746,7 +1747,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
             app.quick_tool = QuickTool::AddText;
         }
         Some(PageMenuAction::AddImage) => {
-            app.add_image_dialog(ctx);
+            app.add_image_dialog();
         }
         Some(PageMenuAction::DeletePage(page)) => {
             app.views[index].session.pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });

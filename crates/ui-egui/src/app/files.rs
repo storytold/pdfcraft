@@ -458,14 +458,16 @@ impl PdfCraftApp {
 
     /// Edit ▸ Attach a file…: choose a file, then attach it to the active document and show
     /// the Attachments panel with it.
-    pub fn attach_file_dialog(&mut self, ctx: &egui::Context) {
+    pub fn attach_file_dialog(&mut self) {
         if self.active_ids().is_none() {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let target = self.pick_target(self.active_ids().map(|(_, id)| id));
-            self.pick_first(PickRequest::open("attachment").title(tl!("Attach a file").to_string()), target, |app, path| app.attach_file(ctx, &path));
+            self.pick_first(PickRequest::open("attachment").title(tl!("Attach a file").to_string()), target, |app, ctx, path| {
+                app.attach_file(ctx, &path)
+            });
         }
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Attaching files is not available on the web yet");
@@ -524,7 +526,7 @@ impl PdfCraftApp {
             }
             (Ok(bytes), _) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.pick_first(PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")), None, move |app, path| {
+                self.pick_first(PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")), None, move |app, _, path| {
                     match craft::atomic::atomic_write(&path, &bytes) {
                         Ok(()) => {
                             // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
@@ -952,11 +954,10 @@ impl PdfCraftApp {
         })
     }
 
-    pub fn open_dialog(&mut self, ctx: &egui::Context) {
+    pub fn open_dialog(&mut self) {
         self.startup_superseded = true;
-        // PLAN: `pick_file(request, target, continuation)` assumed from pdf-shell-w14; the continuation gets the `Picked`.
         // The web answers `Picked::Contents`, the desktop `Picked::Paths`.
-        self.pick_file(Self::open_request(), None, |app, picked| match picked {
+        self.pick_file(Self::open_request(), None, |app, ctx, picked| match picked {
             #[cfg(not(target_arch = "wasm32"))]
             Picked::Paths(paths) => {
                 for path in paths {

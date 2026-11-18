@@ -7,15 +7,18 @@ use pdfcraft_engine::DocId;
 
 use super::PdfCraftApp;
 
+/// What runs once a save has ended one way or the other, given the context of the pass it ends on.
+type SaveThen = Box<dyn FnOnce(&mut PdfCraftApp, &egui::Context)>;
+
 /// A save held back by [`Dialog::LockSignatures`](crate::Dialog::LockSignatures) (#2149).
 pub struct PendingLock {
     pub id: DocId,
     target: SaveTarget,
     /// What was to run once the document is written (close its tab, quit).
-    after: Box<dyn FnOnce(&mut PdfCraftApp)>,
+    after: SaveThen,
     /// What runs when the save does not happen after all.
     // PLAN: a cancelled Lock signatures dialog drops this without running it (`dialogs.rs`, pdf-hub-w2): run it there
-    failed: Box<dyn FnOnce(&mut PdfCraftApp)>,
+    failed: SaveThen,
 }
 
 /// The save under way. The framework's save flow runs one at a time, so one slot holds what the
@@ -24,10 +27,10 @@ pub struct PendingSave {
     key: DocId,
     /// What runs once the document is written (close its tab, quit); never when the save fails
     /// or is cancelled.
-    after: Option<Box<dyn FnOnce(&mut PdfCraftApp)>>,
+    after: Option<SaveThen>,
     /// What runs when the save is cancelled, does not start or fails (a close that waited on it
     /// stops); never when it succeeds.
-    failed: Option<Box<dyn FnOnce(&mut PdfCraftApp)>>,
+    failed: Option<SaveThen>,
     /// Whether the content held applied redactions, and whether it restored saved ones, when the
     /// save proposed its name: a change while the picker was open makes that name wrong.
     // PLAN: the decision names `(usize, usize)` counts; the rule compares these two facts, as the old continuation did (`save.rs:112-113`), so a further Apply alone does not ask again
@@ -57,7 +60,7 @@ impl PdfCraftApp {
     /// to ask (where to save, or whether to replace a file changed on disk) it returns `false`
     /// and saves on a later pass, once the user has answered.
     pub fn save_view(&mut self, ctx: &egui::Context, index: usize, target: SaveTarget) -> bool {
-        self.save_then(ctx, index, target, |_| {}, |_| {})
+        self.save_then(ctx, index, target, |_, _| {}, |_, _| {})
     }
 
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later pass
@@ -69,18 +72,18 @@ impl PdfCraftApp {
         ctx: &egui::Context,
         index: usize,
         target: SaveTarget,
-        after: impl FnOnce(&mut Self) + 'static,
-        failed: impl FnOnce(&mut Self) + 'static,
+        after: impl FnOnce(&mut Self, &egui::Context) + 'static,
+        failed: impl FnOnce(&mut Self, &egui::Context) + 'static,
     ) -> bool {
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
             && !self.commit_typing_in(ctx, id)
         {
-            failed(self);
+            failed(self, ctx);
             return false;
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else {
-            failed(self);
+            failed(self, ctx);
             return false;
         };
         // A signature just placed with Fill & Sign is a removable comment unless it is flattened:
@@ -101,7 +104,7 @@ impl PdfCraftApp {
             return false;
         }
         let Some(doc) = self.session.get(id) else {
-            failed(self);
+            failed(self, ctx);
             return false;
         };
         let (name, path, saved) = (doc.name.clone(), doc.path.clone(), doc.saved_bytes());
@@ -131,7 +134,7 @@ impl PdfCraftApp {
         let step = self.save_flow.start(self.host.files(), &self.watch, document, target);
         if step == SaveStep::Busy {
             self.notify_tr("Finish the save in progress before starting another.");
-            failed(self);
+            failed(self, ctx);
             return false;
         }
         self.pending_save = Some(PendingSave {
@@ -184,7 +187,7 @@ impl PdfCraftApp {
             }
             SaveStep::Cancelled { key } => {
                 if let Some(failed) = self.pending_save.take_if(|p| p.key == key).and_then(|p| p.failed) {
-                    failed(self);
+                    failed(self, ctx);
                 }
                 false
             }
@@ -206,14 +209,14 @@ impl PdfCraftApp {
                 ctx,
                 index,
                 SaveTarget::As,
-                move |app| {
+                move |app, ctx| {
                     if let Some(after) = after {
-                        after(app);
+                        after(app, ctx);
                     }
                 },
-                move |app| {
+                move |app, ctx| {
                     if let Some(failed) = failed {
-                        failed(app);
+                        failed(app, ctx);
                     }
                 },
             );
@@ -225,10 +228,10 @@ impl PdfCraftApp {
         let pending = self.pending_save.take_if(|p| p.key == id);
         if saved {
             if let Some(after) = pending.and_then(|p| p.after) {
-                after(self);
+                after(self, ctx);
             }
         } else if let Some(failed) = pending.and_then(|p| p.failed) {
-            failed(self);
+            failed(self, ctx);
         }
         saved
     }
@@ -242,7 +245,7 @@ impl PdfCraftApp {
     pub(crate) fn answer_lock_signatures(&mut self, ctx: &egui::Context, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
         if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(ctx, p.id) {
-            (p.failed)(self);
+            (p.failed)(self, ctx);
             return;
         }
         self.lock_answered = Some(p.id);
@@ -256,7 +259,7 @@ impl PdfCraftApp {
         if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
             self.save_then(ctx, index, p.target, p.after, p.failed);
         } else {
-            (p.failed)(self);
+            (p.failed)(self, ctx);
         }
     }
 

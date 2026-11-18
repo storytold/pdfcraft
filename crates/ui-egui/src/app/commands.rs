@@ -13,7 +13,7 @@ impl PdfCraftApp {
                 .flat_map(|g| g.sections.iter().flat_map(|s| s.items.iter()))
                 .any(|i| i.command == spec.id);
             if self.active.is_none() && needs_document && is_tool && !self.command_enabled(spec) {
-                self.open_then_run(ctx, spec);
+                self.open_then_run(spec);
                 return;
             }
             self.execute(ctx, command);
@@ -35,14 +35,11 @@ impl PdfCraftApp {
 
     /// Ask for a file to open, then run `spec` on it once it is open (or unlocked). Nothing runs
     /// when the picker is cancelled or the file doesn't open.
-    fn open_then_run(&mut self, ctx: &egui::Context, spec: &'static pdfcraft_engine::commands::CommandSpec) {
+    fn open_then_run(&mut self, spec: &'static pdfcraft_engine::commands::CommandSpec) {
         self.startup_superseded = true;
         let request = craft::host::PickRequest::open("open").title(tl!(spec.label).trim_end_matches('…'));
         let command = spec.id;
-        // The continuation runs on the pass that takes the answer, which has no context of its
-        // own: it gets this one, a handle to the same window.
-        let ctx = ctx.clone();
-        self.pick_file(request, None, move |app, picked| app.open_picked_then(&ctx, picked, command));
+        self.pick_file(request, None, move |app, ctx, picked| app.open_picked_then(ctx, picked, command));
     }
 
     pub(crate) fn reveal_tools(&mut self) {

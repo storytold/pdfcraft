@@ -435,7 +435,7 @@ pub(crate) fn panel(
     let Some(mut out) = shown.inner else { return };
     if let Some(request) = out.requests.take_color() {
         let which = target.recolour();
-        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, color| recolour(ui.ctx(), app, view, which, color));
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, ctx, color| recolour(ctx, app, view, which, color));
     }
     apply(ui.ctx(), app, view, target, &out.edits);
 }
@@ -710,7 +710,7 @@ fn apply_paragraph(ctx: &egui::Context, app: &mut PdfCraftApp, ed: &mut LineEdit
                     ed.choose_family(f);
                     changed = true;
                 }
-                FontPick::Load => app.pick_files(ctx, crate::files::FilePurpose::TextFont { page: ed.page }, false),
+                FontPick::Load => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
                 FontPick::Reload => {
                     #[cfg(not(target_arch = "wasm32"))]
                     let _ = app.installed_document_fonts(true);
@@ -729,7 +729,7 @@ fn apply_paragraph(ctx: &egui::Context, app: &mut PdfCraftApp, ed: &mut LineEdit
         }
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (family, style);
+    let _ = (family, style, ctx);
     changed || (ed.look.clone(), ed.extras) != before
 }
 

@@ -231,7 +231,7 @@ impl PdfCraftApp {
     /// File ▸ Pin folder to Home…: choose a folder whose newest PDFs Home lists.
     pub fn pin_folder_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_first(PickRequest::folder("pin-folder").title(tl!("Pin a folder to Home").to_string()), None, |app, dir| {
+        self.pick_first(PickRequest::folder("pin-folder").title(tl!("Pin a folder to Home").to_string()), None, |app, _, dir| {
             app.pin_folder(&dir.to_string_lossy());
         });
         // The web has no folder path to pin.

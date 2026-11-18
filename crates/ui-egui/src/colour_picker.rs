@@ -8,8 +8,8 @@ use craft::ui::runtime::requests::ColorRequest;
 use crate::PdfCraftApp;
 use crate::comments::to_rgb;
 
-/// What runs with the colour a picker was confirmed with.
-type Then = Box<dyn FnOnce(&mut PdfCraftApp, Srgba)>;
+/// What runs with the colour a picker was confirmed with, given the context of the pass that takes it.
+type Then = Box<dyn FnOnce(&mut PdfCraftApp, &egui::Context, Srgba)>;
 
 /// The dialog host a picker opens on.
 pub(crate) enum PickerHost<'a> {
@@ -57,7 +57,12 @@ impl ColourPicks {
 impl PdfCraftApp {
     /// Opens the colour picker for `request` on `host` and runs `then` with the colour when it is confirmed.
     /// The picker never closes the menu or popover that asked.
-    pub(crate) fn open_colour_picker(&mut self, host: PickerHost<'_>, request: ColorRequest, then: impl FnOnce(&mut PdfCraftApp, Srgba) + 'static) {
+    pub(crate) fn open_colour_picker(
+        &mut self,
+        host: PickerHost<'_>,
+        request: ColorRequest,
+        then: impl FnOnce(&mut PdfCraftApp, &egui::Context, Srgba) + 'static,
+    ) {
         let host = match host {
             PickerHost::App => &mut self.dialogs,
             PickerHost::Window(h) => h,
@@ -68,10 +73,9 @@ impl PdfCraftApp {
 
 /// Runs the continuations of the pickers the app's dialog host finished, once per pass. Every colour picked
 /// here came through Other…, so each is remembered as a recent colour first.
-// PLAN: pdf-hub-w2 calls this without a context.
-pub(crate) fn colour_picker_pass(app: &mut PdfCraftApp) {
+pub(crate) fn colour_picker_pass(app: &mut PdfCraftApp, ctx: &egui::Context) {
     for (then, color) in app.colour_picks.take_answers(&mut app.dialogs) {
         app.recent_colours.remember(to_rgb(color));
-        then(app, color);
+        then(app, ctx, color);
     }
 }

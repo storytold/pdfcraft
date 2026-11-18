@@ -15,6 +15,27 @@ impl PdfCraftApp {
         WindowHost::of(ctx).set_root_frame(decision);
     }
 
+    /// Whether Use system title bar changes anything here: the policy gives the desktop the window
+    /// was framed for another frame for each setting. It doesn't on the web, on a tiling
+    /// compositor, or where `PDFCRAFT_TITLEBAR` decides; nor before the window's frame is known.
+    pub(crate) fn system_title_bar_available(&self, ctx: &egui::Context) -> bool {
+        let Some(desktop) = WindowHost::of(ctx).desktop() else { return false };
+        let env = std::env::var(Prefix::new("PDFCRAFT").var_name()).or_else(|_| std::env::var(Prefix::default().var_name())).ok();
+        let frame = |pref| {
+            policy::decide(
+                policy::Os::current(),
+                policy::Runtime::current(),
+                Backend::from_env(),
+                &desktop,
+                policy::WindowKind::Main,
+                pref,
+                env.as_deref(),
+            )
+            .frame
+        };
+        frame(TitleBarPref::Integrated) != frame(TitleBarPref::System)
+    }
+
     /// Whether the window shows the body only (Acrobat's Full Screen Mode).
     pub fn full_screen(&self) -> bool {
         self.screen_mode.body_only()

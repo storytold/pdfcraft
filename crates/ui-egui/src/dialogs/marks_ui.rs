@@ -969,7 +969,7 @@ impl PdfCraftApp {
         };
         if let Some(request) = colour {
             let key = request.key.clone();
-            self.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, colour| {
+            self.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, _: &egui::Context, colour| {
                 if let Some(dialog) = app.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_id(dialog_key(kind))) {
                     dialog.answer_color(key, colour);
                 }
@@ -989,7 +989,7 @@ impl PdfCraftApp {
                 }
             }
             let target = self.pick_target(Some(doc_id));
-            self.pick_file(pick, target, move |app: &mut PdfCraftApp, picked| {
+            self.pick_file(pick, target, move |app: &mut PdfCraftApp, _: &egui::Context, picked| {
                 if let Some((name, bytes)) = picked_file(picked) {
                     app.marks_picked(kind, serial, name, bytes);
                 }

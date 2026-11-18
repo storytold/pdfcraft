@@ -186,7 +186,7 @@ impl PdfCraftApp {
         if let Some(request) = output.pick_color {
             let answers = Arc::clone(answers);
             let key = request.key.clone();
-            self.open_colour_picker(PickerHost::Window(host), request, move |_, colour| {
+            self.open_colour_picker(PickerHost::Window(host), request, move |_, _, colour| {
                 if let Ok(mut queue) = answers.lock() {
                     queue.push((key, colour));
                 }
@@ -466,15 +466,10 @@ impl PreferencesModel for Prefs<'_> {
         if page != "appearance" {
             return;
         }
-        // PLAN: assumed `suite_view()`, `favorite_themes()`, `system_dark()` and `toggle_favorite_theme(ThemeId)` on the app (theme-store L-10, pdf-shell-w10)
+        // PdfCraft keeps its own appearance and no favourite themes (L-224).
         let suite = self.app.suite_view();
-        let favorites = self.app.favorite_themes();
-        let system_dark = self.app.system_dark();
-        let shown =
-            AppearancePage::new(&suite, Bind::bound(&mut *self.selection)).favorites(&favorites).text_size(false).system_dark(system_dark).show(ui);
-        if let Some(theme) = shown.favorite_toggled {
-            self.app.toggle_favorite_theme(theme);
-        }
+        let system_dark = craft::ui::runtime::env::system_appearance(self.ctx).appearance.mode == Some(craft::theme::Mode::Dark);
+        AppearancePage::new(&suite, Bind::bound(&mut *self.selection)).text_size(false).system_dark(system_dark).show(ui);
     }
 
     fn differs(&self) -> bool {
@@ -529,7 +524,6 @@ impl PreferencesModel for Prefs<'_> {
         self.app.ask_to_lock_signatures = d.ask_to_lock_signatures;
 
         self.app.session.set_javascript(d.javascript);
-        // PLAN: assumed `apply_selection(SelectionChange)` on the app, calling `SuiteClient::change` (theme-store L-10, pdf-shell-w10)
         self.app.apply_selection(std::mem::take(&mut *self.selection));
 
         let defaults = self.app.view_defaults;
@@ -659,13 +653,12 @@ impl Prefs<'_> {
             RowSpec::new("general.recent", tl!("Recent files to keep"), RowKind::int(d.recent_limit as i64, 0..=crate::RECENT_FILES_MAX as i64))
                 .help(tl!("Lowering this forgets the oldest files. At 0 there is no list.")),
         );
-        // PLAN: assumed `system_title_bar_available()` on the app: chrome-w10's policy, replacing `window_controls.is_some()`
         rows.push(
             RowSpec::new("general.title_bar", tl!("Use system title bar"), RowKind::Bool(d.system_title_bar))
                 .help(tl!(
                     "Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
                 ))
-                .visible(self.app.system_title_bar_available()),
+                .visible(self.app.system_title_bar_available(self.ctx)),
         );
         PageSpec::new("general", tl!("General & Interface"), rows)
     }

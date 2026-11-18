@@ -300,6 +300,9 @@ pub struct PdfCraftApp {
     pub(crate) hotbar: hotbar::Hotbar,
     /// Preferences ▸ Appearance: light, dark, or as the system says.
     pub theme_preference: craft::theme::ModeChoice,
+    /// The suite the Appearance page reads its themes from: an in-memory one, as PdfCraft keeps
+    /// its own appearance in its settings rather than in the suite's shared selection.
+    pub(crate) suite: craft::theme_store::SuiteClient,
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,

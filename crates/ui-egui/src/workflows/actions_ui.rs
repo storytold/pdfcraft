@@ -265,7 +265,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         self.run_action_into(action, files, PathBuf::new());
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_first(PickRequest::folder("action.results").title(tl!("Choose a folder for the results")), None, move |app, dir| {
+        self.pick_first(PickRequest::folder("action.results").title(tl!("Choose a folder for the results")), None, move |app, _, dir| {
             app.run_action_into(action, files, dir)
         });
     }
@@ -340,7 +340,7 @@ impl PdfCraftApp {
         {
             let title = crate::i18n::fmt(tl!("Files for {name}"), &[("name", &action.name)]);
             let request = PickRequest::open_many("action.files").title(title).filter("PDF", &["pdf"]);
-            self.pick_file(request, None, move |app, picked| {
+            self.pick_file(request, None, move |app, _, picked| {
                 let Picked::Paths(paths) = picked else { return };
                 let mut files = Vec::new();
                 for p in paths {

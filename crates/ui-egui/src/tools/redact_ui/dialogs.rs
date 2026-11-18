@@ -153,7 +153,7 @@ pub(crate) fn show_props(app: &mut PdfCraftApp, ui: &mut Ui) {
     });
     if let Some(request) = request {
         let key = request.key.clone();
-        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, colour: Srgba| {
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app: &mut PdfCraftApp, _: &egui::Context, colour: Srgba| {
             let Some(draft) = app.redact_props.as_mut() else { return };
             let colour = colours::to_rgb(colour);
             match key.as_str() {
@@ -272,7 +272,7 @@ pub(crate) fn show_search(app: &mut PdfCraftApp, ui: &mut Ui) {
         app.redact_search_open = false;
     }
     if import {
-        app.pick_files(ui.ctx(), FilePurpose::RedactWords, false);
+        app.pick_files(FilePurpose::RedactWords, false);
     }
 }
 

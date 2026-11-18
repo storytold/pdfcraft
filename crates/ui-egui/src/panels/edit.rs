@@ -305,7 +305,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             Some(crate::content_ui::ImageAction::Update(content)) => {
                 app.apply_edit(ui.ctx(), pdfcraft_engine::Edit::UpdateContent { page, index, content });
             }
-            Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(ui.ctx(), page, index),
+            Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
             None => {}
         }
         return;

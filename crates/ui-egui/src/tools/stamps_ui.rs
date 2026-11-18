@@ -339,31 +339,30 @@ pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.quick_tool = QuickTool::Select;
     }
     if craft::ui::buttons::Button::new(tl!("Create custom stamp…")).tooltip(tl!("From a PDF page or an image")).show(ui).clicked() {
-        app.pick_stamp_file(ui.ctx());
+        app.pick_stamp_file();
     }
 }
 
 impl PdfCraftApp {
     /// Create ▸ choose a PDF or an image for a new custom stamp.
-    pub(crate) fn pick_stamp_file(&mut self, ctx: &egui::Context) {
-        let ctx = ctx.clone();
+    pub(crate) fn pick_stamp_file(&mut self) {
         let request = PickRequest::open("stamp")
             .title(tl!("Select a file for the stamp"))
             .filter(tl!("PDF or image"), &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx"]);
-        self.pick_file(request, None, move |app, picked| match picked {
+        self.pick_file(request, None, move |app, ctx, picked| match picked {
             Picked::Paths(paths) => {
                 let Some(path) = paths.into_iter().next() else { return };
                 match std::fs::read(&path) {
                     Ok(bytes) => {
                         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        app.start_custom_stamp(&ctx, name, bytes);
+                        app.start_custom_stamp(ctx, name, bytes);
                     }
                     Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
                 }
             }
             Picked::Contents(files) => {
                 if let Some((name, bytes)) = files.into_iter().next() {
-                    app.start_custom_stamp(&ctx, name, bytes);
+                    app.start_custom_stamp(ctx, name, bytes);
                 }
             }
             _ => {}

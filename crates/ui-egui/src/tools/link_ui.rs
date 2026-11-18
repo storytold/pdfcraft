@@ -503,7 +503,7 @@ impl PdfCraftApp {
     // PLAN: pdf-hub-w2's `dialogs/host.rs::results` calls `app.link_props_pass(ctx)`; the pass needs no context, so it calls it without.
     pub(crate) fn link_props_pass(&mut self, ctx: &egui::Context) {
         if let Some(request) = self.dialogs.get_mut::<LinkPropsDialog>().and_then(|d| d.take_colour_request()) {
-            self.open_colour_picker(PickerHost::App, request, |app: &mut PdfCraftApp, picked: Srgba| {
+            self.open_colour_picker(PickerHost::App, request, |app: &mut PdfCraftApp, _: &egui::Context, picked: Srgba| {
                 if let Some(d) = app.dialogs.get_mut::<LinkPropsDialog>() {
                     d.set_colour(to_rgb(picked));
                 }
