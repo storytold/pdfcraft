@@ -1995,9 +1995,14 @@ fn a_standard_namespace_named_by_its_utf16_text_string_is_recognised() {
     // be written in UTF-16BE. A Lbl in it labels a form field.
     let utf16: String = "http://iso.org/pdf2/ssn".encode_utf16().map(|u| format!("{u:04X}")).collect();
     let doc = structure_doc(&[
-        "<< /S /Document /K [ << /S /Form /K [ << /S /Lbl /NS 4 0 R /K 0 >> ] >> ] >>".into(),
+        "<< /S /Document /K [ << /S /Form /K [5 0 R] >> ] >>".into(),
         format!("<< /Type /Namespace /NS <FEFF{utf16}> >>"),
+        "<< /S /Lbl /NS 4 0 R /K 0 >>".into(),
     ]);
+    // An unrecognised namespace would leave Lbl unresolved, which passes the rule too: the type
+    // itself must come out as the PDF 2.0 Lbl.
+    let label = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().cloned().unwrap();
+    assert_eq!(crate::structure::standard_type(&doc, &pdfcraft_cos::Dict::new(), &label, b"Lbl"), (b"Lbl".to_vec(), Some(true)));
     let r = checked(&doc, &[Rule::LblLBody]);
     assert_eq!(status(&r, Rule::LblLBody), Status::Passed, "{:?}", r.result(Rule::LblLBody));
 }
@@ -2032,7 +2037,7 @@ fn the_type_after_the_last_mapping_allowed_is_classified() {
     };
     // Twelve lead `c0`, in object 6, to an LBody outside a list item: the one finding.
     let doc = structure_doc(&[
-        "<< /S /Document /K [ << /S /Form /K [ << /S /a0 /NS 4 0 R /K 0 >> ] >> << /S /Div /K [ << /S /b0 /NS 4 0 R /K 1 >> 6 0 R ] >> ] >>".into(),
+        "<< /S /Document /K [ << /S /Form /K [7 0 R] >> << /S /Div /K [ << /S /b0 /NS 4 0 R /K 1 >> 6 0 R ] >> ] >>".into(),
         format!(
             "<< /Type /Namespace /NS (http://example.com/x) /RoleMapNS << {} {} {} >> >>",
             chain("a", "Lbl", 12),
@@ -2041,7 +2046,11 @@ fn the_type_after_the_last_mapping_allowed_is_classified() {
         ),
         "<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into(),
         "<< /S /c0 /NS 4 0 R /K 2 >>".into(),
+        "<< /S /a0 /NS 4 0 R /K 0 >>".into(),
     ]);
+    // An unresolved `a0` would pass under Form too: it must come out as the PDF 2.0 Lbl.
+    let a0 = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).as_dict().cloned().unwrap();
+    assert_eq!(crate::structure::standard_type(&doc, &pdfcraft_cos::Dict::new(), &a0, b"a0"), (b"Lbl".to_vec(), Some(true)));
     let r = checked(&doc, &[Rule::LblLBody]);
     let found: Vec<_> = r.result(Rule::LblLBody).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
     assert_eq!(found, [Some(6)], "{:?}", r.result(Rule::LblLBody));
@@ -2120,6 +2129,9 @@ fn a_namespaced_figure_is_listed_and_takes_alternate_text() {
     );
     let listed: Vec<_> = figures(&doc).iter().map(|f| (f.obj.num, f.bbox)).collect();
     assert_eq!(listed, [(7, Some([10.0, 150.0, 50.0, 170.0])), (10, None)], "the role-mapped Photo still counts");
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let before: Vec<_> = r.result(Rule::FiguresAltText).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(before, [Some(7)], "{:?}", r.result(Rule::FiguresAltText));
     set_alt(&mut doc, pdfcraft_cos::ObjRef::new(7, 0), Some("A grey bar")).unwrap();
     let r = checked(&doc, &[Rule::FiguresAltText]);
     assert_eq!(status(&r, Rule::FiguresAltText), Status::Passed, "{:?}", r.result(Rule::FiguresAltText));
@@ -2146,6 +2158,84 @@ fn a_figure_in_a_form_xobject_takes_no_page_bounds_from_an_equal_id() {
     );
     let f = figures(&doc);
     assert_eq!((f.len(), f.first().and_then(|f| f.bbox)), (1, None));
+}
+
+#[test]
+fn a_figure_whose_content_is_on_another_page_takes_no_bounds_from_an_equal_id() {
+    // ISO 32000-2 Table 357: a marked-content reference's /Pg names the page its MCID is on. The
+    // figure's page holds an MCID 0 too, a shape the figure doesn't hold.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /Figure /P 6 0 R /Pg 3 0 R /K << /Type /MCR /Pg 9 0 R /MCID 0 >> >>".into(),
+            "<< /Nums [0 [6 0 R] 1 [7 0 R]] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 10 0 R /StructParents 1 >>".into(),
+            stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC"),
+        ],
+        "",
+    );
+    let f = figures(&doc);
+    assert_eq!((f.len(), f.first().and_then(|f| f.bbox)), (1, None));
+}
+
+#[test]
+fn a_figure_whose_content_is_in_a_form_xobject_is_not_marked_decorative_on_the_page() {
+    // ISO 32000-2 Table 357: the figure's MCID 0 is in the form's content, not the page's. The
+    // page's own MCID 0 is a paragraph, which must stay tagged, and so must the figure.
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 /Resources << /XObject << /X 9 0 R >> >> >>"
+                .into(),
+            stream("/P << /MCID 0 >> BDC 10 150 40 20 re f EMC /X Do"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 5 0 R /K [10 0 R 7 0 R] >>".into(),
+            "<< /S /img /NS 11 0 R /P 6 0 R /Pg 3 0 R /K << /Type /MCR /Stm 9 0 R /MCID 0 >> >>".into(),
+            "<< /Nums [0 [10 0 R]] >>".into(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {}", &stream("/Figure << /MCID 0 >> BDC 100 100 50 30 re f EMC")[3..]),
+            "<< /S /P /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Type /Namespace /NS (http://www.w3.org/1999/xhtml) /RoleMapNS << /img /Figure >> >>".into(),
+        ],
+        "",
+    );
+    let figure = pdfcraft_cos::ObjRef::new(7, 0);
+    let page = doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned();
+    let document = doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned();
+    assert_eq!(mark_decorative(&mut doc, figure), Err(AltError::ContentElsewhere));
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().cloned(), page, "the page content is unchanged");
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().cloned(), document, "the figure stays in the tree");
+    // Alternate text, which touches no content, still works.
+    set_alt(&mut doc, figure, Some("A chart")).unwrap();
+}
+
+#[test]
+fn a_namespace_that_is_a_page_leaves_the_element_in_the_default_namespace() {
+    // ISO 32000-2 Table 356: a namespace dictionary has its name in /NS (and a /Type, if any, of
+    // Namespace). A page is not one, so Photo is read through the root /RoleMap: a Figure.
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >>".into(),
+            stream("/Photo << /MCID 0 >> BDC 10 150 40 20 re f EMC"),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R /RoleMap << /Photo /Figure >> >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R] >>".into(),
+            "<< /S /Photo /NS 3 0 R /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /Nums [0 [7 0 R]] >>".into(),
+        ],
+        "",
+    );
+    let listed: Vec<_> = figures(&doc).iter().map(|f| f.obj.num).collect();
+    assert_eq!(listed, [7]);
+    let r = checked(&doc, &[Rule::FiguresAltText]);
+    let found: Vec<_> = r.result(Rule::FiguresAltText).unwrap().findings.iter().map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(found, [Some(7)], "{:?}", r.result(Rule::FiguresAltText));
 }
 
 #[test]

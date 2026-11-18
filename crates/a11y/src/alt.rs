@@ -27,6 +27,8 @@ pub enum AltError {
     TooLarge,
     #[error("the figure's content may be in a damaged or unreadable content stream, or after the damage, so nothing was changed")]
     Damaged,
+    #[error("the figure's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
+    ContentElsewhere,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -139,11 +141,29 @@ fn mcids(doc: &Document, d: &Dict) -> Vec<i64> {
     mcids_where(doc, d, |_| true)
 }
 
-/// The marked-content ids an element owns directly in its page's own content: not those of a
-/// marked-content reference with /Stm, which are ids in that stream's content (ISO 32000-2
-/// Table 357), so an equal id on the page is another sequence.
-fn page_mcids(doc: &Document, d: &Dict) -> Vec<i64> {
-    mcids_where(doc, d, |m| !m.contains(b"Stm"))
+/// The marked-content ids an element owns directly in the content of its page `page`: not those of
+/// a marked-content reference with /Stm, which are ids in that stream's content, nor of one whose
+/// /Pg is another page, which are ids on that page (ISO 32000-2 Table 357). An equal id on `page`
+/// is another sequence.
+fn page_mcids(doc: &Document, d: &Dict, page: Option<ObjRef>) -> Vec<i64> {
+    mcids_where(doc, d, |m| on_page(m, page))
+}
+
+/// Whether marked-content reference `m` names content in the page content of `page`, the page of
+/// the element holding it (ISO 32000-2 Table 357).
+fn on_page(m: &Dict, page: Option<ObjRef>) -> bool {
+    !m.contains(b"Stm") && m.get(b"Pg").and_then(Object::as_ref).is_none_or(|p| Some(p) == page)
+}
+
+/// Whether element `d` directly holds a marked-content reference to content outside the page
+/// content of `page`: in a form XObject (/Stm) or on another page (ISO 32000-2 Table 357).
+fn holds_content_elsewhere(doc: &Document, d: &Dict, page: Option<ObjRef>) -> bool {
+    let elsewhere = |o: &Object| matches!(&*doc.resolve(o), Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && !on_page(m, page));
+    match d.get(b"K") {
+        Some(Object::Array(a)) => a.iter().any(elsewhere),
+        Some(o) => elsewhere(o),
+        None => false,
+    }
 }
 
 /// The marked-content ids an element owns directly: integers, and those of the marked-content
@@ -348,7 +368,7 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     let mut wanted: HashMap<usize, HashSet<i64>> = HashMap::new();
     for (e, page) in &figures {
         if let Some(p) = page {
-            wanted.entry(*p).or_default().extend(page_mcids(doc, &e.dict));
+            wanted.entry(*p).or_default().extend(page_mcids(doc, &e.dict, e.page));
         }
     }
     let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
@@ -358,7 +378,8 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
         .map(|(e, page)| {
             let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
             let on_page = page.and_then(|p| bounds.get(&p));
-            let bbox = on_page.and_then(|b| page_mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
+            let bbox =
+                on_page.and_then(|b| page_mcids(doc, &e.dict, e.page).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
         })
         .collect()
@@ -532,6 +553,12 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
     let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
+    // Only the page's own content is rewritten. An id in a form XObject or on another page is
+    // another sequence there, and an equal id on this page is unrelated content: refuse before
+    // anything changes, the tag tree included.
+    if holds_content_elsewhere(doc, &d, pg) {
+        return Err(AltError::ContentElsewhere);
+    }
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {

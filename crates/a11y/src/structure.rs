@@ -135,9 +135,17 @@ fn standard_namespace(doc: &Document, space: &Dict) -> Option<bool> {
 }
 
 /// The namespace dictionary an /NS entry, or a role map's target, names; `None` (the default
-/// standard namespace) when it names no dictionary. A stream's dictionary is not one.
+/// standard namespace) when it names no namespace dictionary. One has the namespace name, a text
+/// string, in /NS, and a /Type, if any, of Namespace (ISO 32000-2 Table 356): a stream's
+/// dictionary, or a page's, is not one.
 fn namespace(doc: &Document, o: &Object) -> Option<Arc<Object>> {
-    Some(doc.resolve(o)).filter(|o| matches!(**o, Object::Dict(_)))
+    Some(doc.resolve(o)).filter(|o| match &**o {
+        Object::Dict(d) => {
+            d.get(b"NS").is_some_and(|n| with_resolved(doc, n, |n| n.as_string().is_some()))
+                && d.get(b"Type").is_none_or(|t| with_resolved(doc, t, |t| t.as_name() == Some(b"Namespace".as_slice())))
+        }
+        _ => false,
+    })
 }
 
 /// Where a /RoleMapNS value leads: a type in the default standard namespace (a name), or a type
