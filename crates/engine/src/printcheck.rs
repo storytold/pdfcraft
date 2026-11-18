@@ -283,6 +283,7 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
             for image in placed {
                 if let Some(ppi) = placed_ppi(&image) {
+                    let ppi = ppi / page.user_unit(doc);
                     if let Some(object) = image.object {
                         seen.entry((page_no, object)).and_modify(|known| *known = known.min(ppi)).or_insert(ppi);
                     }
@@ -290,8 +291,9 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
                         unknown = unknown.saturating_add(1);
                         continue;
                     }
-                    let w = (image.rect[2] - image.rect[0]).abs();
-                    let h = (image.rect[3] - image.rect[1]).abs();
+                    let [a, b, c, d, ..] = image.matrix;
+                    let w = a.hypot(b) * page.user_unit(doc);
+                    let h = c.hypot(d) * page.user_unit(doc);
                     out.push(DrawnImage { page: page_no, name: image.name, ppi, pixels: [image.width, image.height], size_mm: [mm(w), mm(h)] });
                 }
             }
@@ -299,15 +301,17 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
         // Images drawn inside a form XObject are not listed above. Their resolution is the
         // lowest-ppi use on this page, which is what the optimizer already measures.
         for (object, image) in pdfcraft_optimize::image_measurements(doc, &[page.obj]) {
-            // The aggregate includes direct uses too. Suppress it only when a direct row
-            // already represents its lowest PPI, or a larger form use would be hidden.
-            if seen.get(&(page_no, object)).is_some_and(|ppi| *ppi <= image.ppi) {
+            unknown = unknown.saturating_add(image.unmeasurable);
+            // A tied Form can have different dimensions: suppress only a selected direct use.
+            if !image.in_form && seen.get(&(page_no, object)).is_some_and(|ppi| *ppi <= image.ppi) {
                 continue;
             }
             // An unsupported pixel dimension has a zero sentinel, but the other axis can
             // still establish a low-PPI finding. Only unmeasurable placements are unknown.
             if !image.ppi.is_finite() || image.size_pt.iter().any(|n| !n.is_finite()) {
-                unknown = unknown.saturating_add(1);
+                if image.unmeasurable == 0 && image.in_form {
+                    unknown = unknown.saturating_add(1);
+                }
                 continue;
             }
             out.push(DrawnImage {
@@ -355,7 +359,7 @@ fn is_press_profile(intent: &str) -> bool {
 }
 
 fn mm(points: f64) -> f64 {
-    points * 25.4 / 72.0
+    points * (25.4 / 72.0)
 }
 
 fn wh_mm(rect: [f64; 4]) -> [f64; 2] {
@@ -450,6 +454,70 @@ mod tests {
             assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail"));
             assert_eq!(report.resolution_unknown, 0);
         }
+    }
+
+    #[test]
+    fn direct_image_dimensions_include_user_unit() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 600, 600);
+        let p = page(&mut doc, "Im", img, "q 216 0 0 216 0 0 cm /Im Do Q");
+        doc.update_dict(p, |d| d.set(b"UserUnit".to_vec(), Object::Int(2))).unwrap();
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1);
+        assert!((report.images[0].ppi - 100.0).abs() < 1e-9);
+        assert!(report.images[0].size_mm.iter().all(|v| (*v - 152.4).abs() < 1e-9));
+    }
+
+    #[test]
+    fn first_form_placement_survives_a_direct_tie() {
+        for form_first in [true, false] {
+            let mut doc = Document::new_empty();
+            let img = image(&mut doc, 8, 8);
+            let form = image_form(&mut doc, img, "q 720 0 0 400 0 0 cm /Im Do Q");
+            let direct = "q 720 0 0 720 0 0 cm /Im Do Q";
+            let content = if form_first { format!("/Fm Do {direct}") } else { format!("{direct} /Fm Do") };
+            let p = page(&mut doc, "Im", img, &content);
+            doc.update_dict(p, |d| {
+                let mut res = d.get(b"Resources").unwrap().as_dict().unwrap().clone();
+                let mut x = res.get(b"XObject").unwrap().as_dict().unwrap().clone();
+                x.set(b"Fm".to_vec(), Object::Ref(form));
+                res.set(b"XObject".to_vec(), Object::Dict(x));
+                d.set(b"Resources".to_vec(), Object::Dict(res));
+            })
+            .unwrap();
+            let report = inspect(&doc);
+            assert_eq!(report.images.len(), if form_first { 2 } else { 1 });
+            assert_eq!(report.images.iter().any(|i| i.size_mm == [mm(720.0), mm(400.0)]), form_first);
+        }
+    }
+
+    #[test]
+    fn reportable_form_image_survives_an_overflowing_use() {
+        for overflow_first in [false, true] {
+            let mut doc = Document::new_empty();
+            let img = image(&mut doc, 8, 8);
+            let good = "q 720 0 0 400 0 0 cm /Im Do Q";
+            let bad = format!("q {:.0} 0 0 1 0 0 cm 10 0 0 400 0 0 cm /Im Do Q", 1e308);
+            let content = if overflow_first { format!("{bad} {good}") } else { format!("{good} {bad}") };
+            let form = image_form(&mut doc, img, &content);
+            let p = page(&mut doc, "Fm", form, "/Fm Do");
+            let report = inspect(&doc);
+            assert_eq!(report.images.len(), 1);
+            assert!((report.images[0].ppi - 0.8).abs() < 1e-9);
+            assert_eq!(report.resolution_unknown, 1);
+            assert_eq!(pdfcraft_optimize::effective_resolutions(&doc, &[p])[&img], 0.0);
+        }
+    }
+
+    #[test]
+    fn finite_form_axis_stays_finite_in_millimetres() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 8, 8);
+        let form = image_form(&mut doc, img, &format!("q {:.0} 0 0 400 0 0 cm /Im Do Q", 1e308));
+        page(&mut doc, "Fm", form, "/Fm Do");
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1);
+        assert!((report.images[0].size_mm[0] / 1e308 - 25.4 / 72.0).abs() < 1e-9);
     }
 
     #[test]
