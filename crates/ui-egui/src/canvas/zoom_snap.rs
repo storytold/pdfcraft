@@ -129,13 +129,13 @@ pub(crate) fn area_bar(
 
 impl PdfCraftApp {
     /// Finish a Snapshot drag: copy the area `view_rect` of `page`.
-    pub(crate) fn finish_marquee(&mut self, index: usize, done: (usize, [f32; 4])) {
+    pub(crate) fn finish_marquee(&mut self, ctx: &egui::Context, index: usize, done: (usize, [f32; 4])) {
         let (page, view_rect) = done;
         // The tool outlives the tab it was chosen on.
         if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
             return;
         }
-        match self.snapshot(index, page, view_rect) {
+        match self.snapshot(ctx, index, page, view_rect) {
             Ok((w, h)) => {
                 self.views[index].session.area_pick = Some((page, view_rect));
                 self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
@@ -206,11 +206,11 @@ impl PdfCraftApp {
     /// Save the area `view_rect` of `page` that view `index` copied as a PNG file (asked where).
     /// The last snapshot is used when it was taken of that area; otherwise (another tab
     /// snapshotted since) the area is rendered again.
-    pub(crate) fn save_snapshot_image(&mut self, index: usize, page: usize, view_rect: [f32; 4]) {
+    pub(crate) fn save_snapshot_image(&mut self, ctx: &egui::Context, index: usize, page: usize, view_rect: [f32; 4]) {
         let this_area = self.views.get(index).is_some_and(|v| self.last_snapshot_of == Some((v.id, page, view_rect)));
         let png = match self.last_snapshot.as_ref() {
             Some((w, h, pixels)) if this_area => pdfcraft_engine::export::encode_png(*w, *h, pixels),
-            _ => self.render_area(index, page, view_rect).and_then(|(w, h, pixels)| pdfcraft_engine::export::encode_png(w, h, &pixels)),
+            _ => self.render_area(ctx, index, page, view_rect).and_then(|(w, h, pixels)| pdfcraft_engine::export::encode_png(w, h, &pixels)),
         };
         let png = match png {
             Ok(png) => png,
@@ -234,8 +234,8 @@ impl PdfCraftApp {
 
     /// Render `view_rect` (page view points) of `page` and copy it to the clipboard (and keep it
     /// in `last_snapshot`), at the current zoom or [`SNAPSHOT_MIN_SCALE`] if that is finer.
-    pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
-        let (w, h, rgba) = self.render_area(index, page, view_rect)?;
+    pub fn snapshot(&mut self, ctx: &egui::Context, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
+        let (w, h, rgba) = self.render_area(ctx, index, page, view_rect)?;
         self.clipboard.write_image(&ClipboardImage { width: w, height: h, rgba: rgba.to_vec() }).map_err(|e| e.to_string())?;
         self.last_snapshot = Some((w, h, rgba));
         self.last_snapshot_of = Some((self.views[index].id, page, view_rect));
@@ -244,11 +244,16 @@ impl PdfCraftApp {
 
     /// Render `view_rect` (page view points) of `page` in view `index` at its current zoom:
     /// (width, height, premultiplied RGBA).
-    fn render_area(&self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
+    fn render_area(
+        &self,
+        ctx: &egui::Context,
+        index: usize,
+        page: usize,
+        view_rect: [f32; 4],
+    ) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
         let view = self.views.get(index).ok_or("no document")?;
         let doc = self.session.get(view.id).ok_or("no document")?;
-        let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = snapshot_scale(view.render_scale(ppp), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
+        let scale = snapshot_scale(view.render_scale(ctx.pixels_per_point()), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,

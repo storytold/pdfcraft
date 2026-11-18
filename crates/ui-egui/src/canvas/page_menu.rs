@@ -2,8 +2,8 @@
 
 use craft::behavior::IconId;
 use craft::ui::canvas::ContextRequest;
-use craft::ui::contract::Show as _;
 use craft::ui::contract::overlay::Anchor;
+use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
 use pdfcraft_engine::Edit;
@@ -102,6 +102,11 @@ pub(crate) struct PageMenuCx<'a> {
     pub form: &'a std::sync::Arc<Vec<pdfcraft_engine::FormField>>,
     pub can_copy: bool,
     pub can_paste_image: bool,
+    /// Comments were copied (in this document or another), so Paste has something to place.
+    pub can_paste_comments: bool,
+    /// The jobs and wake the picture search runs on.
+    pub jobs: &'a std::sync::Arc<dyn craft::host::Jobs>,
+    pub wake: &'a craft::host::Wake,
 }
 
 /// The default rows, in order, for a press at `at` on `page`; `picture_under` is the picture index there.
@@ -294,7 +299,6 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         Some(Owner::PrepareField { field, widget }) => {
             cx.form.get(field).is_some_and(|f| view.session.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
         }
-        Some(Owner::PrepareCorner { .. }) => true,
         _ => false,
     };
     if cx.preparing
@@ -318,11 +322,13 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         // Paste lands where the menu opened, on the picture's page: another page's point means nothing there.
         let at = view.session.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
         let rotation = (view.view.rotation % 360 + cx.info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
-        pick.image = crate::edit_text_ui::picture_menu(ui, view, &images, sel.page, sel.index, cx.can_paste_image, at, rotation);
+        let menu = crate::edit_text_ui::PictureMenu { images: &images, page: sel.page, hit: sel.index, can_paste: cx.can_paste_image, at, rotation };
+        pick.image = crate::edit_text_ui::picture_menu(ui, view, &menu);
         return;
     }
     // The comment the press went to, when it is the one selected, or connected lines being drawn.
-    let on_selected_comment = matches!(view.session.menu_for, Some((page, Owner::Comment { index, .. })) if view.session.comments.selected == Some((page, index)));
+    let on_selected_comment =
+        matches!(view.session.menu_for, Some((page, Owner::Comment { index, .. })) if view.session.comments.is_selected((page, index)));
     let drawing_points = matches!(cx.tool, QuickTool::Comment(t) if t.clicks_points()) && !view.session.comments.tool.drawing().is_empty();
     if on_selected_comment || drawing_points {
         let tool = if let QuickTool::Comment(t) = cx.tool { Some(t) } else { None };
@@ -340,10 +346,14 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         );
         return;
     }
-    let (page, at) = view.session.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
+    let (page, at) = view.session.comments.context_at.unwrap_or((view.view.current, [0.0, 0.0]));
     // On a page still being read, the picture rows appear when the answer comes.
     let picture_under = view.session.comments.context_at.and_then(|(page, at)| {
-        view.session.pictures.get(ui.ctx(), cx.doc, page).and_then(|pictures| pdfcraft_engine::picture_at(pictures, at)).map(|(index, _)| *index)
+        view.session
+            .pictures
+            .get(cx.jobs, cx.wake, cx.doc, page)
+            .and_then(|pictures| pdfcraft_engine::picture_at(pictures, at))
+            .map(|(index, _)| *index)
     });
     // A text selection whose pages are still being read copies once they are.
     let has_text = view.selected_text().is_some() || view.selection_waits_for_text().is_some();
@@ -356,7 +366,7 @@ fn rows(ui: &mut egui::Ui, view: &mut DocView, cx: &PageMenuCx<'_>, menu_for: Op
         can_copy: cx.can_copy,
         can_copy_items,
         can_paste: cx.can_paste_image && can_modify,
-        can_paste_comments: cx.rights.allowed && cx.rights.can_paste,
+        can_paste_comments: cx.rights.allowed && cx.can_paste_comments,
         has_annotations: !cx.info.annotations.is_empty(),
     };
     show_rows(ui, default_rows(&perms, page, at, picture_under), pick);

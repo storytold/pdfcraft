@@ -45,7 +45,7 @@ impl DocView {
 
     /// Whether a text layer, a background or a page picture is still on its way.
     pub fn render_pending(&self) -> bool {
-        self.session.text_queue.counts() != QueueCounts::default()
+        self.session.text_queue.as_ref().is_some_and(|queue| queue.counts() != QueueCounts::default())
             || self.session.text_background.pending()
             || self.session.move_background.pending()
             || self.session.placed.iter().any(|p| matches!(p.picture, TextureState::Loading { .. }))
@@ -61,7 +61,9 @@ impl DocView {
         self.session.forms.unbaked.clear();
         self.session.texts.clear();
         self.session.text_failed.clear();
-        let _dropped = self.session.text_queue.reprioritize(|_, _| None);
+        if let Some(queue) = &self.session.text_queue {
+            let _dropped = queue.reprioritize(|_, _| None);
+        }
         self.reports.clear();
         // Marks a tool waits to make go with the selection: its glyphs may name other text now.
         self.session.text.selection = None;
@@ -71,7 +73,7 @@ impl DocView {
         // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
         // took over stays in control. `document_changed` clamps `current`; if the view no longer
         // sits where the automatic choice left it, `follow_page` ends it.
-        let current = self.current;
+        let current = self.current();
         if let Some(f) = self.find.as_mut() {
             f.matches = FindMatches::new(current);
         }
@@ -83,7 +85,9 @@ impl DocView {
         self.revisions.bump(page);
         self.session.texts.remove(&page);
         self.session.text_failed.remove(&page);
-        let _dropped = self.session.text_queue.reprioritize(|key, priority| (*key != page).then_some(priority));
+        if let Some(queue) = &self.session.text_queue {
+            let _dropped = queue.reprioritize(|key, priority| (*key != page).then_some(priority));
+        }
         self.reports.forget(page);
         if self.session.text.selection.as_ref().is_some_and(|s| s.pages().contains(&page)) {
             // With the marks a tool waits to make on it (#5017 review).
@@ -139,7 +143,7 @@ impl DocView {
     /// runs every page from the current one on). Pages whose layer is held, failed or already on its way are not asked
     /// again, so calling it every pass submits nothing new. The queue's own wake asks for the pass a result needs.
     pub(crate) fn want_text(&mut self, session: &pdfcraft_engine::Session, visible: &[usize], rest: &[usize]) {
-        while let Some(done) = self.session.text_queue.try_recv() {
+        while let Some(done) = self.session.text_queue.as_ref().and_then(|queue| queue.try_recv()) {
             let page = done.key;
             let outcome = done.result;
             // Whether drawn or read for its text, a page cut at the limits is named (#623).
@@ -162,14 +166,16 @@ impl DocView {
         }
         self.retain_text_layers(visible);
         let Some(doc) = session.get(self.id) else { return };
+        let Some(queue) = self.session.text_queue.as_ref() else { return };
         let config = session.render_config(self.id).unwrap_or_default();
         let ranked = visible.iter().map(|p| (*p, Priority::VISIBLE)).chain(rest.iter().map(|p| (*p, Priority::BACKGROUND)));
         for (page, priority) in ranked {
-            if page >= self.page_count || self.session.texts.contains_key(&page) || self.session.text_failed.contains(&page) || self.session.text_queue.contains(&page) {
+            if page >= self.page_count || self.session.texts.contains_key(&page) || self.session.text_failed.contains(&page) || queue.contains(&page)
+            {
                 continue;
             }
             let (bytes, config) = (doc.display.clone(), config.clone());
-            self.session.text_queue.submit(page, priority, move |cancel| {
+            queue.submit(page, priority, move |cancel| {
                 if cancel.is_cancelled() {
                     return TextOutcome::default();
                 }
@@ -201,7 +207,8 @@ impl DocView {
             keep.extend(f.matches.matches().iter().map(|m| m.page));
         }
         let mut rest: Vec<usize> = self.session.texts.keys().filter(|p| !keep.contains(*p)).copied().collect();
-        rest.sort_by_key(|p| p.abs_diff(self.current));
+        let current = self.current();
+        rest.sort_by_key(|p| p.abs_diff(current));
         keep.extend(rest.into_iter().take(MAX_CACHED_TEXT_PAGES));
         self.session.texts.retain(|p, _| keep.contains(p));
     }

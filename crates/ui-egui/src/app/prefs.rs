@@ -41,6 +41,17 @@ fn from_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
 }
 
 impl PdfCraftApp {
+    /// The canvas's navigation choices: the scroll speed, the middle-button direction and whether zooms ease. The
+    /// rest keep the framework's defaults.
+    pub(crate) fn navigation_options(&self) -> craft::ui::canvas::NavigationOptions {
+        let mut options = craft::ui::canvas::NavigationOptions::default();
+        options.wheel_line = self.scroll_speed.wheel_line();
+        options.key_line = self.scroll_speed.key_line();
+        options.invert_middle = self.invert_middle_drag;
+        options.animated_zoom = !self.animation_effects.reduced(None);
+        options
+    }
+
     /// Sets the user's interface theme preference (Light, Dark, or System); the next frame's
     /// [`Self::root_env`] carries it.
     pub fn set_theme_preference(&mut self, preference: ModeChoice) {

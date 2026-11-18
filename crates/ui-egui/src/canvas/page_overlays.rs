@@ -238,7 +238,7 @@ fn link_part(owner: Owner, page: usize, shape: HitShape, tip: Option<String>) ->
 /// the one on screen, so its links, fields, text and comments take no input. Turning the page (a click, a
 /// key) is handled apart and still works.
 pub(super) fn veiled(view: &DocView) -> bool {
-    view.presentation.is_some() && !view.session.presenter.settled_on(view.current)
+    view.presentation.is_some() && !view.session.presenter.settled_on(view.view.current)
 }
 
 /// The sign tabs of one page: their parts, and the layouts those parts and the paint share.

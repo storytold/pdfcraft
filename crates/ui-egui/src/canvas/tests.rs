@@ -264,9 +264,9 @@ fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
 fn a_cut_page_is_named_beside_an_xfa_form_notice() {
     use egui_kittest::kittest::Queryable;
 
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
         app.open_bytes("form.pdf", None, bytes).unwrap();
         app
@@ -285,9 +285,9 @@ fn a_cut_page_is_named_beside_an_xfa_form_notice() {
 fn a_page_found_cut_after_a_dismissal_is_still_named() {
     use egui_kittest::kittest::Queryable;
 
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
         app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
         app
@@ -610,9 +610,9 @@ fn fox_pages_pdf() -> Vec<u8> {
 /// read but holds no match (the third) neither takes part in the step nor stops it.
 #[test]
 fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph() {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
         let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option("language", "en").unwrap();
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
         app.open_bytes("fox.pdf", None, fox_pages_pdf()).unwrap();
         app
     });

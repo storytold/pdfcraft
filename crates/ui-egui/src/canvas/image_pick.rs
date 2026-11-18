@@ -171,11 +171,17 @@ mod picture_tests {
         let host_jobs = jobs.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
             let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs).build();
-            // PLAN: assumed `AppServices::for_tests() -> AppServices` and `with_host(Arc<Host>, AppServices)`, `set_option` and
-            // `open_bytes` taking `&egui::Context` (L-207, L-208; pdf-hub-w1, pdf-shell-w9).
-            let mut app = PdfCraftApp::with_host(Arc::new(host), crate::AppServices::for_tests());
-            app.set_option("language", "en", &cc.egui_ctx).unwrap();
-            app.open_bytes("marks.pdf", None, page_with_a_comment_and_a_link(), &cc.egui_ctx).unwrap();
+            let services = crate::AppServices::new(
+                Wake::none(),
+                craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+                None,
+                None,
+                craft::platform::open::FileIntake::new(Wake::none()).0,
+                craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+            );
+            let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app.open_bytes("marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
             app
         });
         let mut on_screen = None;
@@ -237,9 +243,8 @@ mod picture_tests {
     fn another_tool_takes_back_a_click_on_a_page_not_drawn() {
         let (mut h, _jobs, at) = open_page();
         click_still_being_looked_into(&mut h, &at);
-        // PLAN: assumed `execute(command, &egui::Context)` (L-208).
         let ctx = h.ctx.clone();
-        assert!(h.state_mut().execute("page.organize", &ctx));
+        assert!(h.state_mut().execute(&ctx, "page.organize"));
         h.run_steps(2);
         assert!(h.state().views[0].session.pending_pick.is_some(), "the click waits while the page isn't drawn");
         h.state_mut().quick_tool = crate::QuickTool::Hand;
@@ -411,7 +416,7 @@ impl PdfCraftApp {
     /// as stored in the PDF, otherwise PNG).
     pub(crate) fn copy_page_image_file(&mut self, page: usize, index: usize) {
         // A newer copy wins over a whole-document copy still reading its pages.
-        self.document_copy = None;
+        self.cancel_text_copies();
         let Some((_, id)) = self.active_ids() else { return };
         if !self.may_copy(id) {
             return;

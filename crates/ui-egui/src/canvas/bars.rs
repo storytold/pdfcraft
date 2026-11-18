@@ -109,7 +109,7 @@ pub(super) fn notices(
     // is named in a bar of its own, which the signature, form and security bars below can't
     // replace and dismissing them doesn't hide. Dismissing it covers the pages cut so far: a
     // page found cut later shows it again.
-    if view.cut_pages.iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
+    if view.cut_pages().iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
         cut_pages_bar(view, ui);
     }
     // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
@@ -241,9 +241,10 @@ pub(super) fn notices(
 
 /// The notice naming the pages whose content was cut at the renderer's limits (#623).
 fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui) {
-    let Some(&first) = view.cut_pages.iter().next() else { return };
+    let cut = view.cut_pages();
+    let Some(&first) = cut.first() else { return };
     let page = first.saturating_add(1).to_string();
-    let n = view.cut_pages.len();
+    let n = cut.len();
     let text = if n == 1 {
         crate::i18n::fmt(
             tl!("Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and only part of its text can be found or copied."),
@@ -258,6 +259,6 @@ fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui) {
         )
     };
     if bar(Tone::Warn, "triangle-alert", text).dismiss().show(ui).dismissed {
-        view.cut_notice_dismissed.extend(view.cut_pages.iter().copied());
+        view.cut_notice_dismissed.extend(cut);
     }
 }
