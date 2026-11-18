@@ -15793,3 +15793,34 @@ fn page_changes_are_refused_when_the_page_tree_shown_is_not_the_one_walked() {
     assert!(s.get(id).unwrap().can_undo().is_none(), "nothing was changed");
     s.apply(id, Edit::SetInfo { key: "Title".into(), value: "Still editable".into() }).expect("other edits go on");
 }
+
+/// An optimized copy is written in full, and a damaged page tree can be rewritten so that it reads
+/// with another number of pages than the one shown: here a page-tree node also lists the root
+/// among its kids, and a page names no `/Parent`. Shown with 5 pages, the rewritten copy reads 6,
+/// so the copy is refused instead of being handed back with a page more or less.
+#[test]
+fn an_optimized_copy_that_reads_with_another_page_count_is_refused() {
+    let page = |parent: u32| format!("<< /Type /Page /Parent {parent} 0 R /MediaBox [0 0 100 100] >>");
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [10 0 R 11 0 R 12 0 R] /Count 6 >>")
+        .obj(page(10))
+        .obj(page(10))
+        .obj(page(11))
+        .obj("<< /Type /Page /Parenp 11 0 R /MediaBox [0 0 100 100] >>")
+        .obj(page(12))
+        .obj(page(12))
+        .obj("null")
+        .obj("<< /Type /Pages /Parent 2 0 R /Kids [3 0 R 4 0 R] /Count 2 >>")
+        .obj("<< /Type /Pages /Parent 2 0 R /Kids [5 0 R 6 0 R] /Count 2 >>")
+        .obj("<< /Type /Pages /Parent 2 0 R /Kids [7 0 R 2 0 R 8 0 R] /Count 2 >>")
+        .build();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("loop.pdf", None, Arc::new(pdf), None).expect("opens");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 5, "the fixture still shows 5 pages");
+    match s.optimized_bytes(id, &optimize::Settings::default(), &[]) {
+        Err(EditError::Reopen(m)) => assert!(m.contains("page count from 5"), "{m}"),
+        Err(e) => panic!("refused for another reason: {e}"),
+        Ok((bytes, _)) => panic!("the copy was handed back, reading {:?} page(s)", pdfcraft_render::page_count(bytes, None)),
+    }
+}

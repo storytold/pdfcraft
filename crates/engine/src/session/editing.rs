@@ -67,6 +67,20 @@ fn pages_after(edit: &Edit, shown: usize) -> Option<usize> {
     }
 }
 
+/// The check on what a page edit's written result reads as: refused as a damaged page tree when
+/// it reads with another page count than the edit leaves, and as a result the viewer can't open
+/// ([`EditError::Reopen`], as the other checks of written bytes say) when it doesn't read at all.
+fn page_count_after(edit: &Edit, expected: usize, read: Result<usize, pdfcraft_render::OpenError>) -> Result<(), EditError> {
+    match read {
+        Ok(pages) if pages == expected => Ok(()),
+        Ok(_) => Err(EditError::Invalid(format!(
+            "{} isn't possible here: this document's page tree is damaged, and the change would leave it showing other than {expected} page(s) (nothing was changed)",
+            edit.label()
+        ))),
+        Err(e) => Err(EditError::Reopen(e.to_string())),
+    }
+}
+
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
     match edit {
@@ -369,13 +383,8 @@ impl Session {
         if let Some(expected) = pages_after(&edit, cx.pages) {
             let written = write_incremental(&next, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()));
             let written = written.inspect_err(|_| discard_edit_callbacks(&cx))?;
-            if pdfcraft_render::check_pages(Arc::new(written), password.as_deref(), expected).is_err() {
-                discard_edit_callbacks(&cx);
-                return Err(EditError::Invalid(format!(
-                    "{} isn't possible here: this document's page tree is damaged, and the change would leave it showing other than {expected} page(s) (nothing was changed)",
-                    edit.label()
-                )));
-            }
+            let read = pdfcraft_render::page_count(Arc::new(written), password.as_deref());
+            page_count_after(&edit, expected, read).inspect_err(|_| discard_edit_callbacks(&cx))?;
         }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
         // Places applied redactions left that still hold the removed text, and what became of
@@ -867,7 +876,8 @@ fn edit_notices(edit: &Edit, prev: &pdfcraft_cos::Document, next: &pdfcraft_cos:
 
 #[cfg(test)]
 mod page_count_tests {
-    use super::{Edit, pages_after};
+    use super::{Edit, page_count_after, pages_after};
+    use crate::EditError;
 
     /// The page edits whose page count is checked after the edit, and what they leave: rotating,
     /// boxes, moving and reversing keep every page; deleting takes the distinct pages that exist.
@@ -879,5 +889,30 @@ mod page_count_tests {
         assert_eq!(pages_after(&Edit::ReversePages { pages: vec![0, 1, 2] }, 13), Some(13));
         assert_eq!(pages_after(&Edit::DeletePages { pages: vec![12, 12, 3, 40] }, 13), Some(11), "twice and past the end count once and not at all");
         assert_eq!(pages_after(&Edit::SetInfo { key: "Title".into(), value: "t".into() }, 13), None);
+    }
+
+    /// Only a written result that reads with another page count is called a damaged page tree;
+    /// one that doesn't read at all (a parser crash, an unreadable tree, unsupported encryption)
+    /// is refused as a result that can't be opened, with the reader's own reason.
+    #[test]
+    fn only_another_page_count_is_called_a_damaged_page_tree() {
+        let rotate = Edit::RotatePages { pages: vec![0], degrees: 90 };
+        assert!(page_count_after(&rotate, 13, Ok(13)).is_ok());
+        match page_count_after(&rotate, 13, Ok(12)) {
+            Err(EditError::Invalid(m)) => assert!(m.contains("page tree is damaged") && m.contains("other than 13 page(s)"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        let unread = [
+            pdfcraft_render::OpenError::Invalid("the parser crashed: boom".into()),
+            pdfcraft_render::OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
+            pdfcraft_render::OpenError::Unsupported("encryption not supported: x".into()),
+        ];
+        for e in unread {
+            let said = e.to_string();
+            match page_count_after(&rotate, 13, Err(e)) {
+                Err(EditError::Reopen(m)) => assert!(m == said && !m.contains("page(s)"), "{m}"),
+                other => panic!("{said}: {other:?}"),
+            }
+        }
     }
 }
