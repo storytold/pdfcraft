@@ -1,5 +1,5 @@
-use super::marks::{MarkKind, matrix_number, n};
-use super::{Dict, Document, EditError, ObjRef, Object, Stream, literal, win_ansi};
+use super::marks::{MarkKind, matrix_number};
+use super::{Dict, Document, EditError, ObjRef, Object, Stream};
 
 pub(crate) fn page_list(doc: &Document) -> Vec<pdfcraft_model::Page> {
     pdfcraft_model::pages(doc)
@@ -66,6 +66,19 @@ pub(crate) fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base
         return preferred.to_string();
     }
     (1..=fonts.len().saturating_add(1)).map(|k| format!("{preferred}_{k}")).find(|name| usable(name)).unwrap_or_else(|| preferred.to_string())
+}
+
+/// Add `fonts` (resource name, font) to the page's own resources.
+pub(crate) fn add_page_fonts(doc: &mut Document, page: &pdfcraft_model::Page, fonts: &Dict) -> Result<(), EditError> {
+    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut all = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    for (name, font) in fonts.iter() {
+        all.set(name.clone(), font.clone());
+    }
+    res.set(b"Font".to_vec(), Object::Dict(all));
+    // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+    Ok(())
 }
 
 /// Add the standard `faces` (resource name, base font) and an opacity state to the page's own
@@ -294,7 +307,32 @@ pub(crate) fn isolation(doc: &Document, list: &[Object]) -> Isolation {
 /// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
 /// (appended, after wrapping the original content in q/Q).
 pub(crate) fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind).map(drop)
+    place_tagged(doc, page, kind.tag(), content, behind)?;
+    #[cfg(test)]
+    fail_after_mark_placement(kind)?;
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Force an error after N completed placements of one kind, on this test thread only.
+    pub(crate) static MARK_PLACEMENT_FAILURE: std::cell::Cell<Option<(MarkKind, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn fail_after_mark_placement(kind: MarkKind) -> Result<(), EditError> {
+    MARK_PLACEMENT_FAILURE.with(|failure| {
+        if let Some((target, after, completed)) = failure.get()
+            && target == kind
+        {
+            let completed = completed.saturating_add(1);
+            failure.set(Some((target, after, completed)));
+            if completed == after {
+                return Err(EditError::Invalid("injected mark placement failure".into()));
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Put content on a page, tagged `tag` (see [`place`]). On top, whatever graphics state the
@@ -346,6 +384,76 @@ pub(crate) fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag:
     Ok(mark_ref)
 }
 
+/// Draw `ops`, written for the space whose CTM is `ctm`, on top of everything on `page`, tagged
+/// `Edited`. A rewritten invisible paragraph goes here when [`revealed_under_paint`]: an OCR
+/// layer written before the scan image it lies under would keep the revealed text hidden (#3973).
+pub(crate) fn draw_on_top(doc: &mut Document, page: &pdfcraft_model::Page, ctm: [f64; 6], ops: &[pdfcraft_content::Op]) -> Result<(), EditError> {
+    if ops.is_empty() {
+        return Ok(());
+    }
+    use pdfcraft_content::Op;
+    let mut all = vec![Op::new("q", vec![]), Op::new("cm", ctm.iter().map(|v| pdfcraft_content::num(*v)).collect())];
+    all.extend_from_slice(ops);
+    all.push(Op::new("Q", vec![]));
+    place_tagged(doc, page, "Edited", pdfcraft_content::serialize_ops(&all), false).map(drop)
+}
+
+/// Where a rewritten paragraph can be drawn, in user space ([`revealed_under_paint`]).
+pub(crate) struct Reach {
+    /// The paragraph's old box, where its cover goes.
+    pub rect: [f64; 4],
+    /// The move asked for (`BlockStyle::offset`).
+    pub offset: [f64; 2],
+    /// The widest line the rewrite may draw, how many lines it has, and how far apart they are.
+    pub width: f64,
+    pub rows: usize,
+    pub pitch: f64,
+    pub upright: bool,
+}
+
+impl Reach {
+    /// The old box and the moved one, grown to `width` either way (alignment may grow a line left
+    /// or right), down to `rows` lines and up one `pitch` above its top (a larger size on the first line, however many lines the old box had); turned text grows by the lines' diagonal every way.
+    /// Unbounded when a number is not finite.
+    pub(crate) fn bounds(&self) -> [f64; 4] {
+        const UNBOUNDED: [f64; 4] = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
+        let ([dx, dy], r) = (self.offset, self.rect);
+        if !r.iter().chain(&self.offset).chain([&self.width, &self.pitch]).all(|v| v.is_finite()) {
+            return UNBOUNDED;
+        }
+        let moved = [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
+        let rows = f64::from(u32::try_from(self.rows).unwrap_or(u32::MAX));
+        let (width, height) = (self.width.abs(), self.pitch.abs() * rows);
+        let grown = if self.upright {
+            [moved[0].min(moved[2] - width), moved[1].min(moved[3] - height), moved[2].max(moved[0] + width), moved[3] + self.pitch.abs()]
+        } else {
+            let d = width.hypot(height);
+            [moved[0] - d, moved[1] - d, moved[2] + d, moved[3] + d]
+        };
+        let b = [r[0].min(grown[0]), r[1].min(grown[1]), r[2].max(grown[2]), r[3].max(grown[3])];
+        if b.iter().all(|v| v.is_finite()) { b } else { UNBOUNDED }
+    }
+}
+
+/// Whether a rewritten paragraph that was `invisible` goes on top of page `page`: something after
+/// operator `at` of the page's joined `ops` paints over `reach` (user space, [`Reach::bounds`]), as the scan image
+/// does over an OCR layer written before it (#3973). XObjects count where they are drawn; an inline
+/// image or a shading after it counts anywhere, and so does any XObject when the page's images
+/// cannot be listed.
+pub(crate) fn revealed_under_paint(doc: &Document, page: usize, invisible: bool, reach: [f64; 4], ops: &[pdfcraft_content::Op], at: usize) -> bool {
+    let later = ops.get(at..).unwrap_or_default();
+    if !invisible || later.iter().any(|op| op.is("BI") || op.is("sh")) {
+        return invisible;
+    }
+    later.iter().any(|op| op.is("Do")) && crate::images::painted_over(doc, page, reach, at).unwrap_or(true)
+}
+
+/// The operators to draw on top of the page ([`draw_on_top`]): all of `paragraph` when `over`,
+/// none otherwise. The page was checked to take them ([`check_on_top`]) before the edit began.
+pub(crate) fn lift_on_top(over: bool, paragraph: &mut Vec<pdfcraft_content::Op>) -> Vec<pdfcraft_content::Op> {
+    if over { std::mem::take(paragraph) } else { Vec::new() }
+}
+
 fn too_deep_on_top() -> EditError {
     EditError::Invalid("the page's marked content is nested too deeply to add anything on top of it".into())
 }
@@ -383,12 +491,77 @@ pub(crate) fn place_inside_wrapper(doc: &mut Document, page: &pdfcraft_model::Pa
 /// it away); the original content is wrapped in q/Q first. Used for applied redaction boxes.
 /// Returns the new content stream.
 pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Result<ObjRef, EditError> {
+    stamp_with_fonts(doc, page, tag, &mut pdfcraft_fonts::TextPlan::default(), |_| content)
+}
+
+/// Draw the content `make` builds on top of a page, with standard Helvetica as `/PCHelv` and
+/// the plan's Type3 fonts added to the page's resources first (so the content can reference
+/// them by the names the plan carries). The original content is wrapped in q/Q first; the
+/// stream is tagged `tag` (not a mark kind, so Remove never takes it away). This is how the
+/// OCR text layers get their Unicode faces (see [`add_type3_fonts`]). Returns the new content
+/// stream.
+pub fn stamp_with_fonts(
+    doc: &mut Document,
+    page: usize,
+    tag: &str,
+    plan: &mut pdfcraft_fonts::TextPlan,
+    make: impl FnOnce(&pdfcraft_fonts::TextPlan) -> Vec<u8>,
+) -> Result<ObjRef, EditError> {
     let all = page_list(doc);
     check(&[page], all.len())?;
     check_on_top(doc, &all[page])?;
+    add_type3_fonts(doc, page, plan)?;
+    let content = make(plan);
+    let all = page_list(doc);
     add_resources(doc, &all[page], None, Some(&content))?;
     let p = page_list(doc).swap_remove(page);
     place_tagged(doc, &p, tag, content, false)
+}
+
+/// Add the plan's Type3 fonts to a page's (0-based) resources, building each font once and
+/// sharing the object with every page that uses it. Fills in each planned font's resource name
+/// (`PCOcr`, `PCOcr1`, … — a name free on the page being registered: a font built for an
+/// earlier page keeps its name only where that name is free or already that font) and object;
+/// the content generators read the names from the plan, so this must run before they are
+/// called for each page.
+pub fn add_type3_fonts(doc: &mut Document, page: usize, plan: &mut pdfcraft_fonts::TextPlan) -> Result<(), EditError> {
+    if plan.fonts.is_empty() {
+        return Ok(());
+    }
+    let all = page_list(doc);
+    check(&[page], all.len())?;
+    let p = &all[page];
+    let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    for i in 0..plan.fonts.len() {
+        let object = match plan.fonts[i].object {
+            Some(r) => {
+                // Built for an earlier page under a name that was free THERE. On this page the
+                // name may already be another font (the page's own, or an earlier OCR layer's):
+                // then this page gets a free name of its own, and the plan carries it for the
+                // content written next.
+                let taken = fonts.get(plan.fonts[i].name.as_bytes()).is_some_and(|o| o.as_ref() != Some(r));
+                if taken {
+                    plan.fonts[i].name = super::text::unique_font_name(&fonts, "PCOcr");
+                }
+                r
+            }
+            None => {
+                let glyphs = plan.fonts[i].glyphs.iter().map(|(ch, g)| (*ch, super::text::glyph_path(g), g.width)).collect::<Vec<_>>();
+                let dict = super::text::type3_font_dict(doc, &glyphs)?;
+                let r = doc.add(Object::Dict(dict));
+                plan.fonts[i].name = super::text::unique_font_name(&fonts, "PCOcr");
+                plan.fonts[i].object = Some(r);
+                r
+            }
+        };
+        fonts.set(plan.fonts[i].name.as_bytes().to_vec(), Object::Ref(object));
+    }
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
+    let obj = p.obj;
+    doc.update_dict(obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+    Ok(())
 }
 
 pub(crate) fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {
@@ -414,11 +587,4 @@ pub(crate) fn undrawable(c: char) -> EditError {
 /// The wording of the refusal for text with `c`, which the standard fonts can't draw.
 pub fn undrawable_message(c: char) -> String {
     format!("the standard fonts can't draw \"{c}\" (U+{:04X}); only Western European characters can be added as text for now", u32::from(c))
-}
-
-pub(crate) fn text_op(x: f64, y: f64, text: &str) -> Vec<u8> {
-    let mut v = format!("1 0 0 1 {} {} Tm ", n(x), n(y)).into_bytes();
-    v.extend(literal(&win_ansi(text)));
-    v.extend_from_slice(b" Tj\n");
-    v
 }

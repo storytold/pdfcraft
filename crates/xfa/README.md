@@ -25,14 +25,44 @@ that warning and keeps the existing layout and accepted widget values.
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
   text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
-  inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
+  required fields and exclusion groups (`<validate nullTest="error">`), inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
+- **Prototypes** (`proto`, XFA 3.3 chapter 6, "Prototypes"): before parsing, every `use` and
+  `usehref` reference into the same template is resolved and the template is written again
+  with it merged in, so Designer style sheets (`usehref=".#som($template.#subform.styles.X)"`)
+  give their fields and draws size, anchor, borders, fills, fonts and captions. The element's
+  own attributes, content and children win; `id` and `name` are not inherited; children match
+  by class and position, a matched prototype child being the prototype of the element's own;
+  a `ui` widget or `value` kind and rich text are taken from the nearest layer that has one.
+  References are `#id`, `#som(…)` (or `.#…`) and, for `use`, a SOM expression. Loops are cut
+  where they close, chains merge at most 32 layers, nesting stops at 256 elements, a SOM
+  expression longer than 1,024 bytes names nothing, SOM look-ups share a budget of 2 million
+  elements, each element's reference is resolved once however many elements reach it,
+  merging looks at no more than 64 million children, attributes and namespaces in all
+  (prototype children that write nothing, such as `proto`, count too), and the written
+  template may grow to 4 times its size (at least 1 MB, at most 64 MB). Past the nesting,
+  look-up, merge or growth budget expanding fails as a whole: no partly written template is
+  used, the template is read as it is written (unresolved), with one warning saying which
+  budget. A cut loop or chain is a warning too.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
   container without a width is as wide as its content; flow across content areas and pages with
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers.
+  table in an area) alike; fields that compute the page number or count on layout show the numbers,
+  and so do those that compute the sheet number (`sheet(this)+1`) or count, a sheet being a page on
+  screen; an embedded (floating) field shows its value from the data, which is where a script's
+  value goes (a repeating row's own instance, a page area's field under the area, a multi-select
+  list's picks, a date in its display picture), and an event, reset (a hidden one without a
+  widget included), typed value or pick that changes one lays the form out again;
+  a field inside an exclusion group is not shown yet;
+  a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
+  of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
+  field, a subform or a draw in a flow doesn't turn. A
+  caption without a font of its own is drawn in its field's font, and one naming only
+  some font properties takes the rest from it (XFA 3.3, "Formatting Text That Appears as Fixed
+  or Variable Content", p. 43); a field caption's paragraph
+  is still the one around the field.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
@@ -41,14 +71,18 @@ that warning and keeps the existing layout and accepted widget values.
   scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
   fields under one for each step above it) because other viewers lay a dynamic form out again
   and find a signature by that name. A box whose path, or a part of it, the file already gives
-  another field keeps its own name, and a new layout keeps a signature a generated box holds. Appearance streams are left empty for the forms layer to
+  another field keeps its own name, and a new layout keeps a signature a generated box holds. A field or exclusion group that must be filled in gets the `Required` flag (a radio
+  group on its group field), which viewers outline when they highlight fields. Appearance streams are left empty for the forms layer to
   generate. Each field keeps its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
   twice. The XFA packets stay, so Adobe's viewers keep rendering the form from them.
 
 - **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
   node at its data path: its SOM path without areas, which are named in SOM expressions but are
   not data scopes (`data_path`, as Adobe's viewers bind) (dates in ISO form, check and radio states by their on values), and a
-  repeating subform or row gets as many instances as the data has. `write_datasets` merges the
+  repeating subform or table row gets as many instances as the data has (in flowed and positioned
+  containers alike), up to its `occur max` and at
+  most 1 000 (`MAX_INSTANCES`, a work bound; the rows past it are left out with a layout
+  warning). `write_datasets` merges the
   AcroForm fields' values (by `/PCSom`, or by the Designer field names of a static form) into
   the existing `xfa:data`: only the bound nodes' text changes and missing nodes are added, so
   unbound data, other namespaces, attributes and comments stay byte for byte. Values it can't
@@ -70,7 +104,8 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   the datasets packet per event), and `rerender`, which lays the form out again from template,
   data and overrides. The scripts themselves run in the `js` crate's XFA object model; the
   engine runs initialize and calculate on open, change, exit, validate and calculate after a
-  field changes, and click for buttons. Every generated copy of a page-master button resolves
+  field changes, click for buttons, and preSign and postSign around signing a signature box
+  (preSign first, so what it changes is signed too). Every generated copy of a page-master button resolves
   its own PDF field to the shared XFA click script, so clicking an early copy works as well
   as the last, including through `js_run` and after save/reopen.
   While this XFA layout is active, the engine does not
@@ -85,6 +120,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
   | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
 
@@ -108,9 +144,19 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   not locale-aware pictures beyond simple number and date ones, or `Get`/`Post`/`Put` (refused).
   The object model covers what forms commonly use (`xfa.form`
   navigation and SOM resolution, `rawValue`, `presence`, `access`, instance managers,
-  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page numbers, `xfa.event`);
-  not `xfa.template`, data descriptions, `xfa.connectionSet`, `border`/`font`/`ui` properties
-  (reads give a sink that accepts writes), `execEvent`, or the change event per keystroke.
+  `xfa.host` messages, reset, print, focus and URLs, `xfa.layout` page and sheet numbers,
+  `xfa.event`);
+  property objects (`border`, `font`, `para`, `margin`, `ui` and its `oneOfChild`, `validate`,
+  `calculate`, `occur`, `break`, `breakBefore`, `breakAfter`, `assist`, `format`, `bind`,
+  `desc`, `extras`, `keep`, `caption` and a field's `items`), read as the template writes them
+  (the parser keeps each object's property elements, shared by every instance and every
+  script's snapshot) with the spec's defaults for what forms read, `getElement`,
+  `isPropertySpecified`, `getAttribute`, and a node's `mandatory`, validation messages and
+  colour shorthands; writes to them are read back in the same script but change nothing yet.
+  Not `xfa.template`, data descriptions, `xfa.connectionSet`, the choice-list methods
+  (`addItem`, `clearItems`, `boundItem`; `selectedIndex` reads give a sink that accepts
+  writes), a node's `value` as its value element, `traversal` and `overflow`, property reads
+  in FormCalc, `execEvent`, or the change event per keystroke.
   Validate failures show their message and keep the value, as Acrobat does for scripts.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
@@ -159,6 +205,11 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   file's data is held as a tree and written with the packet's own namespace prefix, never as
   the file's markup, and every rewrite of the packet is parsed back before it is written; the
   engine then lays a dynamic form out again from it and runs its calculations.
+- **Prototypes in other documents** (`usehref="file.xdp#…"`) are not followed: that would
+  mean reading files or the network on opening a form. The reference is left out with a
+  warning. SOM references cover names, `#class` and `[n]`, not `[*]`, `..` or relative forms;
+  traversal declarations are merged like other children, not knitted together as "Resolving
+  Prototypes with Traversals" describes.
 - Missing: `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
   metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
 - Acrobat cannot be an oracle here (clean-room rules): layout follows the specification, and

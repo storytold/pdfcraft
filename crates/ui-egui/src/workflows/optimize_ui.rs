@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout, RichText};
-use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, Preset, QUALITIES, Settings};
+use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, MonoSettings, Preset, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -71,6 +71,8 @@ impl OptimizeKind {
 pub struct OptimizeRun {
     pub doc: DocId,
     pub kind: OptimizeKind,
+    /// Where the copy goes, if the command asked first. Otherwise it asks when the run is done.
+    pub destination: Option<String>,
     pub progress: Arc<Mutex<OptimizeProgress>>,
 }
 
@@ -78,6 +80,11 @@ pub struct OptimizeRun {
 fn stage_label(stage: OptimizeStage) -> String {
     match stage {
         OptimizeStage::Discarding => tl!("Optimizing… removing user data").to_string(),
+        OptimizeStage::Reading { done: 0, .. } => tl!("Optimizing… reading the pages").to_string(),
+        OptimizeStage::Reading { done, total } => crate::i18n::fmt(
+            tl!("Optimizing… reading page {d} of {t}"),
+            &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+        ),
         OptimizeStage::Fragments => tl!("Optimizing… merging image fragments").to_string(),
         OptimizeStage::Images { done, total } => crate::i18n::fmt(
             tl!("Optimizing… image {d} of {t}"),
@@ -139,6 +146,32 @@ fn image_row(ui: &mut egui::Ui, id: &str, title: &str, s: &mut ImageSettings) {
                 }
             });
         }
+    });
+    ui.add_space(8.0);
+}
+
+/// Monochrome Images: how black-and-white images and image masks are resampled and stored.
+fn mono_row(ui: &mut egui::Ui, m: &mut MonoSettings) {
+    ui.label(egui::RichText::new(tl!("Monochrome Images")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        ui.add(widgets::checkbox(&mut m.downsample, tl!("Downsample to")));
+        ui.add_enabled(m.downsample, egui::DragValue::new(&mut m.target_ppi).range(9.0..=2400.0).suffix(" ppi"));
+        ui.label(tl!("for images above"));
+        ui.add_enabled(m.downsample, egui::DragValue::new(&mut m.above_ppi).range(9.0..=2400.0).suffix(" ppi"));
+    });
+    m.above_ppi = m.above_ppi.max(m.target_ppi);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Compression"));
+        let label = match m.compression {
+            MonoCompression::CcittG4 => tl!("CCITT Group 4"),
+            MonoCompression::Jbig2 => tl!("JBIG2 (lossless)"),
+            MonoCompression::Retain => tl!("Retain existing"),
+        };
+        craft_ui::ComboBox::from_id_salt(("mono", "compression")).selected_text(label).show_ui(ui, |ui| {
+            ui.selectable_value(&mut m.compression, MonoCompression::CcittG4, tl!("CCITT Group 4"));
+            ui.selectable_value(&mut m.compression, MonoCompression::Jbig2, tl!("JBIG2 (lossless)"));
+            ui.selectable_value(&mut m.compression, MonoCompression::Retain, tl!("Retain existing"));
+        });
     });
     ui.add_space(8.0);
 }
@@ -205,6 +238,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.merge_fragments, tl!("Merge image fragments")));
             image_row(ui, "color", "Color Images", &mut s.color);
             image_row(ui, "gray", "Grayscale Images", &mut s.gray);
+            mono_row(ui, &mut s.mono);
             ui.label(
                 egui::RichText::new(tl!("Each image is measured where pages draw it; an image is replaced only if the result is smaller."))
                     .small()
@@ -216,7 +250,9 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             ui.add(widgets::checkbox(&mut s.discard_alternate_images, tl!("Discard alternate images")));
             ui.add(widgets::checkbox(&mut s.discard_thumbnails, tl!("Discard embedded page thumbnails")));
             ui.add(widgets::checkbox(&mut s.discard_tags, tl!("Discard document tags")));
+            ui.add(widgets::checkbox(&mut s.discard_search_index, tl!("Discard embedded search index")));
             ui.add(widgets::checkbox(&mut s.discard_print_settings, tl!("Discard embedded print settings")));
+            ui.add(widgets::checkbox(&mut s.discard_form_actions, tl!("Discard all form submission, import and reset actions")));
             discard_box(ui, &mut d.discard, Hidden::Bookmarks, "Discard bookmarks");
             discard_box(ui, &mut d.discard, Hidden::FormFields, "Flatten form fields");
             discard_box(ui, &mut d.discard, Hidden::HiddenLayers, "Discard hidden layer content");
@@ -225,6 +261,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
             discard_box(ui, &mut d.discard, Hidden::Comments, "Discard all comments, forms and multimedia");
             discard_box(ui, &mut d.discard, Hidden::Metadata, "Discard document information and metadata");
             discard_box(ui, &mut d.discard, Hidden::Attachments, "Discard all object data (file attachments)");
+            ui.add(widgets::checkbox(&mut s.discard_external_refs, tl!("Discard external cross-references")));
             discard_box(ui, &mut d.discard, Hidden::PrivateData, "Discard private data of other applications");
             discard_box(ui, &mut d.discard, Hidden::HiddenText, "Discard hidden text");
         }
@@ -351,18 +388,28 @@ impl PdfCraftApp {
     /// Run an optimization of the active document on a worker thread (inline in tests and on
     /// the web), showing its progress; the copy is saved when it is done.
     pub(crate) fn start_optimize(&mut self, kind: OptimizeKind, settings: &Settings, discard: &[Hidden]) {
+        let Some((_, id)) = self.active_ids() else { return };
+        self.run_optimize(id, kind, settings, discard, None);
+    }
+
+    /// [`Self::start_optimize`] for document `id`, saving to `destination` if that's known already.
+    pub(crate) fn run_optimize(&mut self, id: DocId, kind: OptimizeKind, settings: &Settings, discard: &[Hidden], destination: Option<String>) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
         }
-        let Some((_, id)) = self.active_ids() else { return };
         if self.optimize_run.is_some() {
             self.notify_tr("Optimization is already running");
             return;
         }
+        // Both jobs share the progress card and capture the same document state.
+        if self.scan_clean_run.is_some() {
+            self.notify_tr("Scanned pages are already being enhanced");
+            return;
+        }
         let job = match self.session.optimize_job(id, settings, discard) {
             Ok(job) => job,
-            Err(e) => return self.save_optimized(id, kind, Err(e)),
+            Err(e) => return self.save_optimized(id, kind, Err(e), destination),
         };
         let progress = Arc::new(Mutex::new(OptimizeProgress::default()));
         let p = progress.clone();
@@ -379,7 +426,10 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(work) {
+        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(move || {
+            pdfcraft_engine::optimize::give_way_to_other_programs();
+            work();
+        }) {
             // No worker: report the failure instead of waiting for a result that never comes.
             if let Ok(mut s) = progress.lock() {
                 s.result = Some(Err(EditError::Optimize(e.to_string())));
@@ -387,7 +437,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.optimize_run = Some(OptimizeRun { doc: id, kind, progress });
+        self.optimize_run = Some(OptimizeRun { doc: id, kind, destination, progress });
         self.poll_optimize();
     }
 
@@ -403,7 +453,7 @@ impl PdfCraftApp {
     /// Show progress; save the copy once the worker is done.
     pub(crate) fn poll_optimize(&mut self) {
         let Some(run) = self.optimize_run.as_ref() else { return };
-        let (doc, kind, progress) = (run.doc, run.kind, run.progress.clone());
+        let (doc, kind, destination, progress) = (run.doc, run.kind, run.destination.clone(), run.progress.clone());
         let Ok(mut s) = progress.lock() else {
             // The worker panicked while holding the lock: it will never report back.
             self.optimize_run = None;
@@ -432,7 +482,7 @@ impl PdfCraftApp {
                     let detail = if kind == OptimizeKind::Advanced { summary(&r) } else { String::new() };
                     (b, detail)
                 });
-                self.save_optimized(doc, kind, result);
+                self.save_optimized(doc, kind, result, destination);
             }
         }
     }
@@ -454,7 +504,7 @@ mod tests {
             app.set_option("language", "en").unwrap();
             app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();
-            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, progress: p });
+            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p });
             app.notify("Saved notes.pdf");
             app
         });
@@ -465,7 +515,7 @@ mod tests {
         }
         h.get_by_label("Optimizing… image 4 of 10");
         let shown = h.state().progress_notice.clone().unwrap();
-        assert!((shown.fraction - 0.275).abs() < 1e-4, "{shown:?}");
+        assert!((shown.fraction - 0.415).abs() < 1e-4, "{shown:?}");
         assert!(shown.cancellable);
 
         h.get_by_label("Cancel").click();
@@ -482,13 +532,41 @@ mod tests {
     }
 
     #[test]
+    fn the_progress_card_says_what_is_happening() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        assert_eq!(stage_label(OptimizeStage::default()), "Optimizing… reading the pages");
+        assert_eq!(stage_label(OptimizeStage::Reading { done: 11, total: 51 }), "Optimizing… reading page 12 of 51");
+        assert_eq!(stage_label(OptimizeStage::Reading { done: 51, total: 51 }), "Optimizing… reading page 51 of 51");
+        assert_eq!(stage_label(OptimizeStage::Discarding), "Optimizing… removing user data");
+    }
+
+    #[test]
     fn a_second_run_is_refused_while_one_is_going() {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, destination: None, progress: Arc::default() });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
+    }
+
+    #[test]
+    fn optimize_and_enhance_scanned_file_do_not_run_at_once() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let (_, doc) = app.active_ids().unwrap();
+        app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, progress: Arc::default() });
+        app.optimize_with_draft();
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Scanned pages are already being enhanced"));
+        assert!(app.optimize_run.is_none());
+
+        app.scan_clean_run = None;
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, destination: None, progress: Arc::default() });
+        app.start_scan_clean();
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
+        assert!(app.scan_clean_run.is_none());
     }
 }
