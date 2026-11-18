@@ -106,7 +106,7 @@ fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         match event {
             CollectionEvent::Activate(at) => {
                 if let Some(g) = TOOL_GROUPS.get(at) {
-                    app.select_tool(g.id);
+                    app.select_tool(ui.ctx(), g.id);
                 }
             }
             CollectionEvent::Item(at, RowEvent::Trailing { part, .. }) if part == PIN => {

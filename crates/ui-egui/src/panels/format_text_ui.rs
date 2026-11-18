@@ -93,19 +93,19 @@ enum Recolour {
 }
 
 /// Applies the colour a picker answered to what it was asked for, as one change.
-fn recolour(app: &mut PdfCraftApp, view: usize, which: Recolour, color: craft::theme::Srgba) {
+fn recolour(ctx: &egui::Context, app: &mut PdfCraftApp, view: usize, which: Recolour, color: craft::theme::Srgba) {
     let rgb = [color.r, color.g, color.b].map(f64::from);
     match which {
         Recolour::Paragraph => {
             if let Some(mut ed) = app.views.get(view).and_then(|v| v.session.line_editor.clone()) {
                 ed.look.set_color(rgb);
-                app.apply_line_format(view, ed);
+                app.apply_line_format(ctx, view, ed);
             }
         }
         Recolour::Draft => {
             if let Some(mut style) = app.views.get(view).and_then(|v| v.session.content.draft.as_ref()).map(|d| d.style.clone()) {
                 style.set_color(rgb);
-                app.restyle_draft(view, style);
+                app.restyle_draft(ctx, view, style);
             }
         }
         Recolour::Added(page, index) => {
@@ -119,7 +119,10 @@ fn recolour(app: &mut PdfCraftApp, view: usize, which: Recolour, color: craft::t
                 style.set_color(rgb);
                 // A gray or CMYK ink the new colour no longer shows goes with it (#6440).
                 style.drop_stale_ink();
-                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
+                if app.apply_edit(
+                    ctx,
+                    pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) },
+                ) {
                     app.text_style = AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
                 }
             }
@@ -432,9 +435,9 @@ pub(crate) fn panel(
     let Some(mut out) = shown.inner else { return };
     if let Some(request) = out.requests.take_color() {
         let which = target.recolour();
-        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, color| recolour(app, view, which, color));
+        app.open_colour_picker(crate::colour_picker::PickerHost::App, request, move |app, color| recolour(ui.ctx(), app, view, which, color));
     }
-    apply(app, view, target, &out.edits);
+    apply(ui.ctx(), app, view, target, &out.edits);
 }
 
 /// The Format text controls for `target`, shown. The font row is the font picker over the installed
@@ -598,15 +601,15 @@ fn committed(edits: &[EditEvent<FormatTextChange>]) -> Vec<&FormatTextChange> {
 /// Applies the edits of one pass to `target`: the engine edit that follows is one undoable change
 /// (`apply_line_format`, `restyle_draft` or an `UpdateContent`), made only when something changed.
 /// Only this pass's own edits are applied, so a second pass in a frame applies nothing again.
-pub(crate) fn apply(app: &mut PdfCraftApp, view: usize, target: Target, edits: &[EditEvent<FormatTextChange>]) {
+pub(crate) fn apply(ctx: &egui::Context, app: &mut PdfCraftApp, view: usize, target: Target, edits: &[EditEvent<FormatTextChange>]) {
     let changes = committed(edits);
     if changes.is_empty() {
         return;
     }
     match target {
         Target::Paragraph(mut ed) => {
-            if apply_paragraph(app, &mut ed, &changes) {
-                app.apply_line_format(view, *ed);
+            if apply_paragraph(ctx, app, &mut ed, &changes) {
+                app.apply_line_format(ctx, view, *ed);
             }
         }
         Target::Draft(draft) => {
@@ -636,7 +639,7 @@ pub(crate) fn apply(app: &mut PdfCraftApp, view: usize, target: Target, edits: &
                 slot.session.content.draft = Some(next);
             }
             if style != draft.style {
-                app.restyle_draft(view, style);
+                app.restyle_draft(ctx, view, style);
             }
         }
         Target::Added { page, index, text } => {
@@ -650,7 +653,10 @@ pub(crate) fn apply(app: &mut PdfCraftApp, view: usize, target: Target, edits: &
             }
             if style != text {
                 // The reusable style follows the selection only when the edit took, so a refused one adds nothing odd later.
-                if app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) }) {
+                if app.apply_edit(
+                    ctx,
+                    pdfcraft_engine::Edit::UpdateContent { page, index, content: pdfcraft_engine::AddedContent::Text(style.clone()) },
+                ) {
                     app.text_style = AddedText { text: String::new(), rect: [0.0; 4], aligns: Vec::new(), ..style };
                 }
             }
@@ -673,7 +679,7 @@ pub(crate) fn apply(app: &mut PdfCraftApp, view: usize, target: Target, edits: &
 
 /// The open paragraph's changes applied to its editor; whether anything changed, so the caller
 /// applies the paragraph.
-fn apply_paragraph(app: &mut PdfCraftApp, ed: &mut LineEditor, changes: &[&FormatTextChange]) -> bool {
+fn apply_paragraph(ctx: &egui::Context, app: &mut PdfCraftApp, ed: &mut LineEditor, changes: &[&FormatTextChange]) -> bool {
     let before = (ed.look.clone(), ed.extras);
     let mut changed = false;
     // An installed family and its style row arrive as two changes of the same pass.
@@ -704,7 +710,7 @@ fn apply_paragraph(app: &mut PdfCraftApp, ed: &mut LineEditor, changes: &[&Forma
                     ed.choose_family(f);
                     changed = true;
                 }
-                FontPick::Load => app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false),
+                FontPick::Load => app.pick_files(ctx, crate::files::FilePurpose::TextFont { page: ed.page }, false),
                 FontPick::Reload => {
                     #[cfg(not(target_arch = "wasm32"))]
                     let _ = app.installed_document_fonts(true);
@@ -719,7 +725,7 @@ fn apply_paragraph(app: &mut PdfCraftApp, ed: &mut LineEditor, changes: &[&Forma
     if let Some(family) = family {
         let path = app.installed_document_fonts(false).and_then(|i| pick_installed(&i.files, &family, style.as_deref()).map(|f| f.path.clone()));
         if let Some(path) = path {
-            app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[path]);
+            app.use_paths(ctx, crate::files::FilePurpose::TextFont { page: ed.page }, &[path]);
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -766,7 +772,7 @@ mod tests {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
         let text = AddedText { rect: [20.0, 200.0, 180.0, 220.0], text: "Proof".into(), size: 12.0, ..Default::default() };
-        assert!(app.apply_edit(pdfcraft_engine::Edit::AddText { page: 0, text }));
+        assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::AddText { page: 0, text }));
         app
     }
 
@@ -804,7 +810,7 @@ mod tests {
             let mut app = app_with_text();
             let depth = undo_depth(&app);
             let text = item(&app);
-            apply(&mut app, 0, Target::Added { page: 0, index: 0, text }, &size(value));
+            apply(&egui::Context::default(), &mut app, 0, Target::Added { page: 0, index: 0, text }, &size(value));
             assert_eq!(item(&app).size, if bad { 12.0 } else { 24.0 }, "added text, {name}");
             assert_eq!(undo_depth(&app), depth + usize::from(!bad), "one edit for added text, {name}");
 
@@ -812,21 +818,21 @@ mod tests {
             let mut app = app_with_text();
             let depth = undo_depth(&app);
             let draft = open_draft(&mut app);
-            apply(&mut app, 0, Target::Draft(Box::new(draft)), &size(value));
+            apply(&egui::Context::default(), &mut app, 0, Target::Draft(Box::new(draft)), &size(value));
             assert_eq!(item(&app).size, if bad { 12.0 } else { 24.0 }, "draft, {name}");
             assert_eq!(undo_depth(&app), depth + usize::from(!bad), "one edit for the draft, {name}");
 
             // The style the next text gets.
             let mut app = app_with_text();
             let armed = app.text_style.clone();
-            apply(&mut app, 0, Target::Armed(armed.clone()), &size(value));
+            apply(&egui::Context::default(), &mut app, 0, Target::Armed(armed.clone()), &size(value));
             assert_eq!(app.text_style.size, if bad { armed.size } else { 24.0 }, "armed, {name}");
 
             // A preview of a gesture changes nothing; only its commit does.
             let mut app = app_with_text();
             let text = item(&app);
             let update = EditEvent::update(craft::behavior::GestureId::new(1), FormatTextChange::Character(CharacterChange::Size(value)));
-            apply(&mut app, 0, Target::Added { page: 0, index: 0, text }, &[update]);
+            apply(&egui::Context::default(), &mut app, 0, Target::Added { page: 0, index: 0, text }, &[update]);
             assert_eq!(item(&app).size, 12.0, "a preview, {name}");
         }
     }
@@ -863,7 +869,7 @@ mod tests {
         let mut app = app_with_text();
         let draft = open_draft(&mut app);
         let pick = vec![set(FormatTextChange::Paragraph(ParagraphChange::Align(PanelAlign::Center)))];
-        apply(&mut app, 0, Target::Draft(Box::new(draft)), &pick);
+        apply(&egui::Context::default(), &mut app, 0, Target::Draft(Box::new(draft)), &pick);
         assert_eq!(item(&app).align, TextAlign::Center);
     }
 }

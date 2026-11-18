@@ -299,7 +299,7 @@ impl PdfCraftApp {
         match draft.finish(&live, &context) {
             Ok(Some(change)) => {
                 let edits = change.before.edits_to(&change.after);
-                if self.apply_edit(Edit::Batch { label: "Change document properties".into(), edits }) {
+                if self.apply_edit(ctx, Edit::Batch { label: "Change document properties".into(), edits }) {
                     true
                 } else {
                     // Session::apply is atomic on error; do not rebase to any newer document.

@@ -209,7 +209,7 @@ pub(crate) const MAX_WORD_LIST_BYTES: usize = 1 << 20;
 
 impl PdfCraftApp {
     /// Mark every match of the search draft on every page; returns how many were marked.
-    pub fn redact_search(&mut self) -> usize {
+    pub fn redact_search(&mut self, ctx: &egui::Context) -> usize {
         let Some((_, id)) = self.active_ids() else { return 0 };
         let Some(doc) = self.session.get(id) else { return 0 };
         let d = self.redact_search.clone();
@@ -241,13 +241,13 @@ impl PdfCraftApp {
         }
         let n = edits.len();
         if n > 0 {
-            self.apply_edit(Edit::Batch { label: "Mark for redaction".into(), edits });
+            self.apply_edit(ctx, Edit::Batch { label: "Mark for redaction".into(), edits });
         }
         n
     }
 
     /// Mark whole `pages` (0-based) with the current redaction properties.
-    pub fn redact_pages(&mut self, pages: &[usize]) {
+    pub fn redact_pages(&mut self, ctx: &egui::Context, pages: &[usize]) {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let author = self.comment_prefs.author.clone();
@@ -260,11 +260,11 @@ impl PdfCraftApp {
             .collect();
         match <[Edit; 1]>::try_from(edits) {
             Ok([one]) => {
-                self.apply_edit(one);
+                self.apply_edit(ctx, one);
             }
             Err(edits) if edits.is_empty() => {}
             Err(edits) => {
-                self.apply_edit(Edit::Batch { label: "Mark pages for redaction".into(), edits });
+                self.apply_edit(ctx, Edit::Batch { label: "Mark pages for redaction".into(), edits });
             }
         }
     }
@@ -287,9 +287,9 @@ impl PdfCraftApp {
 
 /// The Apply redactions prompt was confirmed: apply every mark, count the step for the
 /// `_Redacted` save rules, and say what the removed text left behind.
-pub(crate) fn finish_apply(app: &mut PdfCraftApp) {
+pub(crate) fn finish_apply(ctx: &egui::Context, app: &mut PdfCraftApp) {
     let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
-    if !app.apply_edit(Edit::ApplyRedactions { pages: None }) {
+    if !app.apply_edit(ctx, Edit::ApplyRedactions { pages: None }) {
         return;
     }
     if let Some(view) = app.active.and_then(|i| app.views.get_mut(i)) {
@@ -320,8 +320,8 @@ pub(crate) fn finish_apply(app: &mut PdfCraftApp) {
 }
 
 /// The Sanitize prompt was confirmed: remove every kind of hidden information.
-pub(crate) fn finish_sanitize(app: &mut PdfCraftApp) {
-    if app.apply_edit(Edit::Sanitize) {
+pub(crate) fn finish_sanitize(ctx: &egui::Context, app: &mut PdfCraftApp) {
+    if app.apply_edit(ctx, Edit::Sanitize) {
         if let Some((_, id)) = app.active_ids() {
             app.renew_recovery(id);
         }

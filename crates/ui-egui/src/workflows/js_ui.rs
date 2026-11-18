@@ -59,7 +59,7 @@ impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
-    pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
+    pub fn handle_js(&mut self, ctx: &egui::Context, id: DocId, out: JsOutput) {
         let view = self.views.iter().position(|v| v.id == id);
         // A script that ran away turned the form's scripts off: calculations and buttons stop
         // working, and the error is only in the console. Say so once, and bring the notice bar
@@ -103,7 +103,7 @@ impl PdfCraftApp {
                 ),
                 Request::SaveAs => {
                     if let Some(i) = view {
-                        self.save_view(i, crate::SaveTarget::As);
+                        self.save_view(ctx, i, crate::SaveTarget::As);
                     }
                 }
                 Request::OpenAttachment { name, open } => self.open_script_attachment(id, &name, open),
@@ -284,7 +284,7 @@ impl PdfCraftApp {
                     self.views[i].page_changed(*p);
                 }
             }
-            self.handle_js(id, run.output);
+            self.handle_js(ctx, id, run.output);
             frame::request_repaint_after(ctx, 0.0);
         }
         if let Some(at) = self.session.next_timer(id) {
@@ -306,7 +306,7 @@ impl PdfCraftApp {
             self.views[i].document_changed(ctx, &info);
         }
         if !out.is_empty() {
-            self.handle_js(id, out);
+            self.handle_js(ctx, id, out);
         }
     }
 
@@ -317,7 +317,7 @@ impl PdfCraftApp {
     /// Run the action of the exact clicked button, preserving legacy name-only entry points.
     pub fn run_button_script_target(&mut self, ctx: &egui::Context, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -339,7 +339,7 @@ impl PdfCraftApp {
                     errors: o.error.into_iter().collect(),
                     doc_errors: Vec::new(),
                 };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
             }
             Err(e) => self.notify_fmt("{field}: {e}", &[("field", field), ("e", &e.to_string())]),
         }
@@ -370,8 +370,8 @@ impl PdfCraftApp {
 
     /// Run the JavaScript action of link `index` on page `page` (0-based; its place in the page's
     /// annotations), clicked in document `id` (#2081). A failed script changes nothing.
-    pub fn run_link_script(&mut self, id: DocId, page: usize, index: usize) {
-        if !self.commit_form_typing() {
+    pub fn run_link_script(&mut self, ctx: &egui::Context, id: DocId, page: usize, index: usize) {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -440,7 +440,7 @@ impl PdfCraftApp {
                 }
                 let (error, result) = (o.error.clone(), o.result.clone());
                 let out = JsOutput { alerts: o.alerts, console: o.console, requests: o.requests, errors: Vec::new(), doc_errors: Vec::new() };
-                self.handle_js(id, out);
+                self.handle_js(ctx, id, out);
                 match error {
                     Some(e) => self.js_console.log.push(format!("Error: {e}")),
                     None => self.js_console.log.extend(result),

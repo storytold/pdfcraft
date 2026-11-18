@@ -104,12 +104,19 @@ impl PdfCraftApp {
     }
 
     /// Open a document and make it the active tab. Encrypted files raise the password prompt.
-    pub fn open_bytes(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>) -> Result<(), String> {
+    pub fn open_bytes(&mut self, ctx: &egui::Context, name: &str, path: Option<String>, bytes: Vec<u8>) -> Result<(), String> {
         self.startup_superseded = true;
-        self.open_bytes_with_focus(name, path, bytes, true)
+        self.open_bytes_with_focus(ctx, name, path, bytes, true)
     }
 
-    pub(super) fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
+    pub(super) fn open_bytes_with_focus(
+        &mut self,
+        ctx: &egui::Context,
+        name: &str,
+        path: Option<String>,
+        bytes: Vec<u8>,
+        activate: bool,
+    ) -> Result<(), String> {
         // Files opened before the first frame (the ones named at startup) are drawn once, in the
         // interface language, rather than in English and again when the frame applies it.
         self.apply_status_captions(i18n::Lang::from_pref(&self.language));
@@ -121,7 +128,7 @@ impl PdfCraftApp {
             }
             return r;
         }
-        self.try_open(name, path, std::sync::Arc::new(bytes), None, activate)
+        self.try_open(ctx, name, path, std::sync::Arc::new(bytes), None, activate)
     }
 
     /// Hand `request` to the open queue; the result arrives later as a pending open, under the
@@ -234,7 +241,7 @@ impl PdfCraftApp {
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
             },
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
-                Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
+                Ok(prepared) => match self.finish_open(ctx, &pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
                         if let Some(path) = pending.path.as_deref() {
                             self.watch.known_as(id, std::path::Path::new(path), pending.stamp);
@@ -282,6 +289,7 @@ impl PdfCraftApp {
     /// as a tab (in front when `activate`).
     fn try_open(
         &mut self,
+        ctx: &egui::Context,
         name: &str,
         path: Option<String>,
         bytes: std::sync::Arc<Vec<u8>>,
@@ -315,7 +323,7 @@ impl PdfCraftApp {
             }
             Err(e) => return Err(e.to_string()),
         };
-        self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
+        self.finish_open(ctx, name, path, bytes.len(), prepared, activate).map(|_| ())
     }
 
     /// Add a prepared document as a tab: its view, the panels it opens with, a portfolio's file list
@@ -323,6 +331,7 @@ impl PdfCraftApp {
     /// once in front, or when a background tab is first selected).
     fn finish_open(
         &mut self,
+        ctx: &egui::Context,
         name: &str,
         path: Option<String>,
         size: usize,
@@ -419,7 +428,7 @@ impl PdfCraftApp {
             // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
             // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
             let (left, left_open) = (self.left, self.left_open);
-            self.select_mode(self.default_mode);
+            self.select_mode(ctx, self.default_mode);
             if self.left_open != left_open {
                 self.left_open = left_open;
                 crate::side_panels::set_panel_visible(self, crate::side_panels::PanelId::from(left), left_open);
@@ -439,7 +448,7 @@ impl PdfCraftApp {
         // or save request must never act on the current document instead.
         if activate {
             let out = self.session.take_js_output(id);
-            self.handle_js(id, out);
+            self.handle_js(ctx, id, out);
         } else if let Some(on) = self.session.take_js_highlight(id) {
             // The field highlight a form asks for isn't about the current document: now.
             self.script_highlight(id, on);
@@ -449,14 +458,14 @@ impl PdfCraftApp {
 
     /// Edit ▸ Attach a file…: choose a file, then attach it to the active document and show
     /// the Attachments panel with it.
-    pub fn attach_file_dialog(&mut self) {
+    pub fn attach_file_dialog(&mut self, ctx: &egui::Context) {
         if self.active_ids().is_none() {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let target = self.pick_target(self.active_ids().map(|(_, id)| id));
-            self.pick_first(PickRequest::open("attachment").title(tl!("Attach a file").to_string()), target, |app, path| app.attach_file(&path));
+            self.pick_first(PickRequest::open("attachment").title(tl!("Attach a file").to_string()), target, |app, path| app.attach_file(ctx, &path));
         }
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Attaching files is not available on the web yet");
@@ -464,7 +473,7 @@ impl PdfCraftApp {
 
     /// Attach the file at `path` to the active document (document level: the Attachments
     /// panel, not a paper-clip comment on a page).
-    pub fn attach_file(&mut self, path: &std::path::Path) {
+    pub fn attach_file(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
@@ -474,7 +483,7 @@ impl PdfCraftApp {
             }
         };
         let mime = pdfcraft_engine::mime_for_name(&name).map(str::to_string);
-        if self.apply_edit(pdfcraft_engine::Edit::AddAttachment { name, bytes, description: None, mime }) {
+        if self.apply_edit(ctx, pdfcraft_engine::Edit::AddAttachment { name, bytes, description: None, mime }) {
             self.set_right(Some(RightPanel::Attachments));
         }
     }

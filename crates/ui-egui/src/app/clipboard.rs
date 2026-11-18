@@ -115,13 +115,13 @@ impl PdfCraftApp {
 
     /// Copy on the canvas: with objects selected in Edit a PDF, those; with no text selected, the
     /// selected comments with their replies; else the text; else the selected image.
-    pub(crate) fn copy_from_canvas(&mut self, i: usize) {
+    pub(crate) fn copy_from_canvas(&mut self, ctx: &egui::Context, i: usize) {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
         // Objects selected together in Edit a PDF take the copy.
         if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
-            self.copy_objects(i, false);
+            self.copy_objects(ctx, i, false);
             return;
         }
         // A selection across pages still being read has no text yet, but is selected all the
@@ -139,26 +139,26 @@ impl PdfCraftApp {
     }
 
     /// Cut on the canvas: objects selected in Edit a PDF, else the selected image.
-    pub(crate) fn cut_from_canvas(&mut self, i: usize) {
+    pub(crate) fn cut_from_canvas(&mut self, ctx: &egui::Context, i: usize) {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
         if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
-            self.copy_objects(i, true);
+            self.copy_objects(ctx, i, true);
             return;
         }
         if let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
-            self.cut_page_image(sel.page, sel.index);
+            self.cut_page_image(ctx, sel.page, sel.index);
         }
     }
 
     /// Paste on the canvas, in this order: the objects copied in Edit a PDF while the clipboard
     /// still holds their copy; a picture the clipboard holds; its text (XFDF is pasted as
     /// comments, and text beats an image the app only remembers); else the remembered image.
-    pub(crate) fn paste_from_clipboard(&mut self, i: usize) {
+    pub(crate) fn paste_from_clipboard(&mut self, ctx: &egui::Context, i: usize) {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
@@ -166,14 +166,14 @@ impl PdfCraftApp {
         let text = if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten().filter(|t| !t.is_empty()) } else { None };
         let image = self.clipboard.read_image().ok().flatten();
         if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(text.as_deref(), image.as_ref()) {
-            self.paste_objects(i);
+            self.paste_objects(ctx, i);
             return;
         }
         if let Some(image) = image {
             match color_image(&image) {
                 // PLAN: assumed `paste_received_image(page, &egui::ColorImage) -> bool` (pdf-edit-w7)
                 Some(pixels) => {
-                    self.paste_received_image(page, &pixels);
+                    self.paste_received_image(ctx, page, &pixels);
                 }
                 None => self.notify_error("the clipboard image is empty, malformed or exceeds size limits"),
             }
@@ -182,16 +182,16 @@ impl PdfCraftApp {
         if let Some(text) = text {
             self.last_copied_image = None;
             self.last_copied_file = None;
-            self.paste_comment_text(i, text);
+            self.paste_comment_text(ctx, i, text);
             return;
         }
-        self.paste_image(page, None);
+        self.paste_image(ctx, page, None);
     }
 
     /// Copy in Edit a PDF with objects selected together: copy them for Paste in any open
     /// document, and put their text (or else their first picture) on the system clipboard for
     /// other applications. A cut then deletes them, as one undo step.
-    pub(crate) fn copy_objects(&mut self, i: usize, cut: bool) -> bool {
+    pub(crate) fn copy_objects(&mut self, ctx: &egui::Context, i: usize, cut: bool) -> bool {
         let Some((id, Some((page, targets)))) = self.views.get(i).map(|v| (v.id, v.session.objects.selection())) else { return false };
         if !self.may_copy(id) {
             return false;
@@ -225,7 +225,7 @@ impl PdfCraftApp {
         };
         self.object_clipboard = Some(pdfcraft_engine::ObjectClipboard::new(clip));
         if cut && let Some(delete) = pdfcraft_engine::Edit::delete_objects(page, targets) {
-            self.apply_edit(delete);
+            self.apply_edit(ctx, delete);
         }
         true
     }
@@ -248,7 +248,7 @@ impl PdfCraftApp {
 
     /// Paste in Edit a PDF: the copied objects onto the current page of tab `i`, as page content
     /// that draws the same (one undo step), and selected.
-    pub(crate) fn paste_objects(&mut self, i: usize) -> bool {
+    pub(crate) fn paste_objects(&mut self, ctx: &egui::Context, i: usize) -> bool {
         let Some((id, page)) = self.views.get(i).map(|v| (v.id, v.current())) else { return false };
         let (Some(doc), Some(clipboard)) = (self.session.get(id), self.object_clipboard.as_mut()) else { return false };
         if !doc.allows_modification() {
@@ -263,7 +263,7 @@ impl PdfCraftApp {
                 return false;
             }
         };
-        if !self.apply_edit(edit) {
+        if !self.apply_edit(ctx, edit) {
             return false;
         }
         if let (Some(Ok(after)), Some(view)) = (self.session.get(id).map(|d| d.editable_objects(page)), self.views.get_mut(i)) {
@@ -276,11 +276,11 @@ impl PdfCraftApp {
     /// come from the system clipboard when it holds them, from the app's own only when it holds
     /// nothing legible (a word copied in another app since is that word, not the comments copied
     /// before it).
-    fn paste_comment_text(&mut self, i: usize, text: String) {
+    fn paste_comment_text(&mut self, ctx: &egui::Context, i: usize, text: String) {
         if pdfcraft_engine::is_xfdf_comments(&text) {
-            self.paste_comments(i, Some(text), None);
+            self.paste_comments(ctx, i, Some(text), None);
         } else if text.trim().is_empty() && self.comment_clipboard.is_some() {
-            self.paste_comments(i, None, None);
+            self.paste_comments(ctx, i, None, None);
         }
     }
 
@@ -314,7 +314,7 @@ impl PdfCraftApp {
     /// bundle until a click places it (`view.comments.paste`), so a copy never lands on its
     /// original and a bundle from a large page goes where it fits on a small one. The copies are
     /// selected once placed (see `apply_edit`).
-    pub fn paste_comments(&mut self, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
+    pub fn paste_comments(&mut self, ctx: &egui::Context, i: usize, text: Option<String>, at: Option<(usize, [f64; 2])>) -> bool {
         let Some(xfdf) = text.or_else(|| self.comment_clipboard.as_ref().map(|c| c.xfdf.clone())) else {
             self.notify_tr("Copy comments first");
             return false;
@@ -334,7 +334,7 @@ impl PdfCraftApp {
         match at {
             Some((page, [x, y])) => {
                 let offset = [x - (bounds[0] + bounds[2]) / 2.0, y - (bounds[1] + bounds[3]) / 2.0];
-                self.apply_edit(pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
+                self.apply_edit(ctx, pdfcraft_engine::Edit::PasteComments { xfdf, page, offset: Some(offset) })
             }
             None => {
                 let Some(view) = self.views.get_mut(i) else { return false };
@@ -475,13 +475,14 @@ mod review_tests {
     /// copy, even with a comment selected too, rather than copying the comment.
     #[test]
     fn a_selection_waiting_for_its_text_takes_copy_over_a_selected_comment() {
+        let ctx = &egui::Context::default();
         let (mut app, writes) = app_with_clipboard();
         let jobs = Arc::new(ManualJobs::new());
         app.text_copies = JobQueue::new(jobs.clone(), Wake::none(), QueueOptions::default());
         let shape = pdfcraft_engine::Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] };
         let style = pdfcraft_engine::Style::default_for(&shape);
         let note = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: String::new(), author: String::new() };
-        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+        assert!(app.apply_edit(ctx, pdfcraft_engine::Edit::AddAnnotation(note)));
         app.views[0].session.comments.select_only((0, 0));
         // The page's text is not read yet: the selection waits for it.
         app.views[0].session.texts.clear();

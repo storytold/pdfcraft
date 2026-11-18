@@ -146,7 +146,7 @@ impl PdfCraftApp {
         {
             self.prompts.revert = None;
             if go {
-                self.revert_active();
+                self.revert_active(ctx);
             }
         }
         if let Some(dialog) = self.prompts.link {
@@ -173,7 +173,7 @@ impl PdfCraftApp {
         {
             self.prompts.apply_redactions = None;
             if go {
-                crate::redact_ui::finish_apply(self);
+                crate::redact_ui::finish_apply(ctx, self);
             }
         }
         if let Some(dialog) = self.prompts.sanitize
@@ -181,7 +181,7 @@ impl PdfCraftApp {
         {
             self.prompts.sanitize = None;
             if go {
-                crate::redact_ui::finish_sanitize(self);
+                crate::redact_ui::finish_sanitize(ctx, self);
             }
         }
         if let Some(dialog) = self.prompts.lock_signatures
@@ -189,7 +189,7 @@ impl PdfCraftApp {
         {
             self.prompts.lock_signatures = None;
             match result {
-                DialogResult::Ok(answer) => super::signature::finish_lock(self, answer),
+                DialogResult::Ok(answer) => super::signature::finish_lock(ctx, self, answer),
                 _ => self.pending_lock = None,
             }
         }

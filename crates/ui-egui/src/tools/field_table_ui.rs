@@ -240,7 +240,7 @@ pub(crate) fn pass(app: &mut PdfCraftApp, ctx: &Context) {
     }
     let edit = draft.laid(info, form).edit.as_ref().ok().cloned();
     // Added, the window closes; refused, it stays as it is, with the notice saying why.
-    let added = edit.is_some_and(|edit| app.apply_edit(edit));
+    let added = edit.is_some_and(|edit| app.apply_edit(ctx, edit));
     if let Some(dialog) = app.dialogs.get_mut::<FieldTableDialog>() {
         dialog.held.answer(if added { Ok(()) } else { Err(tl!("The field table could not be added.").to_owned().into()) });
     }

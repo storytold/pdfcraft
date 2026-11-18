@@ -1226,22 +1226,21 @@ impl crate::PdfCraftApp {
     }
 
     /// Edit a PDF ▸ Add content ▸ Image: pick a file and place it in the middle of the current page.
-    pub fn add_image_dialog(&mut self) {
+    pub fn add_image_dialog(&mut self, ctx: &egui::Context) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick_image(tl!("Choose an image"), |app, name, bytes| app.add_image(name, bytes));
+        self.pick_image(tl!("Choose an image"), |app, name, bytes| app.add_image(ctx, name, bytes));
         #[cfg(target_arch = "wasm32")]
         self.notify_tr("Adding images arrives on the web with file pickers for images");
     }
 
     /// Edit text & images ▸ Replace Image: pick a file to draw in a page image's place.
-    pub(crate) fn replace_page_image_dialog(&mut self, page: usize, index: usize) {
+    pub(crate) fn replace_page_image_dialog(&mut self, ctx: &egui::Context, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick_image(tl!("Replace image"), move |app, name, bytes| {
-            app.apply_edit(Edit::EditPageImage {
-                page,
-                index,
-                change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) },
-            });
+            app.apply_edit(
+                ctx,
+                Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Replace { name, bytes: std::sync::Arc::new(bytes) } },
+            );
         });
         #[cfg(target_arch = "wasm32")]
         self.notify_fmt(
@@ -1303,13 +1302,15 @@ impl crate::PdfCraftApp {
     }
 
     /// Cut: copy the picture, and only when that worked take it off the page (one undo step).
-    pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) -> bool {
+    pub(crate) fn cut_page_image(&mut self, ctx: &egui::Context, page: usize, index: usize) -> bool {
         let Some((view, id)) = self.active_ids() else { return false };
         if self.session.get(id).is_some_and(|doc| !doc.allows_modification()) {
             self.notify_error(tl!("The document's security settings don't allow this change"));
             return false;
         }
-        if !self.copy_page_image(page, index) || !self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete }) {
+        if !self.copy_page_image(page, index)
+            || !self.apply_edit(ctx, Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete })
+        {
             return false;
         }
         if let Some(view) = self.views.get_mut(view) {
@@ -1320,11 +1321,11 @@ impl crate::PdfCraftApp {
 
     /// Redact image: a redaction mark over the whole picture. It is applied, like any mark, from
     /// Redact a PDF.
-    pub(crate) fn redact_page_image(&mut self, page: usize, index: usize) {
+    pub(crate) fn redact_page_image(&mut self, ctx: &egui::Context, page: usize, index: usize) {
         let Some(rect) = self.page_image_box(page, index) else { return };
         let author = self.comment_prefs.author.clone();
         let mark = self.redact_prefs.mark(page, vec![pdfcraft_engine::rect_quad(rect)], &author);
-        if self.apply_edit(mark) {
+        if self.apply_edit(ctx, mark) {
             self.notify_tr("The image is marked for redaction. Apply it with Redact a PDF");
         }
     }
@@ -1346,12 +1347,12 @@ impl crate::PdfCraftApp {
     }
 
     /// Click an image field: pick a picture for it.
-    pub fn choose_field_image(&mut self, name: &str) {
+    pub fn choose_field_image(&mut self, ctx: &egui::Context, name: &str) {
         let Some((_, id)) = self.active_ids() else { return };
-        self.choose_field_image_target(id, name, None);
+        self.choose_field_image_target(ctx, id, name, None);
     }
     /// Keep the clicked document and field identity through the asynchronous image picker.
-    pub fn choose_field_image_target(&mut self, id: pdfcraft_engine::DocId, name: &str, identity: Option<u64>) {
+    pub fn choose_field_image_target(&mut self, ctx: &egui::Context, id: pdfcraft_engine::DocId, name: &str, identity: Option<u64>) {
         if identity.is_some_and(|key| key >= 1u64 << 48) {
             self.notify("The selected image field identity is invalid");
             return;
@@ -1377,7 +1378,7 @@ impl crate::PdfCraftApp {
                         if let Some(view) = app.views.iter_mut().find(|v| v.id == id)
                             && let Some(doc) = app.session.get(id)
                         {
-                            view.document_changed(&doc.info);
+                            view.document_changed(ctx, &doc.info);
                         }
                     }
                     Err(e) => app.notify(e.to_string()),
@@ -1391,10 +1392,10 @@ impl crate::PdfCraftApp {
     }
 
     /// Edit image ▸ Replace: pick a file for the selected image.
-    pub fn replace_image_dialog(&mut self, page: usize, index: usize) {
+    pub fn replace_image_dialog(&mut self, ctx: &egui::Context, page: usize, index: usize) {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick_image(tl!("Replace image"), move |app, name, bytes| {
-            app.apply_edit(Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
+            app.apply_edit(ctx, Edit::ReplaceImage { page, index, name, bytes: std::sync::Arc::new(bytes) });
         });
         #[cfg(target_arch = "wasm32")]
         {
@@ -1404,12 +1405,12 @@ impl crate::PdfCraftApp {
     }
 
     /// Place image `bytes` in the middle of the current page and select it.
-    pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
+    pub fn add_image(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current();
         let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
-        if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
+        if self.apply_edit(ctx, Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
             self.views[i].session.content.selected = Some((page, before_added));
             self.views[i].session.content.select_added = Some((page, before_added));
             self.views[i].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
@@ -1438,7 +1439,7 @@ impl crate::PdfCraftApp {
     }
 
     /// Paste the integration's delivered pixels without rereading a clipboard that may have changed.
-    pub(crate) fn paste_received_image(&mut self, page: usize, image: &egui::ColorImage) -> bool {
+    pub(crate) fn paste_received_image(&mut self, ctx: &egui::Context, page: usize, image: &egui::ColorImage) -> bool {
         let [width, height] = image.size;
         let pixels = width.checked_mul(height);
         let bytes = pixels.and_then(|n| n.checked_mul(4));
@@ -1454,20 +1455,20 @@ impl crate::PdfCraftApp {
         }
         let rgba = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
         let delivered = crate::create_ui::Clip::Image { width, height, rgba };
-        self.paste_image_with_system(page, None, None, None, false, Some(delivered))
+        self.paste_image_with_system(ctx, page, None, None, None, false, Some(delivered))
     }
 
     /// Paste an image from the clipboard onto `page`.
-    pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
-        self.paste_image_internal(page, rect, None)
+    pub fn paste_image(&mut self, ctx: &egui::Context, page: usize, rect: Option<[f64; 4]>) -> bool {
+        self.paste_image_internal(ctx, page, rect, None)
     }
 
     /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
-    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
-        self.paste_image_internal(page, None, Some(at))
+    pub fn paste_image_at(&mut self, ctx: &egui::Context, page: usize, at: [f64; 2]) -> bool {
+        self.paste_image_internal(ctx, page, None, Some(at))
     }
 
-    fn paste_image_internal(&mut self, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
+    fn paste_image_internal(&mut self, ctx: &egui::Context, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
         // Text on the clipboard beats an image copied in the app before it.
         let system = if self.clipboard.has(&[TEXT]) {
             Some(crate::create_ui::Clip::Text(String::new()))
@@ -1478,11 +1479,12 @@ impl crate::PdfCraftApp {
                 rgba: image.rgba,
             })
         };
-        self.paste_image_with_system(page, rect, at, system, cfg!(not(target_arch = "wasm32")), None)
+        self.paste_image_with_system(ctx, page, rect, at, system, cfg!(not(target_arch = "wasm32")), None)
     }
 
     fn paste_image_with_system(
         &mut self,
+        ctx: &egui::Context,
         page: usize,
         rect: Option<[f64; 4]>,
         at: Option<[f64; 2]>,
@@ -1581,7 +1583,7 @@ impl crate::PdfCraftApp {
 
         let added_before: std::collections::HashSet<_> =
             self.session.get(id).into_iter().flat_map(|doc| doc.added()).filter(|item| item.page == page).map(|item| item.obj).collect();
-        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
+        if self.apply_edit(ctx, pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
             let selection = self.session.get(id).and_then(|doc| {
                 let mut inserted =
                     doc.added().iter().filter(|item| item.page == page).enumerate().filter(|(_, item)| !added_before.contains(&item.obj));
@@ -1714,7 +1716,7 @@ mod tests {
         for size in [[0, 1], [usize::MAX, 2], [crate::create_ui::MAX_IMAGE_SIDE + 1, 1], [2, 2]] {
             let mut image = egui::ColorImage::filled([1, 1], egui::Color32::RED);
             image.size = size;
-            assert!(!app.paste_received_image(0, &image));
+            assert!(!app.paste_received_image(&egui::Context::default(), 0, &image));
             assert_eq!(app.last_copied_image, before);
         }
         assert!(app.session.get(app.views[0].id).unwrap().page_images(0).is_empty());
@@ -1725,7 +1727,7 @@ mod tests {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[255, 0, 0, 128]);
-        assert!(app.paste_received_image(0, &image));
+        assert!(app.paste_received_image(&egui::Context::default(), 0, &image));
         assert_eq!(app.last_copied_image.unwrap().2, vec![255, 0, 0, 128]);
     }
 
@@ -1734,7 +1736,7 @@ mod tests {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
-        assert!(app.paste_image_with_system(0, None, None, None, false, None));
+        assert!(app.paste_image_with_system(&egui::Context::default(), 0, None, None, None, false, None));
         let id = app.active_ids().unwrap().1;
         assert_eq!(app.session.get(id).unwrap().page_images(0).len(), 1);
     }
@@ -1744,7 +1746,7 @@ mod tests {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
-        assert!(!app.paste_image_with_system(0, None, None, None, true, None));
+        assert!(!app.paste_image_with_system(&egui::Context::default(), 0, None, None, None, true, None));
     }
 
     #[test]
@@ -1752,13 +1754,16 @@ mod tests {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.create_blank();
         let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
-        app.add_image("test.png".into(), png);
-        app.apply_edit(Edit::Protect(pdfcraft_engine::Protection {
-            permissions_password: Some("owner".into()),
-            changes: pdfcraft_engine::Changes::None,
-            copy: true,
-            ..Default::default()
-        }));
+        app.add_image(&egui::Context::default(), "test.png".into(), png);
+        app.apply_edit(
+            &egui::Context::default(),
+            Edit::Protect(pdfcraft_engine::Protection {
+                permissions_password: Some("owner".into()),
+                changes: pdfcraft_engine::Changes::None,
+                copy: true,
+                ..Default::default()
+            }),
+        );
         let id = app.active_ids().unwrap().1;
         let bytes = app.session.save_bytes(id).unwrap();
         let mut locked = crate::PdfCraftApp::for_unit_tests();
@@ -1766,7 +1771,7 @@ mod tests {
         assert!(!locked.session.get(locked.active_ids().unwrap().1).unwrap().allows_modification());
         locked.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
         let before = locked.last_copied_image.clone();
-        assert!(!locked.cut_page_image(0, 0));
+        assert!(!locked.cut_page_image(&egui::Context::default(), 0, 0));
         assert_eq!(locked.last_copied_image, before);
     }
 
@@ -1777,7 +1782,15 @@ mod tests {
         let id = app.active_ids().unwrap().1;
         app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
         let undo = app.session.get(id).unwrap().can_undo().map(str::to_owned);
-        assert!(!app.paste_image_with_system(0, None, Some([20.0, 20.0]), Some(crate::create_ui::Clip::Text("new text".into())), true, None));
+        assert!(!app.paste_image_with_system(
+            &egui::Context::default(),
+            0,
+            None,
+            Some([20.0, 20.0]),
+            Some(crate::create_ui::Clip::Text("new text".into())),
+            true,
+            None
+        ));
         assert_eq!(app.session.get(id).unwrap().can_undo().map(str::to_owned), undo);
         assert!(app.session.get(id).unwrap().page_images(0).is_empty());
         assert!(app.last_copied_image.is_none());

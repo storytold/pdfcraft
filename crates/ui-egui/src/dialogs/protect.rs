@@ -214,10 +214,10 @@ impl PdfCraftApp {
     }
 
     /// Applies the draft of a Protect dialog that finished with Apply.
-    pub(crate) fn protect_pass(&mut self) {
+    pub(crate) fn protect_pass(&mut self, ctx: &egui::Context) {
         // PLAN: assumed `self.dialogs: DialogHost` with `fn take<D: StackDialog>(&mut self) -> Option<DialogResult<D::Result>>` (pdf-hub-w1 field, pdf-hub-w2 host)
         if let Some(DialogResult::Ok(draft)) = self.dialogs.take::<ProtectDialog>()
-            && self.apply_edit(draft.edit())
+            && self.apply_edit(ctx, draft.edit())
         {
             self.notify_tr("Password protection will be applied when you save");
         }

@@ -501,7 +501,7 @@ impl PdfCraftApp {
     /// One pass of Link Properties for the app: opens the colour picker the Color row asked for, and
     /// applies the edit OK answered.
     // PLAN: pdf-hub-w2's `dialogs/host.rs::results` calls `app.link_props_pass(ctx)`; the pass needs no context, so it calls it without.
-    pub(crate) fn link_props_pass(&mut self) {
+    pub(crate) fn link_props_pass(&mut self, ctx: &egui::Context) {
         if let Some(request) = self.dialogs.get_mut::<LinkPropsDialog>().and_then(|d| d.take_colour_request()) {
             self.open_colour_picker(PickerHost::App, request, |app: &mut PdfCraftApp, picked: Srgba| {
                 if let Some(d) = app.dialogs.get_mut::<LinkPropsDialog>() {
@@ -510,12 +510,12 @@ impl PdfCraftApp {
             });
         }
         if let Some(DialogResult::Ok(edit)) = self.dialogs.take::<LinkPropsDialog>() {
-            self.apply_edit(edit);
+            self.apply_edit(ctx, edit);
         }
     }
 
     /// Create links from URLs in the text of every page.
-    pub fn links_from_urls(&mut self) {
+    pub fn links_from_urls(&mut self, ctx: &egui::Context) {
         let Some((_, id)) = self.active_ids() else { return };
         let found = self.session.find_urls(id);
         if found.is_empty() {
@@ -523,7 +523,7 @@ impl PdfCraftApp {
             return;
         }
         let n = found.len();
-        if self.apply_edit(Edit::AddLinks { links: found, style: LinkStyle::default() }) {
+        if self.apply_edit(ctx, Edit::AddLinks { links: found, style: LinkStyle::default() }) {
             if n == 1 {
                 self.notify_tr("Created 1 link");
             } else {
@@ -533,14 +533,14 @@ impl PdfCraftApp {
     }
 
     /// Remove every link in the active document.
-    pub fn remove_all_links(&mut self) {
+    pub fn remove_all_links(&mut self, ctx: &egui::Context) {
         let Some((_, id)) = self.active_ids() else { return };
         let count = self.session.get(id).map_or(0, |d| d.links().len());
         if count == 0 {
             self.notify_tr("No links to remove");
             return;
         }
-        if self.apply_edit(Edit::RemoveLinks { pages: None }) {
+        if self.apply_edit(ctx, Edit::RemoveLinks { pages: None }) {
             if count == 1 {
                 self.notify_tr("Removed 1 link");
             } else {

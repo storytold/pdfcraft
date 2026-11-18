@@ -533,7 +533,7 @@ impl PdfCraftApp {
         let Some(confirmed) = self.dialogs.get_mut::<HostedParamDialog>().and_then(|d| d.take_ok()) else { return };
         let count = self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
         draft_from(&mut self.ocr_draft, &confirmed.fields, count);
-        let answer = self.start_ocr();
+        let answer = self.start_ocr(ctx);
         if let Some(dialog) = self.dialogs.get_mut::<HostedParamDialog>() {
             dialog.answer_ok(answer.map_err(Into::into));
         }
@@ -541,7 +541,7 @@ impl PdfCraftApp {
 
     /// Recognize text on the pages chosen in the dialog, in the background; the reason it could
     /// not start otherwise.
-    fn start_ocr(&mut self) -> Result<(), String> {
+    fn start_ocr(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let Some((vi, id)) = self.active_ids() else { return Ok(()) };
         if let Some(why) = self.ocr_start_refusal(id) {
             return Err(why);
@@ -557,7 +557,7 @@ impl PdfCraftApp {
             OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
         let settings = d.settings();
-        self.start_ocr_pages(id, &pages, settings, false);
+        self.start_ocr_pages(ctx, id, &pages, settings, false);
         Ok(())
     }
 
@@ -570,7 +570,7 @@ impl PdfCraftApp {
     /// background picture) is left alone, and is judged again only when the document changes. It
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     /// Without an engine the page waits for one (see [`Self::await_ocr_models`]).
-    pub(crate) fn auto_ocr_scanned_page(&mut self) {
+    pub(crate) fn auto_ocr_scanned_page(&mut self, ctx: &egui::Context) {
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
         let mut settings = self.ocr_draft.settings();
@@ -584,7 +584,7 @@ impl PdfCraftApp {
         // a page with real text and a background picture is left alone.
         settings.skip_text_pages = true;
         settings.native_text_only = true;
-        self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
+        self.start_ocr_pages(ctx, scan.doc, &[scan.page], settings, true);
     }
 
     /// Edit found a scan but no engine can read it. The page is set aside until one can (rather
@@ -658,7 +658,7 @@ impl PdfCraftApp {
     }
 
     /// Recognize `pages` (0-based; empty = all) of document `id` in the background.
-    fn start_ocr_pages(&mut self, id: DocId, pages: &[usize], settings: OcrSettings, automatic: bool) {
+    fn start_ocr_pages(&mut self, ctx: &egui::Context, id: DocId, pages: &[usize], settings: OcrSettings, automatic: bool) {
         // What an automatic run's result must still fit when it arrives (see `AutoOcr`).
         let auto = if automatic {
             pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.edit_generation()) })
@@ -677,7 +677,7 @@ impl PdfCraftApp {
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.run_ocr_job(id, job, settings, count, guard, auto, editable);
+        self.run_ocr_job(ctx, id, job, settings, count, guard, auto, editable);
     }
 
     /// Reads the pages on the host's job queue. A cancel keeps the pages read so far, so the
@@ -686,6 +686,7 @@ impl PdfCraftApp {
     #[allow(clippy::too_many_arguments)]
     fn run_ocr_job(
         &mut self,
+        ctx: &egui::Context,
         id: DocId,
         job: pdfcraft_engine::ocr::OcrJob,
         settings: OcrSettings,
@@ -711,12 +712,12 @@ impl PdfCraftApp {
             })
         });
         self.ocr_run = Some(OcrRun { doc: id, count, guard, automatic: auto, editable });
-        self.poll_ocr();
+        self.poll_ocr(ctx);
     }
 
     /// Recognize text in each file, writing the searchable copies into a folder the user picks
     /// (the export folder override in tests), under the same names.
-    pub fn ocr_files(&mut self, files: Vec<(String, Vec<u8>)>) {
+    pub fn ocr_files(&mut self, ctx: &egui::Context, files: Vec<(String, Vec<u8>)>) {
         if self.ocr_batch_running() {
             self.notify_tr("Text recognition is already running");
             return;
@@ -726,9 +727,9 @@ impl PdfCraftApp {
         let settings = self.ocr_draft.settings();
         #[cfg(not(target_arch = "wasm32"))]
         match self.ocr_draft.output_folder.clone() {
-            Some(d) => self.ocr_files_into(files, settings, d.into()),
+            Some(d) => self.ocr_files_into(ctx, files, settings, d.into()),
             None => {
-                self.pick_first(output_folder_request(), None, move |app, dir| app.ocr_files_into(files, settings, dir));
+                self.pick_first(output_folder_request(), None, move |app, dir| app.ocr_files_into(ctx, files, settings, dir));
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -736,7 +737,13 @@ impl PdfCraftApp {
     }
 
     /// [`Self::ocr_files`] once the folder for the searchable files is known.
-    fn ocr_files_into(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf) {
+    fn ocr_files_into(
+        &mut self,
+        ctx: &egui::Context,
+        files: Vec<(String, Vec<u8>)>,
+        settings: OcrSettings,
+        #[cfg(not(target_arch = "wasm32"))] dir: std::path::PathBuf,
+    ) {
         // Another batch may have started while the folder picker was open.
         if self.ocr_batch_running() {
             self.notify_tr("Text recognition is already running");
@@ -788,7 +795,7 @@ impl PdfCraftApp {
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.run_ocr_files(files, settings, dir);
+        self.run_ocr_files(ctx, files, settings, dir);
     }
 
     /// Whether Recognize Text in Multiple Files is running (on the web, or waiting for the
@@ -839,7 +846,7 @@ impl PdfCraftApp {
 
     /// Recognize text in the files on the host's job queue.
     #[cfg(not(target_arch = "wasm32"))]
-    fn run_ocr_files(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, dir: std::path::PathBuf) {
+    fn run_ocr_files(&mut self, ctx: &egui::Context, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, dir: std::path::PathBuf) {
         // The engines are built (and named if they cannot be) before anything starts.
         let recognizers = match pdfcraft_engine::ocr::recognizers(&settings) {
             Ok(r) => r,
@@ -870,7 +877,7 @@ impl PdfCraftApp {
             msg
         });
         self.ocr_batch = Some(count);
-        self.poll_ocr();
+        self.poll_ocr(ctx);
     }
 
     /// Ask the running batch to stop: the file in flight finishes, the rest are counted as not
@@ -954,11 +961,11 @@ impl PdfCraftApp {
     }
 
     /// Show progress; apply the result once the job is done.
-    pub(crate) fn poll_ocr(&mut self) {
+    pub(crate) fn poll_ocr(&mut self, ctx: &egui::Context) {
         #[cfg(target_arch = "wasm32")]
         self.pump_web_ocr();
         self.poll_ocr_batch();
-        self.poll_ocr_run();
+        self.poll_ocr_run(ctx);
     }
 
     /// Posts progress on Recognize Text in Multiple Files while it moves, and its summary once the
@@ -981,7 +988,7 @@ impl PdfCraftApp {
 
     /// Posts progress on a run the user asked for while it moves, and lands its result once the job
     /// has delivered it.
-    fn poll_ocr_run(&mut self) {
+    fn poll_ocr_run(&mut self, ctx: &egui::Context) {
         let Some(run) = self.ocr_run.as_ref() else { return };
         let (doc, count, auto, guard, editable) = (run.doc, run.count.clone(), run.automatic, run.guard.clone(), run.editable);
         let automatic = auto.is_some();
@@ -1009,13 +1016,21 @@ impl PdfCraftApp {
             notices::end_progress(self, ProgressKey::Ocr);
         }
         self.ocr_run = None;
-        self.land_ocr(doc, guard, auto, editable, result);
+        self.land_ocr(ctx, doc, guard, auto, editable, result);
     }
 
     /// Applies a finished run's `result` to document `doc`: dropped for an automatic run whose
     /// document changed, handed to the OCR Verify screen for an editable output, else written as
     /// one undoable step (the guard refuses it when the user edited meanwhile).
-    fn land_ocr(&mut self, doc: DocId, guard: OcrGuard, auto: Option<AutoOcr>, editable: bool, result: Result<Vec<OcrPage>, String>) {
+    fn land_ocr(
+        &mut self,
+        ctx: &egui::Context,
+        doc: DocId,
+        guard: OcrGuard,
+        auto: Option<AutoOcr>,
+        editable: bool,
+        result: Result<Vec<OcrPage>, String>,
+    ) {
         let automatic = auto.is_some();
         // The result is for the bytes the run started from. If the document has changed since (a
         // page deleted or moved, say) its page index may now name another page: drop it, and let
@@ -1053,7 +1068,7 @@ impl PdfCraftApp {
                 if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
                     && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
                 {
-                    view.document_changed(&info);
+                    view.document_changed(ctx, &info);
                 }
                 // An automatic run that found nothing (a page that has text of its own) says nothing.
                 if automatic && words == 0 {
@@ -1341,15 +1356,15 @@ mod tests {
         app.ocr_run = Some(run_of(&app, true, false));
         deliver(&app, &jobs, doc, Ok(vec![one_word_page(None, Vec::new())]));
         app.mode = Mode::Read;
-        app.poll_ocr();
+        app.poll_ocr(&egui::Context::default());
         assert!(app.ocr_run.is_some() && label(&app).is_none(), "waits in Read mode");
         assert_eq!(app.ocr_runs.counts().finished, 1, "the result stays in the queue");
         app.mode = Mode::Edit;
         crate::js_dialogs::open_console(&mut app);
-        app.poll_ocr();
+        app.poll_ocr(&egui::Context::default());
         assert!(app.ocr_run.is_some() && label(&app).is_none(), "waits beneath a dialog");
         close_dialogs(&mut app);
-        app.poll_ocr();
+        app.poll_ocr(&egui::Context::default());
         assert!(app.ocr_run.is_none(), "taken once they are gone");
         assert!(label(&app).is_some(), "one undo step was added");
 
@@ -1359,7 +1374,7 @@ mod tests {
         app.ocr_run = Some(run_of(&app, false, false));
         deliver(&app, &jobs, doc, Ok(vec![one_word_page(None, Vec::new())]));
         app.mode = Mode::Read;
-        app.poll_ocr();
+        app.poll_ocr(&egui::Context::default());
         assert!(label(&app).is_some(), "one undo step was added");
     }
     /// A run's result is for the document as it was when the run started. Once the document has
@@ -1376,7 +1391,7 @@ mod tests {
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
         let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
         app.session.apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 10.0, 50.0, 50.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
-        app.poll_ocr();
+        app.poll_ocr(&egui::Context::default());
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"), "its result was not applied");
         assert!(!app.views[0].auto_ocr_tried.contains(&0), "the page may be judged again");
@@ -1534,7 +1549,10 @@ mod tests {
         app.ocr_draft.output_folder = Some(dir.to_string_lossy().into_owned());
         let s = pdfcraft_engine::Session::new();
         let pdf = s.create_from_text("t", "scanned words here").expect("fixture");
-        app.ocr_files(vec![("scan.pdf".into(), pdf.to_vec()), ("other.pdf".into(), pdf.to_vec()), ("Scan.PDF".into(), pdf.to_vec())]);
+        app.ocr_files(
+            &egui::Context::default(),
+            vec![("scan.pdf".into(), pdf.to_vec()), ("other.pdf".into(), pdf.to_vec()), ("Scan.PDF".into(), pdf.to_vec())],
+        );
         assert!(app.ocr_batch.is_none(), "the batch never starts");
         assert_eq!(app.ocr_batches.counts().running + app.ocr_batches.counts().queued, 0, "nothing was submitted");
         let toast = posted(&mut app);
@@ -1554,7 +1572,7 @@ mod tests {
         app.ocr_draft.output_folder = Some(dir.to_string_lossy().into_owned());
         let s = pdfcraft_engine::Session::new();
         let pdf = s.create_from_text("t", "scanned words here").expect("fixture");
-        app.ocr_files(vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())]);
+        app.ocr_files(&egui::Context::default(), vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())]);
         assert!(app.ocr_batch.is_none(), "the collision stops the batch before anything is read");
         let toast = posted(&mut app);
         assert!(toast.contains("already holds files of these names"), "{toast}");
@@ -1576,7 +1594,7 @@ mod tests {
         app.session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("an edit while the worker runs");
         let after_edit = app.session.get(id).and_then(|d| d.can_undo().map(str::to_owned));
         let page = one_word_page(Some(95.0), Vec::new());
-        app.land_ocr(id, guard, None, false, Ok(vec![page]));
+        app.land_ocr(&egui::Context::default(), id, guard, None, false, Ok(vec![page]));
         let toast = posted(&mut app);
         assert!(toast.contains("changed since recognition started"), "{toast}");
         assert_eq!(
@@ -1596,7 +1614,7 @@ mod tests {
         let note = "3 characters had no font that could show them and appear as ? in the output";
         let page = one_word_page(Some(95.0), vec![note.into()]);
         let guard = app.session.ocr_guard(id).unwrap();
-        app.land_ocr(id, guard, None, false, Ok(vec![page]));
+        app.land_ocr(&egui::Context::default(), id, guard, None, false, Ok(vec![page]));
         let toast = posted(&mut app);
         assert!(toast.contains(note), "{toast}");
     }
@@ -1612,7 +1630,7 @@ mod tests {
         let page = one_word_page(Some(95.0), Vec::new());
         let guard = app.session.ocr_guard(id).unwrap();
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.land_ocr(id, guard, None, true, Ok(vec![page]));
+        app.land_ocr(&egui::Context::default(), id, guard, None, true, Ok(vec![page]));
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);

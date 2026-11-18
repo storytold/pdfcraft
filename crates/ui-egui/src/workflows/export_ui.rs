@@ -164,7 +164,7 @@ pub(crate) fn open_kind(app: &PdfCraftApp) -> Option<ExportKind> {
 }
 
 /// Takes what the Export dialogs answered this pass: OK stores the values and starts the export.
-pub(crate) fn pass(app: &mut PdfCraftApp) {
+pub(crate) fn pass(ctx: &egui::Context, app: &mut PdfCraftApp) {
     for kind in ExportKind::ALL {
         let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id(kind.key())) else { continue };
         let f = &result.fields;
@@ -187,7 +187,7 @@ pub(crate) fn pass(app: &mut PdfCraftApp) {
             Some(_) => d.format = ImageFormat::Png,
             None => {}
         }
-        app.start_export(kind);
+        app.start_export(ctx, kind);
     }
 }
 
@@ -287,9 +287,9 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
 
 impl PdfCraftApp {
     /// Start exporting the active document with the dialog's settings.
-    pub(crate) fn start_export(&mut self, kind: ExportKind) {
+    pub(crate) fn start_export(&mut self, ctx: &egui::Context, kind: ExportKind) {
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((view, id)) = self.active_ids() else { return };

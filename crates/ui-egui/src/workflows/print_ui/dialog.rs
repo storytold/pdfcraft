@@ -294,7 +294,7 @@ impl PdfCraftApp {
         dialog.set_duplex_by_layout(booklet);
 
         if ok.is_some() {
-            match self.print_now() {
+            match self.print_now(ctx) {
                 Ok(PrintStart::Sent) => self.answer_print(Ok(())),
                 // The Save as PDF continuation answers the held OK.
                 Ok(PrintStart::Picking) => {}

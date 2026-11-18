@@ -249,11 +249,11 @@ impl PdfCraftApp {
     /// Reduce File Size: write a compacted copy with images downsampled (the open document is
     /// unchanged). It asks where to save first, so a heavy file can finish by itself, then runs in
     /// the background with a progress bar, like the PDF Optimizer.
-    pub(crate) fn reduce_file_size(&mut self) {
+    pub(crate) fn reduce_file_size(&mut self, ctx: &egui::Context) {
         use crate::optimize_ui::OptimizeKind::Reduce;
         let settings = pdfcraft_engine::optimize::Settings::default();
         // What can't run says so now, not after asking where to save.
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let Some((_, id)) = self.active_ids() else { return };
@@ -275,7 +275,7 @@ impl PdfCraftApp {
         let target = self.pick_target(Some(id));
         self.pick_file(request, target, move |app, picked| {
             if let Some(path) = picked.paths().into_iter().next() {
-                app.run_optimize(id, Reduce, &settings, &[], Some(path.to_string_lossy().into_owned()));
+                app.run_optimize(ctx, id, Reduce, &settings, &[], Some(path.to_string_lossy().into_owned()));
             }
         });
     }
@@ -474,7 +474,7 @@ mod tests {
         let files = Arc::new(ScriptedFiles::held());
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size();
+        h.state_mut().reduce_file_size(&h.ctx.clone());
         h.run_steps(2);
         assert!(h.state().optimize_run.is_none() && jobs.waiting() == 0, "nothing runs until the answer is in");
         assert_eq!(files.open(), 1, "the question is out");
@@ -496,7 +496,7 @@ mod tests {
         let files = Arc::new(ScriptedFiles::held());
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size();
+        h.state_mut().reduce_file_size(&h.ctx.clone());
         h.run_steps(2);
         h.state_mut().open_bytes("other.pdf", None, text_pdf("Another document")).unwrap();
         files.answer(Picked::Paths(vec![out.clone()]));
@@ -518,7 +518,7 @@ mod tests {
         let files = Arc::new(FailingWrites { inner: inner.clone(), fails: Mutex::new(2) });
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files, jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size();
+        h.state_mut().reduce_file_size(&h.ctx.clone());
         h.run_steps(2);
         jobs.run_all();
         h.run_steps(8);
@@ -536,7 +536,7 @@ mod tests {
         // A copy of a plain text file is no smaller.
         h.state_mut().open_bytes("plain.txt", None, "lorem ipsum ".repeat(500).into_bytes()).unwrap();
         h.run_steps(2);
-        h.state_mut().reduce_file_size();
+        h.state_mut().reduce_file_size(&h.ctx.clone());
         h.run_steps(2);
         jobs.run_all();
         h.run_steps(3);
@@ -550,10 +550,10 @@ mod tests {
         let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out])]));
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
-        h.state_mut().reduce_file_size();
+        h.state_mut().reduce_file_size(&h.ctx.clone());
         h.run_steps(2);
         assert!(h.state().optimize_run.is_some(), "the first run is waiting for its job");
-        h.state_mut().reduce_file_size();
+        h.state_mut().reduce_file_size(&h.ctx.clone());
         h.run_steps(2);
         assert_eq!(files.requests().len(), 1, "no second question");
         h.get_by_label_contains("Optimization is already running");

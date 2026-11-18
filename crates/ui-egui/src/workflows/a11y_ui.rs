@@ -183,7 +183,7 @@ pub(crate) fn open_a11y_options(app: &mut PdfCraftApp, ctx: &egui::Context) {
 }
 
 /// What the dialogs of this module answered: called once a pass, after the host ran.
-pub(crate) fn pass(app: &mut PdfCraftApp) {
+pub(crate) fn pass(ctx: &egui::Context, app: &mut PdfCraftApp) {
     if let Some(DialogResult::Ok(result)) = app.dialogs.take_by_id::<HostedParamDialog>(dialog_id("a11y.options")) {
         let Some((_, id)) = app.active_ids() else { return };
         let pages = app.session.get(id).map_or(1, |d| d.info.pages.len().max(1));
@@ -204,7 +204,7 @@ pub(crate) fn pass(app: &mut PdfCraftApp) {
         app.run_accessibility_check();
     }
     if let Some(DialogResult::Ok(answer)) = app.dialogs.take::<AltTextDialog>() {
-        app.save_alt_text(answer);
+        app.save_alt_text(ctx, answer);
     }
 }
 
@@ -638,7 +638,7 @@ impl PdfCraftApp {
                         let edit = self.session.get(id).map(|d| d.accessibility_fix(rule, None));
                         match edit {
                             Some(Ok(e)) => {
-                                if !self.apply_edit(e) {
+                                if !self.apply_edit(ctx, e) {
                                     return;
                                 }
                                 self.run_accessibility_check();
@@ -831,13 +831,13 @@ pub(crate) fn open_alt_text(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 impl PdfCraftApp {
     /// Prepare for accessibility ▸ Tag form fields.
-    pub(crate) fn autotag_form_fields(&mut self) {
-        self.apply_edit(pdfcraft_engine::Edit::AutoTagFormFields);
+    pub(crate) fn autotag_form_fields(&mut self, ctx: &egui::Context) {
+        self.apply_edit(ctx, pdfcraft_engine::Edit::AutoTagFormFields);
         self.choose_right_panel(Some(RightPanel::Tags));
     }
 
     /// Save & Close: one undo step for every change.
-    pub(crate) fn save_alt_text(&mut self, answer: AltTextAnswer) {
+    pub(crate) fn save_alt_text(&mut self, ctx: &egui::Context, answer: AltTextAnswer) {
         let AltTextAnswer { figures, value: d } = answer;
         let mut edits = Vec::new();
         for (k, f) in figures.iter().enumerate() {
@@ -849,7 +849,7 @@ impl PdfCraftApp {
             }
         }
         if !edits.is_empty() {
-            self.apply_edit(pdfcraft_engine::Edit::Batch { label: "Set alternate text".into(), edits });
+            self.apply_edit(ctx, pdfcraft_engine::Edit::Batch { label: "Set alternate text".into(), edits });
         }
     }
 }

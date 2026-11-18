@@ -686,7 +686,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     view.session.calc_order.hide_links = !links_on;
     match act {
         Some(Act::Order(names)) => {
-            app.apply_edit(Edit::SetCalculationOrder { names });
+            app.apply_edit(ui.ctx(), Edit::SetCalculationOrder { names });
         }
         Some(Act::Undo) => {
             app.execute(ui.ctx(), "edit.undo");

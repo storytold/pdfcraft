@@ -122,7 +122,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.sign_draft = None;
         return;
     }
-    run(app, step, out.picked, asked);
+    run(ui.ctx(), app, step, out.picked, asked);
 }
 
 /// The footer buttons that follow OK and Cancel at this step.
@@ -146,7 +146,7 @@ fn removable(d: &SignDraft, ids: &[DigitalIdEntry]) -> Option<usize> {
 }
 
 /// Carries out the footer button picked this pass and what the body asked.
-fn run(app: &mut PdfCraftApp, step: SignStep, picked: Option<usize>, asked: Asked) {
+fn run(ctx: &egui::Context, app: &mut PdfCraftApp, step: SignStep, picked: Option<usize>, asked: Asked) {
     if let Some(i) = asked.remove {
         app.remove_digital_id(i);
     }
@@ -208,7 +208,7 @@ fn run(app: &mut PdfCraftApp, step: SignStep, picked: Option<usize>, asked: Aske
         _ => {}
     }
     if sign_now {
-        match app.finish_signing() {
+        match app.finish_signing(ctx) {
             Ok(()) => app.sign_draft = None,
             Err(e) => {
                 if let Some(d) = app.sign_draft.as_mut() {

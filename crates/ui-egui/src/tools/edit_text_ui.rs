@@ -1569,7 +1569,7 @@ mod tests {
         let (mut app, ed) = preview_app();
         app.views[0].session.line_editor = Some(ed);
         let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
-        app.use_files(crate::files::FilePurpose::TextFont { page: 0 }, vec![("Inter-Regular.ttf".into(), inter)]);
+        app.use_files(&egui::Context::default(), crate::files::FilePurpose::TextFont { page: 0 }, vec![("Inter-Regular.ttf".into(), inter)]);
         let doc = app.session.get(app.views[0].id).unwrap();
         let lines = doc.text_lines(0);
         assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), "Preview text");
@@ -1585,7 +1585,7 @@ mod tests {
         app.views[0].session.line_editor = Some(ed);
 
         // A new document asks where to save; the paragraph is applied before it asks.
-        assert!(!app.save_active(crate::SaveTarget::InPlace));
+        assert!(!app.save_active(&egui::Context::default(), crate::SaveTarget::InPlace));
         assert!(app.views[0].session.line_editor.is_none());
         let doc = app.session.get(app.views[0].id).unwrap();
         assert_eq!(doc.text_lines(0).iter().map(|l| l.text.as_str()).collect::<String>(), "Text preview");
@@ -1599,7 +1599,7 @@ mod tests {
         let draft = crate::content_ui::TextDraft::new(9, None, [20.0, 20.0, 120.0, 40.0], "Typed text".into(), crate::content_ui::default_style());
         app.views[0].session.content.draft = Some(draft.clone());
 
-        assert!(!app.commit_typing_in(app.views[0].id));
+        assert!(!app.commit_typing_in(&egui::Context::default(), app.views[0].id));
         assert_eq!(app.views[0].session.content.draft, Some(draft), "the refused text box stays open");
         assert!(app.views[0].session.line_editor.is_none(), "the paragraph was applied");
         let doc = app.session.get(app.views[0].id).unwrap();
@@ -1656,7 +1656,7 @@ mod tests {
         ed.page = 9;
         app.views[0].session.line_editor = Some(ed.clone());
 
-        assert!(!app.commit_typing_in(app.views[0].id));
+        assert!(!app.commit_typing_in(&egui::Context::default(), app.views[0].id));
         assert_eq!(app.views[0].session.line_editor, Some(ed), "the paragraph keeps its unsaved text");
     }
 

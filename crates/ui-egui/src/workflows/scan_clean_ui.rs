@@ -123,18 +123,18 @@ impl PdfCraftApp {
     }
 
     /// Once per frame: takes the dialog's answer, remembers it and starts the run.
-    pub(crate) fn enhance_scan_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn enhance_scan_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(DialogResult::Ok(answer)) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(DIALOG_KEY)) else { return };
         let d = &mut self.scan_clean_draft;
         if let Some(range) = PageRangeOptions::value(&answer.fields, "pages") {
             d.range = range;
         }
         d.settings = settings_from(&answer.fields, d.settings);
-        self.start_scan_clean();
+        self.start_scan_clean(ctx);
     }
 
     /// Clean up the scans on the pages chosen in the dialog, in the background.
-    pub fn start_scan_clean(&mut self) {
+    pub fn start_scan_clean(&mut self, ctx: &egui::Context) {
         let Some((vi, id)) = self.active_ids() else { return };
         if self.scan_clean_run.is_some() {
             self.notify_tr("Scanned pages are already being enhanced");
@@ -146,7 +146,7 @@ impl PdfCraftApp {
             return;
         }
         // What's typed in a form field is part of the document (#166).
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return;
         }
         let count = self.session.get(id).map_or(0, |d| d.info.pages.len());

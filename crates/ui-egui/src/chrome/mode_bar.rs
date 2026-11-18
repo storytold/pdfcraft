@@ -74,7 +74,7 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                         && let Some((mode, _)) = keys.last().and_then(|at| MODES.get(*at))
                     {
-                        app.switch_mode(*mode, true);
+                        app.switch_mode(ui.ctx(), *mode, true);
                     }
                 }
             });

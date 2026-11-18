@@ -40,7 +40,7 @@ impl crate::PdfCraftApp {
         match action {
             Action::Close(tab) => {
                 if let Some(i) = self.tab_with_key(tab) {
-                    self.request_close_tab(i);
+                    self.request_close_tab(ctx, i);
                 }
             }
             Action::Split { tab, down } => {

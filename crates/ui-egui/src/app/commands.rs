@@ -51,7 +51,7 @@ impl PdfCraftApp {
 
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a
     /// workspace, so opening its panel also opens the page grid (without toggling it off).
-    pub(crate) fn select_tool(&mut self, id: &'static str) {
+    pub(crate) fn select_tool(&mut self, ctx: &egui::Context, id: &'static str) {
         // The tool's panel shows, not the expanded All tools view over it.
         self.all_tools_full = false;
         // Edit a PDF turns on Edit text & images at once, as the Edit tab does (`enter_mode`), so
@@ -67,7 +67,7 @@ impl PdfCraftApp {
             && self.left == LeftPanel::Tool("edit")
             && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText)
         {
-            self.put_down_edit_text();
+            self.put_down_edit_text(ctx);
         }
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
@@ -82,8 +82,8 @@ impl PdfCraftApp {
 
     /// Select the workspace and its matching tool panel, just like the mode bar. The tool goes
     /// with the workspace as [`Self::enter_mode`] sets it.
-    pub(crate) fn select_mode(&mut self, mode: Mode) {
-        self.enter_mode(mode);
+    pub(crate) fn select_mode(&mut self, ctx: &egui::Context, mode: Mode) {
+        self.enter_mode(ctx, mode);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
             view.organize = false;
@@ -101,7 +101,7 @@ impl PdfCraftApp {
     /// here, so they leave Edit alike. Edit turns on Edit text & images at once, as Acrobat does:
     /// every paragraph and image on the page gets its box and is editable with one click. Leaving
     /// Edit puts the editing tools down again and applies a paragraph still open in the editor.
-    pub(crate) fn enter_mode(&mut self, mode: Mode) {
+    pub(crate) fn enter_mode(&mut self, ctx: &egui::Context, mode: Mode) {
         self.mode = mode;
         // Another workspace puts the expanded All tools view away.
         if mode != Mode::AllTools {
@@ -110,7 +110,7 @@ impl PdfCraftApp {
         if mode == Mode::Edit {
             self.quick_tool = QuickTool::EditText;
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-            self.put_down_edit_text();
+            self.put_down_edit_text(ctx);
         }
         // Read mode hides the quick toolbar, so no other tool may stay active there. Opening a
         // document with Read as the default mode comes here without `switch_mode`.
@@ -121,9 +121,9 @@ impl PdfCraftApp {
 
     /// Fill the workspace with the expanded All tools view, entering All tools the way the mode
     /// bar does: leaving Read restores its right panel and leaving Edit puts the editing tool down.
-    pub(crate) fn expand_all_tools(&mut self) {
+    pub(crate) fn expand_all_tools(&mut self, ctx: &egui::Context) {
         if self.mode != Mode::AllTools {
-            self.switch_mode(Mode::AllTools, true);
+            self.switch_mode(ctx, Mode::AllTools, true);
         }
         self.all_tools_full = true;
         self.all_tools_tab = self.shown_tab();
@@ -137,12 +137,12 @@ impl PdfCraftApp {
     /// Back to the Select tool from an editing tool. A paragraph still open in the editor is
     /// applied, as clicking away from it does; left open, its page would keep showing the
     /// paragraph's text removed with no editor over it.
-    pub(crate) fn put_down_edit_text(&mut self) {
+    pub(crate) fn put_down_edit_text(&mut self, ctx: &egui::Context) {
         self.quick_tool = QuickTool::Select;
         if let Some(ed) = self.active.and_then(|i| self.views.get_mut(i)).and_then(|v| v.session.line_editor.take())
             && let Some(edit) = edit_text_ui::finished_edit(ed)
         {
-            self.apply_edit(edit);
+            self.apply_edit(ctx, edit);
         }
     }
 
@@ -150,19 +150,19 @@ impl PdfCraftApp {
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).
     /// Read mode hides the quick toolbar, so entering it also puts the current tool down.
-    pub(crate) fn switch_mode(&mut self, mode: Mode, select_tools: bool) {
+    pub(crate) fn switch_mode(&mut self, ctx: &egui::Context, mode: Mode, select_tools: bool) {
         let was_read = self.mode == Mode::Read;
         if select_tools {
-            self.select_mode(mode);
+            self.select_mode(ctx, mode);
         } else {
-            self.enter_mode(mode);
+            self.enter_mode(ctx, mode);
         }
         if mode == Mode::Read && !was_read {
             self.right_before_read = self.right();
             self.set_right(None);
             // An editing tool is put down so its open paragraph is applied, as `select_mode` does.
             if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
-                self.put_down_edit_text();
+                self.put_down_edit_text(ctx);
             } else {
                 self.quick_tool = QuickTool::Select;
             }

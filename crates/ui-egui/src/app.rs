@@ -658,7 +658,7 @@ impl PdfCraftApp {
         self.present_portfolios();
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
-            self.handle_js(id, out);
+            self.handle_js(ctx, id, out);
         }
         self.script_tick(ctx);
         self.control_logic(ctx);
@@ -691,8 +691,8 @@ impl PdfCraftApp {
         }
         self.process_pending_edits(ctx);
         self.poll_export();
-        self.auto_ocr_scanned_page();
-        self.poll_ocr();
+        self.auto_ocr_scanned_page(ctx);
+        self.poll_ocr(ctx);
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();

@@ -78,7 +78,7 @@ impl PdfCraftApp {
     /// (a text being typed) is lost. If even that panics, the close is cancelled; the user can
     /// close again. It runs `embed::logic` once, which also runs the windows' own logic.
     pub(crate) fn run_close_path(&mut self, ctx: &egui::Context) {
-        if pdfcraft_engine::guard(|| craft::ui::shell::embed::logic(ctx, || self.close_requested())).is_err() {
+        if pdfcraft_engine::guard(|| craft::ui::shell::embed::logic(ctx, || self.close_requested(ctx))).is_err() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
     }
@@ -165,7 +165,7 @@ mod tests {
             app
         });
         h.run_steps(4);
-        assert!(h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 }));
+        assert!(h.state_mut().apply_edit(&h.ctx.clone(), Edit::RotatePages { pages: vec![0], degrees: 90 }));
         if about {
             let ctx = h.ctx.clone();
             h.state_mut().set_option(&ctx, "dialog", "about").unwrap();

@@ -93,7 +93,7 @@ pub(crate) fn open(app: &mut PdfCraftApp, name: &str, widget: usize, tab: FieldT
 
 /// Runs once per pass for the open Field Properties dialog: opens the colour picker a colour row asked for,
 /// applies the properties OK filed, and answers the held OK with what the app did.
-pub(crate) fn finish(app: &mut PdfCraftApp) {
+pub(crate) fn finish(ctx: &egui::Context, app: &mut PdfCraftApp) {
     let recent = app.recent_colours.clone();
     let Some(dialog) = app.dialogs.get_mut::<FieldPropsDialog>() else { return };
     dialog.recent = recent;
@@ -116,7 +116,7 @@ pub(crate) fn finish(app: &mut PdfCraftApp) {
     // The widget being edited, by object: a radio button that joins a group by its new name
     // is appended after the group's own buttons, so its index changes.
     let object = before.as_ref().and_then(|all| all.iter().find(|f| f.name == field)?.widgets.get(widget).map(|w| w.obj));
-    let applied = app.apply_edit(Edit::SetFieldProps { name: field.clone(), props: Box::new(props) });
+    let applied = app.apply_edit(ctx, Edit::SetFieldProps { name: field.clone(), props: Box::new(props) });
     // A refused edit (its reason is in the notice) keeps the dialog open with what was typed, as the
     // several-fields dialog does, so nothing is lost meanwhile.
     let refused = !applied && app.active_ids().is_some();

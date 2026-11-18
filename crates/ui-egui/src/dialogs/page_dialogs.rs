@@ -390,16 +390,19 @@ impl PdfCraftApp {
             && let Some(facts) = self.split_facts()
         {
             let plan = facts.plan(&result.fields);
-            self.split_active(&plan);
+            self.split_active(ctx, &plan);
         }
         if let Some(result) = self.answered(ctx, EXTRACT) {
             let f = &result.fields;
-            self.extract_selection(ExtractOptions {
-                separate: f.bool("separate").unwrap_or(false),
-                delete: f.bool("delete").unwrap_or(false),
-                name: f.text("name").unwrap_or_default().to_string(),
-                pages: f.text("pages").unwrap_or_default().to_string(),
-            });
+            self.extract_selection(
+                ctx,
+                ExtractOptions {
+                    separate: f.bool("separate").unwrap_or(false),
+                    delete: f.bool("delete").unwrap_or(false),
+                    name: f.text("name").unwrap_or_default().to_string(),
+                    pages: f.text("pages").unwrap_or_default().to_string(),
+                },
+            );
         }
         if let Some(result) = self.answered(ctx, ROTATE)
             && let Some(range) = PageRangeOptions::value(&result.fields, "pages")
@@ -408,17 +411,20 @@ impl PdfCraftApp {
             let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
             let base = range.pages(count, self.views[i].current(), &self.views[i].target_pages());
 
-            self.rotate_pages(degrees_of(&result.fields), base, parity_of(range.subset), orientation_of(&result.fields));
+            self.rotate_pages(ctx, degrees_of(&result.fields), base, parity_of(range.subset), orientation_of(&result.fields));
         }
         if let Some(result) = self.answered(ctx, NUMBER) {
             let (from, to) = span(&result.fields);
-            self.apply_edit(Edit::NumberPages {
-                from: from - 1,
-                to: to.max(from) - 1,
-                style: style_of(&result.fields),
-                prefix: result.fields.text("prefix").unwrap_or_default().to_string(),
-                first: result.fields.int("start").map_or(1, |n| n.max(1) as u32),
-            });
+            self.apply_edit(
+                ctx,
+                Edit::NumberPages {
+                    from: from - 1,
+                    to: to.max(from) - 1,
+                    style: style_of(&result.fields),
+                    prefix: result.fields.text("prefix").unwrap_or_default().to_string(),
+                    first: result.fields.int("start").map_or(1, |n| n.max(1) as u32),
+                },
+            );
         }
         if let Some(done) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(REPLACE)) {
             let source = self.replace_source.take();
@@ -429,12 +435,15 @@ impl PdfCraftApp {
                 let pages = source.pages(&result.fields);
                 let src_from = result.fields.int("src_from").map_or(1, |s| s.max(1) as usize);
                 let n = pages.len();
-                self.apply_edit(Edit::ReplacePages {
-                    pages,
-                    name: source.name.clone(),
-                    bytes: source.bytes.clone(),
-                    src_pages: (src_from - 1..src_from - 1 + n).collect(),
-                });
+                self.apply_edit(
+                    ctx,
+                    Edit::ReplacePages {
+                        pages,
+                        name: source.name.clone(),
+                        bytes: source.bytes.clone(),
+                        src_pages: (src_from - 1..src_from - 1 + n).collect(),
+                    },
+                );
             }
         }
     }

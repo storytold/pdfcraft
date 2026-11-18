@@ -84,7 +84,7 @@ impl PdfCraftApp {
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
             ("tool", _) => {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
-                self.select_tool(g.id);
+                self.select_tool(ctx, g.id);
             }
             ("left", _) => self.left_open = value != "closed",
             ("home", _) => {
@@ -98,7 +98,7 @@ impl PdfCraftApp {
                 dialogs::discard_inactive_password_drafts(self);
                 self.open_dialog_named(ctx, value)?;
             }
-            ("tools", _) if value == "full" => self.expand_all_tools(),
+            ("tools", _) if value == "full" => self.expand_all_tools(ctx),
             ("tools", _) => {
                 self.all_tools_full = false;
                 self.all_tools_expanded = value != "collapsed";

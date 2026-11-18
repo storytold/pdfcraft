@@ -111,7 +111,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
         app.left_open = false;
     }
     if let Some(id) = tool {
-        app.select_tool(id);
+        app.select_tool(ui.ctx(), id);
     }
     if let Some(cmd) = run {
         app.run_command(&ui.ctx().clone(), cmd);
@@ -303,9 +303,9 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some((page, index, img)) = image {
         match crate::content_ui::image_panel(ui, &img) {
             Some(crate::content_ui::ImageAction::Update(content)) => {
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content });
+                app.apply_edit(ui.ctx(), pdfcraft_engine::Edit::UpdateContent { page, index, content });
             }
-            Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
+            Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(ui.ctx(), page, index),
             None => {}
         }
         return;
@@ -335,7 +335,7 @@ impl PdfCraftApp {
     /// style at once and stays open. Text already on the page is updated with what has been typed,
     /// as one undoable change; new text waits until it is finished. Text typed after this styling
     /// starts from it too.
-    pub(crate) fn restyle_draft(&mut self, index: usize, mut style: pdfcraft_engine::AddedText) {
+    pub(crate) fn restyle_draft(&mut self, ctx: &egui::Context, index: usize, mut style: pdfcraft_engine::AddedText) {
         // A gray or CMYK ink the colour no longer shows goes now (#6440): kept, the draft would
         // differ from the item the page reads back without it, and a later pick of the ink's
         // look would bring it back.
@@ -357,8 +357,10 @@ impl PdfCraftApp {
         if updated == committed {
             return;
         }
-        if self.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index: item, content: pdfcraft_engine::AddedContent::Text(updated.clone()) })
-            && let Some(d) = self.views.get_mut(index).and_then(|v| v.session.content.draft.as_mut())
+        if self.apply_edit(
+            ctx,
+            pdfcraft_engine::Edit::UpdateContent { page, index: item, content: pdfcraft_engine::AddedContent::Text(updated.clone()) },
+        ) && let Some(d) = self.views.get_mut(index).and_then(|v| v.session.content.draft.as_mut())
         {
             // What the page has now. The aligns stay those of the text in the box.
             d.style = pdfcraft_engine::AddedText { aligns: std::mem::take(&mut d.style.aligns), ..updated };
@@ -370,9 +372,9 @@ impl PdfCraftApp {
     }
 
     /// Apply the open paragraph's formatting as one change; the paragraph stays open.
-    pub(crate) fn apply_line_format(&mut self, index: usize, mut ed: crate::edit_text_ui::LineEditor) {
+    pub(crate) fn apply_line_format(&mut self, ctx: &egui::Context, index: usize, mut ed: crate::edit_text_ui::LineEditor) {
         let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
-        if self.apply_edit(edit) {
+        if self.apply_edit(ctx, edit) {
             ed.applied();
             if let Some(doc) = self.session.get(self.views[index].id)
                 && let Some(block) = doc.text_blocks(ed.page).get(ed.block)

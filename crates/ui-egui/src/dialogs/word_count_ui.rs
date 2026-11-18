@@ -250,7 +250,7 @@ mod tests {
         h.get_by_label("Current page only").click();
         settle(&mut h);
         assert_eq!(words_shown(&h), "2");
-        h.state_mut().apply_edit(pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
+        h.state_mut().apply_edit(&h.ctx.clone(), pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
         settle(&mut h);
         assert_eq!(words_shown(&h), "3");
         h.get_by_label("Close").click();

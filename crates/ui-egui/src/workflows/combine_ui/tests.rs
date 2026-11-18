@@ -228,7 +228,7 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     let mut app = PdfCraftApp::for_unit_tests();
     app.open_bytes("locked.pdf", None, locked()).unwrap();
     assert!(app.password_prompt.is_some() && app.views.is_empty());
-    app.combine_paths(&[]);
+    app.combine_paths(&egui::Context::default(), &[]);
     assert!(app.combine_showing());
     app.submit_password(&egui::Context::default(), Some("pw".into()));
     assert!(app.password_prompt.is_none());
@@ -238,6 +238,6 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     let mut app = PdfCraftApp::for_unit_tests();
     app.open_bytes("locked.pdf", None, locked()).unwrap();
     app.password_prompt.as_mut().unwrap().then = Some("export.text");
-    app.combine_paths(&[]);
+    app.combine_paths(&egui::Context::default(), &[]);
     assert!(app.password_prompt.as_ref().unwrap().activate, "a tool's open keeps its focus");
 }

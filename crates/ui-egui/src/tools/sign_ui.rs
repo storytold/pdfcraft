@@ -300,7 +300,7 @@ impl PdfCraftApp {
                 self.presign = self.session.get(doc).map(|d| (doc, d.undo_depth()));
                 self.refresh_view_of(ctx, doc);
                 let out = self.session.take_js_output(doc);
-                self.handle_js(doc, out);
+                self.handle_js(ctx, doc, out);
             }
             Ok(false) => {}
             Err(e) => self.notify_error(e),
@@ -460,10 +460,10 @@ impl PdfCraftApp {
     }
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
-    fn finish_signing(&mut self) -> Result<(), String> {
+    fn finish_signing(&mut self, ctx: &egui::Context) -> Result<(), String> {
         // What's typed in a form field is signed with the document (#166). A rejected value keeps
         // the dialog open; the notice says why.
-        if !self.commit_form_typing() {
+        if !self.commit_form_typing(ctx) {
             return Err(String::new());
         }
         let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
@@ -510,7 +510,7 @@ impl PdfCraftApp {
         let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
             // Sign what was typed while the save panel was open, too (#166); a refused value
             // has said why already.
-            if !app.commit_typing_in(doc_id) {
+            if !app.commit_typing_in(ctx, doc_id) {
                 return Err(String::new());
             }
             // The form's preSign step (run when signing began) is signed with it; if signing fails
@@ -545,7 +545,7 @@ impl PdfCraftApp {
             }
             app.set_right(Some(crate::RightPanel::Signatures));
             app.notify_fmt("Signed and saved to {path}", &[("path", &path.display().to_string())]);
-            app.handle_js(doc_id, said);
+            app.handle_js(ctx, doc_id, said);
             if let Some(e) = after {
                 app.notify_fmt("Signed and saved, but the form's postSign script couldn't finish: {e}", &[("e", &e.to_string())]);
             }
@@ -1086,7 +1086,7 @@ mod tests {
         sign_draft.step = SignStep::SignAs;
         sign_draft.password = "secret12".into();
         import_app.sign_draft = Some(sign_draft);
-        assert_eq!(import_app.finish_signing(), Ok(()));
+        assert_eq!(import_app.finish_signing(&egui::Context::default()), Ok(()));
         import_app.process_picks();
         assert!(out_pdf.exists());
         let _ = std::fs::remove_dir_all(&dir);

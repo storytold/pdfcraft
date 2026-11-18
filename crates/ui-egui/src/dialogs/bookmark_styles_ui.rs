@@ -86,7 +86,7 @@ impl PdfCraftApp {
     }
 
     /// One pass over the dialog: Create makes the bookmarks and shows them in the Bookmarks panel.
-    pub(crate) fn bookmarks_from_styles_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn bookmarks_from_styles_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let mut draft = std::mem::take(&mut self.text_style_draft);
         let DialogResult::Ok(result) = result else { return };
@@ -101,7 +101,7 @@ impl PdfCraftApp {
         // The document the styles came from, even if another tab is active by now.
         if let Some(i) = draft.doc.and_then(|id| self.views.iter().position(|v| v.id == id)) {
             self.active = Some(i);
-            if self.apply_edit(Edit::BookmarksFromTextStyles { levels }) {
+            if self.apply_edit(ctx, Edit::BookmarksFromTextStyles { levels }) {
                 set_panel_visible(self, PanelId::Bookmarks, true);
             }
         }

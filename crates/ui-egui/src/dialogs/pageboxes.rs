@@ -187,7 +187,7 @@ impl PdfCraftApp {
     }
 
     /// Sets the boxes when the dialog was answered with OK.
-    pub(crate) fn page_boxes_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn page_boxes_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(answer) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(result) = answer.ok() else { return };
         let Some((i, id)) = self.active_ids() else { return };
@@ -208,7 +208,7 @@ impl PdfCraftApp {
         let pages = d.range.pages(count, current, &[]);
         let edit = d.edit(pages);
         d.seeded = None;
-        self.apply_edit(edit);
+        self.apply_edit(ctx, edit);
     }
 }
 

@@ -30,7 +30,7 @@ pub(crate) fn open(app: &mut PdfCraftApp, ctx: &egui::Context, name: String) {
 
 /// Duplicate Field was confirmed with `fields`: duplicates the field onto the range's pages.
 // PLAN: pdf-hub-w2 routes the "form.duplicate_field" result here.
-pub(crate) fn finish(app: &mut PdfCraftApp, fields: &DialogFields) {
+pub(crate) fn finish(ctx: &egui::Context, app: &mut PdfCraftApp, fields: &DialogFields) {
     let Some(name) = fields.text(FIELD).map(str::to_owned) else { return };
     let Some(range) = PageRangeOptions::value(fields, "pages") else { return };
     let Some((i, id)) = app.active_ids() else { return };
@@ -38,5 +38,5 @@ pub(crate) fn finish(app: &mut PdfCraftApp, fields: &DialogFields) {
     let count = doc.info.pages.len();
     let current = app.views.get(i).map_or(0, |v| v.current());
     let pages = range.pages(count, current, &[]);
-    app.apply_edit(Edit::DuplicateField { name, pages });
+    app.apply_edit(ctx, Edit::DuplicateField { name, pages });
 }

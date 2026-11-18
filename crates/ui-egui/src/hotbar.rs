@@ -254,7 +254,7 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
             let color = from_srgba(picked_colour);
             app.fill_text_color = color;
             if let Some((page, index)) = selected_fill_text(app) {
-                app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
+                app.apply_edit(ui.ctx(), Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
             }
         });
     }
@@ -276,7 +276,7 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
             .and_then(|(_, id)| app.session.get(id)?.comment_props(page, index)?.font_size)
             .is_none_or(|stored| format!("{stored:.3}") != format!("{size:.3}"))
     {
-        app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
+        app.apply_edit(ui.ctx(), Edit::FontSizeAnnotation { page, index, size });
     }
 
     fill_text_border_controls(ui, app, picked);
@@ -317,7 +317,7 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
                 let color = from_srgba(picked_colour);
                 match target {
                     Some((page, index)) => {
-                        app.apply_edit(Edit::BorderColorAnnotation { page, index, color: Some(color) });
+                        app.apply_edit(ui.ctx(), Edit::BorderColorAnnotation { page, index, color: Some(color) });
                     }
                     None => app.fill_text_border_color = Some(color),
                 }
@@ -348,9 +348,9 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
                 edits.push(Edit::BorderShapeAnnotation { page, index, shape: border.shape });
             }
             if edits.len() > 1 {
-                app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+                app.apply_edit(ui.ctx(), Edit::Batch { label: "Change comment properties".into(), edits });
             } else if let Some(edit) = edits.pop() {
-                app.apply_edit(edit);
+                app.apply_edit(ui.ctx(), edit);
             }
         }
         None => {
@@ -386,7 +386,7 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
                 let color = from_srgba(picked_colour);
                 app.comment_prefs.set_border_color(tool, Some(color));
                 if let Some((page, annotation)) = target {
-                    app.apply_edit(Edit::BorderColorAnnotation { page, index: annotation, color: Some(color) });
+                    app.apply_edit(ui.ctx(), Edit::BorderColorAnnotation { page, index: annotation, color: Some(color) });
                 }
             });
         }
@@ -397,13 +397,13 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
         && let Some((_, id)) = app.active_ids()
         && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
     {
-        app.colour_selection(color, |a| comments::made_by(a, tool));
+        app.colour_selection(ui.ctx(), color, |a| comments::made_by(a, tool));
     }
     if let Some(request) = pick.request {
         open_picker(app, request, move |app: &mut PdfCraftApp, picked_colour: Srgba| {
             let color = from_srgba(picked_colour);
             if app.active_ids().and_then(|(_, id)| app.session.get(id)).is_some_and(|doc| doc.allows_annotation()) {
-                app.colour_selection(color, |a| comments::made_by(a, tool));
+                app.colour_selection(ui.ctx(), color, |a| comments::made_by(a, tool));
             }
         });
     }

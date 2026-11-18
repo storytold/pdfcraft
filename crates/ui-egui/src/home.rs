@@ -179,7 +179,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     for ask in asked.into_inner() {
         match ask {
-            Asked::Select(id) => app.select_tool(id),
+            Asked::Select(id) => app.select_tool(ui.ctx(), id),
             Asked::Unpin(id) => app.unpin_tool(id),
             // PLAN: assumed `PdfCraftApp::open_pin_tools(&mut self)` (pdf-dialogs-w9).
             Asked::PinTools => app.open_pin_tools(),

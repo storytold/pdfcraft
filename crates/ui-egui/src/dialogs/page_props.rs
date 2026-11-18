@@ -45,7 +45,7 @@ impl PdfCraftApp {
 
     /// One pass over the dialog: applies the chosen order when it differs from what every page has and the document
     /// is as the dialog opened it.
-    pub(crate) fn page_props_pass(&mut self, _ctx: &egui::Context) {
+    pub(crate) fn page_props_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(draft) = self.page_props_draft.take() else { return };
         let DialogResult::Ok(result) = result else { return };
@@ -58,7 +58,7 @@ impl PdfCraftApp {
         let Some(index) = self.views.iter().position(|v| v.id == draft.doc) else { return };
         if current {
             self.active = Some(index);
-            self.apply_edit(Edit::SetTabOrder { pages: draft.pages, order });
+            self.apply_edit(ctx, Edit::SetTabOrder { pages: draft.pages, order });
         }
     }
 }
