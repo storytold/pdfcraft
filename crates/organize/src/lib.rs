@@ -704,7 +704,7 @@ pub fn set_info(doc: &mut Document, key: &str, value: &str) -> Result<(), Organi
     let stale_xmp = xmp::would_go_stale(doc, key, value);
     let entry = (!value.is_empty()).then(|| Object::String(PdfString::text(value)));
     set_info_entry(doc, key.as_bytes(), entry)?;
-    if stale_xmp { xmp::drop_packet(doc) } else { xmp::sync_info(doc, key, value) }
+    if stale_xmp { xmp::drop_packet(doc, key) } else { xmp::sync_info(doc, key, value) }
 }
 
 /// Set (or remove, with `None`) a document-information entry of any type.
