@@ -33,8 +33,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions};
 
 use support::bytes;
 use support::fixture::{
-    ALL_SAVES, FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, FLAG_READONLY, Save, annot_entries, blank, blank_with_indirect_annots, dict_of, name_of,
-    num, nums, page_object_numbers, pdf, save_and_reopen, str_of,
+    ALL_SAVES, FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, FLAG_READONLY, Save, annot_entries, blank, blank_with_indirect_annots, dict_of,
+    name_of, num, nums, page_object_numbers, pdf, save_and_reopen, str_of,
 };
 
 /// A deterministic `/M` date and `/NM` id, so nothing here depends on the clock.
