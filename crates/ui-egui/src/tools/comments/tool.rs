@@ -1,0 +1,421 @@
+use craft::behavior::kurbo::Point;
+use craft::behavior::{CancelReason, Cursor, CursorIcon, EditEvent, PointerButton, PressPhase};
+use craft::keymap::Mods;
+use craft::review::ui::annotate::{
+    AnnotateTool, AnnotateWords, DrawOptions, EmptyPress, EraseMode, FarNudge, HandlesWhileDrawing, InkStrokes, MarkupPress, OpenOn, SelectOptions,
+    ToggleMods,
+};
+use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationKind, AnnotationTool, ShiftLock};
+use craft::ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft::ui::primitives::Draw;
+use egui::Pos2;
+
+use super::bridge::{self, PageMap};
+use super::state::{Composer, ComposerKind, PageCx};
+use super::{CommentPrefs, CommentTool, CommentView, DocInfo, DocView, Edit, MAX_LINE_WIDTH, QuickTool};
+use crate::canvas::PageSelectTool;
+use crate::canvas::page_parts::{Owner, PagePress};
+
+/// Copied comments hanging on the pointer, waiting for a click to place them.
+pub(crate) struct PastePlacement {
+    /// The copied comments as XFDF.
+    pub xfdf: String,
+    /// The bundle's box in user space.
+    pub bounds: [f64; 4],
+    /// How many comments the bundle holds.
+    pub count: usize,
+    /// Each copied comment's shape, for the outline that follows the pointer.
+    pub outlines: Vec<pdfcraft_engine::CommentOutline>,
+}
+
+/// The caret's snap for the page under the pointer: the snapped tip and the caret's side, in page units.
+type CaretSnap = Box<dyn Fn(Point) -> Option<(Point, f64)> + Send>;
+
+/// The comment tools on the pages as a canvas tool: the annotation tool for the comment gestures, the paste
+/// placement, and the text selection beneath a markup tool.
+// PLAN: the sheet's constructor lists four arguments; the tool also needs the pass's tool, preferences and what the
+// document allows (`settings`), where a paste click's edit and notice go (`outcome`), and `paste` as the whole slot so a
+// click or Escape can drop it (pdf-canvas-w9's `view.paste.as_mut()` becomes `&mut view.paste`).
+pub(crate) struct CommentsTool<'a> {
+    annotate: &'a mut AnnotateTool,
+    text: Option<PageSelectTool<'a>>,
+    paste: &'a mut Option<PastePlacement>,
+    placed: Option<&'a mut Option<Edit>>,
+    notice: Option<&'a mut Option<&'static str>>,
+    map: PageMap<'a>,
+    done: &'a mut bool,
+    quick: QuickTool,
+    prefs: Option<&'a CommentPrefs>,
+    allowed: bool,
+    hidden: bool,
+    caret: Option<CaretSnap>,
+}
+
+impl<'a> CommentsTool<'a> {
+    /// The tool over `annotate` (kept in `CommentView::tool`, so a gesture lasts across passes), the paste slot, the
+    /// pages on screen and the flag Escape sets when it leaves the tool (`CommentView::tool_done`).
+    pub(crate) fn new(annotate: &'a mut AnnotateTool, paste: &'a mut Option<PastePlacement>, map: PageMap<'a>, done: &'a mut bool) -> Self {
+        CommentsTool {
+            annotate,
+            text: None,
+            paste,
+            placed: None,
+            notice: None,
+            map,
+            done,
+            quick: QuickTool::Select,
+            prefs: None,
+            allowed: false,
+            hidden: false,
+            caret: None,
+        }
+    }
+
+    /// The text selection a press no comment takes goes on to.
+    pub(crate) fn text(mut self, text: PageSelectTool<'a>) -> Self {
+        self.text = Some(text);
+        self
+    }
+
+    /// The tool in use, the comment preferences, whether the document allows commenting and whether comments are
+    /// hidden.
+    pub(crate) fn settings(mut self, quick: QuickTool, prefs: &'a CommentPrefs, allowed: bool, hidden: bool) -> Self {
+        (self.quick, self.prefs, self.allowed, self.hidden) = (quick, Some(prefs), allowed, hidden);
+        self
+    }
+
+    /// Where a paste click's edit and notice go.
+    pub(crate) fn outcome(mut self, placed: &'a mut Option<Edit>, notice: &'a mut Option<&'static str>) -> Self {
+        self.placed = Some(placed);
+        self.notice = Some(notice);
+        self
+    }
+
+    /// The caret tool's snap to the text under the pointer.
+    // PLAN: assumed pdf-comments-w7 supplies the snap over `geometry::snapped_caret` and the page's text.
+    pub(crate) fn caret_snap(mut self, snap: impl Fn(Point) -> Option<(Point, f64)> + Send + 'static) -> Self {
+        self.caret = Some(Box::new(snap));
+        self
+    }
+
+    fn page_under(&self, at: Pos2) -> Option<usize> {
+        self.map.page_at(Point::new(f64::from(at.x), f64::from(at.y)))
+    }
+
+    /// Whether the annotation tool holds a gesture: the drag, release and cancel are its, else the text's.
+    fn annotating(&self) -> bool {
+        self.annotate.in_flight().is_some() || !self.annotate.drawing().is_empty()
+    }
+
+    fn place(&mut self, page: usize, at: Pos2) {
+        let Some(paste) = self.paste.take() else { return };
+        let Some(at) = self.map.to_page(page, Point::new(f64::from(at.x), f64::from(at.y))) else { return };
+        let [x, y] = self.map.to_user(page, at);
+        let offset = [x - (paste.bounds[0] + paste.bounds[2]) / 2.0, y - (paste.bounds[1] + paste.bounds[3]) / 2.0];
+        // Larger than the page it lands on (an A0 bundle on an A4 page): placed as it is, and said so.
+        if let Some(info) = self.map.info.pages.get(page) {
+            let a = info.user_to_view((paste.bounds[0] + offset[0]) as f32, (paste.bounds[1] + offset[1]) as f32);
+            let b = info.user_to_view((paste.bounds[2] + offset[0]) as f32, (paste.bounds[3] + offset[1]) as f32);
+            let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
+            if w > info.width + 1.0 || h > info.height + 1.0
+                && let Some(notice) = self.notice.as_deref_mut()
+            {
+                *notice = Some("The copied comments are larger than this page; they were placed as they are");
+            }
+        }
+        if let Some(placed) = self.placed.as_deref_mut() {
+            *placed = Some(Edit::PasteComments { xfdf: paste.xfdf, page, offset: Some(offset) });
+        }
+    }
+}
+
+/// The framework's tool for `quick`: the comment tool's own, or Select for every other tool.
+fn annotation_tool(quick: QuickTool) -> AnnotationTool {
+    match quick {
+        QuickTool::Comment(tool) => tool.tool(),
+        _ => AnnotationTool::Select,
+    }
+}
+
+/// The eraser's radius, in screen points, from its thickness setting (#3747): three points per point of
+/// thickness, so the default 2 pt keeps the 12-point eraser. A setting that is not a number is the default.
+fn eraser_radius(width: f64) -> f32 {
+    (3.0 * if width.is_finite() { width.clamp(0.5, MAX_LINE_WIDTH) } else { 2.0 }) as f32
+}
+
+/// A preference colour as straight RGB bytes.
+fn rgb8(color: pdfcraft_engine::Rgb) -> [u8; 3] {
+    let c = super::color32(color);
+    [c.r(), c.g(), c.b()]
+}
+
+impl CanvasTool for CommentsTool<'_> {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        // The page the tool works on follows the pointer between gestures.
+        if cx.gesture_id().is_none()
+            && self.annotate.drawing().is_empty()
+            && let Some(page) = cx.pointer.and_then(|p| self.page_under(p.pos))
+        {
+            self.annotate.page = page;
+        }
+        let page = self.annotate.page;
+        self.annotate.tool = annotation_tool(self.quick);
+        self.annotate.annotations = if self.hidden {
+            Vec::new()
+        } else {
+            bridge::annotations(self.map.info, &self.map, self.quick, self.allowed).into_iter().filter(|a| a.page == page).collect()
+        };
+        let mut eraser_width = 2.0;
+        if let (Some(prefs), QuickTool::Comment(comment)) = (self.prefs, self.quick) {
+            let style = prefs.style(comment);
+            self.annotate.color = rgb8(style.color);
+            self.annotate.highlight_color = rgb8(prefs.style(CommentTool::Highlight).color);
+            self.annotate.width = style.width;
+            if comment == CommentTool::Eraser {
+                eraser_width = style.width;
+            }
+        }
+        let select = SelectOptions {
+            empty_press: EmptyPress::PassThrough,
+            toggle: ToggleMods::ShiftOrCommand,
+            open: OpenOn::Every,
+            shift_lock: ShiftLock::LevelOrPlumb,
+            far_nudge: FarNudge::ShiftOrCommand,
+            handles_while_drawing: HandlesWhileDrawing::Edit,
+            markup_press: MarkupPress::ClickOnly,
+        };
+        let draw = DrawOptions { ink: InkStrokes::PerStroke, erase: EraseMode::Path, eraser_radius: eraser_radius(eraser_width) };
+        // The options are builders over the owned tool: rebuilt from the tool taken out, its gesture kept.
+        let mut built = std::mem::take(self.annotate).select_options(select).draw_options(draw);
+        if self.quick == QuickTool::Comment(CommentTool::Caret)
+            && let Some(snap) = self.caret.take()
+        {
+            built = built.caret_snap(snap);
+        }
+        *self.annotate = built;
+        self.annotate.each_pass(cx);
+        if let Some(text) = self.text.as_mut() {
+            text.each_pass(cx);
+        }
+    }
+
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        if self.paste.is_some() {
+            // A click places the bundle, centred where it is clicked, on the page under it; a right-click lets it
+            // go. Nothing else on the page takes the press.
+            if pointer.button == PointerButton::Secondary {
+                *self.paste = None;
+            } else if self.allowed
+                && let Some(page) = self.page_under(pointer.pos)
+            {
+                self.place(page, pointer.pos);
+            }
+            return ToolAction::Done;
+        }
+        match self.annotate.press(pointer, cx) {
+            ToolAction::Ignored => match self.text.as_mut() {
+                Some(text) => text.press(pointer, cx),
+                None => ToolAction::Ignored,
+            },
+            action => action,
+        }
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if self.annotating() {
+            self.annotate.drag(pointer, cx);
+        } else if let Some(text) = self.text.as_mut() {
+            text.drag(pointer, cx);
+        }
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if self.annotating() {
+            self.annotate.release(pointer, cx);
+        } else if let Some(text) = self.text.as_mut() {
+            text.release(pointer, cx);
+        }
+    }
+
+    fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.annotate.hover(pointer, cx);
+        if let Some(text) = self.text.as_mut() {
+            text.hover(pointer, cx);
+        }
+    }
+
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        if self.annotating() {
+            self.annotate.cancel(reason, cx);
+        } else if let Some(text) = self.text.as_mut() {
+            text.cancel(reason, cx);
+        }
+    }
+
+    fn claims(&self) -> ToolClaims {
+        self.annotate.claims()
+    }
+
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        if matches!(key, ToolKey::Cancel) {
+            // One step back per press: drop a paste, cancel the drawing, deselect, then drop the tool (a comment
+            // tool, or a Fill & Sign one: its Text tool would otherwise open a box at every click with no way out
+            // by the keyboard).
+            if self.paste.take().is_some() {
+                return true;
+            }
+            if !self.annotate.drawing().is_empty() {
+                self.annotate.cancel_drawing();
+                return true;
+            }
+            if !self.annotate.selected.is_empty() {
+                self.annotate.selected.clear();
+                return true;
+            }
+            if matches!(self.quick, QuickTool::Comment(_) | QuickTool::Fill(_)) {
+                *self.done = true;
+                return true;
+            }
+            return false;
+        }
+        self.annotate.key(key, cx)
+    }
+
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        button == PointerButton::Primary || self.paste.is_some() && button == PointerButton::Secondary || self.annotate.takes(button, mods)
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if self.paste.is_some() && cx.pointer.is_some_and(|p| self.page_under(p.pos).is_some()) {
+            return Cursor::System(CursorIcon::Grabbing);
+        }
+        self.annotate.cursor(cx)
+    }
+
+    fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
+        self.annotate.access(cx)
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        self.annotate.paint(draw, cx);
+        if let (Some(paste), Some(pointer)) = (self.paste.as_ref(), cx.pointer)
+            && let Some(page) = self.page_under(pointer.pos)
+        {
+            super::overlay::paste_outline(draw, cx, paste, &self.map, page, pointer.pos);
+        }
+        if let Some(text) = self.text.as_ref() {
+            text.paint(draw, cx);
+        }
+    }
+
+    fn command_form(&self) -> ToolPath {
+        self.annotate.command_form()
+    }
+}
+
+/// The comment a right-click at `at` is on: the topmost, with every tool, as a comment's menu shows whatever tool
+/// is active; on a group subordinate (`/RT /Group`), its group's primary, so the menu offers the comment's actions
+/// (ISO 32000-2 §12.5.6.2). A highlight over a link is the highlight's here (a left click on it follows the link).
+/// `None` off the page or with comments hidden. The page's menu is anchored at `at` (Delete page, Paste, Copy
+/// Image, a note added here), and the comment is selected, or the selection cleared.
+pub(crate) fn context_target(cx: &PageCx<'_>, view: &mut CommentView, at: Pos2) -> Option<usize> {
+    if !cx.xf.rect.contains(at) {
+        return None;
+    }
+    view.context_at = Some((cx.page, cx.to_user(at)));
+    let target = if cx.hidden { None } else { cx.click_target(at) };
+    match target {
+        Some(a) => {
+            view.pick(cx, at, a);
+            Some(a.index)
+        }
+        None => {
+            view.select(None);
+            None
+        }
+    }
+}
+
+/// A click on a comment's body, from the page part that owns it (M-1): the annotation tool selects it with the
+/// modifiers and click count of the press, a double click opening it. A click on a group subordinate selects its
+/// group's primary and remembers the member under the pointer (`cx` is the comment's page).
+pub(crate) fn part_pressed(view: &mut CommentView, press: &PagePress, cx: &PageCx<'_>, words: &AnnotateWords) {
+    let Owner::Comment { index } = press.owner else { return };
+    let PressPhase::Release { start, click: true, .. } = press.phase else { return };
+    if start.button != PointerButton::Primary {
+        return;
+    }
+    view.tool.click(bridge::id_of(press.page, index), press.mods, start.clicks, words);
+    view.member = cx.picked(start.origin, view.primary());
+}
+
+/// The engine edit the gestures of this pass made, taken from the annotation tool after the tool host ran: each
+/// committed `EditEvent` is one engine edit, so a drag is one undo step. A drawn shape that is kept on screen until
+/// its page is drawn again is remembered (`CommentView::settle`). The new comment is selected by the app once the
+/// edit is applied (a pen stroke stays unselected, `editing.rs`).
+pub(crate) fn take_edits(view: &mut CommentView, map: &PageMap<'_>, info: &DocInfo, prefs: &CommentPrefs, now: f64) -> Option<Edit> {
+    let mut edits = Vec::new();
+    for event in view.tool.take_edits() {
+        let (EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) = event else { continue };
+        if let AnnotationEdit::Create(a) = &after
+            && let Some(tool) = CommentTool::from_kind(a.kind)
+        {
+            view.settle(now, a.page, tool, &settled_points(a, map));
+        }
+        edits.extend(bridge::edit(after, map, view, info, prefs));
+    }
+    match edits.len() {
+        0 => None,
+        1 => edits.pop(),
+        _ => Some(Edit::Batch { label: tl!("Comments").to_owned(), edits }),
+    }
+}
+
+/// The user-space points a released drawing is painted from while it settles: a stroke's points, a box's corners, a
+/// line's ends.
+fn settled_points(a: &Marked, map: &PageMap<'_>) -> Vec<[f64; 2]> {
+    let user = |p: &Point| map.to_user(a.page, *p);
+    match a.kind {
+        AnnotationKind::Ink | AnnotationKind::FreehandHighlight => a.strokes.last().map(|s| s.iter().map(user).collect()).unwrap_or_default(),
+        AnnotationKind::Rectangle | AnnotationKind::Oval => vec![user(&Point::new(a.rect.x0, a.rect.y0)), user(&Point::new(a.rect.x1, a.rect.y1))],
+        _ => a.points.iter().map(user).collect(),
+    }
+}
+
+/// After text selection ran: a markup tool turns a finished selection into a comment; Replace Text asks for the
+/// replacement. `finished` is true in the pass the selection's release came (a drag release or a double click); the
+/// call runs on every pass a markup tool is active, since a selection on pages still being read is marked later.
+pub(crate) fn page_after_text(cx: &PageCx<'_>, tool: QuickTool, finished: bool, view: &mut DocView) {
+    let QuickTool::Comment(tool) = tool else { return };
+    if tool == CommentTool::ReplaceText && cx.allowed && finished {
+        // A replacement sits on one page: a selection across pages stays selected for the bar's
+        // markup or Copy.
+        if let Ok([(page, quads)]) = <[_; 1]>::try_from(view.selection_quads(cx.info))
+            && page == cx.page
+        {
+            view.clear_selection();
+            let last = quads.last().copied().unwrap_or_default();
+            let at = [last[2].max(last[6]), last[1].max(last[3])];
+            view.comments.replace = Some(quads);
+            view.comments.composer = Some(Composer { page, at, kind: ComposerKind::Replace, text: String::new(), focus: true });
+        }
+        return;
+    }
+    let Some(kind) = tool.markup().filter(|_| cx.allowed) else { return };
+    // Once, from whichever of the selection's pages is drawn: after an edge scroll its first page
+    // may be out of view. Every page it covers gets its own markup, in one undo step, once all
+    // of them are read.
+    if let crate::canvas::ToolMarks::Marks(marks, head) = view.tool_marks(QuickTool::Comment(tool), finished, Some(cx.page), false, cx.info) {
+        view.clear_selection();
+        let edits = marks.into_iter().map(|(page, quads)| {
+            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                page,
+                shape: super::Shape::TextMarkup { kind, quads },
+                style: cx.prefs.style(tool),
+                contents: String::new(),
+                author: cx.prefs.author.clone(),
+            })
+        });
+        view.pending_edit = view.selection_marks_edit(edits.collect(), head);
+    }
+}
