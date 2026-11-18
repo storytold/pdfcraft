@@ -2,7 +2,7 @@ use super::*;
 
 impl PdfCraftApp {
     /// Run a catalogue command. Commands that aren't implemented yet say which milestone ships them.
-    pub fn run_command(&mut self, command: &str) {
+    pub fn run_command(&mut self, ctx: &egui::Context, command: &str) {
         if let Some(spec) = pdfcraft_engine::commands::command(command) {
             use pdfcraft_engine::commands::Needs;
             // A tool that needs a document, chosen with none open, asks for the file and then
@@ -16,7 +16,7 @@ impl PdfCraftApp {
                 self.open_then_run(spec);
                 return;
             }
-            self.execute(command);
+            self.execute(ctx, command);
             return;
         }
         // Not implemented yet: say which milestone ships it.
@@ -35,21 +35,12 @@ impl PdfCraftApp {
 
     /// Ask for a file to open, then run `spec` on it once it is open (or unlocked). Nothing runs
     /// when the picker is cancelled or the file doesn't open.
-    #[cfg(not(target_arch = "wasm32"))]
     fn open_then_run(&mut self, spec: &'static pdfcraft_engine::commands::CommandSpec) {
         self.startup_superseded = true;
-        let dialog = Self::open_picker().set_title(tl!(spec.label).trim_end_matches('…'));
+        let request = craft::host::PickRequest::open("open").title(tl!(spec.label).trim_end_matches('…'));
         let command = spec.id;
-        self.ask_one(pickers::Ask::File(dialog), None, move |app, path| {
-            let path = path.to_string_lossy().into_owned();
-            app.open_path_then(&path, Some(command));
-        });
-    }
-
-    /// Browsers read the picked file asynchronously; it opens, and the tool can be chosen again.
-    #[cfg(target_arch = "wasm32")]
-    fn open_then_run(&mut self, _spec: &'static pdfcraft_engine::commands::CommandSpec) {
-        self.open_dialog();
+        // PLAN: assumed `open_picked_then(&mut self, Picked, &'static str)` (pdf-shell-w13), which opens desktop paths and browser contents alike.
+        self.pick_file(request, None, move |app, picked| app.open_picked_then(picked, command));
     }
 
     pub(crate) fn reveal_tools(&mut self) {
