@@ -147,7 +147,7 @@ impl Walk<'_> {
                         Some(b"Image") => {
                             let (w, h) = (s.dict.int(b"Width").unwrap_or(0) as f64, s.dict.int(b"Height").unwrap_or(0) as f64);
                             let [a, b, c, d, ..] = top.0;
-                            let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
+                            let (sx, sy) = (a.hypot(b), c.hypot(d));
                             if w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6 {
                                 let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
                                 let measurement = ImageMeasurement {

@@ -277,14 +277,14 @@ fn page_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> Vec<PageBoxes
 fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnImage>, usize) {
     let mut out = Vec::new();
     let mut unknown = 0usize;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::HashMap::<_, f64>::new();
     for (i, page) in pages.iter().enumerate() {
         let page_no = (i + 1) as u32;
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
             for image in placed {
                 if let Some(ppi) = placed_ppi(&image) {
                     if let Some(object) = image.object {
-                        seen.insert((page_no, object));
+                        seen.entry((page_no, object)).and_modify(|known| *known = known.min(ppi)).or_insert(ppi);
                     }
                     if !ppi.is_finite() {
                         unknown = unknown.saturating_add(1);
@@ -299,10 +299,14 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
         // Images drawn inside a form XObject are not listed above. Their resolution is the
         // lowest-ppi use on this page, which is what the optimizer already measures.
         for (object, image) in pdfcraft_optimize::image_measurements(doc, &[page.obj]) {
-            if seen.contains(&(page_no, object)) {
+            // The aggregate includes direct uses too. Suppress it only when a direct row
+            // already represents its lowest PPI, or a larger form use would be hidden.
+            if seen.get(&(page_no, object)).is_some_and(|ppi| *ppi <= image.ppi) {
                 continue;
             }
-            if !image.ppi.is_finite() || image.pixels.contains(&0) || image.size_pt.iter().any(|n| !n.is_finite()) {
+            // An unsupported pixel dimension has a zero sentinel, but the other axis can
+            // still establish a low-PPI finding. Only unmeasurable placements are unknown.
+            if !image.ppi.is_finite() || image.size_pt.iter().any(|n| !n.is_finite()) {
                 unknown = unknown.saturating_add(1);
                 continue;
             }
@@ -408,10 +412,7 @@ mod tests {
         r
     }
 
-    #[test]
-    fn form_image_dimensions_follow_the_lowest_resolution_placement() {
-        let mut doc = Document::new_empty();
-        let img = image(&mut doc, 8, 8);
+    fn image_form(doc: &mut Document, img: pdfcraft_cos::ObjRef, content: &str) -> pdfcraft_cos::ObjRef {
         let mut resources = Dict::new();
         let mut xobjects = Dict::new();
         xobjects.set(b"Im".to_vec(), Object::Ref(img));
@@ -420,7 +421,77 @@ mod tests {
         form.set(b"Subtype".to_vec(), Object::name("Form"));
         form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 720.into(), 400.into()]));
         form.set(b"Resources".to_vec(), Object::Dict(resources));
-        let form = doc.add(Object::Stream(Stream::from_raw(form, b"q 720 0 0 400 0 0 cm /Im Do Q".to_vec())));
+        doc.add(Object::Stream(Stream::from_raw(form, content.as_bytes().to_vec())))
+    }
+
+    #[test]
+    fn form_image_low_ppi_is_not_hidden_by_a_direct_use() {
+        for direct_size in [0.72_f64, 720.0, 1440.0] {
+            let mut doc = Document::new_empty();
+            let img = image(&mut doc, 8, 8);
+            // No own resources on the wrapper: both placements draw the page's /Im.
+            let mut form = Dict::new();
+            form.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 720.into(), 400.into()]));
+            let form = doc.add(Object::Stream(Stream::from_raw(form, b"q 720 0 0 400 0 0 cm /Im Do Q".to_vec())));
+            let p = page(&mut doc, "Im", img, &format!("q {direct_size} 0 0 {direct_size} 0 0 cm /Im Do Q /Fm Do"));
+            doc.update_dict(p, |d| {
+                let mut res = d.get(b"Resources").unwrap().as_dict().unwrap().clone();
+                let mut x = res.get(b"XObject").unwrap().as_dict().unwrap().clone();
+                x.set(b"Fm".to_vec(), Object::Ref(form));
+                res.set(b"XObject".to_vec(), Object::Dict(x));
+                d.set(b"Resources".to_vec(), Object::Dict(res));
+            })
+            .unwrap();
+            let report = inspect(&doc);
+            assert_eq!(report.images.len(), if direct_size < 720.0 { 2 } else { 1 });
+            let worst = report.images.iter().min_by(|a, b| a.ppi.total_cmp(&b.ppi)).unwrap();
+            assert!((worst.ppi - (8.0 * 72.0 / direct_size).min(0.8)).abs() < 1e-9);
+            assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail"));
+            assert_eq!(report.resolution_unknown, 0);
+        }
+    }
+
+    #[test]
+    fn form_image_low_ppi_survives_an_unsupported_pixel_dimension() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 8, 8);
+        doc.update_dict(img, |d| d.set(b"Width".to_vec(), Object::Int(i64::from(u32::MAX) + 1))).unwrap();
+        let form = image_form(&mut doc, img, "q 720 0 0 400 0 0 cm /Im Do Q");
+        page(&mut doc, "Fm", form, "/Fm Do");
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1);
+        let image = &report.images[0];
+        assert_eq!(image.pixels, [0, 8]);
+        assert!((image.ppi - 1.44).abs() < 1e-9);
+        assert_eq!(image.size_mm, [mm(720.0), mm(400.0)]);
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail"));
+        assert_eq!(report.resolution_unknown, 0);
+    }
+
+    #[test]
+    fn form_image_low_ppi_survives_large_finite_axis_lengths() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 8, 8);
+        // PDF numbers have no exponent notation; the axis is finite even though its square is not.
+        let form = image_form(&mut doc, img, &format!("q {:.0} 0 0 400 0 0 cm /Im Do Q", 1e155));
+        page(&mut doc, "Fm", form, "/Fm Do");
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1);
+        let image = &report.images[0];
+        assert_eq!(image.pixels, [8, 8]);
+        assert!((image.ppi / (8.0 * 72.0 / 1e155) - 1.0).abs() < 1e-9);
+        assert!((image.size_mm[0] / mm(1e155) - 1.0).abs() < 1e-9);
+        assert_eq!(image.size_mm[1], mm(400.0));
+        assert!(report.findings.iter().any(|f| f.id == "image-ppi" && f.severity == "fail"));
+        assert_eq!(report.resolution_unknown, 0);
+    }
+
+    #[test]
+    fn form_image_dimensions_follow_the_lowest_resolution_placement() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 8, 8);
+        let form = image_form(&mut doc, img, "q 720 0 0 400 0 0 cm /Im Do Q");
         // A smaller second use must not replace the dimensions of the lowest-ppi use.
         page(&mut doc, "Fm", form, "/Fm Do q 0.5 0 0 0.5 0 0 cm /Fm Do Q");
         let turned = page(&mut doc, "Fm", form, "q 0 1 -1 0 800 0 cm /Fm Do Q");
