@@ -38,7 +38,8 @@ fn has(kind: ShapedScript, c: char) -> bool {
 /// drawn by [`crate::shaped_text`] (its appearances in forms, comments and page marks); with
 /// Arabic or Hebrew this writer shapes it too.
 pub fn has_shaped_text(text: &str) -> bool {
-    text.chars().any(|c| matches!(script(c), Some(ShapedScript::Arabic | ShapedScript::Hebrew)))
+    // (U+061C, the Arabic letter mark, is a direction mark in the Arabic block: not a letter.)
+    text.chars().any(|c| matches!(script(c), Some(ShapedScript::Arabic | ShapedScript::Hebrew)) && !crate::embedding::default_ignorable(c))
 }
 
 /// Whether contextual-script runs have their face. Other unsupported characters may draw as
@@ -349,6 +350,18 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
         }
         // A single overwide grapheme cannot be split without separating a mark from its base.
         let mut end = fit.max(at + 1);
+        // Nor is it put on a row of its own under the characters without width before it (soft
+        // hyphens, zero-width spaces): they would make a row with nothing on it, one each.
+        let no_width = |from: usize, to: usize| paragraph.get(from..to).is_some_and(|s| s.chars().all(crate::embedding::default_ignorable));
+        if end < count && no_width(start, range(end).end) {
+            while end < count {
+                let added = range(end).end..range(end + 1).end;
+                end += 1;
+                if !no_width(added.start, added.end) {
+                    break;
+                }
+            }
+        }
         if end < count {
             // Where the row's first character with ink ends. A break before it would leave a row
             // of indentation or of invisible characters above the text.
@@ -364,32 +377,30 @@ fn wrap_ranges(paragraph: &str, width: f64, measure: impl Fn(Range<usize>) -> f6
                 ink.is_some_and(|ink| next >= ink)
                     && paragraph.get(previous..next).is_some_and(|s| s.chars().all(|c| soft_space(c) || matches!(c, '\u{200b}' | '\u{00ad}')))
             };
-            // The last such place where the line fits as it is drawn when broken there, with its
-            // hyphen; with none, the line is cut between graphemes. A hyphen that does not fit
-            // rules out its whole run (each shows the same hyphen after the same text), and after
-            // a few of them only the other places are tried, so a word of hyphens costs a bounded
-            // number of measurements.
-            const HYPHENS_TRIED: usize = 8;
-            let mut limit = end;
-            let mut rejected = 0usize;
-            loop {
-                let place =
-                    (at + 1..=limit).rev().find(|boundary| breaks_after(*boundary) && (rejected < HYPHENS_TRIED || !ends_in_hyphen(*boundary)));
-                match place {
-                    Some(boundary) if ends_in_hyphen(boundary) && boundary > at + 1 && measure(range(boundary)) > width => {
-                        rejected += 1;
-                        limit = boundary - 1;
-                        while limit > at + 1 && ends_in_hyphen(limit) {
-                            limit -= 1;
-                        }
-                    }
-                    Some(boundary) => {
-                        end = boundary;
-                        break;
-                    }
-                    None => {
-                        end = limit.max(at + 1);
-                        break;
+            // The last such place where the line fits as it is drawn when broken there. A space
+            // or a zero-width space hangs or has no width, so the last of those fits; a hyphen is
+            // shown, so it may not.
+            let plain = (at + 1..=end).rev().find(|boundary| breaks_after(*boundary) && !ends_in_hyphen(*boundary));
+            // The hyphens after that place, in order. The text before a later one is no shorter,
+            // so the ones that fit come first: the last of them is found by halving, in a number
+            // of measurements that grows with the logarithm of how many there are.
+            let hyphens: Vec<usize> =
+                (plain.unwrap_or(at) + 1..=end).filter(|boundary| ends_in_hyphen(*boundary) && breaks_after(*boundary)).collect();
+            let (mut fitting, mut over) = (0usize, hyphens.len());
+            while fitting < over {
+                let middle = fitting + (over - fitting) / 2;
+                if hyphens.get(middle).is_some_and(|boundary| measure(range(*boundary)) <= width) {
+                    fitting = middle + 1;
+                } else {
+                    over = middle;
+                }
+            }
+            match fitting.checked_sub(1).and_then(|last| hyphens.get(last)).copied().or(plain) {
+                Some(boundary) => end = boundary,
+                // With none, the line is cut between graphemes, before a hyphen it would show.
+                None => {
+                    while end > at + 1 && ends_in_hyphen(end) {
+                        end -= 1;
                     }
                 }
             }
@@ -838,6 +849,43 @@ mod tests {
     }
 
     #[test]
+    fn the_last_discretionary_hyphen_that_fits_is_taken_however_many_after_it_do_not() {
+        // "ii-" fits the width of "iiii"; every later hyphen would show "iiii-", which does not.
+        // Word joiners keep the later hyphens from being one run.
+        let width = Std14::Helvetica.text_width("iiii", 12.0);
+        for later in [1usize, 8, 9, 40] {
+            let text = format!("ii\u{00ad}ii{}X", "\u{2060}\u{00ad}".repeat(later));
+            let lines = wrap(&text, 12.0, width).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>(), text);
+            assert_eq!(lines[0].text, "ii\u{00ad}", "{later} later hyphens: {:?}", lines.iter().map(|l| &l.text).collect::<Vec<_>>());
+            assert!(lines.iter().all(|line| line.width <= width + 1e-6), "{later} later hyphens");
+        }
+        // A space after the last hyphen that fits is the later place, and is taken.
+        let lines = wrap("i\u{00ad}i ii\u{00ad}X", 12.0, width).unwrap();
+        assert_eq!(lines[0].text, "i\u{00ad}i ");
+        // A run of hyphens none of which fits, before a letter too wide for the row: the run
+        // goes with that letter, not one hyphen to a row.
+        let width = Std14::Helvetica.text_width("iii", 12.0);
+        let text = format!("iii{}W", "\u{00ad}".repeat(1000));
+        let lines = wrap(&text, 12.0, width).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.chars().count()).collect::<Vec<_>>(), [3, 1001], "two rows");
+        assert_eq!(lines[1].width, Std14::Helvetica.text_width("W", 12.0), "no hyphen is drawn before the letter");
+        // No hyphen fits and there is no other place: the word is cut, and no hyphen is drawn.
+        let narrow = Std14::Helvetica.text_width("ii", 12.0);
+        let lines = wrap("ii\u{00ad}\u{00ad}ii", 12.0, narrow).unwrap();
+        assert!(lines.iter().all(|line| line.width <= narrow + 1e-6), "{lines:?}");
+    }
+
+    #[test]
+    fn an_arabic_letter_mark_alone_does_not_take_this_writer() {
+        // U+061C is in the Arabic block but is a direction mark, not a letter.
+        assert!(!has_shaped_text("\u{061c}12345"));
+        assert!(!has_shaped_text("\u{061c}\u{200f}\u{200e}abc"));
+        assert!(has_shaped_text("\u{061c}\u{0628}"));
+        assert!(has_shaped_text("\u{05d0}"));
+    }
+
+    #[test]
     fn rejected_discretionary_hyphens_bound_the_measured_work() {
         // Break opportunities whose hyphen does not fit: a run of them is one candidate, and a
         // word of them is given up on after a bounded number, then cut between graphemes.
@@ -868,6 +916,10 @@ mod tests {
         let run = format!("iii{}W", "\u{00ad}".repeat(100_000));
         let (work, _) = measured(&run, 4.0);
         assert!(work < run.len() * 40, "measured {work} bytes for {} input bytes", run.len());
+        // Hyphens that word joiners keep apart are not one run: still a bounded search.
+        let joined = format!("iii{}W", "\u{2060}\u{00ad}".repeat(40_000));
+        let (work, _) = measured(&joined, 4.0);
+        assert!(work < joined.len() * 60, "measured {work} bytes for {} input bytes", joined.len());
         let alternating = "i\u{00ad}".repeat(50_000);
         let (work, rows) = measured(&alternating, 4.0);
         assert!(work < alternating.len() * 200, "measured {work} bytes for {} input bytes", alternating.len());

@@ -4263,7 +4263,7 @@ fn arabic_in_a_times_text_box_keeps_times_for_the_rest() {
 /// not send it to their writer: the box is drawn as before, in its own face.
 #[test]
 fn invisible_controls_in_latin_text_keep_the_text_boxes_face() {
-    for control in ["00AD", "200B", "200E"] {
+    for control in ["00AD", "200B", "200E", "061C"] {
         // "co" + control + "op"
         let annot = format!(
             "<< /Type /Annot /Subtype /FreeText /Rect [45 630 245 700] /DA (0 g /TiRo 12 Tf) /BS << /W 0 >> /Contents <FEFF0063006F{control}006F0070> >>"
