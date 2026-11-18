@@ -8450,6 +8450,23 @@ fn sign_document_and_verify_trust(a: &mut Automation, dir: &Path) -> u64 {
     // A Keychain identity that doesn't exist (macOS) or Keychains at all (elsewhere).
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "keychain:No Such Signer", "out": "k.pdf" })), Err(ToolError::Failed(_))));
     assert!(matches!(a.call("sign_document", &json!({ "doc": doc, "id": "windows:No Such Signer", "out": "w.pdf" })), Err(ToolError::Failed(_))));
+    // A card's identity: the module is named explicitly, so no test loads the middleware an
+    // installed smart card might come with.
+    let tokens = ok(a, "sign_smartcard_ids", json!({ "modules": ["no-module.so"] }));
+    assert_eq!(tokens["count"], 0, "{tokens}");
+    assert_eq!(tokens["problems"].as_array().unwrap().len(), 1, "{tokens}");
+    assert!(tokens["problems"][0].as_str().unwrap().contains("no-module.so"));
+    assert!(matches!(
+        a.call("sign_document", &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "out": "c.pdf" })),
+        Err(ToolError::Failed(e)) if e.contains("no PKCS#11 identity")
+    ));
+    assert!(matches!(
+        a.call(
+            "sign_document",
+            &json!({ "doc": doc, "id": "pkcs11:00", "modules": ["no-module.so"], "pin_env": "NOT A NAME", "out": "c.pdf" })
+        ),
+        Err(ToolError::InvalidArgs(e)) if e.contains("pin_env")
+    ));
     let store = ok(a, "sign_windows_ids", json!({}));
     let ids = store["ids"].as_array().unwrap();
     assert_eq!(store["count"].as_u64().unwrap(), ids.len() as u64);

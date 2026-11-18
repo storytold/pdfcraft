@@ -714,7 +714,7 @@ fn the_signature_labels_follow_the_interface_language() {
 fn os_store_identities_are_not_persisted() {
     let mut app = PdfCraftApp::new();
     app.set_option("language", "en").unwrap();
-    for path in ["windows:Store signer", "keychain:Store signer", "file-id.p12"] {
+    for path in ["windows:Store signer", "keychain:Store signer", "pkcs11:Card signer", "file-id.p12"] {
         app.digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
             path: path.into(),
             name: "Signer".into(),
@@ -722,12 +722,15 @@ fn os_store_identities_are_not_persisted() {
             email: String::new(),
             expires: "2030.01.01".into(),
             unusable: None,
+            sha256: String::new(),
         });
     }
     let saved = app.persist();
     let settings: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(settings["digital_ids"].as_array().unwrap().len(), 1);
     assert_eq!(settings["digital_ids"][0]["path"], "file-id.p12");
+    // The module chosen for the card is a setting; the card's identities are not.
+    assert!(settings["pkcs11_modules"].as_array().is_some_and(|m| m.is_empty()));
     let mut restored = PdfCraftApp::new();
     restored.set_option("language", "en").unwrap();
     restored.restore(&saved);
@@ -747,6 +750,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
         email: String::new(),
         expires: "2030.01.01".into(),
         unusable: None,
+        sha256: String::new(),
     });
     let draft = h.state_mut().sign_draft.as_mut().unwrap();
     draft.step = SignStep::Choose;
@@ -763,6 +767,40 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }
 
+/// A card identity asks for its PIN in the Sign as step, says the PIN isn't saved, and offers no
+/// file password. Without the card (or a module) the signing fails with a message, not a panic.
+#[test]
+fn a_card_identity_asks_for_its_pin_and_says_it_is_not_saved() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    // Pushed after the listing, which replaces the entries a card's module gives.
+    h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+        path: "pkcs11:No Such Card".into(),
+        name: "Card signer".into(),
+        issuer: "Test issuer".into(),
+        email: String::new(),
+        expires: "2030.01.01".into(),
+        unusable: None,
+        sha256: String::new(),
+    });
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    h.get_by_label("Continue").click();
+    h.run_steps(3);
+    assert_eq!(h.state().sign_draft.as_ref().unwrap().step, SignStep::SignAs, "step after Continue");
+    h.get_by_label("Sign as \"Card signer\"");
+    h.get_by_label("Card PIN");
+    h.get_by_label("The PIN is used for this signature only and is not saved. Leave it empty if the card has its own keypad.");
+    assert_eq!(h.query_all_by_label("Digital ID password").count(), 0);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    let error = h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap();
+    assert!(error.contains("PKCS#11"), "{error}");
+}
+
 /// Certificate names are as long as their owners made them: the picker cuts both lines of a
 /// row with "…" instead of painting them past the dialog's edge.
 #[test]
@@ -777,6 +815,7 @@ fn long_digital_id_names_stay_inside_the_picker() {
         email: String::new(),
         expires: "2030.01.01".into(),
         unusable: None,
+        sha256: String::new(),
     });
     h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
     h.run_steps(3);
@@ -814,6 +853,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         email: String::new(),
         expires: String::new(),
         unusable: Some("its private key can't be opened: the key is missing from its key store (Windows error 0x80090016)".into()),
+        sha256: String::new(),
     });
     h.state_mut().start_signing(0, None, None, None);
     h.run_steps(3);
@@ -834,6 +874,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         email: String::new(),
         expires: "2030.01.01".into(),
         unusable: None,
+        sha256: String::new(),
     });
     h.state_mut().start_signing(0, None, None, None);
     h.run_steps(3);

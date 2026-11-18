@@ -934,6 +934,34 @@ impl Automation {
                 let (ids, unusable): (Vec<Value>, Vec<Value>) = (Vec::new(), Vec::new());
                 json!({ "count": ids.len(), "ids": ids, "unusable": unusable })
             }
+            "sign_smartcard_ids" => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let (ids, unusable, problems) = {
+                    let modules = self.pkcs11_modules(&a)?;
+                    let listing = pdfcraft_engine::sign::pkcs11::identities(&modules, None);
+                    let ids: Vec<Value> = listing
+                        .identities
+                        .iter()
+                        .map(|id| {
+                            json!({
+                                "id": id.reference(),
+                                "certificate": super::signing::cert_json(&id.certificate),
+                                "token": id.token,
+                                "needs_pin": id.needs_pin(),
+                            })
+                        })
+                        .collect();
+                    let unusable: Vec<Value> = listing
+                        .unusable
+                        .iter()
+                        .map(|u| json!({ "subject": u.subject, "sha256": u.fingerprint, "reason": u.reason, "no_private_key": u.no_private_key }))
+                        .collect();
+                    (ids, unusable, listing.problems)
+                };
+                #[cfg(target_arch = "wasm32")]
+                let (ids, unusable, problems): (Vec<Value>, Vec<Value>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
+                json!({ "count": ids.len(), "ids": ids, "unusable": unusable, "problems": problems })
+            }
             "sign_trust" => self.sign_trust(&a)?,
             "comment_mark" => self.comment_mark(&a)?,
             "comment_lock" => self.comment_lock(&a)?,

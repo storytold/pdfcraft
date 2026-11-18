@@ -262,6 +262,7 @@ impl PdfCraftApp {
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),
             os_key_store_ids: false,
+            pkcs11_modules: Vec::new(),
             cert_viewer: None,
             space_audit: Vec::new(),
             space_audit_of: None,

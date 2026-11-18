@@ -115,7 +115,9 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         });
         ui.add_space(10.0);
     }
-    let removable = d.selected.filter(|&i| ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")));
+    let removable = d.selected.filter(|&i| {
+        ids.get(i).is_some_and(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"))
+    });
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Configure New Digital ID"), false).clicked() {
             d.step = SignStep::Configure;
@@ -148,6 +150,8 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     // Browse… is desktop-only.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
+    #[cfg_attr(any(target_arch = "wasm32", target_os = "macos"), allow(unused_mut))]
+    let mut module_pick = false;
     widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
     widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
     ui.add_space(8.0);
@@ -202,6 +206,31 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.end_row();
         });
     }
+    // macOS keeps its Keychain identities (CryptoTokenKit reads PIV/CAC cards); a direct
+    // PKCS #11 module is left out there until the hardened-runtime decision is made.
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    {
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new(tl!("Smart card (PKCS#11)")).font(theme::semibold(12.5)));
+        ui.label(
+            egui::RichText::new(tl!(
+                "Sign with a card or a USB token through its own middleware (an Italian CNS or CIE, a PIV card). The key never leaves the card, which asks for its PIN when signing."
+            ))
+            .small()
+            .color(t.text_muted),
+        );
+        for path in app.pkcs11_modules.clone() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&path).small());
+                if widgets::pill_button(ui, tl!("Remove"), false).clicked() {
+                    app.pkcs11_modules.retain(|m| *m != path);
+                }
+            });
+        }
+        if widgets::pill_button(ui, tl!("Choose module…"), false).clicked() {
+            module_pick = true;
+        }
+    }
     ui.add_space(6.0);
     error(ui, &d.error);
     ui.horizontal(|ui| {
@@ -249,6 +278,19 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     }
     #[cfg(target_arch = "wasm32")]
     let _ = browse;
+    // Picking a card's middleware lists its identities; the file itself is remembered so a
+    // reader unplugged and replugged needs no second choice.
+    #[cfg(not(target_arch = "wasm32"))]
+    if module_pick {
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PKCS #11 module", &["so", "dylib", "dll"]);
+        let epoch = app.dialog_epoch();
+        app.ask_one(crate::pickers::Ask::File(dialog), None, move |app, p| {
+            if app.dialog_epoch() == epoch {
+                app.choose_pkcs11_module(&p.to_string_lossy());
+            }
+        });
+    }
+    let _ = module_pick;
     close
 }
 
@@ -459,6 +501,12 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
                 .small()
                 .color(t.text_muted),
             );
+        } else if entry.path.starts_with("pkcs11:") {
+            let l = ui.label(tl!("Card PIN"));
+            let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
         } else {
             let l = ui.label(tl!("Digital ID password"));
             let r = ui.add(crate::widgets::line(&mut d.password).password(true).desired_width(200.0)).labelled_by(l.id);
@@ -467,6 +515,15 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             }
         }
         ui.end_row();
+        if entry.path.starts_with("pkcs11:") {
+            ui.label("");
+            ui.label(
+                egui::RichText::new(tl!("The PIN is used for this signature only and is not saved. Leave it empty if the card has its own keypad."))
+                    .small()
+                    .color(t.text_muted),
+            );
+            ui.end_row();
+        }
     });
     ui.add_space(6.0);
     error(ui, &d.error);

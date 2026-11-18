@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 pdfcraft-engine = { workspace = true }
+# A card's PIN is held only for the one signing call, and wiped after it.
+zeroize = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }

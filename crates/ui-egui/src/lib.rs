@@ -676,6 +676,9 @@ pub struct PdfCraftApp {
     pub alt_draft: a11y_ui::AltDraft,
     /// List the OS key store's signing identities among the digital IDs (the desktop app).
     pub os_key_store_ids: bool,
+    /// PKCS #11 modules (a card's middleware) chosen in Configure New Digital ID, beyond the ones
+    /// found installed. Paths to `.so`/`.dylib`/`.dll` files.
+    pub pkcs11_modules: Vec<String>,
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,

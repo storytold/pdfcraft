@@ -8,12 +8,12 @@ use pdfcraft_sign::{
     in_english, kind, pkcs12, signatures,
 };
 
-fn data(name: &str) -> Vec<u8> {
+pub(crate) fn data(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
 /// One page with text and an unsigned signature field "Approval".
-fn fixture() -> Vec<u8> {
+pub(crate) fn fixture() -> Vec<u8> {
     fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>", &[])
 }
 
@@ -50,7 +50,7 @@ fn write_pdf(objs: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-fn open(b: &[u8]) -> Document {
+pub(crate) fn open(b: &[u8]) -> Document {
     Document::open(Arc::new(b.to_vec())).unwrap()
 }
 
@@ -77,7 +77,7 @@ fn standalone_timestamp_scan_survives_cache_batches_and_object_streams() {
     assert!(listed.iter().any(|s| s.field == "Approval" && !s.signed));
 }
 
-fn opts() -> SignOptions {
+pub(crate) fn opts() -> SignOptions {
     SignOptions {
         page: 0,
         rect: Some([20.0, 100.0, 220.0, 150.0]),

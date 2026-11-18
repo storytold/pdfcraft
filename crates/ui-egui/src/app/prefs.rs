@@ -156,8 +156,12 @@ impl PdfCraftApp {
             "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
             "sign_graphic": self.sign_graphic,
-            // macOS Keychain and Windows store identities are read from their OS key stores each time.
-            "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
+            // macOS Keychain, Windows store and card identities are read from their key stores
+            // and cards each time; only files and the modules chosen for them are kept.
+            "digital_ids": self.digital_ids.iter().filter(|e| {
+                !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:")
+            }).collect::<Vec<_>>(),
+            "pkcs11_modules": self.pkcs11_modules,
             "trusted": trusted,
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
@@ -575,6 +579,9 @@ impl PdfCraftApp {
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
         if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
             self.digital_ids = ids;
+        }
+        if let Ok(modules) = serde_json::from_value::<Vec<String>>(v["pkcs11_modules"].clone()) {
+            self.pkcs11_modules = modules;
         }
         self.custom_stamps = stamps_ui::decode(&v["custom_stamps"]);
         self.custom_actions = actions_ui::decode(&v["actions"]);

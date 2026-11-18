@@ -51,6 +51,10 @@ pdfcraft-testkit = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 getrandom = "0.4"
+# Smart cards and USB tokens through their issuer's PKCS #11 module (the Italian CNS and CIE
+# among them). The module is loaded at run time (`libloading`), so no vendor SDK is linked.
+# Apache-2.0; `cryptoki-sys` ships pre-generated bindings, so no build script or OpenSSL.
+cryptoki = "0.12.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows certificate store and CNG signing wrappers (MIT OR Apache-2.0).

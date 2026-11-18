@@ -487,7 +487,10 @@ fn app_creator<'a>(
         app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());
-        app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
+        // The identities the OS already keeps: the macOS Keychain, the Windows store, and (on
+        // Linux and FreeBSD, which have neither) the cards whose PKCS #11 middleware is
+        // installed.
+        app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "freebsd"));
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));

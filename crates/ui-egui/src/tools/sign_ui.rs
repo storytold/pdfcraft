@@ -39,6 +39,11 @@ pub struct DigitalIdEntry {
     /// greyed with the reason, and never selectable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unusable: Option<String>,
+    /// SHA-256 of the certificate (`Certificate::fingerprint`, lower-case without spaces), so the
+    /// same card offered by two sources (the Windows store and its own PKCS #11 module, say) is
+    /// listed once. Empty for entries saved before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sha256: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,7 +60,7 @@ pub enum SignStep {
 pub const KEY_ALGORITHMS: [(&str, &str); 4] =
     [("2048-bit RSA", "rsa2048"), ("3072-bit RSA", "rsa3072"), ("4096-bit RSA", "rsa4096"), ("256-bit ECDSA (P-256)", "p256")];
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct NewIdDraft {
     /// `true`: create a self-signed ID; `false`: use an ID from a file.
     pub create: bool,
@@ -70,6 +75,19 @@ pub struct NewIdDraft {
     /// Use a Digital ID from a file: its path and password.
     pub file: String,
     pub file_password: String,
+}
+
+/// Secrets never reach a log: a `{:?}` of the draft says only that a password or PIN is set.
+impl std::fmt::Debug for NewIdDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewIdDraft")
+            .field("create", &self.create)
+            .field("name", &self.name)
+            .field("file", &self.file)
+            .field("password", &if self.password.is_empty() { "<empty>" } else { "<hidden>" })
+            .field("file_password", &if self.file_password.is_empty() { "<empty>" } else { "<hidden>" })
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for NewIdDraft {
@@ -113,7 +131,7 @@ pub enum SignGraphic {
 }
 
 /// The signing dialogs' state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct SignDraft {
     pub page: usize,
     /// The signature rectangle (user space); `None`: invisible.
@@ -135,6 +153,21 @@ pub struct SignDraft {
     pub error: Option<String>,
     /// Sign with a Digital ID ▸ Remove was clicked for this list entry: asking to confirm.
     pub confirm_remove: Option<usize>,
+}
+
+/// Secrets never reach a log: the card's PIN and a file's password are hidden.
+impl std::fmt::Debug for SignDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignDraft")
+            .field("page", &self.page)
+            .field("rect", &self.rect)
+            .field("field", &self.field)
+            .field("certify", &self.certify)
+            .field("step", &self.step)
+            .field("selected", &self.selected)
+            .field("password", &if self.password.is_empty() { "<empty>" } else { "<hidden>" })
+            .finish_non_exhaustive()
+    }
 }
 
 impl SignDraft {
@@ -274,6 +307,13 @@ fn windows_id(reference: &str) -> Result<DigitalId, String> {
     Err(format!("{reference}: Windows certificate store identities are only available on Windows"))
 }
 
+/// A card's identity by its `pkcs11:` reference. `pin` is used for this signing only; a card
+/// with its own keypad takes none.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+fn pkcs11_id(reference: &str, pin: Option<zeroize::Zeroizing<String>>, modules: &[PathBuf]) -> Result<DigitalId, String> {
+    sign::pkcs11::find(reference, modules, pin).map_err(|e| e.to_string())
+}
+
 pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     DigitalIdEntry {
         path: path.to_string(),
@@ -282,6 +322,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         email: c.subject.email().unwrap_or("").to_string(),
         expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
         unusable: None,
+        sha256: c.fingerprint().split(' ').collect::<String>().to_lowercase(),
     }
 }
 
@@ -295,6 +336,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
         email: String::new(),
         expires: String::new(),
         unusable: Some(u.reason.clone()),
+        sha256: u.fingerprint.split(' ').collect::<String>().to_lowercase(),
     }
 }
 
@@ -370,9 +412,28 @@ impl PdfCraftApp {
         }
     }
 
-    /// List OS key store signing identities (after the file-based IDs).
+    /// The PKCS #11 modules to load: the ones chosen in Configure, then the middleware installed
+    /// on the machine.
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    pub(crate) fn token_modules(&self) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        for path in &self.pkcs11_modules {
+            let path = PathBuf::from(path);
+            if path.exists() && !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        for path in sign::pkcs11::default_modules() {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    /// List OS key store and card signing identities (after the file-based IDs).
     fn refresh_os_key_store_ids(&mut self) {
-        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:") && !e.path.starts_with("pkcs11:"));
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -405,6 +466,82 @@ impl PdfCraftApp {
                 Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
             }
         }
+
+        // Cards are the other readers of a system key store: listed on request, so a test or a
+        // second window doesn't load a card's middleware unasked. Last, so a card the Windows
+        // store already listed is recognised by its certificate rather than added twice.
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+        if self.os_key_store_ids {
+            self.refresh_token_ids();
+        }
+    }
+
+    /// List the cards in the configured modules. A card's identity is not persisted: it belongs
+    /// to the card, and is listed again on every signing.
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+    fn refresh_token_ids(&mut self) {
+        let modules = self.token_modules();
+        if modules.is_empty() {
+            return;
+        }
+        let listing = sign::pkcs11::identities(&modules, None);
+        // The same certificate may already be listed by the Windows store: the card is one
+        // identity, whichever module found it.
+        let mut seen: std::collections::HashSet<String> =
+            self.digital_ids.iter().filter(|e| !e.sha256.is_empty()).map(|e| e.sha256.clone()).collect();
+        for id in listing.identities {
+            let mut entry = entry_for(&id.reference(), &id.certificate);
+            if let Some(name) = id.friendly_name {
+                entry.name = name;
+            }
+            if seen.insert(entry.sha256.clone()) {
+                self.digital_ids.push(entry);
+            }
+        }
+        // Certificates without a private key aren't identities; the others say why they can't
+        // sign, greyed, as the Windows store's do.
+        for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
+            let entry = DigitalIdEntry {
+                path: format!("pkcs11:{}", u.fingerprint.split(' ').collect::<String>().to_lowercase()),
+                name: u.subject.clone(),
+                issuer: String::new(),
+                email: String::new(),
+                expires: String::new(),
+                unusable: Some(u.reason.clone()),
+                sha256: u.fingerprint.split(' ').collect::<String>().to_lowercase(),
+            };
+            if seen.insert(entry.sha256.clone()) {
+                self.digital_ids.push(entry);
+            }
+        }
+    }
+
+    /// Choose a PKCS #11 module (a card's middleware) and list what it finds. Returns true when
+    /// the dialog should show the list again, with the card's identities in it.
+    pub fn choose_pkcs11_module(&mut self, path: &str) -> bool {
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+        {
+            if !self.pkcs11_modules.iter().any(|m| m == path) {
+                self.pkcs11_modules.push(path.to_string());
+            }
+            self.refresh_token_ids();
+            let found = self.digital_ids.iter().any(|e| e.path.starts_with("pkcs11:"));
+            if found {
+                if let Some(d) = self.sign_draft.as_mut() {
+                    d.selected = self.digital_ids.iter().position(|e| e.path.starts_with("pkcs11:") && e.unusable.is_none());
+                    d.step = SignStep::Choose;
+                    d.error = None;
+                }
+            } else {
+                self.notify_fmt("No card identity found through {module}: is the card in the reader?", &[("module", path)]);
+            }
+            found
+        }
+        #[cfg(any(target_arch = "wasm32", target_os = "macos"))]
+        {
+            let _ = path;
+            false
+        }
     }
 
     /// Add a digital ID file to the list (or select it if it's there).
@@ -421,7 +558,11 @@ impl PdfCraftApp {
     /// disk. Keychain and Windows store IDs belong to the OS and are listed again on every
     /// signing, so they can't be removed here. The open dialog's selection follows the list.
     pub fn remove_digital_id(&mut self, index: usize) -> bool {
-        if self.digital_ids.get(index).is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:")) {
+        if self
+            .digital_ids
+            .get(index)
+            .is_none_or(|e| e.path.starts_with("keychain:") || e.path.starts_with("windows:") || e.path.starts_with("pkcs11:"))
+        {
             return false;
         }
         self.digital_ids.remove(index);
@@ -509,6 +650,15 @@ impl PdfCraftApp {
             keychain_id(&entry.path)?
         } else if entry.path.starts_with("windows:") {
             windows_id(&entry.path)?
+        } else if entry.path.starts_with("pkcs11:") {
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "macos")))]
+            {
+                // An empty field is no PIN: a card with its own keypad asks through it.
+                let pin = (!d.password.is_empty()).then(|| zeroize::Zeroizing::new(d.password.clone()));
+                pkcs11_id(&entry.path, pin, &self.token_modules())?
+            }
+            #[cfg(any(target_arch = "wasm32", target_os = "macos"))]
+            return Err(format!("{}: card identities are not available in this build", entry.path));
         } else {
             let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
             sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
@@ -559,6 +709,12 @@ impl PdfCraftApp {
                     return Err(e.to_string());
                 }
             };
+            // The card's PIN was for this signature: it doesn't wait in the dialog for the save
+            // picker, or for a retry.
+            if let Some(d) = app.sign_draft.as_mut() {
+                use zeroize::Zeroize as _;
+                d.password.zeroize();
+            }
             if let Err(e) = crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()) {
                 // Not saved, so not signed: the preSign step stays pending as well.
                 app.presign = pending;
@@ -928,7 +1084,15 @@ mod tests {
     }
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
-        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+        DigitalIdEntry {
+            path: path.into(),
+            name: name.into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            unusable: None,
+            sha256: String::new(),
+        }
     }
 
     /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's

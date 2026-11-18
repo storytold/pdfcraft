@@ -55,8 +55,22 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   that holds and draws `n1` and `n3`; `has_status_layers` says whether a document has any. It
   works on a display copy and never edits an original object, so saving keeps the signed bytes.
 
+- **Cards and USB tokens (PKCS #11).** `pkcs11` loads the card issuer's own middleware at run
+  time — bit4id's `libbit4xpki.so` for an Italian CNS, `libcie-pkcs11.so` for a CIE, OpenSC or a
+  PIV vendor's module — and signs through `ExternalKey`, so the key never leaves the card.
+  Identities are listed without logging in; a card that hides its certificates until the PIN is
+  entered is listed again with it. RSA signs through `CKM_RSA_PKCS` with the `DigestInfo` built
+  here (the card's own `CKM_SHA*_RSA_PKCS` when it has no raw PKCS #1), ECDSA through
+  `CKM_ECDSA` with `r ‖ s` re-encoded as DER, and a key marked `CKA_ALWAYS_AUTHENTICATE` (the
+  CIE's) gets the context-specific login before each use. The PIN is passed for one signing
+  operation, held only while it runs, and never stored, logged, echoed or retried; a card with
+  its own keypad is asked through the card. `pkcs11:<SHA-256>` references work like `keychain:`
+  and `windows:`. Compiled everywhere but macOS, where a hardened-runtime build may not load a
+  third-party library and the Keychain already reads PIV/CAC cards. `tests/it/pkcs11.rs` and the
+  `software_token_tests` in `pkcs11.rs` (SoftHSM2) cover the path without hardware.
+
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
-configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.
+configuration, FieldMDP locks, certificate security, PKCS #11 on macOS.
 macOS Keychain and Windows Current User Personal (My) store identities sign through
 `ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
 ECDSA P-256/P-384; the store integration is tested with software-backed keys. A smart card
