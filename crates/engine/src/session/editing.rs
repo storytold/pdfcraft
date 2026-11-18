@@ -146,7 +146,9 @@ impl Session {
     /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
     fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
         let now = self.now();
-        let today = self.today();
+        // From the same clock reading as the edit's date, so a date completed with the year
+        // (run_checked_edit) is never a year after the edit that wrote it.
+        let today = self.today_at(now);
         let js_off = self.js_off;
         let highlight = self.field_highlight;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);

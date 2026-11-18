@@ -111,8 +111,14 @@ impl Session {
     /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
     /// is taken as local time.
     pub fn today(&self) -> (i64, u32, u32) {
+        self.today_at(self.now())
+    }
+
+    /// [`Session::today`] at clock reading `now` (seconds since the epoch, `None`: no clock), so a
+    /// caller that already read the clock takes the day from that same reading.
+    pub(crate) fn today_at(&self, now: Option<i64>) -> (i64, u32, u32) {
         let offset = self.local_offset();
-        self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))
+        now.map(|t| pdfcraft_cos::pdf_date(t.saturating_add(offset))).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))
     }
 
     /// Open a document from bytes. Rendering starts lazily when pages are requested.

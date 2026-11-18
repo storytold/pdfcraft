@@ -559,3 +559,20 @@ fn a_completed_year_takes_no_time_or_word_and_reads_back() {
     assert_eq!(in_2026("dmyyyy", "1.2.2026"), Ok("1.2.2026".into()));
     assert_eq!(in_2026("ddmmyyyy", "10.10"), Ok("10102026".into()), "fixed widths read back");
 }
+
+/// The time starts at a number typed after a space and followed by ':', not at a colon that a
+/// date separator leads to: a year typed before a colon is kept, a format that separates its
+/// date with colons still has its year filled in, and 29 February without a year in a year that
+/// has none is refused rather than read with the hour as its year.
+#[test]
+fn a_colon_in_the_date_is_no_time_and_a_missing_leap_day_is_refused() {
+    let date = |fmt: &str| Format::Date(fmt.into());
+    let in_2026 = |fmt: &str, typed: &str| with_current_year(2026, || keystroke(&date(fmt), "d", typed));
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10/21:14"), Ok("10/10/21:14".into()), "the typed year 21 is kept");
+    assert_eq!(in_2026("m/d/yy:HH:MM", "10/10/21:14"), Ok("10/10/21:14".into()));
+    assert_eq!(in_2026("dd:mm:yyyy HH:MM", "10:10 14:30"), Ok("10:10:2026 14:30".into()));
+    assert_eq!(in_2026("m/d/yy HH:MM", "10/10 14:30"), Ok("10/10/26 14:30".into()), "still completed");
+    assert!(in_2026("m/d/yy HH:MM", "2/29 00:15").is_err(), "2026 has no 29 February, and 00 is the hour");
+    assert_eq!(with_current_year(2028, || keystroke(&date("m/d/yy HH:MM"), "d", "2/29 00:15")), Ok("2/29/28 00:15".into()));
+    assert_eq!(in_2026("m/d/yy HH:MM", "2/29/00 15:00"), Ok("2/29/00 15:00".into()), "a typed year 2000 is kept");
+}

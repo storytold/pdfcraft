@@ -432,20 +432,31 @@ fn read_date(english: &str, fmt: &str, names: &DateNames, year: Option<i32>) -> 
         }
         cur.clear();
     };
-    // Where the time starts among the numbers: the first number followed by ':'.
+    // Where the time starts among the numbers: the first number typed after a space and followed
+    // by ':' ("10/10 14:30"). A colon after a number the date's own separators lead to is not
+    // a time: "10/10/21:14" keeps its year 21, and "10:10 14:30" in dd:mm:yyyy has its time at 14.
     let mut time_start: Option<usize> = None;
+    // Whether a space was typed since the last token, and whether the token in `cur` follows one.
+    let (mut spaced, mut cur_spaced) = (false, false);
     for c in t.chars() {
         // Digits and letters form separate tokens ("5Mar" is 5 and Mar).
         let same_kind = cur.is_empty() || cur.chars().next().is_some_and(|x| x.is_ascii_digit()) == c.is_ascii_digit();
         if c.is_alphanumeric() && same_kind {
+            if cur.is_empty() {
+                cur_spaced = std::mem::take(&mut spaced);
+            }
             cur.push(c);
         } else {
             let before = nums.len();
             flush(&mut cur, &mut nums, &mut month_name, &mut unread_word);
-            if c == ':' && time_start.is_none() && nums.len() > before {
+            if c == ':' && time_start.is_none() && nums.len() > before && cur_spaced {
                 time_start = Some(before);
             }
+            if c.is_whitespace() {
+                spaced = true;
+            }
             if c.is_alphanumeric() {
+                cur_spaced = std::mem::take(&mut spaced);
                 cur.push(c);
             }
         }
@@ -765,6 +776,14 @@ pub fn keystroke(f: &Format, field: &str, value: &str) -> Result<String, String>
                 Some((dt, _)) => {
                     let written = format_date_in(dt, fmt, &date_names());
                     if parse_date(&written, fmt) == Some(dt) { Ok(written) } else { Err(refused()) }
+                }
+                // Typed without its year, but no such day in the current year (29 February): a
+                // leap year (2000) takes it. Refused, not read again as a date with a year,
+                // which would take the time's hour for the year ("2/29 00:15").
+                None if CURRENT_YEAR.with(std::cell::Cell::get).is_some()
+                    && parse_date_with(value, fmt, Some(2000)).is_some_and(|(_, filled)| filled) =>
+                {
+                    Err(refused())
                 }
                 None => parse_date(value, fmt).map(|_| value.trim().to_string()).ok_or_else(refused),
             }
