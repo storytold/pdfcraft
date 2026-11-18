@@ -3,14 +3,14 @@
 //! panes is one document (one edit, one Undo), the pane last clicked is the one menus and keys act
 //! on, and a tab dropped on the right half of the page splits right with it.
 
+use crate::support::AppHarness as _;
+use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use craft::ui::primitives::textures::TextureState; // PLAN: assumed facade path of `TextureState`
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::panes::Place;
-use crate::support::AppHarness as _;
 
 /// The size of view `i`'s first page picture once it is drawn; a stand-in for a page still loading
 /// is not a drawn page.
@@ -221,7 +221,8 @@ fn split_again_or_closing_a_panes_last_tab_ends_split_view() {
     // Split right with a.pdf (not the tab shown): it moves to the second pane. Closing it there,
     // the pane's last tab, ends split view and closes only that tab.
     let a = index(&h, "a.pdf");
-    h.state_mut().split_tab(a, false);
+    let ctx = h.ctx.clone();
+    h.state_mut().split_tab(&ctx, a, false);
     h.run_steps(3);
     assert_eq!(h.state().views[index(&h, "a.pdf")].place(), Place::Second);
     let a = index(&h, "a.pdf");
@@ -273,7 +274,8 @@ fn the_pane_last_clicked_is_the_one_menus_and_keys_act_on() {
     // left.pdf, opened last, is the tab shown; right.pdf goes to the second pane.
     let mut h = harness(&["right.pdf", "left.pdf"]);
     let right = index(&h, "right.pdf");
-    h.state_mut().split_tab(right, false);
+    let ctx = h.ctx.clone();
+    h.state_mut().split_tab(&ctx, right, false);
     h.run_steps(4);
     let (left, right) = (index(&h, "left.pdf"), index(&h, "right.pdf"));
     let (lid, rid) = (h.state().views[left].id, h.state().views[right].id);

@@ -22,7 +22,6 @@ pub(crate) enum Action {
 /// job on the host's queue; a failure is shown by [`PdfCraftApp::drain_reveals`] on the pass that
 /// receives the result.
 pub(crate) fn reveal_on_jobs(app: &mut crate::PdfCraftApp, path: PathBuf) {
-    // PLAN: assumed field `reveal_jobs: JobQueue<PathBuf, Result<(), String>>` on `PdfCraftApp` (pdf-hub-w1).
     let target = path.clone();
     app.reveal_jobs.submit(path, Priority::VISIBLE, move |_| craft::platform::open::reveal(&target));
 }
@@ -37,7 +36,7 @@ impl crate::PdfCraftApp {
         }
     }
 
-    pub(crate) fn tab_action(&mut self, action: Action) {
+    pub(crate) fn tab_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Close(tab) => {
                 if let Some(i) = self.tab_with_key(tab) {
@@ -46,7 +45,7 @@ impl crate::PdfCraftApp {
             }
             Action::Split { tab, down } => {
                 if let Some(i) = self.tab_with_key(tab) {
-                    self.split_tab(i, down);
+                    self.split_tab(ctx, i, down);
                 }
             }
             Action::Reopen => {
@@ -93,9 +92,12 @@ mod tests {
     fn app_on(jobs: Arc<craft::host::ManualJobs>) -> PdfCraftApp {
         let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
         let host = craft::host::Host::builder(info).jobs(jobs).build();
-        // PLAN: assumed `AppServices::detached()` (pdf-hub-w1): services with no clipboard, recovery directory, update source, intake or watch.
-        let mut app = PdfCraftApp::with_host(Arc::new(host), crate::AppServices::detached());
-        // PLAN: `set_option` takes the context (L-208).
+        let wake = craft::host::Wake::none();
+        let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
+        let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
+        let watch = craft::platform::watch::FileWatch::new(wake.clone());
+        let services = crate::AppServices::new(wake, clipboard, None, None, intake, watch);
+        let mut app = PdfCraftApp::with_host(Arc::new(host), services);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     }
@@ -114,7 +116,7 @@ mod tests {
         let dialog = craft::ui::dialog::DialogWords::english();
         let common = craft::ui::runtime::words::CommonWords::english();
         let dont_save = if cfg!(target_os = "macos") { dialog.unsaved_dont_save } else { dialog.unsaved_no };
-        (dont_save.to_string(), common.cancel.to_string())
+        (dont_save.as_str().to_string(), common.cancel.to_string())
     }
 
     #[test]
@@ -128,7 +130,7 @@ mod tests {
         h.run_steps(4);
         let (first, first_tab) = (h.state().views[0].id, h.state().views[0].view_key());
         h.state_mut().session.apply(first, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
-        h.state_mut().tab_action(Action::Close(first_tab));
+        h.state_mut().tab_action(&egui::Context::default(), Action::Close(first_tab));
         h.run_steps(3);
         let (dont_save, cancel) = answers();
         assert_eq!(h.state().views.len(), 2);
@@ -137,7 +139,7 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().views.len(), 2);
         assert!(h.state().closed_tabs.is_empty());
-        h.state_mut().tab_action(Action::Close(first_tab));
+        h.state_mut().tab_action(&egui::Context::default(), Action::Close(first_tab));
         h.run_steps(3);
         h.get_by_role_and_label(Role::Button, &dont_save).click();
         h.run_steps(3);
@@ -163,7 +165,7 @@ mod tests {
             app.close_tab(0);
         }
         assert_eq!(app.closed_tabs.len(), 10);
-        app.tab_action(Action::Reopen);
+        app.tab_action(&egui::Context::default(), Action::Reopen);
         assert_eq!(app.views.len(), 1);
         let doc = app.session.get(app.views[0].id).unwrap();
         assert_eq!(doc.path.as_deref(), Some(path_text));
@@ -185,15 +187,15 @@ mod tests {
         app.open_path(text);
         app.close_tab(0);
         std::fs::remove_file(&path).unwrap();
-        app.tab_action(Action::Reopen);
+        app.tab_action(&egui::Context::default(), Action::Reopen);
         assert!(app.views.is_empty());
         assert_eq!(app.closed_tabs, [text]);
         std::fs::write(&path, PDF).unwrap();
-        app.tab_action(Action::Reopen);
+        app.tab_action(&egui::Context::default(), Action::Reopen);
         assert_eq!(app.views.len(), 1);
         assert!(app.closed_tabs.is_empty());
         app.closed_tabs.push(text.into());
-        app.tab_action(Action::Reopen);
+        app.tab_action(&egui::Context::default(), Action::Reopen);
         assert_eq!(app.views.len(), 1, "an already-open file is selected, not duplicated");
         assert!(app.closed_tabs.is_empty());
         std::fs::remove_file(path).unwrap();

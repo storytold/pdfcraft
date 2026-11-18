@@ -61,7 +61,12 @@ pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
         if !seen.insert(def.command.id.clone()) {
             return;
         }
-        let def = if def.kind == CommandKind::Command { def.with_kind(kind_of(&def.command.id)) } else { def };
+        let def = if def.kind == CommandKind::Command {
+            let kind = kind_of(&def.command.id);
+            def.with_kind(kind)
+        } else {
+            def
+        };
         defs.push(match shortcut {
             Some(chord) => def.with_default(Binding::new(chord)),
             None => def,
@@ -182,11 +187,10 @@ fn checked(app: &PdfCraftApp, command: &CommandRef) -> Option<bool> {
         "view.continuous" => view.is_some_and(|v| v.continuous),
         "view.page_gaps" => view.is_some_and(|v| v.page_gaps),
         "view.layout.cover" => view.is_some_and(|v| v.cover),
-        "view.full_screen" => app.full_screen,
+        "view.full_screen" => app.full_screen(),
         "view.read_mode" => app.mode == Mode::Read,
-        // PLAN: assumed `right()` and `left_open()` read from the dock (pdf-hub-w1)
         "view.side_panel" => app.right().is_some(),
-        "view.tools_pane" => app.left_open(),
+        "view.tools_pane" => app.left_open,
         "view.split" => app.panes.split.is_some(),
         "view.theme.system" => app.theme_preference == ModeChoice::System,
         "view.theme.light" => app.theme_preference == ModeChoice::Light,

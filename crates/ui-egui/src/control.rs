@@ -49,7 +49,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use craft::automation::dialogs::dialog_method;
 use craft::automation::screenshot::{DocumentId, ScreenshotParams, settle_ms};
 use craft::automation::synthetic::input_method;
-use craft::automation::{access, ControlRequest, Reply};
+use craft::automation::{ControlRequest, Reply, access};
 use craft::ui::runtime::motion;
 use craft::ui::runtime::windows::WindowHost;
 use egui::ViewportId;

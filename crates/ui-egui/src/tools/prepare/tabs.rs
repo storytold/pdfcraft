@@ -264,8 +264,11 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft) {
                 format!("{}, {then}", act.describe())
             };
             let delete = Label::from(crate::i18n::fmt(tl!("Delete {o}"), &[("o", tl!(tr.label()))]));
-            let mut item = ListRow::new(format!("{}: {summary}", tl!(tr.label())))
-                .trailing_part(DELETE, TrailingFace::Icon(IconSpec::svg(IconId::new("trash"))), delete);
+            let mut item = ListRow::new(format!("{}: {summary}", tl!(tr.label()))).trailing_part(
+                DELETE,
+                TrailingFace::Icon(IconSpec::svg(IconId::new("trash"))),
+                delete,
+            );
             if !editing && matches!(act, pdfcraft_engine::FieldAction::JavaScript(_)) {
                 item = item.trailing_part(EDIT, TrailingFace::Icon(IconSpec::svg(IconId::new("pencil"))), tl!("Edit"));
             }
@@ -403,6 +406,8 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
         }
     }
     if *refused {
-        Notice::new(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made.")).layout(NoticeLayout::Inline).show(ui);
+        Notice::new(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made."))
+            .layout(NoticeLayout::Inline)
+            .show(ui);
     }
 }

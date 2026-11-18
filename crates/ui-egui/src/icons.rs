@@ -142,14 +142,13 @@ mod tests {
     #[test]
     fn every_icon_the_app_names_resolves() {
         register();
-        let missing: Vec<String> = engine_icons()
-            .into_iter()
-            .filter(|(_, name)| !has_icon(&IconId::new(name)))
-            .map(|(owner, name)| format!("{owner}: {name}"))
-            .collect();
+        let missing: Vec<String> =
+            engine_icons().into_iter().filter(|(_, name)| !has_icon(&IconId::new(name))).map(|(owner, name)| format!("{owner}: {name}")).collect();
         assert!(missing.is_empty(), "icons nobody has: {missing:?}");
         // The eight documents the comment tools name stay served.
-        for name in ["message-square-plus", "type", "highlighter", "move-right", "message-square-quote", "message-square-text", "replace", "paperclip"] {
+        for name in
+            ["message-square-plus", "type", "highlighter", "move-right", "message-square-quote", "message-square-text", "replace", "paperclip"]
+        {
             assert!(has_icon(&IconId::new(name)), "comment tool icon {name}");
         }
     }

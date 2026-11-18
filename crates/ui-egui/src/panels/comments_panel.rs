@@ -301,7 +301,7 @@ pub(crate) fn show(
     for e in output.edits {
         match e {
             CommentEdit::Add { text, .. } => {
-                let page = view.current.min(info.pages.len().saturating_sub(1));
+                let page = view.current().min(info.pages.len().saturating_sub(1));
                 if let Some(p) = info.pages.get(page) {
                     let at = p.view_to_user(p.width - NOTE_FROM_RIGHT, NOTE_FROM_TOP);
                     applied.push(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
@@ -405,7 +405,6 @@ pub(crate) fn header(
     let (list, _) = threads(doc, prefs);
     let more = IconButton::new(IconSpec::svg(IconId::new("more"))).label(tl!("More options").to_string()).show(ui);
     let hide_all = if doc.comments_hidden() { tl!("Show all comments") } else { tl!("Hide all comments") };
-    // PLAN: assumed `enabled` is the command board's state read, passed by the caller (pdf-chrome-w13).
     let rows = [
         Entry::new("comment.hide_all", hide_all.to_string()).enabled(enabled("comment.hide_all")),
         Entry::new("comment.summarize", tl!("Create PDF comment summary…").to_string()).enabled(enabled("comment.summarize")),

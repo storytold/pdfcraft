@@ -986,7 +986,8 @@ fn draft_session(ui: &mut egui::Ui, body: &PageBody<'_>, view: &mut DocView, doc
     let zoom = placed.scale as f32;
     let page_width = f64::from(doc.info.pages.get(page)?.width);
     let editor_id = egui::Id::new(("added-text-editor", view.view_key()));
-    let background_ready = view.session.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| view.session.text_background.ready_added(page, index));
+    let background_ready =
+        view.session.content.draft.as_ref().and_then(|d| d.index).is_some_and(|index| view.session.text_background.ready_added(page, index));
     let cv = &mut view.session.content;
     let draft = cv.draft.as_mut().filter(|d| d.page == page)?;
     let font = crate::edit_text_ui::editor_font(&draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));

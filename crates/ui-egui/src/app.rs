@@ -211,6 +211,7 @@ impl PdfCraftApp {
             pinned_jobs: queue(&host, &wake, "pdfcraft-pinned-folders"),
             recent_check: persist::recent_check::RecentCheck::new(queue(&host, &wake, "pdfcraft-recent-check")),
             text_copies: queue(&host, &wake, "pdfcraft-copy-text"),
+            reveal_jobs: queue(&host, &wake, "pdfcraft-reveal"),
             ocr_runs: queue(&host, &wake, "pdfcraft-ocr"),
             ocr_batches: queue(&host, &wake, "pdfcraft-ocr-files"),
             verify_jobs: queue(&host, &wake, "pdfcraft-ocr-verify"),
@@ -333,6 +334,8 @@ impl PdfCraftApp {
             script_messages_dropped: 0,
             script_shown: None,
             posted_notices: Vec::new(),
+            notices: craft::ui::notices::NoticeCenter::new(),
+            progress_requests: Vec::new(),
             progress_cards: Default::default(),
             password_prompt: None,
             unlock_prompt: None,
@@ -717,7 +720,7 @@ impl PdfCraftApp {
                 view.session.pending_pick = None;
             }
         }
-        panes::frame(self);
+        panes::frame(self, &ctx);
         // Forms' scripts read Highlight fields as `app.runtimeHighlight`.
         let highlight = self.active.and_then(|i| self.views.get(i)).map_or(self.highlight_fields, |v| v.session.highlight_fields);
         self.session.set_field_highlight(highlight);
