@@ -125,7 +125,11 @@ fn normalize_path(path: &Path) -> PathBuf {
         match component {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                lexical.pop();
+                if matches!(lexical.components().next_back(), Some(std::path::Component::Normal(_))) {
+                    lexical.pop();
+                } else {
+                    lexical.push(component.as_os_str());
+                }
             }
             _ => lexical.push(component.as_os_str()),
         }
