@@ -262,7 +262,7 @@ fn placing_moving_editing_and_deleting_a_field() {
     // Field Properties: rename and make it required (one undo step).
     h.execute("form.field.properties");
     h.run_steps(2);
-    h.get_by_label("Text Field Properties");
+    h.get_by_role_and_label(Role::Dialog, "Text Field Properties");
     assert!(props_open(&h));
     retype(&mut h, "Name:", "email");
     h.get_by_label("Required").click();
