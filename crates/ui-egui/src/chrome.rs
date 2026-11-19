@@ -67,11 +67,13 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         Some(doc) => Title::new(doc.name.clone()),
         None => Title::new("PdfCraft"),
     };
-    let theme_icon = match app.theme_preference {
-        ModeChoice::System => "monitor",
-        ModeChoice::Light => "sun",
-        ModeChoice::Dark => "moon",
+    let (theme_icon, theme_label) = match app.theme_preference {
+        ModeChoice::System => ("monitor", tl!("Use system setting")),
+        ModeChoice::Light => ("sun", tl!("Light gray")),
+        ModeChoice::Dark => ("moon", tl!("Dark gray")),
     };
+    // The button names the choice it shows; a click steps to the next one.
+    let theme_label = format!("{}: {theme_label}", tl!("Display theme"));
     let out = TitleBar::new().show_titled(
         ui,
         title,
@@ -87,7 +89,7 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         |ui, _| {
             IconButton::command(IconId::new("messages-square"), "help.discord").show(ui);
             IconButton::command(IconId::new("circle-help"), "help.shortcuts").show(ui);
-            let theme_button = IconButton::command(IconId::new(theme_icon), ThemeChoice::NextMode.command()).show(ui);
+            let theme_button = IconButton::command(IconId::new(theme_icon), ThemeChoice::NextMode.command()).label(theme_label.clone()).show(ui);
             let opener = theme_button.response().clone();
             Menu::context(tl!("Appearance"), &opener).show(ui, |ui, _| {
                 let appearance = CommandRef::with_params("app.preferences", serde_json::json!({ "tab": "appearance" }));

@@ -27,11 +27,21 @@ fn harness_with(settings: Option<&'static str>, system: Option<egui::Theme>, run
             app
         }
     });
-    h.input_mut().system_theme = system;
+    os_theme(&mut h, system);
     if run {
         h.run_steps(4);
     }
     (h, tx)
+}
+
+/// The desktop reports `theme` as the windowing integration does: the raw input's field, and an
+/// `Event::SystemTheme` for a scheme it knows. An integration never reports a known scheme as gone.
+fn os_theme(h: &mut Harness<'static, PdfCraftApp>, theme: Option<egui::Theme>) {
+    let input = h.input_mut();
+    input.system_theme = theme;
+    if let Some(theme) = theme {
+        input.events.push(egui::Event::SystemTheme(theme));
+    }
 }
 
 fn harness() -> (Harness<'static, PdfCraftApp>, ControlClient) {
@@ -109,15 +119,15 @@ fn toolbar_and_view_menu_share_three_state_preferences() {
     h.get_by_label("Use system setting").click();
     h.run_steps(3);
     assert_theme(&mut h, &c, "System", "Dark");
-    h.input_mut().system_theme = Some(egui::Theme::Light);
+    os_theme(&mut h, Some(egui::Theme::Light));
     h.run_steps(3);
     assert_theme(&mut h, &c, "System", "Light");
     click_toolbar(&mut h, "Use system setting");
     click_toolbar(&mut h, "Light gray");
     // A manual choice exits system mode and survives subsequent OS changes.
-    h.input_mut().system_theme = Some(egui::Theme::Dark);
+    os_theme(&mut h, Some(egui::Theme::Dark));
     h.run_steps(2);
-    h.input_mut().system_theme = Some(egui::Theme::Light);
+    os_theme(&mut h, Some(egui::Theme::Light));
     h.run_steps(2);
     assert_theme(&mut h, &c, "Dark", "Dark");
 }
@@ -186,14 +196,14 @@ fn restored_system_tracks_native_input_without_rewriting_saved_preference() {
     for (input, expected) in
         [(Some(egui::Theme::Dark), "Dark"), (Some(egui::Theme::Light), "Light"), (None, "Light"), (Some(egui::Theme::Dark), "Dark")]
     {
-        h.input_mut().system_theme = input;
+        os_theme(&mut h, input);
         h.run_steps(3);
         assert_theme(&mut h, &c, "System", expected);
     }
     for (manual, expected) in [("light", "Light"), ("dark", "Dark")] {
         ok(&mut h, &c, "ui.set", json!({"key": "theme", "value": manual}));
         for input in [Some(egui::Theme::Dark), Some(egui::Theme::Light), None] {
-            h.input_mut().system_theme = input;
+            os_theme(&mut h, input);
             h.run_steps(3);
             assert_theme(&mut h, &c, expected, expected);
         }
@@ -231,9 +241,9 @@ fn preferences_theme_cards_and_use_system_setting_stay_in_sync() {
     // The Light card itself, not its radio row, picks Light, and a dark OS doesn't undo it.
     h.get_by_label("Light theme").click();
     h.run_steps(3);
-    h.input_mut().system_theme = Some(egui::Theme::Light);
+    os_theme(&mut h, Some(egui::Theme::Light));
     h.run_steps(2);
-    h.input_mut().system_theme = Some(egui::Theme::Dark);
+    os_theme(&mut h, Some(egui::Theme::Dark));
     h.run_steps(2);
     assert_theme(&mut h, &c, "Light", "Light");
     assert_eq!(mode_shown(&h), "Light");
@@ -248,7 +258,7 @@ fn preferences_theme_cards_and_use_system_setting_stay_in_sync() {
     h.run_steps(3);
     assert_theme(&mut h, &c, "System", "Dark");
     assert_eq!(mode_shown(&h), "Use system setting");
-    h.input_mut().system_theme = Some(egui::Theme::Light);
+    os_theme(&mut h, Some(egui::Theme::Light));
     h.run_steps(3);
     assert_theme(&mut h, &c, "System", "Light");
     // Only the Light card is marked Active while the OS is light.
