@@ -72,7 +72,6 @@ fn renderer_and_security_vendors_remain() {
         "vendor/hayro-syntax",
         "vendor/hayro-cmap",
         "vendor/hayro-jbig2",
-        "vendor/hayro-postscript",
         "vendor/lopdf",
         "vendor/vello_common",
     ] {
