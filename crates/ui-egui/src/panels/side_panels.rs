@@ -287,12 +287,7 @@ impl DockPanels<PanelId> for Panels<'_> {
         if panels.contains(&PanelId::Toolbar) {
             crate::hotbar::show_rail(self.app, ui);
         } else if panels.contains(&PanelId::Document) {
-            // The expanded All tools view covers the page area but keeps the docks.
-            if self.app.mode == Mode::AllTools && self.app.all_tools_full {
-                crate::all_tools_ui::show(self.app, ui);
-            } else {
-                crate::panes::page_area(self.app, ui);
-            }
+            document_view(self.app, ui, rect);
         } else {
             return None;
         }
@@ -341,6 +336,28 @@ impl Panels<'_> {
     }
 }
 
+/// The document panel's view in `rect`: the active document alone on black in full screen, the OCR Verify screen
+/// (its four panes under the window's tabs, menus and toolbar, which stay, #6485), the expanded All tools view, or
+/// the page area.
+fn document_view(app: &mut PdfCraftApp, ui: &mut Ui, rect: egui::Rect) {
+    app.settle_document_view();
+    if app.full_screen_document() {
+        ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+        if let Some(i) = app.active {
+            match crate::compare_ui::side_by_side(app, i) {
+                Some((old, new)) => crate::compare_ui::compare_area(app, old, new, ui),
+                None => crate::canvas::document_area(app, i, ui),
+            }
+        }
+    } else if app.ocr_verify.open {
+        crate::ocr_verify::show(app, ui);
+    } else if app.mode == Mode::AllTools && app.all_tools_full && !app.hidden_interface().window_ui {
+        crate::all_tools_ui::show(app, ui);
+    } else {
+        crate::panes::page_area(app, ui);
+    }
+}
+
 /// The permissions alone, for the automation method that applies a dock action without drawing the dock.
 struct Rules;
 
@@ -365,11 +382,15 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let read = app.mode == Mode::Read;
     // The expanded All tools view covers the panels but keeps the rail.
     let expanded = app.mode == Mode::AllTools && app.all_tools_full;
+    // Full screen shows the document alone, and a document can hide the toolbars, the menu and the panels around it
+    // in its tab (ISO 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
+    let bare = app.full_screen_document() || app.hidden_interface().window_ui;
     let workspace = app.dock.clone();
     let mut panels = Panels { ctx: ui.ctx().clone(), app: &mut *app };
     // Home and Combine have no side panel and no rail, and Read mode hides the tools, not the navigation panels.
     let shown = |panel: &PanelId| match panel {
         PanelId::Document => true,
+        _ if bare => false,
         PanelId::Toolbar => active,
         PanelId::Tools => !read && !expanded,
         _ => active && !expanded,
