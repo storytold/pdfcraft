@@ -25,7 +25,7 @@ fn compare_two_versions() {
     h.run_steps(4);
     assert!(h.execute("doc.compare"));
     h.run_steps(2);
-    h.get_by_label("Compare Files");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Compare Files");
     h.get_by_label("Compare").click();
     h.run_steps(3);
     assert_eq!(crate::support::right(h.state()), Some(RightPanel::Compare));

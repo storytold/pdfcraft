@@ -61,7 +61,16 @@ fn type_into(h: &mut H, label: &str, text: &str) {
 
 fn cases() -> Vec<Case> {
     vec![
-        Case { name: "default mode", page: "Documents and view", edit: |h| click(h, "E-Sign"), applied: |a| a.default_mode == Mode::Sign },
+        Case {
+            name: "default mode",
+            page: "Documents and view",
+            edit: |h| {
+                // A choice row is a drop-down: its options show once it opens.
+                click(h, "Default workspace mode");
+                click(h, "E-Sign");
+            },
+            applied: |a| a.default_mode == Mode::Sign,
+        },
         Case {
             name: "layout and continuous on the active view",
             page: "Documents and view",

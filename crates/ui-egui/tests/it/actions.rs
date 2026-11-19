@@ -46,7 +46,8 @@ fn run_and_create_actions() {
     assert!(h.execute("actions.distribution"));
     h.run_steps(2);
     h.get_by_role_and_label(Role::Dialog, "Action Wizard");
-    h.get_by_label("1. Remove hidden information");
+    // The chosen action's description lists its numbered steps, one per line.
+    h.get_by_label_contains("1. Remove hidden information");
     h.get_by_label("Start").click();
     finish(&mut h, &jobs);
     assert_eq!(support::shown_notice(&h).as_deref(), Some("Prepare for Distribution: 1 file done"));

@@ -45,6 +45,7 @@ pub(crate) struct CommentsTool<'a> {
     notice: Option<&'a mut Option<&'static str>>,
     map: PageMap<'a>,
     done: &'a mut bool,
+    pressed: &'a mut bool,
     quick: QuickTool,
     prefs: Option<&'a CommentPrefs>,
     allowed: bool,
@@ -54,8 +55,15 @@ pub(crate) struct CommentsTool<'a> {
 
 impl<'a> CommentsTool<'a> {
     /// The tool over `annotate` (kept in `CommentView::tool`, so a gesture lasts across passes), the paste slot, the
-    /// pages on screen and the flag Escape sets when it leaves the tool (`CommentView::tool_done`).
-    pub(crate) fn new(annotate: &'a mut AnnotateTool, paste: &'a mut Option<PastePlacement>, map: PageMap<'a>, done: &'a mut bool) -> Self {
+    /// pages on screen, the flag Escape sets when it leaves the tool (`CommentView::tool_done`) and whether the
+    /// annotation tool took the open press (`CommentView::tool_pressed`, kept across passes with the gesture).
+    pub(crate) fn new(
+        annotate: &'a mut AnnotateTool,
+        paste: &'a mut Option<PastePlacement>,
+        map: PageMap<'a>,
+        done: &'a mut bool,
+        pressed: &'a mut bool,
+    ) -> Self {
         CommentsTool {
             annotate,
             text: None,
@@ -64,6 +72,7 @@ impl<'a> CommentsTool<'a> {
             notice: None,
             map,
             done,
+            pressed,
             quick: QuickTool::Select,
             prefs: None,
             allowed: false,
@@ -103,9 +112,10 @@ impl<'a> CommentsTool<'a> {
         self.map.page_at(Point::new(f64::from(at.x), f64::from(at.y)))
     }
 
-    /// Whether the annotation tool holds a gesture: the drag, release and cancel are its, else the text's.
+    /// Whether the annotation tool holds the gesture, as it took the press or is clicking out a shape: the drag,
+    /// release and cancel are its, else the text's.
     fn annotating(&self) -> bool {
-        self.annotate.in_flight().is_some() || !self.annotate.drawing().is_empty()
+        *self.pressed || !self.annotate.drawing().is_empty()
     }
 
     fn place(&mut self, page: usize, at: Pos2) {
@@ -204,6 +214,7 @@ impl CanvasTool for CommentsTool<'_> {
     }
 
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        *self.pressed = false;
         if self.paste.is_some() {
             // A click places the bundle, centred where it is clicked, on the page under it; a right-click lets it
             // go. Nothing else on the page takes the press.
@@ -216,7 +227,28 @@ impl CanvasTool for CommentsTool<'_> {
             }
             return ToolAction::Done;
         }
-        match self.annotate.press(pointer, cx) {
+        // A markup tool or Replace Text marks the text its drag selects (`page_after_text`): the text takes the press
+        // first. Under Select the comments come first, and a press no comment takes goes on to the text.
+        if matches!(self.quick, QuickTool::Comment(_))
+            && let Some(text) = self.text.as_mut()
+        {
+            let action = text.press(pointer, cx);
+            if action != ToolAction::Ignored {
+                return action;
+            }
+        }
+        let action = self.annotate.press(pointer, cx);
+        *self.pressed = action != ToolAction::Ignored;
+        // A press on no comment passes through to the text (`EmptyPress::PassThrough`): it leaves the comments
+        // selected only while Shift or Cmd adds to the selection.
+        if action == ToolAction::Ignored
+            && self.annotate.tool == AnnotationTool::Select
+            && pointer.button == PointerButton::Primary
+            && !(pointer.mods.shift || pointer.mods.cmd)
+        {
+            self.annotate.selected.clear();
+        }
+        match action {
             ToolAction::Ignored => match self.text.as_mut() {
                 Some(text) => text.press(pointer, cx),
                 None => ToolAction::Ignored,
@@ -239,6 +271,7 @@ impl CanvasTool for CommentsTool<'_> {
         } else if let Some(text) = self.text.as_mut() {
             text.release(pointer, cx);
         }
+        *self.pressed = false;
     }
 
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
@@ -254,6 +287,7 @@ impl CanvasTool for CommentsTool<'_> {
         } else if let Some(text) = self.text.as_mut() {
             text.cancel(reason, cx);
         }
+        *self.pressed = false;
     }
 
     fn claims(&self) -> ToolClaims {

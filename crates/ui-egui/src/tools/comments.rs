@@ -58,7 +58,7 @@ pub(crate) use state::PageCx;
 use state::after_delete;
 use state::login_name;
 pub use state::{CommentView, Composer, ComposerKind};
-pub(crate) use tool::{CommentsTool, PastePlacement, context_target, page_after_text, part_pressed};
+pub(crate) use tool::{CommentsTool, PastePlacement, context_target, page_after_text, part_pressed, take_edits};
 
 /// Maximum stroke thickness offered by commenting controls, in PDF points.
 pub const MAX_LINE_WIDTH: f64 = 100.0;

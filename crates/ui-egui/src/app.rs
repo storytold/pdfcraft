@@ -70,7 +70,7 @@ impl AppServices {
             update_source,
             intake,
             #[cfg(not(target_arch = "wasm32"))]
-            watch,
+            watch: reload::document_watch(watch),
         }
     }
 

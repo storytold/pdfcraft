@@ -175,22 +175,28 @@ impl PdfCraftApp {
     /// keeps comment tools from reopening it; opening it again lets them (#225). A choice made in
     /// Read mode replaces the pane saved on the way in, so leaving Read mode doesn't undo it.
     pub fn choose_right_panel(&mut self, panel: Option<RightPanel>) {
+        self.right_panel_chosen(self.right(), panel);
+        self.set_right(panel);
+        if let Some(panel) = panel {
+            self.last_right = panel;
+        }
+    }
+
+    /// What the user's choice of the right panel, from `before` to `panel`, is remembered as: here
+    /// or in the dock (its tabs and Close button).
+    pub(crate) fn right_panel_chosen(&mut self, before: Option<RightPanel>, panel: Option<RightPanel>) {
         if self.mode == Mode::Read {
             self.right_before_read = None;
         }
         if panel == Some(RightPanel::Comments) {
             self.comments_panel_closed = false;
-        } else if panel.is_none() && self.right() == Some(RightPanel::Comments) {
+        } else if panel.is_none() && before == Some(RightPanel::Comments) {
             self.comments_panel_closed = true;
         }
         if panel.is_some() {
             self.right_panel_closed = false;
-        } else if self.right().is_some() {
+        } else if before.is_some() {
             self.right_panel_closed = true;
-        }
-        self.set_right(panel);
-        if let Some(panel) = panel {
-            self.last_right = panel;
         }
     }
 

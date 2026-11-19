@@ -350,7 +350,7 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "not written yet");
     h.run_steps(2);
-    h.get_by_label("File changed");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "File changed");
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(std::fs::read(&file.path).unwrap(), fixture(4), "Cancel keeps the newer file");
@@ -381,7 +381,7 @@ fn saving_checks_the_file_with_the_watcher_off_too() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
-    h.get_by_label("File changed");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "File changed");
 }
 
 /// One file, one tab (#2166): opening a file that is open already brings its tab forward,

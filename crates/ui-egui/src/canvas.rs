@@ -1082,6 +1082,12 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &pass.press);
         let reply = ToolHost::new().momentary(momentary).run(ui, pass, &mut tool);
         let mut finish = tool.finish();
+        // The comment gestures the run finished: each committed one is an engine edit, one undo step per drag.
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation);
+        let now = ui.input(|i| i.time);
+        if let Some(edit) = comments::take_edits(&mut session.comments, &map, cx.info, cx.prefs, now) {
+            session.pending_edit = Some(edit);
+        }
         finish.apply(fill, session, &tool_cx);
         if let Some(why) = finish.refused.take() {
             session.objects.notice = Some(why.into());

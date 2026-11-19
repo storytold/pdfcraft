@@ -313,11 +313,14 @@ impl PdfCraftApp {
             "file.save_as" => {
                 self.save_active(ctx, SaveTarget::As);
             }
-            "file.close" => {
-                if let Some(i) = active {
-                    self.request_close_tab(ctx, i);
+            "file.close" => match active {
+                Some(i) => self.request_close_tab(ctx, i),
+                // macOS ⌘W closes the window when no document is open (#869), through the quit guard.
+                None if crate::commands::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => {
+                    self.request_quit(ctx);
                 }
-            }
+                None => {}
+            },
             "file.close_all" => self.close_all(ctx),
             // PLAN: assumed the dialog openers are `PdfCraftApp` methods named as the sheet gives them (dialogs A-3..A-10), taking no argument unless the sheet names one.
             "file.revert" => self.ask_revert(),
