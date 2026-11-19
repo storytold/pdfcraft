@@ -515,7 +515,7 @@ fn an_attachment_needs_a_name_and_leaves_nothing_behind_when_it_has_none() {
 // ── fields that carry no magnitude screen (recorded, not endorsed) ────────────────────────────
 
 /// This is a MAGNITUDE story, not a one-field story. `rect_for` checks the rectangle of every
-/// variant but passes `Shape::CustomStamp { size, line: None }` and `Shape::TypedSignature { contours }`
+/// variant but passes `Shape::CustomStamp { size }` and `Shape::TypedSignature { contours }`
 /// straight into `/PCPictureSize` and `/PCOutline` (`create.rs:62-82`, `create.rs:278`,
 /// `create.rs:285`) with no
 /// magnitude screen whatsoever — and width gets none either. The only style guard on the create
