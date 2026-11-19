@@ -689,6 +689,11 @@ impl PdfCraftApp {
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
+        if blocked {
+            let thread = std::thread::current();
+            let name = thread.name().unwrap_or("").rsplit("::").next().unwrap_or("");
+            eprintln!("DIAG {name}: input blocked: modal {} palette {} focused {}", self.modal_open(), self.palette_open, ctx.input(|i| i.focused));
+        }
         for (index, view) in self.views.iter_mut().enumerate() {
             let shut = blocked || self.active != Some(index);
             view.session.objects.set_input_blocked(shut);

@@ -385,6 +385,11 @@ impl Component for PageParts<'_> {
             if hovered && self.report.hovered.is_none() {
                 self.report.hovered = Some((part.owner, part.page));
             }
+            if press.phase.is_press() || hovered {
+                let thread = std::thread::current();
+                let name = thread.name().unwrap_or("").rsplit("::").next().unwrap_or("");
+                eprintln!("DIAG {name}: part {:?} page {} hovered {hovered} phase {:?}", part.owner, part.page, press.phase);
+            }
             if press.phase.is_press() && self.report.press.is_none() {
                 self.report.press = Some(PagePress { owner: part.owner, page: part.page, phase: press.phase, mods: press.mods });
             }
