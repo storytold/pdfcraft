@@ -4132,6 +4132,33 @@ fn a_rewritten_forms_property_a_form_it_draws_names_too_goes() {
     }
 }
 
+/// The same, `/F`'s resources shared by reference with `/Y`, which the page draws beside the mark
+/// and which draws `/Child` too, and the page's properties giving an `/MC1` of their own. Without
+/// resources of its own, `/Child` names the page's, which stays; with empty ones, its own, and the
+/// page's goes. Either way the description of `/F`'s `/MC1`, which nothing names now, leaves the
+/// file. `/F` alone is the control.
+#[test]
+fn a_shared_forms_property_a_form_it_draws_names_too_goes() {
+    for with_y in [false, true] {
+        for child_res in ["", "/Resources << >>"] {
+            let form = "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources 10 0 R";
+            let f = stream(form, b"/Span /MC1 BDC BT /F1 12 Tf 20 250 Td (SECRET) Tj ET EMC /Child Do");
+            let child = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {child_res}"), b"/Span /MC1 BDC 0 0 10 10 re f EMC");
+            let described = b"<< /Alt (DESCRIBED) /ActualText (DESCRIBED) >>".to_vec();
+            let shared = b"<< /Font << /F1 5 0 R >> /Properties << /MC1 9 0 R >> /XObject << /Child 8 0 R >> >>".to_vec();
+            let y = stream(form, b"/Child Do");
+            let (content, xobjects): (&[u8], &str) = if with_y { (b"/F Do /Y Do", "/F 7 0 R /Y 11 0 R") } else { (b"/F Do", "/F 7 0 R") };
+            let res = format!("/XObject << {xobjects} >> /Properties << /MC1 12 0 R >>");
+            let page_property = b"<< /Lang (PAGEPROPERTY) >>".to_vec();
+            let mut doc = one_page(content, &res, vec![f, child, described, shared, y, page_property]);
+            mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+            assert_eq!(apply(&mut doc, None).map(|r| (r.glyphs, r.forms_rewritten)), Ok((6, 1)), "{with_y}, {child_res:?}");
+            assert!(!surviving_references::full_save_holds(&doc, b"DESCRIBED"), "{with_y}, {child_res:?}");
+            assert_eq!(surviving_references::full_save_holds(&doc, b"PAGEPROPERTY"), child_res.is_empty(), "{with_y}, {child_res:?}");
+        }
+    }
+}
+
 /// `/F`'s own resources give `/Bogus` as a reference to an object the file doesn't define. `/G`,
 /// rewritten for its text under the mark, draws `/F`'s `/Im` beside it, and its rewrite is a new
 /// object, which may take `/Bogus`'s number, read as nothing before it was written: `/F`'s cleanups

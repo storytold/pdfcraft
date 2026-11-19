@@ -523,7 +523,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         if pruned {
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
-        pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents)?;
+        pruned |= prune_retired_properties(doc, &mut res, &property_names, &contents, true)?;
         if pruned {
             doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
         }
@@ -537,15 +537,20 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
 
 /// Retire only properties removed from a rewritten scope, preserving names still used by any
 /// content sharing this holder. Different pages' streams must never be concatenated together.
-fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], contents: &[Vec<Vec<u8>>]) -> Result<bool, CosError> {
+/// `forms`: whether the forms `contents` draws are read for the names they mark, as for a page,
+/// whose properties a form without resources of its own reads too; a form's properties only its
+/// own content names (a form it draws reads its own, or, without resources, the page's).
+fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], contents: &[Vec<Vec<u8>>], forms: bool) -> Result<bool, CosError> {
     if names.is_empty() {
         return Ok(false);
     }
     let mut used = HashSet::new();
     let mut partial = false;
+    let no_forms = Dict::new();
     for content in contents {
         // Each is one page's content or one form's, with the allowance of a page.
-        let read = resource_ops(doc, &mut DecodeBudget::page(), res, content)?;
+        let drawn_through = if forms { None } else { Some(&no_forms) };
+        let read = resource_ops_with(doc, &mut DecodeBudget::page(), &mut ScopedReads::default(), res, drawn_through, content)?;
         partial |= read.partial;
         for op in read.ops {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
@@ -622,7 +627,7 @@ fn unlink_from_forms(
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            pruned |= prune_retired_properties(doc, &mut res, &names, &content)?;
+            pruned |= prune_retired_properties(doc, &mut res, &names, &content, false)?;
             if pruned {
                 doc.update_dict(reference, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
             }

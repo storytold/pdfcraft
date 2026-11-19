@@ -729,7 +729,12 @@ pub(crate) struct Kind {
 /// of what pages sharing a resource dictionary still draw): a form drawn again and again, or a
 /// dictionary many forms give, would otherwise load each object it names on every draw, which
 /// costs an object stream's decoding when the file keeps them there. Objects don't change kind
-/// while a page is walked or checked: the walk adds objects and edits dictionaries' entries.
+/// while a page is walked or checked: the walk adds objects and edits dictionaries' entries. But
+/// an object it adds can take the number of a reference the file gave to nothing, read as such
+/// before. A rewritten form's cleanups take the forms the walk wrote for it as streams
+/// ([`form_xobject_lookup`]), but the cleanups' own reads of forms with resources of their own
+/// (`ScopedReads`) can still take such a number, given to a form rewritten further in, as
+/// nothing, and leave that form unread.
 pub(crate) type Kinds = HashMap<ObjRef, Kind>;
 
 /// What `value` is: a reference is read from `kinds`, or once from the file into it.

@@ -143,11 +143,12 @@ this bound doesn't apply there; it searches such a stream again in each scope wh
 is looked up through what draws it, up to 4,096 such searches on a page, past which it says it
 can't check. The walk, the verification pass, the check of what pages sharing a resource
 dictionary still draw, the cleanups of a rewritten page's and form's own resources (the XObjects
-replaced, fonts and properties) and the Type 3 font cleanup all read it so. Two cleanups don't
-yet, as on `main`: unlinking a removed image or form from the forms that list it, and pruning the
-resources of a Type 3 font's forms read such a form by its own names alone, so a form it draws
-through its caller's names goes unread, and what that form draws with the outer form's own names
-can be dropped from them. A form without resources of its own inside such a form reads the page's
+replaced and fonts, and the page's properties) and the Type 3 font cleanup all read it so; a form's
+own properties are named by its own content alone, since a form it draws reads its own or, without
+resources, the page's. Two cleanups don't yet, as on `main`: unlinking a removed image or form from
+the forms that list it, and pruning the resources of a Type 3 font's forms read a form with
+resources of its own by its own names alone, so a form it draws through its caller's names goes
+unread, and what that form draws with the outer form's own names can be dropped from them. A form without resources of its own inside such a form reads the page's
 properties, and the page keeps them. The
 cleanups of a page's and form's own resources read a form with resources of its own once for the
 page, within one allowance of a page and 2,000,000 of such forms' operators that all of the page's
