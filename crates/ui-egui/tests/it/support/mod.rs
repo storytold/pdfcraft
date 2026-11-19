@@ -83,9 +83,9 @@ pub fn fire_menu(h: &mut Harness<'static, PdfCraftApp>, command: impl Into<Comma
     h.step();
 }
 
-/// The text of the first notice card the main window shows, if any.
+/// The text of the newest notice card the main window shows, if any: what the app said last.
 pub fn shown_notice(h: &Harness<'_, PdfCraftApp>) -> Option<String> {
-    toast::cards(&h.ctx, &WindowKey::main()).first().map(|card| card.toast.message.as_str().to_owned())
+    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned())
 }
 
 /// The services the tests give the app: no wake, no autosave folder, the GitHub update source, a fresh

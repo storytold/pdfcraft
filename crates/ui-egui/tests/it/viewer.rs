@@ -1391,12 +1391,13 @@ fn the_window_title_marks_a_draft_that_is_not_applied_yet() {
 /// only `App::logic` and no frame is drawn, still gives the titles its name.
 #[test]
 fn a_document_opened_while_hidden_names_the_titles() {
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    // A deliberate Open whose picker answers with the file's contents, as a browser's does.
+    let bytes = pdfcraft_engine::Session::new().create_from_text("Arrived", "Arrived while hidden").unwrap();
+    let files = Arc::new(ScriptedFiles::answering([Picked::Contents(vec![("arrived.pdf".into(), bytes.to_vec())])]));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            let (mut app, intake) = app_with_intake(Arc::new(ScriptedFiles::new()), &Written::default());
-            tx.send(intake).unwrap();
+            let mut app = app_with_intake(files, &Written::default()).0;
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "a.pdf", None, fixture(5)).unwrap();
             app.open_bytes(&egui::Context::default(), "b.pdf", None, fixture(2)).unwrap();
@@ -1404,12 +1405,10 @@ fn a_document_opened_while_hidden_names_the_titles() {
         }
     });
     crate::support::settle(&mut h);
-    let intake = rx.recv().expect("the app's file intake");
     h.run_steps(2);
     let before = h.state().views.len();
-    let bytes = pdfcraft_engine::Session::new().create_from_text("Arrived", "Arrived while hidden").unwrap();
-    intake.open_bytes("arrived.pdf".into(), Arc::from(bytes.to_vec()));
     let ctx = h.ctx.clone();
+    assert!(h.state_mut().execute(&ctx, "file.open"));
     let mut frame = eframe::Frame::_new_kittest();
     // The open runs on a worker and is taken in by a later `logic`, as eframe keeps calling it.
     for _ in 0..500 {

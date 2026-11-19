@@ -18,9 +18,12 @@ fn bring_to_front(ctx: &egui::Context) {
 
 impl PdfCraftApp {
     /// Opens what the file intake holds, batch by batch in arrival order: another launch's paths
-    /// like File ▸ Open, its `combine` files in the Combine files tab, bytes as a new tab, drops
-    /// as [`Self::open_dropped`]. A batch from the OS brings the window to the front.
+    /// like File ▸ Open, its `combine` files in the Combine files tab, bytes as a new tab (see
+    /// [`Self::open_startup_files`]), drops as [`Self::open_dropped`]. A batch from the OS brings
+    /// the window to the front.
     pub(crate) fn open_intake(&mut self, ctx: &egui::Context) {
+        // Work the user has started holds even after its tab closes or Home is selected.
+        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.modal_open() || self.password_prompt.is_some();
         for batch in self.intake.take() {
             match batch {
                 Intake::Open(paths) => {
@@ -50,15 +53,41 @@ impl PdfCraftApp {
                 }
                 Intake::Bytes { name, bytes } => {
                     let name = if name.is_empty() { DROPPED_NAME.to_string() } else { name };
-                    if let Err(error) = self.open_bytes(ctx, &name, None, bytes.to_vec()) {
-                        self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
-                    }
+                    self.startup_files.push((name, bytes));
                 }
                 Intake::Dropped { files, .. } => {
                     for file in files {
                         self.open_dropped_file(ctx, file.name, file.path, file.bytes);
                     }
                 }
+            }
+        }
+        self.open_startup_files(ctx);
+    }
+
+    /// Opens the files that arrived as bytes, once no prompt, dialog, link question or open is
+    /// under way: such a file may ask for its own password, and must not take another's place. It
+    /// opens in front only while the user has started nothing; after that it waits in a background
+    /// tab (#171).
+    fn open_startup_files(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let opening = !self.pending_opens.is_empty();
+        #[cfg(target_arch = "wasm32")]
+        let opening = false;
+        if self.startup_files.is_empty()
+            || opening
+            || self.password_prompt.is_some()
+            || self.image_import.is_some()
+            || self.modal_open()
+            || self.pending_link.is_some()
+            || self.pending_remote_link.is_some()
+        {
+            return;
+        }
+        for (name, bytes) in std::mem::take(&mut self.startup_files) {
+            let activate = !self.startup_superseded;
+            if let Err(error) = self.open_bytes_with_focus(ctx, &name, None, bytes.to_vec(), activate) {
+                self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]);
             }
         }
     }

@@ -237,7 +237,7 @@ impl Rig {
     }
 
     /// Adds a custom paper through the custom row, as automation does: its fields, then its Add.
-    pub(crate) fn add_custom(&mut self, name: &str, width: String, length: String) {
+    pub(crate) fn add_custom(&mut self, name: &str, width: f64, length: f64) {
         self.set("custom_name", json!(name));
         self.set("custom_width", json!(width));
         self.set("custom_height", json!(length));
@@ -1343,7 +1343,7 @@ fn adding_custom_paper_overrides_pending_driver_default() {
     assert!(h.state().print_draft.papers_loading());
     h.action("custom");
     let units = h.state().print_draft.units.per_point();
-    h.add_custom("Card", format!("{}", 300.0 * units), format!("{}", 500.0 * units));
+    h.add_custom("Card", 300.0 * units, 500.0 * units);
     assert!(h.state().print_draft.paper_overridden, "Add is an explicit paper choice");
     assert!(!h.state().print_draft.papers_loading(), "the explicit choice need not wait for detection");
     h.settle();
@@ -1377,7 +1377,7 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
     h.action("custom");
     // Typed in the preferences' unit, landscape: 6 × 4 inches.
     let per_point = h.state().print_draft.units.per_point();
-    h.add_custom("Label 4×6", format!("{}", 432.0 * per_point), format!("{}", 288.0 * per_point));
+    h.add_custom("Label 4×6", 432.0 * per_point, 288.0 * per_point);
     {
         let d = &h.state().print_draft;
         assert!(d.paper_is_custom() && d.paper_name() == "Label 4×6", "{}", d.paper_name());

@@ -16,14 +16,14 @@ fn a_custom_paper_cannot_take_a_standard_name() {
     h.action("custom");
     let before = h.state().print_draft.paper_count();
     let per_point = h.state().print_draft.units.per_point();
-    let (w, l) = (format!("{}", 288.0 * per_point), format!("{}", 432.0 * per_point));
+    let (w, l) = (288.0 * per_point, 432.0 * per_point);
     // The name of a standard paper, in either case, is refused: Add changes nothing.
     for name in ["A4", " a4 "] {
-        h.add_custom(name, w.clone(), l.clone());
+        h.add_custom(name, w, l);
         assert_eq!(h.state().print_draft.paper_count(), before, "{name:?} is a standard paper's name");
     }
     // Any other name is accepted by the same row.
-    h.add_custom("A4 label", w.clone(), l.clone());
+    h.add_custom("A4 label", w, l);
     assert_eq!(h.state().print_draft.paper_count(), before + 1);
 
     // Settings read back are checked the same way: the custom "A4" is dropped, the rest kept.

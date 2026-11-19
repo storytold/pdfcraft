@@ -695,6 +695,10 @@ pub struct PdfCraftApp {
     /// browser's startup `?file=` download then opens in the background instead of in front
     /// (#171).
     pub(crate) startup_superseded: bool,
+    /// Files that arrived as bytes through the intake (the browser's startup `?file=` download, a
+    /// host's file), held while a prompt, dialog or open is under way so that they don't take its
+    /// place.
+    pub(crate) startup_files: Vec<(String, std::sync::Arc<[u8]>)>,
     /// The home screen's community card was closed; it comes back next launch (not remembered).
     pub community_card_closed: bool,
     /// A document asked to open this address; the user hasn't answered yet (#90, #91).
