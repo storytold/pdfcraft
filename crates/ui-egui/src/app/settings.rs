@@ -634,7 +634,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
         let mut r = Reader::new(&root, Recent::KEY, &mut errors);
         Recent {
             recent: r.text("recent"),
-            recent_limit: r.f64("recent_limit").filter(|n| *n >= 0.0 && n.is_finite()).map(|n| n as u32),
+            recent_limit: r.f64("recent_limit").filter(|n| *n >= 0.0 && n.is_finite() && n.fract() == 0.0).map(|n| n as u32),
             recent_view: r.string("recent_view"),
             recent_sort: r.string("recent_sort"),
         }
