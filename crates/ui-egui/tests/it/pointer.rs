@@ -196,13 +196,6 @@ fn open(pdf: Vec<u8>, zoom: &'static str, left_open: bool) -> Harness<'static, P
     h
 }
 
-fn diag_pages(h: &Harness<'static, PdfCraftApp>) {
-    let thread = std::thread::current();
-    let name = thread.name().and_then(|n| n.rsplit("::").next()).unwrap_or("");
-    let v = &h.state().views[0];
-    eprintln!("DIAG {name}: viewport {:?} placed {:?} gaps {}", v.viewport_rect(), v.visible_page_rects(), v.view.page_gaps);
-}
-
 fn stamp_tool(h: &mut Harness<'_, PdfCraftApp>) {
     h.state_mut().quick_tool = QuickTool::Stamp(StampKind::DynApproved);
     h.run_steps(4);
@@ -221,15 +214,8 @@ fn at(h: &Harness<'_, PdfCraftApp>, x: f32, y: f32) -> egui::Pos2 {
 
 fn cursor_at(h: &mut Harness<'_, PdfCraftApp>, p: egui::Pos2) -> egui::CursorIcon {
     h.hover_at(p);
-    h.run_steps(1);
-    let first = h.output().platform_output.cursor_icon;
-    h.run_steps(1);
-    let second = h.output().platform_output.cursor_icon;
-    let thread = std::thread::current();
-    let name = thread.name().and_then(|n| n.rsplit("::").next()).unwrap_or("");
-    let (page, viewport) = (h.state().views[0].page_screen_rect(0), h.state().views[0].viewport_rect());
-    eprintln!("DIAG {name}: cursor at {p:?}: {first:?} then {second:?}; page {page:?} viewport {viewport:?}");
-    second
+    h.run_steps(2);
+    h.output().platform_output.cursor_icon
 }
 
 /// A mouse click: press and release in frames of their own, as `drag_at` and `drop_at` send them.
@@ -1034,7 +1020,6 @@ fn drag_seen_only_past_page_ones_edge(tool: impl FnOnce(&mut PdfCraftApp)) -> Ha
     let mut h = open(two_pages_pdf(), "100", false);
     tool(h.state_mut());
     h.run_steps(4);
-    diag_pages(&h);
     let (one, two) = {
         let v = &h.state().views[0];
         (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
@@ -1382,7 +1367,6 @@ fn touching_pages(tool: impl FnOnce(&mut PdfCraftApp)) -> (Harness<'static, PdfC
     h.state_mut().views[0].view.page_gaps = false;
     tool(h.state_mut());
     h.run_steps(4);
-    diag_pages(&h);
     let (one, two) = {
         let v = &h.state().views[0];
         (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))

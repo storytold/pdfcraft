@@ -337,10 +337,9 @@ impl CanvasTool for CommentsTool<'_> {
 /// `None` off the page or with comments hidden. The page's menu is anchored at `at` (Delete page, Paste, Copy
 /// Image, a note added here), and the comment is selected, or the selection cleared.
 pub(crate) fn context_target(cx: &PageCx<'_>, view: &mut CommentView, at: Pos2) -> Option<usize> {
-    if !cx.xf.rect.contains(at) {
+    if !context_anchor(cx, view, at) {
         return None;
     }
-    view.context_at = Some((cx.page, cx.to_user(at)));
     let target = if cx.hidden { None } else { cx.click_target(at) };
     match target {
         Some(a) => {
@@ -352,6 +351,24 @@ pub(crate) fn context_target(cx: &PageCx<'_>, view: &mut CommentView, at: Pos2) 
             None
         }
     }
+}
+
+/// Anchors the page's menu at `at` on the page of `cx`, whoever takes the right-click: Delete page, Paste, Copy Image
+/// and a note added from the menu act there. `false` off the page.
+pub(crate) fn context_anchor(cx: &PageCx<'_>, view: &mut CommentView, at: Pos2) -> bool {
+    if !cx.xf.rect.contains(at) {
+        return false;
+    }
+    view.context_at = Some((cx.page, cx.to_user(at)));
+    true
+}
+
+/// The comment a right-click at `at` is on, as [`context_target`] finds it, without changing the selection.
+pub(crate) fn context_comment(cx: &PageCx<'_>, at: Pos2) -> Option<usize> {
+    if cx.hidden || !cx.xf.rect.contains(at) {
+        return None;
+    }
+    cx.click_target(at).map(|a| a.index)
 }
 
 /// A click on a comment's body, from the page part that owns it (M-1): the annotation tool selects it with the

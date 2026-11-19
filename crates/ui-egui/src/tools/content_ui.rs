@@ -217,9 +217,6 @@ pub struct ContentView {
     pub draft: Option<TextDraft>,
     /// Select the item an add creates (the page's item count before it).
     pub select_added: Option<(usize, usize)>,
-    /// A click on added text opens it for typing (Add text and Edit text); with the other tools a
-    /// double click does. The page body sets it from the tool.
-    pub(crate) edit_on_click: bool,
     /// Done was pressed on the open box: the page body returns to Select ([`ContentView::take_done`]).
     done: bool,
     preview: Option<Preview>,
@@ -474,12 +471,13 @@ pub(crate) fn page_parts(session: &PageSession, doc: &Document, page: usize, pla
 /// A press on an added item (`press.owner` is its part), or, on any other owner, the page's
 /// picture selection following the picture controller. A drag shows the item at the dragged box
 /// and a release that moved it at least a point applies the move; a release that didn't changes
-/// nothing but the selection. A click selects, a double click (or with `edit_on_click` a click)
-/// opens the text for typing. `pages` are the pages as this pass's body placed them, which the
-/// press's screen points are read against. The edit the press ends in, if any.
+/// nothing but the selection. A click selects, a double click (or with `edit_on_click`, which Add
+/// text and Edit text set, a click) opens the text for typing. `pages` are the pages as this pass's
+/// body placed them, which the press's screen points are read against. The edit the press ends in,
+/// if any.
 // PLAN: A-2 gives `added_press(view, doc, press)`; the placement is a parameter so no page geometry is
 // carried between passes (caller: pdf-canvas-w9's `page_tools.rs`, with `body.pages`).
-pub(crate) fn added_press(session: &mut PageSession, doc: &Document, pages: &[PlacedPage], press: &PagePress) -> Option<Edit> {
+pub(crate) fn added_press(session: &mut PageSession, doc: &Document, pages: &[PlacedPage], press: &PagePress, edit_on_click: bool) -> Option<Edit> {
     let page = press.page;
     let added = doc.added();
     let Owner::Added { index } = press.owner else {
@@ -509,7 +507,7 @@ pub(crate) fn added_press(session: &mut PageSession, doc: &Document, pages: &[Pl
         PressPhase::Release { start, click: true, .. } => {
             cv.preview = None;
             cv.selected = Some((page, index));
-            if start.clicks < 2 && !cv.edit_on_click {
+            if start.clicks < 2 && !edit_on_click {
                 return None;
             }
             // Text that can't be drawn stays where it is being typed (#125).

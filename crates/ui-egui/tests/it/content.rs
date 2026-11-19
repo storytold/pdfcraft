@@ -99,6 +99,9 @@ fn texts(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 fn text_tool_drafts_grow_for_latin_and_arabic() {
     let _gpu = gpu();
     for text in ["Wide words ".repeat(8), "سلام عليكم ".repeat(8)] {
+        if crate::support::skip_without_glyphs("text_tool_drafts_grow_for_latin_and_arabic", "en", &text) {
+            continue;
+        }
         let mut h = harness();
         assert!(h.execute("edit.text"));
         h.run_steps(2);
@@ -722,7 +725,7 @@ fn format_text_panel_sets_alignment_and_bold_for_the_armed_style() {
     h.run_steps(3);
     h.get_by_label("Alignment").click();
     h.run_steps(2);
-    h.get_by_label("Centre").click();
+    h.get_by_label("Center text").click();
     h.run_steps(2);
     assert_eq!(h.state().text_style.align, pdfcraft_engine::TextAlign::Center);
     h.get_by_label("Bold").click();
@@ -826,7 +829,7 @@ fn the_text_editor_aligns_a_narrow_box_whose_lines_share_an_alignment() {
 
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
-    h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
+    h.get_all_by_role_and_label(egui::accesskit::Role::Tab, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
 }
 
 /// Scroll the page until `what` (on screen) lies across the mode bar, then the cursor over each
@@ -1146,7 +1149,7 @@ fn aligning_a_selected_line_of_added_text_aligns_only_that_line() {
     h.run_steps(2);
     let button = h.get_by_label("Alignment").rect().center();
     click(&mut h, button);
-    let item = h.get_by_label("Align right").rect().center();
+    let item = h.get_by_label("Right align text").rect().center();
     click(&mut h, item);
     let aligns = |h: &Harness<'static, PdfCraftApp>| match &added(h)[0].content {
         pdfcraft_engine::AddedContent::Text(t) => (t.align, t.aligns.clone()),
@@ -1157,7 +1160,7 @@ fn aligning_a_selected_line_of_added_text_aligns_only_that_line() {
     // A second choice, the line still selected, is for that line again.
     let button = h.get_by_label("Alignment").rect().center();
     click(&mut h, button);
-    let item = h.get_by_label("Centre").rect().center();
+    let item = h.get_by_label("Center text").rect().center();
     click(&mut h, item);
     assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Center)]));
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
@@ -1233,10 +1236,10 @@ Line two"
         pdfcraft_engine::AddedContent::Text(t) => (t.align, t.aligns.clone()),
         _ => panic!(),
     };
-    align_by_focus(&mut h, "Align right");
+    align_by_focus(&mut h, "Right align text");
     assert!(h.state().views[0].session.content.draft.is_some(), "the box stays open");
     assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Right)]));
-    align_by_focus(&mut h, "Centre");
+    align_by_focus(&mut h, "Center text");
     assert!(h.state().views[0].session.content.draft.is_some(), "the box is still open");
     assert_eq!(aligns(&h), (pdfcraft_engine::TextAlign::Left, vec![None, Some(pdfcraft_engine::TextAlign::Center)]));
 }
@@ -1683,7 +1686,7 @@ fn delete_and_escape_under_a_dialog_leave_the_selected_added_text() {
         h.run_steps(3);
         assert_eq!(added(&h).len(), 1, "{key:?} under a dialog deletes nothing");
         assert_eq!(h.state().views[0].session.content.selected, Some((0, 0)), "{key:?}: still selected");
-        assert_eq!(!crate::support::dialog_open(&h), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+        assert_eq!(!crate::support::shortcuts_open(&h), key == egui::Key::Escape, "{key:?}: only Escape closes it");
     }
 }
 
@@ -1726,7 +1729,7 @@ fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
     crate::support::open_shortcuts_from_the_help_menu(&mut h);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    assert!(!crate::support::dialog_open(&h), "Escape closes the dialog");
+    assert!(!crate::support::shortcuts_open(&h), "Escape closes the dialog");
     let open = h.state().views[0].session.content.draft.as_ref().is_some_and(|d| d.text.contains("Reviewed"));
     let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
     assert!(open || added, "the typing stays");
