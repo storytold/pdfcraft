@@ -45,7 +45,6 @@ type MicrosoftClient<
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PurviewToken {
     pub access_token: String,
-    pub refresh_token: Option<String>,
     pub account: Option<PurviewAccount>,
 }
 
@@ -229,11 +228,8 @@ pub fn acquire_token(
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let mut request = client.authorize_url(CsrfToken::new_random).set_pkce_challenge(pkce_challenge);
-    request = request
-        .add_scope(Scope::new("openid".to_owned()))
-        .add_scope(Scope::new("profile".to_owned()))
-        .add_scope(Scope::new("email".to_owned()))
-        .add_scope(Scope::new("offline_access".to_owned()));
+    request =
+        request.add_scope(Scope::new("openid".to_owned())).add_scope(Scope::new("profile".to_owned())).add_scope(Scope::new("email".to_owned()));
     for scope in scopes {
         request = request.add_scope(Scope::new(scope));
     }
@@ -257,8 +253,7 @@ pub fn acquire_token(
     let token =
         client.exchange_code(code).set_pkce_verifier(pkce_verifier).request(&http_client).map_err(|e| PurviewAuthError::Token(e.to_string()))?;
     let account = account_from_id_token(token.extra_fields().id_token.as_deref(), username);
-    let refresh_token = token.refresh_token().map(|value| value.secret().clone());
-    Ok(PurviewToken { access_token: token.access_token().secret().clone(), refresh_token, account })
+    Ok(PurviewToken { access_token: token.access_token().secret().clone(), account })
 }
 
 #[cfg(test)]

@@ -367,6 +367,25 @@ The following inputs are required to turn the PdfCraft POC from an SDK bridge in
   downgrade justification, remove label, remove protection, and ordinary-password composition behavior.
 - Keep the POC fail-close if the SDK, app ID, helper, or tenant policy is missing. Never silently open MIP-shaped bytes in that state.
 
+### Authentication fallback policy
+
+PdfCraft's normal desktop authentication is browser-based Authorization Code
+with PKCE through the Storytold public/native app registration. It does not use
+or reuse Azure CLI credentials, the Azure CLI client ID, `az login`, or
+`az account get-access-token`.
+
+Azure CLI is useful to Storytold maintainers for tenant/app-registration setup
+and Azure resource administration, but it is not the runtime identity for
+PdfCraft and does not replace the MIP SDK app registration, IPIA, delegated
+MIP permissions, or customer tenant consent.
+
+The OAuth device-code flow is a future fallback only for a CLI/headless or
+input-constrained environment. Device code still requires the Storytold app
+client ID and the same MIP delegated scopes; it does not remove the app
+registration or IPIA requirement. Do not enable device code as a public
+desktop default unless the app registration and security review explicitly
+approve it.
+
 ## Step 4: Build the shared native integration
 
 Recommended Storytold layout:
