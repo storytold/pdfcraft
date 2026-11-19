@@ -436,7 +436,6 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let active = usize::from(app.active.and_then(|i| app.views.get(i)).is_some_and(|v| v.pane.place == Place::Second));
     // The drop rule reads the open views up front: the views closure below borrows the app.
     let open: HashSet<u64> = app.views.iter().map(|v| v.pane.key).collect();
-    eprintln!("DIAG fit_visible_zooms_to_the_content_width: page_area avail {:?}", ui.available_rect_before_wrap());
     let views = SplitViews::new(tl!("Pages").to_string(), layout, Bind::bound(&mut at))
         .count(1)
         .active(active)
@@ -449,7 +448,6 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 strip(app, ui, place);
             }
             let room = ui.available_rect_before_wrap();
-            eprintln!("DIAG fit_visible_zooms_to_the_content_width: pane {:?} room {room:?} max {:?}", pane.rect, ui.max_rect());
             let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(room).id_salt("body"));
             body_ui.shrink_clip_rect(room);
             // The strip may have closed or moved a tab just now: look the pane's tab up again (a

@@ -722,7 +722,6 @@ fn build(old: &Old, right: Option<RightPanel>, widths: bool) -> Option<Workspace
     let apply = |workspace: &mut Workspace<PanelId>, action| workspace.apply(action, false, permissions).ok();
     if old.tools_right {
         let moved = workspace.apply(Action::move_column(PanelId::Tools, Target::new_dock(DockEdge::End)), false, permissions);
-        eprintln!("DIAG an_old_saved_layout_migrates_to_the_dock_workspace: move tools right (widths {widths}): ok {}", moved.is_ok());
         moved.ok()?;
     }
     let side = right.filter(|_| old.side_open).map(PanelId::from);

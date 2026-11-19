@@ -482,11 +482,6 @@ mod tests {
         let ctx_h = h.ctx.clone();
         h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
-        eprintln!(
-            "DIAG reduce_file_size_asks_where_to_save_before_it_compresses: run {} waiting {}",
-            h.state().optimize_run.is_some(),
-            jobs.waiting()
-        );
         assert!(h.state().optimize_run.is_none() && jobs.waiting() == 0, "nothing runs until the answer is in");
         assert_eq!(files.open(), 1, "the question is out");
         assert!(files.file(&out).is_none(), "no copy is written before the answer");

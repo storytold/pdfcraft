@@ -695,7 +695,6 @@ impl PdfCraftApp {
         if blocked {
             let thread = std::thread::current();
             let name = thread.name().unwrap_or("").rsplit("::").next().unwrap_or("");
-            eprintln!("DIAG {name}: input blocked: modal {} palette {} focused {}", self.modal_open(), self.palette_open, ctx.input(|i| i.focused));
         }
         for (index, view) in self.views.iter_mut().enumerate() {
             let shut = blocked || self.active != Some(index);
