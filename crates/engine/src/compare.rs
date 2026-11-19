@@ -360,9 +360,9 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        // RTF, Excel and Markdown leave pictures out.
+        // Excel and Markdown leave pictures out.
         let (pages, truncated_pages) =
-            self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Xlsx | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
+            self.export_pages_checked(!matches!(format, OfficeFormat::Xlsx | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         // Word and HTML name the document's language (`/Lang`), so spelling is checked in it;
         // Excel reads its numbers by it (`1.234`: a thousand and more, or just over one).
@@ -373,7 +373,7 @@ impl crate::Document {
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html_with_language(&pages, &title, language.as_deref()).into_bytes(),
             OfficeFormat::HtmlSimple => pdfcraft_export::html_simple_with_language(&pages, &title, language.as_deref()).into_bytes(),
-            OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
+            OfficeFormat::Rtf => pdfcraft_export::rtf_with_title(&pages, &title).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         OfficeExport { bytes, truncated_pages }
