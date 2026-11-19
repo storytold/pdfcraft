@@ -1149,6 +1149,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         None => marks,
     };
     marks.show_at(ui, body.rect);
+    image_pick::drop_stale(cx.doc, session);
+    image_pick::resolve_pending(session, cx.geometry(body), cx.doc, cx.info, cx.tools.host.jobs_shared(), cx.tools.wake);
     image_pick::show_picked(ui, body, session, cx.rotation, cx.info);
     if let Some(at) = cx.present_at {
         // PLAN: `PresentFrame::hide_pointer` asks for `CursorPriority::Hidden`; the page body has no `BodyCx` to claim

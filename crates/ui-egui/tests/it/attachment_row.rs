@@ -223,7 +223,8 @@ fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draf
 }
 
 /// Where the attachment named `label` shows in the panel: the lowest text with that name, below
-/// a tab of the same name once the attachment is open.
+/// a tab of the same name once the attachment is open. The row's accessible name is its name
+/// followed by its details.
 fn row_name(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
-    h.get_all_by_label(label).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the attachment is listed").center()
+    h.query_all_by_label_contains(label).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the attachment is listed").center()
 }

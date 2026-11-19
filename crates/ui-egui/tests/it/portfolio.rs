@@ -94,8 +94,7 @@ fn harness_with(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'sta
 fn opened(pdf: Vec<u8>, panel_closed: bool) -> Harness<'static, PdfCraftApp> {
     harness_with(move |app| {
         if panel_closed {
-            // PLAN: the `panel` option's value for a closed right panel is assumed (pdf-chrome-w13).
-            app.set_option(&egui::Context::default(), "panel", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         }
         app.open_bytes(&egui::Context::default(), "portfolio.pdf", None, pdf).unwrap();
     })
@@ -192,7 +191,7 @@ fn a_file_opened_after_the_portfolio_keeps_the_front() {
     // portfolio's initial document waits for the reader, whose list shows on the portfolio's tab.
     let pdf = portfolio("/Collection << /D (form.pdf) >>", &[("form.pdf", PAGE)]);
     let (mut h, _jobs) = harness_with(move |app| {
-        app.set_option(&egui::Context::default(), "panel", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
         app.open_bytes(&egui::Context::default(), "portfolio.pdf", None, pdf).unwrap();
         app.open_bytes(&egui::Context::default(), "other.pdf", None, PAGE.to_vec()).unwrap();
     });
