@@ -26,6 +26,9 @@ pub enum ImageEdit {
     Arrange(ArrangeOrder),
     /// Remove any private crop on the image.
     RemoveCrop,
+    /// Grouped Form artwork: draw its content in place, so its text and pictures can be edited
+    /// one by one (#2964).
+    Ungroup,
 }
 
 /// Forms ▸ Merge data files into spreadsheet: the field values of each file (FDF, XFDF or a
