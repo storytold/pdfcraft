@@ -1256,7 +1256,7 @@ evidence = [
     "crates/ui-egui/tests/it/control.rs::headless_control_channel_tab_detach_and_reattach",
     "crates/ui-egui/tests/it/control.rs::headless_control_channel_tab_detach_errors_and_trait",
 ]
-notes = "Dragging a document tab outside the tab strip into open space tears it off into a dedicated window viewport (#5348). Tabs can also be moved to a new window via the tab context menu, and re-attached back to the main window with the Re-attach Tab button. Headless control and querying are supported via the UI control channel (PdfCraftControl)."
+notes = "Dragging a document tab outside the tab strip into open space tears it off into a dedicated window viewport (#5348). Tabs can also be moved to a new window via the tab context menu, and re-attached back to the main window with the Re-attach Tab button. Headless control and querying are supported via the UI control channel (PdfCraftControl). Detached windows currently only handle Undo and Redo (no Save, Print, Find, Zoom shortcuts, and no menu bar)."
 
 [[feature]]
 id = "view.split-window"
