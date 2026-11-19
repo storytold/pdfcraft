@@ -225,6 +225,49 @@ fn parse_tsv_bounded(tsv: &str) -> (Vec<Line>, bool) {
     (lines, false)
 }
 
+/// How much taller than wide a word's box must be to show a quarter turn. A word read sideways
+/// is as long as its text and as wide as the text's height, so it is tall and thin; a character
+/// stacked upright in a column (vertical Chinese or Japanese) fills a box of its own em, about
+/// square. The middle word of a line decides, so one short word ("a", "I") does not undo the
+/// rest, and the boxes' own shape — not their order — is what says the glyphs are turned.
+const QUARTER_TURN_ASPECT: f32 = 1.5;
+
+/// Whether a line's words are shaped like text turned a quarter rather than upright characters
+/// stacked in a column. The median word decides, so one wide or narrow word is outvoted.
+fn quarter_turned(line: &Line) -> bool {
+    let mut aspects: Vec<f32> = line
+        .words
+        .iter()
+        .map(|w| {
+            let width = (w.rect[2] - w.rect[0]).max(f32::MIN_POSITIVE);
+            (w.rect[3] - w.rect[1]) / width
+        })
+        .collect();
+    aspects.sort_by(f32::total_cmp);
+    aspects.get(aspects.len().saturating_sub(1) / 2).is_some_and(|a| *a >= QUARTER_TURN_ASPECT)
+}
+
+/// Whether a line reads right to left, from its first strong character: the one Unicode's
+/// bidirectional algorithm uses to decide a paragraph's direction. Digits, punctuation and
+/// spaces before it are skipped; text with no strong character reads left to right.
+fn reads_right_to_left(text: &str) -> bool {
+    for c in text.chars() {
+        let u = c as u32;
+        // Arabic-Indic digits are numbers in the bidi algorithm, not letters.
+        if matches!(u, 0x0660..=0x0669 | 0x06F0..=0x06F9) {
+            continue;
+        }
+        // Hebrew, Arabic and the other right-to-left scripts, and their presentation forms.
+        if matches!(u, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) {
+            return true;
+        }
+        if c.is_alphabetic() {
+            return false;
+        }
+    }
+    false
+}
+
 /// The way a line of two or more words reads, from where its words sit: Tesseract lists a
 /// line's words in reading order, and reads text turned a quarter without saying so (#7254),
 /// so the boxes alone would place it upright, squeezed into tall boxes and out of order.
@@ -238,12 +281,24 @@ fn line_direction(line: &Line) -> Option<WordDirection> {
     let centre = |w: &Word| ((w.rect[0] + w.rect[2]) / 2.0, (w.rect[1] + w.rect[3]) / 2.0);
     let ((x0, y0), (x1, y1)) = (centre(first), centre(last));
     let (dx, dy) = (x1 - x0, y1 - y0);
-    Some(if dy.abs() > 2.0 * dx.abs() { if dy > 0.0 { WordDirection::Down } else { WordDirection::Up } } else { WordDirection::Across })
+    if dy.abs() <= 2.0 * dx.abs() {
+        return Some(WordDirection::Across);
+    }
+    // Upright characters stacked in a column also advance down the image, but their about-square
+    // boxes are no evidence of a turn: keep their orientation (#7254 review).
+    if !quarter_turned(line) {
+        return Some(WordDirection::Across);
+    }
+    // The glyphs turn with the reading direction in a left-to-right line, and the other way in
+    // a right-to-left one: an Arabic line read upward is the mirror of a Latin line read upward,
+    // its letters' tops still toward the right (#7254 review).
+    let clockwise = (dy > 0.0) != reads_right_to_left(&line.text());
+    Some(if clockwise { WordDirection::Down } else { WordDirection::Up })
 }
 
 /// Give every word its line's reading direction ([`line_direction`]). A one-word line takes
 /// the direction most of its block's longer lines share (else the page's), but only when its
-/// box is at least as tall as it is wide: a wide box is never a word turned a quarter.
+/// box is shaped like a quarter turn ([`quarter_turned`]): otherwise it keeps its orientation.
 fn orient(lines: &mut [Line], blocks: &[u32]) {
     const ALL: [WordDirection; 3] = [WordDirection::Across, WordDirection::Down, WordDirection::Up];
     let known: Vec<Option<WordDirection>> = lines.iter().map(line_direction).collect();
@@ -269,9 +324,8 @@ fn orient(lines: &mut [Line], blocks: &[u32]) {
         let direction = match known.get(i).copied().flatten() {
             Some(d) => d,
             None => {
-                let tall = line.words.iter().all(|w| w.rect[3] - w.rect[1] >= w.rect[2] - w.rect[0]);
                 let inherited = blocks.get(i).and_then(|b| by_block.get(b)).and_then(winner).or_else(|| winner(&page));
-                if tall { inherited.unwrap_or_default() } else { WordDirection::Across }
+                if quarter_turned(line) { inherited.unwrap_or_default() } else { WordDirection::Across }
             }
         };
         for word in &mut line.words {
@@ -707,6 +761,39 @@ mod tests {
         assert!(rtl[0].words.iter().all(|w| w.direction == Across), "{rtl:?}");
         let lone = parse_tsv("5\t1\t1\t1\t1\t1\t10\t10\t8\t20\t95\tI");
         assert_eq!(lone[0].words[0].direction, Across);
+    }
+
+    /// #7254 review: characters stacked upright in a column are no evidence of a turn, so they
+    /// keep their orientation; and a right-to-left line turned a quarter reads the other way
+    /// round from a left-to-right one, its letters' tops toward the same side of the image.
+    #[test]
+    fn tsv_keeps_upright_columns_and_right_to_left_turns_apart() {
+        use WordDirection::{Across, Down, Up};
+        // Vertical Japanese: three about-square characters running down one column.
+        let cjk = parse_tsv(
+            "5\t1\t1\t1\t1\t1\t100\t100\t40\t40\t95\t日
+5\t1\t1\t1\t1\t2\t102\t150\t40\t40\t95\t本
+5\t1\t1\t1\t1\t3\t101\t200\t40\t40\t95\t語",
+        );
+        assert!(cjk[0].words.iter().all(|w| w.direction == Across), "{cjk:?}");
+        // A Hebrew line turned clockwise: its words read from the bottom up, letters' tops right.
+        let clockwise = parse_tsv(
+            "5\t1\t1\t1\t1\t1\t100\t300\t24\t90\t95\tאבג
+5\t1\t1\t1\t1\t2\t100\t200\t24\t90\t95\tדהו",
+        );
+        assert!(clockwise[0].words.iter().all(|w| w.direction == Down), "{clockwise:?}");
+        // The same line turned counter-clockwise: words read from the top down, letters' tops left.
+        let counter = parse_tsv(
+            "5\t1\t1\t1\t1\t1\t100\t200\t24\t90\t95\tאבג
+5\t1\t1\t1\t1\t2\t100\t300\t24\t90\t95\tדהו",
+        );
+        assert!(counter[0].words.iter().all(|w| w.direction == Up), "{counter:?}");
+        // The left-to-right turn is unchanged: down the image is still a clockwise turn.
+        let latin = parse_tsv(
+            "5\t1\t1\t1\t1\t1\t100\t200\t24\t90\t95\tALPHA
+5\t1\t1\t1\t1\t2\t100\t300\t24\t90\t95\tBRAVO",
+        );
+        assert!(latin[0].words.iter().all(|w| w.direction == Down), "{latin:?}");
     }
 
     /// Conf −1 rows and level ≠ 5 rows are structure, not words; blank text is dropped.
