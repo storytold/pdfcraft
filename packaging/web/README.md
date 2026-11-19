@@ -36,8 +36,8 @@ workspace and Save target stay selected. Click the downloaded file's tab to swit
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
   `.js` files, and `no-cache` on `index.html`.
-- **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
-  or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
+- **HTTPS:** the clipboard only works in a secure context, which means `https://` or
+  `http://localhost`.
 - **Opener isolation:** send `Cross-Origin-Opener-Policy: same-origin` (the sample `_headers`
   and `.htaccess` do; Apache needs `mod_headers` for it). Pages opened from a document's links
   then can't reach or navigate the PdfCraft tab. The app opens links with `noopener` already;
