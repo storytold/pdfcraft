@@ -2,6 +2,9 @@
 //! confirmation and Clear all.
 
 use crate::support::AppHarness as _;
+use std::sync::Arc;
+
+use craft::host::{Picked, ScriptedFiles};
 use egui::Pos2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -17,6 +20,30 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     });
     crate::support::settle(&mut h);
     h
+}
+
+/// The app with the file at `path` open, whose file pickers answer from `files`: a Save writes into
+/// `files` (read back with `files.file(..)`), not to disk.
+fn harness_on_file(path: String, files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = crate::control::app_with_files(files);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_path(&path);
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
+/// Answers the next pick with `path`.
+fn pick(files: &ScriptedFiles, path: &std::path::Path) {
+    files.queue(Picked::Paths(vec![path.to_owned()]));
+}
+
+/// The message of the newest notice card the main window shows.
+fn latest_notice(h: &Harness<'static, PdfCraftApp>) -> String {
+    use craft::ui::runtime::{env::WindowKey, toast};
+    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned()).unwrap_or_default()
 }
 
 fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
@@ -87,13 +114,8 @@ fn saving_after_applying_redactions_asks_where() {
     let source = include_bytes!("../data/form.pdf").to_vec();
     std::fs::write(&original, &source).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
     h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -106,16 +128,15 @@ fn saving_after_applying_redactions_asks_where() {
     assert_eq!(marks(&h), 0);
     assert_eq!(h.state().views[0].redactions_applied, 1);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
+    pick(&files, &copy);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where first");
     h.run_steps(3);
     assert_eq!(std::fs::read(&original).unwrap(), source, "the opened file is left as it was");
-    assert!(copy.exists(), "the redacted copy is written where the user chose");
+    assert!(files.file(&copy).is_some(), "the redacted copy is written where the user chose");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().name, "contract_Redacted.pdf");
     assert_eq!(s.views[0].redactions_applied, 0);
-    h.state_mut().pick_override = None;
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "the next Save writes the copy in place");
     let _ = std::fs::remove_dir_all(&dir);
@@ -131,13 +152,8 @@ fn undoing_saved_redactions_does_not_save_over_the_redacted_copy() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
     h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -147,12 +163,11 @@ fn undoing_saved_redactions_does_not_save_over_the_redacted_copy() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
+    pick(&files, &copy);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert!(copy.exists());
+    assert!(files.file(&copy).is_some());
     // Undo and Redo leave the saved redactions in effect: Save writes the copy in place.
     h.execute("edit.undo");
     h.run_steps(3);
@@ -161,18 +176,17 @@ fn undoing_saved_redactions_does_not_save_over_the_redacted_copy() {
     assert_eq!((h.state().views[0].redactions_applied, h.state().views[0].redactions_undone_after_save), (0, 0));
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "with the redactions back, Save writes the copy in place");
-    let saved = std::fs::read(&copy).unwrap();
+    let saved = files.file(&copy).unwrap();
     h.execute("edit.undo");
     h.run_steps(3);
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
+    pick(&files, &elsewhere);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where instead of writing over the copy");
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
-    assert!(elsewhere.exists(), "the restored version is written where the user chose");
+    assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
+    assert!(files.file(&elsewhere).is_some(), "the restored version is written where the user chose");
     assert_eq!(h.state().views[0].redactions_undone_after_save, 0);
     // The restored version is now the saved one: Redo applies the redactions to it again.
     h.execute("edit.redo");
@@ -191,13 +205,8 @@ fn redoing_a_new_apply_after_undoing_saved_redactions_still_asks_where() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
     h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -207,12 +216,11 @@ fn redoing_a_new_apply_after_undoing_saved_redactions_still_asks_where() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
+    pick(&files, &copy);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    let saved = std::fs::read(&copy).unwrap();
+    let saved = files.file(&copy).unwrap();
     h.execute("edit.undo");
     h.run_steps(3);
     // Apply the marks again as a new step, then Undo and Redo it.
@@ -227,12 +235,11 @@ fn redoing_a_new_apply_after_undoing_saved_redactions_still_asks_where() {
     h.execute("edit.redo");
     h.run_steps(3);
     let elsewhere = dir.join("contract_again.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
+    pick(&files, &elsewhere);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where instead of writing over the copy");
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
+    assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
     assert!(!h.state().views[0].saved_redactions_cut_off);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -248,13 +255,8 @@ fn undoing_delivered_redactions_asks_where() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness_on_file(path, files.clone());
     h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -268,12 +270,11 @@ fn undoing_delivered_redactions_asks_where() {
     h.execute("edit.undo");
     h.run_steps(3);
     let elsewhere = dir.join("contract_restored.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
+    pick(&files, &elsewhere);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "Save asks where after Undo past a delivered step");
     h.run_steps(3);
-    h.state_mut().pick_override = None;
-    assert!(elsewhere.exists());
+    assert!(files.file(&elsewhere).is_some());
     // A new Apply after Undo past a delivered step cannot be redone back to the delivered one.
     h.state_mut().views[0].redactions_downloaded = 1;
     h.state_mut().views[0].redactions_applied = 0;
@@ -331,13 +332,9 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    // Picks stay open until answered: the Save dialog is on screen while Undo runs.
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness_on_file(path, files.clone());
     let apply = |h: &mut Harness<'static, PdfCraftApp>| {
         h.execute("redact.pages");
         h.run_steps(2);
@@ -350,11 +347,11 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     };
     apply(&mut h);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
+    pick(&files, &copy);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(3);
-    let saved = std::fs::read(&copy).unwrap();
+    let saved = files.file(&copy).unwrap();
     // A second Apply redactions makes Save ask where. Before the answer, Undo takes back the
     // second Apply, its marks and the saved Apply.
     apply(&mut h);
@@ -365,11 +362,10 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     }
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
+    assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
     h.run_steps(4);
-    h.state_mut().pick_override = None;
-    assert_eq!(std::fs::read(&copy).unwrap(), saved, "the redacted copy is left as it was");
-    assert!(elsewhere.exists(), "Save asked again and wrote where the user chose");
+    assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
+    assert!(files.file(&elsewhere).is_some(), "Save asked again and wrote where the user chose");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -383,13 +379,9 @@ fn undoing_apply_redactions_while_the_save_dialog_is_open_asks_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
-    });
-    crate::support::settle(&mut h);
+    // Picks stay open until answered: the Save dialog is on screen while Undo runs.
+    let files = Arc::new(ScriptedFiles::held());
+    let mut h = harness_on_file(path, files.clone());
     h.execute("redact.pages");
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -399,17 +391,15 @@ fn undoing_apply_redactions_while_the_save_dialog_is_open_asks_again() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     let copy = dir.join("contract_Redacted.pdf");
-    h.state_mut().pick_override = Some(vec![copy.to_string_lossy().into_owned()]);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.execute("edit.undo");
     assert_eq!(h.state().views[0].redactions_applied, 0);
     let elsewhere = dir.join("contract_copy.pdf");
-    h.state_mut().pick_override = Some(vec![elsewhere.to_string_lossy().into_owned()]);
+    assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
     h.run_steps(4);
-    h.state_mut().pick_override = None;
-    assert!(!copy.exists(), "the unredacted content is not saved under the _Redacted name");
-    assert!(elsewhere.exists(), "Save asked again and wrote where the user chose");
+    assert!(files.file(&copy).is_none(), "the unredacted content is not saved under the _Redacted name");
+    assert!(files.file(&elsewhere).is_some(), "Save asked again and wrote where the user chose");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -559,9 +549,9 @@ fn redaction_properties_survive_a_restart() {
     h.get_by_label("Make properties default");
     h.get_by_label("OK").click();
     h.run_steps(2);
-    let json = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
-    fresh.restore(&json);
+    fresh.apply_settings(&saved);
     let p = &fresh.redact_prefs;
     assert_eq!(p.fill, None, "no colour is a saved choice, not a missing one");
     assert_eq!(p.overlay_text(), "(b)(6), (b)(7)(C)");
@@ -577,8 +567,11 @@ fn redaction_properties_survive_a_restart() {
     // Settings are untrusted: a bad colour, an unknown code set and a code outside the set are
     // dropped, the rest kept.
     let mut odd = crate::control::new_app();
-    odd.restore(
-        r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true,"size":500,"align":3}}"#,
+    odd.apply_settings(
+        &pdfcraft_ui_egui::settings::import_json(
+            r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true,"size":500,"align":3}}"#,
+        )
+        .0,
     );
     let p = &odd.redact_prefs;
     assert_eq!((p.outline, p.opacity), ([0.89, 0.13, 0.13], 0.7));
@@ -608,7 +601,7 @@ fn redaction_properties_for_this_run_only_and_cancel() {
     assert_eq!(h.state().redact_prefs.outline, [0.0, 0.0, 1.0], "used for this run");
     assert_eq!(h.state().redact_defaults.outline, [0.89, 0.13, 0.13], "not made the default");
     let mut fresh = crate::control::new_app();
-    fresh.restore(&h.state().persist());
+    fresh.apply_settings(&h.state().settings_snapshot());
     assert_eq!(fresh.redact_prefs.outline, [0.89, 0.13, 0.13], "the next run starts from the saved defaults");
     // Cancel discards the edits made while the dialog was open.
     assert!(h.execute("redact.properties"));
@@ -751,7 +744,7 @@ fn applying_says_where_the_removed_text_is_still_held() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert_eq!(marks(&h), 0);
-    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    let toast = latest_notice(&h);
     assert_eq!(
         toast,
         "Applied 1 redaction mark. Save to remove the content from the file. The redacted text also appears in 1 bookmark title, which redaction doesn't change. Remove hidden information removes them."
@@ -804,7 +797,7 @@ fn applying_says_the_pdfa_identification_was_written_back() {
     h.get_by_label("Apply").click();
     h.run_steps(4);
     assert_eq!(marks(&h), 0);
-    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    let toast = latest_notice(&h);
     assert_eq!(
         toast,
         "Applied 1 redaction mark. Save to remove the content from the file. The document's XMP metadata held the redacted text and was removed. Its PDF/A identification was written back on its own."
