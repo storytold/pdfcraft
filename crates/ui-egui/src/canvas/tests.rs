@@ -2915,10 +2915,10 @@ fn esc_with_a_field_being_filled_leaves_the_selection() {
             modifiers: egui::Modifiers::NONE,
         });
     });
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default(), None);
     assert!(v.all_text, "the selection stays while the field takes Esc");
     v.forms.focus = None;
-    shortcuts(&mut v, &ctx, Default::default(), true, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), true, Default::default(), None);
     assert!(!v.all_text, "with no field being filled, Esc clears the selection");
 }
 
