@@ -376,12 +376,6 @@ fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Optio
             (first..end).map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).collect(),
         );
         for _ in first..end {
-            // A file of many pages that are each slow but under the page limit: bound the whole
-            // file so one file can't hold the search (or an uncancellable tool call) indefinitely.
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                read.skip = Some(Skip::TooSlow);
-                return read;
-            }
             if read.matches.len() >= room {
                 read.at_limit = true;
                 break 'pages;
@@ -389,6 +383,15 @@ fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Optio
             let page = loop {
                 if cancel.load(Ordering::Relaxed) {
                     read.cancelled = true;
+                    return read;
+                }
+                // A file of many pages each slow but under the page limit, or one page slow but
+                // under it, can't hold the search (or an uncancellable tool call) indefinitely:
+                // the whole-file budget is checked here, while waiting for a page, not only once
+                // it arrives. Matches found so far stay in `read`, and the TooSlow return routes
+                // through read_pages' retirement path.
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    read.skip = Some(Skip::TooSlow);
                     return read;
                 }
                 if let Some(page) = pool.try_recv() {

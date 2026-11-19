@@ -209,12 +209,15 @@ fn the_listing_stops_collecting_as_soon_as_it_is_cancelled() {
 }
 
 #[test]
-fn a_file_past_the_whole_file_time_limit_is_skipped() {
-    // No single page is slow, but the whole-file budget is already spent: the file is too slow.
+fn the_whole_file_time_limit_expires_while_waiting_for_a_slow_page() {
+    // One page slow (about 4 s) but under the page watchdog; a nonzero whole-file budget runs out
+    // while waiting for it, not between pages. The matches found so far are kept.
+    let long = raw_pdf(&[format!("BT /F1 12 Tf 20 150 Td ({}) Tj ET", "x".repeat(16_000_000))]);
     let left = none_left();
     let mut options = Options::new("unused", "needle");
-    options.file_limit = Duration::ZERO;
-    let read = super::read_pages(Arc::new(pdf(&["needle", "needle"])), 2, "needle", &options, 10, &AtomicBool::new(false), &left);
+    options.page_limit = Duration::from_secs(60);
+    options.file_limit = Duration::from_millis(50);
+    let read = super::read_pages(Arc::new(long), 1, "needle", &options, 10, &AtomicBool::new(false), &left);
     assert_eq!(read.skip, Some(Skip::TooSlow));
 }
 
