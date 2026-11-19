@@ -298,6 +298,19 @@ impl PdfCraftApp {
     }
 
     fn execute_unguarded(&mut self, ctx: &egui::Context, id: &str) -> bool {
+        // Paste is the framework's clipboard command, not a registered one: the pages take what
+        // the clipboard holds (pages in Organize, else objects, a picture or comment text).
+        if id == crate::menus::PASTE {
+            let Some(i) = self.active.filter(|&i| i < self.views.len()) else { return false };
+            if self.views[i].organize {
+                return self.execute_unguarded(ctx, "page.paste");
+            }
+            if self.views[i].session.forms.focus.is_some() {
+                return false;
+            }
+            self.paste_from_clipboard(ctx, i);
+            return true;
+        }
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
             let why = self.disabled_reason(spec);
