@@ -354,6 +354,7 @@ struct StyledLines<'a> {
     spans: Vec<(std::ops::Range<usize>, usize)>,
     underlines: HashMap<usize, bool>,
     overrides: HashMap<usize, &'a RangeStyle>,
+    changed_faces: std::collections::HashSet<usize>,
 }
 
 type StyledChar = (char, usize, String);
@@ -570,6 +571,7 @@ fn calibration_factors(
     metrics: &std::collections::BTreeMap<String, Metrics>,
     style: &BlockStyle,
     overrides: &HashMap<usize, &RangeStyle>,
+    changed_faces: &std::collections::HashSet<usize>,
     space_of: impl Fn(&str, &Metrics) -> f64,
 ) -> HashMap<usize, f64> {
     let mut calibration = HashMap::new();
@@ -584,10 +586,9 @@ fn calibration_factors(
                 source.origin.state.word_spacing,
             ) * source.origin.state.scale
                 * across(source);
-            let changed_face = style.resource.is_some()
-                || overrides
-                    .get(&index)
-                    .is_some_and(|range| range.family.is_some() || range.bold.is_some() || range.italic.is_some() || range.resource.is_some());
+            let paragraph_resource = overrides.get(&index).and_then(|range| range.resource.as_deref()).is_none()
+                && style.resource.as_deref().is_some_and(|resource| resource != source.font);
+            let changed_face = paragraph_resource || changed_faces.contains(&index);
             let factor = if nominal > 0.0 && !changed_face { ((source.rect[2] - source.rect[0]) / nominal).clamp(0.5, 2.0) } else { 1.0 };
             calibration.insert(index, factor);
         }
@@ -842,6 +843,7 @@ fn apply_range_styles<'a>(
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
     let mut overrides = HashMap::new();
+    let mut changed_faces = std::collections::HashSet::new();
     for (span, source) in sources {
         let mut edges = vec![span.start, span.end];
         for range in ranges {
@@ -871,34 +873,54 @@ fn apply_range_styles<'a>(
                     scale: None,
                 };
                 let range = selected.unwrap_or(&default_range);
-                let mut line = lines.get(source).unwrap_or(first).clone();
+                let original = lines.get(source).unwrap_or(first);
+                let mut line = original.clone();
                 let block = style.family.or_else(|| style.bold.map(|b| (source_family(&line.base_font), b, line.italic)));
-                let face = match range.family {
-                    Some(family) => Some(family),
-                    None if range.bold.is_none() && range.italic.is_none() => block,
-                    None => {
-                        // The range alone asks for a new face. It keeps the source's family, which
-                        // only a face the document really names can give it: a guess from another
-                        // name would set the range in a different typeface (#7275).
-                        let own = (source_family(&line.base_font), line.bold, line.italic);
-                        if block.is_none() && range.resource.is_none() && named_family(&line.base_font) != Some(own.0) {
-                            return Err(EditError::Invalid(format!(
-                                "a range's bold or italic keeps the family of {:?}, which is not a standard font: name a font (helvetica, times or courier) or a font_resource",
-                                line.base_font
-                            )));
+                let face = if range.resource.is_some() {
+                    None
+                } else {
+                    match range.family {
+                        Some(family) => Some(family),
+                        None if range.bold.is_none() && range.italic.is_none() => block,
+                        None => {
+                            let (bold, italic) = match block {
+                                Some((_, b, i)) => (range.bold.unwrap_or(b), range.italic.unwrap_or(i)),
+                                None => (range.bold.unwrap_or(original.bold), range.italic.unwrap_or(original.italic)),
+                            };
+                            if block.is_none() && bold == original.bold && italic == original.italic {
+                                None
+                            } else {
+                                // The range alone asks for a new face. It keeps the source's family,
+                                // which only a face the document really names can give it: a guess from
+                                // another name would set the range in a different typeface (#7275).
+                                let own = source_family(&original.base_font);
+                                if block.is_none() && named_family(&original.base_font) != Some(own) {
+                                    return Err(EditError::Invalid(format!(
+                                        "a range's bold or italic keeps the family of {:?}, which is not a standard font: name a font (helvetica, times or courier) or set font_resource on the range",
+                                        original.base_font
+                                    )));
+                                }
+                                let family = block.map_or(own, |(family, _, _)| family);
+                                Some((family, bold, italic))
+                            }
                         }
-                        let (family, bold, italic) = block.unwrap_or(own);
-                        Some((family, range.bold.unwrap_or(bold), range.italic.unwrap_or(italic)))
                     }
                 };
+                let mut face_changed = false;
                 if let Some((family, bold, italic)) = face {
                     let base = family.base_font(bold, italic);
-                    line.font = format!("PCRange{}", base.replace('-', ""));
-                    line.base_font = base.to_owned();
-                    line.bold = bold;
-                    line.italic = italic;
+                    if base != original.base_font || bold != original.bold || italic != original.italic {
+                        line.font = format!("PCRange{}", base.replace('-', ""));
+                        line.base_font = base.to_owned();
+                        line.bold = bold;
+                        line.italic = italic;
+                        face_changed = true;
+                    }
                 }
                 if let Some(resource) = &range.resource {
+                    if *resource != original.font {
+                        face_changed = true;
+                    }
                     line.font = resource.clone();
                 }
                 if let Some(size) = range.size {
@@ -916,6 +938,9 @@ fn apply_range_styles<'a>(
                 }
                 index = styled_lines.len();
                 styled_lines.push(line);
+                if face_changed {
+                    changed_faces.insert(index);
+                }
                 if let Some(range) = selected {
                     overrides.insert(index, range);
                 }
@@ -926,7 +951,7 @@ fn apply_range_styles<'a>(
             styled_spans.push((start..end, index));
         }
     }
-    Ok(StyledLines { lines: styled_lines, spans: styled_spans, underlines, overrides })
+    Ok(StyledLines { lines: styled_lines, spans: styled_spans, underlines, overrides, changed_faces })
 }
 
 /// Select one existing subset of the exact source face for a Thai span. Never replace its
@@ -1912,6 +1937,7 @@ pub(crate) fn rewrite_styled_block(
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
     let overrides = styled.overrides;
+    let changed_faces = styled.changed_faces;
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
@@ -1952,7 +1978,7 @@ pub(crate) fn rewrite_styled_block(
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
-    let mut calibration = calibration_factors(lines, &metrics, style, &overrides, space_of);
+    let mut calibration = calibration_factors(lines, &metrics, style, &overrides, &changed_faces, space_of);
     fit_to_phrase(&mut calibration, lines, phrase_size);
     let advance = |item: &(char, usize, String)| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);

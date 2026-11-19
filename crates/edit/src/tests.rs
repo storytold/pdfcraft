@@ -8734,6 +8734,85 @@ fn a_range_weight_without_a_family_keeps_the_source_family_or_is_refused() {
 }
 
 #[test]
+fn range_noop_weight_preserves_calibration_while_face_change_resets_it() {
+    let base_range = |bold| RangeStyle {
+        range: 0..8,
+        family: None,
+        bold: Some(bold),
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let content = "BT /F1 12 Tf 72 700 Td [(O) 80 (r) 80 (i) 80 (g) 80 (i) 80 (n) 80 (a) 80 (l)] TJ ET";
+    let mut doc = text_page(content);
+    let original = text::text_lines(&doc, 0).unwrap()[0].clone();
+    let original_width = original.rect[2] - original.rect[0];
+
+    // No-op override (bold: false on upright Helvetica) keeps the face and its ~0.9 calibration.
+    let noop = BlockStyle { ranges: vec![base_range(false)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &noop).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].font, "F1");
+    assert_eq!(lines[0].base_font, "Helvetica");
+    let noop_width = lines[0].rect[2] - lines[0].rect[0];
+    assert!((noop_width - original_width).abs() < 0.1, "expected calibrated width {original_width}, got {noop_width}");
+
+    // An actual face change (bold: true on upright Helvetica) resets calibration to 1.0.
+    let mut doc = text_page(content);
+    let bold = BlockStyle { ranges: vec![base_range(true)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &bold).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert_eq!(lines[0].base_font, "Helvetica-Bold");
+    let rewritten = String::from_utf8_lossy(&page_content_bytes(&reopened, 0)).into_owned();
+    let scales: Vec<&str> = rewritten.lines().filter(|l| l.ends_with(" Tz")).collect();
+    assert!(scales.iter().all(|s| *s == "100 Tz"), "{scales:?}: {rewritten}");
+}
+
+#[test]
+fn paragraph_font_resource_does_not_satisfy_range_italic_on_non_standard_face() {
+    let mut doc = styled_text_page("Georgia");
+    let before = page_content_bytes(&doc, 0);
+    let range = RangeStyle {
+        range: 0..4,
+        family: None,
+        bold: None,
+        italic: Some(true),
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    // A paragraph-level font_resource is a single concrete font, so it cannot supply an italic
+    // variant for a range on a non-standard face; the refusal directs callers to the range.
+    let paragraph_only = BlockStyle { resource: Some("F4".into()), ranges: vec![range.clone()], ..Default::default() };
+    let Err(EditError::Invalid(message)) = text::rewrite_block(&mut doc, 0, 0, Some("Original"), &paragraph_only) else {
+        panic!("paragraph font_resource alone must not silently ignore range italic on Georgia");
+    };
+    assert!(message.contains("Georgia") && message.contains("font_resource on the range"), "{message}");
+    assert_eq!(page_content_bytes(&doc, 0), before, "a refused range changes nothing");
+
+    // Setting font_resource on the range itself supplies that range's face without adding PCRange*.
+    let range_resource = BlockStyle { ranges: vec![RangeStyle { resource: Some("F4".into()), ..range }], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &range_resource).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "Orig" && l.font == "F4"), "{lines:?}");
+    let page = pdfcraft_model::pages(&reopened)[0].clone();
+    let res = reopened.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let fonts = reopened.resolve(res.get(b"Font").unwrap()).as_dict().unwrap().clone();
+    assert!(!fonts.iter().any(|(name, _)| name.starts_with(b"PCRange")), "unexpected synthetic PCRange font: {fonts:?}");
+}
+
+#[test]
 fn image_selection_bounds_respect_clips_and_restore_graphics_state() {
     let mut doc = image_page();
     let page = pdfcraft_model::pages(&doc)[0].clone();
