@@ -40,6 +40,18 @@ fn translations(code: &str) -> String {
 }
 
 #[test]
+fn the_macos_bundle_declares_every_interface_language() {
+    // AppKit translates its own dialogs (open and save panels) only into the languages the app
+    // bundle declares, so `CFBundleLocalizations` must list every entry of `LANGUAGES`.
+    let plist = include_str!("../../../../packaging/macos/Info.plist.in");
+    let block = plist.split("<key>CFBundleLocalizations</key>").nth(1).expect("the template declares CFBundleLocalizations");
+    let block = block.split("</array>").next().expect("the declaration is an array");
+    let declared: Vec<String> = block.split("<string>").skip(1).filter_map(|s| s.split("</string>").next()).map(str::to_lowercase).collect();
+    let registered: Vec<String> = LANGUAGES.iter().map(|l| l.code.to_lowercase()).collect();
+    assert_eq!(declared, registered, "packaging/macos/Info.plist.in and LANGUAGES list different languages");
+}
+
+#[test]
 fn keyboard_key_names_have_a_separate_context_and_english_fallback() {
     let keys = fixture_lang("x-keys", "key\tDelete\tEntf\n\tDelete\tLöschen\n\tOpen\tÖffnen\n");
     let previous = current();
@@ -584,7 +596,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
         "ja" | "zh-hans" | "zh-hant" | "tr" | "id" | "vi" | "th" | "lo" | "hi" | "ko" => none,
         "cs" => cs,
         "pt-br" | "fr" | "fa" => zero_one_other,
-        "ru" | "uk" => ru_uk,
+        "ru" | "uk" | "bs" => ru_uk,
         "ar" => ar,
         "pl" => pl,
         "sl" => sl,
@@ -1055,6 +1067,42 @@ fn catalan_is_registered_and_persists() {
     assert_eq!(restored.language, "ca");
     assert!(restored.set_option("language", "xx").is_err());
     assert_eq!(restored.language, "ca");
+}
+
+/// Bosnian locales select it, its picker falls back to "Bosnian", and the choice persists.
+#[test]
+fn bosnian_is_registered_and_persists() {
+    needs_catalogs!();
+    let bs = Lang::from_code("bs").expect("bs registered");
+    assert_eq!(bs.name(), "Bosanski");
+    assert_eq!(bs.picker_name(|_| false), "Bosnian");
+    assert_eq!(normalize_pref("BS"), Some("bs"));
+    for tag in ["bs", "bs-BA", "bs_BA.UTF-8", "BS-ba", "bs-Latn-BA"] {
+        assert_eq!(lang_from_tag(tag), Some(bs), "{tag}");
+    }
+    assert_eq!(first_supported("bs-BA\r\nen-US"), Some(bs));
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "BS").unwrap();
+    assert_eq!(app.language, "bs");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "bs");
+}
+
+/// Bosnian counts (CLDR `bs`): one for 1, 21, 101 but not 11; few for 2–4, 22–24 but not 12–14;
+/// other for the rest.
+#[test]
+fn bosnian_plurals_cover_teens_and_compound_counts() {
+    let form = plural_fixture("bs", 3);
+    for (counts, f) in [
+        (vec![1, 21, 31, 101, 1001], 0),
+        (vec![2, 3, 4, 22, 24, 102, 104], 1),
+        (vec![0, 5, 10, 11, 12, 13, 14, 15, 20, 25, 100, 111, 112, 114, 1000], 2),
+    ] {
+        for n in counts {
+            assert_eq!(form(n), f, "{n}");
+        }
+    }
 }
 
 #[test]
@@ -1543,6 +1591,12 @@ fn date_languages_are_the_interface_languages() {
     let interface: Vec<(&str, &str)> = Lang::all().map(|l| (l.code(), l.name())).collect();
     let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
     assert_eq!(dates, interface);
+}
+
+/// The stale-draft notice remains discoverable after the UI modules are reorganized.
+#[test]
+fn properties_stale_notice_is_in_translation_scan() {
+    assert!(ui_literals().contains("The document changed. Reopen Document Properties to edit the current version."));
 }
 
 /// A report, not a check: the notifications pasting an image and pinning a tool show, in each

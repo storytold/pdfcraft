@@ -21,6 +21,7 @@ use serde_json::Value;
 #[path = "build/update_source.rs"]
 mod update_source;
 
+/// Validate the fixed update source before emitting executable configuration, credits and catalogs.
 fn main() {
     println!("cargo::rerun-if-changed=build/update_source.rs");
     println!("cargo::rerun-if-env-changed=PDFCRAFT_UPDATE_REPO");
