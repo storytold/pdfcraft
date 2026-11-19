@@ -12,18 +12,18 @@ pub mod folders_ui;
 const RECOMMENDED: [&str; 5] = ["organize", "comment", "form", "edit", "protect"];
 
 fn end_min_layout(rtl: bool) -> egui::Layout {
-    if rtl {
-        egui::Layout::left_to_right(egui::Align::Min)
-    } else {
-        egui::Layout::right_to_left(egui::Align::Min)
-    }
+    if rtl { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::right_to_left(egui::Align::Min) }
 }
 
 fn end_center_layout(rtl: bool) -> egui::Layout {
+    if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) }
+}
+
+fn card_wrap_layout(rtl: bool) -> egui::Layout {
     if rtl {
-        egui::Layout::left_to_right(egui::Align::Center)
+        egui::Layout::right_to_left(egui::Align::Min).with_main_wrap(true)
     } else {
-        egui::Layout::right_to_left(egui::Align::Center)
+        egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true)
     }
 }
 
@@ -137,7 +137,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     ui.set_width(ui.available_width());
                     ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
                     ui.add_space(10.0);
-                    ui.horizontal_wrapped(|ui| {
+                    ui.with_layout(card_wrap_layout(crate::i18n::current().rtl()), |ui| {
                         ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
                         for id in RECOMMENDED {
                             if app.is_tool_pinned(id) {
@@ -182,7 +182,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             } else {
                 ui.add_space(6.0);
                 let pinned = app.pinned_tools.clone();
-                ui.horizontal_wrapped(|ui| {
+                ui.with_layout(card_wrap_layout(crate::i18n::current().rtl()), |ui| {
                     ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
                     for id in &pinned {
                         let Some(g) = catalog::group(id) else { continue };
@@ -273,16 +273,13 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 let body = rect.translate(press.offset());
                 let icon_min = if rtl { egui::pos2(body.right() - 34.0, body.top() + 11.0) } else { body.min + vec2(10.0, 11.0) };
-                icons::paint(
-                    ui,
-                    Rect::from_min_size(icon_min, vec2(24.0, 24.0)),
-                    "file-text",
-                    22.0,
-                    egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
-                );
+                icons::paint(ui, Rect::from_min_size(icon_min, vec2(24.0, 24.0)), "file-text", 22.0, egui::Color32::from_rgb(0xE0, 0x3E, 0x3E));
                 // Room at the trailing end for the remove button.
-                let (detail_pos, detail_align) =
-                    if rtl { (body.left_center() + vec2(48.0, 0.0), Align2::LEFT_CENTER) } else { (body.right_center() - vec2(48.0, 0.0), Align2::RIGHT_CENTER) };
+                let (detail_pos, detail_align) = if rtl {
+                    (body.left_center() + vec2(48.0, 0.0), Align2::LEFT_CENTER)
+                } else {
+                    (body.right_center() - vec2(48.0, 0.0), Align2::RIGHT_CENTER)
+                };
                 let detail = ui.painter().text(
                     detail_pos,
                     detail_align,
@@ -291,8 +288,13 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     t.text_muted,
                 );
                 // The name and path stop short of the page count; hovering shows the whole path.
-                let (text_x, width) =
-                    if rtl { let x = body.right() - 46.0; (x, x - (detail.right() + 16.0)) } else { let x = body.left() + 46.0; (x, detail.left() - 16.0 - x) };
+                let (text_x, width) = if rtl {
+                    let x = body.right() - 46.0;
+                    (x, x - (detail.right() + 16.0))
+                } else {
+                    let x = body.left() + 46.0;
+                    (x, detail.left() - 16.0 - x)
+                };
                 widgets::row_text(ui, egui::pos2(text_x, body.top() + 15.0), r.name.as_str(), theme::medium(13.5), t.text, width);
                 widgets::row_text(ui, egui::pos2(text_x, body.top() + 32.0), r.path.as_str(), theme::regular(11.0), t.text_faint, width);
                 if theme::hand(resp).on_hover_text(&r.path).clicked() {

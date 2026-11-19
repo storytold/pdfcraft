@@ -929,6 +929,8 @@ mod tests {
         assert_eq!(in_lang("ddd d mmm", "sq"), "sht 7 mar");
         assert_eq!(in_lang("dddd d. mmmm yyyy", "nb"), "lørdag 7. mars 2026");
         assert_eq!(in_lang("ddd d. mmm", "nb"), "lør. 7. mar.");
+        assert_eq!(in_lang("d mmmm yyyy", "he"), "7 במרץ 2026");
+        assert_eq!(in_lang("mmmm yyyy", "he"), "מרץ 2026");
         assert_eq!(date_language("PT-BR").map(|l| l.code), Some("pt-br"));
         assert!(date_language("xx").is_none());
         for l in &DATE_LANGUAGES {

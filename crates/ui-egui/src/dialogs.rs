@@ -1751,11 +1751,15 @@ fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) 
             press.wash(ui, rect, 6, false);
             let body = rect.translate(press.offset());
 
+            let rtl = crate::i18n::current().rtl();
             let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
-            crate::icons::paint(ui, egui::Rect::from_min_size(body.min + egui::vec2(8.0, 11.0), egui::vec2(22.0, 22.0)), g.icon, 20.0, color);
+            let icon_min = if rtl { egui::pos2(body.right() - 30.0, body.top() + 11.0) } else { body.min + egui::vec2(8.0, 11.0) };
+            crate::icons::paint(ui, egui::Rect::from_min_size(icon_min, egui::vec2(22.0, 22.0)), g.icon, 20.0, color);
 
             let btn_w = 78.0;
-            let btn_rect = egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
+            let btn_center =
+                if rtl { body.left_center() + egui::vec2(btn_w / 2.0 + 8.0, 0.0) } else { body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0) };
+            let btn_rect = egui::Rect::from_center_size(btn_center, egui::vec2(btn_w, 26.0));
             let btn_resp = ui.interact(btn_rect, ui.scope_id().with(("pin_modal_btn", g.id)), egui::Sense::click());
             let btn_hovered = btn_resp.hovered();
 
@@ -1772,9 +1776,15 @@ fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) 
             ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);
             ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, btn_label, theme::medium(12.0), text_color);
 
-            let max_w = (btn_rect.left() - body.left() - 44.0).max(10.0);
-            widgets::row_text(ui, body.min + egui::vec2(38.0, 6.0), label, theme::semibold(13.5), t.text, max_w);
-            widgets::row_text(ui, body.min + egui::vec2(38.0, 24.0), &blurb, theme::regular(11.0), t.text_muted, max_w);
+            let (text_x, max_w) = if rtl {
+                let x = body.right() - 38.0;
+                (x, (x - btn_rect.right() - 6.0).max(10.0))
+            } else {
+                let x = body.left() + 38.0;
+                (x, (btn_rect.left() - body.left() - 44.0).max(10.0))
+            };
+            widgets::row_text(ui, egui::pos2(text_x, body.top() + 6.0), label, theme::semibold(13.5), t.text, max_w);
+            widgets::row_text(ui, egui::pos2(text_x, body.top() + 24.0), &blurb, theme::regular(11.0), t.text_muted, max_w);
 
             if btn_resp.clicked() || resp.clicked() {
                 toggle = Some(g.id);
