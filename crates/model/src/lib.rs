@@ -18,11 +18,16 @@ pub struct Page {
     pub dict: Dict,
 }
 
-/// The side, in points, at or below which a `/MediaBox` has no area and the page falls back to
-/// US Letter (the renderer's `is_nearly_zero`, 1/4096).
+/// The side, in points, at or below which a `/MediaBox` or clipped `/CropBox` has no area and
+/// falls back (the renderer's `is_nearly_zero`, 1/4096).
 const MIN_BOX_SIDE: f64 = 1.0 / 4096.0;
 
-fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+/// Normalized `[x0, y0, x1, y1]` of a page box when its first four entries form a non-NaN,
+/// positive-area rectangle (clamping `±∞` to `±f64::MAX`).
+///
+/// Overflowing spans (e.g. `[-1e308, 0, 1e308, 792]`) are still returned so [`Page::crop`] can
+/// clip a huge `/CropBox` to the `/MediaBox`.
+fn box_coords(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let [a, b, c, d, ..] = o.as_array()?.as_slice() else { return None };
     let mut coords = [doc.resolve(a).as_f64()?, doc.resolve(b).as_f64()?, doc.resolve(c).as_f64()?, doc.resolve(d).as_f64()?];
@@ -33,11 +38,16 @@ fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
         *x = x.clamp(f64::MIN, f64::MAX);
     }
     let r = [coords[0].min(coords[2]), coords[1].min(coords[3]), coords[0].max(coords[2]), coords[1].max(coords[3])];
-    // ±∞ clamps to ±f64::MAX. Each edge is finite, but `f64::MAX - f64::MIN` is +∞,
-    // and a later `0.0 * ∞` is NaN. A box with that span is missing; a finite span,
-    // including one edge at f64::MAX, is kept.
     let (w, h) = (r[2] - r[0], r[3] - r[1]);
-    (w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()).then_some(r)
+    (w > 0.0 && h > 0.0).then_some(r)
+}
+
+/// Like [`box_coords`], rejecting boxes whose span is `+∞` (`±∞` clamps to `±f64::MAX`, so
+/// `f64::MAX - f64::MIN` is `+∞` and a later `0.0 * ∞` would yield `NaN`).
+fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+    let r = box_coords(doc, o)?;
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    (w.is_finite() && h.is_finite()).then_some(r)
 }
 
 impl Page {
@@ -48,10 +58,10 @@ impl Page {
         let media = rect(doc, self.dict.get(b"MediaBox"))
             .filter(|m| m[2] - m[0] > MIN_BOX_SIDE && m[3] - m[1] > MIN_BOX_SIDE)
             .unwrap_or([0.0, 0.0, 612.0, 792.0]);
-        match rect(doc, self.dict.get(b"CropBox")) {
+        match box_coords(doc, self.dict.get(b"CropBox")) {
             Some(c) => {
                 let r = [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])];
-                if r[2] > r[0] && r[3] > r[1] { r } else { media }
+                if r[2] - r[0] > MIN_BOX_SIDE && r[3] - r[1] > MIN_BOX_SIDE { r } else { media }
             }
             None => media,
         }
@@ -118,6 +128,11 @@ pub fn view_matrix_for(rotation: i64, crop: [f64; 4]) -> [f64; 6] {
 /// than [`MAX_INHERITED_COPIES`] bytes to copy into its leaves.
 pub fn pages(doc: &Document) -> Vec<Page> {
     PageTree::new(doc).collect()
+}
+
+/// Leaf page `index` (0-based), walking the page tree only as far as it.
+pub fn page_at(doc: &Document, index: usize) -> Option<Page> {
+    PageTree::new(doc).nth(index)
 }
 
 /// Approximate bytes of inherited values copied into leaf dictionaries by one page walk.
@@ -530,6 +545,14 @@ mod tests {
         assert_eq!(pages(&shifted)[0].crop(&shifted), [0.0, 0.0, 600.0, 800.0]);
         let trailing = doc_with(0, "", "/CropBox [0 0 300 400 /Extra]");
         assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 400.0]);
+        // Overflowing /CropBox still clips to /MediaBox, unless the clipped intersection is a
+        // sliver at or below MIN_BOX_SIDE, matching the renderer.
+        let overflow_crop = doc_with(0, "/MediaBox [0 0 600 800]", "/CropBox [-1e308 0 1e308 792]");
+        assert_eq!(pages(&overflow_crop)[0].crop(&overflow_crop), [0.0, 0.0, 600.0, 792.0]);
+        for sliver in ["/CropBox [-1e308 0 1e308 0.0001]", "/CropBox [-1e308 0 0.0001 800]"] {
+            let sliver_doc = doc_with(0, "/MediaBox [0 0 600 800]", sliver);
+            assert_eq!(pages(&sliver_doc)[0].crop(&sliver_doc), [0.0, 0.0, 600.0, 800.0], "{sliver}");
+        }
         // When `max_raw * user_unit > f32::MAX` (e.g. 1e35 with /UserUnit 75000), effective_user_unit
         // reduces the unit to `f32::MAX / max_raw` (~3,402.82), matching the renderer's `scaled_page_space`.
         let d = doc_with(0, "", "/MediaBox [0 0 1e35 1e35] /CropBox [0 0 1e35 1e35] /UserUnit 75000");
