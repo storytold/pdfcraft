@@ -193,7 +193,29 @@ fn a_folder_that_is_a_link_is_refused() {
     fs::create_dir(&real).unwrap();
     std::os::unix::fs::symlink(&real, &link).unwrap();
     let error = search(&Options::new(&link, "x"), &AtomicBool::new(false), |_| {}).unwrap_err();
-    assert!(error.contains("not a folder"), "{error}");
+    assert!(error.contains("is a link"), "a link folder is named as a link, not just \"not a folder\": {error}");
+}
+
+#[test]
+fn the_listing_stops_collecting_as_soon_as_it_is_cancelled() {
+    let folder = Folder::new();
+    for i in 0..50 {
+        folder.write(&format!("{i}.pdf"), &pdf(&["x"]));
+    }
+    let mut walk = super::Walk::default();
+    walk.folder(&folder.0, true, 0, &AtomicBool::new(true));
+    assert_eq!(walk.seen, 0, "collection stops before the first entry once cancelled, not after the whole folder is listed");
+    assert!(walk.pdfs.is_empty());
+}
+
+#[test]
+fn a_file_past_the_whole_file_time_limit_is_skipped() {
+    // No single page is slow, but the whole-file budget is already spent: the file is too slow.
+    let left = none_left();
+    let mut options = Options::new("unused", "needle");
+    options.file_limit = Duration::ZERO;
+    let read = super::read_pages(Arc::new(pdf(&["needle", "needle"])), 2, "needle", &options, 10, &AtomicBool::new(false), &left);
+    assert_eq!(read.skip, Some(Skip::TooSlow));
 }
 
 #[test]

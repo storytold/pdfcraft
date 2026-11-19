@@ -25,6 +25,10 @@ pub const MAX_SLOW_FILES: usize = 3;
 pub const MAX_LEFT_RUNNING: usize = 3 * MAX_SLOW_FILES;
 /// How long a file may take to load and open, and one page to read.
 pub const TIME_LIMIT: Duration = Duration::from_secs(20);
+
+/// A whole file's reading budget across all its pages. The per-page watchdog bounds one slow page;
+/// this bounds a file of many pages that are each slow but under the page limit.
+pub const FILE_TIME_LIMIT: Duration = Duration::from_secs(600);
 /// Pages asked for at once.
 const PAGE_BATCH: usize = 16;
 /// Glyphs of context on each side of a match.
@@ -47,6 +51,8 @@ pub struct Options {
     pub open_limit: Duration,
     /// How long one page may take to read.
     pub page_limit: Duration,
+    /// How long a whole file may take to read, across all its pages.
+    pub file_limit: Duration,
 }
 
 impl Options {
@@ -60,6 +66,7 @@ impl Options {
             limit: DEFAULT_LIMIT,
             open_limit: TIME_LIMIT,
             page_limit: TIME_LIMIT,
+            file_limit: FILE_TIME_LIMIT,
         }
     }
 }
@@ -155,17 +162,12 @@ pub struct Summary {
     pub stopped: Option<Stop>,
 }
 
-/// Whether `metadata`, read without following links, is a link (or a junction on Windows).
+/// Whether `metadata`, read without following links, is a link: a symlink, or a junction on
+/// Windows. A reparse point that is not a link — Windows Data Deduplication, a OneDrive
+/// files-on-demand placeholder — is not one, so its file is still read. `is_symlink` checks the
+/// reparse tag's name-surrogate bit on Windows, so it matches symlinks and junctions only.
 pub fn linked(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.file_type().is_symlink()
-    }
+    metadata.file_type().is_symlink()
 }
 
 /// Search every PDF in `options.folder`. `events` hears each result as it is found, and `cancel`
@@ -184,6 +186,9 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
         return Err(format!("the search text is longer than {MAX_QUERY_CHARS} characters"));
     }
     let folder = options.folder.symlink_metadata().map_err(|e| format!("{}: {e}", options.folder.display()))?;
+    if linked(&folder) {
+        return Err(format!("{} is a link, which is not followed", options.folder.display()));
+    }
     if !folder.is_dir() {
         return Err(format!("{} is not a folder", options.folder.display()));
     }
@@ -364,12 +369,19 @@ fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Optio
     let mut read = FileRead::default();
     let mut unread = 0usize;
     let mut first = 0;
+    let deadline = Instant::now().checked_add(options.file_limit);
     'pages: while first < pages {
         let end = first.saturating_add(PAGE_BATCH).min(pages);
         pool.set_queue(
             (first..end).map(|page| RenderRequest { page, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).collect(),
         );
         for _ in first..end {
+            // A file of many pages that are each slow but under the page limit: bound the whole
+            // file so one file can't hold the search (or an uncancellable tool call) indefinitely.
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                read.skip = Some(Skip::TooSlow);
+                return read;
+            }
             if read.matches.len() >= room {
                 read.at_limit = true;
                 break 'pages;
