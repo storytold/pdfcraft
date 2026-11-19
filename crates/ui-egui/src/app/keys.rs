@@ -10,8 +10,11 @@ impl PdfCraftApp {
         if self.modal_open() {
             return;
         }
-        // PLAN: Escape is read raw here until the plan names the signal for "the tool host did not take Escape" (a declined-key output or a catalog `app.escape` command); it then calls `escape` from that signal.
-        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        // The window's Escape: the one no component took this pass (a dialog, a menu, a field, the
+        // canvas's tool and sessions all take theirs first). Escape moves nothing, so the
+        // direction does not matter.
+        let cancel = craft::ui::runtime::keys::with_window_intents(ctx, false, |window| window.take_exact(&craft::behavior::Intent::Cancel));
+        if cancel {
             self.escape(ctx);
         }
     }
