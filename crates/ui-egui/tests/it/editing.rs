@@ -226,10 +226,11 @@ fn organize_page_range_tracks_thumbnails_and_applies_typed_selection() {
     use egui::accesskit::Role;
     let _gpu = gpu();
     let mut h = organize(100);
+    // A tile's check toggles its page as ⌘-click does; the check is the pointer's only, so the test ⌘-clicks.
     h.get_by_label("Page 2").click();
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Selected pages").value().as_deref(), Some("2"));
-    h.get_by_label("Page 3").click();
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Selected pages").value().as_deref(), Some("2-3"));
     let old = h.state().views[0].selected.clone();
@@ -342,7 +343,7 @@ fn organize_page_actions_rotate_only_the_named_page_and_undo() {
     let mut h = organize(3);
     h.get_by_label("Page 1").click();
     h.run_steps(2);
-    h.get_by_label("Page 3").click();
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
     h.run_steps(2);
     h.get_by_label("Rotate page 1 clockwise").click();
     h.run_steps(3);
@@ -1584,10 +1585,12 @@ fn column_headings_sort_the_list_and_flip_on_the_second_click() {
     h.get_by_label("File name").click();
     h.run_steps(2);
     assert_eq!(combine_names(&h), ["a.pdf", "Scan2.pdf", "scan10.pdf"], "case-insensitive, numbers by value");
-    h.get_by_label("File name, sorted ascending").click();
+    h.get_by_label("File name").click();
     h.run_steps(2);
     assert_eq!(combine_names(&h), ["scan10.pdf", "Scan2.pdf", "a.pdf"]);
-    h.get_by_label("Pages").click();
+    // The Pages heading: the Pages panel shares its name.
+    let heading = h.get_by_label("File name").accesskit_node().role();
+    h.get_by_role_and_label(heading, "Pages").click();
     h.run_steps(2);
     assert_eq!(combine_names(&h), ["scan10.pdf", "a.pdf", "Scan2.pdf"]);
     // Moving a file by hand ends the sorted order.
@@ -1595,7 +1598,7 @@ fn column_headings_sort_the_list_and_flip_on_the_second_click() {
     h.get_by_label("Move up").click();
     h.run_steps(2);
     assert_eq!(h.state().combine_tab.sort, None);
-    h.get_by_label("Pages");
+    h.get_by_role_and_label(heading, "Pages");
 }
 
 #[test]
@@ -1641,7 +1644,7 @@ fn undo_and_redo_restore_the_combine_list() {
     h.run_steps(2);
     h.get_by_label("File name").click();
     h.run_steps(2);
-    h.get_by_label("File name, sorted ascending").click();
+    h.get_by_label("File name").click();
     h.run_steps(2);
     assert_eq!(combine_names(&h), ["c.pdf", "b.pdf", "a.pdf"]);
     h.get_by_label("Undo").click();
@@ -1698,12 +1701,12 @@ fn the_whole_heading_sorts_and_dragging_it_moves_the_column() {
     assert_eq!(combine_names(&h), ["a.pdf", "b.pdf"]);
     // Drag Size before File name.
     let size = h.get_by_label("Size").rect().center();
-    let name = h.get_by_label("File name, sorted ascending").rect();
+    let name = h.get_by_label("File name").rect();
     drag(&mut h, size, egui::pos2(name.left() + 10.0, name.center().y));
     let order = ["size", "name", "pages", "modified", "warnings"].map(craft::behavior::ColumnKey::new);
     assert_eq!(h.state().combine_columns.order, order);
     assert_eq!(combine_names(&h), ["a.pdf", "b.pdf"], "moving a column doesn't sort");
-    let (size, name) = (h.get_by_label("Size").rect(), h.get_by_label("File name, sorted ascending").rect());
+    let (size, name) = (h.get_by_label("Size").rect(), h.get_by_label("File name").rect());
     assert!(size.left() < name.left(), "Size now shows first");
 }
 
@@ -2102,7 +2105,11 @@ impl egui::DroppedFile for Dropped {
     }
 }
 
+/// Drops `files` as a platform does: held over the window for a frame, then dropped.
 fn drop_files(h: &mut Harness<'static, PdfCraftApp>, files: Vec<Dropped>) {
+    h.input_mut().hovered_files = files.iter().map(|f| egui::HoveredFile { path: Some(f.0.into()), mime: String::new() }).collect();
+    h.step();
+    h.input_mut().hovered_files.clear();
     for f in files {
         h.input_mut().dropped_files.push(std::sync::Arc::new(f));
     }
@@ -3267,18 +3274,19 @@ fn option_copies_and_ctrl_moves_when_the_context_reports_macos() {
     let grab = |h: &Harness<'static, PdfCraftApp>, label: &str| h.get_by_label(label).rect();
     let points = |h: &Harness<'static, PdfCraftApp>| (grab(h, "Page 1").center(), grab(h, "Page 3").right_center() - egui::vec2(10.0, 0.0));
 
-    // Ctrl is not the copy modifier on macOS, so that drag moves the page.
+    // ⌘, where Ctrl copies elsewhere, is not the copy modifier on macOS, so that drag moves the page. (Control-press is
+    // the context click there.)
     let mut h = organize(3);
-    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    craft::ui::testing::windows::set_os(&h.ctx, craft::host::target::Os::Mac);
     let before = page_texts(h.state());
     let (from, to) = points(&h);
-    page_drag(&mut h, from, to, Modifiers::CTRL);
-    assert_eq!(page_texts(h.state()), vec![before[1].clone(), before[2].clone(), before[0].clone()], "Ctrl moves on macOS");
+    page_drag(&mut h, from, to, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE });
+    assert_eq!(page_texts(h.state()), vec![before[1].clone(), before[2].clone(), before[0].clone()], "⌘ moves on macOS");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
 
     // Option is, so the same drag drops a copy at the gap.
     let mut h = organize(3);
-    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    craft::ui::testing::windows::set_os(&h.ctx, craft::host::target::Os::Mac);
     let before = page_texts(h.state());
     let (from, to) = points(&h);
     page_drag(&mut h, from, to, Modifiers::ALT);
@@ -6253,7 +6261,8 @@ fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
     let to = start_drag(&mut h, "Page 4");
     let id = h.state().views[0].id;
     let info = h.state().session.get(id).unwrap().info.clone();
-    h.state_mut().views[0].document_changed(&egui::Context::default(), &info);
+    let ctx = h.ctx.clone();
+    h.state_mut().views[0].document_changed(&ctx, &info);
     h.hover_at(to);
     h.run_steps(1);
     h.drop_at(to);
