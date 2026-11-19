@@ -227,7 +227,7 @@ fn document_scripts_and_preferences() {
         }
         other => panic!("the Document JavaScripts dialog is not open: {other:?}"),
     }
-    h.get_by_label("Save").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Document JavaScripts").get_by_label("Save").click();
     h.run_steps(2);
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().document_scripts()[0].0, "init");
