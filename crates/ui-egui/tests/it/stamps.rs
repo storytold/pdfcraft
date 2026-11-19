@@ -172,6 +172,9 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     let ctx = h.ctx.clone();
     h.state_mut().start_custom_stamp(&ctx, "logo.png".into(), png);
     h.run_steps(2);
+    // The dialog's body scrolls; the check box may sit below the room it shows.
+    h.get_by_label("Add a line filled in when the stamp is placed").scroll_to_me();
+    h.run_steps(3);
     h.get_by_label("Add a line filled in when the stamp is placed").click();
     h.run_steps(2);
 

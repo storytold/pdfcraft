@@ -53,8 +53,16 @@ fn window_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(files) = dropped
         && !app.combine_showing()
     {
-        let ctx = ui.ctx().clone();
-        app.open_dropped(&ctx, files);
+        // While the page grid shows, it takes files dropped anywhere in the window: one let go off the grid goes
+        // in after the last page, as there is no gap under the pointer to say where.
+        let grid = app.active_ids().filter(|(_, id)| app.session.get(*id).is_some_and(|doc| doc.allows_assembly())).map(|(index, _)| index);
+        match grid.and_then(|index| app.views.get_mut(index)).filter(|view| view.organize) {
+            Some(view) => view.dropped_files = Some((usize::MAX, files)),
+            None => {
+                let ctx = ui.ctx().clone();
+                app.open_dropped(&ctx, files);
+            }
+        }
     }
 }
 
