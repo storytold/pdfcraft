@@ -444,9 +444,14 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     let output = DockArea::new("Dock", Bind::given(workspace), &mut panels, DockConfig::default().native_windows(false))
         .hide(HidePanels::Except(&shown))
         .show(ui);
+    let before = right_of(&app.dock);
     for action in output.actions.into_iter().chain(output.requested) {
         // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
         drop(app.dock.apply(action, false, permissions));
+    }
+    let after = right_of(&app.dock);
+    if after != before {
+        app.right_panel_chosen(before, after);
     }
     if let Some(panel) = open_side(&app.dock).and_then(PanelId::side) {
         app.last_right = panel;

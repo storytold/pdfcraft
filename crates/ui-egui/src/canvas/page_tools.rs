@@ -311,7 +311,7 @@ pub(crate) fn page_tool<'a>(
                     let snap = caret_snap(tool, &cx, &session.texts, session.comments.tool.page);
                     let view = &mut session.comments;
                     let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation);
-                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done)
+                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
                         .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
                         .outcome(&mut session.pending_edit, &mut view.notice);
                     let annotate = match snap {

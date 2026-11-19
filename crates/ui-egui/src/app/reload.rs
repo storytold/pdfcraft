@@ -10,7 +10,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use craft::host::Wake;
 use craft::platform::watch::{Changed, FileStamp, FileWatch, ReadPolicy};
 use pdfcraft_engine::DocId;
 
@@ -20,12 +19,11 @@ use crate::PdfCraftApp;
 /// still being written then costs one small read.
 const TAIL: usize = 1024;
 
-/// The watch of the open documents' files: a changed file is read whole once its last KiB holds
-/// `%%EOF`. `wake` runs on the watch's worker when it finds a change; call `.inline()` on the
-/// result for a watch that looks only when ticked (tests).
-// PLAN: the app's `new(ctx)` and the tests' `AppServices` (pdf-hub-w1, L-183) build the watch they carry with this, so the read rule lives in one place
-pub(crate) fn document_watch(wake: Wake) -> FileWatch<DocId> {
-    FileWatch::new(wake).read(ReadPolicy::Whole { tail: TAIL, complete: Arc::new(|end: &[u8]| end.windows(5).any(|w| w == b"%%EOF")) })
+/// `watch` as the open documents' files are watched: a changed file is read whole once its last
+/// KiB holds `%%EOF`. `AppServices::new` applies it to the watch it is given, the system's or a
+/// test's, so the read rule lives in one place.
+pub(crate) fn document_watch(watch: FileWatch<DocId>) -> FileWatch<DocId> {
+    watch.read(ReadPolicy::Whole { tail: TAIL, complete: Arc::new(|end: &[u8]| end.windows(5).any(|w| w == b"%%EOF")) })
 }
 
 impl PdfCraftApp {
@@ -221,7 +219,7 @@ mod tests {
             let (intake, _) = craft::platform::open::FileIntake::new(Wake::none());
             let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
             // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
-            let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, document_watch(Wake::none()).inline());
+            let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
             let path = path.to_owned();
             let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
                 crate::PdfCraftApp::install_runtime(&cc.egui_ctx);

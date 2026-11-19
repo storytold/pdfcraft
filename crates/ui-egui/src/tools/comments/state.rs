@@ -164,6 +164,9 @@ pub struct CommentView {
     pub context_at: Option<(usize, [f64; 2])>,
     /// A one-shot tool just finished; the app returns to the Select tool unless pinned.
     pub tool_done: bool,
+    /// The annotation tool took the open press (it did not answer `Ignored`): the drag, release and cancel are its,
+    /// not the text selection's.
+    pub(crate) tool_pressed: bool,
     /// Snapshot of `(page, index)` comment slot identity from the last `DocInfo`, used to detect
     /// when an edit removes or shifts `/Annots` entries under an active selection or editor.
     pub(crate) slots: std::collections::HashMap<(usize, usize), CommentSlot>,

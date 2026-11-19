@@ -6,7 +6,7 @@
 use crate::support;
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::SignatureStatus;
 use pdfcraft_ui_egui::{PdfCraftApp, SignStep};
 
@@ -81,7 +81,10 @@ fn one_click_trust_stores_the_displayed_signer_not_the_embedded_root() {
     };
 
     // Open the signature row (a click picks it, Right opens a tree row) and use the one-click trust button.
-    h.get_by_label_contains("Signed by").click();
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::TreeItem && n.label().is_some_and(|l| l.contains("Signed by")))
+        .next()
+        .expect("the signature's row")
+        .click();
     h.run_steps(1);
     h.key_press(egui::Key::ArrowRight);
     h.run_steps(2);

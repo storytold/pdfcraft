@@ -293,12 +293,12 @@ fn encrypted(bytes: Vec<u8>, password: &str) -> Vec<u8> {
 fn type_password(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
     // The prompt is laid out in the pass after the one that set it.
     for _ in 0..10 {
-        if h.query_by_role(Role::PasswordInput).is_some() {
+        if h.query_by_role_and_label(Role::PasswordInput, "Password").is_some() {
             break;
         }
         h.run_steps(1);
     }
-    let field = h.get_by_role(Role::PasswordInput);
+    let field = h.get_by_role_and_label(Role::PasswordInput, "Password");
     field.focus();
     field.type_text(password);
     h.run_steps(2);

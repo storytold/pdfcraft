@@ -38,6 +38,7 @@ pub(crate) fn open_over<D: StackDialog>(app: &mut PdfCraftApp, dialog: D) -> Dia
 fn windows(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     app.show_preferences(ui);
     app.show_shortcuts(ui);
+    app.password_pass(ui);
     crate::workflows::js_dialogs::show(app, ui);
     crate::redact_ui::dialogs::show_props(app, ui);
     crate::redact_ui::dialogs::show_search(app, ui);

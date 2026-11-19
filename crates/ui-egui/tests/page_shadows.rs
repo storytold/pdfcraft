@@ -68,6 +68,9 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
     h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
     assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(true));
+    // Preferences shows one page at a time; the shadows are on Appearance.
+    h.get_by_label("Appearance").click();
+    h.run_steps(3);
     let checkbox = h.get_by_label("Show Page Edge Shadows");
     checkbox.click();
     h.run_steps(2);
