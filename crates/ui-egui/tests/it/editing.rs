@@ -3012,8 +3012,11 @@ fn extract_options_and_rotate_pages_dialog() {
     // Rotate Pages: odd page numbers only.
     h.state_mut().run_command(&egui::Context::default(), "page.rotate_dialog");
     h.run_steps(2);
-    h.state_mut().rotate_draft.which = 0;
-    h.state_mut().rotate_draft.parity = pdfcraft_engine::PageParity::Odd;
+    let odd = craft::pages::PageRange { scope: craft::pages::PageScope::All, subset: craft::pages::Subset::Odd, ..Default::default() };
+    let ctx = h.ctx.clone();
+    let rotate = craft::ui::dialog::dialog_id("page.rotate_dialog");
+    h.state_mut().dialogs.set_json_field(&ctx, rotate, "pages", serde_json::to_value(odd).unwrap()).unwrap();
+    h.run_steps(1);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -3031,8 +3034,11 @@ fn rotate_pages_keeps_a_typed_last_page() {
         let mut h = organize(20);
         h.state_mut().run_command(&egui::Context::default(), "page.rotate_dialog");
         h.run_steps(2);
-        let d = &mut h.state_mut().rotate_draft;
-        (d.which, d.from, d.to) = (2, 5, 5);
+        // Pages 5 to 5, as the range's From and To show them.
+        let range = craft::pages::PageRange { scope: craft::pages::PageScope::Range, from: 5, to: Some(5), ..Default::default() };
+        let ctx = h.ctx.clone();
+        let rotate = craft::ui::dialog::dialog_id("page.rotate_dialog");
+        h.state_mut().dialogs.set_json_field(&ctx, rotate, "pages", serde_json::to_value(range).unwrap()).unwrap();
         h.run_steps(1);
         h.get_by_role_and_label(Role::SpinButton, "to").click();
         h.run_steps(2);
@@ -3569,13 +3575,16 @@ fn ink(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
 fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Topmost) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
+    // The jobs, the page renders among them, wait until the test runs them.
+    let (app, jobs) = crate::control::app_with_manual_jobs();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = app;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
         app
     });
     h.run_steps(4);
+    support::settle_held(&mut h, &jobs);
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
@@ -3593,10 +3602,11 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
     let head = egui::Rect::from_min_max(top.min, egui::pos2(top.left() + top.width() * 0.12, top.bottom()));
     let tail = egui::Rect::from_min_max(egui::pos2(top.left() + top.width() * 0.3, top.top()), top.max).shrink(2.0);
     click_at(&mut h, top.center());
-    support::wait_until(&mut h, "the editor's textless page", |app| !app.render_pending());
+    // The editor's textless page.
+    support::settle_held(&mut h, &jobs);
     h.state_mut().views[0].session.line_editor.as_mut().expect("the top box is open").text = "T".into();
     h.run_steps(2);
-    h.state_mut().views[0].hold_rasters = true;
+    // From here the renders wait: the frames below see the page as it was before applying.
     h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     for frame in 0..4 {
         h.step();
@@ -3605,8 +3615,8 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
         assert!(ink(&pixels, head) > 20, "frame {frame} after applying shows no text");
         assert_eq!(ink(&pixels, tail), 0, "frame {frame} after applying shows the old text again");
     }
-    h.state_mut().views[0].hold_rasters = false;
-    support::wait_until(&mut h, "the page drawn with the edit", |app| !app.render_pending());
+    // The page drawn with the edit.
+    support::settle_held(&mut h, &jobs);
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(ink(&pixels, head) > 20, "the page draws the applied text");
@@ -5367,7 +5377,7 @@ fn paragraph_drag_fixture(content: &str, rotation: i64, unit: i64) -> Vec<u8> {
 
 fn paragraph_drag_harness(bytes: Vec<u8>, view_rotation: u16) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = scripted_app();
         app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "paragraphs.pdf", None, bytes).unwrap();
@@ -5450,14 +5460,13 @@ fn paragraph_drag_content(h: &Harness<'static, PdfCraftApp>) -> String {
 fn save_paragraph_drag(h: &mut Harness<'static, PdfCraftApp>, name: &str, original: &[u8]) -> Vec<u8> {
     let out = temp_path(name);
     let id = h.state().views[0].id;
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    queue_save(&out);
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(4);
-    let saved = std::fs::read(&out).unwrap();
+    let saved = saved_file(&out);
     assert!(saved.starts_with(original), "Save keeps the opened/saved revisions");
     assert!(!h.state().session.get(id).unwrap().dirty);
     assert_eq!(h.state().session.get(id).unwrap().bytes.as_slice(), saved.as_slice());
-    std::fs::remove_file(out).unwrap();
     saved
 }
 
@@ -6014,18 +6023,42 @@ fn resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo() {
 #[test]
 fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
     let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
-    let before = page_texts(h.state());
-    // A drag left over (the panel closed mid-drag, the button released elsewhere) moves nothing.
-    h.state_mut().views[0].panel_drag = Some(vec![2]);
     h.run_steps(2);
-    assert!(h.state().views[0].panel_drag.is_none());
-    assert_eq!(page_texts(h.state()), before);
-    // A change to the document drops page indexes taken before it.
-    h.state_mut().views[0].panel_drag = Some(vec![3]);
+    let before = page_texts(h.state());
+    // Presses a thumbnail and drags it halfway towards the first one, leaving the button down.
+    let start_drag = |h: &mut Harness<'static, PdfCraftApp>, label: &str| -> egui::Pos2 {
+        let (from, to) = (panel_thumb(h, label), panel_thumb(h, "Page 1"));
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for k in 1..=3 {
+            h.hover_at(from + (to - from) * (k as f32 / 6.0));
+            h.run_steps(1);
+        }
+        to
+    };
+    // The panel closed mid-drag: the release, over where the first thumbnail was, moves nothing.
+    let to = start_drag(&mut h, "Page 3");
+    h.set_option("panel", "none").unwrap();
+    h.run_steps(2);
+    h.hover_at(to);
+    h.run_steps(1);
+    h.drop_at(to);
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()), before, "a drag that outlived its panel moves nothing");
+    // A change to the document drops page indexes taken before it: the release moves nothing.
+    h.set_option("panel", "pages").unwrap();
+    h.run_steps(3);
+    let to = start_drag(&mut h, "Page 4");
     let id = h.state().views[0].id;
     let info = h.state().session.get(id).unwrap().info.clone();
     h.state_mut().views[0].document_changed(&egui::Context::default(), &info);
-    assert!(h.state().views[0].panel_drag.is_none());
+    h.hover_at(to);
+    h.run_steps(1);
+    h.drop_at(to);
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()), before, "a drag that outlived the pages it picked moves nothing");
 }
 
 /// A Pages panel thumbnail (the rightmost node with that label).
@@ -6100,11 +6133,10 @@ fn host_dirty_hears_when_unsaved_work_appears_and_goes() {
     assert_eq!(reports.lock().unwrap().last(), Some(&true), "an edit is unsaved work");
 
     let out = temp_path("host-dirty.pdf");
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    queue_save(&out);
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
     assert_eq!(reports.lock().unwrap().last(), Some(&false), "saving clears it");
-    let _ = std::fs::remove_file(out);
 }
 
 #[test]
@@ -6864,8 +6896,10 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
     })
     .unwrap();
     let bytes = write_incremental(&doc, &Default::default()).unwrap();
+    // The jobs, the page renders among them, wait until the test runs them.
+    let (app, jobs) = crate::control::app_with_manual_jobs();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = app;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "picture.pdf", None, bytes).unwrap();
         app
@@ -6874,12 +6908,13 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
     assert!(h.execute("edit.edit_text"));
     h.state_mut().views[0].view.zoom = 1.2;
     h.run_steps(4);
-    support::wait_until(&mut h, "the page raster", |app| !app.render_pending());
+    // The page raster.
+    support::settle_held(&mut h, &jobs);
     let page = h.state().views[0].page_screen_rect(0).unwrap();
     let at = |x: f32, y: f32| egui::pos2(page.left() + x / 200.0 * page.width(), page.top() + (300.0 - y) / 300.0 * page.height());
     click_at(&mut h, at(100.0, 80.0));
     assert!(h.state().views[0].session.image_selection.is_some(), "the picture is selected");
-    support::wait_until(&mut h, "the page raster", |app| !app.render_pending());
+    support::settle_held(&mut h, &jobs);
     // From 60..140 × 40..120 to half its size, keeping its lower left corner.
     let (grip, to) = (at(140.0, 120.0), at(100.0, 80.0));
     let kept = egui::Rect::from_two_pos(at(62.0, 42.0), at(98.0, 78.0));
@@ -6898,7 +6933,7 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
         matches!(&shape.shape, egui::Shape::Rect(r) if r.stroke.width == 0.75 && (r.rect.min - old.min).length() < 2.0 && (r.rect.max - old.max).length() < 2.0)
     });
     assert!(!trailing, "the dragged picture's outline trails behind it");
-    h.state_mut().views[0].hold_rasters = true;
+    // From here the renders wait: the frames below see the page as it was before the release.
     h.drop_at(to);
     for frame in 0..4 {
         h.step();
@@ -6925,8 +6960,8 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert_eq!(red(&pixels, gone), 0, "after the second release");
-    h.state_mut().views[0].hold_rasters = false;
-    support::wait_until(&mut h, "the page drawn with the resized picture", |app| !app.render_pending());
+    // The page drawn with the resized picture.
+    support::settle_held(&mut h, &jobs);
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, again) > 20 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");
@@ -7675,7 +7710,7 @@ fn delete_in_the_page_grid_deletes_the_page_and_not_the_hidden_picture() {
 /// can't see, and Enter applies no crop.
 #[test]
 fn a_selected_pictures_keys_wait_for_its_page_to_be_on_screen() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
+    use pdfcraft_ui_egui::canvas::PageDisplay as PageLayout;
     for (crop, key) in [(false, egui::Key::Delete), (true, egui::Key::Enter)] {
         let mut h = picture_pages(crop);
         let id = h.state().views[0].id;
@@ -8396,7 +8431,7 @@ fn stale_clipboard_plain_text_does_not_paste_image() {
     h.run_steps(2);
 
     // can_paste_image should now be false because the clipboard has text, not an image!
-    assert!(!h.state().can_paste_image(), "cannot paste image when the clipboard has text");
+    assert!(!h.state_mut().can_paste_image(), "cannot paste image when the clipboard has text");
 
     // paste_image should fail and return false without pasting
     let ctx_h = h.ctx.clone();

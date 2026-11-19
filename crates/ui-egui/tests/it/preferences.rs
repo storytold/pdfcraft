@@ -5,7 +5,7 @@ use egui_kittest::kittest::Queryable;
 // PLAN: assumed public `pdfcraft_ui_egui::{Mode, units::Unit}` and `craft::theme::selection::MotionChoice` for tests
 use craft::theme::selection::MotionChoice;
 use pdfcraft_ui_egui::units::Unit;
-use pdfcraft_ui_egui::{Mode, PdfCraftApp};
+use pdfcraft_ui_egui::{Mode, PdfCraftApp, side_panels};
 
 const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
@@ -34,6 +34,11 @@ fn harness() -> H {
     });
     h.run_steps(4);
     h
+}
+
+/// Whether the Preferences window is on screen: its page list names the first page while it is open.
+fn preferences_shown(h: &H) -> bool {
+    h.query_by_label("General & Interface").is_some()
 }
 
 fn click(h: &mut H, label: &str) {
@@ -77,7 +82,10 @@ fn cases() -> Vec<Case> {
                 h.get_all_by_label("Left").nth(1).unwrap().click();
                 h.run_steps(3);
             },
-            applied: |a| a.side_panels.tools_on_right() && !a.side_panels.rail_on_right(),
+            applied: |a| {
+                let dock = side_panels::state(a);
+                dock["tools_side"] == "right" && dock["rail_side"] == "left"
+            },
         },
         Case {
             name: "animation effects",
@@ -123,13 +131,13 @@ fn preference_rows_apply_on_ok_and_nothing_changes_on_cancel() {
         assert!(!(case.applied)(h.state()), "{}: a row edits the draft, not the app", case.name);
         click(&mut h, "OK");
         h.run_steps(3);
-        assert!(h.state().preferences.is_none(), "{}: OK closes the window", case.name);
+        assert!(!preferences_shown(&h), "{}: OK closes the window", case.name);
         assert!((case.applied)(h.state()), "{}: OK applies the draft", case.name);
 
         let mut h = edited(&case);
         click(&mut h, "Cancel");
         h.run_steps(3);
-        assert!(h.state().preferences.is_none(), "{}: Cancel closes the window", case.name);
+        assert!(!preferences_shown(&h), "{}: Cancel closes the window", case.name);
         assert!(!(case.applied)(h.state()), "{}: Cancel leaves the app as it was", case.name);
     }
 }

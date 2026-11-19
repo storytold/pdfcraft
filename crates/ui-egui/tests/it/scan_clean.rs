@@ -1,7 +1,10 @@
 //! Scan & OCR ▸ Enhance scanned file in the real shell (egui_kittest): the dialog, the run and
 //! its report, and that the page keeps its comment while its scan is cleaned in place.
 
+use std::sync::Arc;
+
 use crate::support::AppHarness as _;
+use craft::host::ManualJobs;
 use craft::pages::ui::PageRangeOptions;
 use craft::pages::{PageRange, PageScope};
 use craft::ui::dialog::dialog_id;
@@ -29,27 +32,28 @@ fn scan() -> Vec<u8> {
     s.save_bytes(id).unwrap().to_vec()
 }
 
-fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
+/// The scan open in an app whose jobs wait until `run_jobs` runs them.
+fn harness() -> (Harness<'static, PdfCraftApp>, Arc<ManualJobs>) {
+    let (app, jobs) = crate::control::app_with_manual_jobs();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = app;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
         app
     });
     h.run_steps(4);
-    h
+    (h, jobs)
 }
 
 /// Runs the host's queued jobs, then lets the app poll them.
-// PLAN: assumed `PdfCraftApp::manual_jobs() -> &ManualJobs` (pdf-shell S-7).
-fn run_jobs(h: &mut Harness<'static, PdfCraftApp>) {
-    h.state().manual_jobs().run_all();
+fn run_jobs(h: &mut Harness<'static, PdfCraftApp>, jobs: &ManualJobs) {
+    jobs.run_all();
     h.run_steps(3);
 }
 
 #[test]
 fn enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did() {
-    let mut h = harness();
+    let (mut h, jobs) = harness();
     let id = h.state().active_ids().unwrap().1;
     assert!(h.state().session.get(id).unwrap().comment_props(0, 0).is_some());
     assert!(h.execute("ocr.enhance"));
@@ -61,10 +65,10 @@ fn enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did() {
     h.run_steps(1);
     assert!(h.state_mut().dialogs.confirm::<HostedParamDialog>(&ctx));
     h.run_steps(2);
-    run_jobs(&mut h);
+    run_jobs(&mut h, &jobs);
+    assert!(crate::support::shown_notice(&h).is_some(), "a notice says what was done");
     let app = h.state();
     assert!(app.scan_clean_run.is_none() && !app.dialogs.is_open::<HostedParamDialog>(), "finished and closed");
-    assert!(app.toast.is_some(), "a notice says what was done");
     let doc = app.session.get(id).unwrap();
     assert!(doc.can_undo().is_some(), "one undo step restores the page");
     assert_eq!(doc.info.pages.len(), 2);
@@ -73,14 +77,14 @@ fn enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did() {
 
 #[test]
 fn nothing_to_enhance_is_said_not_done() {
-    let mut h = harness();
+    let (mut h, jobs) = harness();
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().scan_clean_draft.settings = pdfcraft_engine::scan_clean::ScanCleanSettings { level: 0, edge_shadows: false, despeckle: false };
     // With every filter off the dialog's OK is disabled; starting anyway changes nothing.
     let ctx_h = h.ctx.clone();
     h.state_mut().start_scan_clean(&ctx_h);
-    run_jobs(&mut h);
+    run_jobs(&mut h, &jobs);
+    assert!(crate::support::shown_notice(&h).is_some(), "a notice says nothing was cleaned");
     let app = h.state();
-    assert!(app.toast.is_some(), "a notice says nothing was cleaned");
     assert_eq!(app.session.get(id).unwrap().can_undo(), None);
 }

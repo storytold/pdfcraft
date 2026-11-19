@@ -2755,7 +2755,7 @@ fn a_page_whose_content_was_cut_is_named_in_a_notice() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(channel, None);
+        app.attach_control(craft::automation::ControlChannel::new(channel), None);
         app.open_bytes(&egui::Context::default(), "cut.pdf", None, pdf).expect("opens");
         app
     });

@@ -251,7 +251,7 @@ fn merge_data_files_into_a_spreadsheet() {
     let files = craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out.clone()])]);
     let host = crate::support::host_with_files(files);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::with_host(host);
+        let mut app = crate::support::test_app(host);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
@@ -616,11 +616,12 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
     let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgb, vec![120u8; 12]).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     std::fs::write(&path, png).unwrap();
+    // The image picker answers with the PNG.
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![path.clone()])]));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = crate::control::app_with_files(files);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "images.pdf", None, bytes).unwrap();
-        app.save_override = Some(path.to_string_lossy().into_owned());
         app
     });
     h.run_steps(6);

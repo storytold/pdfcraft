@@ -6021,6 +6021,7 @@ dependencies = [
  "craft-update",
  "eframe",
  "egui",
+ "egui_kittest",
  "fmv-macos-events",
  "log",
  "pdfcraft-engine",

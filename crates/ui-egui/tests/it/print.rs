@@ -864,13 +864,14 @@ fn a_paper_picked_from_the_menu_while_in_label_is_kept() {
 
 /// Properties… reads the printer's driver options off the GUI thread, as a job of the host: the
 /// dialog keeps drawing while the read is pending, and a read that dies leaves the panel with
-/// nothing rather than waiting (#1818). The request is made directly, so the test runs where
-/// Properties… opens the driver's own window instead (Windows).
-#[cfg(not(target_arch = "wasm32"))]
+/// nothing rather than waiting (#1818). On Windows Properties… opens the driver's own window
+/// (`HAS_PRINTER_PREFERENCES`), so there is no read to test.
+#[cfg(not(any(target_arch = "wasm32", windows)))]
 #[test]
 fn printer_options_are_read_off_the_gui_thread_and_a_dead_read_offers_nothing() {
     use pdfcraft_engine::print::spool::PrinterOption;
     let mut h = harness();
+    list_printers(&mut h, &["Office", "Dead"]);
     h.state_mut().options_source = Some(Arc::new(move |printer: &str| {
         assert_ne!(printer, "Dead", "the read died");
         vec![PrinterOption {
@@ -883,12 +884,12 @@ fn printer_options_are_read_off_the_gui_thread_and_a_dead_read_offers_nothing() 
     }));
     h.open();
     h.settle();
+    // Properties… for the chosen printer, with the panel closed, as a user opens it.
     let ask = |h: &mut Rig, printer: &str| {
-        let d = &mut h.state_mut().print_draft;
-        d.driver_options = None;
-        d.driver_options_loading = Some(printer.into());
-        d.show_driver_options = true;
-        h.state_mut().read_options_in_background(printer.into());
+        h.pick(Some(printer));
+        h.settle();
+        h.get_by_label("Properties…").click();
+        h.run_steps(1);
     };
     ask(&mut h, "Office");
     h.run_steps(3);
@@ -902,6 +903,7 @@ fn printer_options_are_read_off_the_gui_thread_and_a_dead_read_offers_nothing() 
     assert_eq!(options[0].key, "InputSlot");
     h.get_by_label("Paper tray");
 
+    h.action("driver.done");
     ask(&mut h, "Dead");
     h.settle();
     assert_eq!(h.state().print_draft.driver_options, Some(("Dead".into(), Vec::new())), "a dead read offers nothing, and the panel says so");
