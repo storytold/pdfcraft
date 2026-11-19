@@ -96,11 +96,13 @@ fn cli_batch_writes_the_log_file_only_when_asked_review_regression_1() {
     let content = std::fs::read_to_string(&log_as_input).unwrap();
     assert_eq!(content, "Hello world", "Input file should not be overwritten by log: {content}");
 
-    // Test 4: Dry-run log entries include planned output paths
+    // Test 4: Dry-run log entries include planned output paths. A fresh output folder keeps the
+    // planned names clear of the files the real runs above wrote into `out`.
     let log_file = dir.join("dryrun.log");
-    let _dry_run = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&log_file).arg("--dry-run").output().unwrap();
+    let dry_args = ["batch", "input", "--steps", "convert,optimize", "--out-dir", "preview", "--recursive"];
+    let _dry_run = Command::new(BIN).current_dir(&dir).args(dry_args).arg("--log").arg(&log_file).arg("--dry-run").output().unwrap();
     let log_text = std::fs::read_to_string(&log_file).expect("log file written for dry-run");
-    assert!(log_text.contains("planned") && log_text.contains("out/good.pdf"), "Dry-run log should include planned output paths: {log_text}");
+    assert!(log_text.contains("planned") && log_text.contains("preview/good.pdf"), "Dry-run log should include planned output paths: {log_text}");
 
     std::fs::remove_dir_all(dir).unwrap();
 }
