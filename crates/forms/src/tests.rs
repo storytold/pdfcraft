@@ -114,6 +114,32 @@ fn a_button_caption_is_drawn_in_its_fields_font_size_and_color() {
     assert!(auto.contains("/Helv 14.00 Tf") && auto.contains(" 0 g"), "{auto}");
 }
 
+/// A `/DA` names its font in a string, which keeps the `#xx` escapes a name in a dictionary
+/// loses: `/F#20x_1` is the `/DR` font `F x_1`, the name an import renames a font to when the one
+/// it wanted is taken (#7279). The appearance is drawn in that font, its resource named `F x_1`
+/// and its content writing the name escaped, so a viewer finds it.
+#[test]
+fn a_da_font_name_written_with_escapes_is_the_font_the_dr_lists() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R /F#20x_1 7 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (renamed) /V (abc) /DA (/F#20x_1 12 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut doc = document(&objs);
+    redraw_field(&mut doc, "renamed").unwrap();
+    let all = fields(&doc);
+    let w = &field(&all, "renamed").widgets[0];
+    let (font, shown) = appearance_text(&doc, w, b"F x_1");
+    assert_eq!(font.as_dict().and_then(|f| f.name(b"BaseFont")), Some(&b"Courier"[..]), "the /DR font, not Helvetica");
+    assert_eq!(shown, [b"abc".to_vec()]);
+    let drawn = ap(&doc, w);
+    assert!(drawn.contains("/F#20x_1 12 Tf"), "the content names the font escaped: {drawn}");
+}
+
 /// A button caption in a font whose UCS-2 CMap holds 签 is not reported; once `set_props` adds a
 /// character beyond U+FFFF, the caption is still drawn in that font and `undrawn_fields` reports
 /// the character.

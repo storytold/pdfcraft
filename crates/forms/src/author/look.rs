@@ -51,19 +51,21 @@ pub(super) fn patch_da(da: &str, size: Option<f64>, patch: &LookPatch) -> String
     if patch.font.is_some() || size.is_some() {
         let old = appearance::parse_da(da);
         let font = patch.font.map_or_else(|| old.font.clone(), |f| f.resource().to_string());
+        // The `/DA` is a string: the name is written escaped, as `parse_da` reads it back.
+        let font = format!("/{}", appearance::name_token(&font));
         // `parse_da` reads sizes up to 300 points; keep the same bound when writing.
         let size = appearance::fmt(size.unwrap_or(old.size).clamp(0.0, 300.0));
         let at = toks.iter().enumerate().rev().find(|(i, t)| t.as_str() == "Tf" && *i >= 2).map(|(i, _)| i);
         match at {
             Some(i) => {
                 if let Some(slot) = toks.get_mut(i - 2) {
-                    *slot = format!("/{font}");
+                    *slot = font.clone();
                 }
                 if let Some(slot) = toks.get_mut(i - 1) {
                     *slot = size;
                 }
             }
-            None => toks.extend([format!("/{font}"), size, "Tf".into()]),
+            None => toks.extend([font, size, "Tf".into()]),
         }
     }
     if let Some(c) = patch.text {
