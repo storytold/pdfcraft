@@ -71,6 +71,8 @@ const LANGUAGE_COUNT: usize = 36;
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     LangInfo { code: "en", rtl: false },
+    // Hebrew; every `he-*` locale resolves here. Right to left like Arabic: see `LangInfo::rtl`.
+    LangInfo { code: "he", rtl: true },
     LangInfo { code: "ja", rtl: false },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
     LangInfo { code: "zh-hans", rtl: false },
@@ -246,6 +248,7 @@ impl Lang {
     pub fn english_name(self) -> &'static str {
         match self.code() {
             "en" => "English",
+            "he" => "Hebrew",
             "ja" => "Japanese",
             "zh-hans" => "Simplified Chinese",
             "zh-hant" => "Traditional Chinese",
