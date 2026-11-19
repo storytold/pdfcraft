@@ -662,8 +662,9 @@ pub struct DocView {
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
     /// Scans Edit found while no engine could read them, with the document's edit generation
     /// then: they wait for one (the web build downloads the models when first needed), and are
-    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`) or the document changes.
-    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, u64>,
+    /// read once the models are in (see `PdfCraftApp::ocr_models_loaded`), the document changes,
+    /// or a different language or engine is selected.
+    pub(crate) auto_ocr_awaiting_models: std::collections::HashMap<usize, (u64, String, pdfcraft_engine::ocr::EngineChoice)>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// The document owns the full coarse-wheel distance, including its acceleration.

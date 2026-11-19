@@ -16,6 +16,25 @@ fn scan() -> Vec<u8> {
     s.create_from_images(&[("scan.png".into(), png)]).unwrap().to_vec()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn recognize_text_dialog_offers_hungarian() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("Hungarian").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "hu");
+}
+
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {

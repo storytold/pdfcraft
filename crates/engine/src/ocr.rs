@@ -2040,7 +2040,7 @@ mod tests {
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         let id = s.open("src.pdf", None, Arc::new(fixture(1)), None).unwrap();
         let before = crate::export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
-        let mut lines = vec!["中文 English 2026".to_string()];
+        let mut lines = vec!["中文 English 2026".to_string(), "Árvíztűrő tükörfúrógép őűŐŰ".to_string()];
         let chars: Vec<char> = (0x4e00..0x4f10).filter_map(char::from_u32).chain(['𠮷']).collect();
         lines.extend(chars.chunks(90).map(|c| c.iter().collect()));
         let text = lines.join("\n");

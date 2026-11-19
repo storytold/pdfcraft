@@ -42,6 +42,7 @@ pub const LANGUAGE_CODES: &[(&str, &str)] = &[
     ("ko", "kor"),
     ("ar", "ara"),
     ("nl", "nld"),
+    ("hu", "hun"),
 ];
 
 /// English names for [`LANGUAGE_CODES`] (dropdowns show code + name).
@@ -58,6 +59,7 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("ko", "Korean"),
     ("ar", "Arabic"),
     ("nl", "Dutch"),
+    ("hu", "Hungarian"),
 ];
 
 /// Map a settings language code to a Tesseract one: trimmed, case-insensitive, allow-listed;
@@ -485,7 +487,14 @@ impl Recognizer for TesseractCli {
             f.write_all(&png).map_err(|e| OcrError::Process(format!("writing the image failed: {e}")))?;
         }
         // Fixed argv, no shell: tesseract <png> stdout -l <lang> tsv.
-        let tsv = self.run(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output)?;
+        let tsv = self.run(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output).map_err(|error| {
+            match error {
+                OcrError::Process(why) if lang == "hun" && why.contains("hun.traineddata") => OcrError::Process(format!(
+                    "{why}; install the Hungarian language model (Debian/Ubuntu: tesseract-ocr-hun), or put hun.traineddata in Tesseract's tessdata directory"
+                )),
+                other => other,
+            }
+        })?;
         let (lines, truncated) = parse_tsv_bounded(&tsv);
         if truncated {
             return Err(OcrError::Recognize(format!("the {MAX_WORDS}-word limit was exceeded; the incomplete reading was rejected")));
@@ -685,6 +694,8 @@ mod tests {
         assert_eq!(language_code("ja"), "jpn");
         assert_eq!(language_code("ko"), "kor");
         assert_eq!(language_code("nl"), "nld");
+        assert_eq!(language_code("hu"), "hun");
+        assert_eq!(language_code(" HU "), "hun", "trimmed, case-insensitive");
         assert_eq!(language_code("klingon"), "eng", "unknown → eng");
         assert_eq!(language_code(""), "eng");
         // The security property: whatever the settings say, only allow-listed codes reach a
@@ -755,6 +766,34 @@ mod tests {
         assert_eq!(parse_list_langs(out), vec!["eng".to_string(), "osd".to_string()]);
         assert_eq!(parse_list_langs("List of available languages (1):\neng\n"), vec!["eng".to_string()]);
         assert!(parse_list_langs("").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hungarian_recognition_uses_hun_and_reports_its_missing_model() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("synthetic-tesseract");
+        std::fs::write(&script, "#!/bin/sh\nif [ \"$4\" != hun ]; then echo wrong-language >&2; exit 2; fi\necho 'Error opening data file /tessdata/hun.traineddata' >&2\nexit 1\n").unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::new(script.clone());
+        let image = blot(8, 8, 0, 0, 4, 4);
+        let options = RecognizeOptions { language: " HU ".into() };
+        let error = recognizer.recognize(&image, &options).unwrap_err().to_string();
+        assert!(error.contains("hun.traineddata") && error.contains("tesseract-ocr-hun"), "{error}");
+        std::fs::write(&script, "#!/bin/sh\nif [ \"$4\" != hun ]; then exit 2; fi\nprintf '5\\t1\\t1\\t1\\t1\\t1\\t0\\t0\\t4\\t4\\t95\\tőűŐŰ\\n'\n")
+            .unwrap();
+        let lines = recognizer.recognize(&image, &options).unwrap();
+        assert_eq!(lines[0].text(), "őűŐŰ");
+        // Unrelated failures retain their original diagnostic, without installation advice.
+        std::fs::write(&script, "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n").unwrap();
+        let error = recognizer.recognize(&image, &options).unwrap_err().to_string();
+        assert!(error.contains("permission denied") && !error.contains("tesseract-ocr-hun"), "{error}");
+    }
+
+    #[test]
+    fn hungarian_is_offered_by_the_shared_language_table() {
+        assert!(crate::LANGUAGES.contains(&("hu", "Hungarian")));
+        assert_eq!(crate::LANGUAGES, LANGUAGE_NAMES);
     }
 
     /// The real binary, when it is installed: a run end to end, with words that carry a

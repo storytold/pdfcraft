@@ -9325,6 +9325,18 @@ fn initial_view_through_tools() {
     assert!(matches!(a.call("doc_initial_view", &json!({ "doc": doc, "page": 9 })), Err(ToolError::Failed(_))));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn hungarian_ocr_is_exposed_in_status_and_tool_schemas() {
+    let dir = workdir("hungarian-ocr-status");
+    let mut a = auto(&dir);
+    let status = ok(&mut a, "ocr_status", json!({}));
+    assert!(status["languages"].as_array().unwrap().iter().any(|l| l["code"] == "hu" && l["name"] == "Hungarian"));
+    for tool in tools().iter().filter(|t| matches!(t.name, "ocr_recognize" | "ocr_recognize_files" | "ocr_words")) {
+        assert!(tool.input_schema["properties"]["language"]["enum"].as_array().unwrap().contains(&json!("hu")), "{}", tool.name);
+    }
+}
+
 #[test]
 fn ocr_tools_make_a_scan_searchable() {
     let dir = workdir("ocr");

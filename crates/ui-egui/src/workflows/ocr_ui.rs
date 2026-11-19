@@ -493,7 +493,7 @@ impl PdfCraftApp {
     /// Recognize Text does. After a failed download it doesn't try again by itself: Recognize
     /// Text does, and the page is read once the models are in.
     fn await_ocr_models(&mut self, scan: &ScanToRead) {
-        self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, scan.generation);
+        self.views[scan.view].auto_ocr_awaiting_models.insert(scan.page, (scan.generation, self.ocr_draft.language.clone(), self.ocr_draft.engine));
         #[cfg(target_arch = "wasm32")]
         if crate::ocr_web::state() == crate::ocr_web::State::NotStarted
             && let Some(ctx) = self.ctx.clone()
@@ -541,7 +541,9 @@ impl PdfCraftApp {
         // every frame (listing its images parses the page).
         let generation = document.edit_generation();
         if self.views[view].auto_ocr_skipped.get(&page) == Some(&generation)
-            || self.views[view].auto_ocr_awaiting_models.get(&page) == Some(&generation)
+            || self.views[view].auto_ocr_awaiting_models.get(&page).is_some_and(|(seen, language, engine)| {
+                *seen == generation && language == &self.ocr_draft.language && *engine == self.ocr_draft.engine
+            })
         {
             return None;
         }
@@ -1183,6 +1185,21 @@ mod tests {
         assert_eq!(found(&mut app), Some(0), "read once they are in");
         assert!(app.views[0].auto_ocr_skipped.is_empty(), "never taken for no scan");
     }
+    #[test]
+    fn a_scan_waiting_for_models_is_retried_after_switching_language_or_engine() {
+        let mut app = app_with(scan());
+        let scan = app.scan_to_read().unwrap();
+        app.await_ocr_models(&scan);
+        assert_eq!(found(&mut app), None, "do not retry the same unavailable reader every frame");
+        app.ocr_draft.language = "hu".into();
+        assert_eq!(found(&mut app), Some(0), "changing language retries the unchanged scan");
+        app.await_ocr_models(&scan);
+        assert_eq!(found(&mut app), None);
+        app.ocr_draft.engine = EngineChoice::Tesseract;
+        assert_eq!(found(&mut app), Some(0), "changing engine also retries the scan");
+        assert!(!app.views[0].auto_ocr_tried.contains(&0), "a waiting page has never been recognized");
+    }
+
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
     #[test]

@@ -29,7 +29,7 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
 - **The tesseract process is fenced in.** The program comes from a user-configured location or
   the PATH, never from document data (the engine validates a configured path as an absolute
   path to an existing executable file before it is used). The language code is allow-listed
-  (`tesseract::language_code`, 12 codes) before anything reaches a process; the page image
+  (`tesseract::language_code`, 13 codes) before anything reaches a process; the page image
   goes to a private temp file (a fresh 0700 directory holding a 0600 file on Unix) that is
   deleted afterwards; the run has a 120 s timeout, a 64 MiB output cap and a 50 000-word
   reading cap (an incomplete reading is rejected rather than applied); every failure comes back through `OcrError` with its cause named. A configured
@@ -38,6 +38,12 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   versions print it); a failed probe is remembered for 30 s, so an install that appears later
   is found without a restart. Known limit: at the timeout or the output cap only the direct
   child is killed; a wrapper script's own children may outlive it.
+- **Hungarian on desktop.** Choose Hungarian (`hu`) and the Tesseract engine. Its
+  allow-listed model code is `hun`; install `tesseract-ocr-hun` on Debian/Ubuntu, or
+  place `hun.traineddata` in the installed Tesseract's tessdata directory. A missing
+  Hungarian model is reported with this installation hint. The built-in ocrs engine
+  still reads only unaccented Latin; the browser offers only its built-in languages.
+  Desktop language choices and automation schemas share the Tesseract language table.
 - **Confidence drives review.** One classifier (`band_for`) puts a word in the High
   (≥ 90), Medium (70–89) or Low (< 70) band — the review overlay's colours, the legend and the
   counts; the batch flag rule (`low_confidence`, default threshold 60) is deliberately a
