@@ -1624,7 +1624,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8a47038da2f11ddd2c5e1c0454991"
+source = "git+https://github.com/storytold/craft-libs?rev=05f939667e6965b6caf12c8b0e28ecf3cdfcffa0#05f939667e6965b6caf12c8b0e28ecf3cdfcffa0"
 dependencies = [
  "chrono",
  "dunce",
@@ -4830,6 +4830,7 @@ dependencies = [
  "pollster 1.0.1",
  "raw-window-handle",
  "serde_json",
+ "tempfile",
  "uds_windows",
  "wayland-client",
  "wayland-protocols",

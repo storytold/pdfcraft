@@ -5,6 +5,10 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (M14 #6123 review: first-argument repository query ignores trailing inputs; AppImage documentation distinguishes defaults from overrides; estimates unchanged)
+
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged)
+
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
 > **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged)
@@ -265,6 +269,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-04 (M14, #6123 argument review):** The repository query exits when it is the first argument, including trailing options, file names and non-Unicode paths. Earlier help/version keep their behavior. Executable tests are bounded and the AppImage update example is explicitly an official-build default. Estimates unchanged.
+
+- **2026-11-04 (M14, #6123 review):** Fix AppImage source precedence and compiled-binary fallback, independently assert the expected repository, and pin craft-update to the focused case-insensitive repository fix (craft-libs#595). Synthetic URL-confinement and packaging/query regressions cover the changes; no installed app was replaced. Estimates unchanged.
+
+- **2026-11-04 (M14, candidate):** Distributors may compile one validated GitHub release repository with `PDFCRAFT_UPDATE_REPO`; native checks and web release links share it. Unset builds still follow official releases. Build-input tests cover accepted names, default selection, malformed paths and non-Unicode input; integration tests cover the compiled source and release asset confinement. No release was published and no in-place update was exercised. Estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
@@ -912,6 +921,9 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | patch | M14 #6123: the first --print-update-repository argument exits before processing trailing options/files; bounded executable regressions cover ordering and non-Unicode paths; AppImage docs distinguish official defaults from overrides. Estimates unchanged. |
+| 2026-11-04 | patch | M14 #6123 review: AppImage metadata falls back to the compiled repository; test expectations are independent; craft-libs#595 preserves canonical asset URLs for mixed-case repository names. Estimates unchanged. |
+| 2026-11-04 | minor | M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged. |
 | 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |

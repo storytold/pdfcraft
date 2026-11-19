@@ -34,7 +34,7 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "05f939667e6965b6caf12c8b0e28ecf3cdfcffa0", features = ["egui"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "8e03cd016d42032b867fef6bad86bc69bf2c1920", features = ["cos", "crypt", "filters"] }
 # The writers the Word and RTF exports map onto (storytold/craft-libs#793). craft-rtf, craft-wordmodel and
 # craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
