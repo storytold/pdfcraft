@@ -430,7 +430,6 @@ impl PdfCraftApp {
             control: None,
             control_server: None,
             control_epoch: 0,
-            bookmark_rename: None,
             bookmark_clipboard: None,
             word_count_options: Default::default(),
             printer_marks_draft: Default::default(),

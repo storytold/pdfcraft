@@ -983,7 +983,7 @@ fn dropping_a_pdf_on_the_window_opens_it() {
     h.run_steps(3);
     assert!(h.state().views.is_empty());
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "dropped.pdf".into(), bytes: FIXTURE.to_vec() });
-    h.input_mut().dropped_files.push(file);
+    support::input::drop_files(&mut h, [file]);
     support::wait_until(&mut h, "dropped document", |app| app.views.len() == 1 && app.password_prompt.is_none());
     assert_eq!(h.state().views.len(), 1, "the dropped PDF opens in a tab");
     h.get_by_label_contains("dropped.pdf");
@@ -1010,11 +1010,11 @@ fn dropping_an_open_pdf_again_focuses_its_tab() {
     });
     h.run_steps(3);
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: FIXTURE.to_vec() });
-    h.input_mut().dropped_files.push(file.clone());
+    support::input::drop_files(&mut h, [file.clone()]);
     // The drop opens through the background worker on a live window; wait for the tab.
     support::wait_until(&mut h, "dropped document", |app| app.views.len() == 1);
     assert_eq!(h.state().views.len(), 1, "the dropped PDF opens in a tab");
-    h.input_mut().dropped_files.push(file);
+    support::input::drop_files(&mut h, [file]);
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "dropping it again adds no tab");
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1048,7 +1048,7 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
     };
     assert_eq!(pages(&h), 1);
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: Vec::new() });
-    h.input_mut().dropped_files.push(file);
+    support::input::drop_files(&mut h, [file]);
     for _ in 0..300 {
         h.run_steps(1);
         if pages(&h) == 2 {
@@ -1079,7 +1079,7 @@ fn pdfs_dropped_on_the_combine_tab_join_its_list() {
     std::fs::write(&path, FIXTURE).unwrap();
     let on_disk: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: Vec::new() });
     let in_memory: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "second.pdf".into(), bytes: FIXTURE.to_vec() });
-    h.input_mut().dropped_files.extend([on_disk, in_memory]);
+    support::input::drop_files(&mut h, [on_disk, in_memory]);
     h.run_steps(3);
     std::fs::remove_file(&path).ok();
     let app = h.state();
@@ -1107,7 +1107,7 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     h.execute("page.combine");
     h.run_steps(2);
     let folder: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: dir.clone(), bytes: Vec::new() });
-    h.input_mut().dropped_files.push(folder);
+    support::input::drop_files(&mut h, [folder]);
     h.run_steps(3);
     let _ = std::fs::remove_dir_all(&dir);
     let names: Vec<_> = h.state().combine_draft.iter().map(|f| f.name.clone()).collect();
@@ -1151,7 +1151,7 @@ fn files_dropped_on_the_combine_tab_join_the_end_of_its_list_in_the_order_droppe
     let in_memory =
         |name: &str, bytes: &[u8]| -> egui::DroppedFileHandle { std::sync::Arc::new(Dropped { path: name.into(), bytes: bytes.to_vec() }) };
     let dropped = [on_disk("c.pdf"), in_memory("a.pdf", FIXTURE), in_memory("notes.txt", b"Some notes"), on_disk("b.pdf")];
-    h.input_mut().dropped_files.extend(dropped);
+    support::input::drop_files(&mut h, dropped);
     h.run_steps(3);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(h.state().views.is_empty(), "nothing opens");
@@ -1178,7 +1178,7 @@ fn a_file_combine_does_not_take_is_left_out_of_a_drop_and_named() {
         // A PDF without the name of one is still a PDF.
         std::sync::Arc::new(Dropped { path: "scan".into(), bytes: FIXTURE.to_vec() }),
     ];
-    h.input_mut().dropped_files.extend(dropped);
+    support::input::drop_files(&mut h, dropped);
     h.run_steps(3);
     std::fs::remove_file(&path).ok();
     assert_eq!(combine_names(&h), ["first.pdf", "one.pdf", "scan"]);
@@ -1195,14 +1195,14 @@ fn a_pdf_dropped_on_a_document_opens_while_the_combine_tab_waits_behind_it() {
     h.run_steps(2);
     assert!(!h.state().combine_showing() && h.state().combine_tab.open);
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: "dropped.pdf".into(), bytes: FIXTURE.to_vec() });
-    h.input_mut().dropped_files.push(file);
+    support::input::drop_files(&mut h, [file]);
     support::wait_until(&mut h, "dropped document", |app| app.views.len() == 2);
     assert_eq!(combine_names(&h), ["first.pdf"], "the Combine files list is left as it was");
 }
 
-/// An app on a host whose jobs wait for the test (`ManualJobs`), taking its file requests from
-/// `intake`, with an inline file watcher.
-fn host_app(jobs: std::sync::Arc<craft::host::ManualJobs>, intake: craft::platform::open::FileIntake) -> PdfCraftApp {
+/// An app on a host whose jobs run on `jobs`, taking its file requests from `intake`, with an
+/// inline file watcher.
+fn host_app(jobs: std::sync::Arc<dyn craft::host::Jobs>, intake: craft::platform::open::FileIntake) -> PdfCraftApp {
     use craft::host::{AppInfo, Host, ScriptedFiles, Wake};
     use craft::platform::clipboard::{Clipboard, SystemClipboard};
     use craft::platform::watch::FileWatch;
@@ -1219,7 +1219,8 @@ fn host_app(jobs: std::sync::Arc<craft::host::ManualJobs>, intake: craft::platfo
     PdfCraftApp::with_host(std::sync::Arc::new(host), services)
 }
 
-/// A window whose app takes the OS's file requests from the returned sender (`FileIntake`).
+/// A window whose app takes the OS's file requests from the returned sender (`FileIntake`). Its
+/// jobs run on threads, as the running app's do, so a requested file opens while the test steps.
 fn intake_harness() -> (Harness<'static, PdfCraftApp>, craft::platform::open::IntakeSender) {
     use craft::host::Wake;
     use craft::platform::open::FileIntake;
@@ -1227,7 +1228,7 @@ fn intake_harness() -> (Harness<'static, PdfCraftApp>, craft::platform::open::In
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            let mut app = host_app(std::sync::Arc::new(craft::host::ManualJobs::new()), intake);
+            let mut app = host_app(std::sync::Arc::new(craft::host::ThreadJobs), intake);
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app
         }
