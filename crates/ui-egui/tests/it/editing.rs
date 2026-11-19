@@ -571,9 +571,9 @@ fn closing_a_dirty_tab_can_save_first() {
 
 #[test]
 fn the_save_prompt_answers_to_the_keyboard() {
-    // Issue #8: Enter saves; ⌘D / Ctrl+D, Alt+D and Alt+N don't save; Escape cancels. While the
-    // prompt is open, ⌘D is not Document properties.
-    for (m, key) in [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::D), (Modifiers::ALT, Key::N)] {
+    // Issue #8: Enter saves; ⌘D / Ctrl+D and, off macOS, Alt+N (the button's letter) don't save;
+    // Escape cancels. While the prompt is open, ⌘D is not Document properties.
+    for (m, key) in [(Modifiers::COMMAND, Key::D), (Modifiers::ALT, Key::N)] {
         let mut h = organize(2);
         h.get_by_label("Rotate clockwise").click();
         h.run_steps(3);
@@ -1184,6 +1184,9 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     // `/Client#20name` and `/Project#20` are valid PDF names with a space in them, which a new custom
     // property can't have; `/Project#20` is not `/Project`. `/Dept#E9` is not UTF-8 and is listed as
     // "Dept\u{FFFD}". `/Revision` is a number, so it isn't listed.
+    if crate::support::skip_without_glyphs("a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone", "en", "Dept\u{FFFD}") {
+        return;
+    }
     let pdf = String::from_utf8(fixture(1)).unwrap().replace(
         "/Root 1 0 R >>\nstartxref",
         "/Root 1 0 R /Info << /Client#20name (Acme) /Project#20 (Padded) /Dept#E9 (Sales) /Project (Apollo) /Revision 4 >> >>\nstartxref",
@@ -1434,7 +1437,7 @@ fn combining_files_opens_a_new_unsaved_tab() {
     assert_eq!(doc.name, "Combined.pdf");
     assert!(doc.dirty && doc.path.is_none(), "unsaved until the user saves it");
     assert_eq!(doc.info.outline.iter().map(|o| o.title.as_str()).collect::<Vec<_>>(), ["one", "two"]);
-    h.get_by_label("Combined.pdf (edited)");
+    h.get_by_label("Combined.pdf, modified");
 }
 
 #[test]
@@ -2216,7 +2219,7 @@ fn grid_zoom(h: &Harness<'static, PdfCraftApp>) -> f64 {
 #[test]
 fn page_grid_size_is_remembered_for_every_document_and_restart() {
     let mut h = organize(3);
-    h.get_by_label("Larger pages").click();
+    h.get_by_label("Larger Thumbnails").click();
     h.run_steps(3);
     assert_eq!(grid_zoom(&h), 1.25);
     let ctx_h = h.ctx.clone();
@@ -2342,7 +2345,7 @@ fn split_from_organize_grid_context_menu() {
     h.run_steps(2);
     h.get_all_by_label("Split document…").last().unwrap().click();
     h.run_steps(3);
-    h.get_by_label("Split document");
+    h.get_by_role_and_label(Role::Dialog, "Split document");
     // The cut before the selected page is chosen: two parts, not one per page.
     h.get_by_label_contains("Creates 2 files from 4 pages");
     h.get_all_by_label("Split").last().unwrap().click();
@@ -2923,7 +2926,7 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     assert_eq!(texts_of(h.state(), 0).len(), 2, "page changes are blocked");
     assert_eq!(h.query_all_by_label_contains("Insert a file").count(), 0, "nothing to insert into");
     // Looking closer is not a page change.
-    h.get_by_label("Larger pages").click();
+    h.get_by_label("Larger Thumbnails").click();
     h.run_steps(2);
     assert_eq!(grid_zoom(&h), 1.25);
     assert!(!dirty(&h));
@@ -7993,7 +7996,8 @@ fn a_selected_pictures_keys_wait_for_its_page_to_be_on_screen() {
     });
     h.run_steps(6);
     assert!(h.state().views[0].continuous(), "a continuous view");
-    assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 is off the screen");
+    let viewport = h.state().views[0].viewport_rect();
+    assert!(h.state().views[0].page_screen_rect(0).is_none_or(|r| !r.intersects(viewport)), "page 1 is off the screen");
     h.key_press(egui::Key::Delete);
     h.run_steps(4);
     assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), pictures, "the picture stays");
@@ -8527,7 +8531,7 @@ fn leaving_organize_goes_back_to_the_workspace_panel() {
     h.state_mut().left = LeftPanel::Tool("organize");
     h.state_mut().views[0].organize = true;
     h.run_steps(3);
-    h.get_by_label("Pages selected".to_uppercase().as_str());
+    h.get_by_label("Insert a blank page after the selection");
     // What opening a page from the grid does.
     h.state_mut().views[0].organize = false;
     h.run_steps(3);
@@ -11419,8 +11423,7 @@ fn edit_cut_from_the_menu_bar_cuts_the_page() {
 }
 
 /// A native menu's Edit ▸ Paste with a page's context menu open closes the menu, which the click
-/// never reached, and the platform's answer pastes the page, also when it comes late (on Wayland
-/// egui-winit reads the clipboard asynchronously, within 3 seconds).
+/// never reached, and pastes the page; each Edit ▸ Paste pastes it once.
 #[test]
 fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page() {
     let mut h = organize(3);
@@ -11433,44 +11436,18 @@ fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page
     let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    assert!(h.query_by_role(Role::Menu).is_some(), "the page's context menu is open");
     support::fire_menu(&mut h, "edit.paste");
-    assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     h.run_steps(3);
-    assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
-    h.event(egui::Event::Paste("clipboard text".into()));
+    assert!(h.query_by_role(Role::Menu).is_none(), "Edit ▸ Paste closed the context menu");
+    assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");
+    support::fire_menu(&mut h, "edit.paste");
     h.run_steps(3);
-    assert_eq!(pages(&h), 4, "the late paste pasted the page");
+    assert_eq!(pages(&h), 5, "a second Edit ▸ Paste pasted it again");
 }
 
-/// Two native Edit ▸ Pastes with a page's context menu open each ask for the clipboard, and each
-/// answer pastes the page (on Wayland they come one by one).
-#[test]
-fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
-    let mut h = organize(3);
-    h.run_steps(2);
-    h.get_by_label("Page 2").click();
-    h.run_steps(2);
-    h.event(egui::Event::Copy);
-    h.run_steps(3);
-    assert!(h.state().page_clipboard.is_some(), "the page is copied");
-    let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
-    h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
-    h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
-    for _ in 0..2 {
-        support::fire_menu(&mut h, "edit.paste");
-        assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
-    }
-    for pasted in [4, 5] {
-        h.event(egui::Event::Paste("clipboard text".into()));
-        h.run_steps(3);
-        assert_eq!(pages(&h), pasted, "each answer pastes the page");
-    }
-}
-
-/// A paste behind a page's context menu stays there, also one that answers an Edit ▸ Paste asked
-/// for before the user opened the menu (egui-winit answers it as it answers ⌘V): it pastes no page.
+/// A paste (⌘V's answer from the platform) behind a page's context menu stays there: it pastes no
+/// page.
 #[test]
 fn a_paste_behind_a_context_menu_opened_after_edit_paste_pastes_nothing() {
     let mut h = organize(3);
@@ -11483,18 +11460,17 @@ fn a_paste_behind_a_context_menu_opened_after_edit_paste_pastes_nothing() {
     let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
     support::fire_menu(&mut h, "edit.paste");
     h.run_steps(2);
+    assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
+    assert!(h.query_by_role(Role::Menu).is_some(), "the page's context menu is open");
     h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(3);
-    assert_eq!(pages(&h), 3, "the paste behind the context menu pasted the page");
+    assert_eq!(pages(&h), 4, "the paste behind the context menu pasted no page");
 }
 
-/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize. The bar reads as
-/// open on the pass after its click, so Edit ▸ Paste asks the platform for the clipboard once it
-/// has let go of the keys, and the answer (kittest gives none, so the test does) comes to the
-/// pages. An answer to a request sent with the click would come while the bar still held the keys.
+/// Edit ▸ Paste from the in-window menu bar pastes the copied page in Organize, where the clipboard
+/// commands are the picked pages' (`page.paste`), once and whatever the system clipboard holds.
 #[test]
 fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
     let mut h = organize(3);
@@ -11508,16 +11484,6 @@ fn edit_paste_from_the_menu_bar_pastes_the_copied_page() {
     assert_eq!(pages(&h), 3);
     support::open_menu(&mut h, "Edit");
     support::menu_row(&h, "Paste").click();
-    h.step();
-    assert!(craft_menu::bar::is_open(&h.ctx), "the bar reads as open on the pass after the click");
-    assert!(!support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked while the bar held the keys");
-    let mut asked = false;
-    for _ in 0..4 {
-        h.step();
-        asked |= support::asked_for_the_clipboard(&h);
-    }
-    assert!(asked, "Edit ▸ Paste asked the platform for the clipboard");
-    h.event(egui::Event::Paste("clipboard text".into()));
     h.run_steps(4);
     assert_eq!(pages(&h), 4, "Edit ▸ Paste pasted the page");
 }

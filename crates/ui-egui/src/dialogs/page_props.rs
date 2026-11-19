@@ -44,7 +44,8 @@ impl PdfCraftApp {
     }
 
     /// One pass over the dialog: applies the chosen order when it differs from what every page has and the document
-    /// is as the dialog opened it.
+    /// is still active and as the dialog opened it. Another document becoming active, or an edit, while the dialog
+    /// was open means the pages at those indices may not be the ones chosen: nothing changes and the user is told.
     pub(crate) fn page_props_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
         let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let Some(draft) = self.page_props_draft.take() else { return };
@@ -54,11 +55,13 @@ impl PdfCraftApp {
         if draft.before == Some(order) {
             return;
         }
-        let current = self.session.get(draft.doc).is_some_and(|d| d.edit_generation() == draft.generation);
-        let Some(index) = self.views.iter().position(|v| v.id == draft.doc) else { return };
-        if current {
-            self.active = Some(index);
+        let active = self.active_ids().is_some_and(|(_, id)| id == draft.doc);
+        if active && self.session.get(draft.doc).is_some_and(|d| d.edit_generation() == draft.generation) {
             self.apply_edit(ctx, Edit::SetTabOrder { pages: draft.pages, order });
+        } else {
+            self.notify_tr(
+                "The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.",
+            );
         }
     }
 }
