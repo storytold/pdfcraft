@@ -135,9 +135,18 @@ impl DocView {
     /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit
     /// page, width and height with `top` or `left` at the window's edge; `/FitR` zooms so the
     /// rectangle fits, centred. The `B` (content box) forms are read as the page. A null `/XYZ`
-    /// coordinate keeps the reader's place: that axis of the view is not moved, as Acrobat does.
-    /// A point past the end of the document scrolls as far as it can.
+    /// coordinate keeps the reader's place in user space, as Acrobat does: the coordinate at the
+    /// window's top-left now is the one put there on the new page. A point past the end of the
+    /// document scrolls as far as it can.
     pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        let kept = match dest {
+            DestView::Xyz { left, top, .. } if left.is_none() || top.is_none() => self.place_at_corner(info),
+            _ => None,
+        };
+        let dest = match (dest, kept) {
+            (DestView::Xyz { left, top, zoom }, Some([x, y])) => DestView::Xyz { left: left.or(Some(x)), top: top.or(Some(y)), zoom },
+            (dest, _) => dest,
+        };
         self.go_to_page(page);
         let page = self.view.current;
         let Some(p) = info.pages.get(page) else { return };
@@ -186,6 +195,17 @@ impl DocView {
             // The pass places the point at the viewport's start corner beside the page gutter.
             self.view.go_to = Some(GoTo::Corner { page, at: point_of(at, size) });
         }
+    }
+
+    /// The user-space point of the current page at the window's top-left as far as pages go (past
+    /// the side gutter) in the last pass, if that page was drawn.
+    fn place_at_corner(&self, info: &DocInfo) -> Option<[f32; 2]> {
+        let page = self.view.current;
+        let xf = self.page_xform(page)?;
+        let side = self.spacing.as_ref().map_or(0.0, |spacing| spacing.side as f32);
+        let (vx, vy) = xf.screen_to_view(self.viewport_rect().min + egui::vec2(side, 0.0));
+        let u = info.pages.get(page)?.view_to_user(vx, vy);
+        Some([u[0], u[1]])
     }
 
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
