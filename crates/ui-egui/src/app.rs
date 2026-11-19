@@ -745,52 +745,14 @@ impl PdfCraftApp {
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
         ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
         // PLAN: assumed chrome::shell(&mut PdfCraftApp, &mut egui::Ui), the AppShell pass: menu bar, tab strip, mode bar, window edges and captions (pdf-chrome-w10).
+        // The shell's body is the dock, whose document panel draws the page area or what takes its place
+        // (`side_panels::document_view`).
         chrome::shell(self, ui);
         self.follow_screen_mode();
-        if self.screen_mode.body_only() && self.active.is_some() {
-            // Full screen: the page on black, nothing else, as Acrobat's Full Screen Mode (Esc
-            // or ⌘L to leave).
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ui, |ui| {
-                if let Some(i) = self.active {
-                    match compare_ui::side_by_side(self, i) {
-                        Some((old, new)) => compare_ui::compare_area(self, old, new, ui),
-                        None => canvas::document_area(self, i, ui),
-                    }
-                }
-            });
-        } else {
-            // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct
-            // recognized text brings it back with its review as it was.
-            if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
-                self.ocr_verify.open = false;
-            }
-            self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
-            if self.ocr_verify.open {
-                // The OCR Verify screen takes the document area (its four panes) under the window's
-                // tabs, menus and toolbar, which stay (#6485).
-                workflows::ocr_verify::show(self, ui);
-            } else {
-                // Whichever way another tab came to the front, it shows instead of the expanded view.
-                if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
-                    self.all_tools_full = false;
-                }
-                // A document can hide the toolbars, the menu and the panels around it in its tab (ISO
-                // 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
-                let hidden = self.hidden_interface();
-                if !hidden.window_ui {
-                    side_panels::dock(self, ui);
-                }
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                    if self.mode == Mode::AllTools && self.all_tools_full && !hidden.window_ui {
-                        all_tools_ui::show(self, ui);
-                    } else {
-                        panes::page_area(self, ui);
-                    }
-                });
-                // FitWindow and CenterWindow, once the document just opened is laid out.
-                self.window_preferences_frame(&ctx);
-                self.process_pending_edits(&ctx);
-            }
+        if !self.full_screen_document() && !self.ocr_verify.open {
+            // FitWindow and CenterWindow, once the document just opened is laid out.
+            self.window_preferences_frame(&ctx);
+            self.process_pending_edits(&ctx);
         }
         // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
         dialogs::show(self, ui);
@@ -800,6 +762,26 @@ impl PdfCraftApp {
         // Addresses `open_url` queued: the runtime opens them in the browser.
         for url in self.pending_urls.drain(..) {
             ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
+    }
+
+    /// Whether the window shows the active document alone on black, as Acrobat's Full Screen Mode (Esc or ⌘L to
+    /// leave).
+    pub(crate) fn full_screen_document(&self) -> bool {
+        self.screen_mode.body_only() && self.active.is_some()
+    }
+
+    /// Puts away the views the front tab no longer shows, before the document panel draws.
+    pub(crate) fn settle_document_view(&mut self) {
+        // Another mode or the Home tab puts the OCR Verify screen away, as Exit does; Correct recognized text brings
+        // it back with its review as it was.
+        if self.ocr_verify.open && (self.active.is_none() || self.ocr_verify.shown_in.is_some_and(|m| m != self.mode)) {
+            self.ocr_verify.open = false;
+        }
+        self.ocr_verify.shown_in = self.ocr_verify.open.then_some(self.mode);
+        // Whichever way another tab came to the front, it shows instead of the expanded view.
+        if self.all_tools_full && self.all_tools_tab != self.shown_tab() {
+            self.all_tools_full = false;
         }
     }
 }
