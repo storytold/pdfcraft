@@ -485,7 +485,9 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     let base_off = src_config.get(b"BaseState").map(|b| src.resolve(b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
     let hidden = |r: &Object| src_off.contains(r) || (base_off && !src_on.contains(r));
     // An explicit `/Order` presents only the groups it lists (an empty one presents none), each
-    // at its place in the list. A null one is no `/Order` at all (§7.3.9).
+    // at its place in the list. A null one is no `/Order` at all (§7.3.9), and without one the
+    // default configuration's is an empty array: "Any groups not listed in this array shall not
+    // be presented in any user interface" (§8.11.4.3, Table 99). So no copied group is listed.
     let src_order: Option<HashMap<ObjRef, usize>> = src_config
         .get(b"Order")
         .filter(|o| !matches!(&*src.resolve(o), Object::Null))
@@ -512,7 +514,7 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     // The groups this call adds, source reference to destination references: a page copied twice
     // copies its layers twice, and both copies keep the source's settings.
     let mut added: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
-    // The copied groups to present, with their place in the source's `/Order` when it has one.
+    // The copied groups the source's `/Order` lists, with their place in it.
     let mut presented: Vec<(usize, Object)> = Vec::new();
     for (from, to) in ocgs {
         let r = Object::Ref(*to);
@@ -520,13 +522,8 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
             continue;
         }
         all.push(r.clone());
-        match &src_order {
-            None => presented.push((presented.len(), r.clone())),
-            Some(listed) => {
-                if let Some(&at) = listed.get(from) {
-                    presented.push((at, r.clone()));
-                }
-            }
+        if let Some(&at) = src_order.as_ref().and_then(|listed| listed.get(from)) {
+            presented.push((at, r.clone()));
         }
         if hidden(&Object::Ref(*from)) {
             off.push(r)
@@ -572,7 +569,11 @@ pub(crate) fn register_layers(dst: &mut Document, src: &Document, ocgs: &[(ObjRe
     props.set(b"OCGs".to_vec(), Object::Array(all));
     config.set(b"ON".to_vec(), Object::Array(on));
     config.set(b"OFF".to_vec(), Object::Array(off));
-    config.set(b"Order".to_vec(), Object::Array(order));
+    // Without a source `/Order` the destination's is left as it was, absent included: a new
+    // document extracted from such a source mirrors it.
+    if src_order.is_some() {
+        config.set(b"Order".to_vec(), Object::Array(order));
+    }
     for (key, value) in [(b"AS".as_slice(), auto_state), (b"RBGroups", radio), (b"Locked", locked)] {
         if !value.is_empty() {
             config.set(key.to_vec(), Object::Array(value));

@@ -5071,14 +5071,15 @@ fn ordered_names(doc: &Document, d: &Dict) -> Vec<String> {
 }
 
 /// How copied layers are presented (ISO 32000-2 §8.11.4.3, Table 99):
-/// - a null `/Order` is no `/Order` (§7.3.9): the copied layers are listed, as without one;
+/// - a null `/Order` is no `/Order` (§7.3.9): none is written, as without one;
 /// - an explicit `/Order` presents them in its sequence, not in the order the copy met them;
 /// - a group an indirect array lists is found however deep another path first reaches it.
 #[test]
 fn copied_layers_are_presented_in_the_source_order() {
     let out = full_roundtrip(&extract_pages(&layered_source("<< /ON [5 0 R 6 0 R] /Order null >>", &[]), &[0]).unwrap());
-    let (d, _) = layer_config(&out);
-    assert_eq!(ordered_names(&out, &d), ["A", "B"], "a null /Order lists them, as an omitted one does");
+    let (d, ocgs) = layer_config(&out);
+    assert_eq!(order_of(&out, &d), None, "a null /Order is treated as an omitted one");
+    assert_eq!(ocgs.len(), 2, "both layers are still copied: {ocgs:?}");
 
     let out = full_roundtrip(&extract_pages(&layered_source("<< /ON [5 0 R 6 0 R] /Order [6 0 R 5 0 R] >>", &[]), &[0]).unwrap());
     let (d, _) = layer_config(&out);
@@ -5107,8 +5108,9 @@ fn copied_layer_auto_state_names_its_categories() {
 }
 
 /// A destination with layers and no `/Order` of its own presents none of them (its default
-/// `/Order` is an empty array, ISO 32000-2 §8.11.4.3, Table 99): inserting pages with layers
-/// lists only the copied ones, and does not start presenting the destination's own.
+/// `/Order` is an empty array, ISO 32000-2 §8.11.4.3, Table 99): inserting pages whose source
+/// lists its layers lists only the copied ones, and does not start presenting the destination's
+/// own.
 #[test]
 fn inserting_layers_leaves_the_destinations_own_unlisted() {
     let dst_b: Vec<String> = vec![
@@ -5118,10 +5120,50 @@ fn inserting_layers_leaves_the_destinations_own_unlisted() {
         "<< /Type /OCG /Name (Own) >>".into(),
     ];
     let mut dst = open(build(&dst_b, "/Root 1 0 R"));
-    crate::import_pages(&mut dst, &layered_source("<< /ON [5 0 R 6 0 R] >>", &[]), &[0], 1).unwrap();
+    crate::import_pages(&mut dst, &layered_source("<< /ON [5 0 R 6 0 R] /Order [5 0 R 6 0 R] >>", &[]), &[0], 1).unwrap();
     let out = full_roundtrip(&dst);
     let (d, _) = layer_config(&out);
     assert_eq!(ordered_names(&out, &d), ["A", "B"]);
+}
+
+/// A source without `/Order` presents none of its layers ("Any groups not listed in this array
+/// shall not be presented in any user interface", ISO 32000-2 §8.11.4.3, Table 99, whose default
+/// `/Order` is an empty array). Its extracted pages write no `/Order` either, mirroring it, while
+/// the layers are still copied with their visibility (`/ON`, `/OFF`) and auto state (`/AS`).
+#[test]
+fn extracting_from_a_source_without_order_writes_none() {
+    let src = layered_source("<< /OFF [6 0 R] /AS [<< /Event /Print /Category [/Print] /OCGs [5 0 R] >>] >>", &[]);
+    let out = full_roundtrip(&extract_pages(&src, &[0]).unwrap());
+    let (d, ocgs) = layer_config(&out);
+    assert_eq!(order_of(&out, &d), None, "no /Order, as in the source: {d:?}");
+    assert!(!d.contains(b"Order"), "not even an empty one");
+    assert_eq!(ocgs.len(), 2, "both layers are copied: {ocgs:?}");
+    let arr = |k: &[u8]| d.get(k).map(|v| out.resolve(v)).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let name = |o: &Object| out.resolve(o).as_dict().and_then(|g| g.get(b"Name").and_then(Object::as_string)).map(|n| n.to_text());
+    assert_eq!(arr(b"ON").iter().map(name).collect::<Vec<_>>(), [Some("A".to_string())]);
+    assert_eq!(arr(b"OFF").iter().map(name).collect::<Vec<_>>(), [Some("B".to_string())]);
+    let usage = out.resolve(&arr(b"AS")[0]).as_dict().cloned().unwrap();
+    let ruled = usage.get(b"OCGs").and_then(Object::as_array).cloned().unwrap();
+    assert_eq!(ruled.iter().map(name).collect::<Vec<_>>(), [Some("A".to_string())], "the print auto state is kept");
+}
+
+/// Inserting pages from a source without `/Order` (whose layers it presents in no user
+/// interface, ISO 32000-2 §8.11.4.3, Table 99) into a document with its own `/Order` leaves that
+/// `/Order` as it was: the copied layers are not added to it.
+#[test]
+fn inserting_from_a_source_without_order_leaves_the_destination_order() {
+    let dst_b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R] /D << /ON [4 0 R] /Order [4 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /OCG /Name (Own) >>".into(),
+    ];
+    let mut dst = open(build(&dst_b, "/Root 1 0 R"));
+    crate::import_pages(&mut dst, &layered_source("<< /ON [5 0 R 6 0 R] >>", &[]), &[0], 1).unwrap();
+    let out = full_roundtrip(&dst);
+    let (d, ocgs) = layer_config(&out);
+    assert_eq!(ordered_names(&out, &d), ["Own"], "only the destination's own layer is listed");
+    assert_eq!(ocgs.len(), 3, "the copied layers are still registered: {ocgs:?}");
 }
 
 /// A page extracted twice copies the layer one of its comments uses twice: both copies keep the
