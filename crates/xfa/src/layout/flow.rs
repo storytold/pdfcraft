@@ -166,7 +166,7 @@ impl Layouter<'_> {
         let (mut dx, mut shift) = (0.0, 0.0);
         let mut seg_top = top;
         let mut first_segment = true;
-        let mut widget_rest: Option<WidgetRest> = None;
+        let mut widget_rests: Vec<WidgetRest> = Vec::new();
         loop {
             // Each pass rescans every item still to be placed. A block split across very many
             // content areas, and so across very many pages, would do this once per page, costing
@@ -204,16 +204,16 @@ impl Layouter<'_> {
             };
             let mut here = Vec::new();
             let mut below = Vec::new();
-            // The rest of the split widget's box: a piece down to this break, closed on every
-            // side, and what is left of it goes on.
-            if let Some((r, border)) = widget_rest.take() {
+            // The rest of each split widget's box (fields side by side can cross the same break):
+            // a piece down to this break, closed on every side, and what is left of it goes on.
+            for (r, border) in std::mem::take(&mut widget_rests) {
                 let bottom = r.bottom().min(cut);
                 if bottom - r.y > 0.01 {
                     here.extend(widget_box(Rect::new(r.x, r.y, r.w, bottom - r.y), &border));
                 }
                 if r.bottom() > cut + 0.01 {
                     let y = cut.max(r.y);
-                    widget_rest = Some((Rect::new(r.x, y, r.w, r.bottom() - y), border));
+                    widget_rests.push((Rect::new(r.x, y, r.w, r.bottom() - y), border));
                 }
             }
             for (item, kept) in rest {
@@ -230,9 +230,7 @@ impl Layouter<'_> {
                     }
                     here.extend(upper);
                     below.extend(whole.map(|it| (it, None)));
-                    if rest_box.is_some() {
-                        widget_rest = rest_box;
-                    }
+                    widget_rests.extend(rest_box);
                     continue;
                 }
                 if let Some((top, _)) = kept {
@@ -274,7 +272,7 @@ impl Layouter<'_> {
             }
             // A field being split goes on to its own bottom, even when what is left of it draws
             // nothing (no fill, no border).
-            if below.is_empty() && widget_rest.is_none() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
+            if below.is_empty() && widget_rests.is_empty() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
                 if let Some(c) = &mut self.cur {
                     c.y = (end - shift).min(c.rect.bottom()).max(c.y);
                     c.placed = true;

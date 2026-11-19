@@ -3524,6 +3524,40 @@ fn a_filled_text_field_that_outgrows_a_page_keeps_its_fill_under_the_page_text()
     assert!(w.page_text && w.border.fill.is_none() && w.border.color.is_some(), "{w:?}");
 }
 
+/// Two filled text fields side by side whose text runs across pages: each keeps its own fill on
+/// every page its lines go on to, not only the last one the break reached.
+#[test]
+fn side_by_side_text_fields_that_outgrow_a_page_each_keep_their_fill() {
+    let what: String = (0..150).map(|i| format!("What {i}\n")).collect();
+    let why: String = (0..150).map(|i| format!("Why {i}\n")).collect();
+    let xml = wrapped_form(&format!("<form><body><section><row><what>{what}</what><when>1</when><why>{why}</why></row></section></body></form>"))
+        .replace(
+            r#"<field name="what" w="3.5in" h="1in"><ui><textEdit multiLine="1"/></ui>"#,
+            r#"<field name="what" w="3.5in" minH="1in"><ui><textEdit multiLine="1"><border><edge/><fill><color value="255,255,0"/></fill></border></textEdit></ui>"#,
+        )
+        .replace(
+            r#"<field name="why" w="3.5in" h="1in"><ui><textEdit multiLine="1"/></ui>"#,
+            r#"<field name="why" w="3.5in" minH="1in"><ui><textEdit multiLine="1"><border><edge/><fill><color value="0,255,255"/></fill></border></textEdit></ui>"#,
+        );
+    let form = layout_xml(&xml).unwrap();
+    assert!(form.pages.len() >= 3, "{} pages", form.pages.len());
+    let (yellow, cyan) = ([1.0, 1.0, 0.0], [0.0, 1.0, 1.0]);
+    let mut pieces = 0;
+    for (i, p) in form.pages.iter().enumerate() {
+        let has = |prefix: &str| p.items.iter().any(|it| matches!(it, Item::Text(s) if s.text.starts_with(prefix)));
+        let fill = |c: [f64; 3]| p.items.iter().any(|it| matches!(it, Item::Fill { color, .. } if *color == c));
+        if has("What ") {
+            assert!(fill(yellow), "page {}: the fill of what", i + 1);
+            pieces += 1;
+        }
+        if has("Why ") {
+            assert!(fill(cyan), "page {}: the fill of why", i + 1);
+            pieces += 1;
+        }
+    }
+    assert!(pieces >= 6, "{pieces}");
+}
+
 #[test]
 fn the_form_packet_restores_the_presence_and_access_the_form_was_saved_with() {
     // Three rows hidden in the template; a script showed the first two before the form was
