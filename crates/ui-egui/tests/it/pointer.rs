@@ -1502,7 +1502,7 @@ fn with_prepare_on_a_locked_document_a_right_click_on_a_field_selects_nothing() 
     let mut h = open(locked, "150", false);
     // Prepare doesn't open on such a document; it stays open on a tab switched to one.
     h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("form");
-    h.state_mut().left_open = true;
+    h.state_mut().set_left_open(true);
     h.run_steps(4);
     assert!(h.state().is_preparing(), "Prepare is open");
     let id = h.state().views[0].id;

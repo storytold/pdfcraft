@@ -108,7 +108,7 @@ pub(super) fn edit_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static T
         });
     });
     if shown.output.closed.is_some() || shown.output.action == Some(HeaderAction::Close) {
-        app.left_open = false;
+        app.set_left_open(false);
     }
     if let Some(id) = tool {
         app.select_tool(ui.ctx(), id);

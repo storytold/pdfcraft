@@ -66,8 +66,10 @@ impl PdfCraftApp {
         let mut options = Options::default();
         options.editable = false;
         options.fixed = fixed_rows(ctx);
-        // PLAN: framework gap: `AppCatalog::defs` is `pub(crate)`, so the catalog's rows and scopes cannot reach `Keymap::new`; the dialog lists the fixed rows only until they are public
-        let keymap = Keymap::new(Vec::new(), Scopes::new(), Platform::current());
+        // The catalog the keys run on; its rows are all app-scoped, so no panel or context scope is named.
+        let rows =
+            crate::commands::catalog::shared_catalog(crate::commands::mac_shortcuts(ctx)).map(|catalog| catalog.defs().to_vec()).unwrap_or_default();
+        let keymap = Keymap::new(rows, Scopes::new(), Platform::current());
         self.shortcuts = Some(ShortcutsSession { state: DialogState::new(), keymap, options });
     }
 

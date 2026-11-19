@@ -43,7 +43,7 @@ impl PdfCraftApp {
     }
 
     pub(crate) fn reveal_tools(&mut self) {
-        self.left_open = true;
+        self.set_left_open(true);
     }
 
     /// Enter a tool from the catalogue, Home, palette or control channel. Organize is a

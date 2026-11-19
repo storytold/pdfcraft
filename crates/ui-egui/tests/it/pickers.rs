@@ -674,7 +674,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
     h.state_mut().mode = Mode::Edit;
     h.set_option("panel", "pages").unwrap();
     h.state_mut().left = LeftPanel::AllTools;
-    h.state_mut().left_open = false;
+    h.state_mut().set_left_open(false);
     h.state_mut().quick_tool = QuickTool::Hand;
     h.deliver("late.pdf", late);
     h.steps(2);
@@ -683,7 +683,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
     assert_eq!(h.state().mode, Mode::Edit);
     assert_eq!(crate::support::right(h.state()), Some(RightPanel::Pages));
     assert_eq!(h.state().left, LeftPanel::AllTools);
-    assert!(!h.state().left_open);
+    assert!(!h.state().left_open());
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
     assert!(dirty(h.state(), 0));
     assert_eq!(h.state().views.len(), 2, "the startup file remains available in its own tab");

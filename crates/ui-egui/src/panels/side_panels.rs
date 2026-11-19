@@ -12,7 +12,7 @@ use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, BodyCx, Show as _};
-use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, PanelSpec};
+use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, IconicMode, PanelSpec};
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::DockArea;
 use craft::ui::primitives::IconSpec;
@@ -449,20 +449,14 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
         PanelId::Tools => !read && !expanded,
         _ => active && !expanded && listed(panel),
     };
-    // An icon of the side panels' collapsed column opens its panel docked, as production's rail buttons did, not in a
-    // flyout: the pick the area writes here becomes the panel shown.
-    let mut picked = None;
-    let output = DockArea::new("Dock", Bind::given(workspace), &mut panels, DockConfig::default().native_windows(false))
-        .hide(HidePanels::Except(&shown))
-        .flyout(Bind::bound(&mut picked))
-        .show(ui);
+    // The side panels' icons are production's rail: they stay beside the expanded column, a click on one opens its
+    // panel docked, and a click on the open panel's icon closes it.
+    let config = DockConfig::default().native_windows(false).iconic_mode(IconicMode::Rail);
+    let output = DockArea::new("Dock", Bind::given(workspace), &mut panels, config).hide(HidePanels::Except(&shown)).show(ui);
     let before = right_of(&app.dock);
     for action in output.actions.into_iter().chain(output.requested) {
         // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
         drop(app.dock.apply(action, false, permissions));
-    }
-    if let Some(panel) = picked {
-        set_panel_visible(app, panel, true);
     }
     let after = right_of(&app.dock);
     if after != before {

@@ -1825,8 +1825,8 @@ fn navigation_history_for_os(os: egui::os::OperatingSystem) {
     ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "4"}));
     assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
     // The real rail button is accessible and invokes the same history, not the adjacent page.
-    let shortcut = if h.ctx.os() == egui::os::OperatingSystem::Mac { "⌘[" } else { "Ctrl+[" };
-    ok(&mut h, &c, "ui.click", json!({"label": &format!("Previous view ({shortcut})")}));
+    // The toolbar names its slots by their commands (L-233).
+    ok(&mut h, &c, "ui.click", json!({"label": "Previous view"}));
     assert_eq!(h.state().views[0].current(), 0);
     assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.next_view"));
     ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));

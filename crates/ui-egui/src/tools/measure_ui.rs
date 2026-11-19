@@ -823,7 +823,7 @@ impl ItemSource<usize> for MeasurementRows {}
 
 pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
     app.left = LeftPanel::Tool("measure");
-    app.left_open = true;
+    app.set_left_open(true);
     if let Some((index, _)) = app.active_ids()
         && let Some(tool) = id.strip_prefix("measure.").and_then(Tool::from_name)
     {

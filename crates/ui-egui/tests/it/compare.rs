@@ -190,7 +190,8 @@ fn pdfa_dialog_verifies_and_converts() {
     assert!(h.query_by_label("Remove PDF/A identification").is_none(), "nothing to remove yet");
     h.get_by_label("Verify").click();
     h.run_steps(3);
-    h.get_by_label("The document has no XMP metadata");
+    // A finding's row is named by its text, then its clause and severity.
+    assert!(h.query_all_by_label_contains("The document has no XMP metadata").next().is_some(), "the missing XMP is a finding");
     h.get_by_label("Save as PDF/A").click();
     h.run_steps(3);
     h.get_by_label("Declared conformance: PDF/A-2b");

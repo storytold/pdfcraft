@@ -925,7 +925,7 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     click(&mut h, 40.0, 300.0);
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
     h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
-    h.state_mut().left_open = true;
+    h.state_mut().set_left_open(true);
     h.run_steps(3);
     h.get_by_label("Use signature").click();
     h.run_steps(2);
@@ -2229,7 +2229,7 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     h.run_steps(2);
     assert!(h.query_by_label("Lock into the page when saving").is_none(), "the panel is closed");
     h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
-    h.state_mut().left_open = true;
+    h.state_mut().set_left_open(true);
     h.run_steps(3);
     h.get_by_label("Use signature");
     assert_eq!(h.query_all_by_label("Lock into the page when saving").count(), 1, "once, in the panel");
@@ -2697,7 +2697,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
         assert!(!pad_open(h), "a saved signature opens no pad");
         h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
-        h.state_mut().left_open = true;
+        h.state_mut().set_left_open(true);
         h.run_steps(3);
         assert_eq!(h.get_by_label("Use signature").accesskit_node().is_selected(), Some(true), "the active tool's card is marked");
         h.execute("sign.fill.check");

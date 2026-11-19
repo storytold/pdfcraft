@@ -98,16 +98,15 @@ mod tests {
 
     #[test]
     fn the_app_draws_at_the_system_scale_until_a_size_is_chosen() {
-        // A display that reports 200% (#456: a 1080p screen whose system reports 2×).
-        // PLAN: framework gap F-12: the harness's `SystemReader` has no text-scale setter, so Auto is checked at the
-        // display's scale alone until the lead rewires it.
+        // A display that reports 200% (#456: a 1080p screen whose system reports 2×), and a desktop text scale of 125%.
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(2.0).build_eframe(|cc| {
             crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            craft::ui::testing::style::report_os_text_scale(&cc.egui_ctx, Some(1.25));
             crate::PdfCraftApp::for_unit_tests()
         });
         h.run_steps(3);
         let ctx = h.ctx.clone();
-        assert_eq!(ctx.pixels_per_point(), 2.0, "Auto follows the display's scale");
+        assert_eq!(ctx.pixels_per_point(), 2.5, "Auto follows the display's scale and the system's text scale");
         h.state_mut().set_option(&ctx, "ui-scale", "100%").expect("a valid size");
         h.run_steps(3);
         assert_eq!(h.ctx.pixels_per_point(), 1.0, "100% is one screen pixel per point");
@@ -122,9 +121,9 @@ mod tests {
         assert_eq!(h.ctx.pixels_per_point(), 1.5, "the saved size is restored");
         h.state_mut().apply_settings(&crate::app::settings::import_json(r#"{"ui_scale":1e30}"#).0);
         h.run_steps(3);
-        assert_eq!(h.ctx.pixels_per_point(), 2.0, "a hostile saved size is no choice");
+        assert_eq!(h.ctx.pixels_per_point(), 2.5, "a hostile saved size is no choice");
         h.state_mut().set_option(&ctx, "ui-scale", "auto").expect("auto");
         h.run_steps(3);
-        assert_eq!(h.ctx.pixels_per_point(), 2.0);
+        assert_eq!(h.ctx.pixels_per_point(), 2.5);
     }
 }

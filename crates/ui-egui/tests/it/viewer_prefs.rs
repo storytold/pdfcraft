@@ -79,14 +79,14 @@ fn a_document_that_hides_the_interface_opens_without_it_and_f8_brings_it_back() 
     assert_eq!(shown(&h), (false, false, false), "the toolbar, menu and rail are hidden");
     assert_eq!(h.state().hidden_interface(), HiddenInterface::ALL);
     // The quick-action bar is a toolbar too.
-    assert!(h.query_by_label_contains("Hand (H)").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Hand").is_none());
     // The tab strip stays: the tabs and Home are still there.
     h.get_by_label("Home");
 
     h.key_press(egui::Key::F8);
     h.run_steps(3);
     assert_eq!(shown(&h), (true, true, true), "F8 shows them");
-    h.get_by_label_contains("Hand (H)");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Hand");
     h.key_press(egui::Key::F8);
     h.run_steps(3);
     assert_eq!(shown(&h), (false, false, false), "and hides them again");
@@ -309,8 +309,8 @@ fn fit_window_sizes_the_window_to_the_first_page() {
     let (size, at) = window_commands(&mut h, 12);
     let size = size.expect("the window is resized");
     assert_eq!(at, None, "not moved");
-    // A 2:3 portrait page fitted to the window's height makes a narrower window.
-    assert!(size.x < 1000.0 && (size.y - 900.0).abs() < 1.0, "{size:?}");
+    // A 2:3 portrait page fitted to the window's height makes a narrower window than the 1400-point one.
+    assert!(size.x < 1400.0 && (size.y - 900.0).abs() < 1.0, "{size:?}");
     // Asked once.
     assert_eq!(window_commands(&mut h, 6), (None, None));
     // The page now fills the document area's height and nearly its width.

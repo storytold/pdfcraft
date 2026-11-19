@@ -7,8 +7,9 @@ use std::hash::{Hash, Hasher};
 use craft::behavior::{IconId, Selection};
 use craft::i18n::matcher::Matcher;
 use craft::keymap::CommandRef;
-use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::focus::FocusRequest;
 use craft::ui::sections::{HeaderCommand, Panel};
 use craft::ui::style::DataColor;
 use craft::ui::text::TextField;
@@ -90,8 +91,10 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .titled()
         .commands([HeaderCommand::new(IconId::new("minimize-2"), CommandRef::new("tools.collapse"))])
         .show(ui, |ui, _| {
-            // PLAN: framework gap F-6 (a one-shot focus request): the search field took focus when the view opened and nothing else had it.
-            TextField::search(tl!("Search tools and commands…").to_owned(), Bind::bound(&mut app.all_tools_query)).show(ui);
+            // The search field takes the keys whenever nothing else holds them, as it did when the view opened.
+            TextField::search(tl!("Search tools and commands…").to_owned(), Bind::bound(&mut app.all_tools_query))
+                .request_focus(FocusRequest::WhenNone)
+                .show(ui);
             let query = app.all_tools_query.trim().to_owned();
             let matcher = Matcher::new(&craft::i18n::Folder::new(crate::i18n::current().code()), &query);
 
@@ -130,7 +133,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
         });
     if let Some(id) = chosen {
-        app.left_open = true;
+        app.set_left_open(true);
         app.select_tool(ui.ctx(), id);
     }
 }

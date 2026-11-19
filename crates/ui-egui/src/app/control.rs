@@ -86,7 +86,7 @@ impl PdfCraftApp {
                 let g = pdfcraft_engine::catalog::group(value).ok_or_else(|| format!("unknown tool {value}"))?;
                 self.select_tool(ctx, g.id);
             }
-            ("left", _) => self.left_open = value != "closed",
+            ("left", _) => self.set_left_open(value != "closed"),
             ("home", _) => {
                 self.active = None;
                 // With no document open the expanded All tools view covers Home itself, so no

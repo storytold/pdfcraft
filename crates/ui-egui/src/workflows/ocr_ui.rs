@@ -619,7 +619,7 @@ impl PdfCraftApp {
     fn scan_to_read(&mut self) -> Option<ScanToRead> {
         // Edit is on when its panel is open (the Edit tab) or Edit text & images or Add text is picked,
         // the same test the page view uses for editing content.
-        let editing = (self.left_open && self.left == crate::LeftPanel::Tool("edit"))
+        let editing = (self.left_open() && self.left == crate::LeftPanel::Tool("edit"))
             || matches!(self.quick_tool, crate::QuickTool::EditText | crate::QuickTool::AddText);
         // Not in Read mode (which leaves the Edit tool picked but is not editing) and not beneath a
         // dialog or prompt: nothing may change the document under those. It is tried again once
@@ -1298,9 +1298,9 @@ mod tests {
         assert_eq!(found(&mut app), None, "another tool");
         // The Edit tab's panel counts, as for the page view, with no tool picked.
         app.left = LeftPanel::Tool("edit");
-        app.left_open = true;
+        app.set_left_open(true);
         assert_eq!(found(&mut app), Some(0), "the Edit panel");
-        app.left_open = false;
+        app.set_left_open(false);
         assert_eq!(found(&mut app), None, "the Edit panel closed");
     }
 
