@@ -987,12 +987,16 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let ext = format.extension();
+        #[cfg(not(target_arch = "wasm32"))]
         let folder = doc.path.clone();
-        let bytes = doc.export_office(format);
+        let export = doc.export_office_checked(format);
+        let bytes = export.bytes;
+        let truncated_pages = export.truncated_pages;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let write = move |app: &mut Self, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
-                Ok(()) => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
+                Ok(()) if truncated_pages.is_empty() => app.notify_fmt("Exported to {path}", &[("path", &path.display().to_string())]),
+                Ok(()) => app.notify_office_export_truncation(&truncated_pages),
                 Err(e) => app.notify_fmt("Couldn't write {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             };
             match self.save_override.clone() {
@@ -1008,9 +1012,18 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        if let Err(e) = crate::editing::download(&format!("{stem}.{ext}"), &bytes) {
-            self.notify_error(e);
+        match crate::editing::download(&format!("{stem}.{ext}"), &bytes) {
+            Ok(()) => self.notify_office_export_truncation(&truncated_pages),
+            Err(e) => self.notify_error(e),
         }
+    }
+
+    fn notify_office_export_truncation(&mut self, pages: &[usize]) {
+        if pages.is_empty() {
+            return;
+        }
+        let pages = pages.iter().map(|page| page.saturating_add(1).to_string()).collect::<Vec<_>>().join(", ");
+        self.notify_fmt("The export left out content on pages {pages}.", &[("pages", &pages)]);
     }
 
     /// Forms ▸ Merge data files into spreadsheet: choose data files (FDF, XFDF or filled-in PDF
@@ -1143,6 +1156,22 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod stem_tests {
     use super::{attachment_file_name, file_stem_from_user, is_plain_file_name};
+
+    #[test]
+    fn office_export_warning_names_omitted_pages_as_one_based_numbers() {
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.notify_office_export_truncation(&[0, 2]);
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("The export left out content on pages 1, 3."));
+    }
+
+    #[test]
+    fn office_export_without_omissions_does_not_show_a_warning() {
+        let mut app = crate::PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.notify_office_export_truncation(&[]);
+        assert!(app.toast.is_none());
+    }
 
     #[test]
     fn user_file_names_stay_inside_the_folder_and_writable_everywhere() {
