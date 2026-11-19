@@ -771,10 +771,10 @@ fn snap_hairline(path: &BezPath, transform: Affine, bounds: Rect) -> Option<BezP
     let snap_axis = |v: f64, lo: f64, hi: f64| {
         let c = v.floor() + 0.5;
         if hi > lo {
-            if c - 0.5 >= hi && v - 0.5 < hi {
+            if v >= hi && v - 0.5 < hi {
                 return if v <= hi + BOUNDARY_EPS { hi.ceil() - 0.5 } else { v };
             }
-            if c + 0.5 <= lo && v + 0.5 > lo {
+            if v <= lo && v + 0.5 > lo {
                 return if v >= lo - BOUNDARY_EPS { lo.floor() + 0.5 } else { v };
             }
         }
@@ -3423,6 +3423,13 @@ mod hairline_dash_tests {
         let tile = Rect::new(-50.0, -40.0, 80.0, 30.0);
         assert_eq!(snap_vertical(80.0, tile), 79.5);
         assert_eq!(snap_vertical(0.0, tile), 0.5);
+        // Fractional right edge: interior and boundary noise snap onto the last pixel, while a
+        // genuine half-pixel overhang stays unmoved so its partial coverage is kept.
+        let fractional = Rect::new(0.0, 0.0, 130.25, 70.0);
+        assert_eq!(snap_vertical(130.0, fractional), 130.5);
+        assert_eq!(snap_vertical(130.25, fractional), 130.5);
+        assert_eq!(snap_vertical(130.255, fractional), 130.5);
+        assert_eq!(snap_vertical(130.375, fractional), 130.375);
     }
 }
 
