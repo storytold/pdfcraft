@@ -12,8 +12,9 @@ workspace = true
 # Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
 pdfcraft-ui-egui = { workspace = true }
-# The framework, through its facade (contract head): host, platform, automation, pages and quit.
-craft = { workspace = true, features = ["platform", "automation", "pages", "quit"] }
+# The framework, through its facade (contract head): host, platform, automation, pages and quit,
+# and the UI runtime and window policy the window is installed with.
+craft = { workspace = true, features = ["platform", "automation", "pages", "quit", "ui", "window"] }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
 # `crypto_env`: the cryptography environment the engine opens files with.

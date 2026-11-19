@@ -70,12 +70,8 @@ impl PdfCraftApp {
     }
 
     /// Answers the control requests of this frame and finishes the screenshots that are due. Runs in the
-    /// logic phase. Before the first real UI pass (`fonts_ready`) the requests wait in the channel, which keeps
-    /// their deadline.
+    /// logic phase; the runtime and fonts are installed at creation (L-227), so every frame can answer.
     pub(crate) fn control_logic(&mut self, ctx: &egui::Context) {
-        if !self.fonts_ready {
-            return;
-        }
         let Some(mut channel) = self.control.take() else { return };
         let host = WindowHost::of(ctx);
         let document = Some(self.capture_document());
@@ -93,9 +89,6 @@ impl PdfCraftApp {
 
     /// Counts the pass that just ran and issues the captures admitted for it. Call at the end of every UI pass.
     pub(crate) fn control_ui_pass(&mut self, ctx: &egui::Context) {
-        if !self.fonts_ready {
-            return;
-        }
         // A discarded pass is layout work, not a frame an agent can observe.
         if ctx.will_discard() {
             return;
