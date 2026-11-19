@@ -39,7 +39,7 @@ pub(crate) struct Evidence {
     pub letters: bool,
     /// `[x0, y0, x1, y1]` in user space: the left and right ends of the text's advance and the
     /// lowest and highest baseline. `None` unless all of it runs left to right along the x axis
-    /// in fonts whose widths are known.
+    /// in glyphs whose widths the font declares ([`Metrics::width_declared`]).
     pub place: Option<[f64; 4]>,
 }
 
@@ -143,7 +143,7 @@ struct Shown {
     moved: bool,
     letters: bool,
     place: Option<[f64; 4]>,
-    /// Text shown other than left to right along the x axis, or in a font without metrics.
+    /// Text shown other than left to right along the x axis, or in glyphs without a declared width.
     unplaced: bool,
 }
 
@@ -170,9 +170,11 @@ impl Shown {
         if !size.is_finite() || size <= 0.0 || size > 1e6 {
             return;
         }
-        let end = e + advance(state, metrics, bytes) * a;
-        let level = a > 0.0 && d > 0.0 && b.abs() <= a * 1e-3 && c.abs() <= d * 1e-3;
-        if level && end.is_finite() && f.is_finite() {
+        let (run, declared) = advance(state, metrics, bytes);
+        let end = e + run * a;
+        // A negative `Tz` mirrors the glyphs and runs the text right to left.
+        let level = a > 0.0 && d > 0.0 && b.abs() <= a * 1e-3 && c.abs() <= d * 1e-3 && state.spacing[2] > 0.0;
+        if level && declared && end.is_finite() && f.is_finite() {
             let [x0, y0, x1, y1] = self.place.unwrap_or([e, f, e, f]);
             self.place = Some([x0.min(e).min(end), y0.min(f), x1.max(e).max(end), y1.max(f)]);
         } else {
@@ -200,14 +202,15 @@ impl Shown {
     }
 }
 
-/// The text width `bytes` advances by, in unscaled text space (§9.4.4).
-fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> f64 {
+/// The text width `bytes` advances by, in unscaled text space (§9.4.4), and whether the font
+/// declares every glyph's width.
+fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> (f64, bool) {
     let [char_spacing, word_spacing, scale] = state.spacing;
-    let width = metrics.codes(bytes).into_iter().fold(0.0, |sum, (code, len)| {
+    let (width, declared) = metrics.codes(bytes).into_iter().fold((0.0, true), |(sum, declared), (code, len)| {
         let word = if metrics.is_space(code, len) { word_spacing } else { 0.0 };
-        sum + metrics.width(code) * state.size + char_spacing + word
+        (sum + metrics.width(code) * state.size + char_spacing + word, declared && metrics.width_declared(code))
     });
-    width * scale
+    (width * scale, declared)
 }
 
 /// Shows `bytes` in `object`, if any, then moves the text matrix past them.
@@ -215,7 +218,7 @@ fn show(state: &mut State, object: Option<&mut Shown>, bytes: &[u8]) {
     if let Some(o) = object {
         o.show(state, bytes);
     }
-    let moved = state.metrics.as_ref().map_or(0.0, |m| advance(state, m, bytes));
+    let moved = state.metrics.as_ref().map_or(0.0, |m| advance(state, m, bytes).0);
     state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
 }
 
@@ -413,15 +416,23 @@ mod tests {
         assert!(roles(&[]).is_empty());
     }
 
-    /// The evidence for each `BT`..`ET` of `content`, drawn in Helvetica-Bold as `/F1`.
+    /// The evidence for each `BT`..`ET` of `content`, drawn in Helvetica-Bold as `/F1`, a font
+    /// with no widths whose name is no standard face as `/F2`, and one whose `/Widths` covers
+    /// only `a` as `/F3`.
     fn walk(content: &[u8]) -> Vec<Evidence> {
         let doc = Document::new_empty();
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name("Helvetica-Bold"));
         let mut resources = Dict::new();
-        resources.set(b"F1".to_vec(), Object::Dict(font));
+        for (name, base, widths) in [("F1", "Helvetica-Bold", None), ("F2", "HouseFont", None), ("F3", "HouseFont", Some(500))] {
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name(base));
+            if let Some(w) = widths {
+                font.set(b"FirstChar".to_vec(), Object::Int(97));
+                font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(w)]));
+            }
+            resources.set(name.as_bytes().to_vec(), Object::Dict(font));
+        }
         let ops = pdfcraft_content::parse(content).ops;
         let at = |name: &[u8]| -> Vec<usize> { ops.iter().enumerate().filter(|(_, o)| o.op == name).map(|(i, _)| i).collect() };
         let spans: Vec<(usize, usize)> = at(b"BT").into_iter().zip(at(b"ET")).collect();
@@ -463,6 +474,15 @@ mod tests {
         assert_eq!(found[0].place, None, "vertical");
         assert_eq!(found[1].place, None, "part of it has no widths");
         assert_eq!(found[2].place, None, "right to left");
+    }
+
+    #[test]
+    fn text_mirrored_by_tz_or_in_widths_the_font_does_not_declare_has_no_place() {
+        let found = walk(b"q BT /F1 10 Tf -100 Tz 50 0 Td (a) Tj ET Q BT /F2 10 Tf (a) Tj ET BT /F3 10 Tf (ab) Tj ET BT /F3 10 Tf (a) Tj ET");
+        assert_eq!(found[0].place, None, "a negative Tz runs right to left");
+        assert_eq!(found[1].place, None, "no /Widths, and Helvetica only a guess");
+        assert_eq!(found[2].place, None, "b is past /Widths");
+        assert_eq!(rounded(found[3].place), Some([0.0, 0.0, 5.0, 0.0]), "a is in /Widths");
     }
 
     #[test]

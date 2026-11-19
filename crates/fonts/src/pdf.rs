@@ -42,6 +42,8 @@ pub struct Metrics {
     explicit_default: bool,
     /// The standard-14 face to measure with when the dictionary carries no `/Widths`.
     std14: Option<crate::Std14>,
+    /// [`Metrics::std14`] is the face `/BaseFont` names (or a common alias of it), not a guess.
+    std14_named: bool,
     /// Glyph units → text space (0.001, or `/FontMatrix[0]` for Type 3).
     pub scale: f64,
     /// Glyph box in text space per unit of font size.
@@ -899,6 +901,7 @@ impl Metrics {
             default: 500.0,
             explicit_default: false,
             std14: Some(crate::Std14::Helvetica),
+            std14_named: false,
             scale: 0.001,
             ascent: 0.9,
             descent: -0.25,
@@ -1067,7 +1070,9 @@ impl Metrics {
                 let base = String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b"")).into_owned();
                 // The real face, bold and italic included: the published metrics differ by style,
                 // so Times-Bold is not Times-Roman and neither is Helvetica scaled.
-                m.std14 = crate::Std14::from_base_font(&base).or(Some(crate::Std14::Helvetica));
+                let recognised = crate::Std14::recognise(&base);
+                m.std14_named = matches!(recognised, Some((_, crate::Std14Match::Alias)));
+                m.std14 = recognised.map(|(face, _)| face).or(Some(crate::Std14::Helvetica));
             }
         }
         if let Some(d) = descriptor {
@@ -1141,6 +1146,24 @@ impl Metrics {
                 w => w / 1000.0,
             },
             None => self.default * self.scale,
+        }
+    }
+
+    /// Whether [`Metrics::width`] of `code` is a width the font declares: a `/Widths` entry (or
+    /// the embedded program's advance where `/Widths` is absent), a `/W` entry or an explicit
+    /// `/DW`, or the published metrics of the standard-14 face `/BaseFont` names. It is not for a
+    /// `/MissingWidth`, the implied `/DW` of 1000, or a standard-14 face guessed from the name.
+    pub fn width_declared(&self, code: u32) -> bool {
+        if self.composite {
+            let cid = self.cid(code);
+            return self.explicit_default || self.cid_widths.contains_key(&cid) || self.cid_ranges.find(cid).is_some();
+        }
+        if code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)).is_some() {
+            return true;
+        }
+        match self.std14.filter(|_| self.std14_named) {
+            Some(f) => u8::try_from(self.std14_code(f, code)).is_ok_and(|c| f.width(c) != 0.0),
+            None => false,
         }
     }
 

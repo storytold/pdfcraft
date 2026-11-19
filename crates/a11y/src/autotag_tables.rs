@@ -5,9 +5,12 @@
 //! least two chunks, each at most [`ROW_GAP_EM`] font sizes below the one before, are a
 //! candidate. Its chunks' horizontal spans, merged where they overlap or nearly touch, are its
 //! columns. A candidate is a table when it has at least two columns, every column holds text in
-//! at least two rows, its cells average at most [`MAX_MEAN_CELL_CHARS`] characters, and no other
-//! text lies among its rows (a wrapped line, or text whose place is unknown, drawn between its
-//! cells); otherwise it stays paragraphs and is reported for review.
+//! at least two rows, in each column at least two cells and at least half of them share a left
+//! edge, a right edge or a centre to within [`ALIGN_EM`] font sizes, each column's cells average
+//! at most [`MAX_MEAN_CELL_CHARS`] characters, and no other text lies among its rows (a wrapped
+//! line, or text whose place is unknown, drawn between its cells); otherwise it stays paragraphs
+//! and is reported for review. A column of prose lines set on the rows' baselines beside a table
+//! therefore keeps the whole block paragraphs.
 //! The first row is a header row when it is bold and the others are not, or when it is set apart
 //! by a gap at least [`APART_RATIO`] times every other row gap. Ruling lines are not read, and
 //! cells that span rows or columns are not recognised.
@@ -23,7 +26,9 @@ const MIN_ROWS: usize = 3;
 const GUTTER_EM: f64 = 1.0;
 /// Rows further apart than this many font sizes end a table.
 pub(crate) const ROW_GAP_EM: f64 = 2.5;
-/// Cells averaging more characters than this are prose set in columns.
+/// Cell edges this many font sizes apart or less are aligned.
+pub(crate) const ALIGN_EM: f64 = 0.25;
+/// A column whose cells average more characters than this is prose.
 pub(crate) const MAX_MEAN_CELL_CHARS: usize = 30;
 const MAX_COLUMNS: usize = 32;
 const MAX_ROWS: usize = 500;
@@ -168,7 +173,8 @@ fn intruded(block: &[&Row], [x0, y0, x1, y1]: [f64; 4], others: &[(usize, Option
 fn grid(rows: &[&Row]) -> Result<Grid, &'static str> {
     let mut sizes: Vec<f64> = rows.iter().map(|r| r.size).collect();
     sizes.sort_by(f64::total_cmp);
-    let gutter = GUTTER_EM * sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
+    let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
+    let gutter = GUTTER_EM * median;
     let mut spans: Vec<(f64, f64)> = rows.iter().flat_map(|r| r.chunks.iter().map(|c| (c.x0, c.x1))).collect();
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut columns: Vec<(f64, f64)> = Vec::new();
@@ -185,26 +191,57 @@ fn grid(rows: &[&Row]) -> Result<Grid, &'static str> {
         return Err("it has more than 32 columns");
     }
     let mut cells = vec![vec![Vec::new(); columns.len()]; rows.len()];
-    let (mut used, mut chars, mut filled) = (vec![0usize; columns.len()], 0usize, 0usize);
+    // Per column: each filled cell's left and right edge, and the characters of its cells.
+    let (mut edges, mut chars) = (vec![Vec::new(); columns.len()], vec![0usize; columns.len()]);
     for (row, out) in rows.iter().zip(cells.iter_mut()) {
+        let mut spans: Vec<Option<(f64, f64)>> = vec![None; columns.len()];
         for chunk in &row.chunks {
             let column = columns.iter().position(|c| chunk.x0 >= c.0 && chunk.x1 <= c.1).ok_or("a cell crosses two columns")?;
-            let (Some(cell), Some(count)) = (out.get_mut(column), used.get_mut(column)) else { return Err("a cell crosses two columns") };
-            if cell.is_empty() {
-                *count = count.saturating_add(1);
-                filled = filled.saturating_add(1);
-            }
+            let (Some(cell), Some(span), Some(count)) = (out.get_mut(column), spans.get_mut(column), chars.get_mut(column)) else {
+                return Err("a cell crosses two columns");
+            };
+            let (lo, hi) = span.unwrap_or((chunk.x0, chunk.x1));
+            *span = Some((lo.min(chunk.x0), hi.max(chunk.x1)));
             cell.extend(chunk.items.iter().map(|i| i.index));
-            chars = chars.saturating_add(chunk.items.iter().fold(0, |n, i| n.saturating_add(i.chars)));
+            *count = count.saturating_add(chunk.items.iter().fold(0, |n, i| n.saturating_add(i.chars)));
+        }
+        for (column, span) in edges.iter_mut().zip(spans) {
+            column.extend(span);
         }
     }
-    if used.iter().any(|&n| n < 2) {
+    if edges.iter().any(|e| e.len() < 2) {
         return Err("a column has text in only one row");
     }
-    if chars > MAX_MEAN_CELL_CHARS.saturating_mul(filled) {
+    if !edges.iter().all(|e| aligned(e, ALIGN_EM * median)) {
+        return Err("its columns do not line up from row to row");
+    }
+    if chars.iter().zip(&edges).any(|(&n, e)| n > MAX_MEAN_CELL_CHARS.saturating_mul(e.len())) {
         return Err("its cells hold running text");
     }
     Ok(Grid { rows: cells, header: header(rows) })
+}
+
+/// Whether at least two of a column's cells, and at least half of them, share a left edge, a
+/// right edge or a centre to within `tolerance`.
+fn aligned(cells: &[(f64, f64)], tolerance: f64) -> bool {
+    let edges: [fn((f64, f64)) -> f64; 3] = [|(a, _)| a, |(_, b)| b, |(a, b)| (a + b) / 2.0];
+    let most = edges
+        .into_iter()
+        .map(|edge| {
+            let mut at: Vec<f64> = cells.iter().map(|&c| edge(c)).collect();
+            at.sort_by(f64::total_cmp);
+            let (mut start, mut most) = (0usize, 0usize);
+            for (end, &x) in at.iter().enumerate() {
+                while at.get(start).is_some_and(|&first| x - first > tolerance) {
+                    start = start.saturating_add(1);
+                }
+                most = most.max(end.saturating_add(1).saturating_sub(start));
+            }
+            most
+        })
+        .max()
+        .unwrap_or(0);
+    most >= 2 && most.saturating_mul(2) >= cells.len()
 }
 
 /// Whether the first row heads the table: bold over text that is not, or set apart by its gap.
@@ -508,6 +545,44 @@ mod tests {
         let content: String = [700.0, 688.0, 676.0].iter().map(|&y| row("F1", y, &[72.0, 320.0], &[left, right])).collect();
         let found = table_candidates(&page(&content, "")).unwrap();
         assert_eq!(found.first().and_then(|f| f.not_a_table), Some("its cells hold running text"));
+    }
+
+    #[test]
+    fn prose_beside_a_table_on_its_baselines_is_not_a_table() {
+        let prose = "This column holds a sentence of prose text";
+        let rows = [(700.0, "12", "Red"), (686.0, "7", "Green"), (672.0, "30", "Purple")];
+        let content: String = rows.iter().map(|&(y, n, c)| row("F1", y, &[72.0, 330.0, 440.0], &[prose, n, c])).collect();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        assert_eq!(found.first().and_then(|f| f.not_a_table), Some("its cells hold running text"));
+        let mut doc = page(&content, "");
+        autotag_text(&mut doc).unwrap();
+        assert!(!kinds(&doc).iter().any(|k| k == "Table"));
+    }
+
+    #[test]
+    fn values_that_drift_from_row_to_row_are_not_a_column() {
+        // Each value starts 20 units right of the one above: the spans overlap into one column,
+        // but no two share an edge.
+        let rows = [(700.0, "Name", 200.0), (686.0, "Size", 220.0), (672.0, "Kind", 240.0)];
+        let content: String = rows.iter().map(|&(y, label, x)| [cell("F1", 72.0, y, label), cell("F1", x, y, "Value")].concat()).collect();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        assert_eq!(found.first().and_then(|f| f.not_a_table), Some("its columns do not line up from row to row"));
+    }
+
+    #[test]
+    fn right_aligned_and_centred_columns_line_up() {
+        // Digits are 5.56 units wide at 10 pt in Helvetica, so the numbers end at x 250. Red,
+        // Green and Purple are 18.34, 27.79 and 28.9 wide, centred on x 400.
+        let rows = [(700.0, "Apples", "7", "Red", 18.34), (686.0, "Pears", "12", "Green", 27.79), (672.0, "Plums", "130", "Purple", 28.9)];
+        let content: String = rows
+            .iter()
+            .map(|&(y, fruit, n, colour, width)| {
+                let digits = n.len() as f64;
+                [cell("F1", 72.0, y, fruit), cell("F1", 250.0 - 5.56 * digits, y, n), cell("F1", 400.0 - width / 2.0, y, colour)].concat()
+            })
+            .collect();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        assert_eq!(found.first().map(|f| (f.columns, f.not_a_table)), Some((3, None)));
     }
 
     #[test]
