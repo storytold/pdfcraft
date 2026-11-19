@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, LazyLock};
 
-use craft::ui::fonts::{CjkRows, Family, FontRef, I18nScripts, NoCandidates, SEMIBOLD, SystemCandidates, UiFonts};
+use craft::ui::fonts::{CjkRows, Emoji, Family, FontRef, I18nScripts, NoCandidates, SEMIBOLD, SystemCandidates, UiFonts, noto_emoji};
 use egui::epaint::text::{FallbackAlign, FontData, FontTweak, HintingTarget, SmoothHinting};
 
 use crate::i18n::{LANGUAGES, Lang};
@@ -57,20 +57,24 @@ pub fn ui_fonts(lang: Lang) -> UiFonts<'static> {
     let platform = current_platform();
     let proportional = FontRef::proportional();
     let monospace = FontRef::monospace();
+    let medium = FontRef::named(MEDIUM);
+    let semibold = FontRef::named(SEMIBOLD);
     let codes: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
     let system_fonts_off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
+    let mut emoji = Emoji::default();
+    emoji.monochrome = noto_emoji();
     let fonts = UiFonts::new(&SCRIPTS)
         .app_face("Inter", own_face(platform, "Inter", pdfcraft_fonts::INTER_REGULAR), &[proportional.clone(), monospace.clone()])
         .app_face("JetBrainsMono", own_face(platform, "JetBrainsMono", JETBRAINS_MONO), &[monospace.clone()])
-        .app_face("Inter-Medium", own_face(platform, "Inter-Medium", INTER_MEDIUM), &[FontRef::named(MEDIUM)])
-        .app_face("Inter-SemiBold", own_face(platform, "Inter-SemiBold", INTER_SEMIBOLD), &[FontRef::named(SEMIBOLD)])
+        .app_face("Inter-Medium", own_face(platform, "Inter-Medium", INTER_MEDIUM), &[medium.clone()])
+        .app_face("Inter-SemiBold", own_face(platform, "Inter-SemiBold", INTER_SEMIBOLD), &[semibold.clone()])
         .family(Family::named(MEDIUM).weight(500))
         .family(Family::named(SEMIBOLD).weight(600))
-        // egui's own faces, as production's default fonts: the check mark, triangles and other text symbols that
-        // Inter and JetBrains Mono lack, with no system face.
-        .egui_face("Hack", &[proportional.clone(), monospace.clone()])
-        .egui_face("NotoEmoji-Regular", &[proportional.clone(), monospace.clone()])
-        .egui_face("emoji-icon-font", &[proportional.clone(), monospace.clone()])
+        // As production's default fonts, with no system face: Hack draws the triangles and arrows (▸, ⇧) that
+        // Inter and JetBrains Mono lack in every family, the weighted ones included, and Noto Emoji the check mark
+        // and other text symbols.
+        .egui_face("Hack", &[proportional, monospace, medium, semibold])
+        .emoji(emoji)
         .craft_faces(pdfcraft_fonts::CRAFT_FONTS)
         .languages(&codes)
         .ui_language(lang.code())
