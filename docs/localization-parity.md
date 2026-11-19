@@ -92,19 +92,21 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Catalan | `ca` | 2,849 (98.3%) | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
 | Romanian | `ro` | 2,849 (98.3%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,758 (95.2%) | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
+| Hebrew | `he` | not yet measured (2,710 PdfCraft catalog rows) | partial; RTL and embedded Hebrew face; no translated help; English date behavior retained | yes (Middle East edition) |
 | Persian | `fa` | 2,801 (96.7%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Central Kurdish (Sorani) | `ckb` | 2,754 (95.1%) | partial; right-to-left like Arabic | no |
 | Thai | `th` | 2,751 (95.0%) | partial | no |
 | Lao | `lo` | 2,504 (86.4%) | partial | no |
 
-**24 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
+**25 other languages** ship (36 catalogs plus English = **37** interface languages in Preferences).
 Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | Hebrew (`he`) offered as an RTL interface language; macOS bundle localization, locale matching and persistence tests updated. Hebrew catalog coverage awaits a refreshed `cargo xtask i18n-report`; date localization remains unchanged. |
 | 2026-11-04 | minor | Bosnian (`bs`, Latin, Ijekavian) offered: `LANGUAGES` row, `bs-*` locales, Bosnian date names, one/few/other plurals; the catalog is craft-i18n's (#141) |
 | 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of the 2,897 strings in the report's denominator), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
