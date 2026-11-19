@@ -40,10 +40,6 @@ const CATALOG_ONLY: &[(&str, &str, &str)] = &[
 /// Commands whose chords and rows are the framework's clipboard commands.
 const FRAMEWORK_EDIT: &[&str] = &["edit.copy", "edit.paste"];
 
-/// Commands whose keys are the page view's own: it turns a page or spread on ⌘← / ⌘→ and ⌘Page Up / ⌘Page Down
-/// itself, so a chord here would turn it twice. The menus still show the registry's shortcut.
-const PAGE_VIEW_KEYS: &[&str] = &["view.next_page", "view.previous_page"];
-
 static CATALOG_WIN: OnceLock<Option<AppCatalog>> = OnceLock::new();
 static CATALOG_MAC: OnceLock<Option<AppCatalog>> = OnceLock::new();
 
@@ -83,9 +79,6 @@ pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
         }
         let mut chords: Vec<Chord> = spec.shortcut_for(mac).and_then(menus::chord).into_iter().collect();
         chords.extend(second_chords(spec.id));
-        if PAGE_VIEW_KEYS.contains(&spec.id) {
-            chords.clear();
-        }
         push(def, chords);
     }
     for (id, label, shortcut) in EXTRA.iter().filter(|(id, ..)| !FRAMEWORK_EDIT.contains(id)) {
@@ -99,12 +92,15 @@ pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
 }
 
 /// The chords a registry command takes beside its own shortcut: Alt+← / Alt+→ (⌥ on macOS) go back and forward
-/// through the view history, as in Acrobat and browsers (#3632).
+/// through the view history, as in Acrobat and browsers (#3632), and ⌘Page Up / ⌘Page Down turn a page as ⌘← / ⌘→ do.
 fn second_chords(id: &str) -> Vec<Chord> {
     let alt = Mods { alt: true, ..Mods::default() };
+    let cmd = Mods { cmd: true, ..Mods::default() };
     match id {
         "view.previous_view" => vec![Chord::new(alt, Key::Left)],
         "view.next_view" => vec![Chord::new(alt, Key::Right)],
+        "view.previous_page" => vec![Chord::new(cmd, Key::PageUp)],
+        "view.next_page" => vec![Chord::new(cmd, Key::PageDown)],
         _ => Vec::new(),
     }
 }

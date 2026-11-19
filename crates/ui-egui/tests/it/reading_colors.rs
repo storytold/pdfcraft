@@ -3,7 +3,7 @@
 
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use pdfcraft_render::ReadingColors;
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -129,7 +129,9 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
     h.run_steps(6);
     h.get_by_label("Appearance").click();
     h.run_steps(3);
-    assert!(h.query_by_label("Original").is_some());
+    // The document's own colours: the row starts on Off.
+    let row = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours");
+    assert_eq!(row.value().as_deref(), Some("Off"));
     let theme = h.state().theme_preference;
     for (label, expected) in [
         ("White on black", ReadingColors::WHITE_ON_BLACK),

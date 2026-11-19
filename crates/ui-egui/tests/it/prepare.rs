@@ -999,7 +999,7 @@ fn duplicating_a_field_onto_every_page() {
     h.run_steps(3);
     h.get_by_label("Duplicate…").click();
     h.run_steps(2);
-    h.get_by_label("Duplicate Field");
+    h.get_by_role_and_label(Role::Dialog, "Duplicate Field");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -1371,13 +1371,18 @@ fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
     let before = names(&h);
     draw_table(&mut h);
     assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select once the area is drawn");
-    // The table starts with four rows and one column: two rows fewer and one column more.
-    for _ in 0..2 {
-        h.get_all_by_label("-").next().expect("the Rows field's minus").click();
-        h.run_steps(2);
-    }
-    h.get_all_by_label("+").nth(1).expect("the Columns field's plus").click();
-    h.run_steps(2);
+    // The table starts with four rows and one column: two rows fewer and one column more, by the
+    // number fields' arrows.
+    let step = |h: &mut Harness<'static, PdfCraftApp>, field: usize, key: egui::Key, times: usize| {
+        h.query_all(by().role(Role::SpinButton)).nth(field).expect("the table's number field").focus();
+        h.run_steps(1);
+        for _ in 0..times {
+            h.key_press(key);
+            h.run_steps(2);
+        }
+    };
+    step(&mut h, 0, egui::Key::ArrowDown, 2);
+    step(&mut h, 1, egui::Key::ArrowUp, 1);
     retype(&mut h, "Column 1", "desc_N");
     retype(&mut h, "Column 2", "price_N");
     assert_eq!(table(&h)["rows"], 2);
@@ -1433,11 +1438,7 @@ fn enter_in_a_number_field_does_not_add_the_table() {
     let mut h = harness();
     let before = names(&h).len();
     draw_table(&mut h);
-    let rows = h.query_all(by().role(Role::SpinButton)).next().map(|n| n.rect()).expect("the Rows field");
-    h.hover_at(rows.center());
-    h.drag_at(rows.center());
-    h.run_steps(1);
-    h.drop_at(rows.center());
+    h.query_all(by().role(Role::SpinButton)).next().expect("the Rows field").focus();
     h.run_steps(2);
     h.key_press(egui::Key::Backspace);
     h.event(egui::Event::Text("6".into()));
@@ -1672,9 +1673,10 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     h.execute("edit.redo");
     h.run_steps(3);
     assert_eq!(order(&h), ["total", "sub", "other"]);
-    // Dragging other onto the first row puts it first.
+    // Dragging other onto the first row's upper half puts it first.
     let from = order_row(&h, "other").rect().center();
-    let to = order_row(&h, "total").rect().center();
+    let first = order_row(&h, "total").rect();
+    let to = first.center() - egui::vec2(0.0, first.height() / 4.0);
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
@@ -1860,10 +1862,12 @@ fn fields_sharing_a_name_each_show_their_own_formula() {
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
-    for (row, formula) in [("1. dup", "= sum(src)"), ("3. dup", "= sum(x)")] {
-        h.get_by_label_contains(row).hover();
+    // The two dup rows, first and third in the order: rows say their field's name and value, the
+    // number is the row's lead.
+    for (row, formula) in [(0, "= sum(src)"), (1, "= sum(x)")] {
+        h.query_all_by(|node| node.label().is_some_and(|label| label == "dup" || label.starts_with("dup: "))).nth(row).expect("a dup row").hover();
         h.run_steps(30);
-        assert!(h.query_by_label_contains(formula).is_some(), "{row} shows {formula}");
+        assert!(h.query_by_label_contains(formula).is_some(), "dup row {row} shows {formula}");
     }
 }
 

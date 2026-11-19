@@ -74,9 +74,14 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
     let checkbox = h.get_by_label("Show Page Edge Shadows");
     checkbox.click();
     h.run_steps(2);
+    // A row edits the window's draft; Apply takes it.
+    h.get_by_label("Apply").click();
+    h.run_steps(2);
     assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(false), "a click turns it off");
     h.get_by_label("Show Page Edge Shadows").focus();
     h.key_press(egui::Key::Space);
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
     h.run_steps(2);
     assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(true), "Space turns it on");
     h.set_option("show_page_edge_shadows", "false").unwrap();

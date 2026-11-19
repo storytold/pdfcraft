@@ -254,7 +254,7 @@ mod tests {
         h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
         settle(&mut h);
         assert_eq!(words_shown(&h), "3");
-        h.get_by_label("Close").click();
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Close").last().expect("the dialog's Close").click();
         h.run_steps(2);
         assert!(!h.state().modal_open());
         assert!(h.state().dialogs.get::<WordCountDialog>().is_none(), "closing drops the dialog and its queue");
