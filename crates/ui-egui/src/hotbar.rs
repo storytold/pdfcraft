@@ -214,7 +214,8 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(next) = output.last_used {
         app.hotbar.last_used = next;
     }
-    if output.edit_toolbar.as_ref().is_some_and(|opener| opener.clicked()) {
+    // A click by the pointer or by keyboard activation.
+    if output.edit_toolbar.as_ref().is_some_and(craft::ui::contract::clicked) {
         app.hotbar.drawer_open = true;
     }
     if !app.hotbar.drawer_open {
@@ -284,8 +285,11 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
         tl!("Colour"),
         |ui| Swatch::new(tl!("Colour").to_string(), to_srgba(current)).show(ui).response,
         |ui| {
-            colour = comments::palette(ui, tl!("Colour"), Some(current), "hotbar.fill-text-colour", &app.recent_colours);
-            colour.picked.is_some()
+            let pick = comments::palette(ui, tl!("Colour"), Some(current), "hotbar.fill-text-colour", &app.recent_colours);
+            let done = pick.picked.is_some();
+            colour.picked = colour.picked.take().or(pick.picked);
+            colour.request = colour.request.take().or(pick.request);
+            done
         },
     );
     if let Some(color) = colour.picked {
@@ -309,7 +313,7 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
         |ui| {
             let field =
                 SliderField::new(tl!("Font size"), Bind::bound(&mut size), min..=max).scale(SliderScale::Log).unit_kind(UnitKind::Points).show(ui);
-            committed = field.edit.events.committed().is_some();
+            committed |= field.edit.events.committed().is_some();
             false
         },
     );
@@ -428,8 +432,11 @@ fn border_colour_control(
         tl!("Border colour"),
         |ui| Swatch::new(tl!("Border colour").to_string(), to_srgba(own.unwrap_or(text))).show(ui).response,
         |ui| {
-            pick = comments::border_choice(ui, own, key, recent);
-            pick.choice.is_some()
+            let this = comments::border_choice(ui, own, key, recent);
+            let done = this.choice.is_some();
+            pick.choice = pick.choice.take().or(this.choice);
+            pick.request = pick.request.take().or(this.request);
+            done
         },
     );
     pick

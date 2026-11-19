@@ -60,8 +60,14 @@ fn page_texts(app: &PdfCraftApp) -> Vec<String> {
         .collect()
 }
 
+/// Organize copies pages as a file manager copies files: Option on macOS, Ctrl elsewhere.
 fn copy_modifier(_h: &Harness<'static, PdfCraftApp>, copying: bool) -> Modifiers {
-    if copying { Modifiers::ALT } else { Modifiers::NONE }
+    match (copying, cfg!(target_os = "macos")) {
+        (false, _) => Modifiers::NONE,
+        (true, true) => Modifiers::ALT,
+        // Ctrl as a keyboard sends it off macOS: the command key too.
+        (true, false) => Modifiers { ctrl: true, command: true, ..Modifiers::NONE },
+    }
 }
 
 fn start_drag(h: &mut Harness<'static, PdfCraftApp>, copying: bool) -> (Pos2, Modifiers) {

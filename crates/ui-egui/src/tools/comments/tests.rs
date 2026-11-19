@@ -571,9 +571,10 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     assert_eq!(parts(&view, Some(over)).len(), 1, "one part for the comment under the pointer");
     assert!(parts(&view, None).is_empty(), "no pointer, no part");
     assert!(parts(&view, Some(Point::new(5.0, 5.0))).is_empty(), "nor where nothing would take the press");
-    // Over the comment that is selected, no outline part: the handles are what is there.
+    // A selected comment keeps its part, so its tip shows as production's did; the overlay draws no outline round it
+    // (the handles are what is there), and a drag on it still passes to the tool.
     view.session.comments.select_only((0, 0));
-    assert!(parts(&view, Some(over)).is_empty(), "no outline over a selected comment");
+    assert_eq!(parts(&view, Some(over)).len(), 1, "the selected comment is still pressed and tipped where it is");
 }
 
 /// A silent transform error would carry into every saved comment: the user point survives the trip through the document

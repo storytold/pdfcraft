@@ -83,7 +83,7 @@ impl<'a> PageMap<'a> {
     /// its displayed point stands in.
     pub(crate) fn to_doc(&self, page: usize, user: [f64; 2]) -> Point {
         let shown = match self.info.pages.get(page) {
-            Some(p) => turned_point(p, self.rotation, [user[0] as f32, user[1] as f32]),
+            Some(p) => turned_point(p, self.rotation, user),
             None => Point::new(user[0], user[1]),
         };
         match self.frame(page) {
@@ -202,30 +202,29 @@ impl PageFrame {
 }
 
 /// A user-space point as the displayed point of a page the view turns clockwise by `rotation` degrees.
-fn turned_point(page: &PageInfo, rotation: u16, user: [f32; 2]) -> Point {
-    let [x, y] = page.user_to_view(user[0], user[1]);
-    let (w, h) = (page.width, page.height);
+fn turned_point(page: &PageInfo, rotation: u16, user: [f64; 2]) -> Point {
+    let [x, y] = page.user_to_view_f64(user[0], user[1]);
+    let (w, h) = (f64::from(page.width), f64::from(page.height));
     let (a, b) = match rotation {
         90 => (h - y, x),
         180 => (w - x, h - y),
         270 => (y, w - x),
         _ => (x, y),
     };
-    Point::new(f64::from(a), f64::from(b))
+    Point::new(a, b)
 }
 
 /// The user-space point under the displayed point `at` of a page the view turns clockwise by `rotation` degrees.
 fn unturned_point(page: &PageInfo, rotation: u16, at: Point) -> [f64; 2] {
-    let (a, b) = (at.x as f32, at.y as f32);
-    let (w, h) = (page.width, page.height);
+    let (a, b) = (at.x, at.y);
+    let (w, h) = (f64::from(page.width), f64::from(page.height));
     let (x, y) = match rotation {
         90 => (b, h - a),
         180 => (w - a, h - b),
         270 => (w - b, a),
         _ => (a, b),
     };
-    let u = page.view_to_user(x, y);
-    [f64::from(u[0]), f64::from(u[1])]
+    page.view_to_user_f64(x, y)
 }
 
 fn bounds(points: &[Point]) -> Option<Rect> {
@@ -324,11 +323,11 @@ pub(crate) fn annotations(info: &DocInfo, map: &PageMap<'_>, tool: QuickTool, al
             members.entry(*p).or_default().push(m);
         }
     }
-    all.iter()
-        .enumerate()
-        .filter(|(_, a)| a.is_comment() && a.subtype != "Popup" && map.shows(a.page) && pick(a))
-        .filter_map(|(i, a)| marked(map, a, members.get(&i).map_or(&[][..], Vec::as_slice), allowed))
-        .collect()
+    let mut shown: Vec<(usize, &Annotation)> =
+        all.iter().enumerate().filter(|(_, a)| a.is_comment() && a.subtype != "Popup" && map.shows(a.page) && pick(a)).collect();
+    // In paint order (`/Annots`), not the inspection's: the framework takes the last listed as the topmost.
+    shown.sort_by_key(|(_, a)| (a.page, a.index));
+    shown.into_iter().filter_map(|(i, a)| marked(map, a, members.get(&i).map_or(&[][..], Vec::as_slice), allowed)).collect()
 }
 
 fn marker_boxes(map: &PageMap<'_>, anns: &[Marked], icon_side: f64) -> Vec<(AnnotationId, Rect)> {
@@ -417,22 +416,22 @@ pub(crate) fn parts(
     };
     let index = key_of(id).1;
     let owner = Owner::Comment { index };
+    // A part has one shape, and the page parts keep one per comment: the line (or marker) the pointer is on, which
+    // `pick_at` took the comment from. A markup's other lines get theirs when the pointer reaches them.
+    let pointer = egui::pos2(screen.x as f32, screen.y as f32);
+    let Some(shape) = screen_shapes.into_iter().min_by(|a, b| a.distance_sq_to_pos(pointer).total_cmp(&b.distance_sq_to_pos(pointer))) else {
+        return Vec::new();
+    };
     if on_link && tool == QuickTool::Select && engine(info, page, index).is_some_and(|a| a.subtype == "Highlight") {
         // The link's hand and tip show there.
-        return screen_shapes.into_iter().map(|shape| PagePart::new(owner, page, shape, PageLayer::Comment).context_only()).collect();
+        return vec![PagePart::new(owner, page, shape, PageLayer::Comment).context_only()];
     }
     let tip = tips(info, prefs, tool).into_iter().find(|(t, _)| *t == id).map(|(_, tip)| tip);
-    // A part has one shape: a markup's lines are one part each, which a press resolves to the same comment.
-    screen_shapes
-        .into_iter()
-        .map(|shape| {
-            let part = PagePart::new(owner, page, shape, PageLayer::Comment).passes_drag().cursor(icon);
-            match &tip {
-                Some(tip) => part.tip(tip.clone()),
-                None => part,
-            }
-        })
-        .collect()
+    let part = PagePart::new(owner, page, shape, PageLayer::Comment).passes_drag().cursor(icon);
+    vec![match tip {
+        Some(tip) => part.tip_now(tip),
+        None => part,
+    }]
 }
 
 fn engine(info: &DocInfo, page: usize, index: usize) -> Option<&Annotation> {

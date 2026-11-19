@@ -347,9 +347,10 @@ impl CommentView {
         self.member = cx.picked(p, self.primary());
     }
 
-    /// Open the inline editor on the root message of comment (page, index) with `text`.
+    /// Open the inline editor on the root message of comment (page, index) with `text`; it takes
+    /// the keyboard when its card is next built.
     pub(crate) fn open_editor(&mut self, page: usize, index: usize, text: String) {
-        self.panel.editing = Some((bridge::thread_id(page, index), 0, text));
+        self.panel.edit(bridge::thread_id(page, index), 0, text);
     }
 
     /// A comment was just added. An empty editor open on another one closes; one holding text
