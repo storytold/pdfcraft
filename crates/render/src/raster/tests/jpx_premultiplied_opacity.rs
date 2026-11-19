@@ -54,3 +54,17 @@ fn a_jpx_image_with_premultiplied_opacity_is_drawn_through_it() {
         assert!(close(opaque, [128, 128, 128]), "{colour_space}, no /SMaskInData: {opaque:?}");
     }
 }
+
+/// Review on #7292: the colours are recovered in their own colour space, before `/Decode` and the
+/// colour conversion, which are not linear. Dividing the converted RGB instead made a partly
+/// transparent CalGray pixel too bright.
+#[test]
+fn a_premultiplied_colour_is_recovered_before_colour_conversion() {
+    // Sample 128 at opacity 128 is white premultiplied. `/Decode [0 0.25]` makes the recovered
+    // sample 0.25, which CalGray's gamma-1 conversion draws as grey 146, so half opacity over the
+    // blue is 73 and 200. Divided in RGB after conversion instead, the premultiplied 0.125 became
+    // 107 and came back as 213: 107 and 234.
+    let keys = "/ColorSpace [/CalGray << /WhitePoint [1 1 1] /Gamma 1 >>] /Decode [0 0.25] /SMaskInData 2";
+    let actual = page(2, keys);
+    assert!(close(actual, [73, 73, 200]), "{actual:?}");
+}
