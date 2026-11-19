@@ -211,6 +211,7 @@ fn threads(doc: &pdfcraft_engine::Document, prefs: &CommentPrefs) -> (Vec<Commen
             color: a.color.map(rgb8),
             messages,
             statuses: reviewer_statuses(&states, a),
+            reply_statuses: replies.iter().flat_map(|r| reviewer_statuses(&states, r)).collect(),
             marked: states.marked_by(a, &prefs.author),
             locked: a.locked,
             resolved: false,
