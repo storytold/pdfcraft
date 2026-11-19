@@ -22,6 +22,9 @@ fn main() {
                 canvas,
                 options,
                 Box::new(|cc| {
+                    // PLAN: assumed pdfcraft_ui_egui::settings::open() -> Store over craft::settings::BrowserFiles on wasm32, with the former PrintCraft key migrated (pdf-shell-w9, SH-C29, L-117).
+                    let settings = pdfcraft_ui_egui::settings::open();
+                    install_runtime(cc, startup_lang(settings.get().behavior.language.as_deref()))?;
                     let ctx = cc.egui_ctx.clone();
                     let wake = craft::host::Wake::new(move || ctx.request_repaint());
                     // Files to open: a `?file=` download, the embedding page's `pdfcraft:open`, a drop.
@@ -30,8 +33,6 @@ fn main() {
                     let files = craft::web_host::files::BrowserFiles::new(wake, host::MAX_OPEN_BYTES);
                     let app_host = craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO).files(Arc::new(files)).build();
                     let mut app = PdfCraftApp::with_host(Arc::new(app_host), AppServices::system(&cc.egui_ctx, intake));
-                    // PLAN: assumed pdfcraft_ui_egui::settings::open() -> Store over craft::settings::BrowserFiles on wasm32, with the former PrintCraft key migrated (pdf-shell-w9, SH-C29, L-117).
-                    let settings = pdfcraft_ui_egui::settings::open();
                     app.apply_settings(&settings.get());
                     app.attach_settings(settings);
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
@@ -45,7 +46,10 @@ fn main() {
                                 Err(e) => {
                                     eframe::web_sys::console::error_1(&format!("PdfCraft: could not fetch {url}: {e}").into());
                                     // Shown in the app too, not only in the console (#173).
-                                    let text = pdfcraft_ui_egui::i18n::fmt(pdfcraft_ui_egui::i18n::t("Couldn't open {name}: {e}"), &[("name", &name), ("e", &e)]);
+                                    let text = pdfcraft_ui_egui::i18n::fmt(
+                                        pdfcraft_ui_egui::i18n::t("Couldn't open {name}: {e}"),
+                                        &[("name", &name), ("e", &e)],
+                                    );
                                     let _ = craft::ui::notices::NoticeCenter::new().post(&ctx, &craft::ui::notices::PostedNotice::new(text), &[]);
                                 }
                             }
@@ -89,6 +93,28 @@ fn main() {
             }
         }
     });
+}
+
+/// The language the interface starts in: the saved preference, else the browser's.
+#[cfg(target_arch = "wasm32")]
+fn startup_lang(saved: Option<&str>) -> pdfcraft_ui_egui::i18n::Lang {
+    use pdfcraft_ui_egui::i18n::{AUTO, Lang, normalize_pref};
+    Lang::from_pref(saved.and_then(normalize_pref).unwrap_or(AUTO))
+}
+
+/// Installs the framework runtime on eframe's context, with the interface fonts of `lang`. Once
+/// per context, before the app is built. The browser draws the page's frame and opens no OS
+/// windows, so the spec names no frame and no app id.
+#[cfg(target_arch = "wasm32")]
+fn install_runtime(cc: &eframe::CreationContext<'_>, lang: pdfcraft_ui_egui::i18n::Lang) -> Result<(), String> {
+    use craft::host::target::ShellInfo;
+    use craft::ui::InstallSpec;
+    let ctx = cc.egui_ctx.clone();
+    let system = craft::ui::runtime::env::SystemReader::start(move || ctx.request_repaint());
+    let spec = InstallSpec::new(ShellInfo::default(), std::sync::Arc::new(craft::window::system::SystemWindows)).system(system);
+    craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(lang))
+        .map(drop)
+        .map_err(|error| format!("the runtime could not be installed: {error}"))
 }
 
 #[cfg(target_arch = "wasm32")]

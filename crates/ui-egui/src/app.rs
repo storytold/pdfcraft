@@ -176,6 +176,14 @@ impl PdfCraftApp {
         Self::with_host(host, services)
     }
 
+    /// Installs the framework runtime on a unit test harness's context, as the app's window does,
+    /// with a system that opens no OS windows and the interface fonts of English.
+    #[cfg(test)]
+    pub(crate) fn install_runtime(ctx: &egui::Context) {
+        let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), Arc::new(craft::window::system::NoWindows));
+        craft::ui::shell::embed::install(ctx, spec, &crate::fonts::ui_fonts(i18n::Lang::EN)).expect("the runtime installs on a fresh context");
+    }
+
     /// The app over `host` and `services`, with no document open: every queue runs on the host's
     /// jobs, so a test passes a host over `ManualJobs` and `ScriptedFiles`.
     pub fn with_host(host: Arc<Host>, services: AppServices) -> Self {
@@ -417,7 +425,6 @@ impl PdfCraftApp {
             autosave,
             recovered_paths: Default::default(),
             native_menu: None,
-            fonts_ready: false,
             window_title: String::new(),
             page_title: String::new(),
             control: None,
@@ -716,11 +723,12 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Ui);
         let ctx = ui.ctx().clone();
-        i18n::set_current(i18n::Lang::from_pref(&self.language));
-        // Fonts registered via set_fonts only take effect next frame; named families would panic now.
-        if !self.fonts_ready {
-            ctx.request_repaint();
-            return;
+        // The chosen language becomes the current one; when it changes, its fonts are installed with it (the
+        // runtime installed the starting language's fonts at creation, L-227).
+        let lang = i18n::Lang::from_pref(&self.language);
+        if i18n::current().code() != lang.code() {
+            i18n::set_current(lang);
+            crate::fonts::ui_fonts(lang).install(&ctx);
         }
         // Another tool lets go of a click whose picture is still being found.
         if self.quick_tool != QuickTool::Select {

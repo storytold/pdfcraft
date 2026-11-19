@@ -266,13 +266,19 @@ fn main() -> eframe::Result {
     // Who draws the window frame: the platform and Preferences ▸ Use system title bar decide,
     // unless `PDFCRAFT_TITLEBAR` overrides them. The store is read here and opened again by the
     // app (each window attempt opens its own: the OpenGL retry runs the creator again).
-    let title_bar = pdfcraft_ui_egui::settings::open().get().layout.system_title_bar.map_or(Default::default(), |on| {
-        if on { craft::window::policy::TitleBarPref::System } else { craft::window::policy::TitleBarPref::Integrated }
-    });
+    // The interface language is read the same way, for the fonts the runtime installs with.
+    let (title_bar, saved_lang) = {
+        let settings = pdfcraft_ui_egui::settings::open();
+        let saved = settings.get();
+        let title_bar = saved.layout.system_title_bar.map_or(Default::default(), |on| {
+            if on { craft::window::policy::TitleBarPref::System } else { craft::window::policy::TitleBarPref::Integrated }
+        });
+        (title_bar, saved.behavior.language.clone())
+    };
     let frame = craft::window::policy::decide_for(craft::window::Prefix::new("PDFCRAFT"), craft::window::policy::Backend::from_env(), title_bar);
-    let integrated = !matches!(frame.frame, craft::window::policy::Frame::Native);
+    let lang = startup_lang(saved_lang.as_deref(), &options);
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control, create_images, combine, integrated, two_paged };
+    let launch = Launch { files, options, control, create_images, combine, frame, lang, two_paged };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -282,7 +288,7 @@ fn main() -> eframe::Result {
     let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     let result = eframe::run_native(
         "PdfCraft",
-        native_options(launch.integrated, first),
+        native_options(launch.integrated(), first),
         app_creator(
             launch.clone(),
             Rc::clone(&started),
@@ -300,7 +306,7 @@ fn main() -> eframe::Result {
             log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
             eframe::run_native(
                 "PdfCraft",
-                native_options(launch.integrated, eframe::Renderer::Glow),
+                native_options(launch.integrated(), eframe::Renderer::Glow),
                 app_creator(
                     launch,
                     started,
@@ -433,9 +439,47 @@ struct Launch {
     create_images: bool,
     /// `--combine`: the files go to the Combine files tab.
     combine: bool,
-    /// The app's bar is the title bar.
-    integrated: bool,
+    /// Who draws the root window's frame.
+    frame: craft::window::policy::Decision,
+    /// The language the interface starts in, whose fonts are installed with the runtime.
+    lang: pdfcraft_ui_egui::i18n::Lang,
     two_paged: bool,
+}
+
+impl Launch {
+    /// Whether the app's bar is the title bar.
+    fn integrated(&self) -> bool {
+        !matches!(self.frame.frame, craft::window::policy::Frame::Native)
+    }
+}
+
+/// The language the interface starts in: the last valid `--language`, else the saved preference,
+/// else the system's, as the app applies them once it is created.
+fn startup_lang(saved: Option<&str>, options: &[(String, String)]) -> pdfcraft_ui_egui::i18n::Lang {
+    use pdfcraft_ui_egui::i18n::{AUTO, Lang, normalize_pref};
+    let given = options.iter().rev().filter(|(key, _)| key == "language").find_map(|(_, value)| normalize_pref(value));
+    Lang::from_pref(given.or_else(|| saved.and_then(normalize_pref)).unwrap_or(AUTO))
+}
+
+/// Installs the framework runtime on eframe's context, with the root window's frame and the
+/// interface fonts of `lang`. Once per context, before the app is built.
+fn install_runtime(
+    cc: &eframe::CreationContext<'_>,
+    frame: craft::window::policy::Decision,
+    lang: pdfcraft_ui_egui::i18n::Lang,
+) -> Result<(), String> {
+    use craft::host::target::{Backend, ShellInfo};
+    use craft::ui::InstallSpec;
+    use craft::window::system::SystemWindows;
+    let ctx = cc.egui_ctx.clone();
+    let system = craft::ui::runtime::env::SystemReader::start(move || ctx.request_repaint());
+    let spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), std::sync::Arc::new(SystemWindows))
+        .system(system)
+        .app_id(APP_ID)
+        .frame(frame);
+    craft::ui::shell::embed::install(&cc.egui_ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(lang))
+        .map(drop)
+        .map_err(|error| format!("the runtime could not be installed: {error}"))
 }
 
 /// Decode `png` as a [`winit::window::Icon`] for the Windows taskbar and Alt+Tab (`ICON_BIG`).
@@ -486,9 +530,10 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control, create_images, combine, two_paged, .. } = launch;
+    let Launch { files, options, control, create_images, combine, frame, lang, two_paged } = launch;
     Box::new(move |cc| {
         started.set(true);
+        install_runtime(cc, frame, lang)?;
         let ctx = cc.egui_ctx.clone();
         let wake = craft::host::Wake::new(move || ctx.request_repaint());
         // Files a second launch hands over arrive through the single-instance server.

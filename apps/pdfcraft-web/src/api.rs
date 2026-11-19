@@ -33,7 +33,6 @@ mod web {
     use std::rc::Rc;
     use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 
-
     use craft::automation::{ControlRequest, ControlResponse, Dispatch, REPLY_DEADLINE};
     use craft_web_api::methods::Methods;
     use craft_web_api::page::{PageApi, Request};
@@ -114,5 +113,4 @@ mod tests {
         assert_eq!(command_params(json!({"command": "file.word_count", "params": {"a": 1}})), json!({"id": "file.word_count", "params": {"a": 1}}));
         assert_eq!(command_params(json!({"command": "file.save", "params": {}})), json!({"id": "file.save", "params": {}}));
     }
-
 }

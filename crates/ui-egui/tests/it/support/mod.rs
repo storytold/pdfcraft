@@ -4,14 +4,18 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use craft::host::target::ShellInfo;
 use craft::host::{AppInfo, Files, Host, InlineJobs, Jobs, ManualJobs, ScriptedFiles, Wake};
 use craft::keymap::CommandRef;
 use craft::platform::clipboard::{Clipboard, ClipboardBackend, ClipboardError, ClipboardImage, Flavor, TEXT};
 use craft::platform::open::FileIntake;
 use craft::platform::watch::FileWatch;
+use craft::ui::InstallSpec;
 use craft::ui::runtime::commands::{FireSource, fire};
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::toast;
+use craft::ui::shell::embed;
+use craft::window::system::NoWindows;
 use egui::FontId;
 use egui::epaint::text::{Fonts, TextOptions};
 use egui_kittest::Harness;
@@ -133,6 +137,13 @@ pub fn app_with_clipboard(clipboard: RecordingClipboard) -> PdfCraftApp {
 
 /// An app built over `host`, with the tests' services: the one way a test gives the app a host, so
 /// jobs and picked files run when the test steps.
+/// Installs the framework runtime on a harness's context, as the app's window does, with a system
+/// that opens no OS windows and the interface fonts of English. Every harness creator calls it.
+pub fn install_runtime(ctx: &egui::Context) {
+    let spec = InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows));
+    embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(i18n::Lang::EN)).expect("the runtime installs on a fresh context");
+}
+
 pub fn host_harness(host: Arc<Host>, clipboard: RecordingClipboard) -> Harness<'static, PdfCraftApp> {
     let app = PdfCraftApp::with_host(host, services(clipboard));
     Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app)

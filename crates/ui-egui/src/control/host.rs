@@ -47,12 +47,6 @@ impl crate::PdfCraftApp {
         hasher.finish()
     }
 
-    /// Control requests wait for the first UI pass that installs fonts; a font-gated early
-    /// return cannot consume injected input or issue a screenshot.
-    pub(crate) fn accepts_input(&self) -> bool {
-        self.fonts_ready
-    }
-
     /// `ui.panel`: the dock's panel request.
     pub(crate) fn panel(&mut self, reset: bool, params: &Value) -> Result<Value, String> {
         crate::side_panels::command(self, reset, params)
