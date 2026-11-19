@@ -452,3 +452,107 @@ fn reopening_a_certified_xfa_form_keeps_its_signed_pages() {
     let verdict = saved_verdict(&mut again, reopened);
     assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
 }
+
+/// `bytes` certified with DocMDP `level` as they are, signed without opening them in a session
+/// first (which lays a dynamic XFA form out and gives a form the values of its XFA data): a form
+/// as another program certifies it.
+fn certified_as_is(bytes: Vec<u8>, level: u8) -> Arc<Vec<u8>> {
+    let cos = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    let opts = SignOptions {
+        page: 0,
+        rect: Some([20.0, 20.0, 160.0, 50.0]),
+        certify: Some(level),
+        date: "D:20270115120000Z".into(),
+        ..SignOptions::default()
+    };
+    Arc::new(sign::sign(&cos, &digital_id(), &opts).unwrap())
+}
+
+/// The refusal `r` holds for a certification that allows no changes.
+fn refused_at_1<T: std::fmt::Debug>(r: Result<T, EditError>) -> &'static str {
+    match r {
+        Err(EditError::Certified { level: 1, what }) => what,
+        other => panic!("expected a refusal for a no-changes certification, got {other:?}"),
+    }
+}
+
+/// The document's certification reads as signed: nothing was changed since, and its signature
+/// is not reported broken.
+fn assert_as_signed(doc: &pdfcraft_engine::Document) {
+    let cert = doc.signatures.iter().find(|x| x.certify == Some(1)).expect("the certification");
+    assert!(matches!(cert.modification, Modification::None), "{:?}", cert.modification);
+    assert_ne!(cert.status, sign::Status::Invalid, "{:?}", cert.status);
+}
+
+/// A dynamic XFA form certified with no changes allowed before it was ever laid out: opening it
+/// shows it laid out from its template, as other viewers show it, but those pages are for display
+/// only. Filling it in, its document information and saving or signing it are refused, as each
+/// would write the laid-out pages into the signed file; the signed file is untouched.
+#[test]
+fn a_dynamic_xfa_shell_certified_with_no_changes_is_laid_out_for_display_only() {
+    let signed = certified_as_is(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::growable_text_template(false)), 1);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("shell.pdf", None, signed.clone(), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.certification(), Some(1));
+    assert_as_signed(doc);
+    assert!(doc.xfa.is_some() && doc.info.pages.len() >= 2, "the form is shown laid out: {:?}", doc.info.warnings);
+    let value = doc.form.iter().find(|f| f.name == "ACTIVIDADES").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec!["Short".to_string()]), "its laid-out field shows the data");
+    assert!(doc.info.warnings.iter().any(|w| w.contains("certification allows no changes") && w.contains("laid out")), "{:?}", doc.info.warnings);
+    let fill = Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text("Changed".into()) };
+    assert_eq!(refused(s.apply(id, fill)), "filling in form fields");
+    let title = Edit::SetInfo { key: "Title".into(), value: "T".into() };
+    assert_eq!(refused_at_1(s.apply(id, title)), "a change saved with the pages laid out from its XFA template");
+    assert_eq!(refused_at_1(s.save_bytes(id)), "saving the pages laid out from its XFA template");
+    assert_eq!(refused_at_1(s.save_full_bytes(id)), "saving the pages laid out from its XFA template");
+    let opts = SignOptions { page: 0, rect: Some([20.0, 60.0, 160.0, 90.0]), ..SignOptions::default() };
+    assert_eq!(refused_at_1(s.sign(id, &digital_id(), opts)), "saving the pages laid out from its XFA template");
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty && doc.can_undo().is_none(), "nothing changed");
+    let message = EditError::Certified { level: 1, what: "saving the pages laid out from its XFA template" }.to_string();
+    assert!(message.contains("certified with no changes allowed"), "{message}");
+}
+
+/// A static XFA form certified with no changes allowed whose XFA data holds a value its field
+/// doesn't: opening it shows the data's value, as other viewers do, for display only. Filling it
+/// in and saving are refused, so no revision carrying the value is ever written.
+#[test]
+fn a_static_xfa_form_certified_with_no_changes_shows_its_data_for_display_only() {
+    let signed = certified_as_is(pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>"), 1);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("static.pdf", None, signed.clone(), None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.certification(), Some(1));
+    let value = doc.form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec!["Ada".to_string()]), "the field shows the data's value");
+    assert_as_signed(doc);
+    assert!(doc.info.warnings.iter().any(|w| w.contains("certification allows no changes") && w.contains("XFA data")), "{:?}", doc.info.warnings);
+    let fill = Edit::SetFieldValue { name: "form1[0].page1[0].name[0]".into(), value: FieldValue::Text("Grace".into()) };
+    assert_eq!(refused(s.apply(id, fill)), "filling in form fields");
+    assert_eq!(refused_at_1(s.save_bytes(id)), "saving the field values taken from its XFA data");
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty && doc.can_undo().is_none(), "nothing changed");
+}
+
+/// Under a certification that allows filling in, opening synchronizes and lays out an XFA form as
+/// any other, and filling it in and saving go ahead.
+#[test]
+fn an_xfa_form_certified_for_form_fill_is_synchronized_and_filled_as_before() {
+    let signed = certified_as_is(pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>"), 2);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("static.pdf", None, signed.clone(), None).unwrap();
+    let value = s.get(id).unwrap().form.iter().find(|f| f.name == "form1[0].page1[0].name[0]").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec!["Ada".to_string()]));
+    s.apply(id, Edit::SetFieldValue { name: "form1[0].page1[0].name[0]".into(), value: FieldValue::Text("Grace".into()) })
+        .expect("filling in is allowed");
+    let verdict = saved_verdict(&mut s, id);
+    assert!(matches!(verdict, Modification::Allowed(_)), "the certification stays valid: {verdict:?}");
+
+    let signed = certified_as_is(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::growable_text_template(false)), 2);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("shell.pdf", None, signed, None).unwrap();
+    assert!(s.get(id).unwrap().xfa.is_some(), "laid out");
+    s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text("Filled".into()) }).expect("filling in is allowed");
+    s.save_bytes(id).expect("saving is allowed");
+}
