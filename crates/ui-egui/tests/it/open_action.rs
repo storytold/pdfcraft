@@ -158,21 +158,21 @@ fn a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen() 
         let mut h = harness(&format!("/PageMode /FullScreen /ViewerPreferences << /NonFullScreenPageMode /{mode} >>"));
         // The prompt (`ask_full_screen`) is on the dialog host, found by its question.
         h.get_by_label("Open in Full Screen mode?");
-        assert_eq!(h.state().right, want, "{mode}: the panel behind the prompt");
+        assert_eq!(crate::support::right(h.state()), want, "{mode}: the panel behind the prompt");
         // Declining it leaves that panel.
         h.get_by_label("Not now").click();
         h.run_steps(2);
-        assert_eq!((h.state().full_screen(), h.state().right), (false, want), "{mode}: declined");
+        assert_eq!((h.state().full_screen(), crate::support::right(h.state())), (false, want), "{mode}: declined");
         // Entering and leaving full screen comes back to it.
-        h.state_mut().apply_full_screen(true);
+        h.state_mut().set_full_screen(true);
         h.run_steps(2);
-        h.state_mut().apply_full_screen(false);
+        h.state_mut().set_full_screen(false);
         h.run_steps(2);
-        assert_eq!(h.state().right, want, "{mode}: after full screen");
+        assert_eq!(crate::support::right(h.state()), want, "{mode}: after full screen");
     }
     // Without /PageMode /FullScreen the entry means nothing.
     let h = harness("/ViewerPreferences << /NonFullScreenPageMode /UseThumbs >>");
-    assert_eq!(h.state().right, None);
+    assert_eq!(crate::support::right(h.state()), None);
 }
 
 #[test]
@@ -184,11 +184,11 @@ fn a_full_screen_document_with_an_outline_shows_it_only_when_it_asks_to() {
         ("/ViewerPreferences << /NonFullScreenPageMode /UseOutlines >>", Some(RightPanel::Bookmarks)),
     ] {
         let h = harness(&format!("/Outlines 9 0 R /PageMode /FullScreen {prefs}"));
-        assert_eq!(h.state().right, want, "{prefs}");
+        assert_eq!(crate::support::right(h.state()), want, "{prefs}");
     }
     // Not in full screen, a document with an outline still opens on it.
     let h = harness("/Outlines 9 0 R");
-    assert_eq!(h.state().right, Some(RightPanel::Bookmarks));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Bookmarks));
 }
 
 /// Named destinations for open parameters: `intro` (page 2) in the catalog's /Dests and
@@ -230,7 +230,7 @@ fn a_file_named_with_open_parameters_opens_at_their_destination() {
         assert_eq!(h.state().views[0].current(), page, "{parameters}");
         let app = h.state();
         assert_eq!(app.session.get(app.views[0].id).and_then(|d| d.path.clone()).as_deref(), Some(path.as_str()), "{parameters}: the file itself");
-        assert!(h.state().notices.posted().is_empty(), "{parameters}");
+        assert!(crate::support::shown_notice(&h).is_none(), "{parameters}");
     }
     // A name the file doesn't define: it opens where it would have, and says so.
     let mut h = bare_window();
@@ -238,7 +238,7 @@ fn a_file_named_with_open_parameters_opens_at_their_destination() {
     crate::support::wait_until(&mut h, "the manual", |app| app.views.len() == 1);
     h.run_steps(2);
     assert_eq!(h.state().views[0].current(), 2);
-    assert!(!h.state().notices.posted().is_empty(), "the unapplied name is told");
+    assert!(crate::support::shown_notice(&h).is_some(), "the unapplied name is told");
     // A path that names no file, before a `#` or as a whole, still fails as before.
     let mut h = bare_window();
     assert!(!matches!(h.state_mut().open_path(&format!("{path}.missing#page=2")), OpenOutcome::Opened | OpenOutcome::Focused));

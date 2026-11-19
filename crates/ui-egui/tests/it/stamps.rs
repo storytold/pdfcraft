@@ -131,10 +131,10 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert!(((r[2] - r[0]) / (r[3] - r[1]) - 3.0).abs() < 0.05, "keeps the picture's shape: {r:?}");
     assert_eq!(doc.can_undo(), Some("Add stamp"));
     // The library is kept with the app's settings.
-    let saved = s.persist();
+    let saved = s.settings_snapshot();
     let mut again = crate::control::new_app();
     again.set_option(&egui::Context::default(), "language", "en").unwrap();
-    again.restore(&saved);
+    again.apply_settings(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
     assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
@@ -198,6 +198,6 @@ fn a_dynamic_custom_stamp_keeps_its_line_and_fills_it_in_when_placed() {
     // A band under the 3:1 picture (so less wide than 3:1), at least as wide as the picture.
     assert!(aspect > 3.0 * (1.0 - 0.22) - 0.05 && aspect < 3.0 - 0.05, "a band under the 3:1 picture: {r:?}");
     let mut again = crate::control::new_app();
-    again.restore(&s.persist());
+    again.apply_settings(&s.settings_snapshot());
     assert_eq!(again.custom_stamps[0].line, s.custom_stamps[0].line, "kept with the library");
 }

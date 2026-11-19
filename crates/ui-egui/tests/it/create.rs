@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::support::AppHarness as _;
-use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
-use egui_kittest::{Harness, kittest::Queryable};
+use craft::host::{ManualJobs, Picked, ScriptedFiles};
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn png() -> Vec<u8> {
@@ -20,11 +21,9 @@ fn scripted(
     size: egui::Vec2,
     setup: impl FnOnce(&mut PdfCraftApp) + 'static,
 ) -> Harness<'static, PdfCraftApp> {
-    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).jobs(jobs).build());
-    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
-    let services = pdfcraft_ui_egui::AppServices::new(craft::host::Wake::none(), None, None, None, None, None);
+    let host = crate::support::host_with(jobs, files);
     Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::with_host(host, services);
+        let mut app = crate::support::test_app(host);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
@@ -196,13 +195,13 @@ fn the_pdf_optimizer_dialog_picks_a_preset() {
     assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
     h.get_by_value("Standard");
-    assert_eq!(h.get_by_label("Merge image fragments").toggled(), Some(true));
+    assert_eq!(h.get_by_label("Merge image fragments").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
     h.get_by_value("Standard").click();
     h.run_steps(4);
     h.get_by_label("Mobile").click();
     h.run_steps(2);
     h.get_by_value("Mobile");
-    assert_eq!(h.get_by_label("Merge image fragments").toggled(), Some(false), "Mobile turns it off");
+    assert_eq!(h.get_by_label("Merge image fragments").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "Mobile turns it off");
     // Changing an option makes the settings custom.
     h.get_by_label("Merge image fragments").click();
     h.run_steps(2);

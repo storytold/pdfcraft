@@ -55,8 +55,8 @@ fn protecting_for_viewing_requires_matching_passwords_and_saves_encrypted() {
     assert!(s.open("p.pdf", None, bytes, Some("Open-Sesame-42")).is_ok());
     // Remove security is now offered, and undo also takes the protection back.
     assert!(h.execute("protect.remove"));
-    h.state_mut().undo();
-    h.state_mut().undo();
+    h.undo();
+    h.undo();
     assert!(!h.state().session.get(id).unwrap().info.encrypted);
 }
 

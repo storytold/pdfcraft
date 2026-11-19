@@ -340,7 +340,7 @@ fn open_letter(name: &str, content: &str, desk: &Desk) -> Harness<'static, PdfCr
     let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |_cc| {
         let mut app = new_app();
         let _ = app.set_option(&egui::Context::default(), "language", "en");
-        let _ = app.open_bytes(&title, None, bytes);
+        let _ = app.open_bytes(&egui::Context::default(), &title, None, bytes);
         app
     });
     h.run_steps(4);

@@ -242,7 +242,7 @@ fn selected_text_copy_floating_button_honours_permissions() {
             let mut app = app_on(RecordingClipboard::default());
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, bytes).unwrap();
-            app.submit_password(Some(password.into()));
+            app.submit_password(&egui::Context::default(), Some(password.into()));
             app.set_option(&egui::Context::default(), "left", "closed").unwrap();
             app
         });
@@ -342,7 +342,7 @@ fn selected_text_copy_with_formatting_honours_permissions() {
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let clipboard = RecordingClipboard::default();
-    let (mut h, at) = harness_clip(bytes, clipboard.clone(), |app| app.submit_password(Some("pw".into())));
+    let (mut h, at) = harness_clip(bytes, clipboard.clone(), |app| app.submit_password(&egui::Context::default(), Some("pw".into())));
     click(&mut h, at);
     click(&mut h, at);
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
@@ -534,7 +534,7 @@ fn a_selection_across_pages_is_marked_on_every_page_in_one_step() {
     assert_eq!(marks(&h), [(0, "Underline".to_string()), (1, "Underline".to_string())]);
     assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
     assert!(h.state().views[0].session.comments.primary().is_some_and(|(page, _)| page == 1), "its last part is selected, as one markup is");
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(3);
     assert_eq!(marks(&h), [], "one undo removes both");
 }
@@ -557,7 +557,7 @@ fn full_screen_link_click_cancels_the_pending_page_turn() {
         )
         .into_bytes();
     let (mut h, _) = harness_with(four_pages, |_| {});
-    h.state_mut().apply_full_screen(true);
+    h.state_mut().set_full_screen(true);
     crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
     let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
     let at = |x: f32, y: f32| egui::pos2(r.left() + x / 300.0 * r.width(), r.top() + (200.0 - y) / 200.0 * r.height());
@@ -589,7 +589,7 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
         )
         .into_bytes();
     let (mut h, _) = harness_with(two_pages, |_| {});
-    h.state_mut().apply_full_screen(true);
+    h.state_mut().set_full_screen(true);
     crate::support::wait_until(&mut h, "the page in full screen", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
     let at = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer");
     h.hover_at(at);
@@ -604,8 +604,8 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
 
     // A single click turns it once the double-click time is over.
     // Entering full screen again clears the selection.
-    h.state_mut().apply_full_screen(false);
-    h.state_mut().apply_full_screen(true);
+    h.state_mut().set_full_screen(false);
+    h.state_mut().set_full_screen(true);
     h.run_steps(30);
     click(&mut h, at);
     h.run_steps(30);
@@ -615,7 +615,7 @@ fn full_screen_double_click_selects_a_word_and_stays_on_the_page() {
     h.state_mut().views[0].go_to_page(0);
     h.run_steps(30);
     click(&mut h, at);
-    h.state_mut().apply_full_screen(false);
+    h.state_mut().set_full_screen(false);
     h.run_steps(30);
     assert_eq!(h.state().views[0].current(), 0, "no page turn after leaving");
 }
@@ -675,7 +675,7 @@ fn markup_tools_mark_a_selection_across_pages_on_every_page() {
         drag(&mut h, from, to);
         h.run_steps(3);
         assert_eq!(marks(&h), both(kind), "{command}: dragged with the tool");
-        h.state_mut().undo();
+        h.undo();
         h.run_steps(3);
         assert_eq!(marks(&h), [], "{command}: one undo step");
         // Selecting first, then picking the tool.

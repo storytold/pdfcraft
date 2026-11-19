@@ -239,7 +239,7 @@ fn messages_from_scripts_run_on_open_show_right_away() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
     h.run_steps(2);
     assert!(h.query_by_label_contains("Welcome to the form").is_some(), "script console: {:?}", h.state().js_console.log);
-    assert_eq!(h.state().dialog, None, "an initialize script can't open the Print dialog");
+    assert!(!crate::support::dialog_open(&h), "an initialize script can't open the Print dialog");
     let id = h.state().views[0].id;
     assert!(h.state_mut().session.take_js_output(id).is_empty(), "nothing waits for the next edit");
 }
@@ -362,7 +362,7 @@ fn opening_another_document_keeps_the_highlight_the_one_in_front_reads() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&xdp));
     let app = h.state_mut();
     // The document in front has Highlight fields on; the remembered setting is off.
-    app.view_defaults.highlight_fields = false;
+    app.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"highlight_fields": false}"#).0);
     app.views[0].session.highlight_fields = true;
     h.run_steps(2);
     let app = h.state_mut();

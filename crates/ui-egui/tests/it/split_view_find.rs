@@ -9,8 +9,7 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.run_inline = true;
+        let mut app = crate::support::inline_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
@@ -32,10 +31,12 @@ fn each_panes_find_input_has_its_own_id() {
     h.state_mut().views[1].open_find();
     h.run_steps(4);
     assert_eq!(h.get_all_by_label("Find text").count(), 2, "one find field per pane");
-    let mut fields = h.get_all_by_label("Find text");
-    let (first, second) = (fields.next().unwrap(), fields.next().unwrap());
-    assert!(second.accesskit_node().is_focused(), "the focus is in the pane that asked last");
-    assert!(!first.accesskit_node().is_focused(), "the other pane's field does not share it");
+    {
+        let mut fields = h.get_all_by_label("Find text");
+        let (first, second) = (fields.next().unwrap(), fields.next().unwrap());
+        assert!(second.accesskit_node().is_focused(), "the focus is in the pane that asked last");
+        assert!(!first.accesskit_node().is_focused(), "the other pane's field does not share it");
+    }
 
     // Typing goes to one query only.
     h.event(egui::Event::Text("abc".into()));
