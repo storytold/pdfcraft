@@ -841,6 +841,36 @@ fn range_bold_or_italic_without_font_keeps_the_family_and_survives_save() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #7275: a range's `bold` or `italic` without `font` keeps the source family, so a face that
+/// only hints at a standard one ("Georgia" for Times) is refused with an actionable message
+/// instead of saving the word in another typeface, and the page keeps its words.
+#[test]
+fn range_bold_without_font_is_refused_on_a_face_that_is_not_a_standard_font() {
+    let dir = workdir("range-bold-georgia");
+    std::fs::write(dir.join("a.pdf"), pages_with_base_font("Georgia", "BT /F1 24 Tf 1 0 0 1 40 100 Tm (Alpha beta gamma.) Tj ET\n")).unwrap();
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let before = page_text(&mut a, id);
+    let ranges = json!([{"range":[6,10],"bold":true}]);
+    for tool in ["text_edit", "text_edit_layout"] {
+        let refused = err(&mut a, tool, json!({"doc":id,"page":1,"paragraph":1,"ranges":ranges}));
+        let message = refused.to_string();
+        assert!(message.contains("Georgia") && message.contains("helvetica, times or courier"), "{tool}: {message}");
+    }
+    assert_eq!(page_text(&mut a, id), before, "a refused range changes nothing");
+    // Naming the family is the explicit way, and it still applies.
+    ok(&mut a, "text_edit", json!({"doc":id,"page":1,"paragraph":1,"ranges":[{"range":[6,10],"font":"times","bold":true}]}));
+    let lines = ok(&mut a, "text_lines", json!({"doc":id,"page":1}));
+    let fonts: Vec<(String, String)> = lines["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["text"].as_str().unwrap().trim().to_owned(), l["font"].as_str().unwrap().to_owned()))
+        .collect();
+    assert!(fonts.iter().any(|(text, font)| text == "beta" && font == "Times-Bold"), "{fonts:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reopen() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
@@ -2248,6 +2278,30 @@ fn same_text_pages(pages: usize, content: &str) -> Vec<u8> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
     ];
     objs.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 3 0 R >>".to_string()));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// One page of `content` whose `/F1` is `base`, for a face that is not a standard font.
+fn pages_with_base_font(base: &str, content: &str) -> Vec<u8> {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>"),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 3 0 R >>".into(),
+    ];
     let mut pdf = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {

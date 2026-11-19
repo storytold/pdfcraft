@@ -556,7 +556,8 @@ pub struct RangeStyle {
     /// A standard font family, bold, italic.
     pub family: Option<(crate::added::Family, bool, bool)>,
     /// Without `family`: override the weight or slant and keep the family (`None` keeps the
-    /// paragraph's or the source's).
+    /// paragraph's or the source's). The source's family is kept only when its font is a standard
+    /// one or an alias of it; a range that would have to be set in another family is refused.
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub resource: Option<String>,

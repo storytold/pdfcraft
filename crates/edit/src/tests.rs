@@ -8697,6 +8697,42 @@ fn centered_mixed_size_title_keeps_three_rows_when_changed() {
     }
 }
 
+/// #7275: a range's weight or slant with no family keeps the source's family, which only a face
+/// the document really names can give it. "Georgia" only hints at Times, so the range is refused
+/// rather than saving the word in Times-Bold; an accepted alias such as Arial is that family.
+#[test]
+fn a_range_weight_without_a_family_keeps_the_source_family_or_is_refused() {
+    let range = |range| RangeStyle {
+        range,
+        family: None,
+        bold: Some(true),
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let mut doc = styled_text_page("Georgia");
+    let before = page_content_bytes(&doc, 0);
+    let guessed = BlockStyle { ranges: vec![range(0..4)], ..Default::default() };
+    let Err(EditError::Invalid(message)) = text::rewrite_block(&mut doc, 0, 0, Some("Original"), &guessed) else {
+        panic!("a guessed family is refused, not saved in another typeface");
+    };
+    assert!(message.contains("Georgia"), "{message}");
+    assert_eq!(page_content_bytes(&doc, 0), before, "a refused range changes nothing");
+    // Naming the family is the explicit way, and it is unchanged.
+    let named = BlockStyle { ranges: vec![RangeStyle { family: Some((Family::Times, true, false)), ..range(0..4) }], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &named).unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].base_font, "Times-Bold");
+    // Arial is Helvetica, so a bold variant of it keeps the family the document asked for.
+    let mut doc = styled_text_page("Arial");
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &guessed).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.iter().any(|line| line.text == "Orig" && line.base_font == "Helvetica-Bold"), "{lines:?}");
+}
+
 #[test]
 fn image_selection_bounds_respect_clips_and_restore_graphics_state() {
     let mut doc = image_page();

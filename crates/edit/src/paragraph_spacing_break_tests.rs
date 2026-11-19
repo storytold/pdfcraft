@@ -21,8 +21,18 @@ fn spacing_goes_before_an_inserted_break() {
 
 /// A range style takes the styled path (`text_regions`), whose rows are placed by source row.
 fn styled(spacing: f64) -> text::BlockStyle {
-    let range =
-        text::RangeStyle { range: 0..3, family: None, resource: None, size: None, color: None, underline: None, char_spacing: None, scale: None };
+    let range = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        bold: None,
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
     text::BlockStyle { paragraph_spacing: Some(spacing), ranges: vec![range], ..Default::default() }
 }
 
@@ -99,8 +109,18 @@ fn styled_spacing_for_a_row_inserted_among_identical_rows() {
 /// whatever the draft does around them (below).
 #[test]
 fn a_new_styled_paragraph_gets_half_the_size_when_no_spacing_is_set() {
-    let range =
-        text::RangeStyle { range: 0..3, family: None, resource: None, size: None, color: None, underline: None, char_spacing: None, scale: None };
+    let range = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        bold: None,
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
     let style = text::BlockStyle { ranges: vec![range], ..Default::default() };
     let mut doc = page(&rows(&["One", "Three"]));
     text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo\nThree"), &style).unwrap();
@@ -118,8 +138,18 @@ fn a_new_styled_paragraph_gets_half_the_size_when_no_spacing_is_set() {
 /// one 12 pt row step apart.
 #[test]
 fn styled_source_rows_keep_their_steps_when_no_spacing_is_set() {
-    let range =
-        text::RangeStyle { range: 0..3, family: None, resource: None, size: None, color: None, underline: None, char_spacing: None, scale: None };
+    let range = text::RangeStyle {
+        range: 0..3,
+        family: None,
+        bold: None,
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
     let style = text::BlockStyle { ranges: vec![range], ..Default::default() };
     let mut doc = page(&rows(&["One", "Two"]));
     text::rewrite_block(&mut doc, 0, 0, Some("One\nTwo"), &style).unwrap();

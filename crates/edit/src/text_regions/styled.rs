@@ -817,13 +817,27 @@ fn wrap_styled_rows(
     Ok((rows, row_ranges, row_lines, row_soft, row_gap, explicit))
 }
 
+/// The standard family a `/BaseFont` name really names, when it names one or an accepted alias of
+/// one (`Arial` for Helvetica, `TimesNewRoman` for Times). [`source_family`] only guesses from the
+/// name, so "Georgia" is a serif hint for Times and Symbol is none of the three.
+fn named_family(base_font: &str) -> Option<crate::added::Family> {
+    use pdfcraft_fonts::{Std14, Std14Match};
+    let (face, Std14Match::Alias) = Std14::recognise(base_font)? else { return None };
+    Some(match face {
+        Std14::Helvetica | Std14::HelveticaBold | Std14::HelveticaOblique | Std14::HelveticaBoldOblique => crate::added::Family::Helvetica,
+        Std14::TimesRoman | Std14::TimesBold | Std14::TimesItalic | Std14::TimesBoldItalic => crate::added::Family::Times,
+        Std14::Courier | Std14::CourierBold | Std14::CourierOblique | Std14::CourierBoldOblique => crate::added::Family::Courier,
+        Std14::Symbol | Std14::ZapfDingbats => return None,
+    })
+}
+
 fn apply_range_styles<'a>(
     first: &TextLine,
     lines: &[TextLine],
     sources: Vec<(std::ops::Range<usize>, usize)>,
     ranges: &[&'a RangeStyle],
     style: &BlockStyle,
-) -> StyledLines<'a> {
+) -> Result<StyledLines<'a>, EditError> {
     let mut styled_lines = lines.to_vec();
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
@@ -859,13 +873,24 @@ fn apply_range_styles<'a>(
                 let range = selected.unwrap_or(&default_range);
                 let mut line = lines.get(source).unwrap_or(first).clone();
                 let block = style.family.or_else(|| style.bold.map(|b| (source_family(&line.base_font), b, line.italic)));
-                let face = range.family.or_else(|| {
-                    if range.bold.is_none() && range.italic.is_none() {
-                        return block;
+                let face = match range.family {
+                    Some(family) => Some(family),
+                    None if range.bold.is_none() && range.italic.is_none() => block,
+                    None => {
+                        // The range alone asks for a new face. It keeps the source's family, which
+                        // only a face the document really names can give it: a guess from another
+                        // name would set the range in a different typeface (#7275).
+                        let own = (source_family(&line.base_font), line.bold, line.italic);
+                        if block.is_none() && range.resource.is_none() && named_family(&line.base_font) != Some(own.0) {
+                            return Err(EditError::Invalid(format!(
+                                "a range's bold or italic keeps the family of {:?}, which is not a standard font: name a font (helvetica, times or courier) or a font_resource",
+                                line.base_font
+                            )));
+                        }
+                        let (family, bold, italic) = block.unwrap_or(own);
+                        Some((family, range.bold.unwrap_or(bold), range.italic.unwrap_or(italic)))
                     }
-                    let (family, bold, italic) = block.unwrap_or((source_family(&line.base_font), line.bold, line.italic));
-                    Some((family, range.bold.unwrap_or(bold), range.italic.unwrap_or(italic)))
-                });
+                };
                 if let Some((family, bold, italic)) = face {
                     let base = family.base_font(bold, italic);
                     line.font = format!("PCRange{}", base.replace('-', ""));
@@ -901,7 +926,7 @@ fn apply_range_styles<'a>(
             styled_spans.push((start..end, index));
         }
     }
-    StyledLines { lines: styled_lines, spans: styled_spans, underlines, overrides }
+    Ok(StyledLines { lines: styled_lines, spans: styled_spans, underlines, overrides })
 }
 
 /// Select one existing subset of the exact source face for a Thai span. Never replace its
@@ -1882,7 +1907,7 @@ pub(crate) fn rewrite_styled_block(
     let ranges = validated_ranges(draft, style)?;
     let source_count = lines.len();
     let sources = draft_sources(block, draft, style)?;
-    let styled = apply_range_styles(first, lines, sources, &ranges, style);
+    let styled = apply_range_styles(first, lines, sources, &ranges, style)?;
     let lines = styled.lines.as_slice();
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
