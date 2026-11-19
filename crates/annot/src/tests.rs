@@ -1459,9 +1459,18 @@ fn urls_keep_their_written_scheme_and_paired_brackets() {
 fn unclosed_brackets_in_text_without_spaces_are_read_once_per_address() {
     let found = |s: &str| -> Vec<String> { crate::links::find_urls(&s.chars().collect::<Vec<_>>()).into_iter().map(|(_, u)| u).collect() };
     let text = format!("www.before.org {} www.after.org", "https://a/(".repeat(60_000));
-    let started = std::time::Instant::now();
-    assert_eq!(found(&text), ["http://www.before.org", "http://www.after.org"]);
-    assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+    let chars: Vec<char> = text.chars().collect();
+    let mut reads = 0usize;
+    let mut furthest = 0usize;
+    let urls = crate::links::find_urls_with_scan_observer(&chars, |offset| {
+        // Fail on the first over-budget read, rather than waiting for a quadratic scan.
+        assert!(offset < 2048, "candidate read beyond its 2048-character bound: {offset}");
+        reads += 1;
+        furthest = furthest.max(offset);
+    });
+    assert_eq!(urls.into_iter().map(|(_, u)| u).collect::<Vec<_>>(), ["http://www.before.org", "http://www.after.org"]);
+    assert_eq!(furthest, 2047, "the hostile fixture must exercise the scan boundary");
+    assert!(reads <= (60_000 + 2) * 2048, "aggregate candidate work: {reads}");
     let long = format!("https://example.com/{} www.after.org", "a".repeat(3000));
     assert_eq!(found(&long), ["http://www.after.org"]);
     let fits = format!("https://example.com/{}", "a".repeat(2000));

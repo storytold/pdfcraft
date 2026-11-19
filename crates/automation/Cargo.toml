@@ -31,6 +31,9 @@ mcp = ["dep:base64"]
 # Synthetic printer profiles for the app-managed print colour tests.
 craft-cms = { workspace = true }
 craft-image-codecs = { workspace = true }
+# Word exports read back as Word reads them.
+craft-docx = { workspace = true }
+craft-wordmodel = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 flate2.workspace = true
 pdfcraft-model = { workspace = true }

@@ -33,6 +33,8 @@ fn has(kind: ShapedScript, c: char) -> bool {
         ShapedScript::Arabic => crate::arabic_has(c),
         ShapedScript::Hebrew => crate::hebrew_has(c),
         ShapedScript::Thai => crate::thai_has(c),
+        // [`script`] never names the bundled Latin face: Latin here is drawn in the standard font.
+        ShapedScript::Latin => crate::latin_has(c),
     }
 }
 
@@ -150,6 +152,7 @@ fn layout_pass(
                     Some(ShapedScript::Arabic) => Piece::Shaped(crate::shape_arabic(&s, run_rtl)?),
                     Some(ShapedScript::Hebrew) => Piece::Shaped(crate::shape_hebrew(&s, run_rtl)?),
                     Some(ShapedScript::Thai) => Piece::Shaped(crate::shape_thai(&s)?),
+                    Some(ShapedScript::Latin) => Piece::Shaped(crate::shape_latin(&s)?),
                     None if run_rtl => Piece::Latin(s.chars().rev().map(mirrored).collect()),
                     None => Piece::Latin(s),
                 });
