@@ -214,6 +214,10 @@ fn preferences_theme_cards_and_use_system_setting_stay_in_sync() {
     let (mut h, c) = harness();
     h.get_by_label("Display theme: Use system setting").click_secondary();
     h.run_steps(4);
+    eprintln!(
+        "DIAG preferences_theme_cards_and_use_system_setting_stay_in_sync: menu rows {:?}",
+        h.query_all_by_role(Role::MenuItem).map(|n| n.label()).collect::<Vec<_>>()
+    );
     h.get_by_label("Appearance settings…").click();
     h.run_steps(10);
     // A fresh install follows the OS (#1248), which is dark here.
