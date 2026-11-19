@@ -277,21 +277,20 @@ fn page_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> Vec<PageBoxes
 fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnImage>, usize) {
     let mut out = Vec::new();
     let mut unknown = 0usize;
-    let mut seen = std::collections::HashMap::<_, f64>::new();
+    let mut seen = std::collections::HashSet::new();
     for (i, page) in pages.iter().enumerate() {
         let page_no = (i + 1) as u32;
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
             for mut image in placed {
-                // Scale before measuring, as the Form walker does, so rounding cannot
-                // make the same direct placement appear to have two different PPIs.
+                // Both resolution and dimensions are measured in physical page units.
                 image.matrix = image.matrix.map(|v| v * page.user_unit(doc));
                 if let Some(ppi) = placed_ppi(&image) {
-                    if let Some(object) = image.object {
-                        seen.entry((page_no, object)).and_modify(|known| *known = known.min(ppi)).or_insert(ppi);
-                    }
                     if !ppi.is_finite() {
                         unknown = unknown.saturating_add(1);
                         continue;
+                    }
+                    if let Some(object) = image.object {
+                        seen.insert((page_no, object));
                     }
                     let [a, b, c, d, ..] = image.matrix;
                     let w = a.hypot(b);
@@ -304,8 +303,10 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
         // lowest-ppi use on this page, which is what the optimizer already measures.
         for (object, image) in pdfcraft_optimize::image_measurements(doc, &[page.obj]) {
             unknown = unknown.saturating_add(image.unmeasurable);
-            // A tied Form can have different dimensions: suppress only a selected direct use.
-            if !image.in_form && seen.get(&(page_no, object)).is_some_and(|ppi| *ppi <= image.ppi) {
+            // Every measurable direct use is already listed. Deduplicate by its origin,
+            // not PPI: the two walkers can round composed transforms differently. A selected
+            // Form use still needs its own row, even on a tie or a tiny PPI difference.
+            if !image.in_form && seen.contains(&(page_no, object)) {
                 continue;
             }
             // An unsupported pixel dimension has a zero sentinel, but the other axis can
@@ -479,6 +480,27 @@ mod tests {
         let report = inspect(&doc);
         assert_eq!(report.images.len(), 1);
         assert!((report.images[0].ppi - 8.0 / 70.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn repeated_transforms_report_each_direct_placement_once() {
+        for second in [false, true] {
+            let mut doc = Document::new_empty();
+            let img = image(&mut doc, 8, 8);
+            let mut content = "q 0.1 0 0 0.1 0 0 cm 300 0 0 300 0 0 cm /Im Do Q".to_string();
+            if second {
+                content.push_str(" q 60 0 0 60 0 0 cm /Im Do Q");
+            }
+            let p = page(&mut doc, "Im", img, &content);
+            doc.update_dict(p, |d| d.set(b"UserUnit".to_vec(), Object::Int(7))).unwrap();
+            let report = inspect(&doc);
+            let count = if second { 2 } else { 1 };
+            assert_eq!(report.images.len(), count);
+            assert_eq!(report.findings.iter().filter(|f| f.id == "image-ppi").count(), count);
+            if second {
+                assert_ne!(report.images[0].ppi, report.images[1].ppi);
+            }
+        }
     }
 
     #[test]
