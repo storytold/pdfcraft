@@ -7,18 +7,14 @@ fn locked_package(root: &std::path::Path, name: &str) -> String {
         .unwrap_or_else(|| panic!("{name} is not in Cargo.lock"))
 }
 
-/// Interim graph check for the window stack while the reviewed fork revision is not yet
-/// published. The old `vendor/winit` / `vendor/egui-wgpu` path patches were removed from the
-/// published manifest; local integration supplies the reviewed worktrees through an external
-/// Cargo config patch. A git source must name the public storytold fork; a path source is the
-/// local integration graph. Behaviour (surface fitting, error scopes, scroll phases) is tested
-/// directly elsewhere; the retained vendor copies keep provenance until the fork revision is
-/// pinned. No public revision is invented here.
-fn assert_window_stack_graph(root: &std::path::Path, name: &str, version: &str) -> String {
+/// Check the window stack's version and fork URL. The `vendor_graph` integration test also
+/// checks the exact pinned revision. Behaviour (surface fitting, error scopes, scroll phases)
+/// is tested directly elsewhere; the retained vendor copies only keep provenance.
+fn assert_window_stack_graph(root: &std::path::Path, name: &str, version: &str, git_url: &str) -> String {
     let package = locked_package(root, name);
     assert!(package.contains(&format!("\nversion = \"{version}\"\n")), "{name} must resolve to {version}: {package}");
     if let Some(source) = package.lines().find_map(|line| line.strip_prefix("source = ")) {
-        assert!(source.contains("github.com/storytold/"), "{name} must come from the reviewed storytold fork once published, not {source}");
+        assert!(source.starts_with(&format!("\"git+{git_url}?rev=")), "{name} must come from the reviewed fork {git_url}, not {source}");
         assert!(
             source.split(|c: char| !c.is_ascii_hexdigit()).any(|part| part.len() == 40),
             "{name} must pin the fork's 40-character revision, not {source}"
@@ -326,7 +322,7 @@ fn vendor_provenance_egui_wgpu_surface_fit_identity() {
     // provenance only and is no longer a published path patch, so reading it would not prove
     // what the app runs.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
+    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0", "https://github.com/tinywolf3/egui.git");
     assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
 }
 
@@ -393,7 +389,7 @@ fn vendor_provenance_egui_wgpu_catch_errors_identity() {
     // graph check makes sure the app runs the reviewed 0.37 worktree (the retained vendor
     // copy is not read as proof of behaviour).
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0");
+    assert_window_stack_graph(&root, "egui-wgpu", "0.37.0", "https://github.com/tinywolf3/egui.git");
     assert!(root.join("vendor/egui-wgpu/src/winit.rs").exists(), "the vendor copy and its provenance stay until the fork revision is pinned");
 }
 
@@ -442,7 +438,7 @@ fn winit_carries_the_windows_11_monitor_scale_fix() {
     // `vendor/README.md` match the fork's PATCHES.md entries W1–W13. The vendor source is no
     // longer a published path patch, so this checks the actual graph, not the old copy.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    assert_window_stack_graph(&root, "winit", "0.30.13");
+    assert_window_stack_graph(&root, "winit", "0.30.13", "https://github.com/storytold/winit.git");
     let event_loop = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/windows/event_loop.rs")).unwrap();
     // The audited W1 hunk itself, not merely the file's presence: Windows 11 applies the
     // rect Windows suggests, while Windows 10 keeps the old adjustment.

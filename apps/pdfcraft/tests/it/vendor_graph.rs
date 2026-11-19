@@ -2,7 +2,7 @@
 //!
 //! The twelve `winit_*` modules next to this one read the retained `vendor/winit` /
 //! `vendor/egui-wgpu` copies. They are provenance for W1–W13 and E2+E3, not proof of what the app
-//! runs: the root manifest pins both crates to immutable storytold git revisions, and the retained
+//! runs: the root manifest pins both crates to immutable git revisions, and the retained
 //! copies are not path patches. These tests check the resolved graph and the retained evidence
 //! instead of treating the copies as the runtime source. The winit fork's own W17 tests own patch
 //! behaviour.
@@ -27,7 +27,7 @@ fn locked(name: &str) -> String {
     packages.remove(0)
 }
 
-/// The resolved package must be the exact canonical storytold git source at the reviewed
+/// The resolved package must be the exact git source at the reviewed
 /// 40-character revision, including the `Cargo.lock` URL and fragment. A path source (no `source`
 /// line) is refused: it would make the graph depend on a developer's checkout. A published path
 /// patch is refused as well.
@@ -49,7 +49,7 @@ fn assert_resolved(name: &str, version: &str, url: &str, rev: &str) {
 #[test]
 fn vendor_provenance_window_stack_graph_is_resolved() {
     assert_resolved("winit", "0.30.13", "https://github.com/storytold/winit.git", "a517b3846ee8457d84ee4975110bfda6797c44dc");
-    assert_resolved("egui-wgpu", "0.37.0", "https://github.com/storytold/egui.git", "725a39fca940f77149ffbb9c58eef405a16997bc");
+    assert_resolved("egui-wgpu", "0.37.0", "https://github.com/tinywolf3/egui.git", "dee3aa400804a31540c0bdd0579a2ed78b1b7a80");
     // Retained provenance: the audited copies and their recorded W1–W13 / E2+E3 rows.
     let readme = std::fs::read_to_string(root().join("vendor/README.md")).expect("vendor/README.md");
     for marker in ["W1–W13", "surface_fit", "catch_errors", "e9809ef54b18499bb4f2cac945719ecc2a61061b"] {
