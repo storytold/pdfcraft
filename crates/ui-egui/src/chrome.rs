@@ -88,9 +88,6 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         |ui, _| {
             let home = app.active.is_none() && !app.combine_showing();
             if IconButton::new(IconId::new("house")).label(tl!("Home")).selected(home).show(ui).clicked() {
-                if app.combine_showing() {
-                    app.close_combine_preview();
-                }
                 app.active = None;
                 app.combine_tab.focused = false;
             }

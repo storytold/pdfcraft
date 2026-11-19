@@ -324,7 +324,7 @@ pub(crate) fn page_tool<'a>(
                         Some(snap) => annotate.caret_snap(snap),
                         None => annotate,
                     };
-                    let annotate = if selects_text { annotate.text(select) } else { annotate };
+                    let annotate = if selects_text { annotate.over(select) } else { annotate };
                     Arm::Area(Box::new(annotate))
                 }
             }
@@ -341,7 +341,10 @@ pub(crate) fn page_tool<'a>(
         }
         QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, &mut session.box_drag, cx.pages, cx.rotation, size)),
         QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages, press)),
+        // A Fill & Sign tool runs the comments tool over its placing: its own marks already placed are picked up,
+        // moved and resized (`bridge::annotations` reaches only them), and a press anywhere else places the mark.
         QuickTool::Fill(fill_tool) => {
+            let view = &mut session.comments;
             let input = FillInput {
                 tool: fill_tool,
                 text_size: cx.fill.text_size,
@@ -352,9 +355,15 @@ pub(crate) fn page_tool<'a>(
                 author: cx.author,
                 date_text: cx.date_text,
                 fill_text: &mut session.fill_text,
-                comments: &mut session.comments,
+                member: &mut view.member,
             };
-            Arm::Area(Box::new(FillSignTool::new(&cx, input, fill, *press)))
+            let place = FillSignTool::new(&cx, input, fill, *press);
+            let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view);
+            let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
+                .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
+                .outcome(&mut session.pending_edit, &mut view.notice)
+                .over(place);
+            Arm::Area(Box::new(annotate))
         }
         QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session, cx.info, xforms))),
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.pages, cx.text_style))),
