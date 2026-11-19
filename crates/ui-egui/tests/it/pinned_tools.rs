@@ -109,13 +109,13 @@ fn clicking_pinned_tool_card_selects_it() {
 
 #[test]
 fn pin_tool_dialog_workflow() {
-    let mut h = harness(|app| {
-        app.set_option(&egui::Context::default(), "dialog", "pin-tool").unwrap();
-    });
+    let mut h = harness(|_| {});
+    // Home's Pin a tool… opens it.
+    h.get_by_label("Pin a tool…").click();
     h.run_steps(3);
 
-    // Modal is open
-    h.get_by_label_contains("Pin tools to Home");
+    // Modal is open (its heading carries the same name, so the dialog is found by its role).
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Pin tools to Home");
     h.get_by_label("Done");
 
     // Pin a tool from inside the dialog

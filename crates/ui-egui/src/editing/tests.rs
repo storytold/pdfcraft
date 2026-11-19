@@ -124,7 +124,7 @@ fn save_commits_the_open_text_box() {
     assert_eq!(added.len(), 1, "the open text box was committed before the save");
     assert!(app.views[0].session.content.draft.is_none());
     answer_save(&mut h, &files, &jobs, &dest);
-    assert!(std::fs::read(&dest).unwrap().starts_with(b"%PDF"), "the document with its text went where the user chose");
+    assert!(files.file(&dest).unwrap_or_default().starts_with(b"%PDF"), "the document with its text went where the user chose");
     assert!(!h.state().session.get(id).unwrap().dirty);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -198,7 +198,7 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "Save asks instead of writing the temporary copy");
     answer_save(&mut h, &files, &jobs, &kept);
     assert_eq!(std::fs::read(&attachment).unwrap(), original, "the attachment's copy is untouched");
-    assert!(std::fs::read(&kept).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
+    assert!(files.file(&kept).unwrap_or_default().starts_with(b"%PDF"), "the document went where the user chose");
 
     // The chosen file is the document's file now: the next Save writes it without asking.
     let app = h.state_mut();

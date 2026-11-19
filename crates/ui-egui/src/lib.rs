@@ -633,8 +633,6 @@ pub struct PdfCraftApp {
     /// Changes whenever what injected input aims at changes, so the control channel withdraws
     /// input aimed at what was there before.
     pub(crate) control_epoch: u64,
-    /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
-    pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
     /// any document. Destinations are page indices.
     pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,

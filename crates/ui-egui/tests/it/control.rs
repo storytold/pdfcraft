@@ -419,7 +419,12 @@ fn bookmark_titles_can_be_searched_over_control() {
 #[test]
 fn theme_commands_and_options_report_preference_and_effective_colours() {
     let (mut h, c) = harness();
-    h.input_mut().system_theme = Some(egui::Theme::Dark);
+    // The desktop reports its scheme as the windowing integration does: the raw field and an event.
+    let desktop = |h: &mut Harness<'static, PdfCraftApp>, theme: egui::Theme| {
+        h.input_mut().system_theme = Some(theme);
+        h.input_mut().events.push(egui::Event::SystemTheme(theme));
+    };
+    desktop(&mut h, egui::Theme::Dark);
     h.run_steps(2);
     for (id, preference, effective) in
         [("view.theme.system", "System", "Dark"), ("view.theme.light", "Light", "Light"), ("view.theme.dark", "Dark", "Dark")]
@@ -430,7 +435,7 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
         assert_eq!(state["theme"], effective);
     }
     ok(&mut h, &c, "ui.set", json!({ "key": "theme", "value": "system" }));
-    h.input_mut().system_theme = Some(egui::Theme::Light);
+    desktop(&mut h, egui::Theme::Light);
     h.run_steps(2);
     let state = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(state["theme_preference"], "System");
@@ -1421,12 +1426,9 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
     h.run_steps(3);
-    let state = ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width": 401.6}));
-    assert_eq!(state["side_panels"]["side_width"], 401.6f32 as f64);
-    // Widths are clamped to the panel's limits.
-    let state = ok(&mut h, &c, "ui.panel", json!({"panel":"tools", "width": 9000}));
-    assert_eq!(state["side_panels"]["tools_width"], 520.0);
-    ok(&mut h, &c, "ui.panel", json!({"panel":"tools", "width": 300, "open": false}));
+    // Sizes are the dock's: dragged dividers or `ui.dock.apply`, never a `ui.panel` parameter.
+    assert!(call(&mut h, &c, "ui.panel", json!({"panel":"side", "width": 401.6})).is_err());
+    ok(&mut h, &c, "ui.panel", json!({"panel":"tools", "open": false}));
     h.run_steps(3);
     assert_eq!(dock(&mut h, &c)["tools_open"], false);
     ok(&mut h, &c, "ui.panel", json!({"panel":"side", "open": false}));
@@ -1445,19 +1447,15 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
     let (mut reloaded, client) = harness();
     reloaded.state_mut().apply_settings(&saved);
     reloaded.run_steps(4);
-    let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
-    assert_eq!(
-        state,
-        json!({"tools_side":"left", "tools_open":false, "tools_width":300.0, "side_open":true, "side_panel":"Bookmarks", "side_width":401.6f32 as f64})
-    );
+    assert_eq!(ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"], dock(&mut h, &c), "the restored panes are the saved ones");
     // The ui.command form and the reset command.
     ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.panel", "params":{"panel":"tools", "open":true}}));
     assert_eq!(dock(&mut reloaded, &client)["tools_open"], true);
-    ok(&mut reloaded, &client, "ui.panel", json!({"panel":"tools", "width": 300}));
     ok(&mut reloaded, &client, "ui.set", json!({"key":"tools-side", "value":"right"}));
+    assert_eq!(dock(&mut reloaded, &client)["tools_side"], "right");
     ok(&mut reloaded, &client, "ui.command", json!({"id":"ui.dock.reset"}));
     let state = ok(&mut reloaded, &client, "ui.state", json!({}))["side_panels"].clone();
-    assert_eq!((state["tools_side"].clone(), state["tools_width"].clone(), state["side_width"].clone()), (json!("left"), json!(272.0), json!(330.0)));
+    assert_eq!((state["tools_side"].clone(), state["tools_open"].clone()), (json!("left"), json!(true)), "reset puts the Tools pane back");
     assert_eq!(ok(&mut reloaded, &client, "ui.state", json!({}))["documents"][0]["pages"], 5);
 }
 
@@ -1497,7 +1495,6 @@ fn a_script_opened_panel_shows() {
 fn home_and_combine_hide_the_side_panel_without_forgetting_it() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"bookmarks"}));
-    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width": 380}));
     let before = dock(&mut h, &c);
     for combine in [false, true] {
         if combine {

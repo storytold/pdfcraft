@@ -12,10 +12,16 @@ use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::toast;
 
 /// The app with `name` open from `bytes` at `zoom` percent, on a host whose file picker answers the
-/// first save or export with `out`, as the user choosing that file would.
-fn scripted_harness(name: &'static str, bytes: Vec<u8>, zoom: &'static str, out: &std::path::Path) -> Harness<'static, PdfCraftApp> {
+/// first save or export with `out`, as the user choosing that file would. The host keeps what the
+/// app writes in the returned store, which is where a test reads it back.
+fn scripted_harness(
+    name: &'static str,
+    bytes: Vec<u8>,
+    zoom: &'static str,
+    out: &std::path::Path,
+) -> (Harness<'static, PdfCraftApp>, Arc<ScriptedFiles>) {
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.to_path_buf()])]));
-    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build());
+    let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files.clone()).build());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
@@ -28,7 +34,7 @@ fn scripted_harness(name: &'static str, bytes: Vec<u8>, zoom: &'static str, out:
         }
     });
     crate::support::settle(&mut h);
-    h
+    (h, files)
 }
 
 /// The text of the newest notice on screen, if one is shown.
@@ -892,19 +898,20 @@ fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_valu
     assert_eq!(value(&h, "due"), vec![format!("{nm:02}/15/{ny}")], "the PDF field keeps its own date format");
 }
 
-/// The value of `name` in a saved PDF, read back by opening it in a fresh app.
-fn saved_value(path: &std::path::Path, name: &str) -> Vec<String> {
+/// The value of `name` in the PDF saved at `path` in `files`, read back by opening it in a fresh app.
+fn saved_value(files: &ScriptedFiles, path: &std::path::Path, name: &str) -> Vec<String> {
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes(&egui::Context::default(), "saved.pdf", None, std::fs::read(path).unwrap()).unwrap();
+    let bytes = files.file(path).unwrap_or_else(|| panic!("nothing was saved at {}", path.display()));
+    app.open_bytes(&egui::Context::default(), "saved.pdf", None, bytes).unwrap();
     app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
 }
 
-/// Step frames until the save has written `path`, instead of assuming it is there after a fixed
-/// number of frames. The write is atomic, so the file appears only when it is complete.
-fn wait_for_file(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
+/// Step frames until the save has written `path` in `files`, instead of assuming it is there after
+/// a fixed number of frames. The write is whole, so the file appears only when it is complete.
+fn wait_for_file(h: &mut Harness<'static, PdfCraftApp>, files: &ScriptedFiles, path: &std::path::Path) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while !path.exists() {
+    while files.file(path).is_none() {
         assert!(std::time::Instant::now() < deadline, "the save never wrote {}", path.display());
         h.run_steps(1);
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -930,14 +937,14 @@ fn saving_while_still_typing_in_a_field_saves_the_text() {
     // Issue #166: ⌘S with the field still focused saved it blank.
     let dir = scratch("save-focused");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Browser Form 123".into()));
     h.run_steps(2);
     assert!(h.state().views[0].session.forms.focus.is_some(), "still typing");
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     h.run_steps(3);
-    assert_eq!(saved_value(&out, "name"), ["Browser Form 123"], "the saved PDF has the typed text");
+    assert_eq!(saved_value(&files, &out, "name"), ["Browser Form 123"], "the saved PDF has the typed text");
     assert_eq!(value(&h, "name"), ["Browser Form 123"]);
     let doc = h.state().session.get(h.state().views[0].id).unwrap();
     assert!(!doc.dirty, "and the document is saved, not left with an unsaved change");
@@ -970,7 +977,7 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
         } else {
             validated_form()
         };
-        let mut h = scripted_harness("tab.pdf", bytes, "150", &out);
+        let (mut h, files) = scripted_harness("tab.pdf", bytes, "150", &out);
         click_field(&mut h, "qty", 0);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text("42".into()));
@@ -983,8 +990,8 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
             h.run_steps(3);
             h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
         }
-        wait_for_file(&mut h, &out);
-        assert_eq!(saved_value(&out, "qty"), ["42"], "{case}: saving cannot restore the old value");
+        wait_for_file(&mut h, &files, &out);
+        assert_eq!(saved_value(&files, &out, "qty"), ["42"], "{case}: saving cannot restore the old value");
         assert_eq!(value(&h, "qty"), ["42"], "{case}");
         // One typing action is one history entry, even after saving. Escape closes the
         // untouched editor before undoing the document rather than the TextEdit buffer.
@@ -1014,7 +1021,7 @@ fn closing_while_still_typing_in_a_field_asks_to_save() {
 fn close_all_saves_text_typed_in_a_tab_that_is_no_longer_active() {
     let dir = scratch("close-all");
     let out = dir.join("first.pdf");
-    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Typed in tab one".into()));
     h.run_steps(2);
@@ -1027,8 +1034,8 @@ fn close_all_saves_text_typed_in_a_tab_that_is_no_longer_active() {
     h.run_steps(2);
     assert!(asks_to_save(&h), "the first document has an unsaved change");
     h.get_all_by_label("Save").last().expect("the prompt's Save button").click();
-    wait_for_file(&mut h, &out);
-    assert_eq!(saved_value(&out, "name"), ["Typed in tab one"]);
+    wait_for_file(&mut h, &files, &out);
+    assert_eq!(saved_value(&files, &out, "name"), ["Typed in tab one"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1056,9 +1063,9 @@ fn type_then_save_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, name: &str
 fn typing_and_saving_in_the_same_frame_saves_the_last_keystrokes() {
     let dir = scratch("same-frame");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     type_then_save_in_one_frame(&mut h, "name", "Browser", egui::Event::Text(" Form 123".into()));
-    assert_eq!(saved_value(&out, "name"), ["Browser Form 123"]);
+    assert_eq!(saved_value(&files, &out, "name"), ["Browser Form 123"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1066,7 +1073,7 @@ fn typing_and_saving_in_the_same_frame_saves_the_last_keystrokes() {
 fn escape_and_save_in_the_same_frame_discards_the_draft() {
     let dir = scratch("escape");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let (mut h, _files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     let before = value(&h, "name");
     type_then_save_in_one_frame(&mut h, "name", "Discard me", key(egui::Key::Escape, egui::Modifiers::NONE));
     assert_eq!(value(&h, "name"), before, "Escape cancels typing, even with ⌘S right after it");
@@ -1091,13 +1098,14 @@ fn an_unrelated_command_leaves_the_field_being_typed_in_alone() {
 fn exporting_form_data_while_typing_includes_the_text() {
     let dir = scratch("export");
     let out = dir.join("data.xfdf");
-    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Exported value".into()));
     h.run_steps(2);
     let ctx_h = h.ctx.clone();
     h.state_mut().export_data_dialog(&ctx_h, false, true);
-    assert!(std::fs::read_to_string(&out).unwrap().contains("Exported value"));
+    wait_for_file(&mut h, &files, &out);
+    assert!(String::from_utf8_lossy(&files.file(&out).unwrap_or_default()).contains("Exported value"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1255,13 +1263,13 @@ fn buttons_over_text_show_the_pointing_hand_not_the_i_beam() {
 fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
     let dir = scratch("rejected");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("order.pdf", validated_form(), "150", &out);
+    let (mut h, files) = scripted_harness("order.pdf", validated_form(), "150", &out);
     click_field(&mut h, "qty", 0);
     h.event(egui::Event::Text("500".into()));
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     h.run_steps(4);
-    assert!(!out.exists(), "nothing is saved without the typed value");
+    assert!(files.file(&out).is_none(), "nothing is saved without the typed value");
     assert_eq!(value(&h, "qty"), ["4"], "the field keeps its valid value");
     let focus = h.state().views[0].session.forms.focus.clone().expect("the editor stays open");
     assert_eq!(focus.text, "4500", "with the text (typed after the 4), so the user can fix it");
@@ -1277,17 +1285,17 @@ fn a_rejected_value_keeps_the_typing_and_stops_the_save() {
 fn a_save_shortcut_pressed_while_typing_saves_only_the_document_it_was_pressed_in() {
     let dir = scratch("deferred-doc");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
+    let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &out);
     click_field(&mut h, "name", 0);
     h.event(egui::Event::Text("Tab one".into()));
     h.run_steps(2);
     one_frame(&mut h, vec![key(egui::Key::S, egui::Modifiers::COMMAND)]);
-    assert!(!out.exists(), "⌘S while typing waits a frame for the field");
+    assert!(files.file(&out).is_none(), "⌘S while typing waits a frame for the field");
     // Before the deferred ⌘S runs, another document becomes active.
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "other.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
     h.run_steps(3);
-    assert!(!out.exists(), "the other document is not saved by a shortcut pressed in the first");
+    assert!(files.file(&out).is_none(), "the other document is not saved by a shortcut pressed in the first");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1304,19 +1312,19 @@ fn a_value_refused_on_tab_keeps_save_in_the_same_frame_from_running() {
 fn refused_value_stops_save(commit_key: egui::Key, case: &str) {
     let dir = scratch(case);
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("order.pdf", validated_form(), "150", &out);
+    let (mut h, files) = scripted_harness("order.pdf", validated_form(), "150", &out);
     click_field(&mut h, "qty", 0);
     h.event(egui::Event::Text("500".into()));
     h.run_steps(2);
     one_frame(&mut h, vec![key(commit_key, egui::Modifiers::NONE), key(egui::Key::S, egui::Modifiers::COMMAND)]);
     h.run_steps(3);
     assert_eq!(value(&h, "qty"), ["4"]);
-    assert!(!out.exists(), "nothing is saved right after the field refused its value");
+    assert!(files.file(&out).is_none(), "nothing is saved right after the field refused its value");
     // The refused text is back in the field, so a later ⌘S stops again instead of saving 4.
     assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.text.as_str()), Some("4500"));
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
     h.run_steps(4);
-    assert!(!out.exists());
+    assert!(files.file(&out).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1372,7 +1380,7 @@ mod revert_tests {
     fn reverting_rejected_input_saves_the_original_field_and_appearance() {
         let dir = RevertDir::new();
         let path = dir.0.join("saved.pdf");
-        let mut h = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &path);
+        let (mut h, files) = scripted_harness("form.pdf", include_bytes!("../data/form.pdf").to_vec(), "150", &path);
         let ctx_h = h.ctx.clone();
         assert!(h.state_mut().apply_edit(
             &ctx_h,
@@ -1382,8 +1390,7 @@ mod revert_tests {
         // A document with no file asks where to save: the scripted answer arrives on a later pass.
         h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::InPlace);
         crate::support::wait_until(&mut h, "the save", |s| s.views.first().and_then(|v| s.session.get(v.id)).is_some_and(|d| !d.dirty));
-        wait_for_file(&mut h, &path);
-        let saved = std::fs::read(&path).unwrap();
+        let saved = files.file(&path).expect("the save wrote the file");
         let ctx_h = h.ctx.clone();
         assert!(h.state_mut().apply_edit(
             &ctx_h,
@@ -1403,7 +1410,7 @@ mod revert_tests {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
         h.run_steps(4);
         assert_eq!(h.state().views[0].session.forms.focus.as_ref().unwrap().text, "99");
-        assert_eq!(std::fs::read(&path).unwrap(), saved, "rejection leaves the saved file untouched");
+        assert_eq!(files.file(&path), Some(saved.clone()), "rejection leaves the saved file untouched");
         assert!(h.execute("file.revert"));
         h.run_steps(2);
         h.get_all_by_label("Revert").last().expect("confirmation button").click();
@@ -1413,8 +1420,8 @@ mod revert_tests {
         assert_eq!(value(&h, "name"), ["Saved original"]);
         let ctx_h = h.ctx.clone();
         assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::InPlace));
-        assert_eq!(saved_value(&path, "name"), ["Saved original"]);
-        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(saved_value(&files, &path, "name"), ["Saved original"]);
+        let bytes = files.file(&path).expect("the save wrote the file");
         assert_eq!(bytes, saved, "later Save cannot resurrect the discarded draft");
         let mut renderer = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), Default::default());
         let output = renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, ..Default::default() });
@@ -1623,7 +1630,7 @@ fn a_list_box_click_picks_one_of_two_options_with_the_same_export_value() {
     ]);
     let dir = scratch("duplicate-exports");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("dup.pdf", bytes, "100", &out);
+    let (mut h, files) = scripted_harness("dup.pdf", bytes, "100", &out);
     assert_eq!(selected(&h, "dup"), [1], "One-B is selected, not One-A too");
 
     let r = {
@@ -1643,9 +1650,9 @@ fn a_list_box_click_picks_one_of_two_options_with_the_same_export_value() {
     assert_eq!(selected(&h, "dup"), [0]);
 
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
-    wait_for_file(&mut h, &out);
+    wait_for_file(&mut h, &files, &out);
     let mut app = crate::control::new_app();
-    app.open_bytes(&egui::Context::default(), "saved.pdf", None, std::fs::read(&out).unwrap()).unwrap();
+    app.open_bytes(&egui::Context::default(), "saved.pdf", None, files.file(&out).unwrap()).unwrap();
     let reopened = app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "dup").unwrap().clone();
     assert_eq!(reopened.value, ["1"], "/V is the one export value");
     assert_eq!(reopened.selected, [0], "/I keeps One-A through the save");
@@ -1904,10 +1911,11 @@ fn guide_fixture() -> Vec<u8> {
 fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
     let saved = std::env::temp_dir().join(format!("pdfcraft-fake-{}.pdf", std::process::id()));
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
+    let host_files = files.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            let mut app = crate::control::app_with_files(files);
+            let mut app = crate::control::app_with_files(host_files);
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "form.pdf", None, guide_fixture()).unwrap();
             // Another document named like the attachment, its bytes the attachment's and an update.
@@ -1922,9 +1930,9 @@ fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
     // A text file named .pdf is offered to save, not opened.
     let _ = std::fs::remove_file(&saved);
     run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'fake.pdf', nLaunch: 2});");
-    wait_for_file(&mut h, &saved);
+    wait_for_file(&mut h, &files, &saved);
     assert_eq!(tabs(&h), 2, "no tab for a file that isn't a PDF: {:?}", notice(&h));
-    assert_eq!(std::fs::read(&saved).ok().as_deref(), Some(&b"not a PDF at"[..]), "offered to save instead");
+    assert_eq!(files.file(&saved).as_deref(), Some(&b"not a PDF at"[..]), "offered to save instead");
     let _ = std::fs::remove_file(&saved);
     // The real attached PDF opens in a tab of its own, though another inner.pdf starts with it.
     h.state_mut().active = Some(0);
@@ -2025,7 +2033,7 @@ fn combo_harness() -> Harness<'static, PdfCraftApp> {
 fn an_editable_combo_box_takes_a_typed_value() {
     let dir = scratch("editable-combo");
     let out = dir.join("saved.pdf");
-    let mut h = scripted_harness("combo.pdf", combo_form(), "150", &out);
+    let (mut h, files) = scripted_harness("combo.pdf", combo_form(), "150", &out);
     click_field(&mut h, "fruit", 0);
     assert_eq!(focused(&h), Some(("fruit".into(), 0)));
     h.event(egui::Event::Text("Cherry".into()));
@@ -2049,8 +2057,8 @@ fn an_editable_combo_box_takes_a_typed_value() {
     h.run_steps(4);
     assert_eq!(value(&h, "fruit"), ["Damson"], "Tab commits the typed value");
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
-    wait_for_file(&mut h, &out);
-    assert_eq!(saved_value(&out, "fruit"), ["Damson"]);
+    wait_for_file(&mut h, &files, &out);
+    assert_eq!(saved_value(&files, &out, "fruit"), ["Damson"]);
     // Undo takes the typing back as one step.
     undo(&mut h);
     h.run_steps(2);
