@@ -1,12 +1,12 @@
-//! The way back from a link: after a link takes the reader to another place in the document,
-//! "Back to page N" shows at the pages' bottom left. A click on it returns to the place and zoom
-//! the link was followed from. It fades out after a few seconds and shows again while the
+//! The way back from a link: after a link or a bookmark takes the reader to another place in the
+//! document, "Back to page N" shows at the pages' bottom left. A click on it returns to the place
+//! and zoom the jump was made from. It fades out after a few seconds and shows again while the
 //! pointer is near that corner, until the reader goes back (with it, or Previous / Next view) or
-//! follows another link.
+//! follows another link or bookmark.
 
 use egui::{Pos2, Rect, Vec2};
 
-use super::{DocInfo, DocView, Fit, SIDE, vec2};
+use super::{DestView, DocInfo, DocView, Fit, SIDE, vec2};
 use crate::icons;
 use crate::theme::{self, Tokens};
 
@@ -40,7 +40,7 @@ pub(crate) struct LinkReturn {
 
 impl DocView {
     /// Where the reader is now, to come back to after following a link from here at `now`.
-    pub(super) fn link_origin(&self, info: &DocInfo, now: f64) -> LinkReturn {
+    fn link_origin(&self, info: &DocInfo, now: f64) -> LinkReturn {
         let area = self.viewport_screen;
         let corner = area.min + vec2(SIDE, 0.0);
         let at = self
@@ -59,6 +59,15 @@ impl DocView {
         // Before the first frame has laid pages out, the current page's top.
         let (page, place, rel) = at.unwrap_or((self.current, [None, None], vec2(SIDE, 0.0)));
         LinkReturn { page, place, rel, zoom: self.zoom, fit: self.fit, since: now }
+    }
+
+    /// Go to a destination, a link's or a bookmark's, offering the way back to where the reader
+    /// was at `now` ([`DocView::go_to_dest`] otherwise).
+    pub(crate) fn follow_dest(&mut self, page: usize, dest: DestView, info: &DocInfo, now: f64) {
+        // Read before the jump: it is where the reader is now.
+        let from = self.link_origin(info, now);
+        self.go_to_dest(page, dest, info);
+        self.link_return = Some(from);
     }
 
     /// Back to where the last link was followed from, at the zoom it had. When that page is the
@@ -121,19 +130,19 @@ pub(super) fn overlay(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, pointer
     let t = Tokens::get(ctx);
     let shown = egui::Area::new(id).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(corner).show(ctx, |ui| {
         ui.multiply_opacity(opacity);
-        // The accent fill stands out from the pages and the pasteboard in either theme, and
-        // the shadow lifts it off a page it sits over.
-        let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: egui::Color32::from_black_alpha(if t.dark() { 120 } else { 40 }) };
+        // Dark with a light edge in either theme: it reads over a white page and over the
+        // pasteboard, and the shadow lifts it off a page it sits over.
+        let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: egui::Color32::from_black_alpha(if t.dark() { 120 } else { 50 }) };
         egui::Frame::new()
-            .corner_radius(10)
+            .corner_radius(8)
             .shadow(shadow)
             .show(ui, |ui| {
                 ui.spacing_mut().button_padding = vec2(14.0, 8.0);
-                let content = egui::RichText::new(text).font(theme::medium(15.0)).color(egui::Color32::WHITE);
+                let content = egui::RichText::new(text).font(theme::semibold(15.0)).color(egui::Color32::WHITE);
                 let b = egui::Button::image_and_text(icons::image("chevron-left", 18.0, egui::Color32::WHITE), content)
-                    .fill(t.accent)
-                    .stroke(egui::Stroke::NONE)
-                    .corner_radius(10)
+                    .fill(egui::Color32::from_rgb(0x1C, 0x1C, 0x21))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(40)))
+                    .corner_radius(8)
                     .min_size(vec2(0.0, SIZE_GUESS.y));
                 ui.add(b).on_hover_text(tl!("Go back to where you followed the link")).clicked()
             })

@@ -533,7 +533,7 @@ pub struct DocView {
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
-    /// After a link took the reader to another place: where it came from, offered as "Back to
+    /// After a link or bookmark took the reader elsewhere: where they came from, offered as "Back to
     /// page N" at the pages' bottom left ([`link_return`]).
     pub(crate) link_return: Option<link_return::LinkReturn>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
@@ -2959,25 +2959,20 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
 }
 
 /// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
-/// back, to be opened once the document is no longer borrowed. `clicked_at` is the time of a
-/// click on a link on the page, which offers the way back to where it was ([`link_return`]).
+/// back, to be opened once the document is no longer borrowed. A jump within the
+/// document offers the way back to where the reader was at `now` ([`link_return`]).
 pub(crate) fn follow_link(
     app: &mut PdfCraftApp,
     index: usize,
     target: Option<LinkTarget>,
-    clicked_at: Option<f64>,
+    now: f64,
 ) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
     let view_id = app.views[index].id;
     match target? {
         LinkTarget::Page(p, dest) => {
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
-                // Read before the jump: it is where the reader is now.
-                let from = clicked_at.map(|now| view.link_origin(&doc.info, now));
-                view.go_to_dest(p, dest, &doc.info);
-                if from.is_some() {
-                    view.link_return = from;
-                }
+                view.follow_dest(p, dest, &doc.info, now);
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
@@ -3640,7 +3635,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
-    let remote_open = follow_link(app, index, clicked_link, Some(now));
+    let remote_open = follow_link(app, index, clicked_link, now);
     if let Some((page, link)) = javascript_link {
         let id = app.views[index].id;
         app.run_link_script(id, page, link);

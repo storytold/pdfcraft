@@ -1730,6 +1730,26 @@ fn from_viewport_corner(h: &Harness<'static, PdfCraftApp>, page: usize, fx: f32,
     egui::pos2(r.min.x + fx * r.width(), r.min.y + fy * r.height()) - vp.min
 }
 
+/// A chapter in the Bookmarks panel goes elsewhere in the document as a link does: the way back
+/// shows, and returns to the page and zoom the bookmark was clicked from.
+#[test]
+fn a_bookmark_offers_the_way_back_too() {
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = dests_harness();
+    let before = rect(&h, 0).expect("page 1");
+    // 300%, so going back has a zoom to restore.
+    h.get_by_label("Zoomed in").click();
+    h.run_steps(4);
+    assert_eq!((h.state().views[0].current, h.state().views[0].fit), (1, Fit::None));
+    h.get_by_label("Back to page 1").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit), (0, Fit::Width), "page 1 at its zoom again");
+    let after = rect(&h, 0).expect("page 1 on screen");
+    assert!((after.min.y - before.min.y).abs() < 2.0 && (after.width() - before.width()).abs() < 1.0, "{after:?} was {before:?}");
+}
+
 #[test]
 fn bookmark_destinations_scroll_to_their_position() {
     use egui_kittest::kittest::Queryable;

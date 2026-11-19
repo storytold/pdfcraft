@@ -480,14 +480,16 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if reset_layers && app.session.reset_layers(id) {
         app.views[index].invalidate_content();
     }
+    // A bookmark goes somewhere else in the document as a link does, with the way back.
+    let now = ui.input(|i| i.time);
     match nav {
         Some(Nav::Page(p)) => app.views[index].go_to_page(p),
         Some(Nav::Dest(p, dest)) => match app.session.get(id) {
-            Some(doc) => app.views[index].go_to_dest(p, dest, &doc.info),
+            Some(doc) => app.views[index].follow_dest(p, dest, &doc.info, now),
             None => app.views[index].go_to_page(p),
         },
         Some(Nav::Action(target)) => {
-            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target), None) {
+            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target), now) {
                 app.open_remote_link(source, file, destination);
             }
         }
