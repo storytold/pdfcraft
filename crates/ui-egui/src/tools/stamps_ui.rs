@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use craft::behavior::{CancelReason, Cursor, CursorIcon, DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft::host::{PickRequest, Picked};
-use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft::ui::dialog::DialogId;
@@ -20,7 +19,6 @@ use craft::ui::sections::Section;
 use craft::ui::text::TextField;
 use egui::Pos2;
 use pdfcraft_engine::{Edit, MarkFile, NewAnnotation, Shape, StampGroup, StampKind, Style};
-use pdfcraft_render::DocInfo;
 use serde::{Deserialize, Serialize};
 
 // PLAN: assumed `PageMap::to_user(&self, page: usize, at: Point) -> [f64; 2]` and `crate::comments::PageMap<'a>` (pdf-comments-w7, A-1)
@@ -84,8 +82,9 @@ pub enum StampChoice {
     Custom(CustomStamp),
 }
 
-/// A press the tool owns: the page it landed on, where, and the same point in that page's user space.
-struct Press {
+/// A press the tool owns: the page it landed on, where, and the same point in that page's user space. The page
+/// tool is built each pass, so the session keeps it from the press to its release.
+pub(crate) struct StampPress {
     page: usize,
     pos: Pos2,
     user: [f64; 2],
@@ -98,28 +97,25 @@ pub struct StampTool<'a> {
     by_line: String,
     line: Option<String>,
     author: String,
-    pages: &'a [PlacedPage],
-    info: &'a DocInfo,
     map: &'a PageMap<'a>,
-    press: Option<Press>,
+    press: &'a mut Option<StampPress>,
     placed: Option<Edit>,
 }
 
 impl<'a> StampTool<'a> {
     /// A tool placing `choice`. `by_line` is the built-in dynamic stamps' line, `line` a custom stamp's own, both
-    /// already filled in for now; `pages` are the pages on screen and `info` the document's page geometry, which
-    /// lays out a built-in stamp in view space, and `map` takes a pointer to the page's user space, whatever the
-    /// view's rotation.
-    pub fn new(
+    /// already filled in for now; `map` holds the pages on screen and the document's page geometry, which lays out a
+    /// built-in stamp in view space, and takes a pointer to the page's user space, whatever the view's rotation.
+    /// `press` is the session's slot for the tool's press.
+    pub(crate) fn new(
         choice: StampChoice,
         by_line: String,
         line: Option<String>,
         author: String,
-        pages: &'a [PlacedPage],
-        info: &'a DocInfo,
         map: &'a PageMap<'a>,
+        press: &'a mut Option<StampPress>,
     ) -> Self {
-        Self { choice, by_line, line, author, pages, info, map, press: None, placed: None }
+        Self { choice, by_line, line, author, map, press, placed: None }
     }
 
     /// The edit a click placed, once; the canvas applies it.
@@ -131,7 +127,7 @@ impl<'a> StampTool<'a> {
     fn edit_at(&self, page: usize, user: [f64; 2]) -> Option<Edit> {
         match &self.choice {
             StampChoice::Builtin(kind) => {
-                let info = self.info.pages.get(page)?;
+                let info = self.map.info.pages.get(page)?;
                 // Laid out in view space, so the stamp is upright as the page is shown.
                 let [vx, vy] = info.user_to_view(user[0] as f32, user[1] as f32);
                 let (w, h) = kind.size();
@@ -162,10 +158,10 @@ impl<'a> StampTool<'a> {
 
 impl CanvasTool for StampTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
-        let Some(placed) = self.pages.iter().find(|p| p.rect.contains(pointer.pos)) else { return ToolAction::Ignored };
+        let Some(placed) = self.map.pages.iter().find(|p| p.rect.contains(pointer.pos)) else { return ToolAction::Ignored };
         let at = placed.to_page(pointer.pos);
         let user = self.map.to_user(placed.page, at);
-        self.press = Some(Press { page: placed.page, pos: pointer.pos, user });
+        *self.press = Some(StampPress { page: placed.page, pos: pointer.pos, user });
         ToolAction::Claimed
     }
 
@@ -180,7 +176,7 @@ impl CanvasTool for StampTool<'_> {
     }
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
-        self.press = None;
+        *self.press = None;
     }
 
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
