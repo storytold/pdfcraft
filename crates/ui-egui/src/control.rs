@@ -101,13 +101,14 @@ impl PdfCraftApp {
         channel.finish_captures(finished, &mut |_path, _png| Err("ui.screenshot writes no files; omit path".to_string()));
     }
 
-    /// Withdraws the queued synthetic input when the input target (document, dialog, focus) changed since the
-    /// last pass. Runs from the raw input hook, where the framework takes the withdrawal.
+    /// Withdraws the queued synthetic input when its document or dialog changed since the last pass. Runs from
+    /// the raw input hook, where the framework takes the withdrawal; a focus move is the framework's own to
+    /// withdraw on, and a step that moved the focus keeps the rest of its request.
     pub(crate) fn control_before_input(&mut self, ctx: &egui::Context) {
         if self.control.is_none() {
             return;
         }
-        let epoch = self.input_epoch(ctx);
+        let epoch = self.capture_epoch();
         if epoch != self.control_epoch {
             self.control_epoch = epoch;
             WindowHost::of(ctx).withdraw_injected(ViewportId::ROOT);
