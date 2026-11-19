@@ -72,7 +72,7 @@ fn select_after_edit(
             if let Some(&first) = pages.iter().min() {
                 clear_shifted_page_comment_state(view, first);
             }
-            view.select_pages(&[]);
+            view.clear_page_selection(None);
         }
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
@@ -790,16 +790,22 @@ impl PdfCraftApp {
             self.notify_tr("The document changed while the dialog was open, so nothing was changed. Delete the pages again.");
             return;
         }
-        // The view keeps the page it showed, or the one after the deleted run, as the
-        // right-click delete did before it asked: pages deleted before it shift it up, and a page
-        // deleted itself is replaced by what followed the deleted run (or the last page).
-        if let (Some(i), Some(n)) = (self.active_ids().map(|(i, _)| i), self.session.get(d.doc).map(|doc| doc.info.pages.len()))
-            && let Some(v) = self.views.get_mut(i)
-        {
-            let before = d.pages.iter().filter(|p| **p < v.current).count();
-            v.current = v.current.saturating_sub(before).min(n.saturating_sub(d.pages.len() + 1));
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let n = doc.info.pages.len();
+        let current = self.views.get(i).map(|v| v.current).unwrap_or(0);
+        let before = d.pages.iter().filter(|p| **p < current).count();
+        let target_current = current.saturating_sub(before).min(n.saturating_sub(d.pages.len() + 1));
+
+        if self.apply_edit(Edit::DeletePages { pages: d.pages }) {
+            // The view keeps the page it showed, or the one after the deleted run, as the
+            // right-click delete did before it asked: pages deleted before it shift it up, and a page
+            // deleted itself is replaced by what followed the deleted run (or the last page).
+            if let Some(v) = self.views.get_mut(i) {
+                v.current = target_current;
+                v.clear_page_selection(None);
+            }
         }
-        self.apply_edit(Edit::DeletePages { pages: d.pages });
     }
 
     /// Organize ▸ Copy / Cut: remember the selected pages (the document as it is now); Cut also

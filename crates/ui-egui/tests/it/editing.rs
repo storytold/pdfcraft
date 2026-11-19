@@ -8177,6 +8177,57 @@ fn a_document_changed_behind_the_open_pages_delete_ask_deletes_nothing() {
     assert_eq!(page_texts(h.state()).len(), 5);
 }
 
+/// After deleting pages through the confirmation, the selection and Shift-click anchor are
+/// cleared, so a subsequent Shift-click ranges from the new current page.
+#[test]
+fn shift_click_anchor_resets_after_page_deletion() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("doc.pdf", None, fixture(6)).unwrap();
+
+    // Click Page 2 (idx 1).
+    app.views[0].current = 1;
+    app.views[0].clear_page_selection(Some(1));
+    // Ctrl-click Page 3 (idx 2).
+    app.views[0].click_page(2, egui::Modifiers::COMMAND, true);
+    assert_eq!(app.views[0].selected.iter().copied().collect::<Vec<_>>(), vec![1, 2]);
+
+    // Request deletion of pages 1 and 2, then confirm.
+    app.request_delete_pages(0, vec![1, 2]);
+    app.confirm_delete_pages();
+
+    assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 4);
+    assert_eq!(app.views[0].current, 1);
+    assert!(app.views[0].selected.is_empty(), "selection is cleared");
+
+    // Shift-click original Page 6 (now index 3 in the 4-page doc).
+    app.views[0].click_page(3, egui::Modifiers::SHIFT, true);
+    // Range must be from current (1) to 3: [1, 2, 3] (original Pages 4, 5, 6), not [2, 3].
+    assert_eq!(app.views[0].selected.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3]);
+}
+
+/// When page deletion fails (e.g. disallowed by permissions or signed rewrite guard), the
+/// current page is preserved instead of remapping as if pages were removed.
+#[test]
+fn preserve_current_page_when_deletion_fails() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    // 2-page document protected against page modifications.
+    app.open_bytes("doc.pdf", None, protected("", "owner", 0b0100)).unwrap();
+    assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);
+
+    // Navigate to Page 2 (idx 1).
+    app.views[0].current = 1;
+
+    // Request deleting Page 2 and confirm.
+    app.request_delete_pages(0, vec![1]);
+    app.confirm_delete_pages();
+
+    // Deletion was rejected: both pages remain, and view stays on Page 2.
+    assert_eq!(app.session.get(app.views[0].id).unwrap().info.pages.len(), 2);
+    assert_eq!(app.views[0].current, 1);
+}
+
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
 /// went to crop mode's whole-page hit, which unselected every picture.
 #[test]
