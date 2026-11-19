@@ -1128,6 +1128,10 @@ fn decode_raster(
     } else {
         None
     };
+    // PdfCraft patch (107): taken as a bool, so the borrow of `ctx.decoded` ends before the mask
+    // is resolved against it mutably below. With /SMaskInData nonzero the image's /SMask shall be
+    // ignored (ISO 32000-2 Table 87), so its /Matte is not applied to colours it did not multiply.
+    let embedded_opacity = in_data_alpha.is_some();
 
     let is_default_decode = ctx.decode_arr
         == ctx
@@ -1293,8 +1297,9 @@ fn decode_raster(
         })
     };
     let obj = &obj.reporting_to(&sink);
-    let alpha = if let Some((alpha, matte_rgb)) =
-        resolve_matte(obj, &ctx.color_space, target_dimension)
+    let alpha = if !embedded_opacity
+        && let Some((alpha, matte_rgb)) =
+            resolve_matte(obj, &ctx.color_space, target_dimension)
         && alpha.width == ctx.width
         && alpha.height == height
     {
