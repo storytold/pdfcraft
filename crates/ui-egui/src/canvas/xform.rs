@@ -128,19 +128,28 @@ impl PageXform {
         color: Color32,
     ) {
         let mut mesh = egui::Mesh::with_texture(tex);
-        let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
-        let (shown_w, shown_h) = if turn % 180 == 0 { (w, h) } else { (h, w) };
-        let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, rect);
-        for (u, v) in [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-            // The texture's (u, v), from its top-left, in the picture's upright frame, then in user space.
-            let (dx, dy) = (f64::from(u) * shown_w, f64::from(1.0 - v) * shown_h);
-            let (x, y) = (a * dx + c * dy + e, b * dx + d * dy + f);
-            let q = p.user_to_view(x as f32, y as f32);
-            mesh.vertices.push(egui::epaint::Vertex { pos: self.norm_to_screen(q[0] / self.pw, q[1] / self.ph), uv: pos2(u, v), color });
+        let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
+        for (pos, uv) in self.user_image_corners(p, rect, turn).into_iter().zip(uvs) {
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv, color });
         }
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(egui::Shape::mesh(mesh));
+    }
+
+    /// Where the top left, top right, bottom right and bottom left of an upright picture land on screen when it is
+    /// drawn in the user-space `rect` turned back by `turn`, as [`paint_user_image`](Self::paint_user_image) draws it.
+    pub(crate) fn user_image_corners(&self, p: &pdfcraft_render::PageInfo, rect: [f64; 4], turn: i64) -> [Pos2; 4] {
+        let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+        let (shown_w, shown_h) = if turn % 180 == 0 { (w, h) } else { (h, w) };
+        let [a, b, c, d, e, f] = pdfcraft_model::view_matrix_for(turn, rect);
+        [(0.0_f64, 0.0_f64), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| {
+            // The texture's (u, v), from its top-left, in the picture's upright frame, then in user space.
+            let (dx, dy) = (u * shown_w, (1.0 - v) * shown_h);
+            let (x, y) = (a * dx + c * dy + e, b * dx + d * dy + f);
+            let q = p.user_to_view(x as f32, y as f32);
+            self.norm_to_screen(q[0] / self.pw, q[1] / self.ph)
+        })
     }
     pub fn norm_to_screen(&self, u: f32, v: f32) -> Pos2 {
         let (a, b) = match self.rot {

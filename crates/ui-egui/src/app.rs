@@ -678,9 +678,12 @@ impl PdfCraftApp {
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
-        // Showing a document hides the Combine files tab, and ends its preview.
+        // Showing a document hides the Combine files tab.
         if self.active.is_some() && self.combine_tab.focused {
             self.combine_tab.focused = false;
+        }
+        // The page shown large, while it shows: leaving the tab, whichever way, closes it.
+        if !self.combine_showing() {
             self.close_combine_preview();
         }
         // The picks first: a file the user picked opens ahead of a startup file that arrived with it, which then waits

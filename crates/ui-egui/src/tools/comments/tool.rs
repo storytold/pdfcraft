@@ -14,7 +14,6 @@ use super::bridge::{self, PageMap};
 use super::state::{Composer, ComposerKind, PageCx};
 use super::{CommentPrefs, CommentTool, CommentView, DocInfo, Edit, MAX_LINE_WIDTH, QuickTool};
 use crate::canvas::page_parts::{Owner, PagePress};
-use crate::canvas::page_select::PageSelectTool;
 use crate::canvas::{PageGeometry, PageSession};
 
 /// Copied comments hanging on the pointer, waiting for a click to place them.
@@ -33,13 +32,14 @@ pub struct PastePlacement {
 type CaretSnap = Box<dyn Fn(Point) -> Option<(Point, f64)> + Send>;
 
 /// The comment tools on the pages as a canvas tool: the annotation tool for the comment gestures, the paste
-/// placement, and the text selection beneath a markup tool.
+/// placement, and the tool beneath them that takes what no comment takes: the text selection under Select or a
+/// markup tool, Fill & Sign's placing under a Fill & Sign tool (whose own marks are picked up first, as Acrobat does).
 // PLAN: the sheet's constructor lists four arguments; the tool also needs the pass's tool, preferences and what the
 // document allows (`settings`), where a paste click's edit and notice go (`outcome`), and `paste` as the whole slot so a
 // click or Escape can drop it (pdf-canvas-w9's `view.paste.as_mut()` becomes `&mut view.paste`).
 pub(crate) struct CommentsTool<'a> {
     annotate: &'a mut AnnotateTool,
-    text: Option<PageSelectTool<'a>>,
+    beneath: Option<Box<dyn CanvasTool + 'a>>,
     paste: &'a mut Option<PastePlacement>,
     placed: Option<&'a mut Option<Edit>>,
     notice: Option<&'a mut Option<&'static str>>,
@@ -66,7 +66,7 @@ impl<'a> CommentsTool<'a> {
     ) -> Self {
         CommentsTool {
             annotate,
-            text: None,
+            beneath: None,
             paste,
             placed: None,
             notice: None,
@@ -81,9 +81,9 @@ impl<'a> CommentsTool<'a> {
         }
     }
 
-    /// The text selection a press no comment takes goes on to.
-    pub(crate) fn text(mut self, text: PageSelectTool<'a>) -> Self {
-        self.text = Some(text);
+    /// The tool a press no comment takes goes on to: the text selection, or Fill & Sign's placing.
+    pub(crate) fn over(mut self, beneath: impl CanvasTool + 'a) -> Self {
+        self.beneath = Some(Box::new(beneath));
         self
     }
 
@@ -113,7 +113,7 @@ impl<'a> CommentsTool<'a> {
     }
 
     /// Whether the annotation tool holds the gesture, as it took the press or is clicking out a shape: the drag,
-    /// release and cancel are its, else the text's.
+    /// release and cancel are its, else the tool's beneath.
     fn annotating(&self) -> bool {
         *self.pressed || !self.annotate.drawing().is_empty()
     }
@@ -210,8 +210,8 @@ impl CanvasTool for CommentsTool<'_> {
         }
         *self.annotate = built;
         self.annotate.each_pass(cx);
-        if let Some(text) = self.text.as_mut() {
-            text.each_pass(cx);
+        if let Some(beneath) = self.beneath.as_mut() {
+            beneath.each_pass(cx);
         }
     }
 
@@ -232,7 +232,7 @@ impl CanvasTool for CommentsTool<'_> {
         // A markup tool or Replace Text marks the text its drag selects (`page_after_text`): the text takes the press
         // first. Under Select the comments come first, and a press no comment takes goes on to the text.
         if matches!(self.quick, QuickTool::Comment(_))
-            && let Some(text) = self.text.as_mut()
+            && let Some(text) = self.beneath.as_mut()
         {
             let action = text.press(pointer, cx);
             if action != ToolAction::Ignored {
@@ -241,7 +241,7 @@ impl CanvasTool for CommentsTool<'_> {
         }
         let action = self.annotate.press(pointer, cx);
         *self.pressed = action != ToolAction::Ignored;
-        // A press on no comment passes through to the text (`EmptyPress::PassThrough`): it leaves the comments
+        // A press on no comment passes through to the tool beneath (`EmptyPress::PassThrough`): it leaves the comments
         // selected only while Shift or Cmd adds to the selection. A press that began off the pages is no page's and
         // leaves them selected.
         if action == ToolAction::Ignored
@@ -253,8 +253,8 @@ impl CanvasTool for CommentsTool<'_> {
             self.annotate.selected.clear();
         }
         match action {
-            ToolAction::Ignored => match self.text.as_mut() {
-                Some(text) => text.press(pointer, cx),
+            ToolAction::Ignored => match self.beneath.as_mut() {
+                Some(beneath) => beneath.press(pointer, cx),
                 None => ToolAction::Ignored,
             },
             action => action,
@@ -264,32 +264,32 @@ impl CanvasTool for CommentsTool<'_> {
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         if self.annotating() {
             self.annotate.drag(pointer, cx);
-        } else if let Some(text) = self.text.as_mut() {
-            text.drag(pointer, cx);
+        } else if let Some(beneath) = self.beneath.as_mut() {
+            beneath.drag(pointer, cx);
         }
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         if self.annotating() {
             self.annotate.release(pointer, cx);
-        } else if let Some(text) = self.text.as_mut() {
-            text.release(pointer, cx);
+        } else if let Some(beneath) = self.beneath.as_mut() {
+            beneath.release(pointer, cx);
         }
         *self.pressed = false;
     }
 
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         self.annotate.hover(pointer, cx);
-        if let Some(text) = self.text.as_mut() {
-            text.hover(pointer, cx);
+        if let Some(beneath) = self.beneath.as_mut() {
+            beneath.hover(pointer, cx);
         }
     }
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
         if self.annotating() {
             self.annotate.cancel(reason, cx);
-        } else if let Some(text) = self.text.as_mut() {
-            text.cancel(reason, cx);
+        } else if let Some(beneath) = self.beneath.as_mut() {
+            beneath.cancel(reason, cx);
         }
         *self.pressed = false;
     }
@@ -300,9 +300,9 @@ impl CanvasTool for CommentsTool<'_> {
 
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
         if matches!(key, ToolKey::Cancel) {
-            // One step back per press: drop a paste, cancel the drawing, deselect, then drop the tool (a comment
-            // tool, or a Fill & Sign one: its Text tool would otherwise open a box at every click with no way out
-            // by the keyboard).
+            // One step back per press: drop a paste, cancel the drawing, deselect, then Fill & Sign's own steps (its
+            // placing closes the type box, then leaves the tool), or drop a comment tool. The text selection beneath
+            // Select or a markup tool takes no part in them.
             if self.paste.take().is_some() {
                 return true;
             }
@@ -314,7 +314,10 @@ impl CanvasTool for CommentsTool<'_> {
                 self.annotate.selected.clear();
                 return true;
             }
-            if matches!(self.quick, QuickTool::Comment(_) | QuickTool::Fill(_)) {
+            if matches!(self.quick, QuickTool::Fill(_)) {
+                return self.beneath.as_mut().is_some_and(|beneath| beneath.key(key, cx));
+            }
+            if matches!(self.quick, QuickTool::Comment(_)) {
                 *self.done = true;
                 return true;
             }
@@ -335,15 +338,15 @@ impl CanvasTool for CommentsTool<'_> {
         if self.annotating() {
             return own;
         }
-        // Where no comment takes the press, it goes on to the text (`press`): its cursor shows there. A markup tool's
-        // crosshair is the annotation tool's idle face; the drag selects text, so the text's cursor shows over it.
+        // Where no comment takes the press, it goes on to the tool beneath (`press`): its cursor shows there. A markup
+        // tool's crosshair is the annotation tool's idle face; the drag selects text, so the text's cursor shows over it.
         let idle = match own {
             Cursor::System(CursorIcon::Default) => true,
             Cursor::System(CursorIcon::Crosshair) => matches!(self.quick, QuickTool::Comment(_)),
             _ => false,
         };
-        match self.text.as_ref().map(|text| text.cursor(cx)) {
-            Some(text) if idle && !matches!(text, Cursor::System(CursorIcon::Default)) => text,
+        match self.beneath.as_ref().map(|beneath| beneath.cursor(cx)) {
+            Some(beneath) if idle && !matches!(beneath, Cursor::System(CursorIcon::Default)) => beneath,
             _ => own,
         }
     }
@@ -359,13 +362,17 @@ impl CanvasTool for CommentsTool<'_> {
         {
             super::overlay::paste_outline(draw, cx, paste, &self.map, page, pointer.pos);
         }
-        if let Some(text) = self.text.as_ref() {
-            text.paint(draw, cx);
+        if let Some(beneath) = self.beneath.as_ref() {
+            beneath.paint(draw, cx);
         }
     }
 
+    /// A Fill & Sign tool is reached through its own commands; the comment tools through the annotation tool's.
     fn command_form(&self) -> ToolPath {
-        self.annotate.command_form()
+        match self.beneath.as_ref() {
+            Some(beneath) if matches!(self.quick, QuickTool::Fill(_)) => beneath.command_form(),
+            _ => self.annotate.command_form(),
+        }
     }
 }
 
