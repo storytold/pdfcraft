@@ -4105,6 +4105,56 @@ fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
 }
 
 #[test]
+fn accessibility_check_distinguishes_zero_structure_coverage() {
+    let dir = workdir("a11y-coverage");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "pages": 1 }))["doc"].as_u64().unwrap();
+    let report = ok(&mut a, "accessibility_check", json!({ "doc": doc }));
+    let results = report["results"].as_array().unwrap();
+    let result = |id: &str| results.iter().find(|r| r["rule"] == id).unwrap();
+    for id in [
+        "figures-alt-text",
+        "nested-alt-text",
+        "alt-text-associated",
+        "alt-text-hides-annotation",
+        "other-elements-alt-text",
+        "table-rows",
+        "table-cells",
+        "table-headers",
+        "table-regularity",
+        "table-summary",
+        "list-items",
+        "lbl-lbody",
+        "heading-nesting",
+    ] {
+        assert_eq!(result(id)["tested"], 0, "{id}: no applicable structure elements were inspected");
+        assert_eq!(result(id)["status"], "passed", "existing status contract");
+    }
+    for id in ["tagged-pdf", "primary-language", "title"] {
+        assert_eq!(result(id)["status"], "failed", "document-wide requirements still apply");
+        assert!(result(id)["tested"].is_null(), "no element count for document-wide rules");
+    }
+    for (id, status) in [("scripts", "manual"), ("color-contrast", "skipped")] {
+        assert_eq!(result(id)["status"], status);
+        assert!(result(id)["tested"].is_null());
+    }
+    for status in ["passed", "failed", "manual", "skipped"] {
+        assert_eq!(report[status].as_u64().unwrap() as usize, results.iter().filter(|r| r["status"] == status).count());
+    }
+    let filtered = ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["figures-alt-text"] }));
+    let table = filtered["results"].as_array().unwrap().iter().find(|r| r["rule"] == "table-rows").unwrap();
+    assert_eq!(table["status"], "skipped");
+    assert!(table["tested"].is_null(), "disabled is distinct from tested zero elements");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn assert_figure_coverage(report: &Value, tested: usize, status: &str) {
+    let rule = report["results"].as_array().unwrap().iter().find(|x| x["rule"] == "figures-alt-text").unwrap();
+    assert_eq!(rule["tested"], tested);
+    assert_eq!(rule["status"], status);
+}
+
+#[test]
 fn accessibility_check_report_and_fixes_through_tools() {
     let dir = workdir("a11y");
     let mut a = auto(&dir);
@@ -4210,6 +4260,7 @@ trailer << /Root 1 0 R >>
     ));
     let findings = ok(&mut a, "accessibility_check", json!({ "doc": fd, "rules": ["figures-alt-text"] }));
     let figures_rule = findings["results"].as_array().unwrap().iter().find(|x| x["rule"] == "figures-alt-text").unwrap();
+    assert_figure_coverage(&findings, 2, "failed");
     assert_eq!(figures_rule["findings"][0]["object"], 7);
     assert_eq!(figures_rule["findings"][0]["object_generation"], 0);
     assert_eq!(figures_rule["findings"][0]["bbox_user_space"], json!([10.0, 150.0, 50.0, 170.0]));
@@ -4227,6 +4278,8 @@ trailer << /Root 1 0 R >>
     assert_eq!(r["count"], 1);
     let check = ok(&mut a, "accessibility_check", json!({ "doc": fd, "rules": ["figures-alt-text", "tagged-content"] }));
     assert_eq!(check["failed"], 0, "{check}");
+    // The decorative figure is no longer in the tree.
+    assert_figure_coverage(&check, 1, "passed");
     assert!(matches!(a.call("accessibility_set_alt", &json!({ "doc": fd, "figure": 6, "alt": "x" })), Err(ToolError::Failed(_))));
 }
 
