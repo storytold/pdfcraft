@@ -351,9 +351,14 @@ impl ChangedObjectClassifier<'_> {
         let moved: Vec<u32> = added.iter().map(|r| r.num).filter(|num| self.snapshot.placed_annots.contains(num)).collect();
         // The annotations kept, in their new order: another order draws another one on top.
         let reordered = !now.iter().map(|r| r.num).filter(|num| had.contains(num)).eq(was.iter().map(|r| r.num));
+        let was_link = |num: u32| self.old.try_get(num).ok().is_some_and(|o| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Link")));
         if removed.iter().chain(&moved).any(|num| was_widget(*num)) {
             // A form field or signature widget taken off its page, or onto another: no permission covers it.
             Some(kind::OTHER)
+        } else if removed.iter().chain(&moved).any(|num| was_link(*num)) {
+            // A link taken off its page, or onto another, changes where a click goes, which no
+            // level permits, as for a link added or changed (review of #7041).
+            Some(kind::LINKS)
         } else if !removed.is_empty() || !moved.is_empty() || reordered {
             // Deleting, moving or restacking comments is a comment change (permitted at P 3 only).
             Some(kind::COMMENTS)

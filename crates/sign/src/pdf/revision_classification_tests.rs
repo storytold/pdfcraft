@@ -514,3 +514,85 @@ fn a_widget_named_as_new_info_is_not_document_information() {
     let info = with_info(signed.clone().revision(&[(6, Row::Obj(0, 0, "<< /Producer (Writer) >>"))]), 6);
     assert_eq!(verdict(&info.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::METADATA]));
 }
+
+/// From review on #7041: a signed page's comment moved to another page is a comment change, as
+/// it was before the recogniser, and a widget moved so is still refused (`widget_moved_between_pages`).
+#[test]
+fn a_comment_moved_to_another_page_is_a_comment_change() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, COMMENT)),
+    ]);
+    let moved = signed.clone().revision(&[(3, Row::Obj(0, 0, &page("/Annots []"))), (4, Row::Obj(0, 0, &page("/Annots [5 0 R]")))]);
+    assert_eq!(verdict(&moved.open(), signed.open(), Some(3)), Modification::Allowed(vec![super::kind::COMMENTS]));
+    assert_eq!(verdict(&moved.open(), signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::COMMENTS]));
+}
+
+/// From review on #7041: a link taken off a signed page changes where a click goes, as adding or
+/// changing one does, so it is no comment change at any level.
+#[test]
+fn a_link_removed_from_a_signed_page_is_no_comment_change() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, PAGES)),
+        (3, Row::Obj(0, 0, &page("/Annots [5 0 R]"))),
+        (4, Row::Obj(0, 0, &page("/Annots []"))),
+        (5, Row::Obj(0, 0, "<< /Type /Annot /Subtype /Link /Rect [0 0 50 50] /A << /S /URI /URI (https://example.com) >> >>")),
+    ]);
+    let removed = signed.clone().revision(&[(3, Row::Obj(0, 0, &page("/Annots []")))]);
+    for p in [Some(3), None] {
+        assert_eq!(verdict(&removed.open(), signed.open(), p), Modification::Disallowed(vec![super::kind::LINKS]), "P={p:?}");
+    }
+}
+
+/// From review on #7041: validation data is only added. A later revision that drops the signed
+/// document security store, or points the catalog at one that lost its entries, adds nothing;
+/// one that keeps them and adds more does.
+#[test]
+fn the_signed_document_security_store_is_not_dropped_or_swapped() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R /DSS 5 0 R >>")),
+        (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+        (3, Row::Obj(0, 0, &page(""))),
+        (5, Row::Obj(0, 0, "<< /Certs [6 0 R] >>")),
+        (
+            6,
+            Row::Obj(
+                0,
+                0,
+                "<< /Length 3 >>
+stream
+abc
+endstream",
+            ),
+        ),
+    ]);
+    let catalog = |dss: &str| format!("<< /Type /Catalog /Pages 2 0 R {dss} >>");
+    let dropped = signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog("")))]);
+    let swapped = signed.clone().revision(&[(1, Row::Obj(0, 0, &catalog("/DSS 7 0 R"))), (7, Row::Obj(0, 0, "<< /Certs [] >>"))]);
+    for (what, f) in [("dropped", &dropped), ("swapped", &swapped)] {
+        for p in [Some(1), Some(2), Some(3), None] {
+            let v = verdict(&f.open(), signed.open(), p);
+            assert!(matches!(v, Modification::Disallowed(_)), "{what} P={p:?}: {v:?}");
+        }
+    }
+    let grown = signed.clone().revision(&[
+        (1, Row::Obj(0, 0, &catalog("/DSS 7 0 R"))),
+        (7, Row::Obj(0, 0, "<< /Certs [6 0 R 8 0 R] >>")),
+        (
+            8,
+            Row::Obj(
+                0,
+                0,
+                "<< /Length 3 >>
+stream
+def
+endstream",
+            ),
+        ),
+    ]);
+    assert_eq!(verdict(&grown.open(), signed.open(), Some(1)), Modification::Allowed(vec![super::kind::SECURITY_STORE]));
+}

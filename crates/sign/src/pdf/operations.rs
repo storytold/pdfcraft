@@ -7,9 +7,9 @@
 //! |---|---|---|
 //! | Fill an unlocked field | 2, 3, approval | the field's `/V` (and a list box's `/I`); its widgets' `/AS` and appearance, when the value changed; `/NeedAppearances`; `/DR` entries only added |
 //! | Sign an empty field, or add a signature field | 2, 3, approval | a field or widget gaining a new signature dictionary whose `/ByteRange` signs the revision that writes it (`/V`, and a widget's appearance, nothing else of one that was there), the form's `/Fields` and `/SigFlags` |
-//! | Add or change a comment | 3, approval | a non-widget annotation added to a page's `/Annots` (with its appearance and pop-up), an existing one changed, removed or restacked |
+//! | Add or change a comment | 3, approval | a non-widget, non-link annotation added to a page's `/Annots` (with its appearance and pop-up), an existing one changed, removed, moved or restacked |
 //! | Document timestamp | all | an invisible field, or a standalone dictionary, holding a `/DocTimeStamp` that signs the revision that writes it |
-//! | Validation data | all | the document security store, its data and `/VRI` |
+//! | Validation data | all | the document security store, its data and `/VRI`, only added to |
 //! | Housekeeping | all | the signed `/Info` and XMP, the catalog's `/Metadata`, `/NeedsRendering` and developer extensions, cross-reference and object streams |
 //!
 //! A new object is claimed by the operation that claims what refers to it, through the entries
@@ -320,7 +320,8 @@ impl Recogniser<'_> {
 
     /// A signed page's annotations (the page itself, or its `/Annots` array of its own): each
     /// one added is a signature's widget, or a comment; one removed or restacked is a comment
-    /// change. A widget added for no signature, or one moved from another page, is unexplained.
+    /// change, and so is a signed comment moved or copied from another page. A widget added for
+    /// no signature, or one moved from another page, is unexplained.
     /// The same annotations listed again restate what was signed.
     fn pages(&mut self) {
         let (doc, old, snapshot) = (self.doc, self.old, &self.seen.snapshot);
@@ -359,7 +360,12 @@ impl Recogniser<'_> {
             for added in now.iter().filter(|r| !had.contains(&r.num)) {
                 if let Some(op) = [Op::Sign, Op::Timestamp].into_iter().find(|op| self.claimed_by(added.num, *op)) {
                     ops.push(op);
-                } else if !snapshot.placed_annots.contains(&added.num) && doc.get(*added).as_dict().is_some_and(is_comment) {
+                } else if doc.get(*added).as_dict().is_some_and(is_comment)
+                    && (!snapshot.placed_annots.contains(&added.num)
+                        || old.try_get(added.num).ok().is_some_and(|o| o.as_dict().is_some_and(is_comment)))
+                {
+                    // A new comment, or one a signed page listed (and a comment then too) moved
+                    // or copied here (review of #7041).
                     self.claim(added.num, Op::Annotate);
                     ops.push(Op::Annotate);
                 } else {
@@ -471,7 +477,16 @@ impl Recogniser<'_> {
                     }
                     FormChange::Unexplained => None,
                 },
-                b"DSS" => Some(Op::ValidationData),
+                b"DSS" => {
+                    // Validation data is only added: a store dropped, or replaced by one that does
+                    // not keep every signed entry, is not (review of #7041).
+                    let kept = match (b.get(b"DSS"), d.get(b"DSS")) {
+                        (None, Some(_)) => true,
+                        (Some(was), Some(is)) => only_grew(doc, old, &old.resolve(was), &doc.resolve(is), 0),
+                        _ => false,
+                    };
+                    kept.then_some(Op::ValidationData)
+                }
                 b"Perms" => {
                     let perms = d.get(b"Perms").map(|p| doc.resolve(p));
                     let named = perms.as_deref().and_then(Object::as_dict).and_then(|p| p.get(b"DocMDP").and_then(Object::as_ref));
