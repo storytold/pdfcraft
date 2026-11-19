@@ -3276,6 +3276,7 @@ dependencies = [
 [[package]]
 name = "hayro-postscript"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a045550369c90a541693c33#e7873217287876f76a045550369c90a541693c33"
 
 [[package]]
 name = "hayro-syntax"
