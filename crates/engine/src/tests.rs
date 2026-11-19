@@ -5199,6 +5199,26 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// Change page size moves a page's edges, not what is on it: added items stay where they are
+/// drawn, so their boxes (from the shown page's corner) follow, and replacing a picture keeps it there.
+#[test]
+fn added_content_stays_put_when_the_page_size_changes() {
+    let (mut s, id) = session_with(1);
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![0u8; 600]).unwrap();
+    let png = Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap());
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 20.0, 60.0, 70.0]), name: "a.png".into(), bytes: png.clone() }).unwrap();
+    let text = AddedText { rect: [20.0, 250.0, 180.0, 280.0], text: "Note".into(), size: 12.0, ..AddedText::default() };
+    s.apply(id, Edit::AddText { page: 0, text }).unwrap();
+    let rects = |s: &Session| s.get(id).unwrap().added().iter().map(|a| a.content.rect()).collect::<Vec<_>>();
+    let before = rects(&s);
+    s.apply(id, Edit::SetPageSize { pages: vec![0], size: [400.0, 500.0], placement: Placement::default() }).unwrap();
+    let moved: Vec<_> = before.iter().map(|r| [r[0] + 100.0, r[1] + 100.0, r[2] + 100.0, r[3] + 100.0]).collect();
+    assert_eq!(rects(&s), moved, "200×300 centred on 400×500: 100 points more on each side");
+    assert_eq!(moved[0], [110.0, 120.0, 160.0, 170.0]);
+    s.apply(id, Edit::ReplaceImage { page: 0, index: 0, name: "b.png".into(), bytes: png }).unwrap();
+    assert_eq!(rects(&s)[0], [110.0, 120.0, 160.0, 170.0], "the new picture where the old one showed");
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]

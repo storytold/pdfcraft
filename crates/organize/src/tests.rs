@@ -5054,6 +5054,19 @@ fn change_page_size_measures_points_through_user_unit() {
     assert!(matches!(set_page_size(&mut doc, &[0], [28_801.0, 100.0], Placement::default()), Err(OrganizeError::InvalidBox(_))));
 }
 
+/// The hundredth of a point that doesn't count is a point, not a user-space unit: on a page with
+/// a large `/UserUnit` a few points are a small fraction of a unit, and still cut or uncover.
+#[test]
+fn change_page_size_measures_its_slack_in_points() {
+    let mut doc = sized_page("[0 0 2 2]", "/UserUnit 1000");
+    assert_eq!(set_page_size(&mut doc, &[0], [1990.0, 2000.0], Placement::default()).unwrap(), [0], "5 points off each side");
+    let mut doc = sized_page("[0 0 2 2]", "/UserUnit 1000");
+    assert_eq!(set_page_size(&mut doc, &[0], [2010.0, 2000.0], Placement::default()).unwrap(), Vec::<usize>::new());
+    let parts = page_dict(&doc, 0).get(b"Contents").and_then(|c| c.as_array().map(Vec::len));
+    assert_eq!(parts, Some(3), "the 5 points the wider page uncovers on each side are clipped");
+    assert!(!cuts_off([0.0, 0.0, 2.0, 2.0], [0.0, 0.0, 1.999_999, 2.0], 1000.0), "a thousandth of a point isn't a cut");
+}
+
 /// Pages whose visible area doesn't fit any more are reported, and still resized; the boxes
 /// that described the old page go back to the new page.
 #[test]

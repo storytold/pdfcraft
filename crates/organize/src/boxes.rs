@@ -213,11 +213,12 @@ fn resized_media_box(crop: [f64; 4], rotation: i64, user_unit: f64, size: [f64; 
 }
 
 /// Whether a page whose visible area was `visible` loses part of it on a media box `media` (both
-/// user space). Less than a hundredth of a unit doesn't count: a page given the size it already
-/// has, measured in another unit or rounded, loses nothing anyone can see.
-pub fn cuts_off(visible: [f64; 4], media: [f64; 4]) -> bool {
-    const SLACK: f64 = 0.01;
-    visible[0] < media[0] - SLACK || visible[1] < media[1] - SLACK || visible[2] > media[2] + SLACK || visible[3] > media[3] + SLACK
+/// user space, of a page with `user_unit` points per unit). Less than a hundredth of a point
+/// doesn't count: a page given the size it already has, measured in another unit or rounded,
+/// loses nothing anyone can see.
+pub fn cuts_off(visible: [f64; 4], media: [f64; 4], user_unit: f64) -> bool {
+    let slack = 0.01 / if user_unit.is_finite() && user_unit > 0.0 { user_unit } else { 1.0 };
+    visible[0] < media[0] - slack || visible[1] < media[1] - slack || visible[2] > media[2] + slack || visible[3] > media[3] + slack
 }
 
 /// Change Page Size: give `pages` (0-based) a new size of `size` points (width, height as the page
@@ -261,15 +262,15 @@ pub fn set_page_size(doc: &mut Document, pages: &[usize], size: [f64; 2], placem
         if !media.iter().all(|v| v.is_finite()) {
             return Err(bad("the page's boxes are out of range"));
         }
-        if cuts_off(crop, media) {
+        if cuts_off(crop, media, unit) {
             cut.push(i);
         }
-        plan.push((i, *page, media, crop));
+        plan.push((i, *page, media, crop, unit));
     }
-    for &(_, page, media, crop) in &plan {
+    for &(_, page, media, crop, unit) in &plan {
         // Where the new page reaches past what showed, whatever the old boxes hid (bleed, marks,
         // anything cropped away) would show: the content is drawn clipped to what showed.
-        if cuts_off(media, crop) {
+        if cuts_off(media, crop, unit) {
             clip_content(doc, page, crop)?;
         }
         doc.update_dict(page, |d| {
@@ -279,7 +280,7 @@ pub fn set_page_size(doc: &mut Document, pages: &[usize], size: [f64; 2], placem
             }
         })?;
     }
-    pin_inherited_crop(doc, plan.into_iter().map(|(i, page, media, _)| (i, page, media)))?;
+    pin_inherited_crop(doc, plan.into_iter().map(|(i, page, media, ..)| (i, page, media)))?;
     Ok(cut)
 }
 

@@ -181,11 +181,14 @@ impl Automation {
         let before = doc.page_boxes();
         let mut out = self.apply(a, Edit::SetPageSize { pages: pages.clone(), size: [w, h], placement: Placement { across, down, offset } })?;
         let doc = self.doc(a)?;
-        let after = doc.page_boxes();
+        let (after, units) = (doc.page_boxes(), doc.page_user_units());
         // A page whose earlier visible area reaches past its new media box has lost part of what showed.
         let cut: Vec<usize> = pages
             .iter()
-            .filter(|&&i| matches!((before.get(i), after.get(i)), (Some(b), Some(n)) if pdfcraft_organize::cuts_off(b[1], n[0])))
+            .filter(|&&i| {
+                let unit = units.get(i).copied().unwrap_or(1.0);
+                matches!((before.get(i), after.get(i)), (Some(b), Some(n)) if pdfcraft_organize::cuts_off(b[1], n[0], unit))
+            })
             .map(|i| i + 1)
             .collect();
         out["page_sizes"] = json!(doc.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());

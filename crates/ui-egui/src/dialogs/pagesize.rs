@@ -105,6 +105,15 @@ fn shown_sizes(doc: &pdfcraft_engine::Document) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// The sides (points) and the move (points each way, either direction) that every page with these
+/// `/UserUnit`s takes: the engine allows 1 to [`MAX_PAGE_SIDE`] user-space units, so points scale
+/// with each page's unit, and pages with different units take only what fits them all.
+fn bounds(units: impl IntoIterator<Item = f64>) -> (std::ops::RangeInclusive<f64>, f64) {
+    let (least, most) = units.into_iter().fold((f64::INFINITY, 1.0_f64), |(lo, hi), u| (lo.min(u), hi.max(u)));
+    let reach = MAX_PAGE_SIDE * if least.is_finite() { least } else { 1.0 };
+    (most.min(reach)..=reach, reach)
+}
+
 /// The red other dialogs warn in.
 const WARNING: Color32 = Color32::from_rgb(0xD1, 0x3B, 0x3B);
 
@@ -137,6 +146,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let count = doc.info.pages.len().max(1);
     let sizes = shown_sizes(doc);
     let size_of = |p: usize| sizes.get(p).copied().unwrap_or([612.0, 792.0]);
+    let page_units = doc.page_user_units();
     let units = app.units;
     let d = &mut app.size_draft;
     // Opening the dialog starts from the current page's size, in the unit chosen in Preferences,
@@ -147,6 +157,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     }
     // The preview shows the first page the dialog changes.
     let first = d.pages(current, count).first().copied().unwrap_or(current);
+    let (side, reach) = bounds(d.pages(current, count).iter().map(|&p| page_units.get(p).copied().unwrap_or(1.0)));
     ui.label(egui::RichText::new(tl!("Change Page Size")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     ui.horizontal_top(|ui| {
@@ -187,7 +198,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 let mut size = d.size();
                 for (label, idx) in [(tl!("Width"), 0), (tl!("Height"), 1)] {
                     let l = ui.label(label).id;
-                    if length_field(ui, &mut size[idx], d.unit, 1.0..=MAX_PAGE_SIDE, l) {
+                    if length_field(ui, &mut size[idx], d.unit, side.clone(), l) {
                         d.custom = size;
                         d.paper = None;
                         d.landscape = size[0] > size[1];
@@ -207,7 +218,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 ui.end_row();
                 for (label, idx) in [(tl!("Move right"), 0), (tl!("Move down"), 1)] {
                     let l = ui.label(label).id;
-                    length_field(ui, &mut d.offset[idx], d.unit, -MAX_PAGE_SIDE..=MAX_PAGE_SIDE, l);
+                    length_field(ui, &mut d.offset[idx], d.unit, -reach..=reach, l);
                     ui.end_row();
                 }
                 ui.label(tl!("Pages"));
@@ -280,9 +291,14 @@ impl PdfCraftApp {
         if !self.apply_edit(edit) {
             return;
         }
-        let after = self.session.get(id).map(|d| d.page_boxes()).unwrap_or_default();
-        let cut =
-            pages.iter().filter(|&&p| matches!((before.get(p), after.get(p)), (Some(b), Some(a)) if pdfcraft_engine::cuts_off(b[1], a[0]))).count();
+        let (after, units) = self.session.get(id).map(|d| (d.page_boxes(), d.page_user_units())).unwrap_or_default();
+        let cut = pages
+            .iter()
+            .filter(|&&p| {
+                let unit = units.get(p).copied().unwrap_or(1.0);
+                matches!((before.get(p), after.get(p)), (Some(b), Some(a)) if pdfcraft_engine::cuts_off(b[1], a[0], unit))
+            })
+            .count();
         match cut {
             0 => {}
             1 => self.notify_tr("Part of 1 page is now outside the new page size"),
@@ -318,6 +334,15 @@ mod tests {
         assert_eq!(d.visible_area([600.0, 400.0]), [10.0, 380.0, 610.0, 780.0], "bottom left, moved right and up");
         d.range = Range::Pages(2, 9);
         assert!(matches!(d.edit(0, 3), Edit::SetPageSize { ref pages, size: [1000.0, 800.0], .. } if pages == &[1, 2]));
+    }
+
+    #[test]
+    fn the_fields_take_what_every_chosen_page_takes() {
+        assert_eq!(bounds([1.0]), (1.0..=MAX_PAGE_SIDE, MAX_PAGE_SIDE));
+        assert_eq!(bounds([2.0]), (2.0..=2.0 * MAX_PAGE_SIDE, 2.0 * MAX_PAGE_SIDE), "points scale with /UserUnit");
+        assert_eq!(bounds([1.0, 3.0]), (3.0..=MAX_PAGE_SIDE, MAX_PAGE_SIDE), "pages with other units: what fits them all");
+        assert_eq!(bounds([]), (1.0..=MAX_PAGE_SIDE, MAX_PAGE_SIDE));
+        assert_eq!(bounds([1.0, 20_000.0]), (MAX_PAGE_SIDE..=MAX_PAGE_SIDE, MAX_PAGE_SIDE), "never an empty range");
     }
 
     /// The preview's placement is the engine's: what the dialog shows is where the page ends up.

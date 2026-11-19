@@ -583,7 +583,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetPageBox { pages, which, spec } => pdfcraft_organize::set_page_box(doc, pages, *which, *spec)?,
         Edit::SetPageSize { pages, size, placement } => {
+            let views: Vec<_> = pages.iter().filter_map(|&p| pdfcraft_model::page_at(doc, p).map(|pg| (p, pg.view_matrix(doc)))).collect();
             pdfcraft_organize::set_page_size(doc, pages, *size, *placement)?;
+            keep_added_in_place(doc, &views)?;
         }
         Edit::SetTransition { pages, spec } => pdfcraft_organize::set_transition(doc, pages, spec)?,
         Edit::InsertPagesFrom { name, bytes, pages, at, field_conflicts } => {
@@ -1214,6 +1216,28 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
                 break;
             }
             js.refresh_after_batch_edit(doc, e);
+        }
+    }
+    Ok(())
+}
+
+/// After Change Page Size: the page's edges moved and its content didn't, so an added item's box,
+/// kept in display space from the shown page's bottom-left corner, moves the other way and the
+/// item stays where it is drawn. `views` are (page, its view matrix before the change).
+fn keep_added_in_place(doc: &mut pdfcraft_cos::Document, views: &[(usize, [f64; 6])]) -> Result<(), EditError> {
+    let added = pdfcraft_edit::list_added(doc);
+    for &(page, old) in views {
+        let Some(new) = pdfcraft_model::page_at(doc, page).map(|p| p.view_matrix(doc)) else { continue };
+        // Where the old display origin (user-space point `old[4], old[5]`) is in the new display space.
+        let det = new[0] * new[3] - new[1] * new[2];
+        let (ux, uy) = (old[4] - new[4], old[5] - new[5]);
+        let (dx, dy) = ((new[3] * ux - new[2] * uy) / det, (new[0] * uy - new[1] * ux) / det);
+        if !(dx.is_finite() && dy.is_finite()) || (dx == 0.0 && dy == 0.0) {
+            continue;
+        }
+        for (index, item) in added.iter().filter(|a| a.page == page).enumerate() {
+            let [x0, y0, x1, y1] = item.content.rect();
+            pdfcraft_edit::update_content(doc, page, index, &item.content.with_rect([x0 + dx, y0 + dy, x1 + dx, y1 + dy]))?;
         }
     }
     Ok(())

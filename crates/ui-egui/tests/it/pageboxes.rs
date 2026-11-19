@@ -169,6 +169,38 @@ fn change_page_size_dialog_resizes_the_chosen_pages_and_warns_of_cuts() {
     assert_eq!(h.state().size_draft.size(), [400.0, 300.0]);
 }
 
+/// The nine placement radios carry their names for a screen reader (the tooltip names a widget
+/// that has no label of its own).
+#[test]
+fn change_page_size_names_each_placement() {
+    let mut h = harness();
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    for name in ["Top left", "Top", "Top right", "Left", "Centre", "Right", "Bottom left", "Bottom", "Bottom right"] {
+        h.get_by_label(name);
+    }
+    h.get_by_label("Bottom right").click();
+    h.run_steps(2);
+    assert_eq!(h.state().size_draft.anchor, (2, 2));
+}
+
+/// Opened through the control channel, the dialog starts again from the page, as from the menu,
+/// not from a draft that was cancelled.
+#[test]
+fn change_page_size_opened_by_option_starts_from_the_page() {
+    let mut h = harness();
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    h.state_mut().size_draft.custom = [500.0, 500.0];
+    h.state_mut().size_draft.paper = None;
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    h.state_mut().set_option("dialog", "page-size").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().size_draft.size(), [300.0, 400.0]);
+}
+
 #[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();
