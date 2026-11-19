@@ -807,19 +807,37 @@ fn render_nodes(
                             }
                             ctx.request_repaint();
                         }
-                        ui.menu_button(label, |ui| {
-                            ui.set_min_width(160.0);
-                            ui.set_max_width(240.0);
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
-                            ui.spacing_mut().scroll.floating = false;
-                            egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
-                                render_nodes(ui, children, gate, chosen, active_key);
+
+                        let sub_button = egui::containers::menu::SubMenuButton::new(label);
+                        let open = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item == Some(submenu_id));
+                        let inactive = ui.style().visuals.widgets.inactive;
+                        if open {
+                            ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
+                        }
+                        let response = ui.add(sub_button.button);
+                        ui.style_mut().visuals.widgets.inactive = inactive;
+
+                        // A row scrolled out of view does not open its submenu on hover, but an
+                        // already-open submenu (e.g. from keyboard navigation) continues to render.
+                        let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
+                        let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && !ui.clip_rect().contains(p));
+                        if !hidden || open {
+                            sub_button.sub_menu.show(ui, &response, |ui| {
+                                ui.set_min_width(160.0);
+                                ui.set_max_width(240.0);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                                let max_h = (ui.ctx().content_rect().height() - 40.0).max(200.0);
+                                ui.spacing_mut().scroll.floating = false;
+                                egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
+                                    render_nodes(ui, children, gate, chosen, active_key);
+                                });
                             });
-                        })
+                        }
+
+                        response
                     })
                     .inner;
-                ctx.accesskit_node_builder(resp.response.id, |n| {
+                ctx.accesskit_node_builder(resp.id, |n| {
                     n.set_role(egui::accesskit::Role::MenuItem);
                     n.set_label(label);
                     n.set_has_popup(egui::accesskit::HasPopup::Menu);
@@ -1209,5 +1227,55 @@ mod tests {
         assert_eq!(mnemonics[0], Some('S'));
         assert_eq!(mnemonics[1], Some('A'));
         assert_eq!(mnemonics[3], Some('X'));
+    }
+
+    #[test]
+    fn clipped_submenu_row_does_not_open_on_hover_unless_already_open() {
+        let ctx = egui::Context::default();
+        let submenu = craft_menu::Node::submenu("Sub", vec![craft_menu::Item::new(craft_menu::CommandRef::new("cmd.test"), "Child Item").into()]);
+        let nodes = vec![submenu];
+        let gate = craft_menu::Gate::default();
+
+        // Pass 1: Pointer hover over the row's rectangle (y=150), but clip rect is y in 0..100.
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(egui::pos2(50.0, 150.0)));
+        let _ = ctx.run_ui(raw, |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
+        });
+
+        // The submenu must NOT have opened because the row was clipped out of view.
+        let mut open_item = None;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            open_item = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
+        });
+        assert_eq!(open_item, None, "Clipped submenu must not open on hover");
+
+        // Pass 2: Keyboard navigation opens the submenu (mnemonic 'S' for Sub) even when clipped.
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut Some(('S', egui::Key::S)));
+        });
+
+        let mut child_rendered = false;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)));
+            ui.add_space(130.0);
+            let next_id = ui.next_auto_id();
+            let sub_id = egui::containers::menu::SubMenu::id_from_widget_id(next_id);
+            open_item = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item);
+            child_rendered = open_item == Some(sub_id);
+            let mut chosen = Vec::new();
+            render_nodes(ui, &nodes, &gate, &mut chosen, &mut None);
+        });
+        assert!(child_rendered, "Keyboard-opened submenu must remain open and render even when clipped");
     }
 }
