@@ -342,6 +342,9 @@ pub(super) fn offset_at(
 /// combo box, the drop-down list of a combo box and the calendar of a date field. The session ends
 /// by queuing its edit in `session.pending_edit` (a commit), by moving to another field, or by
 /// dropping the draft.
+///
+/// Returns the editor's id when one was shown: it takes the key focus over when the focus arrives on
+/// the field's page part (Tab, a click or a focus request), so the keys and typing reach the text.
 pub(crate) fn show(
     ui: &mut egui::Ui,
     body: &PageBody<'_>,
@@ -350,28 +353,29 @@ pub(crate) fn show(
     form: &[FormField],
     info: &DocInfo,
     pages: PageGeometry<'_>,
-) {
-    let Some(focus) = session.forms.focus.as_ref() else { return };
+) -> Option<egui::Id> {
+    let focus = session.forms.focus.as_ref()?;
     let Some(f) = focused_field(focus, form) else {
         session.forms.focus = None;
-        return;
+        return None;
     };
     let widget = focus.widget;
-    let Some(w) = f.widgets.get(widget) else { return };
-    let Some(page) = w.page else { return };
-    let Some(xf) = session.page_xform(page, pages) else { return };
+    let w = f.widgets.get(widget)?;
+    let page = w.page?;
+    let xf = session.page_xform(page, pages)?;
     let rect = widget_rect(&xf, info, page, w.rect);
     let zoom = xf.zoom();
     let geo = Geometry { frame: TextFrame::of(&xf, info, page, w, rect), zoom };
     if f.read_only() || w.read_only {
-        return;
+        return None;
     }
     let combo = f.kind == FormFieldKind::Combo;
     let types = f.kind == FormFieldKind::Text || (combo && editable_combo(f));
     let mut ended = None;
+    let mut shown = None;
     if types {
         let room = (f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL)).then(|| doc.field_text_box(&focus.name, widget)).flatten();
-        let Some(focus) = session.forms.focus.as_mut() else { return };
+        let focus = session.forms.focus.as_mut()?;
         let Focus { text, selection, .. } = focus;
         let mut host = FieldHost { ctx: ui.ctx().clone(), view: body.view, field: f, widget: w, geo, room, text, caret: selection.caret, laid: None };
         // PLAN: paints through an egui `Painter` with black text, as pdf-forms-w7's `paint_page` does; both move to the `Draw` tokens and the field's `/DA` colour together.
@@ -383,17 +387,25 @@ pub(crate) fn show(
             .mode(if multiline { EditorMode::FieldLines } else { EditorMode::FieldLine })
             .esc_commits(false);
         let editor = if f.has(field_flags::PASSWORD) { editor.masked() } else { editor };
-        ended = editor.show_at(ui, rect).ended;
+        let out = editor.show_at(ui, rect);
+        ended = out.ended;
+        shown = Some(out.response.id);
     }
     match ended {
         Some(EditorEnd::Commit) => commit(session, form),
-        Some(EditorEnd::Next) => session.pending_edit = super::tab_to_next_field(session, info, form, f, widget, true, pages),
-        Some(EditorEnd::Previous) => session.pending_edit = super::tab_to_next_field(session, info, form, f, widget, false, pages),
+        Some(EditorEnd::Next) => {
+            session.pending_edit = super::tab_to_next_field(session, info, form, f, widget, true, pages);
+            session.forms.refocus = true;
+        }
+        Some(EditorEnd::Previous) => {
+            session.pending_edit = super::tab_to_next_field(session, info, form, f, widget, false, pages);
+            session.forms.refocus = true;
+        }
         Some(EditorEnd::Cancel) => session.forms.focus = None,
         // `EditorEnd` is non-exhaustive: an end this code does not know leaves the session open.
         Some(_) | None => {}
     }
-    let Some(focus) = session.forms.focus.as_mut() else { return };
+    let Some(focus) = session.forms.focus.as_mut() else { return shown };
     // A list box is picked from in place on the page, so only a combo box has a drop-down list.
     let picked = if combo { super::choice_list(ui, f, rect, zoom, &mut focus.list_open) } else { None };
     let date = match &f.actions.format {
@@ -407,4 +419,5 @@ pub(crate) fn show(
         focus.text = text;
         commit(session, form);
     }
+    shown
 }
