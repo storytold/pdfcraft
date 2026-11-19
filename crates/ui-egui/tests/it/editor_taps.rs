@@ -208,6 +208,17 @@ fn next_month(h: &Harness<'_, PdfCraftApp>) -> (String, String) {
     (format!("{} {ny}", MONTHS[(nm - 1) as usize]), format!("{nm:02}/15/{ny}"))
 }
 
+/// The middle of the calendar's next-month button.
+fn next_month_button(h: &Harness<'_, PdfCraftApp>) -> egui::Pos2 {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Next").rect().center()
+}
+
+/// The middle of the 15th's cell on the calendar page titled `heading` ("Month Year"): a day is named by its date.
+fn fifteenth(h: &Harness<'_, PdfCraftApp>, heading: &str) -> egui::Pos2 {
+    let (month, year) = heading.split_once(' ').expect("month and year");
+    h.get_by(|n| n.label().is_some_and(|l| l != heading && l.contains(month) && l.contains("15") && l.contains(year))).rect().center()
+}
+
 #[test]
 fn mouse_click_on_a_date_fields_calendar_keeps_it_open() {
     // Control for the tap below.
@@ -216,11 +227,11 @@ fn mouse_click_on_a_date_fields_calendar_keeps_it_open() {
     let (heading, picked) = next_month(&h);
     let p = field(&h, "due").center();
     mouse_click(&mut h, p);
-    let next = h.get_by_label("›").rect().center();
+    let next = next_month_button(&h);
     mouse_click(&mut h, next);
     assert_eq!(focus(&h).as_deref(), Some("due"), "a click on the calendar's next month leaves the field open");
     h.get_by_label(&heading);
-    let day = h.get_by_label("15").rect().center();
+    let day = fifteenth(&h, &heading);
     mouse_click(&mut h, day);
     assert_eq!(value(&h, "due"), [picked], "and a click on a day picks it");
 }
@@ -232,11 +243,11 @@ fn touch_tap_on_a_date_fields_calendar_keeps_it_open() {
     let (heading, picked) = next_month(&h);
     let p = field(&h, "due").center();
     touch_tap(&mut h, p);
-    let next = h.get_by_label("›").rect().center();
+    let next = next_month_button(&h);
     touch_tap(&mut h, next);
     assert_eq!(focus(&h).as_deref(), Some("due"), "a tap on the calendar's next month leaves the field open, as a click does");
     h.get_by_label(&heading);
-    let day = h.get_by_label("15").rect().center();
+    let day = fifteenth(&h, &heading);
     touch_tap(&mut h, day);
     assert_eq!(value(&h, "due"), [picked], "and a tap on a day picks it");
 }
@@ -321,8 +332,7 @@ fn edit_paragraph(h: &mut Harness<'_, PdfCraftApp>) {
     let p = r.min + egui::vec2(60.0 * k, (400.0 - 304.0) * k);
     mouse_click(h, p);
     assert!(h.state().views[0].session.line_editor.is_some(), "the paragraph opens for typing");
-    let input = egui::Id::unique(("edit-text-line-input", h.state().views[0].place()));
-    assert!(h.ctx.memory(|m| m.has_focus(input)), "with the keyboard");
+    assert!(h.ctx.egui_wants_keyboard_input(), "with the keyboard");
 }
 
 /// The open paragraph's line spacing, if a paragraph is open.

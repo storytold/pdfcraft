@@ -55,7 +55,17 @@ impl Act {
         }
     }
 
-    fn icon(self) -> IconId {
+    /// Its row in the tile's menu, as the band's button names it.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Act::Preview => tl!("Preview"),
+            Act::Expand => tl!("Expand"),
+            Act::Collapse => tl!("Collapse"),
+            Act::Remove => tl!("Remove"),
+        }
+    }
+
+    pub(super) fn icon(self) -> IconId {
         IconId::new(match self {
             Act::Preview => "search",
             Act::Expand => "chevron_down",
