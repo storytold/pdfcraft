@@ -4,18 +4,6 @@
 
 use super::as_word::{Meta, word_doc};
 use super::layout::{Image, Page};
-use craft_xml::Writer;
-
-pub(crate) fn core_properties_xml(title: &str) -> Vec<u8> {
-    let mut w = Writer::document();
-    w.open(
-        "cp:coreProperties",
-        &[("xmlns:cp", "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"), ("xmlns:dc", "http://purl.org/dc/elements/1.1/")],
-    );
-    w.leaf("dc:title", &[], title);
-    w.into_bytes()
-}
-
 pub(crate) fn image_mime(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
         "png" => "image/png",
