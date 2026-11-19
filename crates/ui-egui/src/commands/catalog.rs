@@ -190,7 +190,10 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
         }
         PASTE if edit_objects && app.object_clipboard.is_some() => doc.is_some_and(pdfcraft_engine::Document::allows_modification),
         CUT => organize && enabled_id("page.cut"),
-        PASTE => organize && app.page_clipboard.is_some() && enabled_id("page.paste"),
+        PASTE if organize => app.page_clipboard.is_some() && enabled_id("page.paste"),
+        // On the pages Paste takes what the clipboard holds (a picture, comments), which only the paste itself reads:
+        // ⌘V and the platform's delivered paste are this command.
+        PASTE => has_doc,
         SELECT_ALL | DELETE => has_doc || app.combine_showing() && !app.combine_draft.is_empty(),
         id if id.starts_with("view.zoom.") || id.starts_with("view.rotate.") => has_doc,
         PANEL => menus::panel(command).is_some(),
