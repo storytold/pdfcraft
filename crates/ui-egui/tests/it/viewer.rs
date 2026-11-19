@@ -592,10 +592,9 @@ fn layouts_fit_height_labels_and_system_theme() {
 }
 
 fn page_input_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
-    let focused = h.ctx.memory(|m| m.focused());
-    let view = &h.state().views[h.state().active.unwrap()];
-    // Also identifies the original editor when running this test-only patch on the baseline.
-    focused == Some(egui::Id::unique(("page-input", view.id.0))) || focused == Some(egui::Id::unique("page-input"))
+    use egui_kittest::kittest::NodeT as _;
+    // The view rail shows the active document's editor alone.
+    h.query_all(By::new().role(egui::accesskit::Role::TextInput).label("Current page")).any(|n| n.accesskit_node().is_focused())
 }
 
 /// Exercise the real navigation editor, including its focus and Enter handling.
@@ -1071,7 +1070,8 @@ fn initial_view_is_edited_and_honoured_on_open() {
     use pdfcraft_engine::{InitialLayout, Magnification, Navigation};
     let mut h = harness();
     open_properties(&mut h, PropsTab::InitialView);
-    h.get_by_label("Open to page");
+    // The form row names its field group; the field inside carries the same name.
+    h.get_by_role_and_label(egui::accesskit::Role::Group, "Open to page");
     set_properties_field(&mut h, "navigation", json!("bookmarks"));
     set_properties_field(&mut h, "layout", json!("two-up-cover"));
     set_properties_field(&mut h, "magnification", json!("fit-width"));

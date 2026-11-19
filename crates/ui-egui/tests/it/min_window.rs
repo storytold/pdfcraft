@@ -26,7 +26,7 @@ fn at_the_minimum_width_the_menus_the_modes_and_search_stay_reachable() {
     let search = h.get_by_label("Find tools and commands").rect();
     assert!(window.contains_rect(search), "command search is inside the window: {search:?}");
     // The strip shows the current mode whatever the room; the rest fit or fold into its overflow.
-    let mode = h.get_by_label("All tools").rect();
+    let mode = h.get_by_role_and_label(Role::Tab, "All tools").rect();
     assert!(window.contains_rect(mode), "the current mode is inside the window: {mode:?}");
     assert!(!mode.intersects(search), "the mode strip and the search do not overlap: {mode:?} {search:?}");
     // The menu bar folds the titles that don't fit into "⋯", or all of them into one "Menu" when not
