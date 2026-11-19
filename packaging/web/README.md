@@ -104,10 +104,11 @@ From a source build, `trunk build --release` doesn't fetch the models. Add them 
   that partition or block third-party storage may forget them between visits, and the app
   then starts with defaults.
 - **Sandboxed iframes** need at least
-  `sandbox="allow-scripts allow-same-origin allow-downloads allow-popups"`. Without
-  `allow-same-origin` there's no storage. Without `allow-downloads`, Save and Export (browser
-  downloads) are blocked. Without `allow-popups`, external links (community, documentation) cannot
-  open; pass `?embedded` on the iframe `src` to hide external community links cleanly.
+  `sandbox="allow-scripts allow-same-origin allow-downloads"`. Without `allow-same-origin`
+  there's no storage. Without `allow-downloads`, Save and Export (browser downloads) are blocked.
+  `allow-popups` is optional: it lets links open in a new tab (help and documentation, the
+  releases page, community links, and links in a document once the user allows them). Without
+  it they do nothing. `?embedded` on the iframe `src` hides the community links; the others stay.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
 ## Same-document host mode (no iframe)
@@ -190,8 +191,10 @@ URL query flags configure startup behavior. They work on the iframe `src` too.
 
 For example: `<iframe src="https://example.com/pdfcraft/?embedded" ...>`.
 
-PdfCraft renders with **WebGL2** (eframe's Glow renderer). No flag changes the renderer. A browser
-without WebGL2 gets a message in place of the app.
+PdfCraft renders with eframe's Glow renderer. It uses **WebGL2**, or WebGL1 when the browser has
+no WebGL2. No flag changes the renderer. In a browser with neither, the app doesn't start and the
+page stays blank: the error goes to the browser console, and a connected host gets the `failed`
+message.
 
 The build uses WebAssembly SIMD (`.cargo/config.toml`), which reads a scanned page about 2.4
 times faster. Every current browser has it (Chrome and Edge 91, Firefox 89, Safari 16.4 and
