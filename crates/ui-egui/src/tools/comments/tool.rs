@@ -242,11 +242,13 @@ impl CanvasTool for CommentsTool<'_> {
         let action = self.annotate.press(pointer, cx);
         *self.pressed = action != ToolAction::Ignored;
         // A press on no comment passes through to the text (`EmptyPress::PassThrough`): it leaves the comments
-        // selected only while Shift or Cmd adds to the selection.
+        // selected only while Shift or Cmd adds to the selection. A press that began off the pages is no page's and
+        // leaves them selected.
         if action == ToolAction::Ignored
             && self.annotate.tool == AnnotationTool::Select
             && pointer.button == PointerButton::Primary
             && !(pointer.mods.shift || pointer.mods.cmd)
+            && self.page_under(pointer.pos).is_some()
         {
             self.annotate.selected.clear();
         }

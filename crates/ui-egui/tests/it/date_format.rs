@@ -25,6 +25,13 @@ fn pattern(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
     h.get_by_role_and_label(Role::TextInput, "Pattern").value()
 }
 
+/// Opens the Preferences page `page`: its entry in the dialog's list, the first thing the dialog names so (the
+/// window's own "Fill & Sign" names another thing, and the open page its heading).
+fn preferences_page(h: &mut Harness<'static, PdfCraftApp>, page: &str) {
+    h.get_by_role(Role::Dialog).query_all_by_label(page).next().expect("the page's entry").click();
+    h.run_steps(3);
+}
+
 fn retype(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
     // The preferences scroll; bring the field into view before clicking it.
     h.get_by_role_and_label(Role::TextInput, "Pattern").scroll_to_me();
@@ -55,15 +62,13 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     fn reopen(h: &mut Harness<'static, PdfCraftApp>) {
         h.state_mut().open_preferences();
         h.run_steps(4);
-        h.get_by_label("Fill & Sign").click();
-        h.run_steps(3);
+        preferences_page(h, "Fill & Sign");
     }
     fn ok(h: &mut Harness<'static, PdfCraftApp>) {
         h.get_by_label("OK").click();
         h.run_steps(3);
     }
-    h.get_by_label("Fill & Sign").click();
-    h.run_steps(3);
+    preferences_page(&mut h, "Fill & Sign");
     // A valid pattern shows a preview of today while it's typed and applies on OK.
     retype(&mut h, "d \\de mmmm yyyy");
     assert_eq!(h.state().session.date_format(), "m/d/yyyy", "typing edits the draft, not the session");

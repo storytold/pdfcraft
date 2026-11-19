@@ -1,13 +1,16 @@
 //! The toolbar: a tool rail in the dock, with a searchable drawer that edits which commands sit on it.
-use craft::behavior::DockSide;
+use craft::behavior::{DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
+use craft::ui::buttons::IconButton;
 use craft::ui::choice::Swatch;
-use craft::ui::contract::{Bind, Entry, Show};
+use craft::ui::contract::{Bind, Entry, Props as _, Show};
 use craft::ui::docking::PanelSpec;
+use craft::ui::form::SliderField;
 use craft::ui::pickers::Select;
 use craft::ui::rails::{DrawerGroup, DrawerKind, LastUsed, RailTool, SlotId, ToolRail, ToolSlot, ToolbarDrawer, apply_toolbar_edit};
-use craft::ui::text::NumberField;
+use craft::ui::runtime::env::UnitKind;
+use craft::ui::value_drag::SliderScale;
 use pdfcraft_engine::commands::{COMMANDS, command};
 use pdfcraft_engine::{Edit, Rgb};
 use serde::{Deserialize, Serialize};
@@ -260,31 +263,55 @@ fn footer_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
     }
 }
 
+/// The colour of new Fill & Sign text, and of the selected text.
+fn set_fill_text_colour(app: &mut PdfCraftApp, ctx: &egui::Context, color: Rgb) {
+    app.fill_text_color = color;
+    if let Some((page, index)) = selected_fill_text(app) {
+        app.apply_edit(ctx, Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
+    }
+}
+
 /// Fill & Sign's text controls: its colour, font size and border, for the selected text, or for new text when none
-/// is selected.
+/// is selected. Each opens a popover from the bar, as the comment tools' controls do.
 fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
     let picked = selected_fill_text(app);
-    let well = Swatch::new(tl!("Text colour").to_string(), to_srgba(app.fill_text_color)).picker("hotbar.fill-text-colour").well().show(ui);
-    if let Some(request) = well.pick_color {
+    let mut colour = comments::colours::PalettePick::default();
+    let current = app.fill_text_color;
+    comments::popover_from(
+        ui,
+        tl!("Colour"),
+        |ui| Swatch::new(tl!("Colour").to_string(), to_srgba(current)).show(ui).response,
+        |ui| {
+            colour = comments::palette(ui, tl!("Colour"), Some(current), "hotbar.fill-text-colour", &app.recent_colours);
+            colour.picked.is_some()
+        },
+    );
+    if let Some(color) = colour.picked {
+        set_fill_text_colour(app, ui.ctx(), color);
+    }
+    if let Some(request) = colour.request {
         open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
-            let color = from_srgba(picked_colour);
-            app.fill_text_color = color;
-            if let Some((page, index)) = selected_fill_text(app) {
-                app.apply_edit(ctx, Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
-            }
+            set_fill_text_colour(app, ctx, from_srgba(picked_colour));
         });
     }
 
     let (min, max) = (f64::from(crate::fill_sign::MIN_TEXT_SIZE), f64::from(crate::fill_sign::MAX_TEXT_SIZE));
-    let mut size = Some(app.fill_text_size);
-    let field = NumberField::new(tl!("Font size").to_string(), Bind::bound(&mut size)).range(min..=max).popup_slider(min..=max).unit("pt").show(ui);
+    let mut size = app.fill_text_size;
     // #1274: the size also applies to the Fill & Sign text that is selected, once per committed change (a typed
     // value, or the end of a drag), so a drag adds one undo step and not one per frame.
-    let committed = field.edit.events.committed().is_some();
-    if let Some(value) = size {
-        app.fill_text_size = value;
-    }
-    let size = app.fill_text_size;
+    let mut committed = false;
+    comments::popover_from(
+        ui,
+        tl!("Font size"),
+        |ui| IconButton::new(IconId::new("a-large-small")).label(tl!("Font size")).show(ui).response,
+        |ui| {
+            let field =
+                SliderField::new(tl!("Font size"), Bind::bound(&mut size), min..=max).scale(SliderScale::Log).unit_kind(UnitKind::Points).show(ui);
+            committed = field.edit.events.committed().is_some();
+            false
+        },
+    );
+    app.fill_text_size = size;
     if committed
         && let Some((page, index)) = picked
         && app
@@ -323,11 +350,14 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
     }
     // The border's own colour (the text's unless picked).
     if was.width > 0.0 {
-        let well = Swatch::new(tl!("Border colour").to_string(), to_srgba(was.color.unwrap_or(app.fill_text_color)))
-            .picker("hotbar.fill-border-colour")
-            .well()
-            .show(ui);
-        if let Some(request) = well.pick_color {
+        let text_colour = selected
+            .and_then(|(page, index, _)| app.active_ids().and_then(|(_, id)| app.session.get(id))?.comment_props(page, index)?.color)
+            .unwrap_or(app.fill_text_color);
+        let pick = border_colour_control(ui, was.color, text_colour, "hotbar.fill-border-colour", &app.recent_colours);
+        if let Some(color) = pick.choice {
+            border.color = color;
+        }
+        if let Some(request) = pick.request {
             let target = selected.map(|(page, index, _)| (page, index));
             open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
                 let color = from_srgba(picked_colour);
@@ -360,6 +390,9 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
             if border.width != was.width {
                 edits.push(Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(border.width), endings: None });
             }
+            if border.color != was.color {
+                edits.push(Edit::BorderColorAnnotation { page, index, color: border.color });
+            }
             if border.shape != was.shape {
                 edits.push(Edit::BorderShapeAnnotation { page, index, shape: border.shape });
             }
@@ -371,9 +404,33 @@ fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: O
         }
         None => {
             app.fill_text_border = border.width;
+            app.fill_text_border_color = border.color;
             app.fill_text_border_shape = border.shape;
         }
     }
+}
+
+/// The Border colour control: a swatch of the border as drawn (`own`, else the text's colour `text`) that opens
+/// "Same as text" over the palette. `choice` is `Some(None)` for Same as text, `Some(Some(c))` for a colour; a choice
+/// closes the popover.
+fn border_colour_control(
+    ui: &mut egui::Ui,
+    own: Option<Rgb>,
+    text: Rgb,
+    key: &str,
+    recent: &comments::RecentColours,
+) -> comments::colours::ColourChoice {
+    let mut pick = comments::colours::ColourChoice::default();
+    comments::popover_from(
+        ui,
+        tl!("Border colour"),
+        |ui| Swatch::new(tl!("Border colour").to_string(), to_srgba(own.unwrap_or(text))).show(ui).response,
+        |ui| {
+            pick = comments::border_choice(ui, own, key, recent);
+            pick.choice.is_some()
+        },
+    );
+    pick
 }
 
 /// The controls of the active comment tool: its border colour (text boxes and callouts), and the quick bar's.
@@ -390,13 +447,18 @@ fn comment_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, tool: comments::Co
                 && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.locked && comments::made_by(a, tool));
             made.then(|| (page, annotation, doc.comment_props(page, annotation)))
         });
-        let shown = match selected.as_ref().and_then(|(.., p)| p.as_ref()) {
-            Some(p) => p.border_color,
-            None => style.border_color,
+        let (own, text) = match selected.as_ref().and_then(|(.., p)| p.as_ref()) {
+            Some(p) => (p.border_color, p.color.unwrap_or(style.color)),
+            None => (style.border_color, style.color),
+        };
+        let pick = border_colour_control(ui, own, text, "hotbar.comment-border-colour", &app.recent_colours);
+        if let Some(color) = pick.choice {
+            app.comment_prefs.set_border_color(tool, color);
+            if let Some((page, annotation, _)) = &selected {
+                app.apply_edit(ui.ctx(), Edit::BorderColorAnnotation { page: *page, index: *annotation, color });
+            }
         }
-        .unwrap_or(style.color);
-        let well = Swatch::new(tl!("Border colour").to_string(), to_srgba(shown)).picker("hotbar.comment-border-colour").well().show(ui);
-        if let Some(request) = well.pick_color {
+        if let Some(request) = pick.request {
             let target = selected.map(|(page, annotation, _)| (page, annotation));
             open_picker(app, request, move |app: &mut PdfCraftApp, ctx: &egui::Context, picked_colour: Srgba| {
                 let color = from_srgba(picked_colour);

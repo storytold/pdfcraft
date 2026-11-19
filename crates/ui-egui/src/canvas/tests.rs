@@ -638,6 +638,8 @@ fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph(
         find.query = "fox".into();
         find.case_query = "fox".into();
         find.replacement = "owl".into();
+        // A query set here, not typed into the field, starts its search as the field's edit does.
+        view.rerun_find();
     }
     // The text layers arrive over a few frames; the matches of the two pages with text follow.
     for _ in 0..200 {
