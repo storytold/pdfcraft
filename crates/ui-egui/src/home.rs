@@ -212,6 +212,12 @@ mod tests {
             }
         });
         h.run_steps(4);
-        assert_eq!(h.get_all_by_role_and_label(egui::accesskit::Role::ListItem, tl!(label)).count(), 1, "one tile for the tool");
+        // The tiles of Home's two tool grids; the All tools panel beside Home lists the tool too.
+        let tiles: usize = [tl!("Recommended tools"), tl!("Pinned Tools")]
+            .into_iter()
+            .filter_map(|grid| h.query_by_role_and_label(egui::accesskit::Role::ListBox, grid))
+            .map(|grid| grid.query_all_by_role_and_label(egui::accesskit::Role::ListItem, tl!(label)).count())
+            .sum();
+        assert_eq!(tiles, 1, "one tile for the tool");
     }
 }

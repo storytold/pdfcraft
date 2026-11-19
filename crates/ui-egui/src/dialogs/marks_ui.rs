@@ -897,20 +897,6 @@ fn overlay(kind: MarkKind, d: &MarksDraft, size: (f64, f64)) -> SharedOverlay {
     })
 }
 
-/// What a pick (the file the Browse button chose) answers: its name and bytes.
-fn picked_file(picked: craft::host::Picked) -> Option<(String, Vec<u8>)> {
-    match picked {
-        craft::host::Picked::Contents(files) => files.into_iter().next(),
-        craft::host::Picked::Paths(paths) => {
-            let path = paths.into_iter().next()?;
-            let name = path.file_name()?.to_string_lossy().into_owned();
-            let bytes = std::fs::read(&path).ok()?;
-            Some((name, bytes))
-        }
-        craft::host::Picked::Cancelled | craft::host::Picked::Unavailable(_) => None,
-    }
-}
-
 impl PdfCraftApp {
     /// Opens the dialog for `kind`: Add, or Update when `replace`. The draft carries over from the
     /// last opening; the preview starts at the current page.
@@ -1022,8 +1008,11 @@ impl PdfCraftApp {
             }
             let target = self.pick_target(Some(doc_id));
             self.pick_file(pick, target, move |app: &mut PdfCraftApp, _: &egui::Context, picked| {
-                if let Some((name, bytes)) = picked_file(picked) {
-                    app.marks_picked(kind, serial, name, bytes);
+                // The file Browse chose, read through the host's file service as every pick is.
+                match app.read_picked(picked).map(|files| files.into_iter().next()) {
+                    Ok(Some((name, bytes))) => app.marks_picked(kind, serial, name, bytes),
+                    Ok(None) => {}
+                    Err((name, e)) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e)]),
                 }
             });
         }

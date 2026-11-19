@@ -5,12 +5,12 @@
 
 use base64::Engine as _;
 use craft::behavior::selection::Selection;
-use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, keyed};
+use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, PressState, keyed};
 use craft::keymap::CommandRef;
 use craft::review::ui::signature::{SignatureSettings, paint_signature};
 use craft::review::{SavedSignature, SignatureImage as SavedImage};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, SelectMode, Show as _, ShowCollection as _};
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing};
 use craft::ui::list::ThumbAspect;
 use craft::ui::primitives::Draw;
 use craft::ui::style::DataColor;
@@ -342,14 +342,16 @@ pub(crate) struct FillSignTool<'a> {
     info: &'a DocInfo,
     xforms: Vec<(usize, PageXform)>,
     outcome: &'a mut Option<FillOutcome>,
-    dragged: bool,
+    /// This pass's press: its release is a click only when it never moved past the click distance, which the press
+    /// itself records (the press and its release come in different passes).
+    press: PressState,
 }
 
 impl<'a> FillSignTool<'a> {
-    pub(crate) fn new(cx: &PageToolCx<'a>, input: FillInput<'a>, outcome: &'a mut Option<FillOutcome>) -> Self {
+    pub(crate) fn new(cx: &PageToolCx<'a>, input: FillInput<'a>, outcome: &'a mut Option<FillOutcome>, press: PressState) -> Self {
         let size = |page: usize| cx.sizes.get(page).copied().unwrap_or_default();
         let xforms = cx.pages.iter().map(|placed| (placed.page, PageXform::of(placed, cx.rotation, size(placed.page)))).collect();
-        FillSignTool { input, info: cx.info, xforms, outcome, dragged: false }
+        FillSignTool { input, info: cx.info, xforms, outcome, press }
     }
 
     /// The page under `pos` and its transform.
@@ -418,17 +420,14 @@ impl<'a> FillSignTool<'a> {
 
 impl CanvasTool for FillSignTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
-        self.dragged = false;
         if self.page_at(pointer.pos).is_some() { ToolAction::Claimed } else { ToolAction::Ignored }
     }
 
-    fn drag(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        // The host calls `drag` only past the click distance, so a drag never places anything.
-        self.dragged = true;
-    }
+    fn drag(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {}
 
+    /// A drag never places anything: only a click does.
     fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
-        if std::mem::take(&mut self.dragged) {
+        if !self.press.phase.is_click() {
             return;
         }
         if let Some((page, xf)) = self.page_at(pointer.pos) {
@@ -436,9 +435,7 @@ impl CanvasTool for FillSignTool<'_> {
         }
     }
 
-    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
-        self.dragged = false;
-    }
+    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {}
 
     /// Escape steps back one thing per press, as a comment tool's does: the open type box, then the tool, so the Text
     /// tool does not open a box at every click with no way out by the keyboard.
@@ -505,8 +502,11 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp)
     let keys: Vec<usize> = (0..shown.len()).collect();
     let source = keyed(&keys, |k: &usize| *k);
     let ctx_less_label = &label;
-    // The grid places the actions of every tile; a tile never sets it.
+    // The grid places the actions of every tile; a tile never sets it. Two cards at most, in a panel body that
+    // scrolls: the grid is as tall as its cards and owns no scroll.
     let out = TileGrid::new(tl!("Saved signatures"))
+        .sizing(Sizing::Content)
+        .natural_height(true)
         .select(SelectMode::Single)
         .activate(ActivateOn::Click)
         .action_place(TileActionPlace::Band)

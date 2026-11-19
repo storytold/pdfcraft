@@ -224,20 +224,29 @@ pub(crate) struct QuickBarPick {
 }
 
 /// A control that opens a popover under it: `opener` draws the control, a click on it opens and closes the
-/// popover, and `body` fills it. The popover's open flag is the opener's own, kept in the UI's memory.
-fn popover_from(ui: &mut egui::Ui, label: &str, opener: impl FnOnce(&mut egui::Ui) -> egui::Response, body: impl FnOnce(&mut egui::Ui)) {
+/// popover, and `body` fills it; a body that reports it is done (a choice that ends the popover's use) closes it. The
+/// popover's open flag is the opener's own, kept in the UI's memory.
+pub(crate) fn popover_from(
+    ui: &mut egui::Ui,
+    label: &str,
+    opener: impl FnOnce(&mut egui::Ui) -> egui::Response,
+    body: impl FnOnce(&mut egui::Ui) -> bool,
+) {
     let resp = opener(ui);
     let key = resp.id.with("popover-open");
     let mut open = ui.memory(|m| m.data.get_temp::<bool>(key)).unwrap_or(false);
-    if resp.clicked() {
+    // A click by the pointer or by keyboard activation.
+    if craft::ui::contract::clicked(&resp) {
         open = !open;
     }
     let mut body = Some(body);
+    let mut done = false;
     Popover::new(label.to_string(), Bind::bound(&mut open)).opened_by(&resp).show(ui, |ui, _| {
         if let Some(body) = body.take() {
-            body(ui);
+            done = body(ui);
         }
     });
+    open &= !done;
     ui.memory_mut(|m| m.data.insert_temp(key, open));
 }
 
@@ -259,6 +268,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 out.colour = Some(c);
             }
             out.request = pick.request;
+            false
         },
     );
     if tool.has_fill() {
@@ -274,6 +284,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 if pick.request.is_some() {
                     out.request = pick.request;
                 }
+                false
             },
         );
     }
@@ -290,6 +301,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 prefs.set_opacity(tool, percent / 100.0);
                 prefs.set_part_opacity(tool, None, None);
             }
+            false
         },
     );
     if tool.has_width() {
@@ -303,6 +315,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 if w != style.width {
                     prefs.set_width(tool, w);
                 }
+                false
             },
         );
     }

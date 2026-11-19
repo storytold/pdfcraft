@@ -419,7 +419,9 @@ fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
     confirm_extract(&mut h);
     h.answer(Picked::Paths(vec![dir.clone()]));
     assert!(written(&h, "March_ 2026_receipt.pdf"));
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 5, "nothing written outside those names");
+    // The writes go through the host's file service, not to disk.
+    let names: std::collections::BTreeSet<_> = h.files.written().into_iter().filter(|p| p.starts_with(&dir)).collect();
+    assert_eq!(names.len(), 5, "nothing written outside those names: {names:?}");
     // Into a new tab: the tab, and so Save As, has the typed name.
     open_extract(&mut h, Extract { name: Some("Chapter 2"), ..Default::default() });
     confirm_extract(&mut h);
@@ -500,8 +502,8 @@ fn import_comments_takes_the_comments_of_another_pdf() {
     review.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     let dir = scratch("import-pdf-comments");
     let path = dir.join("review.pdf");
-    std::fs::write(&path, review).unwrap();
-    let mut h = harness(&[1]);
+    // The import reads the picked file through the host's file service.
+    let mut h = rig(&[1], ScriptedFiles::held().with_file(&path, review));
     assert!(h.execute("comment.import"));
     h.steps(2);
     h.answer(Picked::Paths(vec![path]));
@@ -565,9 +567,9 @@ fn a_close_prompt_still_means_its_own_document_after_a_pending_save_closes_anoth
 fn a_watermark_file_from_browse_lands_only_in_the_dialog_that_asked() {
     let dir = scratch("browse");
     let file = dir.join("mark.pdf");
-    std::fs::write(&file, fixture(1)).unwrap();
     for keep_open in [true, false] {
-        let mut h = harness(&[1]);
+        // The dialog reads the picked file through the host's file service.
+        let mut h = rig(&[1], ScriptedFiles::held().with_file(&file, fixture(1)));
         assert!(h.execute("edit.watermark"));
         h.steps(2);
         h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "File").click();
@@ -1028,14 +1030,11 @@ fn a_saved_attachment_carries_the_documents_zone() {
     }
 }
 
-/// Every file under `dir`, recursively, sorted.
-fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() { out.extend(files_under(&path)) } else { out.push(path) }
-    }
+/// Every file the host's file service wrote anywhere, once each, sorted: the writes go through it, not to disk.
+fn files_written(h: &Rig) -> Vec<std::path::PathBuf> {
+    let mut out = h.files.written();
     out.sort();
+    out.dedup();
     out
 }
 
@@ -1058,7 +1057,7 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         let ctx_h = h.ctx.clone();
         h.state_mut().split_active(&ctx_h, &pdfcraft_ui_egui::SplitPlan::By(pdfcraft_engine::SplitBy::PageCount(1)));
         h.answer(Picked::Paths(vec![out.clone()]));
-        let written = files_under(&dir.0);
+        let written = files_written(&h);
         assert_eq!(written.len(), 2, "{name}: two split parts, got {written:?}");
         assert!(written.iter().all(|p| p.parent() == Some(out.as_path())), "{name}: {written:?}");
         // Extract writes page 1 under the name Split gave it.
@@ -1066,7 +1065,7 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         confirm_extract(&mut h);
         h.answer(Picked::Paths(vec![out.clone()]));
         assert!(support::shown_notice(&mut h).is_some(), "{name}: Extract reports what it wrote");
-        assert_eq!(files_under(&dir.0), written, "{name}");
+        assert_eq!(files_written(&h), written, "{name}");
         std::fs::remove_dir_all(dir.0.join("a")).unwrap();
     }
 }

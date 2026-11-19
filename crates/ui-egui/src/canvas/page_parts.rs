@@ -169,6 +169,7 @@ pub(crate) struct PagePart {
     cursor: Option<CursorIcon>,
     tip: Option<String>,
     passes_drag: bool,
+    context_only: bool,
     focusable: bool,
 }
 
@@ -176,7 +177,15 @@ impl PagePart {
     /// `owner` on `page`, hit by `shape`, ranked by `layer`. It takes clicks, drags and secondary clicks, and shows the
     /// default cursor and no tip.
     pub(crate) fn new(owner: Owner, page: usize, shape: impl Into<HitShape>, layer: PageLayer) -> Self {
-        PagePart { owner, page, shape: shape.into(), layer, cursor: None, tip: None, passes_drag: false, focusable: false }
+        PagePart { owner, page, shape: shape.into(), layer, cursor: None, tip: None, passes_drag: false, context_only: false, focusable: false }
+    }
+
+    /// The part takes only secondary clicks: a primary press goes to what lies below (a highlight over a link, whose
+    /// click follows the link while its right-click opens the highlight's menu).
+    #[must_use]
+    pub(crate) fn context_only(mut self) -> Self {
+        self.context_only = true;
+        self
     }
 
     /// The cursor over the part.
@@ -208,8 +217,12 @@ impl PagePart {
         self
     }
 
-    /// What the part senses: a click, a secondary click and a drag of its own, or a click that passes its drag on.
+    /// What the part senses: a click, a secondary click and a drag of its own, or a click that passes its drag on, or
+    /// a secondary click alone.
     fn sense(&self) -> Sense {
+        if self.context_only {
+            return Sense::CONTEXT_CLICK;
+        }
         let drag = if self.passes_drag { Sense::PASSES_DRAG } else { Sense::DRAG };
         Sense::CLICK | Sense::CONTEXT_CLICK | drag
     }

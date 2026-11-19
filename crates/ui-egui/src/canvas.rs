@@ -949,7 +949,10 @@ fn page_parts_of(
         let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
         let pointer = ui.input(|i| i.pointer.hover_pos()).map(|p| craft::behavior::kurbo::Point::new(p.x.into(), p.y.into()));
         let (tolerance, icon_side) = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
-        parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side));
+        let on_link = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| parts.iter().any(|part| matches!(part.owner, Owner::Link { .. } | Owner::TextLink { .. }) && part.shape.hit(p)));
+        parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side, on_link));
     }
     // Fields take the page's presses under Select only: another tool's press over a field is the tool's (a new
     // text box, a mark, a stamp).
@@ -971,8 +974,8 @@ fn page_parts_of(
         tabs.push((placed.page, xf, overlay.tabs));
     }
     if cx.preparing {
-        // PLAN: assumed `prepare::tool::page_parts(out, session, form, info, pages, rotation)` (pdf-forms-w9).
-        crate::prepare::tool::page_parts(&mut parts, session, cx.form, cx.info, body.pages, cx.rotation);
+        let field_tool = matches!(cx.tool, QuickTool::Field(_));
+        crate::prepare::tool::page_parts(&mut parts, session, cx.form, cx.info, body.pages, cx.rotation, field_tool);
     }
     if cx.tool == QuickTool::EditText && cx.can_modify {
         crate::object_ui::page_parts(&mut parts, session, cx.doc, cx.info, body.pages, geo);
@@ -1068,6 +1071,12 @@ fn route_press(
         }
         // Add text's menu is the page's.
         session.menu_for = menu_for.filter(|_| !(cx.tool == QuickTool::AddText && cx.can_modify));
+        // A Prepare field is selected for its menu, under a field tool too.
+        if let Owner::PrepareField { .. } = press.owner
+            && cx.can_modify
+        {
+            crate::prepare::tool::field_press(session, cx.form, press);
+        }
         // A link reads its own right-click too: its context event selects it for the Link tool's menu.
         if !matches!(press.owner, Owner::Link { .. } | Owner::TextLink { .. }) {
             return;
@@ -1076,6 +1085,12 @@ fn route_press(
     let clicked = matches!(press.phase, PressPhase::Release { click: true, .. });
     // A press a part takes is no picture pick, and takes back an earlier click whose picture is still being found.
     session.pending_pick = None;
+    // A press on anything but a comment (a field, added text, a link) leaves the selected comments unselected, as a
+    // press on the page does: the part takes it, so the comments tool never sees it.
+    let primary = pressed_by(&press.phase, PointerButton::Primary);
+    if primary && (matches!(press.phase, PressPhase::Down { .. }) || press.phase.is_click()) && !matches!(press.owner, Owner::Comment { .. }) {
+        session.comments.clear_selection();
+    }
     match &press.owner {
         Owner::Link { .. } | Owner::TextLink { .. } => {
             // Read before acting: the links borrow the session.
