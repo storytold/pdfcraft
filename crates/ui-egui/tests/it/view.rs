@@ -438,17 +438,21 @@ const EASED: [&str; 2] = ["system", "on"];
 
 #[test]
 fn a_wheel_notch_scrolls_at_once_with_animation_effects_off() {
-    // Eased, egui spreads a notch over about a quarter of a second. At once, the page moves the
-    // notch's whole distance in one frame.
+    // Eased, the page view spreads a notch over several frames. At once, the page moves the notch's
+    // whole distance in one frame.
     let notch = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().wheel_line();
+    // The first frame the page stands the whole notch further on.
+    let arrives = |moved: &[f32]| moved.iter().position(|y| (y - notch).abs() < 0.5).unwrap_or(moved.len());
+    let mut at_once = 0;
     for effects in AT_ONCE {
         let moved = frames_after_a_notch(effects, false);
         // The frame the notch arrives in scrolls; the next one draws the page where it stays.
         assert!(moved[2..].iter().all(|y| (y - notch).abs() < 0.5), "{effects}: one notch is {notch} points, all at once: {moved:?}");
+        at_once = at_once.max(arrives(&moved));
     }
     for effects in EASED {
         let moved = frames_after_a_notch(effects, false);
-        assert!(moved[2] < notch * 0.75, "{effects}: egui eases the notch: {moved:?}");
+        assert!(arrives(&moved) > at_once + 1, "{effects}: the notch eases over more frames than at once ({at_once}): {moved:?}");
         assert!((moved[39] - notch).abs() < 1.0, "{effects}: easing changes how long a notch takes, not how far it goes: {moved:?}");
     }
 }
@@ -1002,6 +1006,11 @@ fn from_viewport_corner(h: &Harness<'static, PdfCraftApp>, page: usize, fx: f32,
     egui::pos2(r.min.x + fx * r.width(), r.min.y + fy * r.height()) - vp.min
 }
 
+/// The side gutter the page view keeps clear (the spacing token); a destination's left lands past it (L-245).
+fn side_gutter(h: &Harness<'static, PdfCraftApp>) -> f32 {
+    h.state().views[0].spacing.as_ref().expect("laid out").side as f32
+}
+
 #[test]
 fn bookmark_destinations_scroll_to_their_position() {
     use egui_kittest::kittest::Queryable;
@@ -1024,7 +1033,8 @@ fn bookmark_destinations_scroll_to_their_position() {
     let v = &h.state().views[0];
     assert_eq!((v.current(), v.fit(), v.zoom()), (1, Fit::None, 3.0));
     let d = from_viewport_corner(&h, 1, 0.25, 0.5);
-    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "the destination point is at the window's top-left: {d:?}");
+    let side = side_gutter(&h);
+    assert!((d.x - side).abs() < 2.0 && d.y.abs() < 2.0, "the destination point is at the window's top-left, past the gutter {side}: {d:?}");
 
     // Unusable operands are read as null, which keeps the reader's place in user space: y 300
     // was at the window's top on page 2 (its crop box starts at y 100), so on page 3 (crop from
@@ -1078,7 +1088,8 @@ fn a_link_without_a_position_keeps_the_place_on_the_next_page() {
     assert_eq!((h.state().views[0].current(), h.state().views[0].zoom()), (0, 4.0));
     let (fx, fy) = (40.0 / 300.0, 40.0 / 400.0);
     let d = from_viewport_corner(&h, 0, fx, fy);
-    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "(40, 360) is at the window's top-left: {d:?}");
+    let side = side_gutter(&h);
+    assert!((d.x - side).abs() < 2.0 && d.y.abs() < 2.0, "(40, 360) is at the window's top-left, past the gutter {side}: {d:?}");
 
     let r = rect(&h, 0).expect("page 1");
     let at = egui::pos2(r.min.x + r.width() * (100.0 / 300.0), r.min.y + r.height() * (1.0 - 335.0 / 400.0));
@@ -1090,7 +1101,7 @@ fn a_link_without_a_position_keeps_the_place_on_the_next_page() {
     let v = &h.state().views[0];
     assert_eq!((v.current(), v.zoom()), (1, 4.0), "the link goes to page 2 at the same zoom");
     let d = from_viewport_corner(&h, 1, fx, fy);
-    assert!((d.x - 70.0).abs() < 2.0 && d.y.abs() < 2.0, "page 2 shows the same place, not its top: {d:?}");
+    assert!((d.x - side).abs() < 2.0 && d.y.abs() < 2.0, "page 2 shows the same place, not its top: {d:?}");
 }
 
 /// Two pages with a text field on each and a non-embedded Helvetica.

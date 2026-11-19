@@ -432,8 +432,10 @@ pub struct PageOverlaysStyle {
     tab_ink: StyleColor,
     /// The colour of every verdict tone.
     tones: Vec<(Tone, StyleColor)>,
-    /// The badge outline's width, and how far it stands off the widget.
+    /// The badge outline's width, and how far it stands off the widget; also a required field's outline width.
     outline: f32,
+    /// The outline width of a field that isn't required.
+    field_line: f32,
     /// The corners of the badge outline and the flash.
     corners: CornerRadius,
     /// How far the flash and the compare marks stand off what they mark.
@@ -509,6 +511,7 @@ impl Component for PageOverlays<'_> {
             tab_ink: cx.color(colors.text.on_accent),
             tones,
             outline: tokens.stroke.thick,
+            field_line: tokens.stroke.thin,
             corners: CornerRadius::same(tokens.shape.radius.sm.round().clamp(0.0, 255.0) as u8),
             grow: tokens.space.gap.inline,
         }
@@ -553,20 +556,26 @@ impl PageOverlays<'_> {
     fn paint_field_highlights(&self, draw: &Draw<'_>, style: &PageOverlaysStyle) {
         for field in self.doc.form.iter().filter(|f| f.kind != FormFieldKind::PushButton) {
             let required = field.has(pdfcraft_engine::field_flags::REQUIRED);
-            let (width, edge) = if required { (StrokeWidth::Medium, style.required_edge) } else { (StrokeWidth::Thin, style.field_edge) };
+            let (width, line, edge) = if required {
+                (StrokeWidth::Thick, style.outline, style.required_edge)
+            } else {
+                (StrokeWidth::Thin, style.field_line, style.field_edge)
+            };
             for widget in field.widgets.iter().filter(|w| w.page == Some(self.page) && !w.hidden && !w.read_only) {
                 let rect = self.xf.user_rect_f64(&self.doc.info, self.page, widget.rect);
                 // The page transform can turn a finite widget into one the screen cannot place.
                 if !rect.is_finite() {
                     continue;
                 }
-                let shape = if widget.round {
-                    PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0)
+                // The outline lies inside the widget: a rectangle strokes inside its edge, a circle on its radius.
+                let radius = rect.width().min(rect.height()) / 2.0;
+                let (shape, outline) = if widget.round {
+                    (PaintShape::Circle(rect.center(), radius), PaintShape::Circle(rect.center(), radius - line / 2.0))
                 } else {
-                    PaintShape::Rect(rect, CornerRadius::ZERO)
+                    (PaintShape::Rect(rect, CornerRadius::ZERO), PaintShape::Rect(rect, CornerRadius::ZERO))
                 };
                 draw.fill(&shape, style.field_fill);
-                draw.stroke(&shape, width, edge);
+                draw.stroke(&outline, width, edge);
             }
         }
     }

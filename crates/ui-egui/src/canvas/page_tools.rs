@@ -516,8 +516,8 @@ pub(crate) fn edit_text_press(
     geo: PageGeometry<'_>,
     tool: QuickTool,
 ) -> Option<Edit> {
-    let Mods { cmd, shift, .. } = press.mods;
-    if (shift || cmd) && crate::tools::object_ui::modified_press(session, doc, info, press, geo) {
+    let Mods { cmd, ctrl, shift, .. } = press.mods;
+    if (shift || cmd || ctrl) && crate::tools::object_ui::modified_press(session, doc, info, press, geo) {
         return None;
     }
     match press.owner {

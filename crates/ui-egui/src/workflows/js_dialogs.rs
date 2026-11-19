@@ -140,14 +140,15 @@ fn document_scripts(app: &mut PdfCraftApp, ui: &mut egui::Ui, open: &mut bool, d
             let before = scripts.iter().position(|(n, _)| *n == draft.name);
             let mut selection = before.map_or_else(Selection::default, Selection::single);
             let source = ScriptRows(scripts.len());
-            let out = List::new(tl!("Document JavaScripts")).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
-                ui,
-                &source,
-                &mut |&at, icx| {
+            // A short list that scrolls its own rows, above the script.
+            let out = List::new(tl!("Document JavaScripts"))
+                .select(SelectMode::Single)
+                .selection(Bind::bound(&mut selection))
+                .max_rows(5)
+                .show_items(ui, &source, &mut |&at, icx| {
                     let name = scripts.get(at).map(|(n, _)| n.clone()).unwrap_or_default();
                     ListRow::new(name).striped(icx.at % 2 == 1)
-                },
-            );
+                });
             // Only the pass's own pick copies; a drained event list is empty on a second pass.
             if out.events.iter().any(|e| !matches!(e, CollectionEvent::Column(_))) && selection.lead != before {
                 if let Some((name, script)) = selection.lead.and_then(|at| scripts.get(at)) {
