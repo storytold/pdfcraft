@@ -1360,8 +1360,12 @@ fn xobject(
         // fills or, when it has a `/BBox`, the box a form would draw in: either one under a mark
         // counts. Both are read as the proof reads a form's, entries by reference included; a
         // `/Matrix` or `/BBox` that is present but malformed leaves its place unknown, so it counts
-        // as under a mark rather than as outside every one.
+        // as under a mark rather than as outside every one. With no mark at all (Remove Hidden
+        // Information reads hidden text and layers so), no place is under one, malformed or not.
         _ => {
+            if scope.rects.is_empty() {
+                return None;
+            }
             let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
             let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
                 (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
