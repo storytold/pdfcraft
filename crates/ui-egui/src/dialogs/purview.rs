@@ -51,7 +51,7 @@ fn account_card(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) {
                 ui.add_space(6.0);
                 let active_id = active.id.clone();
                 let mut selected = active_id.clone();
-                egui::ComboBox::from_id_salt("purview-account-picker").selected_text(active.label()).width(290.0).show_ui(ui, |ui| {
+                egui::ComboBox::new("purview-account-picker", "Microsoft account").selected_text(active.label()).width(290.0).show_ui(ui, |ui| {
                     for account in &accounts {
                         let is_active = account.id == active_id;
                         if ui.selectable_label(is_active, account.label()).clicked() && !is_active {
