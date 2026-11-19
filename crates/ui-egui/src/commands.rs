@@ -65,7 +65,16 @@ impl PdfCraftApp {
         if self.run_catalog_command(ctx, fired) {
             return;
         }
-        self.execute(ctx, id);
+        // In Organize the clipboard rows and keys are the picked pages' (the catalog enables them as
+        // `page.copy`, `page.cut` and `page.paste`); the registry's text Copy itself stays off there.
+        let organize = self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.organize);
+        let page_command = match id {
+            "edit.copy" => Some("page.copy"),
+            crate::menus::CUT => Some("page.cut"),
+            crate::menus::PASTE => Some("page.paste"),
+            _ => None,
+        };
+        self.execute(ctx, page_command.filter(|_| organize).unwrap_or(id));
     }
 
     /// Answers a key press whose command only the app's own state disabled: the user is told
@@ -205,7 +214,12 @@ impl PdfCraftApp {
             || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
                 || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
-                    !v.organize && (v.session.all_text || v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()))
+                    // Selected text, or a picked picture, which Copy takes in its original format.
+                    !v.organize
+                        && (v.session.all_text
+                            || v.selection_waits_for_text().is_some()
+                            || v.selected_text().is_some_and(|t| !t.is_empty())
+                            || v.session.picked_image.is_some())
                 }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
@@ -279,18 +293,6 @@ impl PdfCraftApp {
     }
 
     fn execute_unguarded(&mut self, ctx: &egui::Context, id: &str) -> bool {
-        // In Organize the clipboard commands are the picked pages' (the catalog enables them as
-        // `page.copy`, `page.cut` and `page.paste`).
-        let organize = self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.organize);
-        let page_command = match id {
-            "edit.copy" => Some("page.copy"),
-            crate::menus::CUT => Some("page.cut"),
-            crate::menus::PASTE => Some("page.paste"),
-            _ => None,
-        };
-        if organize && let Some(page_command) = page_command {
-            return self.execute_unguarded(ctx, page_command);
-        }
         // Paste is the framework's clipboard command, not a registered one: the pages take what
         // the clipboard holds (objects, a picture or comment text).
         if id == crate::menus::PASTE {
