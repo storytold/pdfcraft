@@ -4,7 +4,9 @@
 //! data can declare the whole image: 4096 × 4096 five-bit `/DeviceCMYK` samples held at once,
 //! as `u16`, again as `f32` and once more as bytes for the CMYK conversion, came to about
 //! 500 MiB; at the 2^28-pixel limit the same file allocated about 7 GiB, and a failed allocation
-//! ends the process rather than panicking.
+//! ends the process rather than panicking. The lookup path pads a short image the same way, and
+//! converts that padded tail a band at a time: held whole as `f32` it was four bytes a pixel,
+//! 128 MiB for a 2^25 × 1 image.
 //!
 //! The peak is measured in a child process of this test binary, which renders the page alone and
 //! reports its peak resident size (`VmHWM`, Linux only), so the other tests running in this one
@@ -94,6 +96,18 @@ fn pixel(page: &RenderedPage, x: usize, y: usize) -> [u8; 3] {
     [px[0], px[1], px[2]]
 }
 
+/// The lookup path's padded tail is converted a band at a time too: an image wide enough that
+/// the row of padding past its one sample is over a hundred MiB, and one row tall, so every pixel
+/// after the first is padding.
+#[cfg(target_os = "linux")]
+const LOOKUP_PROBE: &str = "PDFCRAFT_IMAGE_LOOKUP_MEMORY_PROBE";
+/// The RGB result is 96 MiB; the padded row held whole as `f32` came to another 128 MiB.
+#[cfg(target_os = "linux")]
+const LOOKUP_PEAK_LIMIT_KIB: u64 = 160 * 1024;
+/// The width of the image the lookup probe draws: 2^25 pixels, one byte of samples.
+#[cfg(target_os = "linux")]
+const LOOKUP_WIDTH: u32 = 1 << 25;
+
 /// This process's peak resident size, in KiB.
 #[cfg(target_os = "linux")]
 fn peak_kib() -> u64 {
@@ -138,6 +152,44 @@ fn a_padded_image_decodes_without_holding_its_samples_whole() {
         .unwrap();
     println!("the child's peak resident size: {peak} KiB");
     assert!(peak < PEAK_LIMIT_KIB, "peak resident size {peak} KiB, over {PEAK_LIMIT_KIB} KiB");
+}
+
+/// The child half of [`a_padded_lookup_converts_its_tail_in_bands`]: it runs alone, in its own
+/// process. Without the variable it is a plain no-op.
+#[cfg(target_os = "linux")]
+#[test]
+fn stand_in_for_a_padded_lookup() {
+    if std::env::var_os(LOOKUP_PROBE).is_none() {
+        return;
+    }
+    // 2^25 × 1 gray from one byte, which the lookup table takes (more pixels than its 256
+    // entries). `/Decode [0.5 1]` is not the default, so the fast path is skipped; the padding is
+    // decoded zero, so the drawn image is black on the white page.
+    let page = render(pdf(LOOKUP_WIDTH, 1, "/BitsPerComponent 8 /ColorSpace /DeviceGray /Decode [0.5 1]", &[0]));
+    let centre = pixel(&page, 100, 100);
+    assert!(centre.iter().all(|c| *c < 64), "the image is drawn: {centre:?}");
+    println!("peak-kib={}", peak_kib());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_padded_lookup_converts_its_tail_in_bands() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "image_decode_memory::stand_in_for_a_padded_lookup", "--nocapture", "--test-threads=1"])
+        .env(LOOKUP_PROBE, "1")
+        .output()
+        .expect("run this test's own binary as a child");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "the child failed: {stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    let peak: u64 = stdout
+        .split("peak-kib=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("the child ran the decode: {stdout}"))
+        .parse()
+        .unwrap();
+    println!("the child's peak resident size: {peak} KiB");
+    assert!(peak < LOOKUP_PEAK_LIMIT_KIB, "peak resident size {peak} KiB, over {LOOKUP_PEAK_LIMIT_KIB} KiB");
 }
 
 /// Sixteen-bit data of an odd length reads its last byte as the high byte of a sample whose low

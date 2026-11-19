@@ -1773,10 +1773,14 @@ fn rgb_via_lookup(
             rgb.copy_from_slice(colour);
         }
     }
-    // The pixels past the samples present (at most a row): converted as before, padding and all.
-    // `components` is now at sample `whole * n`.
-    if whole < pixels {
-        let tail: Vec<f32> = (whole * n..total)
+    // The pixels past the samples present (at most a row): converted as before, padding and all,
+    // a band at a time, so a wide image cannot hold a whole row of samples at once. `components`
+    // is now at sample `whole * n`.
+    let band = BAND_PIXELS.saturating_mul(n);
+    let mut at = whole * n;
+    while at < total {
+        let end = total.min(at.saturating_add(band));
+        let tail: Vec<f32> = (at..end)
             .map(|i| match decode.get(i % n) {
                 Some(range) if i < used => components
                     .next()
@@ -1784,7 +1788,8 @@ fn rgb_via_lookup(
                 _ => 0.0,
             })
             .collect();
-        let _ = cs.convert_f32(&tail, data.get_mut(whole * 3..)?, false);
+        let _ = cs.convert_f32(&tail, data.get_mut(at / n * 3..end / n * 3)?, false);
+        at = end;
     }
 
     Some(RgbData {
