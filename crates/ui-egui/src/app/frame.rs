@@ -21,7 +21,7 @@ impl PdfCraftApp {
                 self.run_declined(declined);
             }
             let commands = crate::commands::catalog::command_input(self, ctx);
-            FrameInput::new(self.root_env()).commands(commands).host(self.host.clone())
+            FrameInput::new(self.root_env(ctx)).commands(commands).host(self.host.clone())
         });
     }
 }

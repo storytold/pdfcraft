@@ -171,7 +171,7 @@ impl crate::PdfCraftApp {
                 .or_else(|| self.preferences.is_some().then(|| "preferences".to_string()))
                 .or_else(|| self.shortcuts.is_some().then(|| "shortcuts".to_string())),
             "palette_open": self.palette_open,
-            "theme": format!("{:?}", self.root_env().resolved(ctx).mode),
+            "theme": format!("{:?}", self.root_env(ctx).resolved(ctx).mode),
             "theme_preference": format!("{:?}", self.theme_preference),
             "show_page_edge_shadows": self.show_page_edge_shadows,
             "language": self.language,

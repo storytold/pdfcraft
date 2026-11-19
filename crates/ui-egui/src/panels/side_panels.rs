@@ -346,6 +346,12 @@ impl Panels<'_> {
 /// the page area.
 fn document_view(app: &mut PdfCraftApp, ui: &mut Ui, rect: egui::Rect) {
     app.settle_document_view();
+    eprintln!(
+        "DIAG continuous_layout_stacks_pages_vertically: document_view rect={rect:?} avail={:?} max={:?} screen={:?}",
+        ui.available_rect_before_wrap(),
+        ui.max_rect(),
+        ui.ctx().content_rect()
+    );
     if app.full_screen_document() {
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
         if let Some(i) = app.active {

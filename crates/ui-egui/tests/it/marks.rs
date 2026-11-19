@@ -16,7 +16,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 const BOX_LABELS: [&str; 6] =
-    ["Header left text", "Header center text", "Header right text", "Footer left text", "Footer center text", "Footer right text"];
+    ["Left Header Text", "Center Header Text", "Right Header Text", "Left Footer Text", "Center Footer Text", "Right Footer Text"];
 const WATERMARK_TEXT: &str = "Watermark text";
 const REPLACE: &str = "Page 1 paints its own white backdrop, which would hide the background. Replace it";
 
