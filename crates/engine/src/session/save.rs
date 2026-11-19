@@ -15,6 +15,13 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         if let Some(purview) = doc.purview.as_ref()
+            && purview.document.labeling_required
+            && purview.document.label.is_none()
+            && purview.document.default_label_id.is_none()
+        {
+            return Err(EditError::Protection("a sensitivity label is required before this document can be saved".into()));
+        }
+        if let Some(purview) = doc.purview.as_ref()
             && purview.document.protected
             && (doc.dirty || editor.cos.is_modified())
             && !(purview.document.rights.can_save() || purview.document.rights.can_export())
@@ -61,6 +68,13 @@ impl Session {
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
     pub fn save_full_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if let Some(purview) = doc.purview.as_ref()
+            && purview.document.labeling_required
+            && purview.document.label.is_none()
+            && purview.document.default_label_id.is_none()
+        {
+            return Err(EditError::Protection("a sensitivity label is required before this document can be saved".into()));
+        }
         if doc.is_signed() {
             return Err(EditError::Signed);
         }

@@ -66,6 +66,20 @@ fn helper_path() -> Option<std::path::PathBuf> {
         if sibling.is_file() {
             return Some(sibling);
         }
+        #[cfg(target_os = "linux")]
+        {
+            let package_helper = std::path::PathBuf::from("/usr/lib/pdfcraft/pdfcraft-purview-helper");
+            if package_helper.is_file() {
+                return Some(package_helper);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let bundle_helper = folder.join("pdfcraft-purview-helper");
+            if bundle_helper.is_file() {
+                return Some(bundle_helper);
+            }
+        }
     }
     None
 }
@@ -231,6 +245,19 @@ impl NativePurviewProvider {
         }
         if line == "NO_ACCESS" {
             return Err(PurviewError::NoAccess);
+        }
+        if let Some((control, _)) = line.split_once('\t') {
+            match control {
+                "NONE" => return Ok(None),
+                "SIGNIN" => return Err(PurviewError::SignInRequired),
+                "NO_ACCESS" => return Err(PurviewError::NoAccess),
+                "DENIED" => {
+                    let message = line.strip_prefix("DENIED\t").unwrap_or("");
+                    let message = message.split_once('\t').map(|(message, _)| message).unwrap_or(message);
+                    return Err(PurviewError::Native(unescape(message)));
+                }
+                _ => {}
+            }
         }
         if let Some(message) = line.strip_prefix("DENIED\t") {
             return Err(PurviewError::Native(unescape(message)));
@@ -643,5 +670,18 @@ impl Drop for NativePurviewProvider {
         {
             let _ = std::fs::remove_dir_all(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+
+    #[test]
+    fn parse_open_accepts_control_results_with_the_output_suffix() {
+        let provider = NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246"));
+        assert_eq!(provider.parse_open("NONE\t/tmp/output.pdf").unwrap(), None);
+        assert!(matches!(provider.parse_open("SIGNIN\t/tmp/output.pdf"), Err(PurviewError::SignInRequired)));
+        assert!(matches!(provider.parse_open("NO_ACCESS\t/tmp/output.pdf"), Err(PurviewError::NoAccess)));
     }
 }

@@ -54,6 +54,8 @@ pub(super) enum Notice {
     Unlock,
     /// Close this historical snapshot tab (View signed version / View revision).
     Close,
+    /// Open the sensitivity-label dialog from the document message bar.
+    PurviewLabel,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
     /// Lock the placed signatures into the page (#2149).
@@ -170,6 +172,7 @@ pub(super) fn notices(
     let mut open_repairs = false;
     let mut open_console = false;
     let mut toggled = None;
+    let mut open_purview_label = false;
     // A form whose scripts were turned off no longer calculates or answers its buttons: that
     // comes before what else there is to say about the document.
     let scripts_off = doc.xfa_scripts_off();
@@ -212,7 +215,22 @@ pub(super) fn notices(
     } else {
         None
     };
-    let msg = if scripts_off {
+    let purview = doc.purview();
+    let purview_msg = purview.and_then(|purview| {
+        purview.label.as_ref().map(|label| {
+            let protection = if purview.protected { tl!("Protected") } else { tl!("Label applied") };
+            (
+                "tag",
+                crate::i18n::fmt(tl!("Sensitivity label: {label} — {status}"), &[("label", label.name.as_str()), ("status", protection.as_ref())]),
+                false,
+            )
+        })
+    });
+    let msg = if let Some(purview_msg) = purview_msg {
+        Some(purview_msg)
+    } else if purview.is_some_and(|purview| purview.labeling_required) {
+        Some(("tag", tl!("A sensitivity label is required before save").to_string(), false))
+    } else if scripts_off {
         Some(("triangle-alert", crate::js_ui::scripts_off_notice(), true))
     } else if secured {
         // A secured form still says what it is, and keeps Highlight fields: the security
@@ -243,6 +261,11 @@ pub(super) fn notices(
                 toggled = Some(Notice::FieldHighlights(view.highlight_fields));
             }
         }
+        if purview.is_some() {
+            if crate::widgets::pill_button(ui, tl!("Sensitivity label"), false).clicked() {
+                open_purview_label = true;
+            }
+        }
         if scripts_off && crate::widgets::pill_button(ui, tl!("JavaScript Console"), false).clicked() {
             open_console = true;
         }
@@ -271,6 +294,9 @@ pub(super) fn notices(
     }
     if hide_secured {
         return Some(Notice::HideSecured);
+    }
+    if open_purview_label {
+        return Some(Notice::PurviewLabel);
     }
     open_security.then_some(Notice::Security).or(toggled)
 }

@@ -329,9 +329,43 @@ PDFCRAFT_PURVIEW_APP_ID=<storytold-app-client-id> \
 cargo build -p pdfcraft --release --features mip-sdk
 ```
 
+### PdfCraft SDK package layout
+
+SDK builds stage the native bridge next to the application executable and copy the official SDK
+runtime libraries into the platform package:
+
+- macOS: `PdfCraft.app/Contents/MacOS/pdfcraft-purview-helper` and
+  `PdfCraft.app/Contents/Frameworks/*.dylib`
+- Windows: `pdfcraft-purview-helper.exe` and the MIP redistributable DLLs beside `pdfcraft.exe`
+- Linux: `/usr/lib/pdfcraft/pdfcraft-purview-helper` and the MIP SDK shared libraries beside it
+
+Every SDK helper and redistributable is included in nested-code signing or platform package signing.
+The macOS build uses app-relative `@rpath` loading; the Linux build uses `$ORIGIN`; Windows uses
+DLL search rules for files beside the executable. Ordinary packages do not include SDK helper or
+redistributable files.
+
 The app ID is a public client identifier, not a secret. The release pipeline should read it
 from CI configuration or a release manifest, but must record it alongside the app registration
 and IPIA. Do not put an app secret in a desktop binary or source repository.
+
+### PdfCraft POC live-completion gate
+
+The following inputs are required to turn the PdfCraft POC from an SDK bridge into a live tenant test:
+
+- Download the official `mip_sdk_file_macos_1.18.148.zip` package for macOS and, for public release,
+  the corresponding `file`, `protection`, and `upe` packages for every supported platform.
+- Extract the package into a private SDK staging directory outside the Git repository.
+- Set `MIP_SDK_ROOT` to the package root and verify `include/` and `bins/release/<arch>/` exist.
+- Set `PDFCRAFT_PURVIEW_APP_ID` to the public/native Microsoft Entra application client ID.
+- Do not set an app secret in `PDFCRAFT_PURVIEW_APP_ID`, CI environment, source, or packaged binary.
+- Complete the public IPIA process before distributing the SDK-enabled public build.
+- Sign and notarize the macOS helper and SDK libraries; sign and Authenticode-sign or notarize the Windows helper and package.
+- Use a dedicated Microsoft 365 test tenant with a published sensitivity label policy.
+- Create test labels for default, mandatory, protected, and unprotected outcomes.
+- Test a PFILE/PDF produced from the tenant against the live POC on macOS arm64 first.
+- Verify sign-in, MFA/Conditional Access, use-license acquisition, rights, save/re-publish, label
+  downgrade justification, remove label, remove protection, and ordinary-password composition behavior.
+- Keep the POC fail-close if the SDK, app ID, helper, or tenant policy is missing. Never silently open MIP-shaped bytes in that state.
 
 ## Step 4: Build the shared native integration
 

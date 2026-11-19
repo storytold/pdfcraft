@@ -80,9 +80,10 @@ fn main() {
                 .arg("-o")
                 .arg(&helper);
             if os == "macos" {
-                command.arg("-Wl,-rpath,@loader_path/../Frameworks");
+                command.arg("-Wl,-rpath,@executable_path/../Frameworks");
+                command.arg("-Wl,-rpath,@loader_path");
             } else {
-                command.arg(format!("-Wl,-rpath,{}", bins.display()));
+                command.arg("-Wl,-rpath,$ORIGIN");
             }
         }
         let status = match command.status() {

@@ -2994,6 +2994,31 @@ fn combine_source_check_says_why_a_file_cannot_be_combined() {
 }
 
 #[test]
+fn mandatory_sensitivity_policy_blocks_save_until_a_label_is_selected() {
+    let (mut s, id) = session_with(1);
+    let provider = Arc::new(pdfcraft_purview::UnavailablePurviewProvider);
+    let bytes = s.get(id).unwrap().bytes.clone();
+    s.doc_mut(id).unwrap().purview = Some(crate::PurviewDocumentState {
+        handle: 1,
+        original: bytes.clone(),
+        document: crate::PurviewDocument {
+            protected: false,
+            label: None,
+            rights: crate::PurviewRights { view: true, edit: true, save: true, ..crate::PurviewRights::default() },
+            owner: None,
+            content_id: None,
+            labeling_required: true,
+            default_label_id: None,
+            downgrade_justification_required: false,
+        },
+        provider,
+    });
+    assert!(matches!(s.save_bytes(id), Err(EditError::Protection(_))));
+    s.doc_mut(id).unwrap().purview.as_mut().unwrap().document.default_label_id = Some("default-label".into());
+    assert!(s.save_bytes(id).is_ok());
+}
+
+#[test]
 fn protection_is_validated_undoable_and_never_logged() {
     let (mut s, id) = session_with(1);
     assert!(matches!(s.apply(id, Edit::Protect(protection(None, None))), Err(EditError::Protection(_))));

@@ -58,7 +58,11 @@ echo "==> PdfCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $N
 if [[ "$SKIP_BUILD" = 0 ]]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+    (cd "$ROOT" && cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  else
+    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli "${args[@]}")
+  fi
 fi
 
 rm -rf "$WORK"
@@ -74,10 +78,14 @@ done
 sign() {
   # Hardened runtime + secure timestamp for a real identity; ad-hoc can't be timestamped.
   local ts=(--timestamp)
-  [[ "$IDENTITY" = "-" ]] && ts=(--timestamp=none)
   local kc=()
   [[ -n "${MACOS_KEYCHAIN:-}" ]] && kc=(--keychain "$MACOS_KEYCHAIN")
-  codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
+  if [[ "$IDENTITY" = "-" ]]; then
+    ts=(--timestamp=none)
+    codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
+  else
+    codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} --options runtime "${ts[@]}" "$@"
+  fi
 }
 
 # `stapler staple` and `stapler validate` both fetch the ticket from Apple's CloudKit, and a dropped
@@ -114,10 +122,77 @@ notarize() {
 
 # ---- PdfCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/pdfcraft" "$APP/Contents/MacOS/PdfCraft"
 cp "$ROOT/assets/app-icon/pdfcraft.icns" "$APP/Contents/Resources/PdfCraft.icns"
+if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+  MIP_SDK_ROOT="${MIP_SDK_ROOT:-${PDFCRAFT_MIP_SDK_ROOT:-}}"
+  MIP_BIN="$MIP_SDK_ROOT/bins/release"
+  case "$ARCH" in
+    universal)
+      MIP_ARM64="$MIP_BIN/arm64"
+      MIP_X86="$MIP_BIN/x86_64"
+      ;;
+    aarch64)
+      MIP_ARM64="$MIP_BIN/arm64"
+      MIP_X86=
+      ;;
+    x86_64)
+      MIP_ARM64=
+      MIP_X86="$MIP_BIN/x86_64"
+      ;;
+  esac
+  HELPER_SRC=""
+  for t in "${TARGETS[@]}"; do
+    candidate="$CARGO_TARGET_DIR/$t/release/build"
+    found="$(find "$candidate" -path '*/pdfcraft-purview-*/out/pdfcraft-purview-helper' -type f 2>/dev/null | head -n 1)"
+    if [[ -n "$found" ]]; then HELPER_SRC="$found"; break; fi
+  done
+  if [[ -z "$HELPER_SRC" ]]; then
+    found="$(find "$CARGO_TARGET_DIR" -type f -name pdfcraft-purview-helper -path '*/release/*' 2>/dev/null | head -n 1)"
+    if [[ -n "$found" ]]; then HELPER_SRC="$found"; fi
+  fi
+  if [[ -z "$HELPER_SRC" ]]; then
+    echo "error: sdk build did not produce pdfcraft-purview-helper" >&2
+    exit 1
+  fi
+  cp "$HELPER_SRC" "$APP/Contents/MacOS/pdfcraft-purview-helper"
+  if [[ "$ARCH" = universal ]]; then
+    HELPERS=()
+    for t in "${TARGETS[@]}"; do
+      candidate="$CARGO_TARGET_DIR/$t/release/build"
+      found="$(find "$candidate" -path '*/pdfcraft-purview-*/out/pdfcraft-purview-helper' -type f 2>/dev/null | head -n 1)"
+      [[ -n "$found" ]] && HELPERS+=("$found")
+    done
+    if [[ ${#HELPERS[@]} -ne 2 ]]; then
+      echo "error: sdk universal build requires both arm64 and x86_64 helpers" >&2
+      exit 1
+    fi
+    lipo -create -output "$APP/Contents/MacOS/pdfcraft-purview-helper" "${HELPERS[@]}"
+  fi
+  copy_mip_dylibs() {
+    local source_dir="$1" dest_arch="${2:-}"
+    local lib
+    for lib in "$source_dir"/*.dylib; do
+      [[ -f "$lib" ]] || continue
+      local name
+      name="$(basename "$lib")"
+      if [[ "$dest_arch" = universal && -f "$APP/Contents/Frameworks/$name" ]]; then
+        lipo -create -output "$APP/Contents/Frameworks/$name" "$APP/Contents/Frameworks/$name" "$lib"
+      else
+        cp "$lib" "$APP/Contents/Frameworks/$name"
+      fi
+    done
+  }
+  if [[ -n "$MIP_ARM64" ]]; then copy_mip_dylibs "$MIP_ARM64" ""; fi
+  if [[ -n "$MIP_X86" ]]; then copy_mip_dylibs "$MIP_X86" universal; fi
+  for lib in "$APP"/Contents/Frameworks/*.dylib; do
+    [[ -f "$lib" ]] || continue
+    sign --entitlements "$HERE/entitlements.plist" "$lib"
+  done
+  sign --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/pdfcraft-purview-helper"
+fi
 # Required embedded-font notices are independent of optional font inputs.
 cp "$ROOT/NOTICE" "$APP/Contents/Resources/NOTICE"
 # The standard About panel (PdfCraft menu > About PdfCraft) shows Credits.rtf under the version:
