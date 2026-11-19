@@ -1626,7 +1626,8 @@ mod formcalc {
         assert_eq!(calc(r#"IsoTime2Num("12:30:45Z")"#), "45045001");
         assert_eq!(calc(r#"IsoTime2Num("12:30:45.250")"#), "45045251");
         assert_eq!(calc(r#"IsoTime2Num("T12:30:45")"#), "45045001");
-        assert_eq!(calc(r#"Num2Time(3661000)"#), "01:01:01");
+        assert_eq!(calc(r#"Num2Time(3661001)"#), "01:01:01");
+        assert_eq!(calc(r#"Num2Time(0)"#), "");
     }
 
     fn assert_financial_and_unit_builtins() {

@@ -286,6 +286,9 @@ impl Interp<'_> {
     fn try_format_clause(&self, cat: PicCat, pattern: &str, v: &Val, text: &str) -> Option<String> {
         match cat {
             PicCat::Date => {
+                if let Some((y, m, d)) = yyyymmdd_date_from_str(v, text) {
+                    return Some(format_date(y, m, d, pattern));
+                }
                 let days = parse_num(text).filter(|d| is_numeric_text(text) && d.abs() < MAX_DAYS).map(|d| d as i64);
                 match days {
                     Some(d) => {
@@ -306,7 +309,11 @@ impl Interp<'_> {
                 ms.map(|m| format_time(m, pattern))
             }
             PicCat::DateTime => {
-                let days = parse_num(text).filter(|d| is_numeric_text(text) && d.abs() < MAX_DAYS).map(|d| d as i64);
+                let days = if yyyymmdd_date_from_str(v, text).is_some() {
+                    None
+                } else {
+                    parse_num(text).filter(|d| is_numeric_text(text) && d.abs() < MAX_DAYS).map(|d| d as i64)
+                };
                 format_datetime(text, days, pattern)
             }
             PicCat::Text => format_text_pic(text, pattern),
@@ -381,11 +388,12 @@ impl Interp<'_> {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-                    Val::Num(ms.rem_euclid(86_400_000) as f64)
+                    // FormCalc time values are 1-based (1 = midnight 00:00:00.000 GMT).
+                    Val::Num((ms.rem_euclid(86_400_000) + 1) as f64)
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    Val::Num(0.0)
+                    Val::Num(1.0)
                 }
             }
             "date2num" | "isodate2num" => {
@@ -434,10 +442,11 @@ impl Interp<'_> {
                 let ms = self.arg_num(args, 0)?;
                 let pic = if args.len() > 1 { self.arg_str(args, 1)? } else { "HH:MM:SS".into() };
                 self.charge((pic.len() / 64) as u64)?;
-                if !ms.is_finite() || ms < 0.0 {
-                    return Ok(Some(Val::Null));
+                // XFA 3.3 pp. 1099-1100: 1-based ms since midnight (1 = 00:00:00.000); invalid (< 1) returns "".
+                if !ms.is_finite() || ms < 1.0 {
+                    return Ok(Some(Val::Str(String::new())));
                 }
-                Val::Str(format_time(ms, &pic))
+                Val::Str(format_time(ms - 1.0, &pic))
             }
             "time2num" | "isotime2num" => {
                 let s = self.arg_str(args, 0)?;
@@ -584,6 +593,13 @@ impl Interp<'_> {
     }
 }
 
+/// Parse an 8-digit string (`YYYYMMDD`) as a valid civil date without treating numeric day counts as dates.
+fn yyyymmdd_date_from_str(v: &Val, text: &str) -> Option<(i64, u32, u32)> {
+    let Val::Str(_) = v else { return None };
+    let t = text.trim();
+    if t.len() == 8 && t.bytes().all(|b| b.is_ascii_digit()) { parse_date_exact(t, "YYYYMMDD") } else { None }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Limits;
@@ -664,12 +680,22 @@ mod tests {
             ("TimeFmt(3)", "h:MM:SS A Z"),
             ("LocalTimeFmt()", "HH:MM:SS"),
             ("LocalTimeFmt(4)", "h:MM:SS A Z"),
-            (r#"Num2Time(3661000)"#, "01:01:01"),
-            (r#"Num2Time(52205000, "time{h:MM:SS AA}")"#, "2:30:05 PM"),
+            (r#"Num2Time(3661001)"#, "01:01:01"),
+            (r#"Num2Time(3661000)"#, "01:01:00"),
+            (r#"Num2Time(52205001, "time{h:MM:SS AA}")"#, "2:30:05 PM"),
             (r#"Num2GMTime(65593001, "HH:MM:SS Z")"#, "18:13:13 GMT"),
-            (r#"Num2GMTime(52205000, "HH:MM:SS z")"#, "14:30:05 Z"),
-            (r#"Num2Time(-1) == null"#, "1"),
-            (r#"Num2GMTime(-100) == null"#, "1"),
+            (r#"Num2GMTime(52205001, "HH:MM:SS z")"#, "14:30:05 Z"),
+            (r#"Num2GMTime(1, "HH:MM:SS.FFF")"#, "00:00:00.000"),
+            (r#"Num2Time(Time2Num("08:15:30.250 GMT", "HH:MM:SS.FFF Z"), "HH:MM:SS.FFF")"#, "08:15:30.250"),
+            (r#"Num2GMTime(Time2Num("23:59:59.999 GMT", "HH:MM:SS.FFF Z"), "HH:MM:SS.FFF Z")"#, "23:59:59.999 GMT"),
+            (r#"Num2Time(0)"#, ""),
+            (r#"Num2GMTime(0, "HH:MM:SS")"#, ""),
+            (r#"Num2Time(0.5)"#, ""),
+            (r#"Num2Time(-1)"#, ""),
+            (r#"Num2GMTime(-100)"#, ""),
+            (r#"Num2Time(-1) == null"#, "0"),
+            (r#"Within(Time(), 1, 86400000)"#, "1"),
+            (r#"Len(Num2Time(Time(), "HH:MM:SS"))"#, "8"),
             (r#"Time2Num("00:00:00 GMT", "HH:MM:SS Z")"#, "1"),
             (r#"IsoTime2Num("00:00:00Z")"#, "1"),
             (r#"Time2Num("01:00:00")"#, "3600001"),
@@ -785,6 +811,11 @@ mod tests {
             (r#"Parse(DateFmt(4), Num2Date(45350, DateFmt(4)))"#, "2024-02-29"),
             (r#"Format("date{YYYY-JJJ}", "2024-02-29")"#, "2024-060"),
             (r#"Parse("date{YYYY-JJJ}", "2024-060")"#, "2024-02-29"),
+            // Example 25.77: 8-digit string YYYYMMDD vs numeric day count:
+            (r#"Format("MMM D, YYYY", "20020901")"#, "Sep 1, 2002"),
+            (r#"Format("datetime{MMM D, YYYY HH:MM}", "20020901")"#, "Sep 1, 2002 00:00"),
+            (r#"Format("EEEE, YYYY-MM-DD", 45350)"#, "Thursday, 2024-02-29"),
+            (r#"Format("YYYY-MM-DD", 20020901) <> "2002-09-01""#, "1"),
         ]);
     }
 
@@ -797,7 +828,7 @@ mod tests {
             (r#"Parse("||||", "abc") == null"#, "1"),
             (r#"Format("{{{999}}}", 7)"#, "{{{007}}}"),
             (r#"Num2Date(1000000000) == null"#, "1"),
-            (r#"Num2Time(86400000, "HH:MM:SS")"#, "00:00:00"),
+            (r#"Num2Time(86400000, "HH:MM:SS")"#, "23:59:59"),
             (r#"Len(Num2Time(1e30, "HH:MM:SS"))"#, "8"),
         ]);
         assert!(eval_fc(r#"Format("num{$z,zz9.99}", 1e20)"#).starts_with('$'));
