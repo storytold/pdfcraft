@@ -4984,3 +4984,146 @@ fn combining_some_pages_brings_only_their_bookmarks_and_no_attachments() {
     assert_eq!(source_bookmarks(&all), [("Chapter one".to_string(), vec!["Section".to_string()])]);
     assert!(attachments(&all));
 }
+
+/// One page whose visible area is `crop` inside a 1000 × 1000 media box, with `extra` entries.
+fn sized_page(crop: &str, extra: &str) -> Document {
+    open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1000 1000] /CropBox {crop} /Contents 4 0 R {extra} >>"),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+        ],
+        "/Root 1 0 R",
+    ))
+}
+
+/// Where user-space rectangle `r` shows on page `i`: [left, top, right, bottom] in points from
+/// the shown page's top-left corner, read through the page model the renderer sizes pages with.
+fn shown_rect(doc: &Document, i: usize, r: [f64; 4]) -> [f64; 4] {
+    let page = &pdfcraft_model::pages(doc)[i];
+    let [a, b, c, d, e, f] = page.view_matrix(doc);
+    let det = a * d - b * c;
+    let to_view = |x: f64, y: f64| {
+        let (x, y) = (x - e, y - f);
+        ((d * x - c * y) / det, (a * y - b * x) / det)
+    };
+    let (_, h) = page.display_size(doc);
+    let corners = [to_view(r[0], r[1]), to_view(r[2], r[3])];
+    let (xs, ys) = (corners.map(|p| p.0), corners.map(|p| h - p.1));
+    let round = |v: f64| (v * 1000.0).round() / 1000.0;
+    [xs[0].min(xs[1]), ys[0].min(ys[1]), xs[0].max(xs[1]), ys[0].max(ys[1])].map(round)
+}
+
+/// #7116: Change Page Size moves only the edges of the page. The visible area keeps its size and
+/// lands where the placement puts it on the page as shown, whatever the page's turn.
+#[test]
+fn change_page_size_places_the_visible_area_unscaled_on_every_turn() {
+    let crop = [100.0, 200.0, 400.0, 600.0]; // 300 × 400 in user space
+    for rotate in [0, 90, 180, 270, -90, 450] {
+        let shown_turn = (rotate as i64).rem_euclid(360);
+        let (cw, ch) = if shown_turn % 180 == 0 { (300.0, 400.0) } else { (400.0, 300.0) };
+        for (across, down, offset) in [(0.0, 0.0, [0.0, 0.0]), (0.5, 0.5, [0.0, 0.0]), (1.0, 1.0, [0.0, 0.0]), (0.0, 1.0, [10.0, -20.0])] {
+            let mut doc = sized_page("[100 200 400 600]", &format!("/Rotate {rotate}"));
+            let before = page_dict(&doc, 0).get(b"Contents").cloned().unwrap();
+            let cut = set_page_size(&mut doc, &[0], [842.0, 595.0], Placement { across, down, offset }).unwrap();
+            assert!(cut.is_empty(), "{rotate}: a 300 × 400 area fits on A4 landscape");
+            let doc = open(write_incremental(&doc, &SaveOptions::default()).unwrap());
+            let page = &pdfcraft_model::pages(&doc)[0];
+            assert_eq!(page.display_size(&doc), (842.0, 595.0), "{rotate}: the page is shown at the size asked for");
+            let (x, y) = (across * (842.0 - cw) + offset[0], down * (595.0 - ch) + offset[1]);
+            assert_eq!(shown_rect(&doc, 0, crop), [x, y, x + cw, y + ch], "{rotate} {across} {down}: the old visible area, unscaled");
+            let after = page_dict(&doc, 0).get(b"Contents").and_then(|c| c.as_array().cloned()).unwrap();
+            assert_eq!(after.len(), 3, "the content is kept between a clip and its end");
+            assert_eq!(after[1], before, "the content isn't rewritten");
+            assert_eq!(page_boxes(&doc).unwrap()[0][1], page_boxes(&doc).unwrap()[0][0], "the crop box is the new page");
+        }
+    }
+}
+
+/// A size is in points; a page with `/UserUnit` keeps its units, so its media box is smaller in
+/// user space by that factor.
+#[test]
+fn change_page_size_measures_points_through_user_unit() {
+    let mut doc = sized_page("[0 0 100 100]", "/UserUnit 2");
+    set_page_size(&mut doc, &[0], [400.0, 300.0], Placement { across: 0.0, down: 1.0, offset: [0.0; 2] }).unwrap();
+    assert_eq!(page_boxes(&doc).unwrap()[0][0], [0.0, 0.0, 200.0, 150.0], "bottom-left stays where it was");
+    assert_eq!(pdfcraft_model::pages(&doc)[0].display_size(&doc), (400.0, 300.0));
+    // 14,400 user units a side is the most a page may have: 28,800 points at /UserUnit 2.
+    assert!(set_page_size(&mut doc, &[0], [28_800.0, 100.0], Placement::default()).is_ok());
+    assert!(matches!(set_page_size(&mut doc, &[0], [28_801.0, 100.0], Placement::default()), Err(OrganizeError::InvalidBox(_))));
+}
+
+/// Pages whose visible area doesn't fit any more are reported, and still resized; the boxes
+/// that described the old page go back to the new page.
+#[test]
+fn change_page_size_reports_cut_pages_and_resets_the_other_boxes() {
+    let mut doc = sized_page("[100 200 400 600]", "/TrimBox [110 210 390 590] /BleedBox [100 200 400 600] /ArtBox [120 220 380 580]");
+    let cut = set_page_size(&mut doc, &[0], [400.0, 300.0], Placement::default()).unwrap();
+    assert_eq!(cut, [0], "400 points tall doesn't fit on 300");
+    let b = page_boxes(&doc).unwrap()[0];
+    assert_eq!(b[0], [50.0, 250.0, 450.0, 550.0], "centred on the old visible area");
+    assert!(b.iter().all(|r| *r == b[0]), "crop, bleed, trim and art are the new page: {b:?}");
+    let page = page_dict(&doc, 0);
+    for key in [&b"CropBox"[..], b"BleedBox", b"TrimBox", b"ArtBox"] {
+        assert!(!page.contains(key), "{}", String::from_utf8_lossy(key));
+    }
+    // The new page is wider than what showed: what the crop box hid stays hidden.
+    let parts = page.get(b"Contents").and_then(|c| c.as_array().cloned()).unwrap();
+    let text = |o: &Object| String::from_utf8(crate::prune::content_bytes(&doc, o).unwrap().0).unwrap();
+    assert_eq!(text(&parts[0]).trim(), "q 100 200 300 400 re W n");
+    assert_eq!(text(&parts[2]).trim(), "Q");
+    // The same size again changes nothing, cuts nothing and clips no further.
+    assert_eq!(set_page_size(&mut doc, &[0], [400.0, 300.0], Placement::default()).unwrap(), Vec::<usize>::new());
+    assert_eq!(page_boxes(&doc).unwrap()[0][0], [50.0, 250.0, 450.0, 550.0]);
+    assert_eq!(page_dict(&doc, 0).get(b"Contents").and_then(|c| c.as_array().map(Vec::len)), Some(3));
+    // A smaller page inside what showed needs no clip: the new edges do it.
+    let mut doc = sized_page("[100 200 400 600]", "");
+    set_page_size(&mut doc, &[0], [200.0, 200.0], Placement::default()).unwrap();
+    assert!(matches!(page_dict(&doc, 0).get(b"Contents"), Some(Object::Ref(_))), "the content is untouched");
+    // A size within a hundredth of a point of the old one doesn't count as cutting.
+    let mut doc = sized_page("[0 0 595.276 841.89]", "");
+    assert_eq!(set_page_size(&mut doc, &[0], [595.28, 841.89], Placement::default()).unwrap(), Vec::<usize>::new());
+}
+
+/// An ancestor's crop box would come back over the new page: it is pinned to the new media box.
+#[test]
+fn change_page_size_overrides_an_inherited_crop_box() {
+    let mut doc = open(build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 600 800] /CropBox [50 50 550 750] /Rotate 90 >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+            "<< /Type /Page /Parent 2 0 R >>".into(),
+        ],
+        "/Root 1 0 R",
+    ));
+    set_page_size(&mut doc, &[1], [1000.0, 800.0], Placement::default()).unwrap();
+    let b = page_boxes(&doc).unwrap();
+    assert_eq!(b[1][0], [-100.0, -100.0, 700.0, 900.0], "turned 90°: 1000 shown wide is 1000 tall in user space");
+    assert_eq!(b[1][1], b[1][0], "the inherited crop box no longer applies");
+    assert_eq!(b[0][1], [50.0, 50.0, 550.0, 750.0], "the other page keeps it");
+}
+
+/// Bad sizes, placements and pages are refused before any page changes.
+#[test]
+fn change_page_size_refuses_bad_requests_atomically() {
+    let mut doc = open(fixture());
+    let before = page_boxes(&doc).unwrap();
+    let p = Placement::default();
+    for size in [[0.5, 100.0], [100.0, 14_401.0], [f64::NAN, 100.0], [100.0, f64::INFINITY], [-100.0, 100.0]] {
+        assert!(matches!(set_page_size(&mut doc, &[0, 1], size, p), Err(OrganizeError::InvalidBox(_))), "{size:?}");
+    }
+    for bad in [
+        Placement { across: 1.5, ..p },
+        Placement { down: -0.1, ..p },
+        Placement { across: f64::NAN, ..p },
+        Placement { offset: [f64::INFINITY, 0.0], ..p },
+    ] {
+        assert!(matches!(set_page_size(&mut doc, &[0], [100.0, 100.0], bad), Err(OrganizeError::InvalidBox(_))), "{bad:?}");
+    }
+    assert!(matches!(set_page_size(&mut doc, &[0], [100.0, 100.0], Placement { offset: [14_401.0, 0.0], ..p }), Err(OrganizeError::InvalidBox(_))));
+    assert_eq!(set_page_size(&mut doc, &[0, 7], [100.0, 100.0], p), Err(OrganizeError::NoSuchPage(7)));
+    assert!(matches!(set_page_size(&mut doc, &[], [100.0, 100.0], p), Err(OrganizeError::InvalidBox(_))), "no pages");
+    assert_eq!(page_boxes(&doc).unwrap(), before, "nothing changed");
+}

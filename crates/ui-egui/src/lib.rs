@@ -125,6 +125,7 @@ use dialogs::credits;
 use dialogs::hairlines_ui;
 use dialogs::marks_ui;
 use dialogs::pageboxes;
+use dialogs::pagesize;
 use dialogs::palette;
 use dialogs::printer_marks_ui;
 use dialogs::protect;
@@ -813,6 +814,7 @@ pub struct PdfCraftApp {
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
+    pub size_draft: pagesize::SizeDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// The Update dialogs' preview page without the marks they replace.

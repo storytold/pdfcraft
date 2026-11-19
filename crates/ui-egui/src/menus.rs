@@ -193,6 +193,7 @@ const PAGES: &[&str] = &[
     SEP,
     "page.crop",
     "page.boxes",
+    "page.size",
     "page.number",
     "page.properties",
     SEP,

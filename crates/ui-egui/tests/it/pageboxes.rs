@@ -1,4 +1,4 @@
-//! Crop tool, Set Page Boxes and Duplicate pages in the real shell (egui_kittest).
+//! Crop tool, Set Page Boxes, Change Page Size and Duplicate pages in the real shell (egui_kittest).
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -138,6 +138,35 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(size(&h, 0), (300.0, 400.0));
+}
+
+/// #7116: Change page size starts from the current page, turns it with Landscape and resizes the
+/// pages without scaling them; pages that lose part of what showed are named in a notice.
+#[test]
+fn change_page_size_dialog_resizes_the_chosen_pages_and_warns_of_cuts() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.size"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::PageSize));
+    h.get_by_label("Change Page Size");
+    assert_eq!(h.state().size_draft.size(), [300.0, 400.0], "seeded from the page");
+    h.get_by_label("Current page (1)").click();
+    h.get_by_label("Landscape").click();
+    h.run_steps(2);
+    assert_eq!(h.state().size_draft.size(), [400.0, 300.0], "a custom size turns too");
+    h.get_by_label("Part of page 1 would be cut off");
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(size(&h, 0), (400.0, 300.0));
+    assert_eq!(size(&h, 1), (300.0, 400.0), "only the current page");
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert_eq!(toast, "Part of 1 page is now outside the new page size");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change page size"));
+    // Reopened, it starts again from the page as it is now.
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    assert_eq!(h.state().size_draft.size(), [400.0, 300.0]);
 }
 
 #[test]

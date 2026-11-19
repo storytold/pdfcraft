@@ -143,6 +143,56 @@ impl Automation {
         Ok(out)
     }
 
+    /// Change Page Size (#7116): a new size for pages, nothing on them scaled.
+    pub(crate) fn page_set_size(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::Placement;
+        let doc = self.doc(a)?;
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..doc.info.pages.len()).collect(),
+        };
+        let (width, height) = (a.opt_num("width")?, a.opt_num("height")?);
+        let (w, h) = match (a.opt_str("paper")?, width, height) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return Err(ToolError::InvalidArgs("pass paper or width and height, not both".into())),
+            (Some(p), None, None) => {
+                crate::printing::paper_preset(p).map(|(_, s)| s).or_else(|| crate::printing::paper_dimensions(p)).ok_or_else(|| {
+                    ToolError::InvalidArgs(format!(
+                        "unknown paper {p:?}; choose one of {}, or a size such as 210x297mm or 11x17in",
+                        pdfcraft_engine::print::PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")
+                    ))
+                })?
+            }
+            (None, Some(w), Some(h)) => (w, h),
+            _ => return Err(ToolError::InvalidArgs("pass paper, or both width and height in points".into())),
+        };
+        let (w, h) = match a.opt_str("orientation")? {
+            None => (w, h),
+            Some("portrait") => (w.min(h), w.max(h)),
+            Some("landscape") => (w.max(h), w.min(h)),
+            Some(o) => return Err(ToolError::InvalidArgs(format!("orientation must be portrait or landscape, not {o:?}"))),
+        };
+        let align = a.opt_str("align")?.unwrap_or("center");
+        let (across, down) = ALIGNMENTS
+            .iter()
+            .find(|(name, _)| *name == align)
+            .map(|(_, at)| *at)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("align must be one of {}", ALIGNMENTS.map(|(n, _)| n).join(", "))))?;
+        let offset = [a.opt_num("move_right")?.unwrap_or(0.0), a.opt_num("move_down")?.unwrap_or(0.0)];
+        let before = doc.page_boxes();
+        let mut out = self.apply(a, Edit::SetPageSize { pages: pages.clone(), size: [w, h], placement: Placement { across, down, offset } })?;
+        let doc = self.doc(a)?;
+        let after = doc.page_boxes();
+        // A page whose earlier visible area reaches past its new media box has lost part of what showed.
+        let cut: Vec<usize> = pages
+            .iter()
+            .filter(|&&i| matches!((before.get(i), after.get(i)), (Some(b), Some(n)) if pdfcraft_organize::cuts_off(b[1], n[0])))
+            .map(|i| i + 1)
+            .collect();
+        out["page_sizes"] = json!(doc.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        out["cut_off"] = json!(cut);
+        Ok(out)
+    }
+
     pub(crate) fn insert_blank(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let at = self.position(a, "at")?;
@@ -456,3 +506,17 @@ impl Automation {
         Ok(json!({ "files": files }))
     }
 }
+
+/// `page_set_size`'s `align`: where the page's visible area goes, as shares of the spare width
+/// (0 left) and height (0 top).
+const ALIGNMENTS: [(&str, (f64, f64)); 9] = [
+    ("top-left", (0.0, 0.0)),
+    ("top", (0.5, 0.0)),
+    ("top-right", (1.0, 0.0)),
+    ("left", (0.0, 0.5)),
+    ("center", (0.5, 0.5)),
+    ("right", (1.0, 0.5)),
+    ("bottom-left", (0.0, 1.0)),
+    ("bottom", (0.5, 1.0)),
+    ("bottom-right", (1.0, 1.0)),
+];
