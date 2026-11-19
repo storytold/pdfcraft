@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reference: Git Remotes, PR Lifecycle & Conflict Resolution</title>
+  <link rel="stylesheet" href="../assets/teach/style.css">
+  <style>
+    .ref-badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-family: var(--sans-font);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-remote { background: #e2e8f0; color: #2d3748; }
+    .badge-cmd { background: #feebc8; color: #7b341e; }
+    .badge-danger { background: #fed7d7; color: #742a2a; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="lesson-meta">Reference Document • Quick Lookup Sheet</div>
+      <h1>Git Remotes, PR Lifecycle &amp; Conflict Resolution</h1>
+      <p>A compressed field guide for open-source contributors navigating forks, pushing commits to active pull requests, syncing upstream updates, and resolving merge conflicts cleanly.</p>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. Identifying Your Directory &amp; Remotes</h2>
+        <p>A Git repository clone on your machine is a self-contained local database connected to named remote servers:</p>
+        
+        <table style="width: 100%; border-collapse: collapse; margin: 1rem 0; font-family: var(--sans-font); font-size: 0.95rem;">
+          <thead>
+            <tr style="border-bottom: 2px solid var(--border-color); text-align: left;">
+              <th style="padding: 0.5rem;">Entity</th>
+              <th style="padding: 0.5rem;">What it is</th>
+              <th style="padding: 0.5rem;">Your Actual URL</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid var(--border-color);">
+              <td style="padding: 0.6rem;"><span class="ref-badge badge-remote">This Directory</span></td>
+              <td style="padding: 0.6rem;">Your local working copy on your laptop/PC.</td>
+              <td style="padding: 0.6rem;"><code>/media/saifallah/.../pdfcraft</code></td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color);">
+              <td style="padding: 0.6rem;"><span class="ref-badge badge-remote">origin</span></td>
+              <td style="padding: 0.6rem;"><strong>Your personal fork</strong> on GitHub (read &amp; write).</td>
+              <td style="padding: 0.6rem;"><code>https://github.com/Saifallah-star/pdfcraft-storytold.git</code></td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border-color);">
+              <td style="padding: 0.6rem;"><span class="ref-badge badge-remote">upstream</span></td>
+              <td style="padding: 0.6rem;">The <strong>original repository</strong> (read/pull only).</td>
+              <td style="padding: 0.6rem;"><code>https://github.com/PDFCraftTool/pdfcraft.git</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <pre><code># Check remotes at any time:
+git remote -v
+
+# Check current branch and what remote tracking branch it follows:
+git status
+git branch -vv</code></pre>
+      </section>
+
+      <section>
+        <h2>2. How to Add Commits to an Existing Pull Request</h2>
+        <p>A Pull Request is <em>not</em> an uploaded file snapshot. It is a live comparison between your branch on GitHub (<code>origin/&lt;branch&gt;</code>) and the project's target branch (<code>upstream/main</code>).</p>
+        
+        <div class="callout callout-info">
+          <div class="callout-title">Key Rule</div>
+          <p>Any commit you push to your branch on GitHub is <strong>automatically</strong> appended to the open Pull Request. You never need to open a new PR to push fixes or address reviewer comments.</p>
+        </div>
+
+        <pre><code># 1. Ensure you are on the feature branch
+git checkout feat/tear-off-window-viewports-issue-5348
+
+# 2. Make your code changes, then stage the modified files
+git add path/to/changed_file.rs
+
+# 3. Create a descriptive commit
+git commit -m "fix(viewport): handle window close event gracefully"
+
+# 4. Push to your fork (origin)
+git push origin feat/tear-off-window-viewports-issue-5348
+
+# -> GitHub updates the PR instantly!</code></pre>
+      </section>
+
+      <section>
+        <h2>3. Syncing Others' Work / Merging Upstream into your PR</h2>
+        <p>When the original repository moves forward, you need to pull in new commits to keep your branch up-to-date and prevent regressions.</p>
+
+        <div class="comparison-grid">
+          <div class="card">
+            <h3>Standard Merge (Simplest)</h3>
+            <p>Creates a merge commit combining the two branch histories. Safe and preserves full timeline context.</p>
+            <pre><code>git fetch upstream main
+git checkout feat/your-branch
+git merge upstream/main
+git push origin feat/your-branch</code></pre>
+          </div>
+          <div class="card">
+            <h3>Rebase (Linear History)</h3>
+            <p>Unwinds your commits, applies latest upstream commits, then replays your commits on top.</p>
+            <pre><code>git fetch upstream main
+git checkout feat/your-branch
+git rebase upstream/main
+git push origin feat/your-branch --force-with-lease</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Resolving Conflicts: The Step-by-Step Loop</h2>
+        <p>A conflict happens when Git cannot automatically merge changes because two branches edited the exact same lines.</p>
+
+        <h3>Anatomy of Conflict Markers</h3>
+        <div class="conflict-demo">
+          <div class="conflict-header">src/example.rs</div>
+          <div class="conflict-body">
+            <div class="conflict-marker-head">&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD (Current branch: your changes)</div>
+            <div class="conflict-content-head">let default_padding = 16.0;</div>
+            <div class="conflict-separator">======= (Divider)</div>
+            <div class="conflict-content-incoming">let default_padding = 12.0;</div>
+            <div class="conflict-marker-incoming">&gt;&gt;&gt;&gt;&gt;&gt;&gt; upstream/main (Incoming branch: upstream changes)</div>
+          </div>
+        </div>
+
+        <h3>The 5-Step Resolution Loop</h3>
+        <ol>
+          <li><strong>Find conflicted files:</strong> Run <code>git status</code>. Look for files under <em>"both modified"</em>.</li>
+          <li><strong>Open and decide:</strong> In your editor, examine the conflicting code. Decide what the final code should be (keep yours, keep theirs, or combine both).</li>
+          <li><strong>Delete the markers:</strong> Delete <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code>, <code>=======</code>, and <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> completely.</li>
+          <li><strong>Verify:</strong> Run tests or build checks (e.g., <code>cargo check</code>) to make sure there are no syntax errors.</li>
+          <li><strong>Stage and finish:</strong>
+            <pre><code>git add src/example.rs
+
+# If you were merging:
+git commit -m "Merge upstream/main and resolve padding conflict"
+git push origin &lt;branch&gt;
+
+# If you were rebasing:
+git rebase --continue
+git push origin &lt;branch&gt; --force-with-lease</code></pre>
+          </li>
+        </ol>
+
+        <div class="callout">
+          <div class="callout-title">Emergency Panic Button</div>
+          <p>If you make a mistake while resolving conflicts and want to start over cleanly without losing your original commits:</p>
+          <pre><code># To abort a merge:
+git merge --abort
+
+# To abort a rebase:
+git rebase --abort</code></pre>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Part of the Teaching Workspace • Links: <a href="../lessons/0001-git-fork-pr-and-conflict-mastery.html">Lesson 0001</a> • <a href="../GLOSSARY.md">GLOSSARY.md</a> • <a href="../MISSION.md">MISSION.md</a></p>
+    </footer>
+  </div>
+</body>
+</html>
