@@ -178,11 +178,11 @@ impl Walk<'_> {
                     self.load_font_object(r);
                 }
             }
-            b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
-            b"Tw" => gs.word_spacing = op.num(0).unwrap_or(0.0),
-            b"Tz" => gs.scale = op.num(0).unwrap_or(100.0) / 100.0,
-            b"TL" => gs.leading = op.num(0).unwrap_or(0.0),
-            b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
+            b"Tc" => gs.char_spacing = op.nums::<1>().map_or(0.0, |[v]| v),
+            b"Tw" => gs.word_spacing = op.nums::<1>().map_or(0.0, |[v]| v),
+            b"Tz" => gs.scale = op.nums::<1>().map_or(100.0, |[v]| v) / 100.0,
+            b"TL" => gs.leading = op.nums::<1>().map_or(0.0, |[v]| v),
+            b"Ts" => gs.rise = op.nums::<1>().map_or(0.0, |[v]| v),
             b"BT" => (self.tm, self.tlm) = (Matrix::IDENTITY, Matrix::IDENTITY),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {

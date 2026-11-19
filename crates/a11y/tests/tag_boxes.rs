@@ -218,6 +218,19 @@ fn raised_text_is_outlined_where_it_is_raised() {
 }
 
 #[test]
+fn a_text_state_operator_reads_its_last_operand() {
+    // Surplus operands before `Ts`: the rise is the operand next to the operator, as rendered.
+    let doc = one_tag(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 1 20 Ts 100 700 Td (Cell) Tj ET EMC",
+        "/Font << /F1 7 0 R >>",
+        "<< /S /P /Pg 3 0 R /K 0 >>",
+        Vec::new(),
+    );
+    let [_, y0, _, _] = only(&doc, 10);
+    assert!(y0 > 715.0 && y0 < 720.0, "raised by 20, not 1: {y0}");
+}
+
+#[test]
 fn vertical_text_gets_no_box_rather_than_a_horizontal_one() {
     let font = "<< /Type /Font /Subtype /Type0 /BaseFont /V /Encoding /Identity-V /DescendantFonts [<< /Type /Font \
                 /Subtype /CIDFontType2 /BaseFont /V /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>] >>";
