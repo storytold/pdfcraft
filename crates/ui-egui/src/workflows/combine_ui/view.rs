@@ -9,7 +9,7 @@ use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _
 use craft::ui::dialog::Prompt;
 use craft::ui::display::Text;
 use craft::ui::menu::Menu;
-use craft::ui::notices::Notice;
+use craft::ui::notices::{Notice, NoticeAction};
 use craft::ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose};
 use craft::ui::popover::DropVeil;
 use craft::ui::sections::{DialogRole, FooterButton, Panel};
@@ -128,9 +128,18 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 dropped = Some(files.files.clone());
             }
             if n == 0 {
-                Notice::new(Tone::Info, tl!("Add the files to combine"))
+                // Choose the files, or on the desktop a folder of them.
+                let mut empty = Notice::new(Tone::Info, tl!("Add the files to combine"))
                     .lines([tl!("Drop PDFs, images, text files or folders here, or choose them.")])
-                    .show(ui);
+                    .action(NoticeAction::new(tl!("Add files…")).default_action());
+                if cfg!(not(target_arch = "wasm32")) {
+                    empty = empty.action(NoticeAction::new(tl!("Add folder…")));
+                }
+                match empty.show(ui).action {
+                    Some(0) => app.combine_dialog(),
+                    Some(1) => app.combine_add_folder(false),
+                    _ => {}
+                }
             } else if grid {
                 grid_actions = crate::combine_grid::grid(app, ui, &checks, &twice);
                 // PLAN: assumed `combine_grid::preview(app, ui)`, the sheet names it `card::preview` (pdf-workflows-w7)
