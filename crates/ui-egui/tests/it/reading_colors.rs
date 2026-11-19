@@ -41,7 +41,7 @@ fn pending_pages_use_document_reading_background() {
             let mut output =
                 ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() }, |ui| {
                     let rect = ui.max_rect();
-                    textures = pdfcraft_ui_egui::canvas::document_area_at(&mut app, 0, rect, ui).textures.entries;
+                    textures = pdfcraft_ui_egui::canvas::document_area_at(&mut app, 0, rect, ui).expect("the page view runs").textures.entries;
                 });
             output.textures_delta.clear();
             let view = &app.views[0];

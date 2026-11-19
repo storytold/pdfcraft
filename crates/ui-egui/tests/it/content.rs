@@ -34,6 +34,21 @@ fn harness_bytes_with_step_dt(bytes: Vec<u8>, step_dt: f32) -> Harness<'static, 
     h
 }
 
+/// [`harness`] whose jobs, the page renders among them, wait until the test runs them; the pages are rendered once
+/// before it returns.
+fn held_harness() -> (Harness<'static, PdfCraftApp>, std::sync::Arc<craft::host::ManualJobs>) {
+    let (app, jobs) = crate::control::app_with_manual_jobs();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.25).build_eframe(move |_cc| {
+        let mut app = app;
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle_held(&mut h, &jobs);
+    (h, jobs)
+}
+
 fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let k = r.width() / 300.0;
@@ -890,16 +905,17 @@ fn red(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
 #[test]
 fn a_resized_added_picture_shows_only_at_its_new_size() {
     let _gpu = gpu();
-    let mut h = harness();
+    let (mut h, jobs) = held_harness();
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
     let img = craft_image_codecs::Image::from_u8(60, 60, craft_image_codecs::ChannelLayout::Rgb, [200u8, 30, 30].repeat(3600)).unwrap();
     let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     let ctx_h = h.ctx.clone();
     h.state_mut().add_image(&ctx_h, "red.png".into(), png);
+    jobs.run_all();
     h.run_steps(3);
     assert_eq!(h.state().views[0].session.content.selected, Some((0, 0)), "the picture is selected");
-    crate::support::settle(&mut h);
+    crate::support::settle_held(&mut h, &jobs);
     let rect = added(&h)[0].content.rect();
     let r = item_on_screen(&h, rect);
     // The lower right corner to the middle: half the size, the upper left corner kept.
@@ -914,12 +930,12 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
         h.hover_at(grip + (to - grip) * (k as f32 / 4.0));
         h.run_steps(1);
     }
-    crate::support::settle(&mut h);
+    crate::support::settle_held(&mut h, &jobs);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100, "while dragged, the picture is drawn at its new size");
     assert_eq!(red(&pixels, gone), 0, "while dragged, the picture shows at its old size");
     assert_eq!(added(&h)[0].content.rect(), rect, "nothing is applied before release");
-    h.state_mut().views[0].hold_rasters = true;
+    // From here the renders wait: the frames below see the page as it was before the release.
     h.drop_at(to);
     for frame in 0..4 {
         h.step();
@@ -928,8 +944,7 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
         assert_eq!(red(&pixels, gone), 0, "frame {frame} after the release: the picture shows at its old size");
     }
     assert_ne!(added(&h)[0].content.rect(), rect, "the resize is applied");
-    h.state_mut().views[0].hold_rasters = false;
-    crate::support::settle(&mut h);
+    crate::support::settle_held(&mut h, &jobs);
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");

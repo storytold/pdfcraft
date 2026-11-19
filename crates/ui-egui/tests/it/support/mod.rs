@@ -50,6 +50,17 @@ pub fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     assert!(settled, "pages rendered");
 }
 
+/// [`settle`] for an app whose jobs wait in `jobs`: runs them each frame until nothing is waiting to be rendered.
+/// Between calls the page pictures are held back, as a slow render would hold them.
+pub fn settle_held(h: &mut Harness<'static, PdfCraftApp>, jobs: &ManualJobs) {
+    let settled = step_until(h, |h| {
+        jobs.run_all();
+        h.run_steps(1);
+        !h.state().render_pending()
+    });
+    assert!(settled, "pages rendered");
+}
+
 pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl Fn(&PdfCraftApp) -> bool) {
     let held = step_until(h, |h| ready(h.state()));
     assert!(

@@ -1843,7 +1843,7 @@ fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
             app.open_bytes(&egui::Context::default(), "spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
             app.set_option(&egui::Context::default(), "layout", "two-page").unwrap();
             // Before the first layout: zoomed about the content's top left, scrolled to it.
-            app.views[0].view.zoom = zoom;
+            app.views[0].view.zoom = f64::from(zoom);
             app
         });
         crate::support::settle(&mut h);

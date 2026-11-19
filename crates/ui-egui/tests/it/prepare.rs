@@ -18,9 +18,18 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 }
 
 fn harness_with(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    harness_on(crate::control::new_app(), name, bytes)
+}
+
+/// The form fixture in an app whose pickers answer from `files`.
+fn harness_with_files(files: std::sync::Arc<craft::host::ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
+    harness_on(crate::control::app_with_files(files), "form.pdf", include_bytes!("../data/form.pdf").to_vec())
+}
+
+fn harness_on(app: PdfCraftApp, name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
-        let mut app = crate::control::new_app();
+        let mut app = app;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
@@ -128,7 +137,8 @@ fn notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 
 /// The row of the calculation order page for the field `name`, whatever its position and value.
 fn order_row<'h>(h: &'h Harness<'static, PdfCraftApp>, name: &str) -> egui_kittest::Node<'h> {
-    h.get_by_label_contains(&format!(". {name}:"))
+    let pattern = format!(". {name}:");
+    h.get_by(move |node| node.label().is_some_and(|label| label.contains(&pattern)))
 }
 
 fn text_center_near(h: &Harness<'static, PdfCraftApp>, label: &str, expected: Pos2) -> Option<Pos2> {
@@ -1078,16 +1088,16 @@ fn preview_fills_the_form_and_locked_fields_keep_their_properties() {
 
 #[test]
 fn image_fields_take_a_picture_when_clicked() {
-    let mut h = harness();
+    // A picture to choose: the picker answers with it.
+    let path = std::env::temp_dir().join(format!("pdfcraft-image-field-{}.png", std::process::id()));
+    image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30])).save(&path).unwrap();
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![path])]));
+    let mut h = harness_with_files(files);
     assert!(h.execute("form.add.image"));
     h.run_steps(2);
     let (a, b) = (at(&h, 40.0, 220.0), at(&h, 140.0, 290.0));
     drag(&mut h, a, b);
     assert_eq!(names(&h).last().map(String::as_str), Some("Image1"));
-    // A picture to choose (the picker is bypassed in tests).
-    let path = std::env::temp_dir().join(format!("pdfcraft-image-field-{}.png", std::process::id()));
-    image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30])).save(&path).unwrap();
-    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
     // Fill it in as a reader would.
     h.get_by_label("Preview").click();
     h.run_steps(2);

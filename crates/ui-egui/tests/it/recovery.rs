@@ -71,14 +71,13 @@ fn new_app(dir: &Path) -> (PdfCraftApp, Rig) {
     let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
     let host = Host::builder(info).jobs(jobs.clone()).files(files.clone()).build();
     let wake = Wake::none();
-    // PLAN: assumed `pdfcraft_ui_egui::{Clipboard, FileIntake}` and `Clipboard::new(SystemClipboard::new())` as in `AppServices::system` (pdf-hub-w1)
-    let clipboard = pdfcraft_ui_egui::Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
-    let (intake, _) = pdfcraft_ui_egui::FileIntake::new(wake.clone());
+    let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new());
+    let (intake, _) = craft::platform::open::FileIntake::new(wake.clone());
     let watch = craft::platform::watch::FileWatch::new(wake.clone());
+    // A recovery folder turns autosave and recovery on.
     let services = AppServices::new(wake, clipboard, Some(dir.to_path_buf()), None, intake, watch);
     let mut app = PdfCraftApp::with_host(Arc::new(host), services);
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.enable_recovery();
     (app, Rig { files, jobs })
 }
 

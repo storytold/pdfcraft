@@ -59,15 +59,23 @@ fn the_window_and_windows_taskbar_icons_load_from_the_bundled_png() {
 #[test]
 fn a_software_renderer_is_shown_to_the_user() {
     use eframe::wgpu::DeviceType;
+    // The notices the window shows after one frame of `app`.
+    fn shown(app: pdfcraft_ui_egui::PdfCraftApp) -> Vec<String> {
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |_cc| app);
+        h.run_steps(2);
+        let cards = craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main());
+        cards.iter().map(|card| card.toast.message.as_str().to_owned()).collect()
+    }
     // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.
     let mut app = crate::startup::test_app();
     super::notify_software_renderer(&mut app, DeviceType::Cpu);
-    let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
-    assert!(notice.contains("without a graphics processor"), "{notice:?}");
+    let notices = shown(app);
+    assert!(notices.iter().any(|n| n.contains("without a graphics processor")), "{notices:?}");
     for gpu in [DeviceType::IntegratedGpu, DeviceType::DiscreteGpu, DeviceType::VirtualGpu, DeviceType::Other] {
         let mut app = crate::startup::test_app();
         super::notify_software_renderer(&mut app, gpu);
-        assert!(app.toast.is_none(), "{gpu:?}: {:?}", app.toast);
+        let notices = shown(app);
+        assert!(notices.is_empty(), "{gpu:?}: {notices:?}");
     }
 }
 

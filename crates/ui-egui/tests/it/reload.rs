@@ -14,7 +14,12 @@ use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1", and with `notes`
 /// each page has a sticky note.
 fn fixture_with(n: usize, notes: bool) -> Vec<u8> {
-    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
+    fixture_catalog(n, notes, "")
+}
+
+/// [`fixture_with`] whose catalog also holds `catalog` (entries such as `/PageMode /FullScreen`).
+fn fixture_catalog(n: usize, notes: bool, catalog: &str) -> Vec<u8> {
+    let mut objs: Vec<String> = vec![format!("<< /Type /Catalog /Pages 2 0 R {catalog}>>")];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
     objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")));
     objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
@@ -325,7 +330,7 @@ fn a_shorter_new_version_drops_what_pointed_into_the_old_one() {
     assert_eq!(pages(&h), 1);
     assert_eq!(view.current(), 0, "the page is clamped");
     // PLAN: assumed `comments.primary()` reads the selected comment (pdf-comments)
-    assert!(view.selected.is_empty() && view.session.comments.primary().is_none(), "no selection points past the new version");
+    assert!(view.selected.items.is_empty() && view.session.comments.primary().is_none(), "no selection points past the new version");
 }
 
 /// Save asks before writing over a version of the file the document did not come from (#2166):
@@ -346,7 +351,7 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(std::fs::read(&file.path).unwrap(), fixture(4), "Cancel keeps the newer file");
-    assert!(dirty(&h) && h.state().pending_overwrite.is_none());
+    assert!(dirty(&h) && h.query_by_label("Save over the changed file?").is_none());
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
@@ -455,12 +460,11 @@ fn a_newer_version_found_as_the_dialog_closes_replaces_the_held_one() {
 #[test]
 fn a_file_rebuilt_under_the_full_screen_prompt_reloads_once_it_is_answered() {
     // #3917 review: the full-screen prompt is about the document's current version.
-    let file = TempPdf::new("under-full-screen", &fixture(2));
+    // A document that asks for full screen opens with the prompt, as from a user's open.
+    let file = TempPdf::new("under-full-screen", &fixture_catalog(2, false, "/PageMode /FullScreen "));
     let mut h = harness(&file.path);
-    let id = h.state().views[0].id;
-    // PLAN: assumed `ask_full_screen(id)` takes the document id (pdf-dialogs-w4)
-    h.state_mut().ask_full_screen(id);
     h.run_steps(2);
+    h.get_by_label("Open in Full Screen mode?");
     file.rebuild(&fixture(4));
     h.run_steps(4);
     assert_eq!(pages(&h), 2, "not replaced under the prompt");

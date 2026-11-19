@@ -644,11 +644,11 @@ fn shapes_and_ink_are_drawn_by_dragging() {
     assert!((r[0] - 40.0).abs() < 3.0 && (r[1] - 40.0).abs() < 3.0 && (r[2] - 140.0).abs() < 3.0 && (r[3] - 100.0).abs() < 3.0, "{r:?}");
 }
 
-/// Press, drag and release a stroke, running only one frame after the release. Finished
-/// renders are held back from the view (`hold_rasters`), so the raster the commit asks for can't
-/// arrive before the test looks, however fast it renders; a test lets it through by clearing it.
+/// Press, drag and release a stroke, running only one frame after the release. On a
+/// [`pen_harness`] the render jobs wait for the test, so the raster the commit asks for can't
+/// arrive before the test looks, however fast it renders; a test lets it through with
+/// `support::settle_held`.
 fn stroke_without_settling(h: &mut Harness<'static, PdfCraftApp>, a: (f32, f32), b: (f32, f32)) {
-    h.state_mut().views[0].hold_rasters = true;
     let (from, to) = (at(h, a.0, a.1), at(h, b.0, b.1));
     h.hover_at(from);
     h.run_steps(1);
@@ -667,13 +667,24 @@ fn stroke_without_settling(h: &mut Harness<'static, PdfCraftApp>, a: (f32, f32),
 const PEN_COLOUR: [f64; 3] = [0.2, 0.4, 0.6];
 const PEN_WIDTH: f64 = 7.0;
 
-/// A harness with the Ink tool armed in the pen colour and width above.
-fn pen_harness() -> Harness<'static, PdfCraftApp> {
-    harness(|app| {
+/// A harness with the Ink tool armed in the pen colour and width above, whose jobs (the page
+/// renders among them) wait until the test runs them; the pages are rendered once before it returns.
+fn pen_harness() -> (Harness<'static, PdfCraftApp>, std::sync::Arc<craft::host::ManualJobs>) {
+    let (app, jobs) = crate::control::app_with_manual_jobs();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = app;
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         app.comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_COLOUR);
         app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_WIDTH);
         app.set_option(&egui::Context::default(), "quick", "ink").unwrap();
-    })
+        app
+    });
+    h.run_steps(4);
+    support::settle_held(&mut h, &jobs);
+    (h, jobs)
 }
 
 /// How many path shapes of the last frame are painted in the pen's colour and width.
@@ -699,20 +710,20 @@ fn pen_paths(h: &Harness<'static, PdfCraftApp>) -> usize {
 /// raster that draws it arrives later. The stroke stays painted from its points meanwhile.
 #[test]
 fn a_released_pen_stroke_stays_drawn_until_the_page_raster_has_it() {
-    let mut h = pen_harness();
+    let (mut h, jobs) = pen_harness();
     assert_eq!(pen_paths(&h), 0, "nothing in the pen's colour before the stroke");
     stroke_without_settling(&mut h, (40.0, 100.0), (140.0, 60.0));
     assert_eq!(comments(&h).len(), 1, "the stroke is committed");
     assert!(pen_paths(&h) > 0, "still drawn from its points");
     h.run_steps(5);
     assert!(pen_paths(&h) > 0, "drawn from its points for as long as its raster takes");
-    h.state_mut().views[0].hold_rasters = false;
+    support::settle_held(&mut h, &jobs);
     assert!(support::step_until(&mut h, |h| pen_paths(h) == 0), "the raster draws it now and the painted stroke goes");
 }
 
 #[test]
 fn undoing_a_pen_stroke_before_its_raster_leaves_no_ghost() {
-    let mut h = pen_harness();
+    let (mut h, _jobs) = pen_harness();
     stroke_without_settling(&mut h, (40.0, 100.0), (140.0, 60.0));
     assert!(pen_paths(&h) > 0, "the released stroke is painted");
     undo(&mut h);

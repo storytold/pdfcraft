@@ -603,9 +603,9 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     let released = h.state().views[0].page_screen_rect(0).unwrap().top();
     h.run_steps(8);
     assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().top(), released, "no drift after releasing a held middle drag");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
-    assert!(!crate::support::dialog_open(&h));
-    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    // A drag the Crop tool received ends in a crop edit or opens Set Page Boxes.
+    assert!(!crate::support::dialog_open(&h), "the Crop tool must not receive a wheel drag");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "the Crop tool must not receive a wheel drag");
 
     // Small movement within the dead zone before release still latches auto-scroll on.
     ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 10.0], "steps": 4, "button": "middle" }));
@@ -613,9 +613,11 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 60.0 }));
     h.run_steps(8);
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < released - 30.0, "scrolling continues with no button held");
-    assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
     ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y + 60.0, "button": "middle" }));
     assert!(!h.state().views[0].auto_scrolling(), "the next middle click toggles scrolling off");
+    h.run_steps(2);
+    assert!(!crate::support::dialog_open(&h), "the Crop tool must not receive the latched gesture");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "the Crop tool must not receive the latched gesture");
 }
 
 #[cfg(target_os = "linux")]
@@ -862,7 +864,8 @@ fn japanese_controls_and_search_keep_command_ids() {
         let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": translated }));
         assert!(hits["count"].as_u64().unwrap() > 0, "{query}: {hits}");
         ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
-        h.state_mut().palette_query.clear();
+        // Escape cleared the query; on the empty query it closes the palette.
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
     }
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
@@ -903,7 +906,8 @@ fn german_preferences_and_search_keep_command_ids() {
         let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": "Dokument teilen…" }));
         assert!(hits["count"].as_u64().unwrap() > 0, "{query}: {hits}");
         ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
-        h.state_mut().palette_query.clear();
+        // Escape cleared the query; on the empty query it closes the palette.
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
     }
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["name"], "doc.pdf");
 }
@@ -931,7 +935,8 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
         let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": "Розділити документ…" }));
         assert!(hits["count"].as_u64().unwrap() > 0, "{query}: {hits}");
         ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
-        h.state_mut().palette_query.clear();
+        // Escape cleared the query; on the empty query it closes the palette.
+        ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
     }
     for (dialog, label) in [("properties", "Властивості документа"), ("protect", "Захистити паролем"), ("about", "Учасники")]
     {
@@ -1192,10 +1197,10 @@ fn organize_overview_is_reachable_through_the_control_channel() {
 #[test]
 fn saved_signature_can_be_changed_through_the_control_channel() {
     let (mut h, c) = harness();
-    h.state_mut().signature = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().signature = Some(craft::review::SavedSignature::Typed("Ada Lovelace".into()));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.change" }));
     h.run_steps(3);
-    assert_eq!(h.state().signature_draft.text, "Ada Lovelace");
+    // The pad opens on the saved text: its text field shows it.
     let fields = ok(&mut h, &c, "ui.inspect", json!({ "role": "TextInput" }));
     let field = fields["widgets"].as_array().unwrap().iter().find(|w| w["value"] == "Ada Lovelace").expect("the signature text field");
     let r = field["rect"].as_array().unwrap();
@@ -1204,11 +1209,11 @@ fn saved_signature_can_be_changed_through_the_control_channel() {
     ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
     ok(&mut h, &c, "ui.type", json!({ "text": "Grace Hopper" }));
     ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
-    assert_eq!(h.state().signature, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("Grace Hopper".into())));
+    assert_eq!(h.state().signature, Some(craft::review::SavedSignature::Typed("Grace Hopper".into())));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "fill-signature");
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.signature.remove" }));
     assert_eq!(h.state().signature, None);
-    h.state_mut().initials = Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into()));
+    h.state_mut().initials = Some(craft::review::SavedSignature::Typed("GH".into()));
     ok(&mut h, &c, "ui.command", json!({ "id": "sign.fill.initials.remove" }));
     assert_eq!(h.state().initials, None);
 }
@@ -1760,10 +1765,10 @@ fn initial_zoom_option_is_applied_before_the_first_viewport_layout() {
             let mut app = new_app();
             app.open_bytes(&egui::Context::default(), "initial-zoom.pdf", None, fixture(3)).unwrap();
             app.set_option(&egui::Context::default(), "zoom", &percent.to_string()).unwrap();
-            assert_eq!(app.views[0].zoom(), percent as f32 / 100.0, "initial options must work before the viewport exists");
+            assert_eq!(app.views[0].zoom(), f64::from(percent) / 100.0, "initial options must work before the viewport exists");
             app
         });
-        assert_eq!(h.state().views[0].zoom(), percent as f32 / 100.0);
+        assert_eq!(h.state().views[0].zoom(), f64::from(percent) / 100.0);
     }
 }
 
