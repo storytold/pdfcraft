@@ -51,10 +51,26 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     });
     h.run_steps(4);
     assert_eq!(h.state().session.date_format(), "m/d/yyyy");
-    // A valid pattern applies as it's typed, with a preview of today.
+    // The window edits a draft: the pattern applies on OK, and the window opens again for the next step.
+    fn reopen(h: &mut Harness<'static, PdfCraftApp>) {
+        h.state_mut().open_preferences();
+        h.run_steps(4);
+        h.get_by_label("Fill & Sign").click();
+        h.run_steps(3);
+    }
+    fn ok(h: &mut Harness<'static, PdfCraftApp>) {
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+    }
+    h.get_by_label("Fill & Sign").click();
+    h.run_steps(3);
+    // A valid pattern shows a preview of today while it's typed and applies on OK.
     retype(&mut h, "d \\de mmmm yyyy");
-    assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
+    assert_eq!(h.state().session.date_format(), "m/d/yyyy", "typing edits the draft, not the session");
     h.get_by_label_contains("Today: ");
+    ok(&mut h);
+    assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
+    reopen(&mut h);
     // An invalid one stays in the box with the reason, and the last valid one is kept.
     retype(&mut h, "dd/mm HH");
     h.get_by_label_contains("is a time letter (H h M s t)");
@@ -69,12 +85,15 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
         h.run_steps(1);
     }
     assert_eq!(pattern(&h).as_deref(), Some("yyyy mm dd"));
+    ok(&mut h);
     assert_eq!(h.state().session.date_format(), "yyyy mm dd");
+    reopen(&mut h);
     // A letter group that isn't a date code is refused, not silently shortened.
     retype(&mut h, "yyyyyyyy");
     h.get_by_label_contains("`yyyyyyyy` is not a date code");
     assert_eq!(h.state().session.date_format(), "yyyy mm dd");
     retype(&mut h, "yyyy.mm.dd.");
+    ok(&mut h);
     assert_eq!(h.state().session.date_format(), "yyyy.mm.dd.");
 
     // Fill & Sign ▸ Date stamps today in it.

@@ -2,7 +2,6 @@
 //! how it survives a restart, and how documents open with it.
 
 use crate::support::AppHarness as _;
-use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_render::ReadingColors;
@@ -76,10 +75,13 @@ fn reading_colours_preference_round_trips() {
     });
     h.run_steps(4);
     assert_eq!(h.state().reading_colors, ReadingColors::default());
-    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).scroll_to_me();
-    h.run_steps(4);
-    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).click();
-    h.run_steps(2);
+    h.get_by_label("Appearance").click();
+    h.run_steps(3);
+    h.get_by_label("White on black").click();
+    h.run_steps(3);
+    assert_eq!(h.state().reading_colors, ReadingColors::default(), "a row edits the draft, not the app");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
     assert_eq!(h.state().reading_colors, ReadingColors::WHITE_ON_BLACK);
     // The preference is app-wide: the already open document follows it too.
     let id = h.state().views[0].id;
@@ -116,12 +118,10 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         }
     });
     h.run_steps(6);
+    h.get_by_label("Appearance").click();
+    h.run_steps(3);
     assert!(h.query_by_label("Original").is_some());
     let theme = h.state().theme_preference;
-    let appearance = h.get_by_label("Light theme").rect();
-    let preset = h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("White on black")).rect();
-    let documents = h.get_by_label("Documents and view").rect();
-    assert!(appearance.bottom() < preset.top() && preset.bottom() < documents.top());
     for (label, expected) in [
         ("White on black", ReadingColors::WHITE_ON_BLACK),
         ("Yellow on black", ReadingColors::YELLOW_ON_BLACK),
@@ -129,13 +129,16 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         ("Black on white", ReadingColors::BLACK_ON_WHITE),
         ("Off", ReadingColors::default()),
     ] {
-        h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some(label)).scroll_to_me();
-        h.run_steps(4);
-        h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some(label)).click();
-        h.run_steps(4);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
         assert_eq!(h.state().reading_colors, expected);
         assert_eq!(h.state().theme_preference, theme);
-        assert_eq!(h.query_by_label("Original").is_some(), expected.params.is_none());
+        h.state_mut().open_preferences();
+        h.run_steps(4);
+        h.get_by_label("Appearance").click();
+        h.run_steps(3);
     }
     if let Ok(path) = std::env::var("PDFCRAFT_READING_SHOT") {
         h.render().unwrap().save(path).unwrap();

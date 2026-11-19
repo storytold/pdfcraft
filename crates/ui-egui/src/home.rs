@@ -213,6 +213,7 @@ mod tests {
             }
         });
         h.run_steps(4);
+        eprintln!("DIAG review_pinned_recommended_tools_appear_once: {:?}", h.get_all_by_label(tl!(label)).map(|n| n.role()).collect::<Vec<_>>());
         assert_eq!(h.get_all_by_label(tl!(label)).count(), 1);
     }
 }
