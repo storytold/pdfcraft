@@ -790,7 +790,9 @@ mod typed_size_tests {
     }
 }
 
-#[cfg(test)]
+// The Installed fonts submenu this exercises exists only on native targets, and the test seam that
+// seeds its scan is native-only too.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod installed_fonts_tests {
     use super::*;
     use egui_kittest::kittest::{NodeT as _, Queryable};
