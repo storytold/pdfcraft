@@ -1236,9 +1236,31 @@ fn keep_added_in_place(doc: &mut pdfcraft_cos::Document, views: &[(usize, [f64; 
             continue;
         }
         for (index, item) in added.iter().filter(|a| a.page == page).enumerate() {
+            // A stream another page draws too gets a copy for this page first: rewriting it would
+            // move that page's box, and that page didn't change.
+            if added.iter().any(|a| a.obj == item.obj && a.page != page) {
+                own_copy(doc, page, item.obj)?;
+            }
             let [x0, y0, x1, y1] = item.content.rect();
             pdfcraft_edit::update_content(doc, page, index, &item.content.with_rect([x0 + dx, y0 + dy, x1 + dx, y1 + dy]))?;
         }
     }
     Ok(())
+}
+
+/// Point `page`'s `/Contents` at a new copy of stream `obj`, leaving the other pages on `obj`.
+fn own_copy(doc: &mut pdfcraft_cos::Document, page: usize, obj: pdfcraft_cos::ObjRef) -> Result<(), EditError> {
+    let Some(p) = pdfcraft_model::page_at(doc, page) else { return Ok(()) };
+    let copy = pdfcraft_cos::Object::Ref(doc.add((*doc.get(obj)).clone()));
+    let contents = match p.dict.get(b"Contents") {
+        Some(c) if c.as_ref() == Some(obj) => copy,
+        Some(c) => match &*doc.resolve(c) {
+            pdfcraft_cos::Object::Array(a) => {
+                pdfcraft_cos::Object::Array(a.iter().map(|e| if e.as_ref() == Some(obj) { copy.clone() } else { e.clone() }).collect())
+            }
+            _ => return Ok(()),
+        },
+        None => return Ok(()),
+    };
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents)).map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))
 }

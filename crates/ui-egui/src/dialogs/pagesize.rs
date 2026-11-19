@@ -107,11 +107,12 @@ fn shown_sizes(doc: &pdfcraft_engine::Document) -> Vec<[f64; 2]> {
 
 /// The sides (points) and the move (points each way, either direction) that every page with these
 /// `/UserUnit`s takes: the engine allows 1 to [`MAX_PAGE_SIDE`] user-space units, so points scale
-/// with each page's unit, and pages with different units take only what fits them all.
-fn bounds(units: impl IntoIterator<Item = f64>) -> (std::ops::RangeInclusive<f64>, f64) {
+/// with each page's unit, and pages with different units take only what fits them all. No sides
+/// when nothing does: a page needs more points than another takes.
+fn bounds(units: impl IntoIterator<Item = f64>) -> (Option<std::ops::RangeInclusive<f64>>, f64) {
     let (least, most) = units.into_iter().fold((f64::INFINITY, 1.0_f64), |(lo, hi), u| (lo.min(u), hi.max(u)));
     let reach = MAX_PAGE_SIDE * if least.is_finite() { least } else { 1.0 };
-    (most.min(reach)..=reach, reach)
+    ((most <= reach).then_some(most..=reach), reach)
 }
 
 /// The red other dialogs warn in.
@@ -198,7 +199,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 let mut size = d.size();
                 for (label, idx) in [(tl!("Width"), 0), (tl!("Height"), 1)] {
                     let l = ui.label(label).id;
-                    if length_field(ui, &mut size[idx], d.unit, side.clone(), l) {
+                    // Without a size that fits, the field keeps what it shows and is off.
+                    let range = side.clone().unwrap_or(size[idx]..=size[idx]);
+                    if ui.add_enabled_ui(side.is_some(), |ui| length_field(ui, &mut size[idx], d.unit, range, l)).inner {
                         d.custom = size;
                         d.paper = None;
                         d.landscape = size[0] > size[1];
@@ -232,10 +235,15 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             preview(ui, d, size_of(first), first, t);
         });
     });
+    if side.is_none() {
+        ui.add_space(8.0);
+        let note = egui::RichText::new(tl!("The chosen pages have no page size in common")).font(theme::regular(11.0)).color(WARNING);
+        ui.add(egui::Label::new(note).wrap());
+    }
     ui.add_space(12.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+        if ui.add_enabled_ui(side.is_some(), |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -338,11 +346,12 @@ mod tests {
 
     #[test]
     fn the_fields_take_what_every_chosen_page_takes() {
-        assert_eq!(bounds([1.0]), (1.0..=MAX_PAGE_SIDE, MAX_PAGE_SIDE));
-        assert_eq!(bounds([2.0]), (2.0..=2.0 * MAX_PAGE_SIDE, 2.0 * MAX_PAGE_SIDE), "points scale with /UserUnit");
-        assert_eq!(bounds([1.0, 3.0]), (3.0..=MAX_PAGE_SIDE, MAX_PAGE_SIDE), "pages with other units: what fits them all");
-        assert_eq!(bounds([]), (1.0..=MAX_PAGE_SIDE, MAX_PAGE_SIDE));
-        assert_eq!(bounds([1.0, 20_000.0]), (MAX_PAGE_SIDE..=MAX_PAGE_SIDE, MAX_PAGE_SIDE), "never an empty range");
+        assert_eq!(bounds([1.0]), (Some(1.0..=MAX_PAGE_SIDE), MAX_PAGE_SIDE));
+        assert_eq!(bounds([2.0]), (Some(2.0..=2.0 * MAX_PAGE_SIDE), 2.0 * MAX_PAGE_SIDE), "points scale with /UserUnit");
+        assert_eq!(bounds([1.0, 3.0]), (Some(3.0..=MAX_PAGE_SIDE), MAX_PAGE_SIDE), "pages with other units: what fits them all");
+        assert_eq!(bounds([]), (Some(1.0..=MAX_PAGE_SIDE), MAX_PAGE_SIDE));
+        assert_eq!(bounds([1.0, MAX_PAGE_SIDE]), (Some(MAX_PAGE_SIDE..=MAX_PAGE_SIDE), MAX_PAGE_SIDE), "one size fits both");
+        assert_eq!(bounds([1.0, 20_000.0]), (None, MAX_PAGE_SIDE), "no size fits both: 14,400 points at most, and at least 20,000");
     }
 
     /// The preview's placement is the engine's: what the dialog shows is where the page ends up.

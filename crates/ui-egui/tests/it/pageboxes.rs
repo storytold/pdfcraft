@@ -201,6 +201,30 @@ fn change_page_size_opened_by_option_starts_from_the_page() {
     assert_eq!(h.state().size_draft.size(), [300.0, 400.0]);
 }
 
+/// Pages whose `/UserUnit`s leave no size that fits them all: the dialog says so and OK is off,
+/// instead of offering a size the engine refuses. Choosing one page offers its sizes again.
+#[test]
+fn change_page_size_says_when_the_chosen_pages_have_no_size_in_common() {
+    let fixture = String::from_utf8(FIXTURE.to_vec())
+        .unwrap()
+        .replace("4 0 obj << /Type /Page /Parent 2 0 R >>", "4 0 obj << /Type /Page /Parent 2 0 R /UserUnit 20000 >>");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("units.pdf", None, fixture.into_bytes()).unwrap();
+        app
+    });
+    h.run_steps(6);
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    h.get_by_label("The chosen pages have no page size in common");
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled());
+    h.get_by_label_contains("Current page (").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("The chosen pages have no page size in common").is_none());
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+}
+
 #[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();

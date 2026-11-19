@@ -5219,6 +5219,33 @@ fn added_content_stays_put_when_the_page_size_changes() {
     assert_eq!(rects(&s)[0], [110.0, 120.0, 160.0, 170.0], "the new picture where the old one showed");
 }
 
+/// Two pages drawing one added image's stream: resizing one of them leaves the other's box alone.
+#[test]
+fn page_size_change_leaves_a_shared_added_item_on_other_pages_alone() {
+    let (mut s, id) = session_with(2);
+    let img = craft_image_codecs::Image::from_u8(20, 10, craft_image_codecs::ChannelLayout::Rgb, vec![0u8; 600]).unwrap();
+    let png = Arc::new(craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap());
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([10.0, 20.0, 60.0, 70.0]), name: "a.png".into(), bytes: png.clone() }).unwrap();
+    let mut cos = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    let pages = pdfcraft_model::pages(&cos);
+    let contents = pages[0].dict.get(b"Contents").cloned().unwrap();
+    let resources = pages[0].dict.get(b"Resources").cloned().unwrap();
+    cos.update_dict(pages[1].obj, |d| {
+        d.set(b"Contents".to_vec(), contents);
+        d.set(b"Resources".to_vec(), resources);
+    })
+    .unwrap();
+    let id = s.open("shared.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+    let rect = |s: &Session, page: usize| s.get(id).unwrap().added().iter().find(|a| a.page == page).map(|a| a.content.rect());
+    assert_eq!(rect(&s, 1), Some([10.0, 20.0, 60.0, 70.0]));
+    s.apply(id, Edit::SetPageSize { pages: vec![0], size: [400.0, 500.0], placement: Placement::default() }).unwrap();
+    assert_eq!(rect(&s, 0), Some([110.0, 120.0, 160.0, 170.0]));
+    assert_eq!(rect(&s, 1), Some([10.0, 20.0, 60.0, 70.0]), "page 2 was not resized");
+    s.apply(id, Edit::ReplaceImage { page: 1, index: 0, name: "b.png".into(), bytes: png }).unwrap();
+    assert_eq!(rect(&s, 1), Some([10.0, 20.0, 60.0, 70.0]), "the new picture where the old one showed");
+    assert_eq!(rect(&s, 0), Some([110.0, 120.0, 160.0, 170.0]));
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]
