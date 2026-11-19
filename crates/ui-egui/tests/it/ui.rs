@@ -458,7 +458,8 @@ fn a_document_asking_for_full_screen_is_asked_about_first() {
     let mut h = harness(move |app| app.open_bytes(&egui::Context::default(), "deck.pdf", None, deck()).expect("opens"));
     h.run_steps(3);
     assert!(!h.state().full_screen(), "nothing happens before the answer");
-    h.get_by_label("Open in Full Screen mode?");
+    // The dialog and its title share the label: the dialog is the one node of its role.
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Open in Full Screen mode?");
     h.get_by_label("Not now").click();
     h.run_steps(3);
     assert!(!h.state().full_screen());

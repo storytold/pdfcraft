@@ -107,7 +107,9 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             // The header rows are keyed after the tiles, whose keys are their positions.
             let groups: Vec<TileGroup<usize>> =
                 spans.into_iter().enumerate().map(|(at, (start, count, title))| TileGroup::new(shown.len() + at, start, count, title)).collect();
+            // The panel's body scrolls as a whole, so the grid takes the height of its rows and owns no scroll.
             let grid = TileGrid::<usize>::new(tl!("All tools").to_owned())
+                .natural_height(true)
                 .select(SelectMode::Single)
                 .activate(ActivateOn::Click)
                 .card()

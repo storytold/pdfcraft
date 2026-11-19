@@ -520,6 +520,9 @@ impl PdfCraftApp {
         // its change has run the field's exit) before the focus scripts run.
         self.run_focus_scripts(ctx, i);
         self.run_field_triggers(ctx, i);
+        if let Some((at, files)) = self.views.get_mut(i).and_then(|v| v.dropped_files.take()) {
+            self.insert_dropped(ctx, files, at);
+        }
         match self.views.get_mut(i).and_then(|v| v.pending_action.take()) {
             Some(crate::canvas::ViewAction::InsertFromFile) => self.insert_from_file_dialog(),
             Some(crate::canvas::ViewAction::InsertFromFileAt(at)) => self.insert_from_file_at(Some(at)),

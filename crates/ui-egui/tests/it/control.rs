@@ -140,6 +140,9 @@ fn harness_on(app: PdfCraftApp, pages: usize, width: f32, scale: f32) -> (Harnes
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
+        // What `automation::server::serve` does for the running app: keep the presented frame's access tree for
+        // `ui.inspect`, `ui.click {label}` and `ui.focus`.
+        craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx).keep_access_tree();
         {
             let mut app = app;
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
@@ -179,13 +182,15 @@ pub(crate) fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, metho
 /// click that holds, moves, then releases. `modifiers` are held for the whole gesture and `button`
 /// is `"primary"`, `"secondary"` or `"middle"`.
 fn drag(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, from: Value, to: Value, steps: usize, modifiers: &[&str], button: &str) {
-    ok(h, c, "ui.click", json!({"x": from[0], "y": from[1], "hold": true, "button": button, "modifiers": modifiers}));
+    let modifiers_held = |names: &[&str]| -> Value { Value::Object(names.iter().map(|name| ((*name).to_owned(), Value::Bool(true))).collect()) };
+    let held = modifiers_held(modifiers);
+    ok(h, c, "ui.click", json!({"x": from[0], "y": from[1], "hold": true, "button": button, "modifiers": held}));
     let point = |p: &Value| [p[0].as_f64().unwrap_or_default(), p[1].as_f64().unwrap_or_default()];
     let (from, to) = (point(&from), point(&to));
     let steps = steps.max(1);
     for step in 1..=steps {
         let t = step as f64 / steps as f64;
-        ok(h, c, "ui.move", json!({"x": from[0] + (to[0] - from[0]) * t, "y": from[1] + (to[1] - from[1]) * t, "modifiers": modifiers}));
+        ok(h, c, "ui.move", json!({"x": from[0] + (to[0] - from[0]) * t, "y": from[1] + (to[1] - from[1]) * t, "modifiers": held}));
     }
     // `ui.release` takes no modifiers: releasing the button ends the gesture they were held for.
     ok(h, c, "ui.release", json!({"button": button}));
@@ -313,9 +318,9 @@ fn control_button_focus_preserves_document_undo_redo_shortcuts() {
     assert!(!h.ctx.text_edit_focused());
     ok(&mut h, &c, "ui.command", json!({"id": "page.insert_blank"}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["pages"], 3);
-    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": ["command"]}));
+    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": {"command": true}}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["pages"], 2);
-    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": ["command", "shift"]}));
+    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": {"command": true, "shift": true}}));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["pages"], 3);
 }
 
@@ -332,7 +337,7 @@ fn control_text_focus_retains_text_undo_ownership() {
     assert!(h.ctx.text_edit_focused());
     ok(&mut h, &c, "ui.type", json!({"text": "target"}));
     assert_eq!(search_text(&h), "target");
-    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": ["command"]}));
+    ok(&mut h, &c, "ui.key", json!({"key": "Z", "modifiers": {"command": true}}));
     assert_eq!(search_text(&h), "");
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][0]["pages"], 3);
 }
@@ -599,7 +604,7 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
     let p = h.state().views[0].viewport_rect().center();
     let top = h.state().views[0].page_screen_rect(0).unwrap().top();
-    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 60.0], "steps": 12, "button": "middle" }));
+    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x, p.y + 60.0]), 12, &[], "middle");
     h.run_steps(2);
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
     assert!(!h.state().views[0].auto_scrolling(), "releasing after holding and scrolling turns auto-scroll off");
@@ -611,7 +616,7 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "the Crop tool must not receive a wheel drag");
 
     // Small movement within the dead zone before release still latches auto-scroll on.
-    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y + 10.0], "steps": 4, "button": "middle" }));
+    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x, p.y + 10.0]), 4, &[], "middle");
     assert!(h.state().views[0].auto_scrolling(), "release within the dead zone keeps scrolling toggled on");
     ok(&mut h, &c, "ui.move", json!({ "x": p.x, "y": p.y + 60.0 }));
     h.run_steps(8);
@@ -764,7 +769,7 @@ fn autoscroll_is_scoped_to_the_active_view_and_cannot_start_under_a_dialog() {
     ok(&mut h, &c, "ui.click", json!({ "x": p.x, "y": p.y, "button": "middle" }));
     assert!(!h.state().views[0].auto_scrolling(), "a modal owns its input");
     assert!(call(&mut h, &c, "ui.move", json!({ "x": "bad", "y": 2 })).is_err());
-    assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2], "to": [3, 4], "button": "bad" })).is_err());
+    assert!(call(&mut h, &c, "ui.click", json!({ "x": 1, "y": 2, "button": "bad" })).is_err());
 }
 
 #[cfg(target_os = "linux")]
@@ -808,7 +813,7 @@ fn middle_button_pans_while_held_outside_linux() {
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Crop;
     let p = h.state().views[0].viewport_rect().center();
     let top = h.state().views[0].page_screen_rect(1).unwrap().top();
-    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y - 60.0], "steps": 12, "button": "middle" }));
+    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x, p.y - 60.0]), 12, &[], "middle");
     h.run_steps(2);
     let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
     assert!((moved - (top - 60.0)).abs() < 1.0, "the page follows the pointer 1:1: {top} -> {moved}");
@@ -830,7 +835,7 @@ fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
     h.run_steps(2);
     let p = h.state().views[0].viewport_rect().center();
     let top = h.state().views[0].page_screen_rect(1).unwrap().top();
-    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y - 60.0], "steps": 12, "button": "middle" }));
+    drag(&mut h, &c, json!([p.x, p.y]), json!([p.x, p.y - 60.0]), 12, &[], "middle");
     h.run_steps(2);
     let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
     assert!((moved - (top + 60.0)).abs() < 1.0, "dragging up scrolls up, so the page moves down: {top} -> {moved}");
@@ -998,7 +1003,7 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
         assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], code);
     }
     ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
-    ok(&mut h, &c, "ui.key", json!({ "key": ",", "modifiers": ["command"] }));
+    ok(&mut h, &c, "ui.key", json!({ "key": ",", "modifiers": {"command": true} }));
     let prefs = ok(&mut h, &c, "ui.inspect", json!({ "query": "表示言語" }));
     assert!(prefs["count"].as_u64().unwrap() > 0, "{prefs}");
     ok(&mut h, &c, "ui.click", json!({ "label": "OK" }));
@@ -1129,7 +1134,7 @@ fn commands_keys_and_typing() {
     assert_eq!(list["commands"].as_array().unwrap().iter().find(|x| x["id"] == "edit.undo").unwrap()["enabled"], true);
 
     // ⌘K opens the palette; typing filters it; Escape closes it.
-    ok(&mut h, &c, "ui.key", json!({ "key": "K", "modifiers": ["command"] }));
+    ok(&mut h, &c, "ui.key", json!({ "key": "K", "modifiers": {"command": true} }));
     assert!(palette_on_screen(&h), "the palette is on screen");
     ok(&mut h, &c, "ui.type", json!({ "text": "split" }));
     let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": "split document" }));
@@ -1164,16 +1169,7 @@ fn ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page() {
     let (a, b) = (cell(&mut h, &c, 1), cell(&mut h, &c, 3));
     // The gesture reads the OS the context reports: Option on macOS, Ctrl elsewhere.
     let copy = if h.ctx.os() == egui::os::OperatingSystem::Mac { "alt" } else { "ctrl" };
-    ok(
-        &mut h,
-        &c,
-        "ui.drag",
-        json!({
-            "from": [(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0],
-            "to": [b[2] - 4.0, (b[1] + b[3]) / 2.0],
-            "modifiers": [copy],
-        }),
-    );
+    drag(&mut h, &c, json!([(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0]), json!([b[2] - 4.0, (b[1] + b[3]) / 2.0]), 8, &[copy], "primary");
     h.run_steps(3);
     let st = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(st["documents"][0]["pages"], 4, "the drag copied the page instead of moving it: {st}");
@@ -1209,7 +1205,7 @@ fn saved_signature_can_be_changed_through_the_control_channel() {
     let r = field["rect"].as_array().unwrap();
     let [x0, y0, x1, y1] = [0, 1, 2, 3].map(|i| r[i].as_f64().unwrap());
     ok(&mut h, &c, "ui.click", json!({ "x": (x0 + x1) / 2.0, "y": (y0 + y1) / 2.0 }));
-    ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": ["command"] }));
+    ok(&mut h, &c, "ui.key", json!({ "key": "A", "modifiers": {"command": true} }));
     ok(&mut h, &c, "ui.type", json!({ "text": "Grace Hopper" }));
     ok(&mut h, &c, "ui.click", json!({ "label": "Apply" }));
     assert_eq!(h.state().signature, Some(craft::review::SavedSignature::Typed("Grace Hopper".into())));
@@ -1230,7 +1226,7 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
     let r = &st["active"]["pages_on_screen"][0]["rect"];
     let (x0, y0, x1, y1) = (r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap(), r[3].as_f64().unwrap());
     let (a, b) = ([x0 + (x1 - x0) * 0.2, y0 + (y1 - y0) * 0.2], [x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.4]);
-    ok(&mut h, &c, "ui.drag", json!({ "from": a, "to": b }));
+    drag(&mut h, &c, json!(a), json!(b), 8, &[], "primary");
     h.run_steps(2);
     let st = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(st["active"]["selected_comment"], json!({ "page": 1, "index": 1 }), "{st}");
@@ -1239,7 +1235,7 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
     ok(&mut h, &c, "ui.click", json!({ "x": (a[0] + b[0]) / 2.0, "y": (a[1] + b[1]) / 2.0, "button": "secondary" }));
     let menu = ok(&mut h, &c, "ui.inspect", json!({ "query": "Set status" }));
     assert!(menu["count"].as_u64().unwrap() >= 1, "{menu}");
-    assert!(call(&mut h, &c, "ui.drag", json!({ "from": [1, 2] })).unwrap_err().contains("to must be"));
+    assert!(call(&mut h, &c, "ui.move", json!({ "x": 1 })).is_err());
 }
 
 #[test]
@@ -1825,7 +1821,7 @@ fn navigation_history_for_os(os: egui::os::OperatingSystem) {
     assert!(call(&mut h, &c, "ui.command", json!({"id": "view.previous_view"})).is_err());
     // Empty-history shortcuts were silent before registry integration and must stay silent.
     for key in ["[", "]"] {
-        ok(&mut h, &c, "ui.key", json!({"key": key, "modifiers": ["command"]}));
+        ok(&mut h, &c, "ui.key", json!({"key": key, "modifiers": {"command": true}}));
         assert!(crate::support::shown_notice(&h).is_none(), "an unavailable history action must not ask to open the already-open document");
     }
     let before = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
@@ -1839,9 +1835,9 @@ fn navigation_history_for_os(os: egui::os::OperatingSystem) {
     ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));
     assert_eq!(h.state().views[0].current(), 3);
     ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "5"}));
-    ok(&mut h, &c, "ui.key", json!({"key": "[", "modifiers": ["command"]}));
+    ok(&mut h, &c, "ui.key", json!({"key": "[", "modifiers": {"command": true}}));
     assert_eq!(h.state().views[0].current(), 3, "shortcut traverses exactly one history entry");
-    ok(&mut h, &c, "ui.key", json!({"key": "]", "modifiers": ["command"]}));
+    ok(&mut h, &c, "ui.key", json!({"key": "]", "modifiers": {"command": true}}));
     assert_eq!(h.state().views[0].current(), 4);
     ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
     let ctx_h = h.ctx.clone();
