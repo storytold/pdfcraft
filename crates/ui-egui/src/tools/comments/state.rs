@@ -249,9 +249,10 @@ impl CommentView {
         self.slots = next;
     }
 
-    /// Every selected comment, the one the handles belong to first.
+    /// Every selected comment, the one the handles belong to first, then the others in the order they were selected.
     pub fn selection(&self) -> Vec<(usize, usize)> {
-        self.tool.selected.iter().rev().map(|id| bridge::key_of(*id)).collect()
+        let Some((lead, others)) = self.tool.selected.split_last() else { return Vec::new() };
+        std::iter::once(lead).chain(others).map(|id| bridge::key_of(*id)).collect()
     }
 
     /// The selected comment the handles, the properties and the context menu act on: the last one selected.
@@ -271,8 +272,8 @@ impl CommentView {
     }
 
     /// Select `keys`, the first being the lead (the one with the handles): repeated keys count once, at
-    /// their first place. The tool keeps its primary last, so the others are stored in reverse and the
-    /// lead last: [`Self::selection`] gives `keys` back in order.
+    /// their first place. The tool keeps its primary last, so the others are stored in order and the
+    /// lead after them: [`Self::selection`] gives `keys` back in order.
     pub fn select_keys(&mut self, keys: &[(usize, usize)]) {
         let mut unique: Vec<(usize, usize)> = Vec::with_capacity(keys.len());
         for key in keys {
@@ -280,7 +281,10 @@ impl CommentView {
                 unique.push(*key);
             }
         }
-        self.tool.selected = unique.into_iter().rev().map(|(p, i)| bridge::id_of(p, i)).collect();
+        if !unique.is_empty() {
+            unique.rotate_left(1);
+        }
+        self.tool.selected = unique.into_iter().map(|(p, i)| bridge::id_of(p, i)).collect();
         self.member = None;
     }
 

@@ -113,8 +113,8 @@ fn link_properties_sets_the_page_view_zoom() {
     h.get_by_role_and_label(Role::Dialog, "Create Link");
     h.get_by_label("Go to a page view").click();
     h.run_steps(3);
-    // The field around the zoom choice carries its name too: the choice is the one that isn't the group.
-    h.get_by(|n| n.label().as_deref() == Some("Zoom") && n.role() != Role::Group).click();
+    // The field's caption and the toolbar's zoom carry the name too: the choice is the drop-down.
+    h.get_by_role_and_label(Role::ComboBox, "Zoom").click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "200%").scroll_to_me();
     h.run_steps(3);

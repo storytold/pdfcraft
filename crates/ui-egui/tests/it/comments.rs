@@ -1299,7 +1299,7 @@ fn comment_properties_change_appearance_and_author() {
     drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
     open_comment_props(&mut h, 0, 0);
     h.run_steps(2);
-    h.get_by_label("Rectangle Properties");
+    h.get_by_role_and_label(Role::Dialog, "Rectangle Properties");
     {
         let s = h.state();
         assert_eq!(s.session.get(s.views[0].id).unwrap().comment_props(0, 0).unwrap().width, Some(2.0));
@@ -1561,31 +1561,32 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
         app.views[0].session.comments.panel.filter.hidden_authors.push("Beta".into());
         app.views[0].session.comments.select_only((0, 0));
     });
-    h.get_by_label("First root");
+    // The panel names a card or reply row by its author, text and date.
+    h.get_by_label_contains("First root");
     h.get_by_label("Page 1");
     h.get_by_label("3"); // All three page roots count, including the two filtered out.
-    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
-    assert_eq!(h.query_all_by_label("Unnamed root").count(), 0);
+    assert_eq!(h.query_all_by_label_contains("Duplicate root").count(), 0);
+    assert_eq!(h.query_all_by_label_contains("Unnamed root").count(), 0);
     assert!(
-        h.get_by_label("Needle first reply").rect().top() < h.get_by_label("Second reply").rect().top(),
+        h.get_by_label_contains("Needle first reply").rect().top() < h.get_by_label_contains("Second reply").rect().top(),
         "replies follow source order, not dates"
     );
     h.get_by_label("Accepted");
     h.get_by_label("Mark with checkmark"); // The later Unmarked reply wins independently.
-    assert_eq!(h.query_all_by_label("Status-only token").count(), 0, "status text is searchable but is not a displayed reply");
+    assert_eq!(h.query_all_by_label_contains("Status-only token").count(), 0, "status text is searchable but is not a displayed reply");
 
     h.state_mut().views[0].session.comments.panel.filter.hidden_authors.clear();
     h.run_steps(2);
     // The replies point at the first root: sharing its /NM doesn't give the other its thread
     // (or a search match on that thread).
-    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
-    assert_eq!(h.query_all_by_label("Needle first reply").count(), 1);
+    assert_eq!(h.query_all_by_label_contains("Duplicate root").count(), 0);
+    assert_eq!(h.query_all_by_label_contains("Needle first reply").count(), 1);
     h.state_mut().views[0].session.comments.panel.search = "status-only token".into();
     h.state_mut().views[0].session.comments.panel.filter.hidden_statuses.push(ReviewStatus::Rejected);
     h.state_mut().views[0].session.comments.panel.filter.hidden_checks.push(true);
     h.run_steps(2);
-    h.get_by_label("First root");
-    assert_eq!(h.query_all_by_label("Duplicate root").count(), 0);
+    h.get_by_label_contains("First root");
+    assert_eq!(h.query_all_by_label_contains("Duplicate root").count(), 0);
 
     h.state_mut().views[0].session.comments.panel.filter.hidden_statuses.push(ReviewStatus::Accepted);
     h.run_steps(2);
@@ -1598,8 +1599,8 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     h.state_mut().views[0].session.comments.panel.search = "unnamed root".into();
     h.state_mut().views[0].session.comments.panel.filter.hidden_checks.clear();
     h.run_steps(2);
-    h.get_by_label("Unnamed root");
-    assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
+    h.get_by_label_contains("Unnamed root");
+    assert_eq!(h.query_all_by_label_contains("Needle first reply").count(), 0, "nothing replies to the unnamed root");
 }
 
 // Contributor-original PDF. A status is set on a reply (its /IRT names the reply, ISO 32000-2
@@ -1864,20 +1865,22 @@ fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread(
     for orphan in
         ["Points at itself", "Points at an unlisted note", "Points at a pop-up", "Points at a link", "Points at a form field", "Loop one", "Loop two"]
     {
-        assert!(h.get_by_label(orphan).rect().top() > h.get_by_label("Page 2").rect().top(), "{orphan}");
+        // The panel names a card or reply row by its author, text and date.
+        assert!(h.get_by_label_contains(orphan).rect().top() > h.get_by_label("Page 2").rect().top(), "{orphan}");
     }
     // A reply to a reply joins the thread of the comment it starts from, also when that comment
     // has no /NM.
-    let (parent, direct, deeper) = (h.get_by_label("Unnamed parent"), h.get_by_label("Direct reply"), h.get_by_label("Reply to the reply"));
+    let (parent, direct, deeper) =
+        (h.get_by_label_contains("Unnamed parent"), h.get_by_label_contains("Direct reply"), h.get_by_label_contains("Reply to the reply"));
     assert!(parent.rect().top() < direct.rect().top() && direct.rect().top() < deeper.rect().top());
-    assert!(deeper.rect().top() < h.get_by_label("Struck words").rect().top(), "under its own thread");
+    assert!(deeper.rect().top() < h.get_by_label_contains("Struck words").rect().top(), "under its own thread");
     // Comments: the unnamed parent, the strikeout and the seven on page 2. Replies: the two
     // replies, not the Replace Text caret grouped with its strikeout.
     h.get_by_label("9");
     h.get_by_label("2 replies");
     // A status whose comment no page lists is not a comment: no card, and nothing to pick on the
     // page where it sits.
-    assert_eq!(h.query_all_by_label("Stray status").count(), 0);
+    assert_eq!(h.query_all_by_label_contains("Stray status").count(), 0);
     click_pt(&mut h, (250.0, 30.0));
     assert!(h.state().views[0].session.comments.selection().is_empty());
 }
@@ -2055,7 +2058,7 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     h.get_by_label("Mark with checkmark").click();
     h.run_steps(3);
     assert!(comments(&h).iter().any(|a| a.state.as_deref() == Some("Marked")));
-    h.get_by_label("Remove checkmark");
+    h.get_by_role_and_label(Role::Button, "Remove checkmark");
 
     // "…" ▸ Copy text puts the comment's text on the clipboard.
     let ctx_h = h.ctx.clone();
@@ -2272,8 +2275,17 @@ fn the_panel_shows_each_reviewers_status_and_only_my_checkmark() {
     drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
     h.set_option("quick", "select").unwrap();
     h.state_mut().views[0].session.comments.clear_selection();
+    // The panel names a card by its author and text: each shape gets a text to tell its card by.
+    let oval = comments(&h).iter().find(|a| a.subtype == "Circle").map(|a| a.index).expect("the oval");
+    for (index, text) in [(0, "The rectangle"), (oval, "The oval")] {
+        let ctx_h = h.ctx.clone();
+        h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetAnnotationContents { page: 0, index, text: text.into() });
+    }
     h.run_steps(2);
-    let cards = |h: &Harness<'static, PdfCraftApp>| (h.query_all_by_label("Rectangle").count(), h.query_all_by_label("Oval").count());
+    let cards = |h: &Harness<'static, PdfCraftApp>| {
+        (h.query_all_by_label_contains("The rectangle").count(), h.query_all_by_label_contains("The oval").count())
+    };
+    assert_eq!(cards(&h), (1, 1), "both cards show");
     let shown = cards(&h);
     h.state_mut().views[0].session.comments.panel.filter.hidden_statuses = vec![ReviewStatus::Rejected];
     h.run_steps(2);
@@ -3969,9 +3981,9 @@ fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
     assert!(h.query_all_by(|n| n.placeholder() == Some("Add a reply")).next().is_none(), "the box closes");
 }
 
-/// A pop-up window's box holding `text` (a comment's or a reply's).
+/// A pop-up window's text `text` (a comment's or a reply's): the comment's box, or a reply's read-only text.
 fn shows_text(n: &egui_kittest::kittest::AccessKitNode<'_>, text: &str) -> bool {
-    n.role() == Role::MultilineTextInput && n.value().as_deref() == Some(text)
+    matches!(n.role(), Role::MultilineTextInput | Role::Label) && n.value().as_deref() == Some(text)
 }
 
 /// On a page turned a quarter (View ▸ Rotate View), a resized pop-up window stays where it is on
@@ -4815,7 +4827,7 @@ fn edit_delete_from_a_native_menu_under_the_full_screen_prompt_leaves_the_commen
         let ctx_h = h.ctx.clone();
         h.state_mut().open_bytes(&ctx_h, "deck.pdf", None, deck).expect("the deck opens");
         h.run_steps(3);
-        let prompt = |h: &Harness<'static, PdfCraftApp>| h.query_by_label("Open in Full Screen mode?").is_some();
+        let prompt = |h: &Harness<'static, PdfCraftApp>| h.query_by_role_and_label(Role::Dialog, "Open in Full Screen mode?").is_some();
         assert!(prompt(&h), "the full-screen prompt is open");
         support::fire_menu(&mut h, craft::menu::CommandRef::with_params("window.document", serde_json::json!({ "index": 0 })));
         h.run_steps(3);
