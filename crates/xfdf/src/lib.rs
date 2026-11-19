@@ -27,7 +27,7 @@ mod xfdf;
 
 #[cfg(test)]
 use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
-use common::{check_form_xml_depth, el_text, esc, parse_form_xml, walk_xfdf, xml_name};
+use common::{check_form_xml_depth, el_text, esc, parse_form_xml, xml_name};
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
@@ -50,6 +50,10 @@ pub enum DataError {
     Malformed(String),
     #[error("nothing in the file matches this document")]
     NothingImported,
+    /// Every value the file gave for this document's fields was refused ([`Report::rejected`]):
+    /// the names, as the caller wants them said.
+    #[error("the form refused every value in the file, so nothing was imported: {0}")]
+    Refused(String),
     #[error("FDF export exceeds the {0} limit; no data was exported")]
     ExportLimit(&'static str),
     #[error(transparent)]
@@ -138,7 +142,11 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             )
         }
         _ => {
-            let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+            // A formula-like cell gets a leading `'`, as in CSV; `tab_delimited` takes it off.
+            let clean = |s: &str| {
+                let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
+                s.replace(['\t', '\n', '\r'], " ")
+            };
             format!(
                 "{}\n{}\n",
                 fields.iter().map(|f| clean(&f.0)).collect::<Vec<_>>().join("\t"),
@@ -175,18 +183,10 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             })
             .collect());
     }
-    let text = String::from_utf8_lossy(bytes);
-    let t = text.trim_start_matches('\u{feff}').trim_start();
-    check_form_xml_depth(t)?;
-    let root = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
-    if root.local() != "xfdf" {
-        return Err(DataError::UnknownFormat);
-    }
-    let mut values = Vec::new();
-    if let Some(fields) = root.child(craft_xml::Local("fields")) {
-        walk_xfdf(fields, "", &mut values, 0)?;
-    }
-    Ok(values)
+    craft_xfdf::read_fields(bytes).map_err(|error| match error {
+        craft_xfdf::Error::UnknownFormat => DataError::UnknownFormat,
+        craft_xfdf::Error::Malformed(message) => DataError::Malformed(message),
+    })
 }
 
 /// Merge Data Files into Spreadsheet: one CSV row per file, one column per field name (in the
@@ -197,9 +197,10 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 /// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut columns: Vec<&str> = Vec::new();
+    let mut known: HashSet<&str> = HashSet::new();
     for f in files {
         for (k, _) in f {
-            if !columns.contains(&k.as_str()) {
+            if known.insert(k.as_str()) {
                 columns.push(k);
             }
         }
@@ -218,7 +219,12 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
-        let row: Vec<String> = columns.iter().map(|c| f.iter().find(|(k, _)| k == c).map_or(String::new(), |(_, v)| q(&v.join(", ")))).collect();
+        // The first value of a name repeated in one file wins, as the scan it replaces found it.
+        let mut by_name: HashMap<&str, &Vec<String>> = HashMap::new();
+        for (k, v) in f {
+            by_name.entry(k.as_str()).or_insert(v);
+        }
+        let row: Vec<String> = columns.iter().map(|c| by_name.get(c).map_or(String::new(), |v| q(&v.join(", ")))).collect();
         out.push_str(&row.join(","));
         out.push('\n');
     }
@@ -342,7 +348,7 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
 fn tab_delimited(t: &str) -> Result<Vec<(String, Vec<String>)>, DataError> {
     let mut lines = t.lines();
     let (Some(head), Some(row)) = (lines.next(), lines.next()) else { return Err(DataError::UnknownFormat) };
-    Ok(head.split('\t').map(str::to_string).zip(row.split('\t')).map(|(k, v)| (k, vec![v.to_string()])).collect())
+    Ok(head.split('\t').map(|k| csv_text(k.to_string())).zip(row.split('\t')).map(|(k, v)| (k, vec![csv_text(v.to_string())])).collect())
 }
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
