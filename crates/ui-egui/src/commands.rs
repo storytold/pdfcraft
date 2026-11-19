@@ -152,14 +152,8 @@ impl PdfCraftApp {
                 }
             }
             "app.theme" => self.toggle_theme(ctx),
-            "tools.expand" => {
-                self.all_tools_full = false;
-                self.all_tools_expanded = true;
-            }
-            "tools.collapse" => {
-                self.all_tools_full = false;
-                self.all_tools_expanded = false;
-            }
+            "tools.expand" => self.expand_all_tools(ctx),
+            "tools.collapse" => self.all_tools_full = false,
             "tools.all" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     v.organize = false;

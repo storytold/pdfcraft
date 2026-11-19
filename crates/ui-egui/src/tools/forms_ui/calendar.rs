@@ -20,7 +20,7 @@ pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, ope
     let mut picked = before.clone();
     CalendarPopover::new("Calendar", Bind::bound(&mut *open), Bind::bound(&mut picked))
         .precisions(&[DatePrecision::Day])
-        .overlay(|overlay| overlay.opener_anchor(Anchor::Rect(rect)))
+        .overlay(|overlay| overlay.anchor(Anchor::Rect(rect)))
         .show(ui, |_, _| {});
     if picked == before {
         return None;

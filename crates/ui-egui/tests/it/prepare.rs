@@ -124,7 +124,7 @@ fn pick(h: &mut Harness<'static, PdfCraftApp>, label: &str, option: &str) {
 
 /// Clicks the tab `label` of Field Properties.
 fn tab(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
-    h.get_by_label(label).click();
+    h.get_by_role_and_label(Role::Tab, label).click();
     h.run_steps(2);
 }
 
@@ -311,7 +311,7 @@ fn format_validate_and_calculate_tabs() {
     tab(&mut h, "Validate");
     choose(&mut h, "Field value is in range:");
     // The range opens as 0 to 100; unticking "To:" leaves it open above.
-    h.get_by_label("To:").click();
+    h.get_by_role_and_label(Role::CheckBox, "To:").click();
     h.run_steps(2);
     tab(&mut h, "Calculate");
     choose(&mut h, "Simplified field notation:");
@@ -384,7 +384,7 @@ fn city_calculation(h: &Harness<'static, PdfCraftApp>) -> (pdfcraft_engine::form
 
 /// What each multi-line box on the tab holds.
 fn script_boxes(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
-    h.query_all_by_role(Role::MultilineTextInput).filter_map(|n| n.value()).collect()
+    h.query_all_by_role_and_label(Role::MultilineTextInput, CUSTOM).filter_map(|n| n.value()).collect()
 }
 
 /// The script box's description: what a screen reader says about it besides its text.
@@ -395,16 +395,16 @@ fn script_box_description(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
 
 /// Selects everything in the script box and types `text` over it.
 fn retype_script(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
-    h.get_by_role(Role::MultilineTextInput).click();
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.get_by_role(Role::MultilineTextInput).type_text(text);
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).type_text(text);
     h.run_steps(2);
 }
 
 /// Pastes `text` into the script box where its cursor is.
 fn paste_script(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
-    h.get_by_role(Role::MultilineTextInput).click();
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).click();
     h.run_steps(1);
     h.event(egui::Event::Paste(text.into()));
     h.run_steps(2);
@@ -490,7 +490,7 @@ fn an_edit_past_256_kib_is_refused_and_the_next_edit_is_taken() {
     assert!(script_boxes(&h) == [full.as_str()], "the box holds the full 256 KiB");
     // One byte more is not.
     h.key_press(egui::Key::End);
-    h.get_by_role(Role::MultilineTextInput).type_text(" ");
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).type_text(" ");
     h.run_steps(2);
     assert!(refused(&h).0, "256 KiB and a byte");
     assert!(script_boxes(&h) == [full.as_str()]);
@@ -539,9 +539,9 @@ fn a_script_past_256_kib_shows_its_start_and_is_kept() {
     assert_eq!(script_box_description(&h).as_deref(), Some(note));
     let start = &long[..MAX_EDITED_SCRIPT - 1];
     assert!(script_boxes(&h) == [start], "the box shows the start, up to the last whole character");
-    h.get_by_role(Role::MultilineTextInput).click();
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).click();
     h.run_steps(1);
-    h.get_by_role(Role::MultilineTextInput).type_text("x");
+    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).type_text("x");
     h.run_steps(2);
     assert!(script_boxes(&h) == [start], "and can't be typed in");
     press(&mut h, "OK");

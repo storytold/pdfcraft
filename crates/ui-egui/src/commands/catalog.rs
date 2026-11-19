@@ -19,8 +19,9 @@ const CATALOG_ONLY: &[(&str, &str, &str)] = &[
     ("app.theme", "Switch theme", "moon"),
     ("home.unpin_tool", "Unpin tool", "pin-off"),
     ("form.calculation_order.back", "Back to Prepare a form", "chevron-left"),
-    ("tools.expand", "Expand tools", "chevrons-up-down"),
-    ("tools.collapse", "Collapse tools", "chevrons-down-up"),
+    // Labels distinct from the Combine grid's Expand and Collapse, which can show beside them.
+    ("tools.expand", "Expand all tools", "maximize-2"),
+    ("tools.collapse", "Collapse all tools", "minimize-2"),
     ("tools.all", "All tools", "layout-grid"),
     ("view.dock_side", "Move the side panel to the other side", "arrow-left-right"),
     ("view.fit_toggle", "Toggle fit", "scan"),
