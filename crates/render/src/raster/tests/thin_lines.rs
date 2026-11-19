@@ -111,3 +111,76 @@ trailer << /Root 1 0 R >>
     assert!(plain.iter().any(|v| *v < 255), "the glyph's stroke is drawn");
     assert_eq!(plain, nested, "nesting a Type 3 glyph leaves the stroke it draws alone");
 }
+
+/// Hairlines on the page's right and bottom edges stay visible instead of snapping outside the
+/// canvas, while interior hairlines and tile seams stay snapped. Partial overhangs keep their
+/// partial edge coverage without jumping inward, and tiled renders remain pixel-identical to
+/// whole-page renders.
+#[test]
+fn hairlines_on_page_edges_stay_visible_while_interior_hairlines_stay_snapped() {
+    let content = "0.1 w 130 5 m 130 65 l S 10 0 m 120 0 l S \
+                   0 5 m 0 65 l S 10 70 m 120 70 l S \
+                   50 5 m 50 65 l S 10 30 m 120 30 l S";
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let (rgba, w) = draw(content, scale);
+        let h = rgba.len() / 4 / w;
+        assert!(rgb_at(&rgba, w, w - 1, h / 2)[0] < 255, "at {scale}: right-edge hairline disappeared");
+        assert!(rgb_at(&rgba, w, w / 2, h - 1)[0] < 255, "at {scale}: bottom-edge hairline disappeared");
+        if scale != 1.25 {
+            assert_eq!(rgb_at(&rgba, w, w - 1, h / 2)[0], 0, "at {scale}: right-edge hairline should ink whole pixel");
+            assert_eq!(rgb_at(&rgba, w, w - 2, h / 2)[0], 255, "at {scale}: right-edge neighbour should stay white");
+            assert_eq!(rgb_at(&rgba, w, w / 2, h - 1)[0], 0, "at {scale}: bottom-edge hairline should ink whole pixel");
+            assert_eq!(rgb_at(&rgba, w, w / 2, h - 2)[0], 255, "at {scale}: bottom-edge neighbour should stay white");
+            assert_eq!(rgb_at(&rgba, w, 0, h / 2)[0], 0, "at {scale}: left-edge hairline should ink whole pixel");
+            assert_eq!(rgb_at(&rgba, w, 1, h / 2)[0], 255, "at {scale}: left-edge neighbour should stay white");
+            assert_eq!(rgb_at(&rgba, w, w / 2, 0)[0], 0, "at {scale}: top-edge hairline should ink whole pixel");
+            assert_eq!(rgb_at(&rgba, w, w / 2, 1)[0], 255, "at {scale}: top-edge neighbour should stay white");
+        }
+        let s = f64::from(scale);
+        let x = (50.0 * s) as usize;
+        let y_mid = (35.0 * s) as usize;
+        let interior_col: Vec<u8> = (x - 1..=x + 1).map(|px| rgb_at(&rgba, w, px, y_mid)[0]).collect();
+        assert_eq!(interior_col, [255, 0, 255], "at {scale}: interior vertical hairline should stay snapped");
+        let y = ((70.0 - 30.0) * s) as usize;
+        let x_mid = (75.0 * s) as usize;
+        let interior_row: Vec<u8> = (y - 1..=y + 1).map(|py| rgb_at(&rgba, w, x_mid, py)[0]).collect();
+        assert_eq!(interior_row, [255, 0, 255], "at {scale}: interior horizontal hairline should stay snapped");
+    }
+
+    // A full-page border rectangle inks crisp black on all four edges.
+    let (rgba, w) = draw("0.1 w 0 0 130 70 re S", 1.0);
+    assert_eq!(rgb_at(&rgba, w, 0, 35)[0], 0);
+    assert_eq!(rgb_at(&rgba, w, 129, 35)[0], 0);
+    assert_eq!(rgb_at(&rgba, w, 65, 0)[0], 0);
+    assert_eq!(rgb_at(&rgba, w, 65, 69)[0], 0);
+
+    // Partial overhangs stay unmoved and retain partial coverage on the last column/row.
+    let (rgba, w) = draw("0.1 w 130.2 5 m 130.2 65 l S 10 -0.2 m 120 -0.2 l S", 1.0);
+    let right_overhang = rgb_at(&rgba, w, 129, 35)[0];
+    let bottom_overhang = rgb_at(&rgba, w, 65, 69)[0];
+    assert!((1..255).contains(&right_overhang), "expected partial coverage on right overhang, got {right_overhang}");
+    assert!((1..255).contains(&bottom_overhang), "expected partial coverage on bottom overhang, got {bottom_overhang}");
+
+    // Tiled rendering matches full-page rendering pixel-for-pixel across tile seams and outer page edges.
+    let pdf = image_cache_pdf(content, "<< >>", &[]);
+    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    let full = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(full.error.is_none(), "{:?}", full.error);
+    for tile in [
+        Tile { x: 0, y: 0, w: 50, h: 40 },
+        Tile { x: 50, y: 0, w: 80, h: 40 },
+        Tile { x: 0, y: 40, w: 50, h: 30 },
+        Tile { x: 50, y: 40, w: 80, h: 30 },
+    ] {
+        let part = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: Some(tile), scale: 1.0, tag: 0, preview: false });
+        assert!(part.error.is_none(), "{:?}", part.error);
+        assert_eq!((part.width, part.height), (tile.w, tile.h));
+        for py in 0..tile.h {
+            for px in 0..tile.w {
+                let a = &full.rgba[(((py + tile.y) * full.width + px + tile.x) * 4) as usize..][..4];
+                let b = &part.rgba[((py * tile.w + px) * 4) as usize..][..4];
+                assert_eq!(a, b, "tile {tile:?} mismatch at ({px}, {py})");
+            }
+        }
+    }
+}

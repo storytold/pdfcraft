@@ -256,6 +256,31 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
+    // PdfCraft patch (#7097): the full scaled page's visible device box in this render's
+    // coordinates, so `snap_hairline` keeps strokes on the page's outer edges visible without
+    // treating a tile seam as a page edge.
+    let (page_width, page_height) = page.render_dimensions();
+    let full_side = |pt: f32, scale: f32, explicit: Option<u16>, pix: u16| {
+        let scaled = f64::from(pt) * f64::from(scale);
+        if explicit.is_none() {
+            f64::from(pix)
+        } else if scaled.is_finite() && scaled > 0.0 {
+            // Matches pdfcraft-render's 0.01 px tolerance in `device_pixels`, while depending
+            // only on the page and scale so every tile shares the same outer edge.
+            scaled.min((scaled - 0.01).ceil().max(1.0))
+        } else {
+            0.0
+        }
+    };
+    let x0 = -f64::from(render_settings.x_offset);
+    let y0 = -f64::from(render_settings.y_offset);
+    let snap_bounds = Rect::new(
+        x0,
+        y0,
+        x0 + full_side(page_width, x_scale, render_settings.width, pix_width),
+        y0 + full_side(page_height, y_scale, render_settings.height, pix_height),
+    );
+
     let mut device = Renderer::new(
         pix_width,
         pix_height,
@@ -263,6 +288,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        snap_bounds,
     );
 
     if let Some(max) = render_settings.max_coverage {
