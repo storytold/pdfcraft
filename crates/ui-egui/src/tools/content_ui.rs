@@ -1026,13 +1026,17 @@ fn draft_session(
         origin: at + INSET,
     };
     let origin = layout.origin;
-    // PLAN: framework gap F-6: `TextEditor` has no focus request, so a new box is not handed the keyboard here.
-    draft.focus = false;
+    // A box still waiting for its focus was started in this pass by the press the editor also sees as a press on the
+    // canvas background: that press is the one that opened it, not a click away from it.
+    let fresh = std::mem::replace(&mut draft.focus, false);
     let mut selection = draft.selection.unwrap_or_else(|| TextSelection::caret_at(draft.text.chars().count()));
     let mut host = AddedTextHost { draft, ctx: ctx.clone(), view: body.view, layout, laid_out: None };
     let paper = Rect::from_min_size(at, egui::vec2(width, host.galley().rect.height() + INSET.y * 2.0));
     let output = TextEditor::new(tl!("Added text"), &mut host, Bind::bound(&mut selection)).esc_commits(false).id(editor_id).show_at(ui, paper);
-    let ended = output.ended;
+    if fresh {
+        output.response.request_focus();
+    }
+    let ended = output.ended.filter(|end| !(fresh && *end == EditorEnd::Commit));
     let galley = host.galley();
     let paper = Rect::from_min_size(at, egui::vec2(width, galley.rect.height() + INSET.y * 2.0));
     cv.drawn = Some(DraftPaint {

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::support::AppHarness as _;
 use craft::host::{ManualJobs, Picked, ScriptedFiles};
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -62,10 +63,11 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
     h.run_steps(2);
     h.get_by_label("Use custom DPI").click();
     h.run_steps(2);
-    let field = h.get_by_label("DPI");
+    // The field's group shares its label: the field is the other node.
+    let field = h.get_all_by_label("DPI").find(|n| n.accesskit_node().role() != Role::Group).expect("the DPI field");
     field.focus();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.get_by_label("DPI").type_text("144");
+    h.get_all_by_label("DPI").find(|n| n.accesskit_node().role() != Role::Group).expect("the DPI field").type_text("144");
     h.key_press(Key::Enter);
     h.run_steps(2);
     h.get_by_label("Create").click();
@@ -167,7 +169,7 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     h.run_steps(4);
     assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
-    h.get_by_label("PDF Optimizer");
+    h.get_by_role_and_label(Role::Dialog, "PDF Optimizer");
     h.get_by_label("Color Images");
     h.get_by_label("Monochrome Images");
     // Monochrome Images ▸ Downsample to can be turned off.
@@ -186,7 +188,7 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     h.run_steps(4);
     assert!(files.file(&out).expect("the copy is saved").starts_with(b"%PDF-"));
     assert!(h.state().optimize_run.is_none(), "the run is over");
-    assert!(h.query_by_label("PDF Optimizer").is_none(), "the dialog closed");
+    assert!(h.query_by_role_and_label(Role::Dialog, "PDF Optimizer").is_none(), "the dialog closed");
 }
 
 #[test]

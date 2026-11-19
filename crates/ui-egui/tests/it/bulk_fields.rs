@@ -113,9 +113,15 @@ fn type_in_next_field(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
     h.run_steps(4);
 }
 
+/// Ticks the apply box in the header of the property group `label`: the group and its header text share the label,
+/// so the box is found inside the group.
+fn click_gate(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_role_and_label(Role::Group, label).get_by_role_and_label(Role::CheckBox, "Enable").click();
+}
+
 /// Ticks the Tooltip property of the dialog and types `text` into its text box.
 fn set_tooltip(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
-    h.get_by_label("Tooltip:").click();
+    click_gate(h, "Tooltip:");
     h.run_steps(4);
     h.get_by_role_and_label(Role::TextInput, "Tooltip").click();
     h.run_steps(1);
@@ -129,20 +135,20 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     let before = bytes(&h);
     let original = [doc(&h).field_look("alpha").unwrap(), doc(&h).field_look("beta").unwrap()];
     select(&mut h, &["alpha", "beta"]);
-    h.get_by_label("Shared Field Properties");
+    h.get_by_role_and_label(Role::Dialog, "Shared Field Properties");
     h.get_by_label("2 fields selected");
     assert!(shared(&h)["required"]["mixed"].as_bool().unwrap());
     // Ticking a property applies the value the first field has: alpha is required.
-    h.get_by_label("Required").click();
+    click_gate(&mut h, "Required");
     h.run_steps(4);
     assert_eq!(shared(&h)["required"]["apply"], true);
     assert_eq!(shared(&h)["required"]["value"], true);
     h.get_by_label("Appearance").click();
     h.run_steps(4);
     // Below the fold of the dialog's scroll area with the roomier rows (#487).
-    h.get_by_label("Line Thickness:").scroll_to_me();
+    h.get_by_role_and_label(Role::Group, "Line Thickness:").scroll_to_me();
     h.run_steps(4);
-    h.get_by_label("Line Thickness:").click();
+    click_gate(&mut h, "Line Thickness:");
     h.run_steps(4);
     assert_eq!(shared(&h)["width"]["apply"], true, "thickness click enables the property");
     type_in_next_field(&mut h, "4");
@@ -181,7 +187,7 @@ fn cancelling_shared_properties_discards_only_the_draft() {
     h.get_by_label("Appearance").click();
     h.run_steps(4);
     // The fill row is the second "No color": border first, then fill.
-    h.get_by_label("Fill Color:").click();
+    click_gate(&mut h, "Fill Color:");
     h.run_steps(4);
     h.get_all_by_label("No color").nth(1).unwrap().click();
     h.run_steps(4);
@@ -233,7 +239,7 @@ fn shared_properties_cannot_apply_to_a_different_active_document() {
     let mut h = harness();
     let before = bytes(&h);
     select(&mut h, &["alpha", "beta"]);
-    h.get_by_label("Required").click();
+    click_gate(&mut h, "Required");
     h.run_steps(4);
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture()).unwrap();
@@ -285,7 +291,7 @@ fn fields_panel_selects_multiple_fields_and_opens_their_shared_properties() {
     assert_eq!(h.state().views[0].session.prepare.names(), ["alpha", "beta"]);
     h.get_by_label("Properties…").click();
     h.run_steps(4);
-    h.get_by_label("Shared Field Properties");
+    h.get_by_role_and_label(Role::Dialog, "Shared Field Properties");
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     h.get_by_label("beta").click_modifiers(egui::Modifiers::COMMAND);
@@ -301,7 +307,7 @@ fn double_clicking_a_field_in_the_panel_opens_its_individual_properties() {
         h.run_steps(4);
     }
     h.run_steps(4);
-    h.get_by_label("Text Field Properties");
+    h.get_by_role_and_label(Role::Dialog, "Text Field Properties");
     assert!(h.state().dialogs.is_open::<FieldPropsDialog>());
     let draft = h.state().dialogs.get::<FieldPropsDialog>().and_then(|d| d.json_fields()).expect("Field Properties is open");
     assert_eq!(draft["name"], "beta");
@@ -328,7 +334,7 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
     h.execute("form.field.properties");
     h.run_steps(4);
     assert_eq!(shared(&h)["names"], serde_json::json!(["group", "alpha"]), "the group is listed once");
-    h.get_by_label("Tooltip:");
+    h.get_by_role_and_label(Role::Group, "Tooltip:");
     set_tooltip(&mut h, "Shared help");
     h.get_by_label("OK").click();
     h.run_steps(4);
@@ -343,7 +349,7 @@ fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
     select(&mut h, &["alpha", "beta"]);
     h.get_by_label("Appearance").click();
     h.run_steps(4);
-    h.get_by_label("Line Thickness:").click();
+    click_gate(&mut h, "Line Thickness:");
     h.run_steps(4);
     type_in_next_field(&mut h, "2");
     assert_eq!(shared(&h)["width"]["value"], 2.0);

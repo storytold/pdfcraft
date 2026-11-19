@@ -76,6 +76,8 @@ const ICONS: &[(&str, &[u8])] = &[
     icon!("minimize-2"),
     icon!("move-horizontal"),
     icon!("move-right"),
+    icon!("panel-left"),
+    icon!("panel-right"),
     icon!("paperclip"),
     icon!("pen-line"),
     icon!("presentation"),

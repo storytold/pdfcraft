@@ -242,7 +242,7 @@ fn typing_moving_styling_and_deleting_added_content() {
     let mut h = harness();
     assert!(h.execute("edit.text"));
     h.run_steps(2);
-    h.get_by_label("Edit a PDF");
+    assert!(h.query_all_by_label("Edit a PDF").next().is_some(), "the panel is titled");
     let p = at(&h, 40.0, 300.0);
     click(&mut h, p);
     assert!(h.state().views[0].session.content.draft.is_some(), "the editor opened");
