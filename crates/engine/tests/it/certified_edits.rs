@@ -556,3 +556,109 @@ fn an_xfa_form_certified_for_form_fill_is_synchronized_and_filled_as_before() {
     s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text("Filled".into()) }).expect("filling in is allowed");
     s.save_bytes(id).expect("saving is allowed");
 }
+
+/// A timestamp authority that answers in-process with the test digital ID at a fixed time: no
+/// network.
+struct TestTsa(sign::DigitalId);
+
+impl sign::TimestampAuthority for TestTsa {
+    fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, sign::SignError> {
+        let query = sign::timestamp::parse_request(request)?;
+        let generation_time = sign::Time { year: 2027, month: 1, day: 15, hour: 13, minute: 0, second: 0 };
+        sign::timestamp::respond(
+            sign::timestamp::TimestampSigner {
+                key: &self.0.key,
+                certificate: &self.0.certificate,
+                chain: &self.0.chain,
+                digest: sign::DigestAlg::Sha256,
+            },
+            sign::timestamp::TimestampIssuance { query: &query, policy: "1.2.3.4", generation_time, serial: 7 },
+        )
+    }
+}
+
+/// A dynamic XFA shell certified with no changes allowed, opened (laid out for display only) in a
+/// session that trusts the test certificate. Also the signed file, the pages shown and the value
+/// of its laid-out field.
+fn display_only_shell() -> (Session, DocId, Arc<Vec<u8>>, usize) {
+    let signed = certified_as_is(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::growable_text_template(false)), 1);
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    s.set_trusted_certificates(vec![digital_id().certificate]);
+    let id = s.open("shell.pdf", None, signed.clone(), None).unwrap();
+    let pages = s.get(id).unwrap().info.pages.len();
+    assert!(pages >= 2, "laid out for display only");
+    (s, id, signed, pages)
+}
+
+/// The certification of `bytes`, validated on its own with the test certificate trusted.
+fn certification_of(bytes: &Arc<Vec<u8>>) -> sign::SignatureInfo {
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let trust = sign::TrustStore { certs: vec![digital_id().certificate] };
+    sign::signatures(&cos, bytes, &trust).into_iter().find(|x| x.certify == Some(1)).expect("the certification")
+}
+
+/// After the operation was saved, the document still shows the form laid out for display only,
+/// unchanged, and still refuses saving and signing.
+fn assert_still_shown(s: &Session, id: DocId, pages: usize) {
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), pages, "the pages shown stay");
+    let value = doc.form.iter().find(|f| f.name == "ACTIVIDADES").map(|f| f.value.clone());
+    assert_eq!(value, Some(vec!["Short".to_string()]), "the laid-out field stays");
+    assert!(!doc.dirty);
+    assert_eq!(refused_at_1(s.save_bytes(id)), "saving the pages laid out from its XFA template");
+    let opts = SignOptions { page: 0, rect: Some([20.0, 60.0, 160.0, 90.0]), ..SignOptions::default() };
+    assert_eq!(refused_at_1(s.sign(id, &digital_id(), opts.clone())), "saving the pages laid out from its XFA template");
+    assert_eq!(
+        refused_at_1(s.sign_with_timestamp(id, &digital_id(), opts, &TestTsa(digital_id()))),
+        "saving the pages laid out from its XFA template"
+    );
+}
+
+/// A certification that allows no changes still permits an incremental update holding only a
+/// document timestamp (ISO 32000-2 §12.8.2.2.1, Table 257; §12.8.5): a form shown laid out for
+/// display only is timestamped on its signed file, the certification stays valid, and the form
+/// stays shown as it was.
+#[test]
+fn a_display_only_certified_form_is_timestamped_on_its_signed_file() {
+    let (mut s, id, signed, pages) = display_only_shell();
+    let stamped = s.timestamp_document(id, &TestTsa(digital_id()), String::new()).expect("a document timestamp is permitted");
+    assert!(stamped.starts_with(&signed), "appended to the signed file");
+    let cert = certification_of(&stamped);
+    assert_eq!(cert.status, sign::Status::Valid, "{:?}", cert.details);
+    assert!(matches!(&cert.modification, Modification::Allowed(k) if k.contains(&sign::kind::SIGNATURE)), "{:?}", cert.modification);
+    s.mark_signed(id, stamped, None).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.signatures.iter().any(|x| x.signed && x.doc_timestamp), "the document timestamp is read");
+    let cert = doc.signatures.iter().find(|x| x.certify == Some(1)).expect("the certification");
+    assert_eq!(cert.status, sign::Status::Valid, "{:?}", cert.details);
+    assert_still_shown(&s, id, pages);
+}
+
+/// Revocation evidence in a document security store is likewise permitted under a no-changes
+/// certification (ISO 32000-2 Table 257, §12.8.4.3) and goes onto the signed file.
+#[test]
+fn a_display_only_certified_form_takes_revocation_evidence_on_its_signed_file() {
+    let (mut s, id, signed, pages) = display_only_shell();
+    let evidence = sign::dss::Evidence { certs: vec![digital_id().certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let ltv = s.embed_ltv(id, &evidence).expect("a document security store is permitted");
+    assert!(ltv.starts_with(&signed), "appended to the signed file");
+    let cos = pdfcraft_cos::Document::open(ltv.clone()).unwrap();
+    assert!(cos.get(cos.root().unwrap()).as_dict().unwrap().contains(b"DSS"), "the catalog holds the store");
+    let cert = certification_of(&ltv);
+    assert_eq!(cert.status, sign::Status::Valid, "{:?}", cert.details);
+    assert!(matches!(&cert.modification, Modification::Allowed(k) if k.contains(&sign::kind::SECURITY_STORE)), "{:?}", cert.modification);
+    s.mark_signed(id, ltv, None).unwrap();
+    let cert = s.get(id).unwrap().signatures.iter().find(|x| x.certify == Some(1)).cloned().expect("the certification");
+    assert_eq!(cert.status, sign::Status::Valid, "{:?}", cert.details);
+    assert_still_shown(&s, id, pages);
+}
+
+/// A form shown for display only takes no other file as saved: bytes that don't append to its
+/// signed file are refused and leave it as it was.
+#[test]
+fn a_display_only_certified_form_refuses_marking_another_file_saved() {
+    let (mut s, id, _, pages) = display_only_shell();
+    let other = Arc::new(form());
+    assert_eq!(refused_at_1(s.mark_saved(id, other, None)), "saving the pages laid out from its XFA template");
+    assert_still_shown(&s, id, pages);
+}

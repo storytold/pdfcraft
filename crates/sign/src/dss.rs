@@ -67,8 +67,9 @@ pub fn embed(doc: &Document, evidence: &Evidence) -> Result<Vec<u8>, SignError> 
     let crl_refs: Vec<Object> = crls.iter().map(|c| Object::Ref(embed_stream(&mut doc, c))).collect();
 
     let mut dss = Dict::new();
+    // Only the entries ISO 32000-2 Table 261 defines (Type, VRI, Certs, OCSPs, CRLs): validation
+    // counts a store of that shape as validation data, which every certification permits.
     dss.set(b"Type".to_vec(), Object::name("DSS"));
-    dss.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
     // Each list is one indirect array the store and every signature's VRI entry point to, so the
     // output does not grow with signatures times evidence.
     let cert_list = Object::Ref(doc.add(Object::Array(cert_refs)));

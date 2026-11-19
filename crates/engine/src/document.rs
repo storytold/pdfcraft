@@ -115,7 +115,7 @@ impl ShownNotSaved {
     }
 
     /// The change saving would make, for [`EditError::Certified`].
-    fn saved(self) -> &'static str {
+    pub(crate) fn saved(self) -> &'static str {
         match self {
             Self::Layout => "saving the pages laid out from its XFA template",
             Self::Data => "saving the field values taken from its XFA data",
@@ -552,10 +552,12 @@ impl Document {
         }
     }
 
-    /// Refuse writing the document as it is shown (Save, Save As, signing, a document timestamp,
-    /// embedding revocation data) when opening reconciled it with its XFA packets under a
-    /// certification that allows no changes (ISO 32000-2 Table 257): that file would carry the
-    /// laid-out pages or the field values, a change the certification forbids.
+    /// Refuse writing the document as it is shown (Save, Save As, signing) when opening
+    /// reconciled it with its XFA packets under a certification that allows no changes (ISO
+    /// 32000-2 Table 257): that file would carry the laid-out pages or the field values, a change
+    /// the certification forbids. A document timestamp or revocation evidence, which it permits,
+    /// is appended to the signed file instead ([`crate::Session::timestamp_document`],
+    /// [`crate::Session::embed_ltv`]).
     pub fn check_saving(&self) -> Result<(), EditError> {
         match self.shown_not_saved.as_ref() {
             Some(shown) => Err(EditError::Certified { level: 1, what: shown.kind.saved() }),

@@ -553,6 +553,19 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
 }
 
+/// Revocation evidence embedded in a document security store is validation data P=1 permits
+/// too (ISO 32000-2 Table 257): the store holds only the entries Table 261 defines, and the
+/// certification stays valid.
+#[test]
+fn embedded_revocation_evidence_keeps_a_no_changes_certification_valid() {
+    use pdfcraft_sign::dss::{self, Evidence};
+    let (id, trust, signed) = certified_p1();
+    let ltv = dss::embed(&open(&signed), &Evidence { certs: vec![id.certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() }).unwrap();
+    let s = signatures(&open(&ltv), &ltv, &trust).into_iter().find(|s| s.certify == Some(1)).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SECURITY_STORE)), "{:?}", s.modification);
+}
+
 /// Signature field "Approval" whose value, object 4, asks for DocMDP P 1 in its `/Reference`;
 /// object 5 is another signature dictionary. `perms` goes into the catalog. The signature itself
 /// is a dummy: which signature certifies is decided before its bytes are checked.
