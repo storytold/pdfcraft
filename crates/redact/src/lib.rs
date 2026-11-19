@@ -906,16 +906,19 @@ fn redact_page_content(
     // never rewritten above: take its copy of the templates away too.
     // Matched by what the settings say, not how they are stored: a rewriting tool may make the
     // entry indirect on one stream and leave it direct on the other.
+    // Only the entry goes: the stream's content is still what was read for it above.
+    let mut settings_only = Vec::new();
     if !redacted_settings.is_empty() {
         let decoded: Vec<pdfcraft_edit::HeaderFooter> =
             redacted_settings.iter().filter_map(|v| pdfcraft_edit::recorded_header_footer(doc, v)).collect();
-        for o in new_list.iter_mut() {
+        for (i, o) in new_list.iter_mut().enumerate() {
             let mut stream = match &*doc.resolve(o) {
                 Object::Stream(s) if s.dict.get(b"PCHeaderFooter").is_some_and(|v| same_settings(doc, &redacted_settings, &decoded, v)) => s.clone(),
                 _ => continue,
             };
             stream.dict.remove(b"PCHeaderFooter");
             *o = Object::Ref(doc.add(Object::Stream(stream)));
+            settings_only.push(i);
         }
     }
     if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
@@ -933,14 +936,17 @@ fn redact_page_content(
                 .iter()
                 .zip(&list)
                 .zip(&data)
-                .map(|((now, was), read)| match &*doc.resolve(now) {
-                    // Left as it was: what was read above, with its parameters by reference.
-                    _ if now == was => read.clone(),
-                    // Written above by `Stream::flate`, which leaves no `/DecodeParms`.
-                    Object::Stream(s) => s.decoded().unwrap_or_default(),
-                    _ => Vec::new(),
+                .enumerate()
+                .map(|(i, ((now, was), read))| match &*doc.resolve(now) {
+                    // Left as it was, or only its header settings taken off (keeping its
+                    // `/Filter` and `/DecodeParms`, perhaps by reference): what was read above.
+                    _ if now == was || settings_only.contains(&i) => Ok(read.clone()),
+                    // Written above by `Stream::flate`. One that won't decode is an error, not
+                    // empty content: `prune` would take that as drawing nothing.
+                    Object::Stream(s) => doc.with_direct_parms(s).decoded(),
+                    _ => Ok(Vec::new()),
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
             interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }

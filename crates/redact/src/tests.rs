@@ -245,6 +245,44 @@ fn an_image_drawn_again_in_content_with_parameters_by_reference_stays() {
     assert_eq!((image.dict.name(b"Subtype"), image.decoded().ok()), (Some(&b"Image"[..]), Some(vec![255; 4])));
 }
 
+/// #6352 review: a stream that only records a redacted header's settings keeps its `/Filter`
+/// and `/DecodeParms` when the settings are taken off. Read again without its parameters (given by
+/// reference), it seemed to draw nothing, so an image it draws, removed under the mark elsewhere on
+/// the page, lost its resource while the stream still drew it.
+#[test]
+fn an_image_drawn_by_a_stream_keeping_header_settings_stays() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let img = stream("/Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", [255, 255, 255, 255]);
+    let mut doc = one_page(b"q 10 0 0 10 10 270 cm /Im1 Do Q", "/XObject << /Im1 7 0 R >>", vec![img]);
+    let mut hf = pdfcraft_edit::HeaderFooter::default();
+    hf.text[1] = "SECRET9".into();
+    pdfcraft_edit::add_header_footer(&mut doc, &[0], &hf, false, &pdfcraft_edit::Context { date: (2026, 10, 1) }).unwrap();
+    let page = doc.resolve(&Object::Ref(ObjRef::new(3, 0))).as_dict().unwrap().clone();
+    let mut contents = doc.resolve(page.get(b"Contents").unwrap()).as_array().unwrap().to_vec();
+    let settings = contents
+        .iter()
+        .find_map(|o| match &*doc.resolve(o) {
+            Object::Stream(s) => s.dict.get(b"PCHeaderFooter").cloned(),
+            _ => None,
+        })
+        .unwrap();
+    let mut again = predicted(&mut doc, Dict::new(), b"q 10 0 0 10 200 100 cm /Im1 Do Q");
+    again.dict.set(b"PCHeaderFooter".to_vec(), settings);
+    contents.push(Object::Ref(doc.add(Object::Stream(again))));
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    // Over the header and the image drawn at the top, not the one drawn again below.
+    mark(&mut doc, 0, &[[0.0, 240.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let doc = reopen(&doc);
+    assert!(content(&doc, 0).contains("200 100 cm /Im1 Do"), "{}", content(&doc, 0));
+    let p = pdfcraft_model::pages(&doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let Some(Object::Stream(image)) = xo.reference(b"Im1").map(|r| (*doc.get(r)).clone()) else { panic!("no /Im1: {xo:?}") };
+    assert_eq!((image.dict.name(b"Subtype"), image.decoded().ok()), (Some(&b"Image"[..]), Some(vec![255; 4])));
+}
+
 /// #2130: a font with no /Widths is drawn with its embedded program's advances. Measured with a
 /// guess from its name instead (Courier's 600 units for "Mono"), the end of the line seemed to
 /// lie past a mark that covers all of it on screen, and was kept.

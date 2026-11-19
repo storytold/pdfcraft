@@ -400,6 +400,32 @@ fn settings_a_file_makes_up_are_not_listed() {
     }
 }
 
+/// #6352 review: listing read a header's settings again for every stream that recorded them, so a
+/// file repeating one shared entry (or one stream) across its pages could make it slow. A scan now
+/// reads each stream and each settings entry given by reference once, and still finds every page.
+#[test]
+fn settings_shared_by_many_streams_are_read_once_in_a_scan() {
+    let (mut doc, mark) = one_recorded_header();
+    let settings = doc.get(mark).as_dict().unwrap().get(b"PCHeaderFooter").cloned().unwrap();
+    let shared = Object::Ref(doc.add(settings));
+    doc.update_dict(mark, |d| d.set(b"PCHeaderFooter".to_vec(), shared)).unwrap();
+    let Object::Stream(copy) = (*doc.get(mark)).clone() else { panic!("a stream") };
+    // Page 0 draws the header's own stream 500 times; page 1 has 200 streams of its own, each
+    // recording the same settings by reference.
+    let mut first = vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))];
+    first.extend(std::iter::repeat_n(Object::Ref(mark), 500));
+    let mut second = vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))];
+    second.extend((0..200).map(|_| Object::Ref(doc.add(Object::Stream(copy.clone())))));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(first))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(4, 0), |d| d.set(b"Contents".to_vec(), Object::Array(second))).unwrap();
+    crate::marks::DECODED.with(|n| n.set(0));
+    let found = header_footers(&doc);
+    assert_eq!(crate::marks::DECODED.with(std::cell::Cell::get), 1, "the shared entry is read once");
+    assert_eq!(found.len(), 1);
+    assert_eq!((found[0].pages.as_slice(), found[0].settings.text[1].as_str()), (&[0, 1][..], "Real"));
+    assert!(unrecorded_header_footer_pages(&doc).is_empty());
+}
+
 #[test]
 fn settings_a_rewriting_tool_made_indirect_are_still_listed() {
     let (mut doc, mark) = one_recorded_header();

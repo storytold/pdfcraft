@@ -2,13 +2,13 @@ use pdfcraft_fonts::shaped_text::{is_thai, thai_refusal, thai_width};
 
 use super::marks::{
     Background, Context, HeaderFooter, HeaderFooterMark, MarkKind, MarkText, SETTINGS_KEY, Watermark, add_picture_resource, bates_start, expand,
-    matrix_number, n, picture, rgb, shrink_matrix,
+    matrix_number, n, picture, read, rgb, shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, content_list, contents, free_font_name, isolation, page_fonts,
     page_list, place, place_inside_wrapper, stream_tag, undrawable, wrapper_role,
 };
-use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+use super::{Document, EditError, ObjRef, Object, added, backdrop, helvetica_width};
 
 /// Commit one complete mark operation only after every selected page succeeds. The snapshot
 /// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
@@ -45,26 +45,94 @@ fn recorded_settings(doc: &Document, stream: &Object) -> Option<HeaderFooter> {
     if stream_tag(doc, stream).as_deref() != Some(MarkKind::HeaderFooter.tag()) {
         return None;
     }
-    let resolved = doc.resolve(stream);
-    HeaderFooter::from_object(doc, resolved.as_dict()?.get(SETTINGS_KEY)?)
+    read(doc, stream, |s| HeaderFooter::from_object(doc, s.as_dict()?.get(SETTINGS_KEY)?))
+}
+
+/// The most bytes of recorded text one scan of a document converts: the text of hundreds of
+/// thousands of real headers, yet a bound on a file that repeats a large one in every stream.
+const MAX_SCAN_TEXT: usize = 16 * 1024 * 1024;
+
+/// One scan of a document's headers and footers. A stream, or a settings entry, given by reference
+/// is read once however many pages share it, and the text converted in all is bounded
+/// ([`MAX_SCAN_TEXT`]): a file repeating its settings can't make listing them slow.
+struct Scan {
+    found: Vec<HeaderFooterMark>,
+    streams: std::collections::HashMap<ObjRef, Recorded>,
+    settings: std::collections::HashMap<ObjRef, Recorded>,
+    budget: usize,
+}
+
+/// What a content stream records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recorded {
+    /// No header and footer, or one whose settings can't be read (from before they were recorded,
+    /// another tool's, unreadable, or past the scan's text budget).
+    Nothing,
+    /// Settings, listed as `found[k]`, or not listed (`None`) past [`MAX_HEADER_FOOTERS`].
+    Settings(Option<usize>),
+}
+
+impl Scan {
+    fn of(doc: &Document) -> Self {
+        let mut scan = Self { found: Vec::new(), streams: Default::default(), settings: Default::default(), budget: MAX_SCAN_TEXT };
+        for (i, page) in page_list(doc).iter().enumerate() {
+            for o in content_list(doc, page).iter() {
+                if let Recorded::Settings(Some(k)) = scan.stream(doc, o)
+                    && let Some(mark) = scan.found.get_mut(k)
+                    && mark.pages.last() != Some(&i)
+                {
+                    mark.pages.push(i);
+                }
+            }
+        }
+        scan
+    }
+
+    fn stream(&mut self, doc: &Document, o: &Object) -> Recorded {
+        let Object::Ref(r) = o else { return self.read_stream(doc, o) };
+        if let Some(known) = self.streams.get(r) {
+            return *known;
+        }
+        let recorded = self.read_stream(doc, o);
+        self.streams.insert(*r, recorded);
+        recorded
+    }
+
+    fn read_stream(&mut self, doc: &Document, o: &Object) -> Recorded {
+        if stream_tag(doc, o).as_deref() != Some(MarkKind::HeaderFooter.tag()) {
+            return Recorded::Nothing;
+        }
+        read(doc, o, |s| Some(self.entry(doc, s.as_dict()?.get(SETTINGS_KEY)?))).unwrap_or(Recorded::Nothing)
+    }
+
+    /// A stream's [`SETTINGS_KEY`] entry.
+    fn entry(&mut self, doc: &Document, value: &Object) -> Recorded {
+        let Object::Ref(r) = value else { return self.read_settings(doc, value) };
+        if let Some(known) = self.settings.get(r) {
+            return *known;
+        }
+        let recorded = self.read_settings(doc, value);
+        self.settings.insert(*r, recorded);
+        recorded
+    }
+
+    fn read_settings(&mut self, doc: &Document, value: &Object) -> Recorded {
+        let Some(settings) = HeaderFooter::from_object_within(doc, value, &mut self.budget) else { return Recorded::Nothing };
+        if let Some(k) = self.found.iter().position(|m| m.settings == settings) {
+            return Recorded::Settings(Some(k));
+        }
+        if self.found.len() >= MAX_HEADER_FOOTERS {
+            return Recorded::Settings(None);
+        }
+        self.found.push(HeaderFooterMark { pages: Vec::new(), settings });
+        Recorded::Settings(Some(self.found.len() - 1))
+    }
 }
 
 /// The headers and footers that record their settings, in page order, each with the pages it is
 /// on. Marks from before settings were recorded, or from another tool, are not listed.
 pub fn header_footers(doc: &Document) -> Vec<HeaderFooterMark> {
-    let mut found: Vec<HeaderFooterMark> = Vec::new();
-    for (i, page) in page_list(doc).iter().enumerate() {
-        for settings in content_list(doc, page).iter().filter_map(|o| recorded_settings(doc, o)) {
-            if let Some(mark) = found.iter_mut().find(|m| m.settings == settings) {
-                if mark.pages.last() != Some(&i) {
-                    mark.pages.push(i);
-                }
-            } else if found.len() < MAX_HEADER_FOOTERS {
-                found.push(HeaderFooterMark { pages: vec![i], settings });
-            }
-        }
-    }
-    found
+    Scan::of(doc).found
 }
 
 /// The header and footer added last to page `page` (0-based): `Some(None)` when it records no
@@ -82,10 +150,11 @@ pub fn newest_header_footer(doc: &Document, page: usize) -> Option<Option<Header
 /// those page-wide, as it did before settings were recorded.
 pub fn unrecorded_header_footer_pages(doc: &Document) -> Vec<usize> {
     let tagged = |o: &Object| stream_tag(doc, o).as_deref() == Some(MarkKind::HeaderFooter.tag());
+    let mut scan = Scan::of(doc);
     page_list(doc)
         .iter()
         .enumerate()
-        .filter(|(_, page)| content_list(doc, page).iter().any(|o| tagged(o) && recorded_settings(doc, o).is_none()))
+        .filter(|(_, page)| content_list(doc, page).iter().any(|o| tagged(o) && scan.stream(doc, o) == Recorded::Nothing))
         .map(|(i, _)| i)
         .collect()
 }

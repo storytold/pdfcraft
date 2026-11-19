@@ -177,12 +177,22 @@ pub(crate) const SETTINGS_KEY: &[u8] = b"PCHeaderFooter";
 /// what listing the headers and footers of a hostile file decodes.
 const MAX_RECORDED_TEXT: usize = 16 * 1024;
 
+/// `f` of `o`, or of what it refers to: a direct value is read in place, never copied, so a large
+/// one costs nothing until it has been checked. (`Document::resolve` copies a direct value whole.)
+pub(crate) fn read<T>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> Option<T>) -> Option<T> {
+    match o {
+        Object::Ref(_) => f(&doc.resolve(o)),
+        _ => f(o),
+    }
+}
+
 /// An array of exactly `N` numbers, each resolved: a rewriting tool may make any of them indirect.
 fn numbers<const N: usize>(doc: &Document, o: &Object) -> Option<[f64; N]> {
-    let array = doc.resolve(o);
-    let items = array.as_array().filter(|a| a.len() == N)?;
-    let values: Vec<f64> = items.iter().map(|v| doc.resolve(v).as_f64()).collect::<Option<_>>()?;
-    <[f64; N]>::try_from(values).ok()
+    read(doc, o, |array| {
+        let items = array.as_array().filter(|a| a.len() == N)?;
+        let values: Vec<f64> = items.iter().map(|v| read(doc, v, Object::as_f64)).collect::<Option<_>>()?;
+        <[f64; N]>::try_from(values).ok()
+    })
 }
 
 impl HeaderFooter {
@@ -234,43 +244,63 @@ impl HeaderFooter {
     /// Settings back from a [`SETTINGS_KEY`] entry. `None` unless every value is one the dialog
     /// could have written: a file can say anything here.
     pub(crate) fn from_object(doc: &Document, o: &Object) -> Option<Self> {
-        let resolved = doc.resolve(o);
-        let d = resolved.as_dict()?;
-        // Every value resolved: a rewriting tool may make any of them indirect.
-        let value = |key: &[u8]| d.get(key).map(|v| doc.resolve(v));
-        let flag = |key: &[u8]| match &*value(key)? {
-            Object::Bool(b) => Some(*b),
-            _ => None,
-        };
-        // The count and each size are checked before anything is decoded or copied.
-        let texts = value(b"Text")?;
-        let texts = texts.as_array().filter(|a| a.len() == 6)?;
-        let text: Vec<String> = texts
-            .iter()
-            .map(|t| {
-                let t = doc.resolve(t);
-                let s = t.as_string().filter(|s| s.bytes.len() <= MAX_RECORDED_TEXT)?;
-                Some(s.to_text())
-            })
-            .collect::<Option<_>>()?;
-        let hf = Self {
-            text: text.try_into().ok()?,
-            font: match value(b"Font")?.as_name()? {
-                b"Helvetica" => added::Family::Helvetica,
-                b"Times" => added::Family::Times,
-                b"Courier" => added::Family::Courier,
-                _ => return None,
-            },
-            font_size: value(b"Size")?.as_f64()?,
-            color: numbers(doc, d.get(b"Color")?)?,
-            underline: flag(b"Underline")?,
-            margins: numbers(doc, d.get(b"Margins")?)?,
-            start_number: u32::try_from(value(b"Start")?.as_int()?).ok()?,
-            shrink: flag(b"Shrink")?,
-        };
-        let sane = hf.check().is_ok() && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
-        sane.then_some(hf)
+        Self::from_object_within(doc, o, &mut usize::MAX)
     }
+
+    /// [`from_object`](Self::from_object), converting at most `budget` bytes of text, which it
+    /// takes from: `None` once that is spent. Bounds what one scan of a document converts.
+    pub(crate) fn from_object_within(doc: &Document, o: &Object, budget: &mut usize) -> Option<Self> {
+        #[cfg(test)]
+        DECODED.with(|n| n.set(n.get() + 1));
+        // Every value resolved, as a rewriting tool may make any of them indirect, and read in
+        // place: nothing is copied before it is checked.
+        read(doc, o, |o| {
+            let d = o.as_dict()?;
+            let flag = |key: &[u8]| {
+                read(doc, d.get(key)?, |v| match v {
+                    Object::Bool(b) => Some(*b),
+                    _ => None,
+                })
+            };
+            // The count and each size are checked before anything is decoded.
+            let text: Vec<String> = read(doc, d.get(b"Text")?, |texts| {
+                let texts = texts.as_array().filter(|a| a.len() == 6)?;
+                texts
+                    .iter()
+                    .map(|t| {
+                        read(doc, t, |t| {
+                            let s = t.as_string().filter(|s| s.bytes.len() <= MAX_RECORDED_TEXT)?;
+                            *budget = budget.checked_sub(s.bytes.len())?;
+                            Some(s.to_text())
+                        })
+                    })
+                    .collect()
+            })?;
+            let hf = Self {
+                text: text.try_into().ok()?,
+                font: read(doc, d.get(b"Font")?, |v| match v.as_name()? {
+                    b"Helvetica" => Some(added::Family::Helvetica),
+                    b"Times" => Some(added::Family::Times),
+                    b"Courier" => Some(added::Family::Courier),
+                    _ => None,
+                })?,
+                font_size: read(doc, d.get(b"Size")?, Object::as_f64)?,
+                color: numbers(doc, d.get(b"Color")?)?,
+                underline: flag(b"Underline")?,
+                margins: numbers(doc, d.get(b"Margins")?)?,
+                start_number: read(doc, d.get(b"Start")?, |v| u32::try_from(v.as_int()?).ok())?,
+                shrink: flag(b"Shrink")?,
+            };
+            let sane = hf.check().is_ok() && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
+            sane.then_some(hf)
+        })
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many settings entries [`HeaderFooter::from_object_within`] has read on this thread.
+    pub(crate) static DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The header and footer settings a [`SETTINGS_KEY`] entry records, if it records ones that
