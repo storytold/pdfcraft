@@ -72,7 +72,7 @@ pub(crate) fn page_input(ui: &egui::Ui, input: CropPageInput<'_>) -> bool {
                 let (a, b) = (to_user(xf, info, page, r.left_top()), to_user(xf, info, page, r.right_bottom()));
                 let rect = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
                 // Nothing is cropped yet: Set Page Boxes opens on these margins (#5695).
-                view.crop_marquee = Some(rect);
+                view.crop_marquee = Some((page, rect));
                 return true;
             }
         }

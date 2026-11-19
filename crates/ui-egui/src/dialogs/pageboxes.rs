@@ -29,15 +29,24 @@ pub struct BoxesDraft {
     pub range: Range,
     /// The draft was seeded from this page and box (re-seed when either changes).
     pub seeded: Option<(usize, PageBox)>,
+    /// The page the dialog is for when it is not the current one: the page a crop rectangle was
+    /// drawn on (#5695). That page may be mostly scrolled away, so the page shown most, which
+    /// becomes current, can be another. `None` is the current page.
+    pub page: Option<usize>,
 }
 
 impl Default for BoxesDraft {
     fn default() -> Self {
-        Self { which: PageBox::Crop, unit: Unit::Inches, margins: [0.0; 4], range: Range::All, seeded: None }
+        Self { which: PageBox::Crop, unit: Unit::Inches, margins: [0.0; 4], range: Range::All, seeded: None, page: None }
     }
 }
 
 impl BoxesDraft {
+    /// The page (0-based) the dialog is for, given the view's current page.
+    pub fn page_or(&self, current: usize) -> usize {
+        self.page.unwrap_or(current)
+    }
+
     /// The pages (0-based) the dialog applies to.
     pub fn pages(&self, current: usize, count: usize) -> Vec<usize> {
         match self.range {
@@ -63,6 +72,7 @@ impl BoxesDraft {
             .map(|v| if v.is_finite() { (v.max(0.0) * user_unit * 100.0).round() / 100.0 } else { 0.0 });
         // Seeded for this page and box, so the dialog keeps these margins instead of the page's.
         self.seeded = Some((page, PageBox::Crop));
+        self.page = Some(page);
     }
 
     /// The edit for the draft. `user_units` is each page's `/UserUnit` (points per user-space unit):
@@ -118,9 +128,10 @@ fn box_index(b: PageBox) -> usize {
 /// Draw the dialog body; returns (apply, cancel).
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let Some((i, id)) = app.active_ids() else { return (false, true) };
-    let current = app.views[i].current;
     let Some(doc) = app.session.get(id) else { return (false, true) };
     let boxes = doc.page_boxes();
+    // The page this is for: the one a crop rectangle was drawn on, else the current one.
+    let current = app.boxes_draft.page.filter(|p| *p < boxes.len()).unwrap_or(app.views[i].current);
     let page_unit = doc.page_user_unit(current);
     let count = boxes.len().max(1);
     let units = app.units;
@@ -330,6 +341,7 @@ mod tests {
         assert_eq!(d.range, Range::Current);
         assert_eq!(d.margins, [0.0, 40.0, 59.67, 40.0]);
         assert_eq!(d.seeded, Some((3, PageBox::Crop)));
+        assert_eq!(d.page_or(0), 3, "for the page drawn on, whichever is current");
         assert_eq!(d.edit(3, 5, &[]), Edit::SetPageBox { pages: vec![3], which: PageBox::Crop, spec: BoxSpec::Margins([0.0, 40.0, 59.67, 40.0]) });
         // A coordinate that is not a number never gives a margin the engine refuses.
         d.seed_crop_rect(0, [0.0, 0.0, 300.0, 400.0], [f64::NAN, 10.0, 290.0, f64::INFINITY], f64::NAN, Unit::Points);

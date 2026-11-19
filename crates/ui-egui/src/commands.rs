@@ -454,6 +454,7 @@ impl PdfCraftApp {
             }
             "page.boxes" => {
                 self.boxes_draft.seeded = None;
+                self.boxes_draft.page = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
             "page.extract" => self.open_extract_dialog(),
