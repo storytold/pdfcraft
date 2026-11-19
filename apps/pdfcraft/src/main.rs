@@ -385,8 +385,8 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
 		}
 	}
 	
-	// Linux keeps its existing runtime icon.
-	#[cfg(target_os = "linux")]
+	// Other desktop targets, such as Linux and FreeBSD, keep the runtime icon.
+	#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 	match eframe::icon_data::from_png_bytes(APP_ICON_PNG) {
 		Ok(icon) => viewport = viewport.with_icon(icon),
 		Err(e) => log::warn!("app icon: {e}"),
