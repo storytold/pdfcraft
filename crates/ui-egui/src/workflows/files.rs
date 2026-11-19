@@ -666,7 +666,7 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            match self.session.insert_source(id, &name, &Arc::new(bytes)) {
+            match self.session.insert_source_inline(id, &name, &Arc::new(bytes)) {
                 Ok((pages, bytes)) => {
                     if self.apply_edit(Edit::InsertPagesFrom {
                         name,

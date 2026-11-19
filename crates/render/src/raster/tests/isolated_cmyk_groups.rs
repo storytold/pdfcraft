@@ -88,11 +88,12 @@ endstream endobj
         assert!(distance(&group, &square) <= 3, "{mode}: group {group:?}, square {square:?}");
     }
 
-    // A group whose contents have no ink tints (here the second element is RGB) is
-    // composited in RGB exactly as before: the same as a group blending in DeviceRGB.
-    let rgb = |_: [f32; 4]| "1 0 0 rg".to_string();
-    let cmyk_group = render("/CS /DeviceCMYK /I true", &rgb);
-    let rgb_group = render("/CS /DeviceRGB /I true", &rgb);
+    // A group whose contents have no ink tints (here the second element draws an RGB image
+    // over the page) is composited in RGB exactly as before: the same as a group blending
+    // in DeviceRGB.
+    let image = |_: [f32; 4]| "q 370 0 0 60 0 0 cm BI /W 1 /H 1 /CS /DeviceRGB /BPC 8 /F /AHx ID ff0000> EI Q".to_string();
+    let cmyk_group = render("/CS /DeviceCMYK /I true", &image);
+    let rgb_group = render("/CS /DeviceRGB /I true", &image);
     assert_eq!(cmyk_group.rgba, rgb_group.rgba, "contents without tints are drawn as before");
 }
 
@@ -247,6 +248,32 @@ trailer << /Root 1 0 R >>
     p.rgba[((y * p.width + x) * 4) as usize..][..3].to_vec()
 }
 
+/// An RGB colour painted in an isolated `DeviceCMYK` group is blended as the process ink that
+/// draws back to it through the CMYK profile (hayro-interpret patch (104)), instead of
+/// sending the whole group back to RGB blending.
+///
+/// Under `/BM /Difference` with black ink, a colour's cyan, magenta and yellow are
+/// complemented and its black kept (ISO 32000-2 §11.3.4), so 50% grey, mostly cyan, magenta
+/// and yellow ink, comes out a warm grey: neither the neutral grey of RGB blending nor the
+/// near-black of a grey made from black ink alone. Acrobat draws the same blend on a CMYK page
+/// as (137, 112, 106). Painted without a blend, a colour inside the profile's gamut draws as
+/// itself, and pure red is clipped to the profile's red, as in Acrobat.
+#[test]
+fn an_rgb_colour_in_an_isolated_cmyk_group_blends_as_its_ink() {
+    let resources = "/ExtGState << /D << /BM /Difference >> >>";
+    let pixel = |group: &str| cmyk_group_pixel([100, 100], "/G Do", [20, 20, 80, 80], group, resources, (50, 50));
+    let near = |a: &[u8], b: [u8; 3], within: u8| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= within);
+
+    let blended = pixel("0.5 0.5 0.5 rg 20 20 60 60 re f /D gs 0 0 0 1 k 20 20 60 60 re f");
+    assert!(near(&blended, [137, 112, 106], 10), "grey under Difference with black: {blended:?}");
+
+    // (colour, expected pixel, how far from it)
+    for (rgb, expected, within) in [("0.8 0.4 0.2", [204, 102, 51], 3), ("0.3 0.7 0.4", [77, 179, 102], 3), ("1 0 0", [238, 32, 37], 8)] {
+        let drawn = pixel(&format!("{rgb} rg 20 20 60 60 re f"));
+        assert!(near(&drawn, expected, within), "{rgb} drew as {drawn:?}, expected {expected:?}");
+    }
+}
+
 /// From the review of #5228: a shading pattern painted before the group left its pattern
 /// transform on the context, and the finished group was drawn through it, so the cyan half
 /// of the group showed magenta. The group must look the same whether or not a pattern was
@@ -324,4 +351,16 @@ trailer << /Root 1 0 R >>
         // magenta, red and blue high and green low.
         assert!(rgb[1] > 120 && rgb[0] < 60 && rgb[2] < 120, "blended in CMYK, green: {rgb:?}");
     }
+}
+
+/// An RGB colour with a non-finite component has no tints: converting it to RGB first would
+/// give some finite colour that is not its ink.
+#[test]
+fn an_rgb_colour_with_a_non_finite_component_has_no_tints() {
+    use hayro::hayro_interpret::color::AlphaColor;
+    use hayro::hayro_interpret::color::Color;
+    let rgb = |c: [f32; 3]| Color::from_rgba(AlphaColor::new([c[0], c[1], c[2], 1.0])).ink_tints();
+    assert!(rgb([0.5, 0.5, 0.5]).is_some());
+    assert_eq!(rgb([f32::NAN, 0.5, 0.5]), None);
+    assert_eq!(rgb([0.5, f32::INFINITY, 0.5]), None);
 }

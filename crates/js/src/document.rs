@@ -1,4 +1,6 @@
-use super::host::{FieldKey, arg, colour, error, function, host, read, s, set_value, strings, text, text_line, value_of, write};
+use super::host::{
+    FieldKey, arg, charge, colour, error, function, host, kind_of, read, s, strings, text, text_bytes, text_line, value_for, value_of, write,
+};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
@@ -41,8 +43,9 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-            let vals = strings(&arg(args, 0), c)?;
-            write(c, name, |f| set_value(f, vals))?;
+            let vals = value_for(kind_of(c, name)?, strings(&arg(args, 0), c)?);
+            charge(c, name, |f| text_bytes(&f.value), text_bytes(&vals))?;
+            write(c, name, |f| f.value = vals)?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -104,6 +107,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let text_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
+            charge(c, name, |f| f.text_color.as_deref().map_or(0, text_bytes), text_bytes(&v))?;
             write(c, name, |f| f.text_color = Some(v.into()))?;
             Ok(JsValue::undefined())
         }
@@ -113,6 +117,7 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
     let fill_color_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
+            charge(c, name, |f| f.fill_color.as_deref().map_or(0, text_bytes), text_bytes(&v))?;
             write(c, name, |f| f.fill_color = Some(v.into()))?;
             Ok(JsValue::undefined())
         }
@@ -279,7 +284,71 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         Ok(JsValue::undefined())
     }
 
+    /// `setAction(cTrigger, cScript)`: install `cScript` as the field's JavaScript for
+    /// `cTrigger`, replacing what it ran before; saved with the document (#269).
+    fn set_action(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+        let trigger = text(&arg(args, 0), c)?;
+        if !SET_ACTION_TRIGGERS.contains(&trigger.as_str()) {
+            return Err(error(format!("setAction: unknown trigger {trigger:?}; use one of {}", SET_ACTION_TRIGGERS.join(", "))));
+        }
+        let script = text(&arg(args, 1), c)?;
+        if let Some(why) = crate::run::refuse(&script) {
+            return Err(error(format!("setAction: {why}")));
+        }
+        write(c, name, |f| {
+            f.actions.retain(|(t, _)| *t != trigger);
+            f.actions.push((trigger, script));
+        })?;
+        Ok(JsValue::undefined())
+    }
+    /// `setItems(oArray)`: replace a combo box's or list box's items. Each item is its text, or
+    /// a `[text, exportValue]` pair. The value stays when an item still has it, and otherwise
+    /// becomes the first item's (#269).
+    fn set_items(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        if !matches!(f.kind, FieldType::ComboBox | FieldType::ListBox) {
+            return Err(error(format!("setItems: {} is not a combo box or list box", f.name)));
+        }
+        let list = arg(args, 0).as_object().filter(JsObject::is_array).ok_or_else(|| error("setItems needs an array of items"))?;
+        let list = JsArray::from_object(list)?;
+        let len = list.length(c)?;
+        if len > MAX_ITEMS as u64 {
+            return Err(error(format!("setItems: at most {MAX_ITEMS} items")));
+        }
+        let mut items = Vec::new();
+        let mut bytes = 0usize;
+        for i in 0..len {
+            let item = list.get(i, c)?;
+            let (label, export) = match item.as_object().filter(JsObject::is_array) {
+                Some(pair) => {
+                    let pair = JsArray::from_object(pair.clone())?;
+                    let label = text(&pair.get(0, c)?, c)?;
+                    let export = pair.get(1, c)?;
+                    let export = if export.is_undefined() { label.clone() } else { text(&export, c)? };
+                    (label, export)
+                }
+                None => {
+                    let label = text(&item, c)?;
+                    (label.clone(), label)
+                }
+            };
+            bytes = bytes.saturating_add(label.len()).saturating_add(export.len());
+            if bytes > MAX_ITEM_BYTES {
+                return Err(error("setItems: the items are too long"));
+            }
+            items.push((export, label));
+        }
+        write(c, name, |f| {
+            let kept: Vec<String> = f.value.iter().filter(|v| items.iter().any(|(export, _)| export == *v)).cloned().collect();
+            f.value = if kept.is_empty() { items.first().map(|(export, _)| vec![export.clone()]).unwrap_or_default() } else { kept };
+            f.options = items;
+        })?;
+        Ok(JsValue::undefined())
+    }
+
     let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
+    let set_action = NativeFunction::from_copy_closure_with_captures(set_action, n.clone());
+    let set_items = NativeFunction::from_copy_closure_with_captures(set_items, n.clone());
     let get_item_at = NativeFunction::from_copy_closure_with_captures(get_item_at, n.clone());
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
@@ -314,12 +383,22 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) 
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
         .function(set_focus, js_string!("setFocus"), 0)
+        .function(set_action, js_string!("setAction"), 2)
+        .function(set_items, js_string!("setItems"), 1)
         .function(button_get_icon, js_string!("buttonGetIcon"), 1)
         .function(button_set_icon, js_string!("buttonSetIcon"), 2)
         .function(button_get_caption, js_string!("buttonGetCaption"), 1)
         .function(button_set_caption, js_string!("buttonSetCaption"), 2)
         .build()
 }
+
+/// The triggers `field.setAction` takes (Acrobat JavaScript reference, Field.setAction).
+const SET_ACTION_TRIGGERS: [&str; 10] =
+    ["MouseUp", "MouseDown", "MouseEnter", "MouseExit", "OnFocus", "OnBlur", "Keystroke", "Validate", "Calculate", "Format"];
+/// Most items one `setItems` call takes, and most bytes of their texts and export values: a
+/// script must not grow a field without bound.
+const MAX_ITEMS: usize = 10_000;
+const MAX_ITEM_BYTES: usize = 1 << 20;
 
 // ── the document (global object) ────────────────────────────────────────────────────────────
 
@@ -408,4 +487,95 @@ pub(crate) fn page_num_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
     h.doc.page = p;
     h.request(Request::GoToPage(p));
     Ok(JsValue::undefined())
+}
+
+// ── page templates (#1429) ──────────────────────────────────────────────────────────────────
+
+/// A Template object (`this.getTemplate(name)`): its `name`, whether it is `hidden` (setting it
+/// shows or hides the template's page), and `spawn` to add a page from it.
+pub(crate) fn template_object(ctx: &mut Context, name: &str) -> JsObject {
+    let n = JsString::from(name);
+    fn get_name(_: &JsValue, _: &[JsValue], name: &JsString, _c: &mut Context) -> JsResult<JsValue> {
+        Ok(JsValue::from(name.clone()))
+    }
+    fn get_hidden(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let name = name.to_std_string_escaped();
+        let hidden = host(c)?.borrow().doc.templates.iter().find(|(n, _)| *n == name).is_some_and(|(_, h)| *h);
+        Ok(JsValue::from(hidden))
+    }
+    fn set_hidden(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let hidden = arg(args, 0).to_boolean();
+        let name = name.to_std_string_escaped();
+        let mut h = host(c)?.borrow_mut();
+        // The script reads back what it set.
+        if let Some(t) = h.doc.templates.iter_mut().find(|(n, _)| *n == name) {
+            t.1 = hidden;
+        }
+        h.request(Request::SetTemplateHidden { name, hidden });
+        Ok(JsValue::undefined())
+    }
+    fn spawn(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let request = spawn_request(name.to_std_string_escaped(), args, 0, c)?;
+        host(c)?.borrow_mut().request(request);
+        Ok(JsValue::null())
+    }
+    let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
+    let get_name = function(ctx, NativeFunction::from_copy_closure_with_captures(get_name, n.clone()));
+    let get_hidden = function(ctx, NativeFunction::from_copy_closure_with_captures(get_hidden, n.clone()));
+    let set_hidden = function(ctx, NativeFunction::from_copy_closure_with_captures(set_hidden, n.clone()));
+    let spawn = NativeFunction::from_copy_closure_with_captures(spawn, n);
+    ObjectInitializer::new(ctx)
+        .accessor(js_string!("name"), Some(get_name), None, rw)
+        .accessor(js_string!("hidden"), Some(get_hidden), Some(set_hidden), rw)
+        .function(spawn, js_string!("spawn"), 4)
+        .build()
+}
+
+/// The request for a page from template `name`, from `spawn`'s arguments starting at `first`:
+/// `(nPage, bRename, bOverlay)` or one object holding them. As in Acrobat, the page is 0 unless
+/// given, and the fields are renamed and the page laid over unless asked otherwise.
+fn spawn_request(name: String, args: &[JsValue], first: usize, ctx: &mut Context) -> JsResult<Request> {
+    let given = arg(args, first);
+    let named = given.as_object().filter(|o| !o.is_array());
+    let mut value = |key: &str, index: usize| -> JsResult<JsValue> {
+        match &named {
+            Some(o) => o.get(JsString::from(key), ctx),
+            None => Ok(arg(args, first.saturating_add(index))),
+        }
+    };
+    let (page, rename, overlay) = (value("nPage", 0)?, value("bRename", 1)?, value("bOverlay", 2)?);
+    let page = if page.is_undefined() { 0.0 } else { page.to_number(ctx)? };
+    // NaN, negative and huge numbers land on the first page and past the last, where the
+    // document clamps them.
+    let page = if page.is_finite() {
+        page.max(0.0).min(usize::MAX as f64) as usize
+    } else if page > 0.0 {
+        usize::MAX
+    } else {
+        0
+    };
+    let flag = |v: &JsValue| if v.is_undefined() { true } else { v.to_boolean() };
+    Ok(Request::SpawnTemplate { name, page, rename: flag(&rename), overlay: flag(&overlay) })
+}
+
+/// `this.getTemplate(cName)`: the Template object, or `null` when there is none of that name.
+pub(crate) fn get_template(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = text(&arg(args, 0), ctx)?;
+    let exists = host(ctx)?.borrow().doc.templates.iter().any(|(n, _)| *n == name);
+    Ok(if exists { template_object(ctx, &name).into() } else { JsValue::null() })
+}
+
+/// `this.spawnPageFromTemplate(cTemplate, nPage, bRename, bOverlay)`: the older way to spawn.
+pub(crate) fn spawn_page_from_template(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    // `({ cTemplate, nPage, bRename, bOverlay })` names its arguments, the template included.
+    let (name, first) = match arg(args, 0).as_object().filter(|o| !o.is_array()) {
+        Some(o) => (text(&o.get(js_string!("cTemplate"), ctx)?, ctx)?, 0),
+        None => (text(&arg(args, 0), ctx)?, 1),
+    };
+    if !host(ctx)?.borrow().doc.templates.iter().any(|(n, _)| *n == name) {
+        return Err(error(format!("there is no template named {name}")));
+    }
+    let request = spawn_request(name, args, first, ctx)?;
+    host(ctx)?.borrow_mut().request(request);
+    Ok(JsValue::null())
 }
