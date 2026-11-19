@@ -1201,6 +1201,98 @@ fn reset_layers_returns_to_the_files_visibility() {
     assert!(!s.reset_layers(DocId(999)));
 }
 
+/// #7411: a full Save As renumbers the objects (the layer groups move from 9 and 10 to the lowest
+/// free numbers); the open document keeps the layer the user hid hidden, and the other shown.
+#[test]
+fn a_full_save_as_keeps_the_layer_choices_of_the_open_document() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    // Objects 5 to 8 are not used, so a rewrite closes the gap.
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let hidden = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let (red, blue) = colours(&s);
+    assert!(red > 100 && blue > 100, "both layers show as the file opens: {red} red, {blue} blue");
+    assert!(s.set_layer_visible(id, 0, false));
+    assert_eq!(colours(&s).0, 0, "the red rectangle is hidden");
+    let before = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+
+    let after = s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    assert_ne!(before, after, "the rewrite renumbered the layer groups");
+    assert_eq!(hidden(&s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)]);
+    let (red, blue) = colours(&s);
+    assert_eq!(red, 0, "the page is still drawn without the red rectangle");
+    assert!(blue > 100, "and with the blue one: {blue}");
+}
+
+/// #7411: undo history survives the full Save As, whose renumbering the restored graph does not
+/// share. Undo and redo carry the user's layer choices over by name, so the layer hidden before the
+/// save stays hidden in the layer list and in the pixels, and the renderer's overrides name the
+/// numbers the restored graph has.
+#[test]
+fn undo_and_redo_after_a_full_save_as_keep_the_hidden_layer_hidden() {
+    let content = b"/OC /R BDC 1 0 0 rg 10 10 40 80 re f EMC /OC /B BDC 0 0 1 rg 110 10 40 80 re f EMC";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [9 0 R 10 0 R] /D << /BaseState /ON /Order [9 0 R 10 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /R 9 0 R /B 10 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+    ];
+    objs.extend((5..=8).map(|_| b"null".to_vec()));
+    objs.push(b"<< /Type /OCG /Name (Red rectangle) >>".to_vec());
+    objs.push(b"<< /Type /OCG /Name (Blue rectangle) >>".to_vec());
+    let mut s = Session::new();
+    let id = s.open("layers.pdf", None, Arc::new(pdf_of_objects(&objs)), None).unwrap();
+    let colours = |s: &Session| {
+        let page = render_page(s, id);
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, blue)
+    };
+    let layers = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| (l.name.clone(), l.visible)).collect::<Vec<_>>();
+    let ids = |s: &Session| s.get(id).unwrap().info.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap();
+    assert!(s.set_layer_visible(id, 0, false));
+    let saved = s.save_full_bytes(id).unwrap();
+    s.mark_saved(id, saved, Some("/tmp/out/layers.pdf".into())).unwrap();
+    let saved_ids = ids(&s);
+    let expect_red_hidden = |s: &Session, step: &str| {
+        assert_eq!(layers(s), [("Red rectangle".to_string(), false), ("Blue rectangle".to_string(), true)], "{step}: the layer list");
+        let (red, blue) = colours(s);
+        assert_eq!((red, blue > 100), (0, true), "{step}: the pixels show the blue rectangle only");
+    };
+    expect_red_hidden(&s, "after the save");
+
+    s.undo(id).unwrap();
+    assert_ne!(ids(&s), saved_ids, "undo brings back the numbers from before the save");
+    expect_red_hidden(&s, "after undo");
+    s.redo(id).unwrap();
+    assert_eq!(ids(&s), saved_ids, "redo brings back the numbers the save wrote");
+    expect_red_hidden(&s, "after redo");
+    // Choices made after the trip still apply to the numbers now in use.
+    assert!(s.set_layer_visible(id, 0, true));
+    assert!(colours(&s).0 > 100, "the red rectangle shows again when asked for");
+}
+
 #[test]
 fn edits_to_unknown_documents_are_rejected() {
     let (mut s, _) = session_with(1);
@@ -3190,16 +3282,16 @@ fn need_appearances_form() -> Vec<u8> {
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 11 0 R 12 0 R 15 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada Lovelace) /Rect [20 250 180 270] /P 3 0 R /AP << /N 8 0 R >> >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (town) /V <FEFF0050006C007A00650148> /Rect [20 200 180 220] /P 3 0 R /AP << /N 9 0 R >> >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00200159> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V <FEFF00420072006E006F00205317> /Rect [20 150 180 170] /P 3 0 R /AP << /N 10 0 R >> >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC EMC"),
         stream("/Tx BMC BT /Helv 10 Tf 2 5 Td (Brno r) Tj ET EMC"),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (street) /V (Main Street) /Rect [20 100 180 120] /P 3 0 R >>".into(),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F0159006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (river) /V <FEFF004F5317006500630068> /Rect [20 50 180 70] /P 3 0 R /AP << /N 13 0 R >> >>".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Bg 14 0 R >> >> /Length 10 >>\nstream\nq /Bg Do Q\nendstream".into(),
         stream("0.9 g 0 0 160 20 re f"),
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F0159006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (lake) /V <FEFF004F5317006500630068> /Rect [20 20 180 40] /P 3 0 R /AP << /N 16 0 R >> >>".into(),
         "<< /Type /XObject /Subtype /Form /BBox [0 0 160 20] /Resources << /XObject << /Fm 17 0 R >> >> /Length 10 >>\nstream\nq /Fm Do Q\nendstream".into(),
         stream("BT /Helv 10 Tf 2 5 Td (Orech) Tj ET"),
     ];
@@ -3229,7 +3321,8 @@ fn normal_appearance(doc: &pdfcraft_cos::Document, num: u32) -> String {
 
 /// #5939 review: the first signature removes `/NeedAppearances`, so the fields are drawn from
 /// their values first; without that, `name` and `town` would show their empty placeholders. A
-/// field whose own appearance draws its value keeps it rather than get a `?` for `ř`.
+/// field whose own appearance draws its value keeps it rather than get a `?` for `北`, which no
+/// font PdfCraft draws with has; `ň` is drawn from the bundled Inter face (#6822).
 #[test]
 fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -3241,7 +3334,8 @@ fn the_first_signature_draws_the_fields_need_appearances_left_to_the_viewer() {
     let doc = pdfcraft_cos::Document::open(signed.clone()).unwrap();
     assert!(!pdfcraft_forms::need_appearances(&doc));
     assert!(normal_appearance(&doc, 4).contains("(Ada Lovelace) Tj"), "{}", normal_appearance(&doc, 4));
-    assert!(normal_appearance(&doc, 5).contains("(Plze?) Tj"), "{}", normal_appearance(&doc, 5));
+    let town = normal_appearance(&doc, 5);
+    assert!(town.contains("(Plze) Tj") && town.contains("/PCLa") && !town.contains('?'), "{town}");
     assert!(normal_appearance(&doc, 6).contains("(Brno r) Tj"), "{}", normal_appearance(&doc, 6));
     assert!(normal_appearance(&doc, 11).contains("(Main Street) Tj"), "{}", normal_appearance(&doc, 11));
     // Its own appearance only paints a background, so `river` gets the drawing, `?` and all.
@@ -15360,6 +15454,39 @@ fn mixed_widget_icons_are_normalized_with_history_and_save() {
         }
     }
 }
+/// #7409: a form-data file whose only known value the form refuses imports nothing, and says which
+/// field refused it; the document, its Undo and its Redo stay as they were. A file with other
+/// values that took still imports them, and the repair log names the field that refused.
+#[test]
+fn form_data_the_form_refuses_is_reported_and_leaves_the_document_alone() {
+    let (mut s, id) = session_with(1);
+    let combo = NewField::Combo { options: vec!["A".into(), "B".into()], editable: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 250.0, 180.0, 272.0], kind: combo, name: Some("Choice".into()) }).unwrap();
+    let notes = NewField::Text { multiline: false };
+    s.apply(id, Edit::AddField { page: 0, rect: [20.0, 210.0, 180.0, 232.0], kind: notes, name: Some("Notes".into()) }).unwrap();
+    let choose =
+        |s: &mut Session, v: &str| s.apply(id, Edit::SetFieldValue { name: "Choice".into(), value: FieldValue::Choice(vec![v.into()]) }).unwrap();
+    choose(&mut s, "A");
+    choose(&mut s, "B");
+    s.undo(id).unwrap();
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    let import = |s: &mut Session, xml: &str| s.apply(id, Edit::ImportData { name: "data.xml".into(), bytes: Arc::new(xml.as_bytes().to_vec()) });
+    let (undo, redo) = (s.get(id).unwrap().can_undo().map(String::from), s.get(id).unwrap().can_redo().map(String::from));
+    assert!(redo.is_some());
+
+    let err = import(&mut s, "<fields><Choice>INVALID</Choice></fields>").unwrap_err();
+    assert!(err.to_string().contains("nothing was imported") && err.to_string().contains("\"Choice\""), "{err}");
+    let doc = s.get(id).unwrap();
+    assert_eq!((doc.can_undo().map(String::from), doc.can_redo().map(String::from)), (undo, redo), "no Import step, Redo kept");
+    assert_eq!(value(&s, "Choice"), vec!["A".to_string()]);
+
+    // Some values took: the file imports, and the refused field is named in the repair log.
+    import(&mut s, "<fields><Choice>INVALID</Choice><Notes>hello</Notes></fields>").unwrap();
+    assert_eq!((value(&s, "Choice"), value(&s, "Notes")), (vec!["A".to_string()], vec!["hello".to_string()]));
+    let log = s.get(id).unwrap().repair_log().to_vec();
+    assert!(log.iter().any(|l| l.contains("refused") && l.contains("\"Choice\"") && !l.contains("Notes")), "{log:?}");
+}
+
 /// A comment imported or pasted without the appearance its file carried (unreadable there) is
 /// said in the repair log, which the interface shows and the tools return.
 #[test]
