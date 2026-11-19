@@ -109,7 +109,7 @@ fn number_pages_dialog_labels_the_selected_pages() {
     h.state_mut().views[0].select_pages(&[0, 1]);
     assert!(h.execute("page.number"));
     h.run_steps(3);
-    h.get_by_label("Number pages");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Number pages");
     h.get_by_value("1, 2, 3").click(); // the style menu
     h.run_steps(2);
     h.get_by_label("i, ii, iii").click();
@@ -274,7 +274,7 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     };
     open(&mut h);
     assert!(crate::support::dialog_open(&h), "the dialog opens");
-    h.get_by_label("New bookmarks from text styles");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "New bookmarks from text styles");
     assert_eq!(h.state().text_style_draft.levels, [Some(0), None, None, None], "the largest style is offered for level 1");
     // Cancel: nothing made.
     h.get_by_label("Cancel").click();
