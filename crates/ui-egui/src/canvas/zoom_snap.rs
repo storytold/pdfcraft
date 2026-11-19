@@ -27,20 +27,22 @@ pub enum AreaChoice {
 
 /// The Snapshot tool, built per pass over the placed pages. A drag reports the page and the
 /// rectangle in page view points; a click with no drag, or under 2 points either way, reports nothing.
-pub(crate) struct SnapshotTool {
+pub(crate) struct SnapshotTool<'a> {
     placed: Vec<PlacedPage>,
     /// Per placed page: its unrotated view-space size.
     sizes: Vec<(usize, (f32, f32))>,
     rotation: u16,
-    drag: PageBoxDrag,
+    /// The session's drag, kept from the press to the release.
+    drag: &'a mut PageBoxDrag,
     done: Option<(usize, [f32; 4])>,
 }
 
-impl SnapshotTool {
-    /// A tool over `placed`, in a view turned by `rotation`; `page_size_of` gives a page's size in view points.
-    pub(crate) fn new(placed: &[PlacedPage], rotation: u16, page_size_of: impl Fn(usize) -> (f32, f32)) -> Self {
+impl<'a> SnapshotTool<'a> {
+    /// A tool over `placed`, in a view turned by `rotation`, with its rectangle in `drag`; `page_size_of` gives a
+    /// page's size in view points.
+    pub(crate) fn new(drag: &'a mut PageBoxDrag, placed: &[PlacedPage], rotation: u16, page_size_of: impl Fn(usize) -> (f32, f32)) -> Self {
         let sizes = placed.iter().map(|p| (p.page, page_size_of(p.page))).collect();
-        Self { placed: placed.to_vec(), sizes, rotation, drag: PageBoxDrag::default(), done: None }
+        Self { placed: placed.to_vec(), sizes, rotation, drag, done: None }
     }
 
     /// The area the last release made, once.
@@ -54,7 +56,7 @@ impl SnapshotTool {
     }
 }
 
-impl CanvasTool for SnapshotTool {
+impl CanvasTool for SnapshotTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
         match page_under(&self.placed, pointer.pos) {
             Some(placed) if self.drag.press(placed, pointer.pos) => ToolAction::Claimed,

@@ -5,7 +5,8 @@ use std::ops::Range;
 use craft::behavior::kurbo::Point;
 use craft::pages::ui::PageBody;
 use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun, TextEditor, TextEditorHost, TextSelection};
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::runtime::focus::FocusRequest;
 use egui::{Color32, FontId, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::{BorderShape, Edit};
 use pdfcraft_render::DocInfo;
@@ -254,11 +255,9 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSes
     // Escape cancels: the page's Escape belongs to the editor while a box is open.
     // A box still waiting for its focus was started in this pass by the press the editor also sees as a press on the
     // canvas background: that press is the one that opened it, not a click away from it.
-    let fresh = tb.focus;
-    let out = TextEditor::new(tl!("Text to place"), &mut host, Bind::bound(fill_selection)).esc_commits(false).show_at(ui, rect);
-    if std::mem::take(&mut tb.focus) {
-        out.response.request_focus();
-    }
+    let fresh = std::mem::take(&mut tb.focus);
+    let editor = TextEditor::new(tl!("Text to place"), &mut host, Bind::bound(fill_selection)).esc_commits(false);
+    let out = if fresh { editor.request_focus(FocusRequest::Take) } else { editor }.show_at(ui, rect);
     match out.ended.filter(|end| !(fresh && *end == EditorEnd::Commit))? {
         EditorEnd::Cancel => {
             *fill_text = None;

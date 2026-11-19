@@ -122,7 +122,7 @@ fn create_signing_id(h: &mut Harness<'static, PdfCraftApp>) {
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure), "no IDs yet: configure one");
 
     // Create a new digital ID (P-256 keeps the test fast).
-    h.get_by_label("Configure a Digital ID for Signing");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Configure a Digital ID for Signing");
     field(h, "Name").click();
     h.run_steps(1);
     field(h, "Name").type_text("Grace Hopper");
@@ -870,7 +870,7 @@ fn an_imported_digital_id_can_be_removed() {
     assert!(p12.exists(), "the file itself is not deleted");
     // With no IDs left the dialog offers to configure one.
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure));
-    h.get_by_label("Configure a Digital ID for Signing");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Configure a Digital ID for Signing");
 }
 
 /// Sign-and-save must use the same destination metadata policy as Save As.
