@@ -23,7 +23,7 @@ impl PdfCraftApp {
     /// the window to the front.
     pub(crate) fn open_intake(&mut self, ctx: &egui::Context) {
         // Work the user has started holds even after its tab closes or Home is selected.
-        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.modal_open() || self.password_prompt.is_some();
+        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.modal_open();
         for batch in self.intake.take() {
             match batch {
                 Intake::Open(paths) => {
@@ -74,14 +74,7 @@ impl PdfCraftApp {
         let opening = !self.pending_opens.is_empty();
         #[cfg(target_arch = "wasm32")]
         let opening = false;
-        if self.startup_files.is_empty()
-            || opening
-            || self.password_prompt.is_some()
-            || self.image_import.is_some()
-            || self.modal_open()
-            || self.pending_link.is_some()
-            || self.pending_remote_link.is_some()
-        {
+        if self.startup_files.is_empty() || opening || self.image_import.is_some() || self.modal_open() {
             return;
         }
         for (name, bytes) in std::mem::take(&mut self.startup_files) {
