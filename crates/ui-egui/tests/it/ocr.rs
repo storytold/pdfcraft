@@ -30,6 +30,9 @@ fn recognize_text_dialog_offers_hungarian() {
     h.run_steps(2);
     h.get_by_value("English").click();
     h.run_steps(2);
+    // The language is at the end of a scrollable popup; bring the option into view first.
+    h.get_by_label("Hungarian").scroll_to_me();
+    h.run_steps(4);
     h.get_by_label("Hungarian").click();
     h.run_steps(2);
     assert_eq!(h.state().ocr_draft.language, "hu");
