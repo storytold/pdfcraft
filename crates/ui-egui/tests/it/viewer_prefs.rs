@@ -69,7 +69,7 @@ fn shown(h: &Harness<'static, PdfCraftApp>) -> (bool, bool, bool) {
     (
         h.query_by_label("Find tools and commands").is_some(),
         h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some("File")).is_some(),
-        h.query_by_label("Toggle fit page / fit width").is_some(),
+        h.query_by_label("Toggle fit").is_some(),
     )
 }
 
