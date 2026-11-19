@@ -426,12 +426,6 @@ pub(crate) fn field_press(
     let form = doc.form.as_slice();
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return };
     let usable = usable(f, w, allowed);
-    eprintln!(
-        "DIAG list_box_clicks_select_directly_and_ctrl_click_toggles_multi: field_press {} widget {wi} usable {usable} down {} release_click {}",
-        f.name,
-        matches!(press.phase, PressPhase::Down { .. }),
-        matches!(press.phase, PressPhase::Release { click: true, .. })
-    );
     match &press.phase {
         PressPhase::Down { start, .. } => {
             // The press runs the widget's Mouse Down JavaScript, as in Acrobat (#269).

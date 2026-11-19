@@ -83,11 +83,6 @@ fn select_after_edit(
                 view.session.comments.select_keys(&[(a.page, n)]);
             }
             view.session.comments.reveal = true;
-            eprintln!(
-                "DIAG a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool: AddAnnotation {:?} newest {newest:?} selection {:?}",
-                std::mem::discriminant(&a.shape),
-                view.session.comments.selection()
-            );
             // A new highlight opens its note for typing straight away, as in Acrobat,
             // unless a note typed into another card is still unsaved.
             if let (pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, .. }, Some(n)) = (&a.shape, newest)
@@ -113,7 +108,6 @@ fn select_after_edit(
         // can be moved or copied again; anything else in a batch clears the selection.
         Edit::Batch { edits, .. } if edits.iter().all(|e| matches!(e, Edit::MoveAnnotation { .. })) => {}
         Edit::Batch { edits, .. } => {
-            eprintln!("DIAG a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool: batch of {} cleared the selection", edits.len());
             view.session.comments.clear_selection();
         }
         // The copies the paste added (and nothing that was there before): select them all.
