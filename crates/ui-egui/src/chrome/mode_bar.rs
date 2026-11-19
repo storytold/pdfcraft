@@ -51,10 +51,13 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         if menus {
             app.menu_bar_ui(ui);
         }
-        // The document may hide the tools (`crate::viewer_prefs`); the buttons stay.
+        // The document may hide the tools (`crate::viewer_prefs`): the mode strip, the buttons and the search.
         let shown = MODES.iter().position(|(mode, _)| *mode == app.mode);
         Bar::new(tl!("Modes"), BarKind::Tool)
             .trailing(|ui, _| {
+                if hidden.toolbar {
+                    return;
+                }
                 IconButton::command(IconId::new("printer"), "print.dialog").show(ui);
                 IconButton::command(IconId::new("save"), "file.save").show(ui);
                 IconButton::command(IconId::new("info"), "file.properties").show(ui);

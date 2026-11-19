@@ -34,7 +34,7 @@ fn export_dialogs_write_images_and_text() {
     h.run_steps(4);
     assert!(h.execute("export.image"));
     h.run_steps(2);
-    h.get_by_label("Export to Image");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Export to Image");
     h.get_by_label("Export").click();
     h.run_steps(4);
     jobs.run_all();
@@ -53,7 +53,7 @@ fn export_dialogs_write_images_and_text() {
     // Export all images: this document has none, and says so.
     assert!(h.execute("export.all_images"));
     h.run_steps(2);
-    h.get_by_label("Export All Images");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Export All Images");
     h.get_by_label("Export").click();
     h.run_steps(4);
     jobs.run_all();

@@ -39,6 +39,9 @@ pub(crate) const PRESENT_KEYS: &[Chord] = &[Chord::plain(Key::Space), Chord::pla
 pub(crate) struct Presenter {
     /// The page wholly in view, and since when (its transition over).
     shown: Option<(usize, f64)>,
+    /// That page's picture, which the next page's transition starts from: in the frame that turns
+    /// to the next page, the page view no longer places the page before.
+    picture: Option<CachedTexture>,
     turn: Option<Turn>,
     /// Where the pointer last moved to, and when.
     pointer: Option<(Pos2, f64)>,
@@ -98,9 +101,13 @@ impl Presenter {
         self.shown.is_some_and(|(p, _)| p == page)
     }
 
-    /// The pages the page view keeps alive for the transition: the outgoing one.
+    /// The pages the page view keeps alive for the transition: the outgoing one, or the page in
+    /// view, which a turn starts from.
     pub(crate) fn keep_pages(&self) -> Vec<usize> {
-        self.turn.iter().map(|t| t.from_page).collect()
+        match &self.turn {
+            Some(t) => vec![t.from_page],
+            None => self.shown.map(|(page, _)| page).into_iter().collect(),
+        }
     }
 
     /// The direction a page key turns, `Some(forward)`: Space and Enter forward, Backspace and
@@ -219,9 +226,10 @@ pub(super) fn frame(
     if showing != Some(page) && arriving != Some(page) {
         // A new page: play its transition from the page before, when there is one to play.
         let plays = animates && at.display == PageDisplay::Single && at.rotation == 0;
+        let remembered = presenter.picture.filter(|_| showing.is_some());
         let turn = showing.or(arriving).filter(|_| plays).and_then(|from_page| {
             let (effect, seconds) = entry(info, page).and_then(effect_of)?;
-            let from = placed(from_page)?.picture.shown()?;
+            let from = placed(from_page).and_then(|p| p.picture.shown()).or(remembered)?;
             Some(Turn { from_page, from, to_page: page, effect, seconds, started: None })
         });
         // Its display time starts once the page is on screen, not while it still says Rendering…
@@ -276,6 +284,8 @@ pub(super) fn frame(
             }
         }
     }
+
+    presenter.picture = presenter.shown.filter(|(shown, _)| *shown == page).and_then(|_| placed(page)).and_then(|p| p.picture.shown());
 
     // A page with a display time advances once it is up (not past the last page).
     let mut step = None;

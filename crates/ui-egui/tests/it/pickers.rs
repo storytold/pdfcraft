@@ -312,7 +312,7 @@ fn set_checked(r: &mut Rig, label: &str, want: bool) {
 
 /// Replaces what the text field called `label` holds with `text`.
 fn type_into(r: &mut Rig, label: &str, text: &str) {
-    r.get_by_label(label).click();
+    r.get_by_role_and_label(egui::accesskit::Role::TextInput, label).click();
     r.steps(1);
     r.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     r.event(egui::Event::Text(text.into()));
@@ -382,7 +382,11 @@ fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
 
     // The dialog starts with the document's name, which gives the usual names.
     open_extract(&mut h, separate(None));
-    assert_eq!(h.get_by_label("File name").value().as_deref(), Some("doc0"), "the dialog starts with the document's name");
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name").value().as_deref(),
+        Some("doc0"),
+        "the dialog starts with the document's name"
+    );
     confirm_extract(&mut h);
     h.answer(Picked::Paths(vec![dir.clone()]));
     assert!(dir.join("doc0 (page 1).pdf").exists());
@@ -434,7 +438,7 @@ fn extract_pages_takes_the_page_ranges_typed_in_the_dialog() {
     h.state_mut().views[0].select_pages(&[1]);
     assert!(h.execute("page.extract"));
     h.steps(2);
-    assert!(h.get_by_label("Pages").value().unwrap_or_default().is_empty(), "opens on the selection");
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Pages").value().unwrap_or_default().is_empty(), "opens on the selection");
     press(&mut h, "Cancel");
     // Ranges, a backward one and a repeat: in that order, each page once.
     open_extract(&mut h, Extract { pages: Some("5-6, 3-2, 6"), ..Default::default() });
@@ -556,7 +560,7 @@ fn a_watermark_file_from_browse_lands_only_in_the_dialog_that_asked() {
         let mut h = harness(&[1]);
         assert!(h.execute("edit.watermark"));
         h.steps(2);
-        h.get_by_label("File").click();
+        h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "File").click();
         h.steps(2);
         h.get_by_label("Browse…").click();
         h.steps(1);
@@ -601,7 +605,7 @@ fn replace_pages_applies_only_to_the_document_its_dialog_was_opened_on() {
         assert!(h.execute("page.replace"));
         h.steps(2);
         h.answer(Picked::Paths(vec![file.clone()]));
-        h.get_by_label("Replace Pages");
+        h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Replace Pages");
         if switch {
             // A file opened meanwhile (a browser read finishing) becomes the active document.
             h.state_mut().active = Some(1);
@@ -844,10 +848,10 @@ fn a_late_startup_url_waits_for_an_existing_dialog_to_close() {
     let mut h = harness(&[3]);
     assert!(h.execute("app.preferences"));
     h.steps(2);
-    assert!(h.query_by_label("Preferences").is_some(), "the dialog is open");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Preferences").is_some(), "the dialog is open");
     h.deliver("late.pdf", fixture(1));
     h.steps(2);
-    assert!(h.query_by_label("Preferences").is_some(), "the dialog is still open");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Preferences").is_some(), "the dialog is still open");
     assert_eq!(h.state().views.len(), 1);
     h.key_press(egui::Key::Escape);
     h.steps(2);
