@@ -541,7 +541,10 @@ pub(crate) fn listed_size(
     }
     let default = default?;
     let name = media.option().name.as_ref()?;
-    (default.option().name.as_ref() == Some(name)).then(|| default.size())
+    let chosen = default.option().name.as_ref()?;
+    // The same option by namespace and local name: the ticket and the capabilities may bind the
+    // namespace to different prefixes.
+    (chosen.local_name == name.local_name && chosen.namespace_ref() == name.namespace_ref()).then(|| default.size())
 }
 
 /// The PageMediaSize the driver puts in a new job's ticket (the printer's Printing Defaults), with

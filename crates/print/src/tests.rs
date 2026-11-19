@@ -2023,4 +2023,14 @@ fn a_custom_size_is_listed_only_when_the_default_ticket_chooses_it() {
     assert_eq!(size(spool::listed_size(&offered, None)), None, "no default ticket");
     // The Zebra's: the default ticket chooses the custom size, at the stock it is set to.
     assert_eq!(size(spool::listed_size(&offered, Some(&custom(103_886, 76_200)))), Some((103_886, 76_200)));
+    // The same option under another prefix for the same namespace, and the same local name in
+    // another namespace.
+    let custom_as = |prefix: &str, namespace: &str| {
+        media(format!(
+            r#"{HEAD}<psf:Feature name="psk:PageMediaSize"><psf:Option xmlns:{prefix}="{namespace}" name="{prefix}:CustomMediaSize"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeHeight"/></psf:ScoredProperty></psf:Option></psf:Feature><psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">103886</psf:Value></psf:ParameterInit><psf:ParameterInit name="psk:PageMediaSizeMediaSizeHeight"><psf:Value xsi:type="xsd:integer">76200</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+        ))
+    };
+    let keywords = "http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords";
+    assert_eq!(size(spool::listed_size(&offered, Some(&custom_as("k", keywords)))), Some((103_886, 76_200)), "another prefix");
+    assert_eq!(size(spool::listed_size(&offered, Some(&custom_as("ns0000", "http://example.com/vendor")))), None, "another namespace");
 }
