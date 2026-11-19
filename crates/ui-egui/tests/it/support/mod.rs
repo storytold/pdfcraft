@@ -85,7 +85,12 @@ pub fn fire_menu(h: &mut Harness<'static, PdfCraftApp>, command: impl Into<Comma
 
 /// The text of the newest notice card the main window shows, if any: what the app said last.
 pub fn shown_notice(h: &Harness<'_, PdfCraftApp>) -> Option<String> {
-    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned())
+    // A posted notice's text is the card's title; a message and bullet lines follow it.
+    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| {
+        let toast = &card.toast;
+        let parts = toast.title.iter().chain(std::iter::once(&toast.message)).chain(&toast.lines);
+        parts.map(|part| part.as_str()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n")
+    })
 }
 
 /// The services the tests give the app: no wake, no autosave folder, the GitHub update source, a fresh

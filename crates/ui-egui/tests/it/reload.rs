@@ -219,7 +219,7 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         assert_eq!(view.zoom(), 1.0);
         assert_eq!(view.page_input, "iv");
         assert_eq!(h.ctx.memory(|m| m.focused()), Some(editor));
-        h.get(By::new().role(egui::accesskit::Role::TextInput).value("iv"));
+        h.get(By::new().role(egui::accesskit::Role::TextInput).label("Current page").value("iv"));
 
         // Keep the replacement editor's selection and then its caret, without re-focusing it.
         h.event(egui::Event::Text("2".into()));
