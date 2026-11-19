@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use skrifa::{
     FontRef, MetadataProvider,
     instance::{LocationRef, Size},

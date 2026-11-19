@@ -13,6 +13,7 @@ use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 pub(crate) struct CidMapping<'a> {
     pub cid: u16,
     pub glyph: u16,
+    #[allow(dead_code)]
     pub width: f64,
     pub unicode: &'a str,
 }
