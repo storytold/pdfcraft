@@ -24,6 +24,7 @@ use crate::pkcs12::DigitalId;
 use crate::x509::{Certificate, build_chain, build_chain_noted};
 
 mod changes;
+mod field_mdp_check;
 mod listing;
 mod locks;
 mod signing;
@@ -32,12 +33,14 @@ mod validate;
 
 #[cfg(test)]
 use changes::only_grew;
+pub use field_mdp_check::{FieldMdpRules, SignedXfaScope, signed_xfa_scope};
 #[cfg(test)]
 pub(crate) use listing::MAX_FIELD_NAME_BYTES;
 #[cfg(test)]
 use listing::{DISCOVERY_CACHE_LIMIT, Field, MAX_ENTRIES, MAX_FIELDS, MAX_NAME_BYTES, is_document_timestamp, sig_fields};
 pub use listing::{DigestCache, list, list_cached};
 pub(crate) use listing::{walk_sig_fields, widget_shown};
+pub use locks::{FieldMdp, FieldMdpAction, FieldMdpPolicy, field_mdp, signature_field_lock, signed_field_policies};
 pub(crate) use signing::fmt;
 pub use signing::{Appearance, AppearanceLabels, SignOptions, display_date, has_signatures, sign, sign_with_timestamp, timestamp_document};
 pub use types::{Detail, Fill, Modification, Status, TrustStore, WORDINGS, Words, in_english, kind};

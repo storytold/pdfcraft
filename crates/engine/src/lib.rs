@@ -55,6 +55,7 @@ mod scan_colours;
 mod scan_fields;
 mod session;
 pub mod signature_image;
+mod signature_locks;
 pub mod signature_scan;
 mod sources;
 pub mod spooler;

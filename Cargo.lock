@@ -5298,6 +5298,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "pdfcraft-testkit",
+ "pdfcraft-xfa",
  "rc2",
  "ripemd",
  "rsa",

@@ -8313,11 +8313,11 @@ fn on_changes_notes_only_the_exits_that_ran() {
     let mut exited = Vec::new();
     let mut out = crate::js::JsOutput::default();
     let mut stopped = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: true, highlight: false, time_scale: 1 };
-    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited).unwrap();
+    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut stopped, &mut exited, None).unwrap();
     assert!(exited.is_empty(), "no exit ran: {exited:?}");
     let mut out = crate::js::JsOutput::default();
     let mut running = crate::xfa::XfaRun { page_count: 1, out: &mut out, datasets: None, ran_away: false, highlight: false, time_scale: 1 };
-    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited).unwrap();
+    crate::xfa::on_changes(&mut cos, &tpl, &names, &mut running, &mut exited, None).unwrap();
     assert_eq!(exited.len(), 1, "the exit ran: {exited:?}");
 }
 
@@ -8520,6 +8520,234 @@ fn xfa_signing_scripts_run_before_and_after_signing() {
     // Nor with JavaScript off.
     s.set_javascript(false);
     assert!(!s.run_sign_event(id, &sign, SignEvent::Before).unwrap());
+}
+
+/// An unlocked XFA input stays editable when its calculation targets a signed field: the signed
+/// value and its dataset stay unchanged, and the edit reports the skipped calculation.
+#[test]
+fn signed_xfa_manifest_keeps_calculated_values_and_warns_on_input_changes() {
+    let xdp = r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <subform layout="tb">
+  <field name="A" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>1</integer></value></field>
+  <field name="B" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>2</integer></value></field>
+  <field name="C" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>4</integer></value></field>
+  <subform name="Subform1" layout="tb">
+   <field name="D" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>55</integer></value></field>
+   <field name="Sum" w="1in" h="0.3in" access="readOnly"><ui><numericEdit/></ui>
+    <calculate><script contentType="application/x-javascript">Number(A.rawValue) + Number(B.rawValue)</script></calculate></field>
+   <field name="sign" w="2in" h="0.5in"><ui><signature type="PDF1.6"><manifest action="include" use="#locked"/></signature></ui></field>
+  <variables><manifest id="locked">
+   <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].D[0]</ref>
+   <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].Sum[0]</ref>
+   <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].sign[0]</ref>
+  </manifest></variables>
+  </subform>
+  <subform name="Subform2" layout="tb">
+   <field name="E" w="1in" h="0.3in"><ui><numericEdit/></ui></field>
+   <field name="F" w="1in" h="0.3in"><ui><numericEdit/></ui></field>
+   <field name="sign2" w="2in" h="0.5in"><ui><signature type="PDF1.6"><manifest action="exclude" use="#except"/></signature></ui></field>
+   <variables><manifest id="except">
+    <ref>xfa[0].template[0].form1[0].#subform[0].A[0]</ref>
+    <ref>xfa[0].template[0].form1[0].#subform[0].B[0]</ref>
+    <ref>xfa[0].template[0].form1[0].#subform[0].C[0]</ref>
+    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].D[0]</ref>
+    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].Sum[0]</ref>
+    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].sign[0]</ref>
+    <ref>xfa[0].template[0].form1[0].#subform[0].Subform2[0].E[0]</ref>
+   </manifest></variables>
+  </subform>
+ </subform>
+</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data>
+ <form1><A>1</A><B>2</B><C>4</C><Subform1><D>55</D><Sum>3</Sum></Subform1><Subform2><E>7</E><F>8</F></Subform2></form1>
+</xfa:data></xfa:datasets></xdp:xdp>"##;
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("manifest.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).unwrap();
+    let name = |s: &Session, leaf: &str| {
+        s.get(id).unwrap().form.iter().find(|f| f.name == leaf || f.name.ends_with(&format!(".{leaf}[0]"))).unwrap().name.clone()
+    };
+    let (a, b, c, d, sum, e, f, sign_name, sign2_name) = (
+        name(&s, "A"),
+        name(&s, "B"),
+        name(&s, "C"),
+        name(&s, "D"),
+        name(&s, "Sum"),
+        name(&s, "E"),
+        name(&s, "F"),
+        name(&s, "sign"),
+        name(&s, "sign2"),
+    );
+    assert!(!s.get(id).unwrap().form.iter().find(|f| f.name == c).unwrap().read_only());
+    let signed = s.sign(id, &digital_id, SignOptions { field: Some(sign_name), rect: None, ..SignOptions::default() }).unwrap();
+    s.mark_signed(id, signed, None).unwrap();
+    let mdp = pdfcraft_sign::pdf::field_mdp(&s.get(id).unwrap().editor.as_ref().unwrap().cos);
+    assert_eq!(mdp.len(), 1);
+    assert_eq!(mdp[0].action, pdfcraft_sign::pdf::FieldMdpAction::Include);
+    assert!(mdp[0].fields.contains(&d));
+    assert!(mdp[0].fields.contains(&sum));
+    assert!(!mdp[0].fields.contains(&a));
+    assert!(!mdp[0].fields.contains(&sign2_name));
+    assert!(
+        !s.get(id).unwrap().form.iter().find(|field| field.name == sign2_name).unwrap().read_only(),
+        "the unsigned Subform2 signature field must remain available after signing Subform1"
+    );
+    let signed = s.sign(id, &digital_id, SignOptions { field: Some(sign2_name), rect: None, ..SignOptions::default() }).unwrap();
+    s.mark_signed(id, signed, None).unwrap();
+    let mdp = pdfcraft_sign::pdf::field_mdp(&s.get(id).unwrap().editor.as_ref().unwrap().cos);
+    assert_eq!(mdp.len(), 2);
+    let second = mdp.iter().find(|rule| rule.action == pdfcraft_sign::pdf::FieldMdpAction::Exclude).unwrap();
+    assert!(second.fields.contains(&a));
+    assert!(!second.fields.contains(&f));
+    let mut data_only = s.get(id).unwrap().editor.as_ref().unwrap().cos.clone();
+    pdfcraft_xfa::data::write_data_value(&mut data_only, &pdfcraft_xfa::som_to_path("form1[0].Subform1[0].Sum[0]"), "9").unwrap();
+    let changed = Arc::new(pdfcraft_cos::write_incremental(&data_only, &pdfcraft_cos::SaveOptions::default()).unwrap());
+    let data_only = pdfcraft_cos::Document::open(changed.clone()).unwrap();
+    let verdicts = pdfcraft_sign::pdf::list(&data_only, &changed, &sign::TrustStore { certs: vec![digital_id.certificate.clone()] });
+    assert!(
+        verdicts.iter().any(|signature| {
+            matches!(&signature.modification, sign::Modification::Disallowed(kinds) if kinds.contains(&sign::kind::LOCKED_FIELD))
+        })
+    );
+    assert_manifest_calculation_edits(&mut s, id, [&a, &b, &c, &d, &sum, &e, &f]);
+}
+
+fn assert_manifest_calculation_edits(s: &mut Session, id: DocId, [a, b, c, d, sum, e, f]: [&str; 7]) {
+    let field = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().clone();
+    assert!(field(s, d).read_only());
+    assert!(field(s, sum).read_only());
+    assert!(!field(s, a).read_only());
+    assert!(!field(s, c).read_only());
+    assert!(!field(s, e).read_only());
+    assert!(field(s, f).read_only());
+    let before = field(s, sum).value;
+    let dataset_value = |s: &Session| {
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        pdfcraft_xfa::data_of(cos).unwrap().text_at(&pdfcraft_xfa::som_to_path("form1[0].Subform1[0].Sum[0]")).map(str::to_owned)
+    };
+    let original_data = dataset_value(s);
+    assert_eq!(original_data.as_deref(), Some("3"));
+    assert!(!before.is_empty(), "the signed calculated field has a value to preserve");
+    for (input, value) in [(a, "4"), (b, "5")] {
+        s.apply(id, Edit::SetFieldValue { name: input.to_owned(), value: FieldValue::Text(value.into()) }).unwrap();
+        assert_eq!(s.get(id).unwrap().edit_notices, [EditNotice::SignedCalculationSkipped { fields: vec![sum.to_owned()] }]);
+        assert_eq!(field(s, sum).value, before);
+        assert_eq!(dataset_value(s), original_data);
+    }
+    assert_eq!(field(s, a).value, ["4"]);
+    assert_eq!(field(s, b).value, ["5"]);
+    s.apply(id, Edit::SetFieldValue { name: c.to_owned(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert!(s.get(id).unwrap().edit_notices.is_empty());
+    assert_eq!(field(s, c).value, ["9"]);
+    s.apply(id, Edit::SetFieldValue { name: e.to_owned(), value: FieldValue::Text("9".into()) }).unwrap();
+    assert!(s.get(id).unwrap().edit_notices.is_empty());
+    assert_eq!(field(s, e).value, ["9"]);
+    assert!(
+        s.get(id)
+            .unwrap()
+            .signatures
+            .iter()
+            .filter(|signature| signature.signed)
+            .all(|signature| { !matches!(signature.modification, sign::Modification::Disallowed(_)) })
+    );
+    assert!(s.apply(id, Edit::SetFieldValue { name: d.to_owned(), value: FieldValue::Text("90".into()) }).is_err());
+    assert!(s.apply(id, Edit::SetFieldValue { name: sum.to_owned(), value: FieldValue::Text("90".into()) }).is_err());
+    assert!(s.apply(id, Edit::SetFieldValue { name: f.to_owned(), value: FieldValue::Text("90".into()) }).is_err());
+    assert_eq!(field(s, d).value, ["55"]);
+    assert_eq!(field(s, sum).value, before);
+
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("manifest-reopened.pdf", None, saved, None).unwrap();
+    let reopened = s.get(reopened).unwrap();
+    assert_eq!(reopened.form.iter().find(|field| field.name == a).unwrap().value, ["4"]);
+    assert_eq!(reopened.form.iter().find(|field| field.name == sum).unwrap().value, before);
+    let cos = &reopened.editor.as_ref().unwrap().cos;
+    let data = pdfcraft_xfa::data_of(cos).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].Subform1[0].Sum[0]")), original_data.as_deref());
+}
+
+/// An unsigned XFA signature has no effect, but signing one without a manifest protects every
+/// field, including another signature field that was still unsigned.
+#[test]
+fn signed_xfa_signature_without_manifest_locks_all_fields() {
+    let xdp = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <field name="A" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>1</integer></value></field>
+ <field name="B" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>2</integer></value></field>
+ <field name="partial" w="2in" h="0.5in"><ui><signature type="PDF1.6"><manifest action="include">
+  <ref>form[0].B[0]</ref><ref>form[0].partial[0]</ref>
+ </manifest></signature></ui></field>
+ <field name="whole" w="2in" h="0.5in"><ui><signature/></ui></field>
+</subform></template></xdp:xdp>"#;
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let id = session.open("no-manifest.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).unwrap();
+    let name = |leaf: &str| {
+        session.get(id).unwrap().form.iter().find(|field| field.name == leaf || field.name.ends_with(&format!(".{leaf}[0]"))).unwrap().name.clone()
+    };
+    let (a, b, partial, whole) = (name("A"), name("B"), name("partial"), name("whole"));
+    let read_only = |session: &Session, name: &str| session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().read_only();
+    assert!(!read_only(&session, &a));
+    assert!(!read_only(&session, &whole));
+
+    let signed = session.sign(id, &digital_id, SignOptions { field: Some(partial.clone()), ..SignOptions::default() }).unwrap();
+    session.mark_signed(id, signed, None).unwrap();
+    assert!(read_only(&session, &b));
+    assert!(!read_only(&session, &a));
+    assert!(!read_only(&session, &whole), "an unsigned no-manifest signature must not lock fields");
+
+    let signed = session.sign(id, &digital_id, SignOptions { field: Some(whole.clone()), ..SignOptions::default() }).unwrap();
+    session.mark_signed(id, signed, None).unwrap();
+    let mdp = pdfcraft_sign::pdf::field_mdp(&session.get(id).unwrap().editor.as_ref().unwrap().cos);
+    assert_eq!(mdp.len(), 1, "the PDF1.3 signature without a manifest does not add a FieldMDP transform");
+    for name in [&a, &b, &partial, &whole] {
+        assert!(read_only(&session, name), "{name} was not locked by the signature without a manifest");
+    }
+    assert!(session.apply(id, Edit::SetFieldValue { name: a, value: FieldValue::Text("3".into()) }).is_err());
+    assert!(session.sign(id, &digital_id, SignOptions::default()).is_err(), "the complete field lock also blocks adding a new signature field");
+}
+
+/// A different signer can leave only the AcroForm signature widget and a required XFA layout.
+/// Keep the saved pages, since replacing them would invalidate the signature.
+#[test]
+fn opening_a_signed_xfa_form_with_required_rendering_keeps_the_signature_valid() {
+    let xdp = pdfcraft_xfa::fixtures::signature_calculation_template()
+        .replace("</xdp:xdp>", "<config><acrobat><acrobat7><dynamicRender>required</dynamicRender></acrobat7></acrobat></config></xdp:xdp>");
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&xdp))).unwrap();
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |catalog| {
+        catalog.remove(b"NeedsRendering");
+    })
+    .unwrap();
+    let p12 = include_bytes!("../../sign/tests/data/ec-p256.p12");
+    let identity = sign::pkcs12::open(p12, "test").unwrap();
+    let approval = "form[0].page1[0].approval[0]";
+    let opts = SignOptions {
+        new_field_name: Some(approval.into()),
+        rect: Some([36.0, 650.0, 180.0, 686.0]),
+        date: "D:20270115080000Z".into(),
+        ..SignOptions::default()
+    };
+    let signed = Arc::new(sign::sign(&cos, &identity, &opts).unwrap());
+    let trust = TrustStore { certs: vec![identity.certificate.clone()] };
+    let original = pdfcraft_cos::Document::open(signed.clone()).unwrap();
+    assert!(pdfcraft_xfa::existing_layout(&original).is_none());
+    assert_eq!(sign::pdf::validate(&original, &signed, &trust, approval).unwrap().status, SignatureStatus::Valid);
+
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    session.set_trusted_certificates(trust.certs);
+    let id = session.open("external-signed-xfa.pdf", None, signed.clone(), None).unwrap();
+    let doc = session.get(id).unwrap();
+    let sig = doc.signatures.iter().find(|sig| sig.field == approval).expect("the signature is still present");
+    assert_eq!(sig.status, SignatureStatus::Valid, "{:?}", sig.modification);
+    assert_eq!(sig.modification, sign::Modification::None);
+    assert!(doc.xfa.is_none(), "external signed pages should keep their layout");
+    assert_eq!(doc.bytes, signed, "opening must not append a layout revision");
 }
 
 /// A signature box the file already holds a signature for is drawn with that signature's picture.
@@ -11354,6 +11582,61 @@ fn signed_field_named(len: usize) -> Vec<u8> {
         format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(len)),
         "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
     ])
+}
+
+/// A signed PDF carrying `/Lock` but no FieldMDP transform, as some other signers write.
+fn signed_field_with_only_lock(action: &str, fields: &str) -> Vec<u8> {
+    let mut bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DR << /Font << /Helv 8 0 R >> >> /DA (/Helv 10 Tf 0 g) >> >>"
+            .into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R 6 0 R 7 0 R] >>".into(),
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /V 5 0 R /Lock << /Type /SigFieldLock /Action /{action} {fields} >> /Rect [20 20 180 60] /P 3 0 R >>"
+        ),
+        "<< /Type /Sig /SubFilter /adbe.pkcs7.detached /ByteRange [0 0000000000 0000000000 0000000000] /Contents <00> >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (A) /V (one) /DV (default) /Rect [20 100 100 120] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (B) /V (two) /DV (default) /Rect [20 140 100 160] /P 3 0 R >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ]);
+    let gap = bytes.windows(4).position(|window| window == b"<00>").unwrap();
+    let marker = b"0000000000 0000000000 0000000000";
+    let range = bytes.windows(marker.len()).position(|window| window == marker).unwrap();
+    let values = format!("{gap:010} {:010} {:010}", gap + 4, bytes.len() - gap - 4);
+    bytes[range..range + marker.len()].copy_from_slice(values.as_bytes());
+    bytes
+}
+
+#[test]
+fn signed_lock_without_field_mdp_blocks_only_selected_engine_fields() {
+    let blocked = |result: Result<(), EditError>| {
+        assert!(matches!(&result, Err(EditError::Invalid(message)) if message.contains("signature locks")), "{result:?}");
+    };
+    for (action, fields, locked, free) in [("Include", "/Fields [(A)]", "A", "B"), ("Exclude", "/Fields [(A)]", "B", "A")] {
+        let bytes = signed_field_with_only_lock(action, fields);
+        let mut session = Session::new();
+        let id = session.open("lock-only.pdf", None, Arc::new(bytes.clone()), None).unwrap();
+        let doc = session.get(id).unwrap();
+        assert!(doc.signatures.iter().any(|signature| signature.field == "Approval" && signature.signed_len == bytes.len()));
+        assert!(doc.form.iter().find(|field| field.name == locked).unwrap().read_only(), "{action} locks {locked}");
+        assert!(!doc.form.iter().find(|field| field.name == free).unwrap().read_only(), "{action} leaves {free} editable");
+        blocked(session.apply(id, Edit::SetFieldValue { name: locked.into(), value: FieldValue::Text("changed".into()) }));
+        blocked(session.apply(id, Edit::ResetForm { names: Some(vec![locked.into()]) }));
+        blocked(session.apply(id, Edit::SetFieldScript { name: locked.into(), event: "validate".into(), script: Some("event.rc = false;".into()) }));
+        session.apply(id, Edit::SetFieldValue { name: free.into(), value: FieldValue::Text("changed".into()) }).unwrap();
+        session.apply(id, Edit::SetFieldScript { name: free.into(), event: "validate".into(), script: Some("event.rc = true;".into()) }).unwrap();
+    }
+    let bytes = signed_field_with_only_lock("All", "");
+    let mut session = Session::new();
+    let id = session.open("all-lock.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(session.get(id).unwrap().form.iter().filter(|field| field.name == "A" || field.name == "B").all(|field| field.read_only()));
+    blocked(session.apply(id, Edit::SetFieldValue { name: "A".into(), value: FieldValue::Text("changed".into()) }));
+
+    let bytes = signed_field_with_only_lock("Unknown", "");
+    let mut session = Session::new();
+    let id = session.open("unreadable-lock.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(session.get(id).unwrap().form.iter().filter(|field| field.name == "A" || field.name == "B").all(|field| field.read_only()));
+    assert!(session.get(id).unwrap().info.warnings.iter().any(|warning| warning.contains("/Lock")));
 }
 
 /// A PDF of `objs`, numbered from 1, with a cross-reference table.

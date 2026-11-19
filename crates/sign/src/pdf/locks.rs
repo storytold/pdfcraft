@@ -12,15 +12,48 @@
 
 use std::collections::{BTreeMap, HashSet as NameSet};
 
-use super::listing::{Field, MAX_ENTRIES, MAX_FIELD_NAME_BYTES, MAX_FIELDS, MAX_NAME_BYTES};
+use super::listing::{Field, MAX_ENTRIES, MAX_FIELD_NAME_BYTES, MAX_FIELDS, MAX_NAME_BYTES, sig_fields};
 use super::{Dict, Document, HashSet, ObjRef, Object};
 
 /// What a lock covers (`/Action`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
+pub enum FieldMdpAction {
     All,
     Include,
     Exclude,
+}
+
+type Action = FieldMdpAction;
+
+/// Field selection written when signing. XFA references are resolved to PDF field names by the
+/// caller before reaching the PDF signer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldMdpPolicy {
+    pub action: FieldMdpAction,
+    pub fields: Vec<String>,
+}
+
+impl FieldMdpPolicy {
+    /// FieldMDP field lists select a set; their order and repeated names do not change the lock.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        if self.action != other.action {
+            return false;
+        }
+        if self.action == FieldMdpAction::All {
+            return true;
+        }
+        let left: NameSet<_> = self.fields.iter().collect();
+        let right: NameSet<_> = other.fields.iter().collect();
+        left == right
+    }
+}
+
+/// One signed field's FieldMDP transform, with its field names as written in the PDF.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldMdp {
+    pub signature_field: String,
+    pub action: FieldMdpAction,
+    pub fields: Vec<String>,
 }
 
 /// One lock: its action and the fully qualified names it lists, exactly as written.
@@ -54,6 +87,8 @@ const MAX_LOCK_NAMES: usize = MAX_FIELDS;
 /// Most locks read for one signature: its `/Lock` and its FieldMDP references. Real signatures
 /// carry one or two; each one costs a pass over the form's names.
 const MAX_RULES: usize = 16;
+/// References can carry other transforms too, but reading them still costs a lookup each.
+const MAX_REFERENCES: usize = 64;
 /// Deepest field tree walked, and deepest nesting (references included) compared. Real forms nest
 /// a few levels.
 const MAX_FIELD_DEPTH: usize = 64;
@@ -106,6 +141,63 @@ fn rule(doc: &Document, d: &Dict) -> Result<Rule, ()> {
     Ok(Rule { action, names })
 }
 
+fn policy(rule: Rule) -> FieldMdpPolicy {
+    let mut fields: Vec<_> = rule.names.into_iter().collect();
+    fields.sort();
+    FieldMdpPolicy { action: rule.action, fields }
+}
+
+/// An authored `/Lock` on a signature field. A null lock means no policy; a malformed lock is
+/// kept as authored but cannot be combined with a requested FieldMDP policy.
+pub(super) fn lock_policy_checked(doc: &Document, field: &Dict) -> Result<Option<FieldMdpPolicy>, ()> {
+    let Some(lock) = field.get(b"Lock") else { return Ok(None) };
+    match doc.resolve(lock).as_ref() {
+        Object::Null => Ok(None),
+        Object::Dict(dict) => rule(doc, dict).map(policy).map(Some),
+        _ => Err(()),
+    }
+}
+
+/// The signature field's `/Lock` in a signed revision. A missing lock is distinct from an
+/// unreadable one: callers must not treat an invalid lock as an empty selection.
+pub fn signature_field_lock(doc: &Document, signature_field: &str) -> Result<Option<FieldMdpPolicy>, &'static str> {
+    let field = sig_fields(doc).into_iter().find(|field| field.name == signature_field).ok_or("signature field not found")?;
+    lock_policy_checked(doc, &field.dict).map_err(|_| "invalid /Lock policy")
+}
+
+/// All policies belonging to one signature in its signed revision. An unreadable policy leaves
+/// the scope unknown, as it does when validating the signature.
+pub fn signed_field_policies(doc: &Document, signature_field: &str) -> Result<Vec<FieldMdpPolicy>, &'static str> {
+    let field = sig_fields(doc).into_iter().find(|field| field.name == signature_field).ok_or("signature field not found")?;
+    let signature = field.signature(doc).ok_or("signature value not found")?;
+    policies(doc, &field, &signature).map_err(|_| "invalid /Lock or FieldMDP policy")
+}
+
+pub(super) fn policies(doc: &Document, field: &Field, signature: &Dict) -> Result<Vec<FieldMdpPolicy>, ()> {
+    rules(doc, field, signature).map(|rules| rules.into_iter().map(policy).collect())
+}
+
+/// Read the valid FieldMDP transforms of signature fields. Use [`signed_field_policies`] to
+/// decide a signature's full lock scope, including its `/Lock` and any unreadable transforms.
+pub fn field_mdp(doc: &Document) -> Vec<FieldMdp> {
+    let mut out = Vec::new();
+    for field in sig_fields(doc) {
+        let Some(signature) = field.signature(doc) else { continue };
+        let Some(references) = signature.get(b"Reference").map(|value| doc.resolve(value)) else { continue };
+        let Some(references) = references.as_array() else { continue };
+        for reference in references.iter().take(MAX_REFERENCES) {
+            let resolved = doc.resolve(reference);
+            let Some(reference) = resolved.as_dict().filter(|dict| dict.name(b"TransformMethod") == Some(b"FieldMDP")) else { continue };
+            let Some(params) = reference.get(b"TransformParams").map(|value| doc.resolve(value)) else { continue };
+            let Some(params) = params.as_dict() else { continue };
+            let Ok(parsed) = rule(doc, params) else { continue };
+            let policy = policy(parsed);
+            out.push(FieldMdp { signature_field: field.name.clone(), action: policy.action, fields: policy.fields });
+        }
+    }
+    out
+}
+
 /// The locks of signature field `field`, whose value is `value`, both as the signed revision `old`
 /// has them. `Err` when one is there but can't be read: a `/Lock` or `/Reference` of the wrong
 /// type, a reference that is not a dictionary, a FieldMDP reference without parameters, or more
@@ -122,7 +214,7 @@ fn rules(old: &Document, field: &Field, value: &Dict) -> Result<Vec<Rule>, ()> {
     let refs = value.get(b"Reference").map(|r| old.resolve(r));
     let refs: &[Object] = match refs.as_deref() {
         None | Some(Object::Null) => &[],
-        Some(Object::Array(a)) => a,
+        Some(Object::Array(a)) if a.len() <= MAX_REFERENCES => a,
         // A single reference dictionary where an array belongs may still be a FieldMDP lock.
         Some(_) => return Err(()),
     };

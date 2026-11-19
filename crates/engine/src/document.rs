@@ -39,6 +39,8 @@ pub struct Document {
     pub read_only_reason: Option<String>,
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
+    /// Session-only restrictions imposed by signed field manifests.
+    pub(crate) signature_locks: crate::signature_locks::SignatureLocks,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,
     pub(crate) links: OnceLock<Vec<pdfcraft_annot::links::LinkItem>>,
     /// Signature fields, validated against the session's trust store (Signatures panel).
@@ -87,6 +89,8 @@ pub struct Document {
 pub enum EditNotice {
     /// Text stored as typed but drawn with `?`.
     Undrawn(TextNotice),
+    /// A locked, signed XFA field kept its value when an unlocked input triggered its calculation.
+    SignedCalculationSkipped { fields: Vec<String> },
     /// Remove background couldn't turn back on the white backdrop these pages (0-based,
     /// ascending) paint themselves: their content changed after the background replaced it, so
     /// turning it on could paint over something (`pdfcraft_edit::backdrops_left_off`). They look
@@ -113,6 +117,16 @@ impl std::fmt::Display for EditNotice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EditNotice::Undrawn(n) => n.fmt(f),
+            EditNotice::SignedCalculationSkipped { fields } => {
+                let plural = fields.len() != 1;
+                write!(
+                    f,
+                    "the signed calculated field{} {} kept {} previous value; the calculation was skipped",
+                    if plural { "s" } else { "" },
+                    fields.join(", "),
+                    if plural { "their" } else { "its" }
+                )
+            }
             EditNotice::BackdropsLeftOff { pages } => {
                 let (which, own) = if pages.len() == 1 { ("page", "its") } else { ("pages", "their") };
                 write!(

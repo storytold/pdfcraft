@@ -806,6 +806,11 @@ pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
     crate::data::template_field(tpl, som).is_some_and(Field::grows_with_text)
 }
 
+/// Whether the template field at `som` has a non-empty calculate script.
+pub fn field_is_calculated(tpl: &Template, som: &str) -> bool {
+    crate::data::template_field(tpl, som).is_some_and(|field| field.calculate.as_ref().is_some_and(|script| !script.text.trim().is_empty()))
+}
+
 /// Is the field at `som` embedded in rich text (a floating field, XFA 3.3 p. 1222)? Its value
 /// is shown in that text, so a new one needs the form laid out again. A page area's fields count
 /// too, and so does any field bound to the same data as an embedded one.

@@ -12,6 +12,46 @@ fn form(fields: &str, objects: &[String]) -> Document {
     Document::open(Arc::new(pdf.build())).unwrap()
 }
 
+#[test]
+fn field_mdp_reads_include_exclude_and_all_actions() {
+    let doc = form(
+        "3 0 R 4 0 R 5 0 R",
+        &[
+            "<< /T (one) /FT /Sig /V << /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Action /Include /Fields [(form.C) (form.D)] >> >>] >> >>".into(),
+            "<< /T (two) /FT /Sig /V << /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Action /Exclude /Fields [(form.A)] >> >>] >> >>".into(),
+            "<< /T (three) /FT /Sig /V << /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Action /All >> >>] >> >>".into(),
+        ],
+    );
+    assert_eq!(
+        field_mdp(&doc),
+        [
+            FieldMdp { signature_field: "one".into(), action: FieldMdpAction::Include, fields: vec!["form.C".into(), "form.D".into()] },
+            FieldMdp { signature_field: "two".into(), action: FieldMdpAction::Exclude, fields: vec!["form.A".into()] },
+            FieldMdp { signature_field: "three".into(), action: FieldMdpAction::All, fields: vec![] },
+        ]
+    );
+}
+
+#[test]
+fn signature_field_lock_reads_all_actions_without_field_mdp() {
+    let doc = form(
+        "3 0 R 4 0 R 5 0 R 6 0 R 7 0 R",
+        &[
+            "<< /T (include) /FT /Sig /V << >> /Lock << /Action /Include /Fields [(A)] >> >>".into(),
+            "<< /T (exclude) /FT /Sig /V << >> /Lock << /Action /Exclude /Fields [(B)] >> >>".into(),
+            "<< /T (all) /FT /Sig /V << >> /Lock << /Action /All >> >>".into(),
+            "<< /T (invalid) /FT /Sig /V << >> /Lock << /Action /Include >> >>".into(),
+            "<< /T (absent) /FT /Sig /V << >> >>".into(),
+        ],
+    );
+    assert_eq!(signature_field_lock(&doc, "include"), Ok(Some(FieldMdpPolicy { action: FieldMdpAction::Include, fields: vec!["A".into()] })));
+    assert_eq!(signature_field_lock(&doc, "exclude"), Ok(Some(FieldMdpPolicy { action: FieldMdpAction::Exclude, fields: vec!["B".into()] })));
+    assert_eq!(signature_field_lock(&doc, "all"), Ok(Some(FieldMdpPolicy { action: FieldMdpAction::All, fields: vec![] })));
+    assert_eq!(signature_field_lock(&doc, "absent"), Ok(None));
+    assert!(signature_field_lock(&doc, "invalid").is_err());
+    assert!(signature_field_lock(&doc, "missing").is_err());
+}
+
 /// Each name's first three characters and its length: enough to tell them apart without
 /// printing thousands of bytes when an assertion fails.
 fn short(fields: &[Field]) -> Vec<(String, usize)> {

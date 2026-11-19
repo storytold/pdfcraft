@@ -482,6 +482,49 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
+#[test]
+fn signed_field_mdp_allows_unlisted_values_and_rejects_protected_values() {
+    let unsigned = fixture_with(
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R 8 0 R] >> >>",
+        &[b"<< /FT /Tx /T (A) /V (one) >>", b"<< /FT /Tx /T (B) /V (two) >>"],
+    );
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let policy = pdfcraft_sign::pdf::FieldMdpPolicy { action: pdfcraft_sign::pdf::FieldMdpAction::Include, fields: vec!["A".into()] };
+    let signed =
+        pdfcraft_sign::sign(&open(&unsigned), &id, &SignOptions { field: Some("Approval".into()), field_mdp: Some(policy), ..opts() }).unwrap();
+    let mdp = pdfcraft_sign::pdf::field_mdp(&open(&signed));
+    assert_eq!(mdp.len(), 1);
+    assert_eq!(mdp[0].fields, ["A"]);
+    let verdict = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Approval").unwrap();
+    let unprotected =
+        edit_after(&signed, |doc| doc.update_dict(ObjRef::new(8, 0), |field| field.set(b"V".to_vec(), PdfString::text("changed"))).unwrap());
+    assert_eq!(verdict(&unprotected).status, Status::Valid);
+    let protected =
+        edit_after(&signed, |doc| doc.update_dict(ObjRef::new(7, 0), |field| field.set(b"V".to_vec(), PdfString::text("changed"))).unwrap());
+    let result = verdict(&protected);
+    assert_eq!(result.status, Status::Invalid);
+    assert!(matches!(result.modification, Modification::Disallowed(ref kinds) if kinds.contains(&kind::LOCKED_FIELD)));
+}
+
+#[test]
+fn signing_copies_an_existing_field_lock_into_field_mdp() {
+    let mut doc =
+        open(&fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] >> >>", &[b"<< /FT /Tx /T (A) /V (one) >>"]));
+    let mut lock = Dict::new();
+    lock.set(b"Type".to_vec(), Object::name("SigFieldLock"));
+    lock.set(b"Action".to_vec(), Object::name("Include"));
+    lock.set(b"Fields".to_vec(), Object::Array(vec![Object::String(PdfString::text("A"))]));
+    let lock = doc.add(Object::Dict(lock));
+    doc.update_dict(ObjRef::new(6, 0), |field| field.set(b"Lock".to_vec(), Object::Ref(lock))).unwrap();
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
+    let mdp = pdfcraft_sign::pdf::field_mdp(&open(&signed));
+    assert_eq!(mdp.len(), 1);
+    assert_eq!(mdp[0].action, pdfcraft_sign::pdf::FieldMdpAction::Include);
+    assert_eq!(mdp[0].fields, ["A"]);
+}
+
 /// Certify `fixture` with "no changes allowed" (DocMDP P=1).
 fn certified_p1() -> (DigitalId, TrustStore, Vec<u8>) {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();

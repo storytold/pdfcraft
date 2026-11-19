@@ -15,6 +15,7 @@ use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
 
 use crate::js::JsOutput;
 use crate::js::Request;
+use crate::signature_locks::SignatureLocks;
 
 /// Most scripts run for one event (calculates of a whole form, say).
 const MAX_SCRIPTS_PER_EVENT: usize = 2_000;
@@ -454,6 +455,11 @@ struct Runner<'a, 'b> {
     doc: &'a mut pdfcraft_cos::Document,
     tpl: &'a Template,
     run: &'a mut XfaRun<'b>,
+    signature_locks: Option<&'a SignatureLocks>,
+    suppressed_calculations: Option<&'a mut Vec<String>>,
+    /// What each protected calculation would yield before the input edit. Compare results,
+    /// rather than the signed field's value, which may already lag after an earlier edit.
+    calculation_before: Option<HashMap<String, String>>,
     clock: Clock,
     runs: usize,
     skipped: usize,
@@ -507,6 +513,9 @@ impl<'a, 'b> Runner<'a, 'b> {
             doc,
             tpl,
             run,
+            signature_locks: None,
+            suppressed_calculations: None,
+            calculation_before: None,
             clock: Clock::start(budget_ms),
             runs: 0,
             skipped: 0,
@@ -651,6 +660,26 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.data.get_or_insert_with(Default::default).apply(&op);
         self.pending.push(op);
         self.invalidate();
+    }
+
+    /// Keep a signed calculation's stored value and report a changed result to the caller.
+    fn set_calculated_value(&mut self, som: &str, value: &str) -> bool {
+        if let Some(name) = self.signature_locks.and_then(|locks| locks.calculated_name(som)) {
+            if self.suppressed_calculations.is_none() {
+                return false;
+            }
+            let name = name.to_owned();
+            let current = self.fields().get(&name).and_then(|field| field.value.first()).cloned().unwrap_or_default();
+            let before = self.calculation_before.as_ref().and_then(|values| values.get(&name)).unwrap_or(&current);
+            if before != value
+                && let Some(suppressed) = self.suppressed_calculations.as_mut()
+                && !suppressed.contains(&name)
+            {
+                suppressed.push(name);
+            }
+            return false;
+        }
+        self.set_value(som, value)
     }
 
     /// Give the object at `som` the value `value`: in the data, and in every widget bound to
@@ -892,7 +921,11 @@ impl<'a, 'b> Runner<'a, 'b> {
             match e {
                 XfaEffect::SetValue { som, value } => {
                     if !self.numbered.contains(som) {
-                        self.set_value(som, value);
+                        if ev.activity == "calculate" {
+                            self.set_calculated_value(som, value);
+                        } else {
+                            self.set_value(som, value);
+                        }
                     }
                 }
                 XfaEffect::SetPresence { som, presence } => {
@@ -1041,7 +1074,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 continue;
             }
             if let Some(result) = o.result {
-                self.set_value(&ev.som, &result);
+                self.set_calculated_value(&ev.som, &result);
             }
         }
         Ok(())
@@ -1236,8 +1269,9 @@ fn value_unchanged(doc: &pdfcraft_cos::Document, f: &pdfcraft_forms::Field, v: O
 /// say); a viewer runs it after every layout. Every layout:ready script runs, but a field that
 /// numbers pages keeps the number the layout gave each page: the value a script writes to it is
 /// dropped (one value would put the same number on every page).
-pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
+pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun, locks: &SignatureLocks) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    r.signature_locks = Some(locks);
     // The scripts read the live form (template, data and overrides), not the pages, so the
     // pages are laid out once, after the last of them. Laying a large form out after every
     // script that hides a subform spent the time limit on the first few, and the form was kept
@@ -1267,6 +1301,47 @@ pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mu
     r.finish()
 }
 
+/// Re-evaluate protected calculations on the previous state, without writing anything back.
+/// A signed field may already have a stale value after an earlier accepted input edit; warning
+/// on every later unrelated edit would be wrong. The script budget is the normal event budget.
+fn calculated_values_before(
+    before: &pdfcraft_cos::Document,
+    tpl: &Template,
+    locks: &SignatureLocks,
+    run: &XfaRun<'_>,
+) -> Option<HashMap<String, String>> {
+    locks.calculated_names().next()?;
+    let mut copy = before.clone();
+    let mut output = JsOutput::default();
+    let mut preview = XfaRun {
+        page_count: run.page_count,
+        out: &mut output,
+        datasets: None,
+        ran_away: false,
+        highlight: run.highlight,
+        time_scale: run.time_scale,
+    };
+    let mut runner = Runner::new(&mut copy, tpl, &mut preview, OPEN_BUDGET_MS);
+    runner.calculates().ok()?;
+    if runner.run.ran_away {
+        return None;
+    }
+    let mut values = HashMap::new();
+    for name in locks.calculated_names() {
+        if let Some(value) = runner.fields().get(name).and_then(|field| field.value.first()) {
+            values.insert(name.to_string(), value.clone());
+        }
+    }
+    Some(values)
+}
+
+/// Signed values and notices for one edit's calculation pass.
+pub(crate) struct SignedCalculation<'a> {
+    pub before: &'a pdfcraft_cos::Document,
+    pub locks: &'a SignatureLocks,
+    pub suppressed: &'a mut Vec<String>,
+}
+
 /// After fields `names` took new values: each one's change, exit and validate scripts, then
 /// the calculations once (or only those, after a reset). A validate script that answers false,
 /// or fails, shows its message; the value stays, as Acrobat marks the field invalid rather
@@ -1277,8 +1352,15 @@ pub(crate) fn on_changes(
     names: &[String],
     run: &mut XfaRun,
     exited: &mut Vec<String>,
+    signed: Option<SignedCalculation<'_>>,
 ) -> Result<(), String> {
+    let calculation_before = signed.as_ref().and_then(|signed| calculated_values_before(signed.before, tpl, signed.locks, run));
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    if let Some(signed) = signed {
+        r.signature_locks = Some(signed.locks);
+        r.suppressed_calculations = Some(signed.suppressed);
+    }
+    r.calculation_before = calculation_before;
     for name in names {
         let som = r.by_som().iter().find(|(_, f)| *f == name).map(|(s, _)| s.clone());
         let Some(som) = som else { continue };

@@ -82,6 +82,9 @@ pub struct SignOptions {
     pub date: String,
     /// Certify with these DocMDP permissions (1 no changes, 2 form fill and signing, 3 also comments).
     pub certify: Option<u8>,
+    /// FieldMDP restrictions to authenticate with this signature. An existing signature field's
+    /// `/Lock` is used when this is absent; conflicting policies are rejected.
+    pub field_mdp: Option<super::FieldMdpPolicy>,
     pub appearance: Appearance,
     /// The words of the labels the visible signature shows.
     pub appearance_labels: AppearanceLabels,
@@ -183,7 +186,35 @@ fn sign_inner(
     }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
+    let field_lock = opts
+        .field
+        .as_deref()
+        .and_then(|name| sig_fields(&doc).into_iter().find(|field| field.name == name))
+        .map(|field| match super::locks::lock_policy_checked(&doc, &field.dict) {
+            Ok(policy) => Ok(policy),
+            Err(()) if opts.field_mdp.is_none() => Ok(None),
+            Err(()) => Err(SignError::Pdf(format!("the signature field {:?} has an invalid /Lock policy", field.name))),
+        })
+        .transpose()?
+        .flatten();
+    if let (Some(requested), Some(lock)) = (opts.field_mdp.as_ref(), field_lock.as_ref())
+        && !requested.equivalent(lock)
+    {
+        return Err(SignError::Pdf("the requested FieldMDP policy and the signature field's /Lock select different fields".into()));
+    }
+    // A field's authored /Lock is copied into the authenticated transform, as PDF 1.7 requires.
+    let mdp = field_lock.as_ref().or(opts.field_mdp.as_ref());
+    if let Some(policy) = mdp
+        && (policy.fields.len() > 20_000
+            || policy.fields.iter().any(|name| name.is_empty() || name.len() > 4_096)
+            || policy.fields.iter().fold(0usize, |size, name| size.saturating_add(name.len())) > 4 << 20)
+    {
+        return Err(SignError::Pdf("the FieldMDP field list exceeds its limits".into()));
+    }
     let earlier_signatures = has_signatures(&doc);
+    if earlier_signatures && opts.certify.is_some() {
+        return Err(SignError::Pdf("a certification signature must be the first signature in the document".into()));
+    }
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
@@ -208,6 +239,7 @@ fn sign_inner(
     let mut build = Dict::new();
     build.set(b"App".to_vec(), Object::Dict(app));
     v.set(b"Prop_Build".to_vec(), Object::Dict(build));
+    let mut references = Vec::new();
     if let Some(p) = opts.certify {
         let mut tp = Dict::new();
         tp.set(b"Type".to_vec(), Object::name("TransformParams"));
@@ -217,7 +249,35 @@ fn sign_inner(
         sr.set(b"Type".to_vec(), Object::name("SigRef"));
         sr.set(b"TransformMethod".to_vec(), Object::name("DocMDP"));
         sr.set(b"TransformParams".to_vec(), Object::Dict(tp));
-        v.set(b"Reference".to_vec(), Object::Array(vec![Object::Dict(sr)]));
+        references.push(Object::Dict(sr));
+    }
+    if let Some(policy) = mdp {
+        let mut tp = Dict::new();
+        tp.set(b"Type".to_vec(), Object::name("TransformParams"));
+        tp.set(
+            b"Action".to_vec(),
+            Object::name(match policy.action {
+                super::FieldMdpAction::All => "All",
+                super::FieldMdpAction::Include => "Include",
+                super::FieldMdpAction::Exclude => "Exclude",
+            }),
+        );
+        tp.set(b"V".to_vec(), Object::name("1.2"));
+        if policy.action != super::FieldMdpAction::All {
+            tp.set(b"Fields".to_vec(), Object::Array(policy.fields.iter().map(|field| Object::String(PdfString::text(field))).collect()));
+        }
+        let mut sr = Dict::new();
+        sr.set(b"Type".to_vec(), Object::name("SigRef"));
+        sr.set(b"TransformMethod".to_vec(), Object::name("FieldMDP"));
+        sr.set(b"TransformParams".to_vec(), Object::Dict(tp));
+        // PDF 1.7 Table 8.103 requires /Data for FieldMDP. Its object is the catalog; the
+        // transform parameters select the fields within that document.
+        sr.set(b"Data".to_vec(), Object::Ref(root));
+        references.push(Object::Dict(sr));
+    }
+    if !references.is_empty() {
+        v.set(b"V".to_vec(), Object::Int(1));
+        v.set(b"Reference".to_vec(), Object::Array(references));
     }
     let sig = doc.add(Object::Dict(v.clone()));
     if opts.certify.is_some() {

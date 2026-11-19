@@ -8383,6 +8383,46 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn xfa_signature_locks_are_enforced_through_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let xdp = pdfcraft_xfa::fixtures::signature_calculation_template();
+    std::fs::write(dir.path().join("form.pdf"), pdfcraft_xfa::fixtures::shell(xdp)).unwrap();
+    let mut a = auto(dir.path());
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    ok(&mut a, "sign_trust", json!({ "paths": ["ada.p12"], "password": "secret12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let unsigned_fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let name = |leaf: &str| {
+        unsigned_fields["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|field| field["name"].as_str())
+            .find(|name| *name == leaf || name.ends_with(&format!(".{leaf}[0]")))
+            .unwrap()
+    };
+    let (qty, total) = (name("qty"), name("total"));
+    let approval = "form[0].page1[0].approval[0]";
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "field": approval, "out": "signed.pdf" }));
+    let blocked = a.call("form_fill", &json!({ "doc": doc, "values": { (total): "90" } }));
+    assert!(matches!(&blocked, Err(ToolError::Failed(message)) if message.contains("signature locks")), "{blocked:?}");
+    let filled = ok(&mut a, "form_fill", json!({ "doc": doc, "values": { (qty): "5" } }));
+    let warnings = filled["warnings"].as_array().expect("protected calculation warning");
+    assert!(warnings.iter().any(|value| value.as_str().is_some_and(|warning| warning.contains(total) && warning.contains("kept"))), "{filled}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "filled.pdf", "full": false }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "filled.pdf" }))["doc"].as_u64().unwrap();
+    let fields = ok(&mut a, "form_fields", json!({ "doc": reopened }));
+    let field = |name: &str| fields["fields"].as_array().unwrap().iter().find(|field| field["name"] == name).unwrap();
+    assert_eq!((field(qty)["value"].as_str(), field(total)["value"].as_str()), (Some("5"), Some("4")), "{fields}");
+    assert_eq!(field(total)["read_only"], true);
+    let signatures = ok(&mut a, "sign_list", json!({ "doc": reopened }));
+    assert_eq!(signatures["all_valid"], true, "{signatures}");
+    let page = a.call("page_render", &json!({ "doc": reopened, "page": 1, "dpi": 36 })).unwrap();
+    let Some(Content::Png { data, .. }) = page.first() else { panic!("expected a rendered page") };
+    assert!(craft_image_codecs::decode(data).unwrap().into_data().iter().any(|&sample| sample < 128));
+}
+
 /// Digital IDs are created and opened, documents signed with them and their signatures validated,
 /// all through the tools.
 #[test]
