@@ -4,6 +4,14 @@ use egui::{Key, Modifiers, MouseWheelUnit, TouchPhase};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::settings::PdfCraftSettings;
+
+/// Saved settings that hold only the Default page display `token`.
+fn saved_default_layout(token: &str) -> PdfCraftSettings {
+    let mut saved = PdfCraftSettings::default();
+    saved.layout.default_layout = Some(token.to_owned());
+    saved
+}
 
 /// Three 300×400 pt pages. Page 1 links to page 3.
 const PAGES: &[u8] = b"%PDF-1.7
@@ -71,7 +79,7 @@ fn pages_sidebar_select_all_keeps_current_page_and_keyboard_scope() {
         assert_eq!(h.state().views[0].current(), 1, "selecting does not navigate");
     }
     sidebar_key(&mut h, Key::Escape, Modifiers::NONE);
-    assert!(h.state().views[0].selected.is_empty());
+    assert!(h.state().views[0].selected.items.is_empty());
 
     // A click on the viewer returns Ctrl+A to text selection, even with Pages open.
     let pos = rect(&h, 1).unwrap().center();
@@ -80,7 +88,7 @@ fn pages_sidebar_select_all_keeps_current_page_and_keyboard_scope() {
     }
     h.run_steps(3);
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
-    assert!(h.state().views[0].selected.is_empty(), "viewer shortcut must not select thumbnails");
+    assert!(h.state().views[0].selected.items.is_empty(), "viewer shortcut must not select thumbnails");
 
     // A different document does not inherit the previous sidebar's keyboard ownership.
     h.get_by_label("Page 2").click();
@@ -90,12 +98,12 @@ fn pages_sidebar_select_all_keeps_current_page_and_keyboard_scope() {
     h.run_steps(5);
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
     let active = h.state().active.unwrap();
-    assert!(h.state().views[active].selected.is_empty());
+    assert!(h.state().views[active].selected.items.is_empty());
     h.get_by_label("Page 1").click();
     h.run_steps(2);
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
     assert_eq!(h.state().views[active].target_pages(), vec![0, 1, 2]);
-    assert!(h.state().views[0].selected.is_empty(), "selection remains document-local");
+    assert!(h.state().views[0].selected.items.is_empty(), "selection remains document-local");
 }
 
 /// Two pages of different sizes: 300×400 then 600×300.
@@ -170,7 +178,7 @@ fn page_gaps_in_organizer_do_not_move_the_document_scroll_position() {
     assert!(h.state().views[0].organize);
     assert!(h.execute("view.page_gaps"));
     h.run_steps(2);
-    assert!(!h.state().views[0].show_page_gaps);
+    assert!(!h.state().views[0].view.page_gaps);
     assert!(h.execute("page.organize"));
     h.run_steps(4);
     let after = rect(&h, 1).unwrap();
@@ -189,14 +197,14 @@ fn page_gaps_comparison_harness() -> Harness<'static, PdfCraftApp> {
         app.open_bytes(&egui::Context::default(), "new.pdf", None, PAGES.to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
         app.compare_old = Some(app.views[0].id);
-        app.run_compare();
+        app.run_compare(&egui::Context::default());
         app
     });
     h.run_steps(4);
     let at = h.state().views[0].viewport_rect().center();
     h.event(egui::Event::PointerMoved(at));
     h.run_steps(2);
-    assert_eq!(h.state().compare.as_ref().unwrap().leader, 0);
+    assert_eq!(h.state().compare.as_ref().unwrap().views.lead, craft::pages::ui::Lead::Left);
     assert_eq!(h.state().active, Some(1));
     h
 }
@@ -210,7 +218,7 @@ fn page_gaps_comparison_menu_preserves_the_active_panes_choice() {
     h.run_steps(2);
     h.get_by_label("Show gaps between pages").click();
     h.run_steps(4);
-    assert!(h.state().views.iter().all(|v| !v.show_page_gaps), "the old leader must not restore gaps after the active pane's menu action");
+    assert!(h.state().views.iter().all(|v| !v.view.page_gaps), "the old leader must not restore gaps after the active pane's menu action");
 }
 
 /// The control setting has the same synchronized behavior and leaves unrelated views alone.
@@ -220,13 +228,13 @@ fn page_gaps_comparison_control_preserves_both_states() {
     for (value, show) in [("off", false), ("on", true)] {
         h.set_option("page-gaps", value).unwrap();
         h.run_steps(4);
-        assert!(h.state().views.iter().all(|v| v.show_page_gaps == show), "comparison rejected page-gaps={value}");
+        assert!(h.state().views.iter().all(|v| v.view.page_gaps == show), "comparison rejected page-gaps={value}");
     }
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "unrelated.pdf", None, PAGES.to_vec()).unwrap();
     h.set_option("page-gaps", "off").unwrap();
-    assert!(h.state().views[0].show_page_gaps && h.state().views[1].show_page_gaps);
-    assert!(!h.state().views[2].show_page_gaps);
+    assert!(h.state().views[0].view.page_gaps && h.state().views[1].view.page_gaps);
+    assert!(!h.state().views[2].view.page_gaps);
 }
 
 /// The saved default survives restart and applies to newly opened documents.
@@ -235,7 +243,7 @@ fn page_gaps_default_survives_restart_and_applies_to_new_documents() {
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "default-page-gaps", "off").unwrap();
     let mut restored = crate::control::new_app();
-    restored.restore(&app.persist());
+    restored.apply_settings(&app.settings_snapshot());
     restored.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| restored);
     h.run_steps(8);
@@ -277,8 +285,9 @@ fn page_gaps_work_for_mixed_sizes_and_two_page_rows() {
     assert!((b.left() - a.right()).abs() < 0.01);
     assert!((c.top() - a.bottom()).abs() < 0.01);
     let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
-    h.state_mut().views[0].document_replaced(&info);
-    assert!(!h.state().views[0].show_page_gaps, "a file reload preserves the view setting");
+    let ctx_h = h.ctx.clone();
+    h.state_mut().views[0].document_replaced(&ctx_h, &info);
+    assert!(!h.state().views[0].view.page_gaps, "a file reload preserves the view setting");
 }
 
 /// Page edges stay adjacent at integer and fractional physical-pixel scales.
@@ -314,12 +323,12 @@ fn two_up_layout_places_pages_side_by_side() {
 
 #[test]
 fn two_page_view_shows_one_spread_at_a_time_until_continuous() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
+    use pdfcraft_ui_egui::canvas::PageDisplay;
     // Two-page view without continuous scrolling shows just the current spread; the continuous
     // checkbox reveals the rest (#752).
     let mut h = harness(&[("layout", "two-page"), ("zoom", "50")]);
     h.run_steps(4);
-    assert_eq!(h.state().views[0].layout, PageLayout::TwoUp);
+    assert_eq!(h.state().views[0].view.display, PageDisplay::TwoUp);
     assert!(!h.state().views[0].continuous(), "`two-page` is the non-scrolling two-page display");
     assert!(rect(&h, 0).is_some() && rect(&h, 1).is_some(), "the first spread is on screen");
     assert!(rect(&h, 2).is_none(), "the next spread is not shown until paged or scrolled");
@@ -327,7 +336,7 @@ fn two_page_view_shows_one_spread_at_a_time_until_continuous() {
     h.set_option("continuous", "on").unwrap();
     h.run_steps(4);
     assert!(rect(&h, 2).is_some(), "continuous scrolling reveals the later spreads");
-    assert_eq!(h.state().views[0].layout, PageLayout::TwoUp, "the base layout is unchanged");
+    assert_eq!(h.state().views[0].view.display, PageDisplay::TwoUp, "the base layout is unchanged");
 }
 
 #[test]
@@ -355,13 +364,10 @@ fn single_page_jump_draws_a_fitting_page_where_it_stays() {
     assert!((first.min.y - settled.min.y).abs() < 0.5, "page 2 drawn where it settles: {first:?} then {settled:?}");
 }
 
-/// The 40 frames from one wheel notch on, with the system asking for no animations (Windows'
-/// Animation effects turned off) or not, and Preferences ▸ Animation effects as given: how far
+/// The 40 frames from one wheel notch on, with Preferences ▸ Animation effects as given: how far
 /// page 1 has moved up in each frame, or with ⌘/Ctrl held, the view's zoom.
-fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: bool) -> Vec<f32> {
+fn frames_after_a_notch(animation_effects: &str, zooming: bool) -> Vec<f32> {
     let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "100")]);
-    // PLAN: the env's reduced-motion answer (pdf-shell-w8) replaces `motion.reduced`.
-    h.state_mut().motion.reduced = system_reduced;
     h.set_option("animation_effects", animation_effects).unwrap();
     let at = h.state().views[0].viewport_rect().center();
     h.hover_at(at);
@@ -378,36 +384,30 @@ fn frames_after_a_notch(system_reduced: bool, animation_effects: &str, zooming: 
     (0..40)
         .map(|_| {
             h.step();
-            if zooming { h.state().views[0].view.zoom } else { before - rect(&h, 0).expect("page 1 still laid out").min.y }
+            if zooming { h.state().views[0].view.zoom as f32 } else { before - rect(&h, 0).expect("page 1 still laid out").min.y }
         })
         .collect()
 }
 
-/// The system's answer and the Animation effects choice, for each way to have them off and
-/// each way to have them on.
-const AT_ONCE: [(bool, &str); 3] = [(true, "system"), (false, "off"), (true, "off")];
-const EASED: [(bool, &str); 3] = [(false, "system"), (false, "on"), (true, "on")];
+/// The Animation effects choices that scroll a notch at once and the ones that ease it. The system's
+/// reduced-motion answer reaches the app through the framework's env only, so a test cannot ask for it.
+const AT_ONCE: [&str; 1] = ["off"];
+const EASED: [&str; 2] = ["system", "on"];
 
 #[test]
 fn a_wheel_notch_scrolls_at_once_with_animation_effects_off() {
     // Eased, egui spreads a notch over about a quarter of a second. At once, the page moves the
     // notch's whole distance in one frame.
-    let notch = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
-    for (system_reduced, effects) in AT_ONCE {
-        let moved = frames_after_a_notch(system_reduced, effects, false);
+    let notch = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().wheel_line();
+    for effects in AT_ONCE {
+        let moved = frames_after_a_notch(effects, false);
         // The frame the notch arrives in scrolls; the next one draws the page where it stays.
-        assert!(
-            moved[2..].iter().all(|y| (y - notch).abs() < 0.5),
-            "{effects}, system reduced {system_reduced}: one notch is {notch} points, all at once: {moved:?}"
-        );
+        assert!(moved[2..].iter().all(|y| (y - notch).abs() < 0.5), "{effects}: one notch is {notch} points, all at once: {moved:?}");
     }
-    for (system_reduced, effects) in EASED {
-        let moved = frames_after_a_notch(system_reduced, effects, false);
-        assert!(moved[2] < notch * 0.75, "{effects}, system reduced {system_reduced}: egui eases the notch: {moved:?}");
-        assert!(
-            (moved[39] - notch).abs() < 1.0,
-            "{effects}, system reduced {system_reduced}: easing changes how long a notch takes, not how far it goes: {moved:?}"
-        );
+    for effects in EASED {
+        let moved = frames_after_a_notch(effects, false);
+        assert!(moved[2] < notch * 0.75, "{effects}: egui eases the notch: {moved:?}");
+        assert!((moved[39] - notch).abs() < 1.0, "{effects}: easing changes how long a notch takes, not how far it goes: {moved:?}");
     }
 }
 
@@ -415,13 +415,13 @@ fn a_wheel_notch_scrolls_at_once_with_animation_effects_off() {
 fn page_display_commands_switch_layouts() {
     let mut h = harness(&[]);
     h.execute("view.layout.single");
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
+    assert_eq!(h.state().views[0].view.display, pdfcraft_ui_egui::canvas::PageDisplay::Single);
     // The cover toggle refuses outside two-page view instead of arming a hidden flag.
     assert!(!h.state().views[0].view.cover);
     assert!(!h.execute("view.layout.cover"));
     assert!(!h.state().views[0].view.cover);
     h.execute("view.layout.two_up");
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
+    assert_eq!(h.state().views[0].view.display, pdfcraft_ui_egui::canvas::PageDisplay::TwoUp);
     assert!(h.execute("view.layout.cover"));
     assert!(h.state().views[0].view.cover, "the cover toggle flips");
     assert!(h.execute("view.layout.cover"));
@@ -431,9 +431,9 @@ fn page_display_commands_switch_layouts() {
     h.execute("view.continuous");
     h.run_steps(3);
     assert!(!h.state().views[0].continuous(), "the checkbox turns continuous scrolling off");
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "toggling scrolling leaves the base layout");
+    assert_eq!(h.state().views[0].view.display, pdfcraft_ui_egui::canvas::PageDisplay::TwoUp, "toggling scrolling leaves the base layout");
     h.execute("view.layout.single");
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
+    assert_eq!(h.state().views[0].view.display, pdfcraft_ui_egui::canvas::PageDisplay::Single);
     assert!(!h.state().views[0].continuous(), "switching the base layout leaves scrolling off");
 }
 
@@ -443,7 +443,7 @@ fn layout_option_rejects_typos() {
     assert!(h.set_option("layout", "singel").is_err());
     assert!(h.set_option("default-layout", "bogus").is_err());
     assert!(h.set_option("cover", "maybe").is_err());
-    assert_eq!(h.state().views[0].layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
+    assert_eq!(h.state().views[0].view.display, pdfcraft_ui_egui::canvas::PageDisplay::Single);
     assert!(h.state().views[0].continuous(), "a rejected typo leaves the default display unchanged");
     assert!(h.set_option("cover", "on").is_err(), "cover needs two-page view first");
     h.set_option("layout", "two-up").unwrap();
@@ -458,40 +458,40 @@ fn view_options_without_a_document() {
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
     assert!(app.set_option(&egui::Context::default(), "default-layout", "single").is_ok(), "the default needs no document");
-    assert_eq!(app.view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
+    assert_eq!(app.view_defaults.display, pdfcraft_ui_egui::canvas::PageDisplay::Single);
     assert!(app.set_option(&egui::Context::default(), "cover", "on").is_err(), "cover needs an open document");
     assert!(app.set_option(&egui::Context::default(), "layout", "single").is_err(), "layout needs an open document");
 }
 
 #[test]
 fn default_page_display_is_used_for_new_documents() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
+    use pdfcraft_ui_egui::canvas::PageDisplay;
     // The factory default is single page, scrolling continuously, without snap jumps.
-    assert_eq!(crate::control::new_app().view_defaults.layout, PageLayout::Single);
+    assert_eq!(crate::control::new_app().view_defaults.display, PageDisplay::Single);
     assert!(crate::control::new_app().view_defaults.continuous);
     let mut h = harness(&[]);
     h.set_option("default-layout", "single").unwrap();
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "other.pdf", None, PAGES.to_vec()).expect("opens");
-    assert_eq!(h.state().views[1].layout, PageLayout::Single);
+    assert_eq!(h.state().views[1].view.display, PageDisplay::Single);
     // So do documents the app creates itself (blank, combined, extracted, from images…).
     assert!(h.execute("create.blank"));
-    assert_eq!(h.state().views[2].layout, PageLayout::Single);
+    assert_eq!(h.state().views[2].view.display, PageDisplay::Single);
     // Persisted preferences survive a restart.
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
     fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
-    fresh.restore(&saved);
-    assert_eq!(fresh.view_defaults.layout, PageLayout::Single);
+    fresh.apply_settings(&saved);
+    assert_eq!(fresh.view_defaults.display, PageDisplay::Single);
     // Garbage keeps the previous default; casing is forgiven; legacy files lack the key.
-    fresh.restore(r#"{"default_layout":"bogus"}"#);
-    assert_eq!(fresh.view_defaults.layout, PageLayout::Single);
-    fresh.restore(r#"{"default_layout":"TWO-UP"}"#);
-    assert_eq!(fresh.view_defaults.layout, PageLayout::TwoUp);
+    fresh.apply_settings(&saved_default_layout("bogus"));
+    assert_eq!(fresh.view_defaults.display, PageDisplay::Single);
+    fresh.apply_settings(&saved_default_layout("TWO-UP"));
+    assert_eq!(fresh.view_defaults.display, PageDisplay::TwoUp);
     let mut legacy = crate::control::new_app();
     legacy.set_option(&egui::Context::default(), "language", "en").unwrap();
-    legacy.restore("{}");
-    assert_eq!(legacy.view_defaults.layout, PageLayout::Single);
+    legacy.apply_settings(&PdfCraftSettings::default());
+    assert_eq!(legacy.view_defaults.display, PageDisplay::Single);
     assert!(legacy.view_defaults.continuous, "a legacy file without the key keeps the factory default");
 }
 
@@ -519,11 +519,13 @@ fn default_zoom_is_used_for_new_documents() {
         assert!(h.set_option("default-zoom", bad).is_err(), "{bad}");
     }
     // Saved settings keep it, and garbage leaves it alone.
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
     fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
-    fresh.restore(&saved);
-    fresh.restore(r#"{"default_zoom":"bogus"}"#);
+    fresh.apply_settings(&saved);
+    let mut garbage = PdfCraftSettings::default();
+    garbage.behavior.default_zoom = Some("bogus".to_owned());
+    fresh.apply_settings(&garbage);
     fresh.open_bytes(&egui::Context::default(), "again.pdf", None, PAGES.to_vec()).expect("opens");
     assert_eq!(fit_zoom(&fresh, 0), (Fit::None, 1.5));
 }
@@ -552,14 +554,14 @@ fn the_rail_zoom_field_sets_a_typed_zoom() {
     }
     type_zoom(&mut h, "9000", Key::Enter);
     assert_eq!(h.state().views[0].zoom(), 64.0);
-    h.state_mut().views[0].set_zoom(2.0);
+    h.state_mut().views[0].view.zoom = 2.0;
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Zoom").value().as_deref(), Some("200%"));
 }
 
 #[test]
 fn always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for() {
-    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    use pdfcraft_ui_egui::canvas::{Fit, PageDisplay};
     // Opens on page 2 at fit page, two pages side by side.
     let asks = String::from_utf8_lossy(PAGES).replace("/Pages 2 0 R >>", "/Pages 2 0 R /OpenAction [4 0 R /Fit] /PageLayout /TwoPageLeft >>");
     let open = |always: Option<&str>| {
@@ -570,14 +572,14 @@ fn always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for() {
         }
         app.open_bytes(&egui::Context::default(), "asks.pdf", None, asks.clone().into_bytes()).expect("opens");
         let v = &app.views[0];
-        (v.fit(), v.layout, v.continuous(), v.current())
+        (v.fit(), v.view.display, v.continuous(), v.current())
     };
     // Off by default: the document's view wins.
-    assert_eq!(open(None), (Fit::Page, PageLayout::TwoUp, false, 1));
-    assert_eq!(open(Some("off")), (Fit::Page, PageLayout::TwoUp, false, 1));
+    assert_eq!(open(None), (Fit::Page, PageDisplay::TwoUp, false, 1));
+    assert_eq!(open(Some("off")), (Fit::Page, PageDisplay::TwoUp, false, 1));
     // On: Default zoom and Default page display; the page it opens at is still the document's.
-    assert_eq!(open(Some("on")), (Fit::Width, PageLayout::Single, true, 1));
-    assert!(crate::control::new_app().set_option("always-default-view", "yes").is_err());
+    assert_eq!(open(Some("on")), (Fit::Width, PageDisplay::Single, true, 1));
+    assert!(crate::control::new_app().set_option(&egui::Context::default(), "always-default-view", "yes").is_err());
 }
 
 #[test]
@@ -586,12 +588,14 @@ fn always_use_my_default_zoom_and_page_layout_survives_a_restart() {
     assert!(!app.always_default_view, "off by default");
     app.always_default_view = true;
     let mut restarted = crate::control::new_app();
-    restarted.restore(&app.persist());
+    restarted.apply_settings(&app.settings_snapshot());
     assert!(restarted.always_default_view, "the choice is kept");
-    restarted.restore(r#"{"always_default_view":"bogus"}"#);
-    assert!(restarted.always_default_view, "garbage leaves it alone");
+    // A key that is not a boolean does not read as settings at all, so what is left of it is a file without the key.
+    assert!(serde_json::from_str::<PdfCraftSettings>(r#"{"behavior":{"always_default_view":"bogus"}}"#).is_err());
+    restarted.apply_settings(&PdfCraftSettings::default());
+    assert!(restarted.always_default_view, "settings without the key leave it alone");
     let mut legacy = crate::control::new_app();
-    legacy.restore("{}");
+    legacy.apply_settings(&PdfCraftSettings::default());
     assert!(!legacy.always_default_view, "a legacy file without the key keeps it off");
 }
 
@@ -614,8 +618,8 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_d
     let mut h = harness(&[("continuous", "off"), ("zoom", "50")]);
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "second.pdf", None, PAGES.to_vec()).expect("opens");
-    h.state_mut().views[1].set_continuous(false);
-    h.state_mut().views[1].set_zoom(0.75);
+    h.state_mut().views[1].view.continuous = false;
+    h.state_mut().views[1].view.zoom = 0.75;
     assert_eq!(h.state().views.len(), 2);
     assert!(!h.state().views[0].continuous());
     assert_ne!(h.state().views[0].fit(), pdfcraft_ui_egui::canvas::Fit::Width);
@@ -769,7 +773,7 @@ fn preferences_set_the_default_zoom() {
 #[test]
 fn rail_page_display_menu_offers_acrobats_view_choices() {
     use egui_kittest::kittest::Queryable;
-    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    use pdfcraft_ui_egui::canvas::{Fit, PageDisplay};
     let mut h = harness(&[]);
     h.run_steps(4);
     let pick = |h: &mut Harness<'static, PdfCraftApp>, item: &str| {
@@ -778,9 +782,9 @@ fn rail_page_display_menu_offers_acrobats_view_choices() {
         h.get_by_label(item).click();
         h.run_steps(4);
     };
-    let shown = |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].layout, h.state().views[0].continuous(), h.state().views[0].fit());
+    let shown = |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].view.display, h.state().views[0].continuous(), h.state().views[0].fit());
     pick(&mut h, "Fit one full page");
-    assert_eq!(shown(&h), (PageLayout::Single, false, Fit::Page), "one full page at a time, not scrolling");
+    assert_eq!(shown(&h), (PageDisplay::Single, false, Fit::Page), "one full page at a time, not scrolling");
     // The whole page fits at once, so the wheel turns pages without zooming out first.
     let at = h.state().views[0].viewport_rect().center();
     h.hover_at(at);
@@ -793,7 +797,7 @@ fn rail_page_display_menu_offers_acrobats_view_choices() {
     pick(&mut h, "Zoom to page level");
     assert_eq!(h.state().views[0].fit(), Fit::Page);
     pick(&mut h, "Fit to width scrolling");
-    assert_eq!(shown(&h), (PageLayout::Single, true, Fit::Width), "single page, scrolling continuously");
+    assert_eq!(shown(&h), (PageDisplay::Single, true, Fit::Width), "single page, scrolling continuously");
 }
 
 #[test]
@@ -1244,13 +1248,13 @@ fn page_actions_and_timers_wait_under_a_dialog() {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "timer.pdf", None, PAGE_TIMER.to_vec()).expect("opens");
-        app.dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+        assert!(app.execute(&egui::Context::default(), "help.shortcuts"), "the shortcuts dialog opens");
         app
     });
     h.run_steps(3);
     let id = h.state().views[0].id;
     assert!(h.state_mut().session.next_timer(id).is_none(), "the open action waits under the dialog");
-    h.state_mut().dialog = None;
+    h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state_mut().session.next_timer(id).is_some(), "and runs once it closes");
 }
@@ -1525,10 +1529,10 @@ fn field_highlighting_is_on_by_default_and_remembered() {
     h.state_mut().open_bytes(&ctx_h, "radios.pdf", None, RADIOS.to_vec()).expect("opens");
     h.run_steps(4);
     assert!(!h.state().views[1].session.highlight_fields, "the next document opens plain");
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut next = crate::control::new_app();
     next.set_option(&egui::Context::default(), "language", "en").unwrap();
-    next.restore(&saved);
+    next.apply_settings(&saved);
     next.open_bytes(&egui::Context::default(), "form.pdf", None, FORM.to_vec()).expect("opens");
     assert!(!next.views[0].session.highlight_fields, "and so does the next session");
 }
@@ -1538,15 +1542,16 @@ fn field_highlighting_is_on_by_default_and_remembered() {
 #[test]
 fn stored_field_highlight_choice_wins_over_the_default() {
     for (stored, expected) in [
-        (r#"{"highlight_fields": false}"#, false),
-        (r#"{"highlight_fields": true}"#, true),
+        (r#"{"behavior": {"highlight_fields": false}}"#, false),
+        (r#"{"behavior": {"highlight_fields": true}}"#, true),
         (r#"{}"#, true),
-        (r#"{"highlight_fields": "no"}"#, true),
-        (r#"{"highlight_fields": null}"#, true),
+        (r#"{"behavior": {"highlight_fields": "no"}}"#, true),
+        (r#"{"behavior": {"highlight_fields": null}}"#, true),
     ] {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.restore(stored);
+        // A value of the wrong type does not read as settings: the app keeps its default.
+        app.apply_settings(&serde_json::from_str::<PdfCraftSettings>(stored).unwrap_or_default());
         app.open_bytes(&egui::Context::default(), "form.pdf", None, FORM.to_vec()).expect("opens");
         assert_eq!(app.views[0].session.highlight_fields, expected, "{stored}");
     }
@@ -1934,7 +1939,8 @@ fn switching_modes_keeps_the_current_page_at_fixed_zoom() {
     h.event(wheel(MouseWheelUnit::Point, -35.0, TouchPhase::Move));
     h.run_steps(8);
     let before = rect(&h, 17).unwrap().top() - h.state().views[0].viewport_rect().top();
-    h.state_mut().run_command("view.read_mode");
+    let ctx_h = h.ctx.clone();
+    h.state_mut().run_command(&ctx_h, "view.read_mode");
     h.run_steps(8);
     assert_eq!(h.state().views[0].current(), 17, "switching to Read should keep the current page");
     let after = rect(&h, 17).unwrap().top() - h.state().views[0].viewport_rect().top();
@@ -1985,7 +1991,7 @@ fn long_view_menu_fits_a_short_window() {
     assert!(row.top() >= 0.0 && row.bottom() <= 400.0, "the Bookmarks submenu row is onscreen: {row:?}");
     bookmarks.click();
     h.run_steps(4);
-    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+    assert!(h.state().dock.layout.contains(&pdfcraft_ui_egui::side_panels::PanelId::Bookmarks), "the Bookmarks panel is open in the dock");
 }
 
 fn click_with(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2, modifiers: Modifiers) {
@@ -2048,15 +2054,16 @@ fn full_screen_shows_one_fitted_page_and_clicks_turn_it() {
 /// comes back to that and full screen stays one spread at a time.
 #[test]
 fn full_screen_survives_a_reload_and_keeps_a_new_documents_own_view() {
-    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    use pdfcraft_ui_egui::canvas::{Fit, PageDisplay};
     let mut h = harness(&[("layout", "continuous"), ("zoom", "50")]);
     h.run_steps(4);
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
     h.run_steps(6);
+    let ctx_h = h.ctx.clone();
     {
         let app = h.state_mut();
         let info = app.session.get(app.views[0].id).unwrap().info.clone();
-        app.views[0].document_replaced(&info);
+        app.views[0].document_replaced(&ctx_h, &info);
     }
     h.run_steps(4);
     assert!(h.state().views[0].presenting(), "still presenting after the reload");
@@ -2072,11 +2079,11 @@ fn full_screen_survives_a_reload_and_keeps_a_new_documents_own_view() {
     h.state_mut().open_bytes(&ctx_h, "two.pdf", None, two_columns.into_bytes()).expect("opens");
     h.run_steps(6);
     let v = h.state().views.last().unwrap();
-    assert!(v.presenting() && v.layout == PageLayout::TwoUp && !v.continuous(), "one spread at a time");
+    assert!(v.presenting() && v.view.display == PageDisplay::TwoUp && !v.continuous(), "one spread at a time");
     h.key_press(Key::Escape);
     h.run_steps(4);
     let v = h.state().views.last().unwrap();
-    assert!(v.layout == PageLayout::TwoUp && v.continuous(), "the document's own two-column view comes back");
+    assert!(v.view.display == PageDisplay::TwoUp && v.continuous(), "the document's own two-column view comes back");
 }
 
 /// Review on #2070: full screen hides the tools and a click turns the page only with Select, so
@@ -2092,7 +2099,7 @@ fn full_screen_clicks_turn_pages_whatever_tool_was_on() {
     assert!(h.state().full_screen());
     assert_eq!(h.state().quick_tool, QuickTool::Select, "Select in full screen");
     // Entering again (a second document asking for it) keeps the tool to give back.
-    h.state_mut().apply_full_screen(true);
+    h.state_mut().set_full_screen(true);
     let r = rect(&h, 0).expect("page 1 on screen");
     click_with(&mut h, r.center(), Modifiers::NONE);
     assert_eq!(h.state().views[0].current(), 1, "a click goes forward");
@@ -2143,7 +2150,22 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
     std::fs::create_dir_all(&dir).unwrap();
     let more = dir.join("more.pdf");
     std::fs::write(&more, PAGES).unwrap();
-    let mut h = harness(&[("panel", "pages")]);
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // The file picker answers with the file to insert, then the folder picker with the folder to extract into.
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([
+        craft::host::Picked::Paths(vec![more.clone()]),
+        craft::host::Picked::Paths(vec![out.clone()]),
+    ]));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = crate::control::app_with_files(files);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
+        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+        app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
+        app
+    });
+    h.run_steps(8);
     let id = h.state().views[0].id;
     let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.len();
     let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
@@ -2154,21 +2176,16 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
     };
     assert_eq!(count(&h), 3);
     h.state_mut().views[0].select_pages(&[0]);
-    h.state_mut().pick_override = Some(vec![more.to_string_lossy().into_owned()]);
     tool(&mut h, "Insert pages from a file after the selection…");
-    h.run_steps(3);
-    assert_eq!(count(&h), 6, "the picked file's three pages are inserted");
+    assert!(crate::support::step_until(&mut h, |h| count(h) == 6), "the picked file's three pages are inserted");
 
-    let out = dir.join("out");
-    std::fs::create_dir_all(&out).unwrap();
-    h.state_mut().export_dir_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().views[0].select_pages(&[1, 2]);
     tool(&mut h, "Extract the selected pages…");
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Extract), "Extract opens for the selection");
-    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, ..Default::default() };
+    assert!(h.state().dialogs.is_open::<craft::ui::patterns::form_dialogs::HostedParamDialog>(), "Extract opens for the selection");
+    h.get_by_label("Extract pages as separate files").click();
+    h.run_steps(2);
     h.get_all_by_label("Extract").last().unwrap().click();
-    h.run_steps(3);
-    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 2, "the two selected pages, each a file");
+    assert!(crate::support::step_until(&mut h, |_| std::fs::read_dir(&out).is_ok_and(|d| d.count() == 2)), "the two selected pages, each a file");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2219,7 +2236,7 @@ fn a_document_press_releases_pages_keyboard_focus_without_escape() {
     h.run_steps(2);
     assert_ne!(h.ctx.memory(|m| m.focused()), focused, "pressing the document relinquishes Pages focus without Escape");
     sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
-    assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
+    assert!(h.state().views[0].selected.items.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }
 
 /// Delete over the Pages panel with a menu of the menu bar open is the menu's, and the Escape that
@@ -2235,7 +2252,7 @@ fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_p
     h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
     h.run_steps(2);
     let selected = h.state().views[0].selected.clone();
-    assert_eq!(selected.iter().copied().collect::<Vec<_>>(), [0, 1], "⌘-click picked pages 1 and 2");
+    assert_eq!(selected.items.iter().copied().collect::<Vec<_>>(), [0, 1], "⌘-click picked pages 1 and 2");
     let thumb = h.get_by_label("Page 2").rect().center();
     crate::support::open_menu(&mut h, "View");
     h.hover_at(thumb);
@@ -2418,10 +2435,11 @@ fn full_screen_starts_afresh_when_the_document_is_replaced() {
     h.key_press(Key::ArrowRight);
     h.run_steps(1);
     assert!(h.state().views[0].presenting_a_transition(), "page 2 comes in with its Wipe");
+    let ctx_h = h.ctx.clone();
     {
         let app = h.state_mut();
         let info = app.session.get(app.views[0].id).unwrap().info.clone();
-        app.views[0].document_replaced(&info);
+        app.views[0].document_replaced(&ctx_h, &info);
     }
     assert!(!h.state().views[0].presenting_a_transition(), "the old transition is dropped");
 }
@@ -2733,12 +2751,11 @@ fn cut_content_pdf() -> Vec<u8> {
 fn a_page_whose_content_was_cut_is_named_in_a_notice() {
     let _gpu = gpu();
     let pdf = cut_content_pdf();
-    let slot: std::sync::Arc<std::sync::Mutex<Option<pdfcraft_ui_egui::control::ControlClient>>> = Default::default();
-    let s = slot.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+    let (client, channel) = std::sync::mpsc::channel();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        *s.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app.attach_control(channel, None);
         app.open_bytes(&egui::Context::default(), "cut.pdf", None, pdf).expect("opens");
         app
     });
@@ -2752,18 +2769,6 @@ fn a_page_whose_content_was_cut_is_named_in_a_notice() {
     assert!(h.state().views[0].page_errors().is_empty(), "a cut page still draws");
     h.get_by_label_contains("Page 1 holds more content than PdfCraft can read");
     // Automation counts pages from 1, as the notice does (review on #2113).
-    let client = slot.lock().unwrap().take().expect("the control channel");
-    let rx = client.send("ui.state", serde_json::json!({}));
-    // Bounded by wall-clock time rather than frames, so a busy runner doesn't fail it, and a
-    // dropped channel fails at once instead of stalling the run.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let state = loop {
-        h.run_steps(1);
-        match rx.try_recv() {
-            Ok(reply) => break reply.expect("ui.state"),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!("ui.state: the control channel closed without a reply"),
-            Err(std::sync::mpsc::TryRecvError::Empty) => assert!(std::time::Instant::now() < deadline, "ui.state: no reply within 30 s"),
-        }
-    };
+    let state = crate::control::ok(&mut h, &client, "ui.state", serde_json::json!({}));
     assert_eq!(state["active"]["cut_pages"], serde_json::json!([1]), "{state}");
 }
