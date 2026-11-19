@@ -64,6 +64,9 @@ pub struct FormView {
     /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
     /// the editor reopens with it rather than losing the typing.
     pub(crate) committed: Option<Focus>,
+    /// The editor handed the keys on (Tab, Shift+Tab): the field the session moved to takes the key focus in the
+    /// next pass, from its page part, as Tab onto the part would give it.
+    pub(crate) refocus: bool,
     /// Fields modified by the user whose appearance stream has not been rasterized by the render worker yet.
     /// Tracked as (field_name, page_index) so committed edits stay immediately visible without flicker.
     pub unbaked: HashSet<(String, usize)>,
