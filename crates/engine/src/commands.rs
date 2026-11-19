@@ -233,9 +233,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     // and adds their further default chords.
     c("view.zoom.in", "Zoom in", None, Some(Shortcut::cmd("+")), Document, "zoom_in"),
     c("view.zoom.out", "Zoom out", None, Some(Shortcut::cmd("−")), Document, "zoom_out"),
-    c("view.zoom.page_level", "Page level zoom", None, Some(Shortcut::cmd("0")), Document, "maximize_2"),
+    c("view.zoom.page_level", "Zoom to page level", None, Some(Shortcut::cmd("0")), Document, "maximize_2"),
     c("view.zoom.actual_size", "Actual size", None, Some(Shortcut::cmd("1")), Document, "scan"),
-    c("view.zoom.fit_width", "Fit width", None, Some(Shortcut::cmd("2")), Document, "move-horizontal"),
+    c("view.zoom.fit_width", "Fit to width", None, Some(Shortcut::cmd("2")), Document, "move-horizontal"),
     c("view.rotate.cw", "Rotate view clockwise", None, Some(Shortcut::cmd_shift("+")), Document, "rotate_cw"),
     c("view.rotate.ccw", "Rotate view counterclockwise", None, Some(Shortcut::cmd_shift("−")), Document, "rotate_ccw"),
     c("view.first_page", "First page", None, Some(Shortcut::cmd_shift("Up")), Document, "chevrons_left"),
