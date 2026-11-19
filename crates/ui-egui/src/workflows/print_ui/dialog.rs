@@ -157,7 +157,12 @@ impl PdfCraftApp {
     }
 
     /// Asks for a fresh printer list: the app's source reads it in the background, without one the spooler is asked now.
+    /// A list already being read is the fresh one (the dialog's first pass asks too, as `State::refresh` refuses to
+    /// while it discovers): reading again would replace the job that owns the dialog's receiver.
     fn refresh_printers(&mut self) {
+        if self.dialogs.get::<HostedPrint>().is_some_and(|dialog| dialog.state().discovering()) {
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.printer_source.is_some() {
             let receiver = self.list_printers();

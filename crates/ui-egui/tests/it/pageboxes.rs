@@ -1,6 +1,7 @@
 //! Crop tool and Set Page Boxes in the real shell (egui_kittest).
 
 use crate::support::AppHarness as _;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
@@ -84,7 +85,7 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     let mut h = harness();
     assert!(h.execute("page.boxes"));
     h.run_steps(3);
-    h.get_by_label("Set Page Boxes");
+    h.get_by_role_and_label(Role::Dialog, "Set Page Boxes");
     // One inch off every side (the units default to inches).
     for side in ["Top", "Bottom", "Left", "Right"] {
         h.get_by_label(side).click();
