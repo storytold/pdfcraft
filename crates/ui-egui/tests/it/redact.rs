@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use craft::host::{Picked, ScriptedFiles};
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
@@ -81,6 +82,13 @@ fn marking_applying_and_clearing() {
     }
     h.drop_at(b);
     h.run_steps(4);
+    eprintln!(
+        "DIAG marking_applying_and_clearing: tool {:?} mode {:?} page {:?} from {a:?} to {b:?} cursor {:?}",
+        h.state().quick_tool,
+        h.state().mode,
+        h.state().views[0].page_screen_rect(0),
+        h.output().platform_output.cursor_icon
+    );
     assert_eq!(marks(&h), 1);
     // Redact pages ▸ current page.
     h.execute("redact.pages");
@@ -372,7 +380,8 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
     assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
-    h.run_steps(4);
+    // The write runs on a worker: step until it has landed.
+    crate::support::wait_until(&mut h, "the save to land", |_| files.file(&elsewhere).is_some());
     assert_eq!(files.file(&copy).unwrap(), saved, "the redacted copy is left as it was");
     assert!(files.file(&elsewhere).is_some(), "Save asked again and wrote where the user chose");
     let _ = std::fs::remove_dir_all(&dir);
@@ -406,7 +415,8 @@ fn undoing_apply_redactions_while_the_save_dialog_is_open_asks_again() {
     assert_eq!(h.state().views[0].redactions_applied, 0);
     let elsewhere = dir.join("contract_copy.pdf");
     assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
-    h.run_steps(4);
+    // The write runs on a worker: step until it has landed.
+    crate::support::wait_until(&mut h, "the save to land", |_| files.file(&elsewhere).is_some());
     assert!(files.file(&copy).is_none(), "the unredacted content is not saved under the _Redacted name");
     assert!(files.file(&elsewhere).is_some(), "Save asked again and wrote where the user chose");
     let _ = std::fs::remove_dir_all(&dir);
@@ -509,7 +519,7 @@ fn redaction_codes_become_the_overlay_text() {
     let mut h = harness();
     assert!(h.execute("redact.properties"));
     h.run_steps(2);
-    h.get_by_label("Redaction Tool Properties");
+    h.get_by_role_and_label(Role::Dialog, "Redaction Tool Properties");
     h.get_by_label("Use overlay text").click();
     h.run_steps(2);
     h.get_by_label("Custom text").click();
@@ -604,9 +614,10 @@ fn redaction_properties_for_this_run_only_and_cancel() {
     assert!(h.execute("redact.properties"));
     h.run_steps(6);
     h.get_by_label("Redaction mark appearance");
-    h.get_by_label("Outline colour:");
-    h.get_by_label("Fill colour:");
-    h.get_by_label("Opacity:");
+    // A colour row's name labels both its text and its swatch button.
+    for row in ["Outline colour:", "Fill colour:", "Opacity:"] {
+        assert!(h.get_all_by_label(row).count() > 0, "{row} is offered");
+    }
     h.get_by_label("Make properties default").click();
     h.run_steps(3);
     assert!(!h.state().redact_props.as_ref().unwrap().remember);
@@ -690,7 +701,7 @@ fn removing_hidden_information_and_sanitizing() {
     let mut h = harness();
     h.execute("protect.remove_hidden");
     h.run_steps(2);
-    h.get_by_label("Remove hidden information");
+    h.get_by_role_and_label(Role::Dialog, "Remove hidden information");
     {
         let d = h.state().hidden_draft.as_ref().unwrap();
         let fields = d.found.iter().find(|f| f.0 == pdfcraft_engine::Hidden::FormFields).unwrap();
