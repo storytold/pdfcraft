@@ -1627,11 +1627,12 @@ fn control_open_of_an_already_open_file_replies_ok_and_focuses_its_tab() {
     });
     h.run_steps(4);
     let c = tx;
-    // This test pins the synchronous open contract (focus vs open vs failure): the open job is
-    // run before the reply is read. A live app replies `pending` instead (#1620).
+    // Opens go through the open queue: the first two are accepted, then open once their jobs run (#1620).
     let first = call_running(&mut h, &c, &jobs, "ui.open", json!({ "path": a })).unwrap();
-    assert_eq!(first["opened"], json!(a), "{first}");
+    assert_eq!(first["accepted"], json!(a), "{first}");
     call_running(&mut h, &c, &jobs, "ui.open", json!({ "path": b })).unwrap();
+    run_jobs(&mut h, &jobs);
+    assert_eq!(h.state().views.len(), 2, "both files are open");
     // The file is already open: the tab focuses, and the reply must be Ok — an agent driving the
     // app headlessly would otherwise read a focus as a read failure (#1620).
     let again = call_running(&mut h, &c, &jobs, "ui.open", json!({ "path": a })).unwrap();
@@ -1900,11 +1901,12 @@ fn control_collapses_and_expands_a_pinned_folder() {
     run_jobs(&mut h, &jobs);
     let folded = |h: &mut Harness<'static, PdfCraftApp>| ok(h, &c, "ui.state", json!({}))["pinned_folders"].clone();
     assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
-    h.get_by_label("inside.pdf");
+    // A file's row is named by the file, then when it changed and its size.
+    h.get_by_label_contains("inside.pdf");
     ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=on") }));
     run_jobs(&mut h, &jobs);
     assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": true }]));
-    assert!(h.query_by_label("inside.pdf").is_none(), "a collapsed folder lists nothing");
+    assert!(h.query_by_label_contains("inside.pdf").is_none(), "a collapsed folder lists nothing");
     let unpinned = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": "/not/pinned=on" })).unwrap_err();
     assert!(unpinned.contains("not a pinned folder"), "{unpinned}");
     let bad = call(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=yes") })).unwrap_err();
@@ -1913,7 +1915,7 @@ fn control_collapses_and_expands_a_pinned_folder() {
     ok(&mut h, &c, "ui.set", json!({ "key": "folder-collapsed", "value": format!("{folder}=off") }));
     run_jobs(&mut h, &jobs);
     assert_eq!(folded(&mut h), json!([{ "folder": folder, "collapsed": false }]));
-    h.get_by_label("inside.pdf");
+    h.get_by_label_contains("inside.pdf");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

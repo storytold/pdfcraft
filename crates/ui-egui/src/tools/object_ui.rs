@@ -226,19 +226,13 @@ fn object_at(xf: &PageXform, info: &DocInfo, page: usize, objects: &[EditableObj
 /// notice that the page's objects can't be selected together. `false` where no object lies (the
 /// press starts an area selection that adds to them) and off the page.
 pub(crate) fn modified_press_at(session: &mut PageSession, doc: &Document, info: &DocInfo, page: usize, xf: &PageXform, p: Pos2) -> bool {
-    if !xf.rect.contains(p) {
-        return false;
-    }
-    if session.content.draft.is_some() || session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
-        session.objects.notice = Some(tl!("Finish or discard the text being edited before selecting several objects.").into());
-        return true;
-    }
-    let objects = match session.objects.inventory(doc, page) {
-        Ok(objects) => objects,
-        Err(_) => {
-            session.objects.notice = Some(tl!("This page contains objects that cannot be selected together.").into());
+    let objects = match modified_target(session, doc, page, xf, p) {
+        ModifiedTarget::None => return false,
+        ModifiedTarget::Refused(notice) => {
+            session.objects.notice = Some(notice.into());
             return true;
         }
+        ModifiedTarget::Objects(objects) => objects,
     };
     let Some(object) = object_at(xf, info, page, &objects, p).and_then(|t| objects.iter().find(|o| o.target == t)) else {
         return false;
@@ -268,9 +262,36 @@ pub(crate) fn modified_press_at(session: &mut PageSession, doc: &Document, info:
 // PLAN: contract A-6 gives `Option<Edit>`; a modified press never makes an edit and the caller needs to know it was taken
 pub(crate) fn modified_press(session: &mut PageSession, doc: &Document, info: &DocInfo, press: &PagePress, geo: PageGeometry<'_>) -> bool {
     let Some(xf) = session.page_xform(press.page, geo) else { return false };
-    match press.phase.start() {
-        Some(start) if matches!(press.phase, PressPhase::Down { .. }) => modified_press_at(session, doc, info, press.page, &xf, start.origin),
-        _ => false,
+    match press.phase {
+        PressPhase::Down { start, .. } => modified_press_at(session, doc, info, press.page, &xf, start.origin),
+        // The rest of a press its Down took is the toggle's too: its release is no click on what lies under it
+        // (a click on added text would open it for typing).
+        _ => press.phase.start().is_some_and(|start| match modified_target(session, doc, press.page, &xf, start.origin) {
+            ModifiedTarget::None => false,
+            ModifiedTarget::Refused(_) => true,
+            ModifiedTarget::Objects(objects) => object_at(&xf, info, press.page, &objects, start.origin).is_some(),
+        }),
+    }
+}
+
+/// What a modified press at `p` on `page` meets: nothing it takes (off the page), a refusal with its
+/// notice, or the page's objects to toggle one of.
+enum ModifiedTarget {
+    None,
+    Refused(&'static str),
+    Objects(Vec<EditableObject>),
+}
+
+fn modified_target(session: &mut PageSession, doc: &Document, page: usize, xf: &PageXform, p: Pos2) -> ModifiedTarget {
+    if !xf.rect.contains(p) {
+        return ModifiedTarget::None;
+    }
+    if session.content.draft.is_some() || session.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
+        return ModifiedTarget::Refused(tl!("Finish or discard the text being edited before selecting several objects."));
+    }
+    match session.objects.inventory(doc, page) {
+        Ok(objects) => ModifiedTarget::Objects(objects),
+        Err(_) => ModifiedTarget::Refused(tl!("This page contains objects that cannot be selected together.")),
     }
 }
 

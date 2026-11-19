@@ -232,6 +232,12 @@ fn a_password_answered_after_combine_opens_behind_the_combine_tab() {
     assert!(app.combine_showing());
     app.submit_password(&egui::Context::default(), Some("pw".into()));
     assert!(app.password_prompt.is_none());
+    // The unlocked document opens through the open queue, which the host's threads run.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while app.views.is_empty() && std::time::Instant::now() < deadline {
+        app.poll_pending_opens(&egui::Context::default());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(app.views.len(), 1, "the document is open");
     assert!(app.combine_showing(), "and the Combine files tab still shows");
 

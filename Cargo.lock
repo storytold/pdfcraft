@@ -6536,6 +6536,7 @@ dependencies = [
  "craft-menu",
  "craft-quit",
  "craft-ui",
+ "craft-update",
  "edit-session",
  "eframe",
  "egui",

@@ -182,7 +182,8 @@ fn settings_from_the_old_opt_in_leave_the_check_at_start_on() {
 }
 
 /// An app with an unsaved change to a form in a new temporary folder, which Save writes without
-/// asking where; its update check dialog is open. Returns the document's path too.
+/// asking where; its update has installed and the check dialog says so. Returns the document's
+/// path too.
 fn app_with_unsaved_file(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf) {
     let dir = std::env::temp_dir().join(format!("pdfcraft-ui-updates-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -190,7 +191,14 @@ fn app_with_unsaved_file(test: &str) -> (Harness<'static, PdfCraftApp>, PathBuf)
     let path = dir.join("source.pdf");
     let bytes = include_bytes!("../data/form.pdf").to_vec();
     std::fs::write(&path, &bytes).unwrap();
-    let mut h = harness(Ok(None));
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        let updater = craft::update::updater::Updater::ready_for_tests(&pdfcraft_ui_egui::UPDATE_APP, "0.1.0", release("v99.0.0"), || Ok(()));
+        let host = Arc::new(Host::builder(info()).build());
+        let mut app = PdfCraftApp::with_host(host, services_asking(None).with_updater(updater));
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app
+    });
     h.run_steps(2);
     let app = h.state_mut();
     app.open_bytes(&egui::Context::default(), "source.pdf", Some(path.to_string_lossy().into_owned()), bytes).unwrap();

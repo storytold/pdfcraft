@@ -303,6 +303,13 @@ impl PdfCraftApp {
             self.paste_from_clipboard(ctx, i);
             return true;
         }
+        // Copy and Cut take the objects selected together in Edit a PDF, as the catalog enables them for those.
+        if (id == "edit.copy" || id == crate::menus::CUT)
+            && let Some(i) = self.active.filter(|&i| self.views.get(i).is_some_and(|v| !v.organize && v.session.objects.count() > 0))
+            && self.quick_tool == crate::QuickTool::EditText
+        {
+            return self.copy_objects(ctx, i, id == crate::menus::CUT);
+        }
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
             let why = self.disabled_reason(spec);
