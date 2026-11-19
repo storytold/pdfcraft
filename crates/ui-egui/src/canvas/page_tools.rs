@@ -147,9 +147,9 @@ enum Arm<'a> {
     /// The signature rectangle of Digitally sign.
     SignArea(SignAreaTool<'a>),
     /// Snapshot: the area to copy.
-    Snapshot(SnapshotTool),
+    Snapshot(SnapshotTool<'a>),
     /// Crop: the rectangle to crop the page to, or a double click for Set Page Boxes.
-    Crop(CropTool),
+    Crop(CropTool<'a>),
 }
 
 /// The page tool of a pass, handed to the tool host: every [`CanvasTool`] method forwards to the arm.
@@ -303,7 +303,7 @@ pub(crate) fn page_tool<'a>(
         QuickTool::Measure(t) => {
             Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, cx.info, t, cx.units, cx.author, cx.host, cx.wake.clone()))
         }
-        QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, cx.pages, cx.rotation, size)),
+        QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, &mut session.box_drag, cx.pages, cx.rotation, size)),
         QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages)),
         QuickTool::Fill(fill_tool) => {
             let input = FillInput {
@@ -340,8 +340,8 @@ pub(crate) fn page_tool<'a>(
             None => Arm::Hand(HandTool::new(cx.navigation)),
         },
         QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.pages, cx.info, *press))),
-        QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, cx.pages, cx.rotation, cx.info)),
-        QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(cx.pages, cx.rotation, size)),
+        QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, &mut session.box_drag, cx.pages, cx.rotation, cx.info)),
+        QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(&mut session.box_drag, cx.pages, cx.rotation, size)),
     };
     PageTool { arm, tool, selects_text, released: false, presenting: cx.presenting, presenter_keys: Vec::new() }
 }

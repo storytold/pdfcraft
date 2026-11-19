@@ -361,8 +361,9 @@ pub(crate) fn parts(
     let markers = marker_boxes(info, &anns, icon_side);
     let Some(id) = pick_at(&anns, at, tolerance, icon_side, &markers) else { return Vec::new() };
     let Some(found) = anns.iter().find(|a| a.id == id) else { return Vec::new() };
-    let mut shapes: Vec<Rect> =
-        if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { vec![found.extent(icon_side)] };
+    // A markup's lines, or its box when it has none (a highlight with no /QuadPoints is picked by its box too).
+    let lines: Vec<Rect> = if found.kind.is_markup() { found.points.chunks(4).filter_map(bounds).collect() } else { Vec::new() };
+    let mut shapes = if lines.is_empty() { vec![found.extent(icon_side)] } else { lines };
     shapes.extend(markers.iter().filter(|(m, _)| *m == id).map(|(_, r)| *r));
     let screen_shapes: Vec<egui::Rect> = shapes
         .iter()
@@ -414,7 +415,7 @@ pub(super) fn edited_user_rect(info: &DocInfo, a: &Annotation, edit: &Annotation
 pub(crate) fn edit(e: AnnotationEdit, map: &PageMap<'_>, view: &mut CommentView, info: &DocInfo, prefs: &CommentPrefs) -> Option<Edit> {
     match e {
         AnnotationEdit::Create(a) => create(&a, map, prefs),
-        AnnotationEdit::Move { ids, delta } => moved(&ids, delta, info),
+        AnnotationEdit::Move { ids, delta } => moved(&ids, delta, map, info),
         AnnotationEdit::Resize { id, rect } => {
             let (page, index) = key_of(id);
             engine(info, page, index).filter(|a| resizable(a))?;
@@ -463,7 +464,7 @@ pub(crate) fn edit(e: AnnotationEdit, map: &PageMap<'_>, view: &mut CommentView,
     }
 }
 
-fn moved(ids: &[AnnotationId], delta: Vec2, info: &DocInfo) -> Option<Edit> {
+fn moved(ids: &[AnnotationId], delta: Vec2, map: &PageMap<'_>, info: &DocInfo) -> Option<Edit> {
     if delta == Vec2::ZERO {
         return None;
     }
@@ -481,7 +482,9 @@ fn moved(ids: &[AnnotationId], delta: Vec2, info: &DocInfo) -> Option<Edit> {
             // moved with its comment.
             let a = engine(info, page, index).filter(|a| !a.is_reply() && !on_text(a) && !a.locked)?;
             let p = info.pages.get(page)?;
-            let (dx, dy) = user_delta(p, delta);
+            // The delta is in the page as shown, the view's turn included: the map takes it back to user space.
+            let (from, to) = (map.to_user(page, Point::ZERO), map.to_user(page, Point::ZERO + delta));
+            let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
             if !(dx.is_finite() && dy.is_finite()) {
                 return None;
             }
