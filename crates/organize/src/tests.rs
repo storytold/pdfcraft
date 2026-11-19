@@ -5046,3 +5046,29 @@ fn page_form_clips_crop_to_media_before_rotation() {
         }
     }
 }
+
+/// Importers such as 3D posters must still be able to reject an explicitly empty source.
+#[test]
+fn page_form_keeps_explicit_zero_area_for_caller_validation() {
+    for key in [b"MediaBox".as_slice(), b"CropBox".as_slice()] {
+        for inherited in [false, true] {
+            let mut src = open(fixture());
+            let page = pages(&src).unwrap()[0].obj;
+            src.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(0))).unwrap();
+            let target = if inherited { src.get(page).as_dict().unwrap().reference(b"Parent").unwrap() } else { page };
+            if inherited {
+                src.update_dict(page, |d| {
+                    d.remove(key);
+                })
+                .unwrap();
+            }
+            src.update_dict(target, |d| {
+                d.set(key.to_vec(), Object::Array(vec![20.into(), 30.into(), 100.into(), 30.into()]));
+            })
+            .unwrap();
+            let mut dst = Document::new_empty();
+            let (_, size) = page_as_form(&mut dst, &src, 0).unwrap();
+            assert_eq!(size, (80.0, 0.0));
+        }
+    }
+}
