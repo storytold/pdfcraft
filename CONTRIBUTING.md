@@ -77,8 +77,10 @@ These are the reasons a PR gets rejected.
 
 - Gap 6 in [`docs/gaps.md`](docs/gaps.md), the backlog of wrong results in shipped features. Bug
   fixes are smaller and review faster than new features.
-- Tooling, tests and docs rarely conflict with other work. `crates/fonts`, `crates/ui-egui` and
-  the i18n catalogues are where several people collide at once.
+- Tooling, tests and docs rarely conflict with other work. `crates/fonts` and `crates/ui-egui`
+  are where several people collide at once.
+- New interface strings stay in English in the code. Translations go to
+  [storytold/craft-i18n](https://github.com/storytold/craft-i18n), not to this repository.
 - [`ROADMAP.md`](ROADMAP.md) and [`docs/gaps.md`](docs/gaps.md) rank the larger work.
 
 ## Credit
