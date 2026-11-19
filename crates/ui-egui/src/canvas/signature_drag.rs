@@ -11,7 +11,7 @@ use pdfcraft_render::{PageInfo, RenderPool, RenderRequest, Tile};
 
 use super::PageXform;
 use crate::QuickTool;
-use crate::comments::{CommentView, PageCx, id_of, key_of};
+use crate::comments::{CommentView, PageCx, PageMap, id_of, key_of};
 
 /// The longest side, in pixels, a stamp's own layer is rendered at.
 const MAX_STAMP_SIDE: f32 = 2048.0;
@@ -277,7 +277,7 @@ impl SignatureDrag {
 
     /// The comment being dragged, drawn from its layers under `tool`, the quick tool the page sees: only Select and the
     /// Fill & Sign tools move comments.
-    pub fn paint(&self, draw: &Draw<'_>, cx: &PageCx<'_>, tool: QuickTool, cv: &CommentView, pending: Option<&Edit>) {
+    pub fn paint(&self, draw: &Draw<'_>, cx: &PageCx<'_>, map: &PageMap<'_>, tool: QuickTool, cv: &CommentView, pending: Option<&Edit>) {
         let (Some((_, page, index)), Some(layers)) = (self.key, &self.layers) else { return };
         if page != cx.page || !matches!(tool, QuickTool::Select | QuickTool::Fill(_)) || cx.hidden {
             return;
@@ -294,7 +294,7 @@ impl SignatureDrag {
         {
             return;
         }
-        let rect = cx.adjusted_rect(a, in_flight, pending);
+        let rect = cx.adjusted_rect(map, a, in_flight, pending);
         draw.clipped(cx.xf.rect, |draw| {
             paint_quad(draw, page_corners(cx.xf), background.id);
             match &layers.front {
@@ -369,7 +369,7 @@ impl SignatureDrag {
     }
 
     /// The comment being moved, drawn where it goes (as far as its frame has gone).
-    pub fn paint_move(&self, draw: &Draw<'_>, cx: &PageCx<'_>, cv: &CommentView, pending: Option<&Edit>) {
+    pub fn paint_move(&self, draw: &Draw<'_>, cx: &PageCx<'_>, map: &PageMap<'_>, cv: &CommentView, pending: Option<&Edit>) {
         let Some(((_, page, index), m)) = &self.moving else { return };
         if *page != cx.page || cx.hidden {
             return;
@@ -377,7 +377,7 @@ impl SignatureDrag {
         let Some(a) = cx.get(*index) else { return };
         // As far as its frame has gone from where the move started (once applied, its box is
         // already where it went).
-        let rect = cx.adjusted_rect(a, cv.tool.in_flight(), pending);
+        let rect = cx.adjusted_rect(map, a, cv.tool.in_flight(), pending);
         let from = cx.xf.user_rect(cx.info, *page, m.layer.from);
         draw.clipped(cx.xf.rect, |draw| m.layer.paint(draw, cx, *page, from.translate(rect.min - from.min)));
     }

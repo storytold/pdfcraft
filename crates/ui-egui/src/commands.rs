@@ -119,6 +119,12 @@ impl PdfCraftApp {
                     self.unpin_tool(&tool);
                 }
             }
+            // A row that opens Preferences on one of its pages (the theme button's Appearance settings…).
+            "app.preferences" if fired.command.params.get("tab").is_some() => {
+                if let Some(page) = fired.command.params.get("tab").and_then(serde_json::Value::as_str) {
+                    self.open_preferences_at(page);
+                }
+            }
             "app.theme" => self.toggle_theme(ctx),
             "tools.expand" => self.expand_all_tools(ctx),
             "tools.collapse" => self.all_tools_full = false,

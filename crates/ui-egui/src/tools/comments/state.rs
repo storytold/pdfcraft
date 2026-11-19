@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use craft::review::AnnotationEdit;
 use craft::review::ui::{AnnotateTool, CommentsPanelState, NoteDrafts};
 
-use super::bridge;
+use super::bridge::{self, PageMap};
 use super::geometry::{frame, is_markup};
 use super::tool::PastePlacement;
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PageXform, Pos2, Rect};
@@ -608,8 +608,8 @@ impl PageCx<'_> {
 
     /// The same geometry drives the live image, its handles, and the edit on release: `pending` is
     /// the edit just released and not yet applied, `in_flight` the tool's edit while the pointer
-    /// is down.
-    pub(crate) fn adjusted_rect(&self, a: &Annotation, in_flight: Option<AnnotationEdit>, pending: Option<&Edit>) -> Rect {
+    /// is down, in `map`'s document space.
+    pub(crate) fn adjusted_rect(&self, map: &PageMap<'_>, a: &Annotation, in_flight: Option<AnnotationEdit>, pending: Option<&Edit>) -> Rect {
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
@@ -621,7 +621,7 @@ impl PageCx<'_> {
             let f = frame(a, self.rotation());
             return self.xf.user_rect(self.info, self.page, [f[0] + *dx as f32, f[1] + *dy as f32, f[2] + *dx as f32, f[3] + *dy as f32]);
         }
-        match in_flight.and_then(|edit| bridge::edited_user_rect(self.info, a, &edit)) {
+        match in_flight.and_then(|edit| bridge::edited_user_rect(map, a, &edit)) {
             Some(r) => self.xf.user_rect(self.info, self.page, r),
             None => self.frame_rect(a),
         }

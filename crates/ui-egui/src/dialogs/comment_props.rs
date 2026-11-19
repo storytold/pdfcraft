@@ -25,9 +25,10 @@ fn field_colour(c: pdfcraft_engine::Rgb) -> FieldValue {
     FieldValue::Color(c.map(|v| v as f32))
 }
 
-/// A dialog field's colour as the comment's.
+/// A dialog field's colour as the comment's. Each channel is the decimal the `f32` shows (its shortest form), not
+/// its binary widening: a colour the dialog opened with or was given (0.18) comes back as itself, not 0.18000000715.
 fn rgb(c: [f32; 3]) -> pdfcraft_engine::Rgb {
-    c.map(f64::from)
+    c.map(|v| v.to_string().parse().unwrap_or(f64::from(v)))
 }
 
 /// Where the Comment Properties dialog stands: the id the dialog host returned for it, and what it

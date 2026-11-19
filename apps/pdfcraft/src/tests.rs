@@ -75,7 +75,15 @@ fn a_software_renderer_is_shown_to_the_user() {
         });
         h.run_steps(2);
         let cards = craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main());
-        cards.iter().map(|card| card.toast.message.as_str().to_owned()).collect()
+        // A posted notice's text is the card's title; a message and bullet lines follow it.
+        cards
+            .iter()
+            .map(|card| {
+                let toast = &card.toast;
+                let parts = toast.title.iter().chain(std::iter::once(&toast.message)).chain(&toast.lines);
+                parts.map(|part| part.as_str()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n")
+            })
+            .collect()
     }
     // Issue #519: WARP or llvmpipe is announced in the app, not just in pdfcraft.log.
     let mut app = crate::startup::test_app();

@@ -201,10 +201,12 @@ impl CanvasTool for CommentsTool<'_> {
         draw.eraser_radius = eraser_radius(eraser_width);
         // The options are builders over the owned tool: rebuilt from the tool taken out, its gesture kept.
         let mut built = std::mem::take(self.annotate).select_options(select).draw_options(draw);
+        // The snap reads the page's displayed units; the tool asks in document space.
         if self.quick == QuickTool::Comment(CommentTool::Caret)
             && let Some(snap) = self.caret.take()
+            && let Some(frame) = self.map.frame(page)
         {
-            built = built.caret_snap(snap);
+            built = built.caret_snap(move |at| snap(frame.shown(at)).map(|(tip, side)| (frame.doc(tip), frame.doc_len(side))));
         }
         *self.annotate = built;
         self.annotate.each_pass(cx);

@@ -135,8 +135,9 @@ impl StackDialog for WordCountDialog {
                         (tl!("Characters without spaces"), report.total.characters_without_spaces),
                         (tl!("Pages counted"), report.pages.len()),
                     ] {
-                        Field::new(label.to_string()).show(ui, |ui, _| {
-                            Text::new(value.to_string()).show(ui);
+                        let value = value.to_string();
+                        Field::new(label.to_string()).value(value.clone()).show(ui, |ui, _| {
+                            Text::new(value.clone()).show(ui);
                         });
                     }
                     if report.pages_without_text > 0 {
@@ -217,13 +218,9 @@ mod tests {
         PdfCraftApp::with_host(Arc::new(host), services)
     }
 
-    /// The figure in the Words row of the open dialog: the value beside the row's label.
+    /// The figure in the Words row of the open dialog: the value its readout field reports.
     fn words_shown(h: &Harness<'_, PdfCraftApp>) -> String {
-        let row = h.get_by_label("Words").parent().expect("the Words label sits in its row");
-        row.children_recursive()
-            .filter_map(|n| n.accesskit_node().label().map(|l| l.to_string()))
-            .find(|l| l.chars().all(|c| c.is_ascii_digit()))
-            .expect("the row shows a figure")
+        h.get_by_role_and_label(egui::accesskit::Role::Group, "Words").value().expect("the Words row reports a figure")
     }
 
     #[test]
