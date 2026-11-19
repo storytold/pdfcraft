@@ -28,7 +28,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     let Some(page) = doc.info.pages.get(current) else { return };
     let page_size = Size::new(f64::from(page.width.max(1.0)), f64::from(page.height.max(1.0)));
 
-    IconButton::command(IconId::new(if rail_on_right { "panel_left" } else { "panel_right" }), "view.dock_side").show(ui);
+    if rail_on_right {
+        IconButton::command(IconId::new("panel_left"), "view.rail.left").show(ui);
+    } else {
+        IconButton::command(IconId::new("panel_right"), "view.rail.right").show(ui);
+    }
 
     // The rows' marks come from the commands' checked state (the catalog), not from here.
     let display_icon = if view.view.display == PageDisplay::Single { "file-text" } else { "columns-2" };

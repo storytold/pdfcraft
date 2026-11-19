@@ -122,9 +122,10 @@ impl PdfCraftApp {
                     v.view.fit = fit;
                 }
             }
-            "view.dock_side" => {
-                let edge = if crate::side_panels::state(self)["tools_side"] == "right" { "left" } else { "right" };
-                if let Err(e) = crate::side_panels::command(self, false, &serde_json::json!({ "panel": "tools", "edge": edge })) {
+            "view.rail.left" | "view.rail.right" => {
+                use craft::behavior::DockSide;
+                let side = if id == "view.rail.left" { DockSide::Start } else { DockSide::End };
+                if let Err(e) = crate::side_panels::set_rail_side(self, side) {
                     self.notify(e);
                 }
             }

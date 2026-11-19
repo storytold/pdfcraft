@@ -202,6 +202,10 @@ impl DisplayOrder<Vec<usize>> for Rows<'_> {
     fn open(&self, at: usize) -> bool {
         self.0.get(at).is_some_and(|r| r.open)
     }
+    /// The title: what the rename field starts from and type-ahead matches.
+    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
+        self.0.get(at).map(|r| std::borrow::Cow::Borrowed(r.item.title.as_str()))
+    }
 }
 
 impl ItemSource<Vec<usize>> for Rows<'_> {}

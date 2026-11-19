@@ -25,8 +25,9 @@ const TOOL_HAND: &str = "view.hand_tool";
 const TOOL_CROP: &str = "page.crop";
 const TOOL_EDIT_TEXT: &str = "edit.edit_text";
 
-const SLOT_POINTER: SlotId = 0;
-const SLOT_CROP: SlotId = 1;
+const SLOT_SELECT: SlotId = 0;
+const SLOT_HAND: SlotId = 1;
+const SLOT_CROP: SlotId = 2;
 /// The first comment group's slot; group `g` is `SLOT_COMMENT + g`.
 const SLOT_COMMENT: SlotId = 10;
 const SLOT_EDIT_TEXT: SlotId = 20;
@@ -122,7 +123,8 @@ fn last_used(app: &PdfCraftApp) -> LastUsed<String> {
 /// The built-in slots, then one slot for each of `user` commands.
 fn slots_with(app: &PdfCraftApp, user: &[String]) -> Vec<ToolSlot<String>> {
     let mut slots = vec![
-        ToolSlot::new(SLOT_POINTER, vec![rail_tool(TOOL_SELECT), rail_tool(TOOL_HAND)]),
+        ToolSlot::new(SLOT_SELECT, vec![rail_tool(TOOL_SELECT)]),
+        ToolSlot::new(SLOT_HAND, vec![rail_tool(TOOL_HAND)]),
         ToolSlot::ending_group(SLOT_CROP, vec![rail_tool(TOOL_CROP)]),
     ];
     let groups = comments::GROUPS.len();
