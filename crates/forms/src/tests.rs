@@ -1260,6 +1260,83 @@ fn thai_a_field_font_cannot_hold_is_drawn_from_the_thai_face() {
     }
 }
 
+/// #6822: Greek typed into a field whose font (Helvetica, WinAnsi) can't hold it is stored as typed
+/// (a UTF-16BE text string) and drawn from the bundled Inter face, beside the field's font, rather
+/// than as `?`: nothing is marked and other viewers aren't asked to redraw. Latin beside it stays
+/// in the field's font, and text WinAnsi holds is drawn in it alone, as before.
+#[test]
+fn greek_a_field_font_cannot_hold_is_drawn_from_the_bundled_face() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greek) /DA (/Helv 10 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (mixed) /Ff 4096 /DA (/Helv 10 Tf 0 g) /Rect [50 600 350 660] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (western) /DA (/Helv 10 Tf 0 g) /Rect [50 500 250 520] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let greek = "Γειά σου";
+    let mixed = "Name: Γειά\nσου ok";
+    let western = "Café (±)";
+    set_value(&mut doc, "greek", &FieldValue::Text(greek.into())).unwrap();
+    set_value(&mut doc, "mixed", &FieldValue::Text(mixed.into())).unwrap();
+    set_value(&mut doc, "western", &FieldValue::Text(western.into())).unwrap();
+    let doc = reopen(&doc);
+    // The values, as typed: /V is UTF-16BE behind its byte order mark.
+    for (name, typed) in [("greek", greek), ("mixed", mixed), ("western", western)] {
+        let all = fields(&doc);
+        let f = field(&all, name);
+        assert_eq!(f.value, [typed]);
+        let v = doc.get(f.obj).as_dict().unwrap().get(b"V").unwrap().as_string().unwrap().bytes.clone();
+        let utf16: Vec<u8> = [0xFE, 0xFF].into_iter().chain(typed.encode_utf16().flat_map(u16::to_be_bytes)).collect();
+        assert_eq!(v, utf16, "{name}");
+    }
+    assert!(undrawn_fields(&doc).is_empty(), "{:?}", undrawn_fields(&doc));
+    assert!(!need_appearances(&doc), "no viewer needs to redraw what is drawn");
+    // The normal appearance's content and its font resources.
+    let drawn = |name: &str| {
+        let all = fields(&doc);
+        let w = &field(&all, name).widgets[0];
+        let wd = doc.get(w.obj).as_dict().unwrap().clone();
+        assert_eq!(pdfcraft_fonts::undrawn_mark(&wd), None, "{name}");
+        assert!(wd.get(b"DA").and_then(|o| o.as_string()).is_some_and(|s| s.to_text().starts_with("/Helv ")), "the /DA is kept");
+        let n = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(n) else { panic!() };
+        let fonts = s.dict.get(b"Resources").and_then(|r| r.as_dict()).and_then(|r| r.get(b"Font")).and_then(|f| f.as_dict()).unwrap().clone();
+        (s.decoded().unwrap(), fonts)
+    };
+    fn has(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+    for name in ["greek", "mixed"] {
+        let (ap, fonts) = drawn(name);
+        assert!(!ap.contains(&b'?'), "{name}: {}", String::from_utf8_lossy(&ap));
+        let (key, font) = fonts.iter().find(|(k, _)| k.starts_with(b"PCLa")).expect("a font from the bundled face");
+        assert!(has(&ap, &[&b"/"[..], key.as_slice(), &b" "[..]].concat()), "{name} shows it");
+        let font = font.as_dict().unwrap();
+        assert_eq!(font.name(b"Subtype"), Some(&b"Type3"[..]));
+        let Object::Stream(cmap) = &*doc.get(font.reference(b"ToUnicode").unwrap()) else { panic!("ToUnicode is a stream object") };
+        let cmap = String::from_utf8_lossy(&cmap.decoded().unwrap()).into_owned();
+        assert!(cmap.contains("<03C3>") && cmap.contains("<03BF>") && cmap.contains("<03C5>"), "σου copies as typed: {cmap}");
+    }
+    let (greek_ap, _) = drawn("greek");
+    assert!(has(&greek_ap, b"( ) Tj"), "the space between the words is Helvetica's");
+    let (mixed_ap, _) = drawn("mixed");
+    assert!(has(&mixed_ap, b"(Name: ) Tj") && has(&mixed_ap, b"( ok) Tj"), "{}", String::from_utf8_lossy(&mixed_ap));
+    // Text WinAnsi holds: Helvetica alone, with the bytes it always had.
+    let (ap, fonts) = drawn("western");
+    assert_eq!(fonts.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), [b"Helv".to_vec()]);
+    let shown = [pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(western)), b" Tj".to_vec()].concat();
+    assert!(has(&ap, &shown), "{}", String::from_utf8_lossy(&ap));
+    // A character the bundled face lacks is still drawn as `?` and reported, beside drawn Greek.
+    let mut doc = doc;
+    set_value(&mut doc, "greek", &FieldValue::Text("Γειά 北".into())).unwrap();
+    assert_eq!(undrawn_fields(&doc), [("greek".to_string(), '北')]);
+    assert!(need_appearances(&doc));
+}
+
 /// A document that declares PDF/A can't ask other viewers to redraw its fields (PDF/A forbids
 /// `/NeedAppearances`): the value is still kept and its widget marked, and the flag stays off.
 #[test]
@@ -4314,6 +4391,132 @@ fn document_scripts_read_each_name_tree_node_once() {
         "<< /S /JavaScript /JS (var ready = true;) >>".into(),
     ]);
     assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
+}
+
+#[test]
+fn detection_names_check_boxes_from_the_nearer_neighbouring_label() {
+    use crate::detect::*;
+    let w = |t: &str, x0: f64, y0: f64, x1: f64| Word { text: t.into(), rect: [x0, y0, x1, y0 + 10.0] };
+    let names_of = |words: &[Word], boxes: &[[f64; 4]]| -> Vec<String> {
+        detect(words, &Shapes { boxes: boxes.to_vec(), rules: Vec::new() }, &[], &[])
+            .into_iter()
+            .map(|c| {
+                assert_eq!(c.kind, Kind::CheckBox);
+                c.name
+            })
+            .collect()
+    };
+
+    // #2943: "Monsieur [box]   Madame [box]" — each label ends ~4-5 pt before its box, while
+    // the next label begins 23 pt after the first box. Drawing order does not change the names.
+    let french_words = [w("Monsieur", 100.0, 532.0, 141.0), w("Madame", 180.0, 532.0, 218.0)];
+    let french_boxes = [[146.0, 532.0, 157.0, 542.0], [222.0, 532.0, 233.0, 542.0]];
+    assert_eq!(names_of(&french_words, &french_boxes), ["Monsieur", "Madame"]);
+    assert_eq!(names_of(&french_words, &[french_boxes[1], french_boxes[0]]), ["Monsieur", "Madame"]);
+
+    // Two filers on the same form ("Monsieur [ ] Madame [ ]" repeated) number the second pair.
+    let two_filers_words =
+        [w("Monsieur", 100.0, 532.0, 141.0), w("Madame", 180.0, 532.0, 218.0), w("Monsieur", 320.0, 532.0, 361.0), w("Madame", 400.0, 532.0, 438.0)];
+    let two_filers_boxes = [[146.0, 532.0, 157.0, 542.0], [222.0, 532.0, 233.0, 542.0], [366.0, 532.0, 377.0, 542.0], [442.0, 532.0, 453.0, 542.0]];
+    assert_eq!(names_of(&two_filers_words, &two_filers_boxes), ["Monsieur", "Madame", "Monsieur2", "Madame2"]);
+
+    // Even with equal 5 pt gaps ("Label [ ] Label [ ]" vs "[ ] Label [ ] Label"), each box pairs
+    // with its own neighbour rather than leaving an outer box or label orphaned.
+    let tight_left_words = [w("Monsieur", 100.0, 400.0, 140.0), w("Madame", 160.0, 400.0, 200.0)];
+    let tight_left_boxes = [[145.0, 400.0, 155.0, 410.0], [205.0, 400.0, 215.0, 410.0]];
+    assert_eq!(names_of(&tight_left_words, &tight_left_boxes), ["Monsieur", "Madame"]);
+
+    let tight_right_words = [w("Monsieur", 115.0, 400.0, 155.0), w("Madame", 175.0, 400.0, 215.0)];
+    let tight_right_boxes = [[100.0, 400.0, 110.0, 410.0], [160.0, 400.0, 170.0, 410.0]];
+    assert_eq!(names_of(&tight_right_words, &tight_right_boxes), ["Monsieur", "Madame"]);
+
+    // An unlabelled box does not steal a label that sits closer to the adjacent box.
+    assert_eq!(names_of(&[w("Madame", 180.0, 532.0, 218.0)], &french_boxes), ["Check Box1", "Madame"]);
+    assert_eq!(
+        names_of(&[w("Monsieur", 115.0, 400.0, 155.0)], &[[100.0, 400.0, 110.0, 410.0], [178.0, 400.0, 188.0, 410.0]]),
+        ["Monsieur", "Check Box1"]
+    );
+
+    // Deliberate ambiguity: "[ ] 4pt Yes 3pt [ ] No" gives Yes to the closer box.
+    assert_eq!(
+        names_of(&[w("Yes", 114.0, 400.0, 134.0), w("No", 151.0, 400.0, 166.0)], &[[100.0, 400.0, 110.0, 410.0], [137.0, 400.0, 147.0, 410.0]]),
+        ["Check Box1", "Yes"]
+    );
+
+    // A row heading ending with a colon ("Status: [ ] Single [ ] Married" or French
+    // "Civilité : Monsieur [ ] Madame [ ]") does not beat or merge into the option label,
+    // while a standalone "Married: [ ]" or "Date of birth : [ ]" still uses its prompt.
+    let prompt_words = [w("Status:", 50.0, 300.0, 96.0), w("Single", 115.0, 300.0, 145.0), w("Married", 185.0, 300.0, 225.0)];
+    let prompt_boxes = [[100.0, 300.0, 110.0, 310.0], [170.0, 300.0, 180.0, 310.0]];
+    assert_eq!(names_of(&prompt_words, &prompt_boxes), ["Single", "Married"]);
+    let civilite_words =
+        [w("Civilité", 30.0, 532.0, 72.0), w(":", 75.0, 532.0, 78.0), w("Monsieur", 100.0, 532.0, 141.0), w("Madame", 180.0, 532.0, 218.0)];
+    assert_eq!(names_of(&civilite_words, &french_boxes), ["Monsieur", "Madame"]);
+    assert_eq!(names_of(&[w("Married:", 50.0, 300.0, 95.0)], &[[100.0, 300.0, 110.0, 310.0]]), ["Married"]);
+    assert_eq!(
+        names_of(
+            &[w("Date", 30.0, 300.0, 52.0), w("of", 55.0, 300.0, 65.0), w("birth", 68.0, 300.0, 90.0), w(":", 92.0, 300.0, 95.0)],
+            &[[100.0, 300.0, 110.0, 310.0]]
+        ),
+        ["Date of birth"]
+    );
+
+    // "[ ] Oui   Non [ ]" with an 18 pt gap between "Oui" and "Non" splits the two labels
+    // between their respective boxes instead of merging "Oui Non".
+    let mixed_words = [w("Oui", 115.0, 300.0, 135.0), w("Non", 153.0, 300.0, 175.0)];
+    let mixed_boxes = [[100.0, 300.0, 110.0, 310.0], [180.0, 300.0, 190.0, 310.0]];
+    assert_eq!(names_of(&mixed_words, &mixed_boxes), ["Oui", "Non"]);
+
+    // An existing check-box widget still claims its own label so a neighbouring unlabelled box
+    // does not steal it.
+    let existing = [[100.0, 400.0, 110.0, 410.0]];
+    let remaining =
+        detect(&[w("Monsieur", 115.0, 400.0, 155.0)], &Shapes { boxes: vec![[178.0, 400.0, 188.0, 410.0]], rules: Vec::new() }, &existing, &[]);
+    assert_eq!(remaining.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Check Box1"]);
+
+    // A stray punctuation token right after the first box does not pull the next box's label in.
+    assert_eq!(names_of(&[w(".", 158.0, 532.0, 160.0), w("Madame", 180.0, 532.0, 218.0)], &french_boxes), ["Check Box1", "Madame"]);
+}
+
+/// A hostile vector page can contain arbitrarily many small squares; detection must not run
+/// pairwise comb/overlap/neighbor work on all of them, nor cubic default-name lookup.
+#[test]
+fn detection_bounds_many_small_squares_before_pairwise_work() {
+    use crate::detect::*;
+    let boxes = (0..MAX_DETECTION_BOXES * 50)
+        .map(|i| {
+            let x = (i % 100) as f64 * 30.0;
+            let y = (i / 100) as f64 * 30.0;
+            [x, y, x + 10.0, y + 10.0]
+        })
+        .collect();
+    let shapes = Shapes { boxes, rules: Vec::new() };
+    let found = detect(&[], &shapes, &[], &["Check Box1".into(), "Check Box3".into()]);
+    assert_eq!(found.len(), MAX_DETECTION_BOXES);
+    assert!(found.iter().all(|c| c.kind == Kind::CheckBox));
+    assert_eq!(found.first().unwrap().name, "Check Box2");
+    assert_eq!(found.get(1).unwrap().name, "Check Box4");
+    assert_eq!(found.last().unwrap().name, format!("Check Box{}", MAX_DETECTION_BOXES + 2));
+    assert_eq!(found.iter().map(|c| &c.name).collect::<std::collections::HashSet<_>>().len(), found.len());
+    let prefix = Shapes { boxes: shapes.boxes.iter().take(MAX_DETECTION_BOXES).copied().collect(), rules: Vec::new() };
+    assert_eq!(found, detect(&[], &prefix, &[], &["Check Box1".into(), "Check Box3".into()]));
+}
+
+#[test]
+fn detection_box_budget_counts_rejected_inputs_and_keeps_existing_exclusions() {
+    use crate::detect::*;
+    let first = [0.0, 0.0, 10.0, 10.0];
+    let last = [30.0, 0.0, 40.0, 10.0];
+    // The final input at the limit is included; the next is not, even if earlier inputs are
+    // duplicates. A later input higher on the page stays outside the budget despite reading first.
+    let mut boxes = vec![first; MAX_DETECTION_BOXES - 1];
+    boxes.push(last);
+    boxes.push([60.0, 30.0, 70.0, 40.0]);
+    let shapes = Shapes { boxes, rules: Vec::new() };
+    assert_eq!(detect(&[], &shapes, &[], &[]).iter().map(|c| c.rect).collect::<Vec<_>>(), [first, last]);
+    let mut existing = vec![[90.0, 0.0, 100.0, 10.0]; MAX_DETECTION_BOXES];
+    existing.push(last);
+    assert_eq!(detect(&[], &shapes, &existing, &[]).iter().map(|c| c.rect).collect::<Vec<_>>(), [first]);
 }
 
 #[test]
