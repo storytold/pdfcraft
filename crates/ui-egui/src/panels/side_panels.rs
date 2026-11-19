@@ -301,7 +301,14 @@ impl DockPanels<PanelId> for Panels<'_> {
         match panel.side() {
             Some(side) => PanelSpec::new(side_label(side)).icon(IconSpec::svg(IconId::new(side_icon(side)))).command(command),
             None if self.app.left == LeftPanel::CalculationOrder => PanelSpec::new(crate::i18n::t("Calculation order").to_owned()).command(command),
+            None if super::tools::has_footer(self.app) => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command).footer(),
             None => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command),
+        }
+    }
+
+    fn footer(&mut self, panel: &PanelId, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
+        if *panel == PanelId::Tools {
+            super::tools::footer(self.app, ui);
         }
     }
 

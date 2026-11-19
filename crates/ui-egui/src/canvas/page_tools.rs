@@ -340,7 +340,7 @@ pub(crate) fn page_tool<'a>(
             Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, cx.info, t, cx.units, cx.author, cx.host, cx.wake.clone()))
         }
         QuickTool::Crop => Arm::Crop(CropTool::new(cx.can_crop, &mut session.box_drag, cx.pages, cx.rotation, size)),
-        QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages)),
+        QuickTool::EnhanceCamera => Arm::Camera(CameraTool::new(cx.can_modify, cx.pages, press)),
         QuickTool::Fill(fill_tool) => {
             let input = FillInput {
                 tool: fill_tool,
@@ -354,7 +354,7 @@ pub(crate) fn page_tool<'a>(
                 fill_text: &mut session.fill_text,
                 comments: &mut session.comments,
             };
-            Arm::Area(Box::new(FillSignTool::new(&cx, input, fill)))
+            Arm::Area(Box::new(FillSignTool::new(&cx, input, fill, *press)))
         }
         QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session, cx.info, xforms))),
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.pages, cx.text_style))),

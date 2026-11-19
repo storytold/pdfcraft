@@ -5,7 +5,7 @@
 // PLAN: `craft-draw`, `craft-pages` and `craft-behavior` must be dependencies of pdfcraft-ui-egui (Cargo.toml is not in this set's files).
 use craft::behavior::kurbo::{Point, Rect as DocRect};
 use craft::behavior::overlay::Align;
-use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId};
+use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, PressState};
 use craft::draw::ui::PerspectiveCropQuad;
 use craft::pages::ui::view::{PageBody, PlacedPage};
 use craft_ui::buttons::{Button, IconButton};
@@ -176,7 +176,8 @@ pub(crate) fn bar(ui: &mut Ui, body: &PageBody<'_>, session: &mut PageSession, a
 pub(crate) struct CameraTool<'a> {
     allowed: bool,
     pages: &'a [PlacedPage],
-    /// The page the press in progress went down on.
+    /// The page the press in progress went down on, read from this pass's press: the press and its release come in
+    /// different passes.
     pressed: Option<usize>,
     /// The press moved past slop: it is a drag from its page, not a click.
     dragged: bool,
@@ -184,9 +185,10 @@ pub(crate) struct CameraTool<'a> {
 }
 
 impl<'a> CameraTool<'a> {
-    /// The tool over the pages on screen; with `allowed` off it only refuses.
-    pub(crate) fn new(allowed: bool, pages: &'a [PlacedPage]) -> Self {
-        CameraTool { allowed, pages, pressed: None, dragged: false, moved_to: None }
+    /// The tool over the pages on screen, in a pass whose press is `press`; with `allowed` off it only refuses.
+    pub(crate) fn new(allowed: bool, pages: &'a [PlacedPage], press: &PressState) -> Self {
+        let pressed = press.phase.start().and_then(|start| pages.iter().find(|p| p.rect.contains(start.origin))).map(|p| p.page);
+        CameraTool { allowed, pages, pressed: pressed.filter(|_| allowed), dragged: false, moved_to: None }
     }
 
     /// The page the quadrilateral moves to, once a press asked for it.

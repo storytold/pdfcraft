@@ -300,7 +300,7 @@ fn the_pane_last_clicked_is_the_one_menus_and_keys_act_on() {
     h.run_steps(2);
     assert!(h.state().session.get(rid).unwrap().dirty);
     // The main strip still marks the tab its pane shows, and the window title names it.
-    assert_eq!(h.get_by_role_and_label(Role::Tab, "left.pdf (edited)").accesskit_node().is_selected(), Some(true));
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "left.pdf, modified").accesskit_node().is_selected(), Some(true));
     assert!(h.state().window_title.starts_with("left.pdf"), "{}", h.state().window_title);
 }
 
