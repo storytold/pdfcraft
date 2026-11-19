@@ -536,6 +536,61 @@ fn marked_id(doc: &Document, props: &Dict, op: &pdfcraft_content::Op, ids: &Hash
     (op.op == b"BDC").then(|| bdc_mcid(doc, props, op)).flatten().filter(|n| ids.contains(n))
 }
 
+/// Point the MCR `item` at the stream that now holds the content of the one it names, when that
+/// stream was replaced.
+fn remap_stm_item(doc: &mut Document, item: &mut Object, new_of: &impl Fn(ObjRef) -> Option<ObjRef>) -> Result<bool, pdfcraft_cos::CosError> {
+    let target = match item {
+        Object::Ref(r) => {
+            let Some(new) = doc.get(*r).as_dict().and_then(|d| d.get(b"Stm")).and_then(Object::as_ref).and_then(new_of) else {
+                return Ok(false);
+            };
+            doc.update_dict(*r, |d| {
+                d.set(b"Stm".to_vec(), Object::Ref(new));
+            })?;
+            return Ok(true);
+        }
+        Object::Dict(d) => d,
+        _ => return Ok(false),
+    };
+    let Some(new) = target.get(b"Stm").and_then(Object::as_ref).and_then(new_of) else { return Ok(false) };
+    target.set(b"Stm".to_vec(), Object::Ref(new));
+    Ok(true)
+}
+
+/// Point every MCR on `page` that names a replaced stream at the stream that now holds its
+/// content. The page's `/Contents` no longer names the old stream, so without this a later
+/// operation would take that content for a form's and rewrite a stream nothing draws.
+fn remap_stms(doc: &mut Document, page: ObjRef, replaced: &[(ObjRef, ObjRef)]) -> Result<(), pdfcraft_cos::CosError> {
+    if replaced.is_empty() {
+        return Ok(());
+    }
+    let new_of = |old: ObjRef| replaced.iter().find(|(o, _)| *o == old).map(|(_, new)| *new);
+    for element in elements(doc).into_iter().filter(|e| e.page == Some(page)) {
+        let Some(k) = element.dict.get(b"K").cloned() else { continue };
+        let array = matches!(k, Object::Array(_));
+        let mut items = match k {
+            Object::Array(items) => items,
+            one => vec![one],
+        };
+        let mut changed = false;
+        for item in &mut items {
+            changed |= remap_stm_item(doc, item, &new_of)?;
+        }
+        if changed {
+            let k = if array {
+                Object::Array(items)
+            } else {
+                match items.as_slice() {
+                    [one] => one.clone(),
+                    _ => Object::Null,
+                }
+            };
+            doc.update_dict(element.object, |d| d.set(b"K".to_vec(), k))?;
+        }
+    }
+    Ok(())
+}
+
 /// What [`artifact_marked_content`] did.
 #[derive(Debug, PartialEq)]
 enum Marked {
@@ -594,6 +649,7 @@ fn artifact_marked_content(
     }
     let mut spliced = spliced.into_iter();
     let mut next = Vec::with_capacity(streams.len());
+    let mut replaced = Vec::new();
     for (entry, stream) in streams {
         let Some((stream, old, _)) = stream else {
             next.push(entry);
@@ -614,13 +670,20 @@ fn artifact_marked_content(
         let stream = Object::Stream(Stream::flate(dict, &new));
         // Splicing depends on this occurrence's neighbours. The original stream may also
         // appear elsewhere in this array or on another page, where it must stay unchanged.
-        next.push(Object::Ref(doc.add(stream)));
+        let replacement = doc.add(stream);
+        if let Some(old) = entry.as_ref() {
+            replaced.push((old, replacement));
+        }
+        next.push(Object::Ref(replacement));
     }
     let contents = match next.as_slice() {
         [one] => one.clone(),
         _ => Object::Array(next),
     };
     doc.update_dict(page.obj, |p| p.set(b"Contents".to_vec(), contents))?;
+    // An MCR may name the stream that was just replaced: point it at the stream that now holds
+    // that content, so a later operation finds the content the page draws.
+    remap_stms(doc, page.obj, &replaced)?;
     Ok(Marked::Done)
 }
 

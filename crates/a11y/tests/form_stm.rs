@@ -306,6 +306,39 @@ fn stm_naming_the_page_stream_is_the_page() {
     assert_eq!(form, [("Figure".into(), Some(0))]);
 }
 
+/// An earlier operation replaces the page stream that an MCR's `/Stm` names. The reference follows
+/// the replacement, so the content now drawn on the page is what the next operation changes.
+#[test]
+fn stm_follows_a_page_stream_replaced_by_an_earlier_operation() {
+    let mut doc = fixture(FORM, "<< /Type /MCR /MCID 1 /Stm 11 0 R >>", "[22 0 R]");
+    doc.update_dict(ObjRef::new(4, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(PAGE_FIGURE), Object::Ref(FORM_FIGURE)]))).unwrap();
+    mark_tag_artifact(&mut doc, PAGE_FIGURE).expect("page artifact");
+    mark_tag_artifact(&mut doc, FORM_FIGURE).expect("artifact");
+    let (page, form) = marks(&doc);
+    assert_eq!(page, [("Artifact".into(), None), ("Artifact".into(), None)], "the visible paragraph is the one changed");
+    assert_eq!(form, [("Figure".into(), Some(0))], "the form is untouched");
+}
+
+/// A stream that two pages draw: replacing it for one page leaves the other page's MCR naming it.
+#[test]
+fn replacing_a_page_stream_leaves_another_page_naming_it_alone() {
+    let mut doc = build(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 3 0 R /MarkInfo << /Marked true >> >>".into()),
+        (2, "<< /Type /Pages /Kids [10 0 R 30 0 R] /Count 2 >>".into()),
+        (3, "<< /Type /StructTreeRoot /K 4 0 R /ParentTree 5 0 R >>".into()),
+        (4, "<< /Type /StructElem /S /Document /P 3 0 R /K [20 0 R 31 0 R] >>".into()),
+        (5, "<< /Nums [0 [20 0 R] 1 [31 0 R]] >>".into()),
+        (10, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 0 >>".into()),
+        (11, format!("<< /Length {} >>\nstream\n{PAGE}\nendstream", PAGE.len())),
+        (20, "<< /Type /StructElem /S /Figure /P 4 0 R /Pg 10 0 R /K 0 >>".into()),
+        (30, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R /StructParents 1 >>".into()),
+        (31, "<< /Type /StructElem /S /P /P 4 0 R /Pg 30 0 R /K << /Type /MCR /MCID 1 /Stm 11 0 R >> >>".into()),
+    ]);
+    mark_tag_artifact(&mut doc, PAGE_FIGURE).expect("artifact");
+    // Page 30 still draws stream 11, so its paragraph is still that page's own content.
+    assert_eq!(tag_content(&doc, ObjRef::new(31, 0)).expect("content")[0].stream, ContentSource::Page);
+}
+
 /// A `/Stm` that isn't a reference names no stream: the mark is reported as unreadable, not as
 /// the page's content and not as object 0, and the page's own MCID 0 text is not taken for it.
 #[test]
