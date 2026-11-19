@@ -383,6 +383,10 @@ pub struct PageSession {
     /// The rectangle being dragged on a page by Snapshot, Crop or a signature area: the page tools are built each
     /// pass, so the drag lives here from its press to its release.
     pub(crate) box_drag: PageBoxDrag,
+    /// The Hand tool and Marquee Zoom's Zoom tool: each keeps its gesture (the press, the last
+    /// point, a flick's glide) from pass to pass, so the page tool lends them rather than building them.
+    pub(crate) hand: craft::ui::canvas::HandTool,
+    pub(crate) marquee_zoom: craft::ui::canvas::ZoomTool,
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
     /// shows its entries when it has a menu and is the one selected, or else the page's own.
     pub(crate) menu_for: Option<(usize, Owner)>,
@@ -438,6 +442,8 @@ impl PageSession {
             fill_selection: Default::default(),
             signature_drag: Default::default(),
             box_drag: PageBoxDrag::default(),
+            hand: craft::ui::canvas::HandTool::new(Default::default()),
+            marquee_zoom: craft::ui::canvas::ZoomTool::new(Default::default()),
             menu_for: None,
         }
     }
@@ -1452,6 +1458,11 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     }
     if out.toggle_white_space {
         view.view.hide_white_space = !view.view.hide_white_space;
+    }
+    // Full screen shows the page alone, so its keys are the page's: with nothing else holding the keyboard, the page
+    // view takes it, and the presenter's keys reach the running tool.
+    if presenting && ui.ctx().memory(|m| m.focused()).is_none() {
+        focus::request(ui.ctx(), FocusTarget::Id(out.canvas.response.id));
     }
     if let Some(action) = body_out.action.take() {
         view.pending_action = Some(action);

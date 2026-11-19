@@ -758,6 +758,9 @@ impl PdfCraftApp {
         // The shell's body is the dock, whose document panel draws the page area or what takes its place
         // (`side_panels::document_view`).
         chrome::shell(self, ui);
+        // The keys the app reads itself, once the shell's pass has fired the commands and the tool host has taken
+        // its tools' keys; leaving full screen is followed in this same pass.
+        self.shortcuts(&ctx);
         self.follow_screen_mode();
         if !self.full_screen_document() && !self.ocr_verify.open {
             // FitWindow and CenterWindow, once the document just opened is laid out.
