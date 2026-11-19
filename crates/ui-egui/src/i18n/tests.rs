@@ -1626,10 +1626,10 @@ fn translation_gaps_report() {
 const REPORT_START: &str = "=== translation gaps ===";
 const REPORT_END: &str = "=== end of translation gaps ===";
 
-/// Preferences ▸ Date format ▸ Language offers exactly the interface languages, in order, with
-/// the interface's names for them when the catalogs are embedded.
+/// Preferences ▸ Date format ▸ Language offers the date-capable interface languages, in order,
+/// with the interface's names for them when the catalogs are embedded.
 #[test]
-fn date_languages_are_the_interface_languages() {
+fn date_languages_match_date_capable_interface_languages() {
     let interface: Vec<&str> = LANGUAGES.iter().filter(|l| l.code != "he").map(|l| l.code).collect();
     let dates: Vec<&str> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| l.code).collect();
     assert_eq!(dates, interface);
