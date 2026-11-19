@@ -174,3 +174,112 @@ fn an_annotation_without_a_page_in_the_tree_is_outlined_on_its_own_page() {
     ]);
     assert_eq!(boxes(&doc, 10), [TagBox { page: 1, rect: [10.0, 20.0, 30.0, 40.0] }]);
 }
+
+/// One page whose content is `content`, its resources `resources` and the tree's single tag
+/// object 10 `tag`; `extra` adds objects.
+fn one_tag(content: &str, resources: &str, tag: &str, extra: Vec<(u32, String)>) -> Document {
+    let mut objects = vec![
+        (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 9 0 R >>".to_owned()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into()),
+        (3, format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << {resources} >> >>")),
+        (5, stream("", content)),
+        (7, FONT.into()),
+        (9, "<< /Type /StructTreeRoot /K 10 0 R >>".into()),
+        (10, tag.into()),
+    ];
+    objects.extend(extra);
+    build_pdf(&objects)
+}
+
+#[test]
+fn a_font_chosen_by_an_extended_graphics_state_is_measured() {
+    let doc = one_tag(
+        "/P << /MCID 0 >> BDC /GS1 gs BT 100 700 Td (Cell) Tj ET EMC",
+        "/ExtGState << /GS1 << /Type /ExtGState /Font [7 0 R 12] >> >>",
+        "<< /S /P /Pg 3 0 R /K 0 >>",
+        Vec::new(),
+    );
+    let b = boxes(&doc, 10);
+    assert_eq!(b.len(), 1, "{b:?}");
+    let [x0, _, x1, y1] = b[0].rect;
+    assert!((x0 - 100.0).abs() < 1e-6 && x1 > 115.0 && x1 < 130.0 && y1 > 707.0 && y1 < 713.0, "{b:?}");
+}
+
+#[test]
+fn raised_text_is_outlined_where_it_is_raised() {
+    let doc = one_tag(
+        "/P << /MCID 0 >> BDC BT /F1 12 Tf 20 Ts 100 700 Td (Cell) Tj ET EMC",
+        "/Font << /F1 7 0 R >>",
+        "<< /S /P /Pg 3 0 R /K 0 >>",
+        Vec::new(),
+    );
+    let [_, y0, _, y1] = only(&doc, 10);
+    assert!(y0 > 715.0 && y0 < 720.0 && y1 > 727.0 && y1 < 733.0, "20 above the baseline: {y0} {y1}");
+}
+
+#[test]
+fn vertical_text_gets_no_box_rather_than_a_horizontal_one() {
+    let font = "<< /Type /Font /Subtype /Type0 /BaseFont /V /Encoding /Identity-V /DescendantFonts [<< /Type /Font \
+                /Subtype /CIDFontType2 /BaseFont /V /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>] >>";
+    let doc = one_tag(
+        "/P << /MCID 0 >> BDC BT /F2 12 Tf 100 700 Td <00410042> Tj ET EMC",
+        "/Font << /F2 8 0 R >>",
+        "<< /S /P /Pg 3 0 R /K 0 >>",
+        vec![(8, font.into())],
+    );
+    assert_eq!(boxes(&doc, 10), []);
+}
+
+#[test]
+fn an_object_whose_type_is_not_a_name_is_not_a_tag() {
+    let doc = one_tag("/P << /MCID 0 >> BDC 10 10 20 20 re f EMC", "", "<< /S 123 /Pg 3 0 R /K 0 >>", Vec::new());
+    assert_eq!(tag_boxes(&doc, ObjRef::new(10, 0)), Err(TagError::NotATag(ObjRef::new(10, 0))));
+}
+
+#[test]
+fn an_annotation_reached_with_and_without_its_page_is_outlined_once() {
+    let doc = one_tag(
+        "",
+        "",
+        "<< /S /Link /K [<< /Type /OBJR /Pg 3 0 R /Obj 11 0 R >> << /Type /OBJR /Obj 11 0 R >>] >>",
+        vec![(11, "<< /Type /Annot /Subtype /Link /P 3 0 R /Rect [10 20 30 40] >>".into())],
+    );
+    assert_eq!(boxes(&doc, 10), [TagBox { page: 0, rect: [10.0, 20.0, 30.0, 40.0] }]);
+}
+
+#[test]
+fn two_sequences_in_one_form_are_two_boxes() {
+    let doc = one_tag(
+        "q 1 0 0 1 400 680 cm /Fm1 Do Q",
+        "/XObject << /Fm1 21 0 R >>",
+        "<< /S /P /Pg 3 0 R /K [<< /Type /MCR /Stm 21 0 R /MCID 0 >> << /Type /MCR /Stm 21 0 R /MCID 1 >>] >>",
+        vec![(
+            21,
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 30 30]", "/P << /MCID 0 >> BDC 0 0 9 9 re f EMC /P << /MCID 1 >> BDC 9 9 9 9 re f EMC"),
+        )],
+    );
+    let whole = TagBox { page: 0, rect: [400.0, 680.0, 430.0, 710.0] };
+    assert_eq!(boxes(&doc, 10), [whole.clone(), whole]);
+}
+
+#[test]
+fn an_annotation_rectangle_entry_given_by_reference_is_read() {
+    let doc = one_tag(
+        "",
+        "",
+        "<< /S /Link /Pg 3 0 R /K << /Type /OBJR /Obj 11 0 R >> >>",
+        vec![(11, "<< /Type /Annot /Subtype /Link /P 3 0 R /Rect [10 20 30 12 0 R] >>".into()), (12, "40".into())],
+    );
+    assert_eq!(boxes(&doc, 10), [TagBox { page: 0, rect: [10.0, 20.0, 30.0, 40.0] }]);
+}
+
+#[test]
+fn an_annotation_rectangle_past_f32_is_not_outlined() {
+    let doc = one_tag(
+        "",
+        "",
+        "<< /S /Link /Pg 3 0 R /K << /Type /OBJR /Obj 11 0 R >> >>",
+        vec![(11, format!("<< /Type /Annot /Subtype /Link /P 3 0 R /Rect [0 0 1{} 10] >>", "0".repeat(40)))],
+    );
+    assert_eq!(boxes(&doc, 10), []);
+}

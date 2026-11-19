@@ -24,6 +24,10 @@ pub(crate) struct Glyph<'a> {
     pub size: f64,
     /// Horizontal scaling (`Tz` / 100).
     pub scale: f64,
+    /// Text rise (`Ts`), in unscaled text space.
+    pub rise: f64,
+    /// The font writes vertically; its glyphs are still advanced as if horizontal.
+    pub vertical: bool,
     /// Where the next glyph starts, in user space.
     pub end: (f64, f64),
 }
@@ -33,25 +37,40 @@ impl Glyph<'_> {
     pub fn bbox(&self) -> [f64; 4] {
         let m = self.metrics;
         let width = m.width(self.code) * self.size * self.scale;
-        self.trm.bbox([0.0, m.descent * self.size, width, m.ascent * self.size])
+        self.trm.bbox([0.0, m.descent * self.size + self.rise, width, m.ascent * self.size + self.rise])
     }
+}
+
+/// A font selected by `Tf` (a font resource name) or by an extended graphics state's `/Font`
+/// (the font object).
+#[derive(Clone)]
+enum FontKey {
+    Name(Vec<u8>),
+    Object(ObjRef),
+}
+
+/// A font's metrics and its writing mode.
+struct Font {
+    metrics: Metrics,
+    vertical: bool,
 }
 
 /// The graphics state that places glyphs: the CTM, the font and the text state parameters.
 #[derive(Clone)]
 struct TextState {
     ctm: Matrix,
-    font: Option<Vec<u8>>,
+    font: Option<FontKey>,
     size: f64,
     char_spacing: f64,
     word_spacing: f64,
     scale: f64,
     leading: f64,
+    rise: f64,
 }
 
 impl Default for TextState {
     fn default() -> Self {
-        TextState { ctm: Matrix::IDENTITY, font: None, size: 0.0, char_spacing: 0.0, word_spacing: 0.0, scale: 1.0, leading: 0.0 }
+        TextState { ctm: Matrix::IDENTITY, font: None, size: 0.0, char_spacing: 0.0, word_spacing: 0.0, scale: 1.0, leading: 0.0, rise: 0.0 }
     }
 }
 
@@ -64,9 +83,10 @@ struct Walk<'d> {
     doc: &'d Document,
     fonts: Dict,
     props: Dict,
-    metrics: HashMap<Vec<u8>, Rc<Metrics>>,
+    ext_g_states: Dict,
+    metrics: HashMap<Vec<u8>, Rc<Font>>,
     /// Built once per font object, however many resource names alias it.
-    by_font: HashMap<ObjRef, Rc<Metrics>>,
+    by_font: HashMap<ObjRef, Rc<Font>>,
     /// The id each open marked-content sequence is in: its own, else the enclosing one's.
     stack: Vec<Option<i64>>,
     gs: TextState,
@@ -86,6 +106,7 @@ pub(crate) fn for_each_glyph(doc: &Document, page: &Dict, mut f: impl FnMut(&Gly
         doc,
         fonts: sub(doc, &res, b"Font"),
         props: sub(doc, &res, b"Properties"),
+        ext_g_states: sub(doc, &res, b"ExtGState"),
         metrics: HashMap::new(),
         by_font: HashMap::new(),
         stack: Vec::new(),
@@ -139,15 +160,29 @@ impl Walk<'_> {
             }
             b"Tf" => {
                 gs.size = op.num(1).unwrap_or(gs.size);
-                gs.font = op.name(0).map(<[u8]>::to_vec);
+                gs.font = op.name(0).map(|n| FontKey::Name(n.to_vec()));
                 if let Some(name) = op.name(0) {
                     self.load_font(name);
+                }
+            }
+            b"gs" => {
+                // `/Font [font size]` selects a font as `Tf` does (ISO 32000-2 §8.4.5).
+                let ext = op.name(0).and_then(|n| self.ext_g_states.get(n)).map(|x| self.doc.resolve(x));
+                let font = ext.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"Font")).map(|f| self.doc.resolve(f));
+                if let Some([Object::Ref(r), size]) = font.as_deref().and_then(Object::as_array).map(|a| &a[..]) {
+                    let size = self.doc.resolve(size).as_f64();
+                    let r = *r;
+                    let gs = &mut self.gs;
+                    gs.size = size.unwrap_or(gs.size);
+                    gs.font = Some(FontKey::Object(r));
+                    self.load_font_object(r);
                 }
             }
             b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
             b"Tw" => gs.word_spacing = op.num(0).unwrap_or(0.0),
             b"Tz" => gs.scale = op.num(0).unwrap_or(100.0) / 100.0,
             b"TL" => gs.leading = op.num(0).unwrap_or(0.0),
+            b"Ts" => gs.rise = op.num(0).unwrap_or(0.0),
             b"BT" => (self.tm, self.tlm) = (Matrix::IDENTITY, Matrix::IDENTITY),
             b"Td" | b"TD" => {
                 if let Some([x, y]) = op.nums::<2>() {
@@ -189,7 +224,7 @@ impl Walk<'_> {
         });
         let built = match font.and_then(|r| self.by_font.get(&r)) {
             Some(m) => Some(m.clone()),
-            None => self.fonts.get(name).map(|f| self.doc.resolve(f)).and_then(|f| f.as_dict().map(|d| Rc::new(Metrics::from_dict(self.doc, d)))),
+            None => self.fonts.get(name).map(|f| self.doc.resolve(f)).and_then(|f| f.as_dict().map(|d| self.build(d))),
         };
         if let Some(m) = built {
             if let Some(r) = font {
@@ -199,9 +234,30 @@ impl Walk<'_> {
         }
     }
 
+    /// Reads the metrics of the font object an extended graphics state selects, once.
+    fn load_font_object(&mut self, r: ObjRef) {
+        if self.by_font.contains_key(&r) {
+            return;
+        }
+        let built = self.doc.resolve(&Object::Ref(r)).as_dict().map(|d| self.build(d));
+        if let Some(m) = built {
+            self.by_font.insert(r, m);
+        }
+    }
+
+    fn build(&self, d: &Dict) -> Rc<Font> {
+        Rc::new(Font { metrics: Metrics::from_dict(self.doc, d), vertical: pdfcraft_fonts::pdf::writes_vertically(self.doc, d) })
+    }
+
     /// Shows the strings of a text-showing operator, glyph by glyph.
     fn show(&mut self, op: &Op, f: &mut impl FnMut(&Glyph<'_>)) {
-        let Some(m) = self.gs.font.as_ref().and_then(|font| self.metrics.get(font)).cloned() else { return };
+        let font = match &self.gs.font {
+            Some(FontKey::Name(n)) => self.metrics.get(n),
+            Some(FontKey::Object(r)) => self.by_font.get(r),
+            None => None,
+        };
+        let Some(font) = font.cloned() else { return };
+        let (m, vertical) = (&font.metrics, font.vertical);
         let gs = &mut self.gs;
         if op.op != b"Tj" && op.op != b"TJ" {
             if op.op == b"\"" {
@@ -232,7 +288,7 @@ impl Walk<'_> {
                 let advance = m.width(code) * gs.size + gs.char_spacing + if m.is_space(code, len) { gs.word_spacing } else { 0.0 };
                 let next = Matrix::translate(advance * gs.scale, 0.0).then(&self.tm);
                 let end = next.then(&gs.ctm).apply(0.0, 0.0);
-                f(&Glyph { id, trm: self.tm.then(&gs.ctm), metrics: &m, code, size: gs.size, scale: gs.scale, end });
+                f(&Glyph { id, trm: self.tm.then(&gs.ctm), metrics: m, code, size: gs.size, scale: gs.scale, rise: gs.rise, vertical, end });
                 self.tm = next;
             }
         }

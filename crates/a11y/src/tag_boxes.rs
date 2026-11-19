@@ -7,7 +7,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::alt::{self, union};
 use crate::glyphs::MAX_SAVED;
-use crate::tags::TagError;
+use crate::tags::{TagError, tag_type_name};
 
 /// How deep the tag's subtree may nest, counting arrays and references.
 const MAX_DEPTH: usize = 512;
@@ -29,7 +29,7 @@ enum Item {
     /// Marked content in the page's own content.
     Mark { page: ObjRef, mcid: i64 },
     /// Marked content in a form XObject (`/Stm`): outlined where the form is placed.
-    Stream { page: ObjRef, stream: ObjRef },
+    Stream { page: ObjRef, stream: ObjRef, mcid: Option<i64> },
     /// An object reference: an annotation, or an XObject placed on the page.
     Object { page: Option<ObjRef>, object: ObjRef },
 }
@@ -43,12 +43,23 @@ enum Item {
 /// XObject's placement. Returns `NotATag` for an object that isn't a reachable indirect tag, and
 /// `ContentLimit` beyond 65,536 entries or 512 levels.
 pub fn tag_boxes(doc: &Document, object: ObjRef) -> Result<Vec<TagBox>, TagError> {
-    let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else { return Err(TagError::NotATag(object)) };
+    // Only what the tag listing lists: a tag type that is a name.
+    let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object && tag_type_name(doc, &e.dict).is_some()) else {
+        return Err(TagError::NotATag(object));
+    };
     let items = subtree_items(doc, object, &element.dict, element.page)?;
     let mut by_page: HashMap<ObjRef, Vec<Item>> = HashMap::new();
+    let mut kept = HashSet::new();
     for item in items {
         if let Some(page) = item_page(doc, &item) {
-            by_page.entry(page).or_default().push(item);
+            // One annotation reached with and without `/Pg` is one box on its page.
+            let item = match item {
+                Item::Object { object, .. } => Item::Object { page: Some(page), object },
+                other => other,
+            };
+            if kept.insert(item) {
+                by_page.entry(page).or_default().push(item);
+            }
         }
     }
     let mut out = Vec::new();
@@ -140,9 +151,13 @@ fn subtree_items(doc: &Document, root: ObjRef, dict: &Dict, page: Option<ObjRef>
 fn mcr_item(doc: &Document, d: &Dict, pg: Option<ObjRef>) -> Option<Item> {
     let page = d.get(b"Pg").and_then(Object::as_ref).or(pg)?;
     match d.get(b"Stm").and_then(Object::as_ref) {
-        Some(stream) => Some(Item::Stream { page, stream }),
-        None => d.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int()).map(|mcid| Item::Mark { page, mcid }),
+        Some(stream) => Some(Item::Stream { page, stream, mcid: mcid(doc, d) }),
+        None => mcid(doc, d).map(|mcid| Item::Mark { page, mcid }),
     }
+}
+
+fn mcid(doc: &Document, d: &Dict) -> Option<i64> {
+    d.get(b"MCID").map(|m| doc.resolve(m)).and_then(|m| m.as_int())
 }
 
 /// Calls `f` with each item's box on one page, in the items' order. Items drawn nowhere are skipped.
@@ -164,7 +179,8 @@ fn page_boxes(doc: &Document, page: &Dict, items: &[Item], mut f: impl FnMut([f6
             Item::Stream { stream, .. } => placed.get(&stream).copied(),
             Item::Object { object, .. } => annotation_rect(doc, object).or_else(|| placed.get(&object).copied()),
         };
-        if let Some(rect) = rect.filter(|r| r.iter().all(|v| v.is_finite())) {
+        // Within `f32`, which the screen and the headless tool draw and report in.
+        if let Some(rect) = rect.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= f64::from(f32::MAX))) {
             f(rect);
         }
     }
@@ -174,7 +190,8 @@ fn page_boxes(doc: &Document, page: &Dict, items: &[Item], mut f: impl FnMut([f6
 fn mark_bounds(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> HashMap<i64, [f64; 4]> {
     let mut out = alt::content_bboxes(doc, page, ids);
     crate::glyphs::for_each_glyph(doc, page, |g| {
-        if let Some(id) = g.id.filter(|id| ids.contains(id)) {
+        // A vertical font's glyphs are placed as if horizontal here: no box rather than a wrong one.
+        if let Some(id) = g.id.filter(|id| !g.vertical && ids.contains(id)) {
             let b = g.bbox();
             let e = out.entry(id).or_insert(b);
             *e = union(Some(*e), b);
@@ -188,7 +205,8 @@ fn annotation_rect(doc: &Document, object: ObjRef) -> Option<[f64; 4]> {
     let target = doc.get(object);
     let d = target.as_dict()?;
     // Every entry must be a number: skipping one would shift the others into the wrong corners.
-    let r: Vec<f64> = d.get(b"Rect").map(|r| doc.resolve(r)).and_then(|r| r.as_array().and_then(|a| a.iter().map(Object::as_f64).collect()))?;
+    let r: Vec<f64> =
+        d.get(b"Rect").map(|r| doc.resolve(r)).and_then(|r| r.as_array().and_then(|a| a.iter().map(|v| doc.resolve(v).as_f64()).collect()))?;
     match r[..] {
         [a, b, c, e] => Some([a.min(c), b.min(e), a.max(c), b.max(e)]),
         _ => None,

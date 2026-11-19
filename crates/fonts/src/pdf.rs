@@ -825,6 +825,22 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
+/// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
+/// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
+pub fn writes_vertically(doc: &Document, font: &Dict) -> bool {
+    // `/Subtype` may be written by reference (#6750).
+    let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
+    if subtype.as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
+        return false;
+    }
+    match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
+        Some(Object::Name(n)) => n.ends_with(b"-V"),
+        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
+        _ => false,
+    }
+}
+
 /// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
 /// building its metrics, so it decodes no CMap.
 pub fn base_font_name(doc: &Document, font: &Dict) -> String {

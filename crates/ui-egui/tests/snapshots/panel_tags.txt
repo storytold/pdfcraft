@@ -6,6 +6,7 @@ Label = "1 tags"
 Button "P · 16" [on]
 Label = "16 0 R"
 Button "Go to page 1"
+CheckBox "Highlight content" [on]
 Label = "Tag type"
 TextInput "Tag type" = "P"
 Label = "Title"

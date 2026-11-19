@@ -454,7 +454,8 @@ impl Document {
     /// Tags panel ▸ Highlight content: where a tag's content and its descendants' content is drawn,
     /// one box per marked-content sequence or referenced object, in user space.
     pub fn tag_boxes(&self, object: pdfcraft_cos::ObjRef) -> Result<Vec<a11y::TagBox>, a11y::TagError> {
-        self.editor.as_ref().map(|e| a11y::tag_boxes(&e.cos, object)).unwrap_or_else(|| Ok(Vec::new()))
+        // Without the structure read there are no tags to outline, so `object` is not one.
+        self.editor.as_ref().map_or(Err(a11y::TagError::NotATag(object)), |e| a11y::tag_boxes(&e.cos, object))
     }
 
     /// The edit that fixes `rule`, for the rules with an automatic fix: the document language

@@ -285,6 +285,10 @@ pub(crate) fn panel(
 pub(crate) fn paint_page(painter: &egui::Painter, t: &Tokens, xf: &PageXform, page: usize, info: &pdfcraft_render::DocInfo, boxes: &[TagBox]) {
     for b in boxes.iter().filter(|b| b.page == page) {
         let r = xf.user_rect_f64(info, page, b.rect).expand(1.5);
+        // Zoom can carry a huge box past `f32`.
+        if !r.is_finite() {
+            continue;
+        }
         painter.rect_filled(r, egui::CornerRadius::same(2), t.accent.gamma_multiply(0.16));
         painter.rect_stroke(r, egui::CornerRadius::same(2), egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Outside);
     }
