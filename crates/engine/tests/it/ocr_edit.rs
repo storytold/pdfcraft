@@ -419,18 +419,21 @@ fn a_formatting_change_redraws_the_whole_ocr_phrase() {
     assert_eq!(drawn.join(" "), "John Smyth Example");
 }
 
-/// A layer whose words follow one another with no position of their own: a word that went would
-/// move those after it, so keeping them isn't possible and the whole phrase is redrawn instead.
+/// A layer whose words follow one another with no position of their own: a word that goes leaves
+/// its advance behind (ISO 32000-2 §9.4.4), so the words after it stay where they were and are
+/// kept as the scan, with nothing drawn.
 #[test]
-fn words_that_depend_on_the_one_before_are_redrawn_rather_than_moved() {
+fn words_that_depend_on_the_one_before_are_kept_in_place() {
     let bytes = under_scan("BT /F1 10 Tf 3 Tr 20 44 Td (John) Tj ( ) Tj (Smith) Tj ( ) Tj (Example) Tj ET");
     let mut s = Session::new();
     let id = s.open("relative.pdf", None, bytes, None).unwrap();
     assert_eq!(texts(&s, id), ["John Smith Example"]);
+    let right = |s: &Session| s.get(id).unwrap().text_lines(0).iter().find(|l| l.text.contains("Example")).map(|l| l.rect[2]);
+    let before = right(&s).unwrap();
     edit_block(&mut s, id, 0, "John Example");
     let (scan, drawn) = scan_and_drawn(&s, id);
-    assert!(scan.is_empty(), "no word is left to shift under the scan: {scan:?}");
-    assert_eq!(drawn, ["John Example"]);
+    assert_eq!((scan, drawn), (vec!["John".to_owned(), "Example".to_owned()], Vec::<String>::new()));
+    assert_eq!(right(&s), Some(before), "Example stays where it was");
 }
 
 /// The edit survives a save and reopen, and each piece can be edited again.
@@ -460,19 +463,21 @@ fn a_draft_with_the_same_words_changes_nothing() {
     }
 }
 
-/// Visible text positioned after the end of an OCR word depends on that word. An edit may not
-/// leave the word gone and the visible text somewhere else while calling the rest kept.
+/// Visible text positioned after the end of an OCR word depends on that word. The word that goes
+/// leaves its advance behind, so the visible text stays where it was and the word kept stays the
+/// scan's.
 #[test]
-fn visible_text_that_follows_an_ocr_word_stops_it_being_kept_alone() {
+fn visible_text_that_follows_a_removed_ocr_word_stays_in_place() {
     let bytes = under_scan("BT /F1 10 Tf 3 Tr 20 44 Td (John) Tj ( ) Tj (Smith) Tj 0 Tr /F1 14 Tf ( Label) Tj ET");
     let mut s = Session::new();
     let id = s.open("label.pdf", None, bytes, None).unwrap();
     let label = |s: &Session| s.get(id).unwrap().text_lines(0).iter().find(|l| l.text.contains("Label")).map(|l| l.rect[0]);
-    assert_eq!(scan_and_drawn(&s, id).0, ["John Smith"]);
+    assert_eq!(scan_and_drawn(&s, id), (vec!["John Smith".to_owned()], vec!["Label".to_owned()]));
     let before = label(&s).unwrap();
     edit_block(&mut s, id, 0, "John");
-    let (scan, _) = scan_and_drawn(&s, id);
-    assert!(scan.is_empty(), "John can't stay alone when Label would move with it: {scan:?}, Label at {:?} from {before}", label(&s));
+    // Nothing new is drawn: the visible text is the page's own.
+    assert_eq!(scan_and_drawn(&s, id), (vec!["John".to_owned()], vec!["Label".to_owned()]));
+    assert_eq!(label(&s), Some(before), "Label stays where it was");
 }
 
 /// A large word right before a small one, as OCR's sizes can make them: the large word's cover,

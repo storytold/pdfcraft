@@ -431,8 +431,12 @@ pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureIn
 /// structure and validation against `bytes` and `trust` are read again on every call.
 pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &DigestCache) -> Vec<SignatureInfo> {
     let pages = annot_pages(doc);
-    let mut out = Vec::new();
+    let mut out: Vec<SignatureInfo> = Vec::new();
     let mut field_values: HashSet<ObjRef> = HashSet::new();
+    // Fields that name one signature value are judged once: validation does not depend on the
+    // field, and repeating it per field would repeat the digest, chain and evidence work.
+    // The row of `out` that holds each value's verdict: a later field copies it, not a map of copies.
+    let mut judged: HashMap<ObjRef, usize> = HashMap::new();
     let (fields, whole) = walk_sig_fields(doc);
     for f in fields {
         if let Some(v_ref) = f.dict.get(b"V").and_then(Object::as_ref) {
@@ -445,6 +449,13 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             .filter(|r| r.len() == 4)
             .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
         let visible = widget.is_some_and(|(_, w)| widget_shown(doc, w));
+        // A repeat of a judged value reads nothing of it: the signature dictionary is not copied.
+        let shared = f.dict.get(b"V").and_then(Object::as_ref).filter(|_| f.dict.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some()));
+        if let Some(first) = shared.and_then(|r| judged.get(&r)).and_then(|&i| out.get(i)) {
+            let own = SignatureInfo { field: f.name.clone(), signed: true, page, rect, visible, ..first.clone() };
+            out.push(own);
+            continue;
+        }
         let v = f.signature(doc);
         let mut info = SignatureInfo {
             field: f.name.clone(),
@@ -476,6 +487,9 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         };
         if let Some(v) = v {
             validate_into(doc, bytes, trust, &v, &mut info, cache);
+        }
+        if let Some(r) = shared {
+            judged.insert(r, out.len());
         }
         out.push(info);
     }
