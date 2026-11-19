@@ -793,12 +793,13 @@ pub(crate) fn signature_pad(
     let norm = |p: Pos2| [(p.x - rect.left()) / rect.width(), (rect.bottom() - p.y) / rect.width()];
     // Only the primary button draws: a right-button drag (or a pen's barrel button, which is
     // the secondary button, held with the pen in the air) leaves the pad alone, as on the page.
-    if resp.drag_started_by(egui::PointerButton::Primary) {
+    // A primary press joining a drag the secondary button began starts a stroke of its own:
+    // egui reports no new drag start then, and the points would extend the previous stroke.
+    let drawing = resp.dragged_by(egui::PointerButton::Primary);
+    if drawing && (resp.drag_started() || ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))) {
         strokes.push(Vec::new());
     }
-    if resp.dragged_by(egui::PointerButton::Primary)
-        && let (Some(p), Some(s)) = (resp.interact_pointer_pos(), strokes.last_mut())
-    {
+    if drawing && let (Some(p), Some(s)) = (resp.interact_pointer_pos(), strokes.last_mut()) {
         let n = norm(p.clamp(rect.min, rect.max));
         if s.last().is_none_or(|l| (l[0] - n[0]).abs() + (l[1] - n[1]).abs() > 0.002) {
             s.push(n);

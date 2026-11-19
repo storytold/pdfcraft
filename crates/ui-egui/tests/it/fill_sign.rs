@@ -862,6 +862,35 @@ fn only_the_primary_button_draws_in_the_signature_pad() {
     stroke(&mut h, egui::PointerButton::Primary);
     assert_eq!(h.state().signature_draft.strokes.len(), 1, "a primary drag draws one stroke");
     assert!(h.state().signature_draft.strokes[0].len() > 1);
+
+    // A primary press joining a right-button drag starts a stroke of its own where it pressed,
+    // instead of extending the stroke above from where that one ended.
+    let press = |h: &mut Harness<'static, PdfCraftApp>, pos: Pos2, button: egui::PointerButton, pressed: bool| {
+        h.event(egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    };
+    let joined = start + egui::vec2(60.0, -40.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    press(&mut h, start, egui::PointerButton::Secondary, true);
+    h.hover_at(joined);
+    h.run_steps(1);
+    press(&mut h, joined, egui::PointerButton::Primary, true);
+    for k in 1..=4 {
+        h.hover_at(joined + egui::vec2(k as f32 * 25.0, 0.0));
+        h.run_steps(1);
+    }
+    let end = joined + egui::vec2(100.0, 0.0);
+    press(&mut h, end, egui::PointerButton::Primary, false);
+    press(&mut h, end, egui::PointerButton::Secondary, false);
+    h.run_steps(1);
+    let strokes = &h.state().signature_draft.strokes;
+    assert_eq!(strokes.len(), 2, "the primary press started a second stroke: {strokes:?}");
+    // Pad x is normalised to its 460 pt width: the stroke spans the 100 pt the primary drag
+    // moved, not the right-button stretch before it.
+    let xs: Vec<f32> = strokes[1].iter().map(|p| p[0]).collect();
+    let span = xs.iter().cloned().fold(f32::MIN, f32::max) - xs.iter().cloned().fold(f32::MAX, f32::min);
+    assert!((span - 100.0 / 460.0).abs() < 0.03, "the stroke covers only the primary drag: {span}");
 }
 
 #[test]
