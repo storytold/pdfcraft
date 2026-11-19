@@ -226,7 +226,10 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
             }
             ThumbnailEvent::ContextMenu(request) => opened = Some(request.at),
             ThumbnailEvent::Insert(at) => view.pending_action = Some(ViewAction::InsertFromFileAt(at)),
-            ThumbnailEvent::FilesDropped { insert, .. } => view.grid_gap = Some(insert),
+            ThumbnailEvent::FilesDropped { insert, files, .. } => {
+                view.grid_gap = Some(insert);
+                view.dropped_files = Some((insert, files));
+            }
             ThumbnailEvent::Action { page, action, .. } => {
                 view.session.pending_edit = match action {
                     ROTATE_CCW => Some(Edit::RotatePages { pages: vec![page], degrees: -90 }),

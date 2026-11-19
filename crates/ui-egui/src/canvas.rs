@@ -235,6 +235,9 @@ pub struct DocView {
     pub pages_panel: Option<Rect>,
     /// The Pages-panel gap under the pointer (where dropped files go), when it can take pages.
     pub panel_gap: Option<usize>,
+    /// Files dropped on a gap of the page grid or the Pages panel, with the gap, until the app
+    /// inserts them.
+    pub(crate) dropped_files: Option<(usize, Vec<craft::ui::runtime::drag::OsFile>)>,
     /// Transient keyboard owner for this document's Pages sidebar.
     pub(crate) pages_focus_id: Option<egui::Id>,
     /// Scale of the thumbnails in the Pages inspector, independent of document and grid zoom.
@@ -570,6 +573,7 @@ impl DocView {
             grid_gap: None,
             pages_panel: None,
             panel_gap: None,
+            dropped_files: None,
             pages_focus_id: None,
             thumbnail_zoom: 1.0,
             grid_reveal: None,

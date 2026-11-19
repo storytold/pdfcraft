@@ -7,6 +7,7 @@ use craft::theme::ModeChoice;
 use craft::ui::buttons::{Button, IconButton};
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::popover::DropVeil;
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::shell::{AppShell, Slot, Title, TitleBar};
 
@@ -33,10 +34,28 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .title_bar(|ui, _, app: &mut PdfCraftApp| title_bar(app, ui))
         .top(Slot::new("modes").visible(modes_visible), |ui, _, app: &mut PdfCraftApp| mode_bar::show(app, ui))
         .end(Slot::new("view-rail").visible(window_ui), |ui, _, app: &mut PdfCraftApp| view_rail::show(app, ui))
-        .body(|ui, _, app: &mut PdfCraftApp| side_panels::dock(app, ui))
+        .body(|ui, _, app: &mut PdfCraftApp| window_body(app, ui))
         .show(ui, app);
     // PLAN: assumed `set_screen_mode(&mut self, ScreenMode)` (pdf-shell-w8)
     app.set_screen_mode(out.screen_mode);
+}
+
+/// The dock, under the veil that shows files held over the window. Files dropped on the window open as
+/// documents; the Combine files tab takes its own through its veil.
+fn window_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let mut dropped = None;
+    let _ = DropVeil::new(tl!("Drop to open the files")).show(ui, |ui, files| {
+        if let Some(files) = files {
+            dropped = Some(files.files.clone());
+        }
+        side_panels::dock(app, ui);
+    });
+    if let Some(files) = dropped
+        && !app.combine_showing()
+    {
+        let ctx = ui.ctx().clone();
+        app.open_dropped(&ctx, files);
+    }
 }
 
 /// The title bar: Home, the document tabs and Open, then the community, shortcuts, theme and

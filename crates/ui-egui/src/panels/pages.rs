@@ -74,7 +74,10 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 }
             }
             ThumbnailEvent::ContextMenu(request) => target = Some(request.key),
-            ThumbnailEvent::FilesDropped { insert, .. } => view.panel_gap = Some(insert),
+            ThumbnailEvent::FilesDropped { insert, files, .. } => {
+                view.panel_gap = Some(insert);
+                view.dropped_files = Some((insert, files));
+            }
             _ => {}
         }
     }

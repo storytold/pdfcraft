@@ -48,6 +48,10 @@ impl PdfCraftApp {
         options.wheel_line = self.scroll_speed.wheel_line();
         options.key_line = self.scroll_speed.key_line();
         options.invert_middle = self.invert_middle_drag;
+        // Linux latches a middle-click auto-scroll; the other platforms drag the view.
+        if cfg!(target_os = "linux") {
+            options.middle_button = craft::behavior::MiddleButton::AutoScroll;
+        }
         options.animated_zoom = !self.animation_effects.reduced(None);
         options
     }
