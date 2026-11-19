@@ -278,10 +278,8 @@ pub(crate) fn rich_plain(node: &craft_xml::El) -> String {
                     }
                     walk(el, out);
                 }
-                craft_xml::Node::Text(t) => {
-                    if !(t.trim().is_empty() && t.contains('\n')) {
-                        out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
-                    }
+                craft_xml::Node::Text(t) if !(t.trim().is_empty() && t.contains('\n')) => {
+                    out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
                 }
                 _ => {}
             }

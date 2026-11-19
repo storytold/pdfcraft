@@ -1,8 +1,10 @@
 use super::as_docx::{rgb8, room_for};
 use super::html::{self, HtmlBlock, HtmlCell, HtmlRun, HtmlTable};
-use super::layout::{Image, Item, Page, Run, Table, items};
+use super::layout::{Image, Item, Page, items};
+#[cfg(test)]
+use super::layout::{Run, Table};
 
-pub(crate) use super::html::{allowed, esc};
+pub(crate) use super::html::allowed;
 
 /// The longest language tag the exports write. BCP 47 sets no maximum (35 characters is only
 /// the least a protocol must hold), so this bounds only what a PDF's `/Lang` can put in a file.
@@ -85,23 +87,10 @@ fn table_html(t: &Table, simple: bool) -> String {
 fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&str>) -> String {
     let mut embedded: Vec<(String, &Image)> = Vec::new();
     let mut blocks: Vec<HtmlBlock<'_>> = Vec::new();
-    let mut owned_tables: Vec<Table> = Vec::new();
-    let mut owned_runs: Vec<Vec<Run<'_>>> = Vec::new();
     let items: Vec<Item<'_>> = items(pages);
     for it in &items {
         match it {
-            Item::Para(runs, _) => owned_runs.push(runs.clone()),
-            Item::Table(t) => owned_tables.push(t.clone()),
-            _ => {}
-        }
-    }
-    let mut run_idx = 0;
-    let mut table_idx = 0;
-    for it in &items {
-        match it {
-            Item::Para(_, lvl) => {
-                let runs = &owned_runs[run_idx];
-                run_idx += 1;
+            Item::Para(runs, lvl) => {
                 blocks.push(HtmlBlock::Para {
                     runs: runs
                         .iter()
@@ -110,9 +99,7 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
                     level: *lvl,
                 });
             }
-            Item::Table(_) => {
-                let t = &owned_tables[table_idx];
-                table_idx += 1;
+            Item::Table(t) => {
                 blocks.push(HtmlBlock::Table(HtmlTable {
                     rows: t
                         .rows

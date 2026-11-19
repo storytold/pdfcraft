@@ -895,9 +895,6 @@ fn read_rich_text(rich: &craft_xml::El, ns: &[(String, String)], has_contents: b
     }
 }
 
-/// XFDF's own namespace (ISO 19444-1).
-const XFDF_NS: &str = "http://ns.adobe.com/xfdf/";
-
 /// Put an annotation dictionary on a page, replacing one with the same `/NM`. Returns its
 /// reference.
 /// `/F` bits an imported file may not set on a redaction mark: Invisible, Hidden, NoView — so a
