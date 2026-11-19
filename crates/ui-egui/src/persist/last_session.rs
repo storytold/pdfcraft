@@ -51,28 +51,13 @@ impl PdfCraftApp {
             let is_open = |path: &str| {
                 self.views.iter().any(|v| self.session.get(v.id).and_then(|d| d.path.as_deref()).map(session::absolute).as_deref() == Some(path))
             };
-            let documents = last.to_reopen(&skip, is_open);
-            let mut active = None;
-            let mut prompt = self.password_prompt.take();
-            for document in documents {
-                let before = self.views.len();
-                self.open_path(&document.path);
-                if let Some(p) = self.password_prompt.take() {
-                    prompt.get_or_insert(p);
-                }
-                if self.views.len() > before
-                    && let Some(view) = self.views.last_mut()
-                {
-                    // `go_to_page` clamps a page past the end.
-                    view.go_to_page(document.view["page"].as_u64().and_then(|p| usize::try_from(p).ok()).unwrap_or(0));
-                    if last.active.as_deref() == Some(document.path.as_str()) {
-                        active = Some(self.views.len() - 1);
-                    }
-                }
-            }
-            self.password_prompt = prompt;
-            if active.is_some() {
-                self.active = active;
+            // The opens are queued: each takes the page it showed with it, and only the session's active file comes
+            // to the front.
+            for document in last.to_reopen(&skip, is_open) {
+                let page = document.view["page"].as_u64().and_then(|p| usize::try_from(p).ok()).unwrap_or(0);
+                let place = pdfcraft_render::RemoteDestination::Page { page, view: pdfcraft_render::DestView::Top };
+                let front = last.active.as_deref().is_none_or(|active| active == document.path);
+                self.reopen_path(&document.path, place, front);
             }
         }
         #[cfg(target_arch = "wasm32")]

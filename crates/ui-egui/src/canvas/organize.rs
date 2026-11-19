@@ -26,10 +26,15 @@ const ROTATE_CCW: usize = 0;
 const ROTATE_CW: usize = 1;
 const DELETE: usize = 2;
 
-/// The grid's id: the press owner `PageThumbnails::id` takes and `cancel_organize_press` ends. One place builds it, so the
+/// The grid's id: the press owner `PageThumbnails::id` takes and `cancel_page_drags` ends. One place builds it, so the
 /// two cannot drift; the pane key outlives `document_replaced`.
 fn organize_grid_id(view: &DocView) -> egui::Id {
     egui::Id::new(("organize-grid", view.view_key()))
+}
+
+/// The Pages panel grid's id, built the same way as [`organize_grid_id`].
+pub(crate) fn pages_panel_grid_id(view: &DocView) -> egui::Id {
+    egui::Id::new(("pages-panel-grid", view.view_key()))
 }
 
 impl DocView {
@@ -73,10 +78,11 @@ impl DocView {
         self.selected = Selection::new(Vec::new(), None, anchor.filter(|a| *a < self.page_count));
     }
 
-    /// Ends a page drag the Organize grid holds open: its indices came from a document the edit, undo, redo or
-    /// replacement has since changed.
-    pub(crate) fn cancel_organize_press(&self, ctx: &egui::Context) {
+    /// Ends a page drag the Organize grid or the Pages panel holds open: its indices came from a document the edit,
+    /// undo, redo or replacement has since changed.
+    pub(crate) fn cancel_page_drags(&self, ctx: &egui::Context) {
         PageThumbnails::cancel_press(ctx, organize_grid_id(self));
+        PageThumbnails::cancel_press(ctx, pages_panel_grid_id(self));
     }
 }
 
@@ -187,6 +193,16 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         (IconId::new("rotate_cw"), CommandRef::new("page.rotate")),
         (IconId::new("trash-2"), CommandRef::new("page.delete")),
     ];
+    // Each action names the page it acts on, so a screen reader can tell one tile's buttons from the next.
+    let action_label = |action: usize, page: usize| {
+        let template = match action {
+            ROTATE_CCW => tl!("Rotate page {label} counterclockwise"),
+            ROTATE_CW => tl!("Rotate page {label} clockwise"),
+            _ => tl!("Delete page {label}"),
+        };
+        let label = info.pages.get(page).map_or_else(|| (page + 1).to_string(), |p| p.label.clone());
+        crate::i18n::fmt(template, &[("label", &label)]).into()
+    };
     let insert_label = |at: usize| {
         match info.pages.get(at) {
             Some(p) => crate::i18n::fmt(tl!("Insert a file before page {label}"), &[("label", &p.label)]),
@@ -205,6 +221,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         .editable(editable)
         .size(&mut *cx.zoom)
         .actions(&actions)
+        .action_label(&action_label)
         .insert_label(&insert_label)
         .middle_button(middle)
         .invert_middle(cx.invert_middle)
