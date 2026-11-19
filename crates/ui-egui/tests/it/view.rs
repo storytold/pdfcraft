@@ -658,6 +658,8 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_d
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "second.pdf", None, PAGES.to_vec()).expect("opens");
     h.state_mut().views[1].view.continuous = false;
+    // A fixed zoom: no fit, at 75%.
+    h.state_mut().views[1].view.fit = pdfcraft_ui_egui::canvas::Fit::None;
     h.state_mut().views[1].view.zoom = 0.75;
     assert_eq!(h.state().views.len(), 2);
     assert!(!h.state().views[0].continuous());
@@ -698,7 +700,9 @@ fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_e
     assert_eq!(v0.fit(), Fit::None);
     assert_eq!(v0.zoom(), 0.5);
 
-    h.state_mut().views[0].enter_presentation();
+    // Every view follows the window's screen mode: full screen presents it.
+    h.state_mut().set_full_screen(true);
+    h.run_steps(3);
     assert!(h.state().views[0].presenting());
     assert!(!h.state().views[0].continuous());
     assert_eq!(h.state().views[0].fit(), Fit::Page);
@@ -717,7 +721,8 @@ fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_e
         assert_eq!(v.normal_display().fit, Fit::Width, "saved normal display updated to default fit width");
     }
 
-    h.state_mut().views[0].leave_presentation();
+    h.state_mut().set_full_screen(false);
+    h.run_steps(3);
     {
         let v = &h.state().views[0];
         assert!(!v.presenting());
@@ -734,7 +739,9 @@ fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display
     let mut h = harness(&[("default-continuous", "off"), ("continuous", "off")]);
     assert!(!h.state().views[0].continuous());
 
-    h.state_mut().views[0].enter_presentation();
+    // Every view follows the window's screen mode: full screen presents it.
+    h.state_mut().set_full_screen(true);
+    h.run_steps(3);
     assert!(h.state().views[0].presenting());
     assert!(!h.state().views[0].continuous());
     assert_eq!(h.state().views[0].fit(), Fit::Page);
@@ -752,7 +759,8 @@ fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display
         assert!(v.normal_display().continuous, "saved normal display updated to continuous");
     }
 
-    h.state_mut().views[0].leave_presentation();
+    h.state_mut().set_full_screen(false);
+    h.run_steps(3);
     {
         let v = &h.state().views[0];
         assert!(!v.presenting());
@@ -1163,6 +1171,24 @@ const LOCKED: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// How many filled shapes of the frame cover the widget at `pdf` (user space, y up) on page 1 of
+/// 300×400: a rectangle over its box, or a circle round its centre.
+fn tints_over(h: &Harness<'static, PdfCraftApp>, pdf: [f32; 4]) -> usize {
+    let r = rect(h, 0).expect("page 1 on screen");
+    let to = |x: f32, y: f32| egui::pos2(r.min.x + r.width() * x / 300.0, r.min.y + r.height() * (1.0 - y / 400.0));
+    let want = egui::Rect::from_two_pos(to(pdf[0], pdf[1]), to(pdf[2], pdf[3]));
+    let near = |a: egui::Pos2, b: egui::Pos2| (a - b).length() < 1.0;
+    h.output()
+        .shapes
+        .iter()
+        .filter(|c| match &c.shape {
+            egui::Shape::Rect(s) => s.fill.a() > 0 && near(s.rect.min, want.min) && near(s.rect.max, want.max),
+            egui::Shape::Circle(s) => s.fill.a() > 0 && near(s.center, want.center()),
+            _ => false,
+        })
+        .count()
+}
+
 /// Highlight fields marks the fields that can be filled: a read-only one (a form's locked
 /// box, or one its scripts have not opened yet) is left as it is drawn, as in Acrobat.
 #[test]
@@ -1180,9 +1206,8 @@ fn highlight_fields_leaves_read_only_fields_alone() {
         }
     });
     h.run_steps(6);
-    let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
-    let tinted = h.output().shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == tint)).count();
-    assert_eq!(tinted, 1, "only the field that can be filled is tinted");
+    assert_eq!(tints_over(&h, [50.0, 300.0, 250.0, 330.0]), 1, "the field that can be filled is tinted");
+    assert_eq!(tints_over(&h, [50.0, 200.0, 250.0, 230.0]), 0, "the read-only field is left as drawn");
 }
 
 /// A radio group whose second button is locked on its own widget (`/Ff` 1 there), as the
@@ -1214,9 +1239,8 @@ fn highlight_fields_leaves_a_groups_read_only_button_alone() {
         }
     });
     h.run_steps(6);
-    let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
-    let tinted = h.output().shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Circle(r) if r.fill == tint)).count();
-    assert_eq!(tinted, 1, "only the button that can be chosen is tinted");
+    assert_eq!(tints_over(&h, [50.0, 300.0, 90.0, 340.0]), 1, "the button that can be chosen is tinted");
+    assert_eq!(tints_over(&h, [150.0, 300.0, 190.0, 340.0]), 0, "the read-only button is left as drawn");
 }
 
 /// A push button and a text field, with fields highlighted.
@@ -1246,9 +1270,8 @@ fn highlight_fields_leaves_push_buttons_alone() {
         }
     });
     h.run_steps(6);
-    let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
-    let tinted = h.output().shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == tint)).count();
-    assert_eq!(tinted, 1, "only the text field is tinted");
+    assert_eq!(tints_over(&h, [50.0, 100.0, 250.0, 130.0]), 1, "the text field is tinted");
+    assert_eq!(tints_over(&h, [50.0, 200.0, 250.0, 340.0]), 0, "the push button is left as drawn");
 }
 
 /// A page whose open action starts an interval writing a counter into the console.
@@ -2073,13 +2096,18 @@ fn long_view_menu_fits_a_short_window() {
     assert!(h.state().dock.layout.contains(&pdfcraft_ui_egui::side_panels::PanelId::Bookmarks), "the Bookmarks panel is open in the dock");
 }
 
+/// A click at `pos` with `modifiers` held, reported as the platform does: the held keys first,
+/// then the press and release, then the keys let go.
 fn click_with(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2, modifiers: Modifiers) {
     h.hover_at(pos);
+    h.event(egui::Event::ModifiersChanged(modifiers));
     h.run_steps(1);
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers });
     }
     h.run_steps(4);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
 }
 
 /// Full screen is Acrobat's Full Screen Mode (#379, #1459): one page at a time, fitted to the
@@ -2101,7 +2129,8 @@ fn full_screen_shows_one_fitted_page_and_clicks_turn_it() {
     let r = rect(&h, 0).unwrap();
     let vp = h.state().views[0].viewport_rect();
     assert!(r.height() <= vp.height() + 1.0 && r.width() <= vp.width() + 1.0, "the page fits: {r:?} in {vp:?}");
-    assert!(h.query_by_label("Select (V)").is_none(), "no quick tools in full screen");
+    // The Select tool's button is named by its command; V is its shortcut, not part of its name.
+    assert!(h.query_all_by_label("Select").next().is_none(), "no quick tools in full screen");
     click_with(&mut h, r.center(), Modifiers::NONE);
     assert_eq!(h.state().views[0].current(), 1, "a click goes forward a page");
     h.key_press(Key::ArrowRight);
@@ -2125,7 +2154,7 @@ fn full_screen_shows_one_fitted_page_and_clicks_turn_it() {
     assert!((v.zoom() - 0.5).abs() < 1e-3, "zoom back to 50%: {}", v.zoom());
     assert_eq!(v.current(), 1, "at the page reached in full screen");
     h.run_steps(2);
-    assert!(h.query_by_label("Select (V)").is_some(), "the quick tools are back");
+    assert!(h.query_all_by_label("Select").next().is_some(), "the quick tools are back");
 }
 
 /// #2070 review: full screen survives the file being reloaded (Esc still brings the display from

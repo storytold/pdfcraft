@@ -526,8 +526,9 @@ mod sidecar_tests {
             jobs.run_all();
             h.step();
         }
-        assert_eq!(std::fs::read(&named).unwrap(), b"someone else's file", "the named file is untouched");
-        assert!(std::fs::read(&chosen).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
+        // Saves go through the host's files, which hold what is written in memory.
+        assert!(files.file(&named).is_none(), "the named file is untouched");
+        assert!(files.file(&chosen).expect("the save wrote the chosen file").starts_with(b"%PDF"), "the document went where the user chose");
 
         // The chosen file is the document's file now: the next Save writes it without asking.
         let ctx_h = h.ctx.clone();

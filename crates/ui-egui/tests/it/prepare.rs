@@ -314,8 +314,8 @@ fn format_validate_and_calculate_tabs() {
     h.get_by_role_and_label(Role::CheckBox, "To:").click();
     h.run_steps(2);
     tab(&mut h, "Calculate");
-    choose(&mut h, "Simplified field notation:");
-    retype_script(&mut h, "name");
+    choose(&mut h, NOTATION);
+    retype_box(&mut h, NOTATION, "name");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -382,9 +382,19 @@ fn city_calculation(h: &Harness<'static, PdfCraftApp>) -> (pdfcraft_engine::form
     (f.actions.calculate, f.actions.scripts.calculate)
 }
 
-/// What each multi-line box on the tab holds.
+/// The Calculate tab's box for a formula in simplified field notation.
+const NOTATION: &str = "Simplified field notation:";
+/// The Actions tab's box for a Run a JavaScript action's script.
+const ACTION_SCRIPT: &str = "Script:";
+
+/// What each multi-line box labelled `label` holds.
+fn boxes(h: &Harness<'static, PdfCraftApp>, label: &str) -> Vec<String> {
+    h.query_all_by_role_and_label(Role::MultilineTextInput, label).filter_map(|n| n.value()).collect()
+}
+
+/// What each custom calculation script box on the tab holds.
 fn script_boxes(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
-    h.query_all_by_role_and_label(Role::MultilineTextInput, CUSTOM).filter_map(|n| n.value()).collect()
+    boxes(h, CUSTOM)
 }
 
 /// The script box's description: what a screen reader says about it besides its text.
@@ -393,13 +403,18 @@ fn script_box_description(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
     h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).accesskit_node().description()
 }
 
-/// Selects everything in the script box and types `text` over it.
-fn retype_script(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
-    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).click();
+/// Selects everything in the multi-line box labelled `label` and types `text` over it.
+fn retype_box(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
+    h.get_by_role_and_label(Role::MultilineTextInput, label).click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.get_by_role_and_label(Role::MultilineTextInput, CUSTOM).type_text(text);
+    h.get_by_role_and_label(Role::MultilineTextInput, label).type_text(text);
     h.run_steps(2);
+}
+
+/// Selects everything in the custom calculation script box and types `text` over it.
+fn retype_script(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    retype_box(h, CUSTOM, text);
 }
 
 /// Pastes `text` into the script box where its cursor is.
@@ -563,8 +578,8 @@ fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
         h.run_steps(3);
     };
     open_calculate(&mut h, "city");
-    choose(&mut h, "Simplified field notation:");
-    retype_script(&mut h, "name * 2");
+    choose(&mut h, NOTATION);
+    retype_box(&mut h, NOTATION, "name * 2");
     h.get_by_label("OK").click();
     h.run_steps(3);
     let calculation = |h: &Harness<'static, PdfCraftApp>| {
@@ -1121,7 +1136,7 @@ fn add_action(h: &mut Harness<'static, PdfCraftApp>, trigger: &str, kind: &str, 
     pick(h, "Select Trigger:", trigger);
     pick(h, "Select Action:", kind);
     if kind == "Run a JavaScript" {
-        retype_script(h, text);
+        retype_box(h, ACTION_SCRIPT, text);
     } else {
         retype(h, "Value:", text);
     }
@@ -1182,8 +1197,8 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
     h.get_all_by_label("Edit").last().unwrap().click();
     h.run_steps(2);
     h.get_by_label("Edit Action");
-    assert_eq!(script_boxes(&h), [script]);
-    retype_script(&mut h, "app.alert('changed');");
+    assert_eq!(boxes(&h, ACTION_SCRIPT), [script]);
+    retype_box(&mut h, ACTION_SCRIPT, "app.alert('changed');");
     h.get_by_label("Discard").click();
     h.run_steps(2);
     h.get_by_label("Add an Action");
@@ -1194,7 +1209,7 @@ fn actions_tab_edits_the_script_of_an_existing_action() {
     open(&mut h);
     h.get_all_by_label("Edit").last().unwrap().click();
     h.run_steps(2);
-    retype_script(&mut h, "app.alert('changed');");
+    retype_box(&mut h, ACTION_SCRIPT, "app.alert('changed');");
     h.get_by_label("Update").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -1702,7 +1717,7 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     h.run_steps(3);
     // Field Properties of a is open on the Calculate tab, which shows a's formula.
     assert!(props_open(&h));
-    assert_eq!(script_boxes(&h), ["b + 1"]);
+    assert_eq!(boxes(&h, NOTATION), ["b + 1"]);
 }
 
 /// A radio group `shirt` of three buttons, S, M and L, with L chosen, while preparing the form.
@@ -1863,16 +1878,16 @@ fn a_notation_that_cannot_be_stored_keeps_field_properties_open() {
     assert!(props_open(&h), "Field Properties is open");
     retype(&mut h, "Tooltip:", "Subtotal");
     tab(&mut h, "Calculate");
-    retype_script(&mut h, "qty EVCALC 2");
+    retype_box(&mut h, NOTATION, "qty EVCALC 2");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(props_open(&h), "the dialog stays open");
-    assert_eq!(script_boxes(&h), ["qty EVCALC 2"], "as typed");
+    assert_eq!(boxes(&h, NOTATION), ["qty EVCALC 2"], "as typed");
     tab(&mut h, "General");
     assert_eq!(text_of(&h, "Tooltip:").as_deref(), Some("Subtotal"), "as typed");
     assert_eq!(formula(&h), Calculate::Notation("qty * 2".into()), "the field keeps its formula");
     tab(&mut h, "Calculate");
-    retype_script(&mut h, "qty * 3");
+    retype_box(&mut h, NOTATION, "qty * 3");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert!(!props_open(&h), "applied and closed");
@@ -1927,7 +1942,7 @@ fn a_formula_reading_a_missing_field_has_its_own_card() {
     h.run_steps(3);
     // Field Properties of sub is open on the Calculate tab, which shows sub's formula.
     assert!(props_open(&h));
-    assert_eq!(script_boxes(&h), ["qty - discount"]);
+    assert_eq!(boxes(&h, NOTATION), ["qty - discount"]);
 }
 
 #[test]

@@ -31,7 +31,9 @@ fn pending_pages_use_document_reading_background() {
         let id = app.views[0].id;
         // Deliberately differ from the app preference: the document is the source of truth.
         app.session.set_reading_colors(id, colors);
+        // The page view runs on the framework's runtime, which knows its commands' scopes.
         let ctx = Context::default();
+        crate::support::install_runtime(&ctx);
         for page in 0..3 {
             app.views[0].go_to_page(page);
             // Draw the real canvas without finishing the render frame, so no texture can
@@ -53,6 +55,14 @@ fn pending_pages_use_document_reading_background() {
             assert_eq!(fill, Some(expected), "page {page}, reading mode {}", colors.mode_name());
         }
     }
+}
+
+/// Picks `option` in the Appearance page's Reading colours row, a select whose options show once it is opened.
+fn pick_reading_colours(h: &mut Harness<'static, PdfCraftApp>, option: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reading colours").click();
+    h.run_steps(3);
+    h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option is on screen")).click();
+    h.run_steps(3);
 }
 
 /// A small PNG for the Create ▸ Images path, which opens the document it builds.
@@ -77,8 +87,7 @@ fn reading_colours_preference_round_trips() {
     assert_eq!(h.state().reading_colors, ReadingColors::default());
     h.get_by_label("Appearance").click();
     h.run_steps(3);
-    h.get_by_label("White on black").click();
-    h.run_steps(3);
+    pick_reading_colours(&mut h, "White on black");
     assert_eq!(h.state().reading_colors, ReadingColors::default(), "a row edits the draft, not the app");
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -129,8 +138,7 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
         ("Black on white", ReadingColors::BLACK_ON_WHITE),
         ("Off", ReadingColors::default()),
     ] {
-        h.get_by_label(label).click();
-        h.run_steps(3);
+        pick_reading_colours(&mut h, label);
         h.get_by_label("OK").click();
         h.run_steps(3);
         assert_eq!(h.state().reading_colors, expected);
