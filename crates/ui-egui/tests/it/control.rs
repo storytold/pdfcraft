@@ -180,7 +180,7 @@ pub(crate) fn ok(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, metho
 
 /// Presses `from`, moves through `steps` points to `to` and releases, the way `ui.drag` did: a
 /// click that holds, moves, then releases. `modifiers` are held for the whole gesture and `button`
-/// is `"primary"`, `"secondary"` or `"middle"`.
+/// is `"left"`, `"secondary"` or `"middle"`.
 fn drag(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, from: Value, to: Value, steps: usize, modifiers: &[&str], button: &str) {
     let modifiers_held = |names: &[&str]| -> Value { Value::Object(names.iter().map(|name| ((*name).to_owned(), Value::Bool(true))).collect()) };
     let held = modifiers_held(modifiers);
@@ -1169,7 +1169,7 @@ fn ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page() {
     let (a, b) = (cell(&mut h, &c, 1), cell(&mut h, &c, 3));
     // The gesture reads the OS the context reports: Option on macOS, Ctrl elsewhere.
     let copy = if h.ctx.os() == egui::os::OperatingSystem::Mac { "alt" } else { "ctrl" };
-    drag(&mut h, &c, json!([(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0]), json!([b[2] - 4.0, (b[1] + b[3]) / 2.0]), 8, &[copy], "primary");
+    drag(&mut h, &c, json!([(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0]), json!([b[2] - 4.0, (b[1] + b[3]) / 2.0]), 8, &[copy], "left");
     h.run_steps(3);
     let st = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(st["documents"][0]["pages"], 4, "the drag copied the page instead of moving it: {st}");
@@ -1226,7 +1226,7 @@ fn drawing_a_comment_by_drag_and_its_context_menu() {
     let r = &st["active"]["pages_on_screen"][0]["rect"];
     let (x0, y0, x1, y1) = (r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap(), r[3].as_f64().unwrap());
     let (a, b) = ([x0 + (x1 - x0) * 0.2, y0 + (y1 - y0) * 0.2], [x0 + (x1 - x0) * 0.5, y0 + (y1 - y0) * 0.4]);
-    drag(&mut h, &c, json!(a), json!(b), 8, &[], "primary");
+    drag(&mut h, &c, json!(a), json!(b), 8, &[], "left");
     h.run_steps(2);
     let st = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(st["active"]["selected_comment"], json!({ "page": 1, "index": 1 }), "{st}");
