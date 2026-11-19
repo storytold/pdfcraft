@@ -51,6 +51,9 @@ craft-wordmodel = { git = "https://github.com/storytold/craft-libs", version = "
 craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "010702ee9b030844c852939095b1da0d0656a890" }
 craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "010702ee9b030844c852939095b1da0d0656a890" }
 craft-opc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+# Shared MCP stdio framing and JSON-RPC 2.0 envelopes (storytold/craft-libs#778).
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "fbb2d4b299d87191a79444c6e4e02d69d9325059" }
+craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "fbb2d4b299d87191a79444c6e4e02d69d9325059" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.21.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.21.0" }
