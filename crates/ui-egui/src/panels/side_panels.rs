@@ -292,14 +292,6 @@ impl DockPanels<PanelId> for Panels<'_> {
         if panels.contains(&PanelId::Toolbar) {
             crate::hotbar::show_rail(self.app, ui);
         } else if panels.contains(&PanelId::Document) {
-            if rect.width() < 100.0 {
-                eprintln!(
-                    "DIAG checker_summary_does_not_hide_manual_review: document panel {rect:?}, ui max_rect {:?}, screen {:?}, dock {:?}",
-                    ui.max_rect(),
-                    ui.ctx().content_rect(),
-                    self.app.dock.layout.root
-                );
-            }
             document_view(self.app, ui, rect);
         } else {
             return None;
