@@ -421,6 +421,19 @@ fn settings_a_rewriting_tool_made_indirect_are_still_listed() {
 }
 
 #[test]
+fn a_header_too_long_to_be_listed_is_not_added() {
+    // Every header add accepts is one the listing can name, so Update never has to fall back to
+    // replacing it page-wide.
+    let mut doc = fixture();
+    let too_long = with_text(&"x".repeat(16 * 1024 + 1));
+    assert!(matches!(add_header_footer(&mut doc, &[0], &too_long, false, &cx()), Err(EditError::Invalid(_))));
+    assert!(marks_present(&doc).is_empty(), "nothing drawn");
+    let longest = with_text(&"x".repeat(16 * 1024));
+    add_header_footer(&mut doc, &[0], &longest, false, &cx()).unwrap();
+    assert_eq!(header_footers(&doc).len(), 1, "the longest box add accepts is listed");
+}
+
+#[test]
 fn a_header_added_with_an_out_of_range_colour_can_be_updated() {
     let mut doc = fixture();
     let bright = HeaderFooter { color: [2.0, -1.0, 0.5], ..with_text("Bright") };

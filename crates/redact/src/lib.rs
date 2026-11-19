@@ -35,6 +35,7 @@ mod pattern_guard;
 pub mod patterns;
 pub mod sanitize;
 mod tags;
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -825,6 +826,13 @@ struct Applying {
     pruned_patterns: Vec<ObjRef>,
 }
 
+/// Whether a stream's `/PCHeaderFooter` entry `v` records the same header and footer as one of
+/// the entries taken off redacted streams (`raw`, and those of them that decode, `decoded`).
+fn same_settings(doc: &Document, raw: &[Object], decoded: &[pdfcraft_edit::HeaderFooter], v: &Object) -> bool {
+    let value = doc.resolve(v);
+    raw.iter().any(|r| *doc.resolve(r) == *value) || pdfcraft_edit::recorded_header_footer(doc, v).is_some_and(|hf| decoded.contains(&hf))
+}
+
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
 fn redact_page_content(
     doc: &mut Document,
@@ -896,10 +904,14 @@ fn redact_page_content(
     }
     // A shrinking header's `cm` stream records the same settings but draws no text, so it is
     // never rewritten above: take its copy of the templates away too.
+    // Matched by what the settings say, not how they are stored: a rewriting tool may make the
+    // entry indirect on one stream and leave it direct on the other.
     if !redacted_settings.is_empty() {
+        let decoded: Vec<pdfcraft_edit::HeaderFooter> =
+            redacted_settings.iter().filter_map(|v| pdfcraft_edit::recorded_header_footer(doc, v)).collect();
         for o in new_list.iter_mut() {
             let mut stream = match &*doc.resolve(o) {
-                Object::Stream(s) if s.dict.get(b"PCHeaderFooter").is_some_and(|v| redacted_settings.contains(v)) => s.clone(),
+                Object::Stream(s) if s.dict.get(b"PCHeaderFooter").is_some_and(|v| same_settings(doc, &redacted_settings, &decoded, v)) => s.clone(),
                 _ => continue,
             };
             stream.dict.remove(b"PCHeaderFooter");

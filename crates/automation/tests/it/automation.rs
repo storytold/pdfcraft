@@ -3853,20 +3853,33 @@ fn header_footer_update_changes_the_one_named() {
     ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [2, 3], "header_left": "SECOND" }));
     let listed = ok(&mut a, "doc_header_footers", json!({ "doc": doc }));
     assert_eq!(listed["header_footers"][0]["pages"], json!([1]));
-    assert_eq!(listed["header_footers"][1], json!({ "index": 1, "pages": [2, 3], "text": { "header_left": "SECOND" } }));
-    // Added after listing, so index 0 is still FIRST; it shares page 1 with FIRST and must stay.
+    assert_eq!(listed["header_footers"][1], json!({ "index": 2, "pages": [2, 3], "text": { "header_left": "SECOND" } }));
+    // Indices count from 1, as pages do. Added after listing, so index 1 is still FIRST; it
+    // shares page 1 with FIRST and must stay.
     ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [1], "footer_left": "THIRD" }));
-    let updated = ok(&mut a, "doc_header_footer", json!({ "doc": doc, "update": 0, "header_left": "CHANGED" }));
+    let updated = ok(&mut a, "doc_header_footer", json!({ "doc": doc, "update": 1, "header_left": "CHANGED" }));
     assert_eq!(updated["header_footers"], ok(&mut a, "doc_header_footers", json!({ "doc": doc }))["header_footers"], "the indices that hold now");
     let texts = page_text(&mut a, doc);
     assert!(texts[0].contains("CHANGED") && !texts[0].contains("FIRST"), "{texts:?}");
     assert!(texts[0].contains("THIRD"), "the other one on that page stays: {texts:?}");
     assert!(texts[1].contains("SECOND") && !texts[1].contains("CHANGED"), "{texts:?}");
-    for bad in [json!({ "doc": doc, "update": 9, "header_left": "X" }), json!({ "doc": doc, "update": 0, "replace": true, "header_left": "X" })] {
+    // Given pages, the update goes there instead: it leaves every page the old one was on, and
+    // the other header and footer on those pages stays.
+    let changed = updated["header_footers"].as_array().unwrap().iter().find(|m| m["text"]["header_left"] == "CHANGED").unwrap()["index"].clone();
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "update": changed, "pages": [2], "header_left": "MOVED" }));
+    let texts = page_text(&mut a, doc);
+    assert!(!texts[0].contains("CHANGED") && !texts[0].contains("MOVED") && texts[0].contains("THIRD"), "{texts:?}");
+    assert!(texts[1].contains("MOVED") && texts[1].contains("SECOND"), "{texts:?}");
+    assert!(!texts[2].contains("MOVED") && texts[2].contains("SECOND"), "{texts:?}");
+    for bad in [
+        json!({ "doc": doc, "update": 9, "header_left": "X" }),
+        json!({ "doc": doc, "update": 0, "header_left": "X" }),
+        json!({ "doc": doc, "update": 1, "replace": true, "header_left": "X" }),
+    ] {
         assert!(matches!(a.call("doc_header_footer", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
     }
     // The Update command changes a document: it must not run the read-only listing and report success.
-    let by_command = json!({ "id": "edit.header_footer.update", "params": { "doc": doc, "update": 0, "header_left": "VIA COMMAND" } });
+    let by_command = json!({ "id": "edit.header_footer.update", "params": { "doc": doc, "update": 1, "header_left": "VIA COMMAND" } });
     let listed = ok(&mut a, "doc_header_footers", json!({ "doc": doc }));
     assert!(a.call("command_run", &by_command).is_err());
     assert_eq!(ok(&mut a, "doc_header_footers", json!({ "doc": doc })), listed);

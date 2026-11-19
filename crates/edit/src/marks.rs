@@ -192,6 +192,11 @@ impl HeaderFooter {
         if self.text.iter().all(|t| t.trim().is_empty()) {
             return Err(EditError::Invalid("type the header or footer text first".into()));
         }
+        // Measured as recorded: a box the listing would refuse to decode must not be added, or it
+        // could never be listed and updated, only replaced page-wide.
+        if self.text.iter().any(|t| pdfcraft_cos::PdfString::text(t).bytes.len() > MAX_RECORDED_TEXT) {
+            return Err(EditError::Invalid(format!("a header or footer box can hold at most {} KB of text", MAX_RECORDED_TEXT / 1024)));
+        }
         if let Some(c) = self.first_undrawable() {
             return Err(super::place::undrawable(c));
         }
@@ -266,6 +271,13 @@ impl HeaderFooter {
         let sane = hf.check().is_ok() && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
         sane.then_some(hf)
     }
+}
+
+/// The header and footer settings a [`SETTINGS_KEY`] entry records, if it records ones that
+/// [`add_header_footer`](crate::add_header_footer) would accept: what redaction matches a
+/// header's streams by, however each stores them.
+pub fn recorded_header_footer(doc: &Document, value: &Object) -> Option<HeaderFooter> {
+    HeaderFooter::from_object(doc, value)
 }
 
 /// The `cm` that shrinks a page's original content (user space) into the band `hf` leaves free,

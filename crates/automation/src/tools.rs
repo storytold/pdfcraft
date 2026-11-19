@@ -1237,7 +1237,7 @@ pub fn tools() -> Vec<ToolDef> {
             json!({
                 "doc": doc(),
                 "pages": pages("to mark (default: all)"),
-                "update": { "type": "integer", "minimum": 0, "description": "The index doc_header_footers lists for the header and footer to change. Not with replace." },
+                "update": { "type": "integer", "minimum": 1, "description": "The index doc_header_footers lists for the header and footer to change. Not with replace." },
                 "header_left": { "type": "string" }, "header_center": { "type": "string" }, "header_right": { "type": "string" },
                 "footer_left": { "type": "string" }, "footer_center": { "type": "string" }, "footer_right": { "type": "string" },
                 "font": { "type": "string", "enum": ["Helvetica", "Times", "Courier"] },

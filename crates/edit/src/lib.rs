@@ -89,7 +89,7 @@ pub use apply::{
 };
 #[cfg(test)]
 use marks::bates_start;
-pub use marks::{Background, Context, HeaderFooter, HeaderFooterMark, MarkKind, MarkSource, Watermark, expand};
+pub use marks::{Background, Context, HeaderFooter, HeaderFooterMark, MarkKind, MarkSource, Watermark, expand, recorded_header_footer};
 use marks::{matrix_number, n};
 pub(crate) use place::undrawable;
 #[cfg(test)]

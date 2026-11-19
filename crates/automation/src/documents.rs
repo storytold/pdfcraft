@@ -569,7 +569,7 @@ impl Automation {
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let mut out = json!({ "index": i, "pages": m.pages.iter().map(|p| p + 1).collect::<Vec<_>>() });
+                let mut out = json!({ "index": i + 1, "pages": m.pages.iter().map(|p| p + 1).collect::<Vec<_>>() });
                 if copying {
                     let boxes = ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"];
                     let text: serde_json::Map<String, Value> =
@@ -617,10 +617,12 @@ impl Automation {
             Some(_) if a.opt_bool("replace")?.is_some() => return Err(ToolError::InvalidArgs("give update or replace, not both".into())),
             Some(index) => {
                 let found = self.doc(a)?.header_footers();
-                let mark = usize::try_from(index).ok().and_then(|i| found.get(i)).cloned();
+                // 1-based, as the listing numbers them and as `pages` are.
+                let mark = usize::try_from(index).ok().and_then(|i| i.checked_sub(1)).and_then(|i| found.get(i)).cloned();
                 let listed = found.len();
                 Some(mark.ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("update must be an index doc_header_footers lists ({listed} found), not {index}"))
+                    let range = if listed == 0 { "it lists none".to_string() } else { format!("1 to {listed}") };
+                    ToolError::InvalidArgs(format!("update must be an index doc_header_footers lists ({range}), not {index}"))
                 })?)
             }
             None => None,

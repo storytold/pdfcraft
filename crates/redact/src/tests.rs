@@ -704,6 +704,43 @@ fn a_redacted_header_keeps_no_copy_of_its_text() {
 }
 
 #[test]
+fn a_redacted_header_keeps_no_copy_of_its_text_however_its_streams_store_it() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB) Tj ET", "", vec![]);
+    let mut hf = pdfcraft_edit::HeaderFooter { shrink: true, ..Default::default() };
+    hf.text[1] = "SECRET9".into();
+    pdfcraft_edit::add_header_footer(&mut doc, &[0], &hf, false, &pdfcraft_edit::Context { date: (2026, 10, 1) }).unwrap();
+    // As a rewriting tool may: one stream's settings moved to an object of their own, the
+    // other's left in place, so the two entries are no longer the same value.
+    let page = doc.resolve(&Object::Ref(ObjRef::new(3, 0))).as_dict().unwrap().clone();
+    let contents = doc.resolve(page.get(b"Contents").unwrap()).as_array().unwrap().to_vec();
+    let recorded: Vec<ObjRef> = contents
+        .iter()
+        .filter_map(|o| match o {
+            Object::Ref(r) => Some(*r),
+            _ => None,
+        })
+        .filter(|r| matches!(&*doc.resolve(&Object::Ref(*r)), Object::Stream(s) if s.dict.get(b"PCHeaderFooter").is_some()))
+        .collect();
+    assert_eq!(recorded.len(), 2, "the header's stream and its shrink's");
+    for &moved in &recorded {
+        let mut doc = doc.clone();
+        let settings = match &*doc.resolve(&Object::Ref(moved)) {
+            Object::Stream(s) => s.dict.get(b"PCHeaderFooter").unwrap().clone(),
+            _ => panic!("a content stream"),
+        };
+        let indirect = doc.add(settings);
+        doc.update_dict(moved, |d| d.set(b"PCHeaderFooter".to_vec(), Object::Ref(indirect))).unwrap();
+        mark(&mut doc, 0, &[[0.0, 240.0, 300.0, 300.0]], "");
+        apply(&mut doc, None).unwrap();
+        let page = doc.resolve(&Object::Ref(ObjRef::new(3, 0))).as_dict().unwrap().clone();
+        let contents = doc.resolve(page.get(b"Contents").unwrap()).as_array().unwrap().to_vec();
+        let left = contents.iter().filter(|o| matches!(&*doc.resolve(o), Object::Stream(s) if s.dict.get(b"PCHeaderFooter").is_some())).count();
+        assert_eq!(left, 0, "a stream of the redacted header still records its settings ({moved:?} indirect)");
+        assert!(content(&doc, 0).contains("(AB)"), "the rest of the page stays");
+    }
+}
+
+#[test]
 fn operators_split_across_content_streams_are_redacted_whole() {
     // One content stream in three pieces, split between tokens: a marked-content dictionary
     // ends in the second piece, and the TJ array that ends it shows its glyphs with the
