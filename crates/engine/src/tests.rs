@@ -7399,7 +7399,7 @@ fn javascript_field_rect_moves_first_widget_and_undoes() {
     let mut s = Session::new();
     let id = s.open("rect.pdf", None, Arc::new(scripted_form()), None).unwrap();
     let initial = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect;
-    s.run_javascript(id, "getField('price').rect = [30, 40, 130, 60];", Some("go")).unwrap();
+    s.run_javascript(id, "getField('price').rect = [30, 60, 130, 40];", Some("go")).unwrap();
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().widgets[0].rect, [30.0, 40.0, 130.0, 60.0]);
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
     s.undo(id).unwrap();
@@ -12273,8 +12273,6 @@ fn dynamic_calculation_reads_and_side_effects_reach_later_fields() {
     assert!(s.take_js_output(id).errors.is_empty());
 }
 
-/// Within one edit, a field's `display` reads as the file had it before the edit, even after a
-/// script set it with the value cached; the next edit's runner reads what the script wrote.
 #[test]
 /// Later field callbacks see current COS appearance/flags rather than the runner creation snapshot.
 fn field_scripts_read_current_appearance_during_an_edit() {
@@ -15626,6 +15624,7 @@ fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_passw
     let reopened = pdfcraft_cos::Document::open(saved).unwrap();
     assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
 }
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_objects_survive_incremental_save_but_not_a_full_rewrite() {
