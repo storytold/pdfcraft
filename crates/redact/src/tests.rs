@@ -4107,6 +4107,55 @@ fn a_rewritten_form_keeps_what_a_form_it_draws_through_its_callers_names_draws_w
     }
 }
 
+/// `/F`, with resources of its own, marks its text under the mark with its own `/MC1`, whose
+/// description holds words, and draws `/Child`, through the page's names or its own, which marks
+/// content with `/MC1` too. Without resources of its own `/Child` reads the page's properties, and
+/// with empty ones its own: either way nothing names `/F`'s `/MC1` once the text is gone, and its
+/// description leaves the file.
+#[test]
+fn a_rewritten_forms_property_a_form_it_draws_names_too_goes() {
+    for (via, child_name) in [("the page's names", ""), ("its own names", "/XObject << /Child 8 0 R >>")] {
+        for child_res in ["", "/Resources << >>"] {
+            let f = stream(
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /Properties << /MC1 9 0 R >> {child_name} >>"
+                ),
+                b"/Span /MC1 BDC BT /F1 12 Tf 20 250 Td (SECRET) Tj ET EMC /Child Do",
+            );
+            let child = stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {child_res}"), b"/Span /MC1 BDC 0 0 10 10 re f EMC");
+            let described = b"<< /Alt (DESCRIBED) /ActualText (DESCRIBED) >>".to_vec();
+            let mut doc = one_page(b"/F Do", "/XObject << /F 7 0 R /Child 8 0 R >>", vec![f, child, described]);
+            mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+            assert_eq!(apply(&mut doc, None).map(|r| (r.glyphs, r.forms_rewritten)), Ok((6, 1)), "{via}, {child_res:?}");
+            assert!(!surviving_references::full_save_holds(&doc, b"DESCRIBED"), "{via}, {child_res:?}");
+        }
+    }
+}
+
+/// `/F`'s own resources give `/Bogus` as a reference to an object the file doesn't define. `/G`,
+/// rewritten for its text under the mark, draws `/F`'s `/Im` beside it, and its rewrite is a new
+/// object, which may take `/Bogus`'s number, read as nothing before it was written: `/F`'s cleanups
+/// still read it and keep `/Im`, whichever number that is. Without `/Bogus` is the control.
+#[test]
+fn a_rewritten_forms_cleanups_read_a_form_written_under_a_number_that_named_nothing() {
+    for n in [0, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] {
+        let bogus = if n == 0 { String::new() } else { format!("/Bogus {n} 0 R") };
+        let f = stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /G 8 0 R /Im 9 0 R {bogus} >> >>"),
+            b"/G Do",
+        );
+        let g = stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << >>",
+            b"BT /F1 12 Tf 20 250 Td (SECRET) Tj ET q 10 0 0 10 100 50 cm /Im Do Q",
+        );
+        let image = stream("/Type /XObject /Subtype /Image /Width 6 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"KEPT_IMAGE_BYTES");
+        let mut doc = one_page(b"/F Do", "/XObject << /F 7 0 R >>", vec![f, g, image]);
+        mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+        assert_eq!(apply(&mut doc, None).map(|r| (r.glyphs, r.forms_rewritten)), Ok((6, 2)), "{bogus:?}");
+        assert!(surviving_references::full_save_holds(&doc, b"KEPT_IMAGE_BYTES"), "{bogus:?}");
+    }
+}
+
 /// Remove Hidden Information has the same rewrite: an off layer's image named by an inherited
 /// /Resources must leave the saved file too.
 #[test]

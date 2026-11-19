@@ -511,16 +511,22 @@ pub(crate) fn form_resources(doc: &Document, own: &Dict, caller: &Dict, kinds: &
 }
 
 /// Where a form with resources of its own, rewritten, looks up the XObjects it draws, as the walk
-/// read it ([`form_resources`]): in the resources it is written back with, `written`, where they
-/// give a stream, and otherwise in `caller`, its caller's XObject names. The cleanups after the walk
-/// read what it draws through these: else a form it draws through its caller's names goes unread,
-/// and what that form draws with the form's own resources is dropped from them.
-pub(crate) fn form_xobject_lookup(doc: &Document, written: &Dict, caller: &Dict, kinds: &mut Kinds) -> Dict {
+/// read it ([`form_resources`]): the forms the walk wrote for it, `added`; in the resources it is
+/// written back with, `written`, where they give a stream; and otherwise in `caller`, its caller's
+/// XObject names. The cleanups after the walk read what it draws through these: else a form it
+/// draws through its caller's names goes unread, and what that form draws with the form's own
+/// resources is dropped from them.
+pub(crate) fn form_xobject_lookup(doc: &Document, written: &Dict, added: &[(Vec<u8>, ObjRef)], caller: &Dict, kinds: &mut Kinds) -> Dict {
     let mut xobjects = caller.clone();
     for (name, value) in res_dict(doc, written, b"XObject").iter() {
         if kind(doc, value, kinds).stream {
             xobjects.set(name.to_vec(), value.clone());
         }
+    }
+    // Streams, taken as such: they are new objects, and `kinds` may hold for their numbers what a
+    // reference the file gave to nothing there was read as.
+    for (name, reference) in added {
+        xobjects.set(name.clone(), Object::Ref(*reference));
     }
     xobjects
 }
@@ -1768,9 +1774,14 @@ fn xobject(
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
                 // A form it draws through its caller's names draws with its own resources too.
-                let lookup = own.is_some().then(|| form_xobject_lookup(doc, &cleaned_res, xobjects, &mut scope.kinds));
+                let lookup = own.is_some().then(|| form_xobject_lookup(doc, &res, &inner.xobjects, xobjects, &mut scope.kinds));
                 let drawn_through = lookup.as_ref();
-                match prune_properties(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, drawn_through, content) {
+                // Its own properties are named by its own content alone: a form it draws reads its
+                // own, or, without resources, the page's (ISO 32000-2 §7.8.3), as the walk reads
+                // them. So with resources of its own, no form it draws is read for them.
+                let no_forms = Dict::new();
+                let marked_through = if own.is_some() { Some(&no_forms) } else { None };
+                match prune_properties(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, marked_through, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);
