@@ -2,10 +2,13 @@
 //! follows each pointer frame, moved or resized, without editing the PDF. Any other comment
 //! follows the pointer while it is moved: its own layer is drawn where it goes.
 
+use craft::behavior::{Input, Sense};
 use craft::review::AnnotationEdit;
+use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Role};
 use craft::ui::primitives::textures::{CachedTexture, TextureStore, TextureStoreOptions};
 use craft::ui::primitives::{Draw, backdrop};
-use egui::{ColorImage, Pos2, Rect, TextureId, pos2, vec2};
+use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
+use egui::{ColorImage, Pos2, Rect, Response, TextureId, Vec2, pos2, vec2};
 use pdfcraft_engine::{Document, Edit};
 use pdfcraft_render::{PageInfo, RenderPool, RenderRequest, Tile};
 
@@ -380,6 +383,81 @@ impl SignatureDrag {
         let rect = cx.adjusted_rect(map, a, cv.tool.in_flight(), pending);
         let from = cx.xf.user_rect(cx.info, *page, m.layer.from);
         draw.clipped(cx.xf.rect, |draw| m.layer.paint(draw, cx, *page, from.translate(rect.min - from.min)));
+    }
+}
+
+/// The style of the drag's layers: they paint the document's own pixels and nothing of the theme.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct DragLayerStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// The comment being dragged over one page, drawn from the drag's layers where it goes: the selected stamp's
+/// ([`SignatureDrag::paint`]), then any other comment being moved ([`SignatureDrag::paint_move`]). Paint only.
+// `unregistered`: it needs a live document and a drag under way, so the suite has no sample of it.
+#[derive(craft::ui::contract::Component)]
+#[component(canvas_control, unregistered)]
+pub(crate) struct DragLayer<'a> {
+    #[common]
+    common: Common,
+    drag: &'a SignatureDrag,
+    cx: &'a PageCx<'a>,
+    map: &'a PageMap<'a>,
+    tool: QuickTool,
+    cv: &'a CommentView,
+    pending: Option<&'a Edit>,
+}
+
+impl<'a> DragLayer<'a> {
+    pub(crate) fn new(
+        drag: &'a SignatureDrag,
+        cx: &'a PageCx<'a>,
+        map: &'a PageMap<'a>,
+        tool: QuickTool,
+        cv: &'a CommentView,
+        pending: Option<&'a Edit>,
+    ) -> Self {
+        DragLayer { common: Common::new(), drag, cx, map, tool, cv, pending }
+    }
+}
+
+impl Component for DragLayer<'_> {
+    const ROLE: Role = Role::GROUP;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    const SHOWS_LABEL: bool = false;
+    type Style = DragLayerStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: DragLayerStyleKey) -> DragLayerStyle {
+        DragLayerStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, _: &Cx<'_, Self>) {
+        let draw = ui.draw();
+        self.drag.paint(&draw, self.cx, self.map, self.tool, self.cv, self.pending);
+        self.drag.paint_move(&draw, self.cx, self.map, self.cv, self.pending);
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }
 
