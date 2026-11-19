@@ -2,17 +2,62 @@
 use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
-    Close(DocId),
+    /// Close a tab, by its view key (`DocView::view_key`: split view can show one document in two
+    /// tabs).
+    Close(u64),
     Reopen,
     Reveal(DocId),
+    /// Split right (or down) with a tab, by its view key.
+    Split {
+        tab: u64,
+        down: bool,
+    },
 }
 
 impl crate::PdfCraftApp {
+    /// Reveal a local file without opening it or changing document/Recent state. The existence
+    /// check and the file manager call can block (a disconnected network mount, a slow `dbus-send`
+    /// or `explorer.exe`), so they run on a worker; a failure is shown by
+    /// [`Self::show_reveal_errors`]. Tests run it inline ([`PdfCraftApp::run_inline`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reveal_path(&mut self, path: &std::path::Path) {
+        let path = path.to_path_buf();
+        let errors = self.reveal_errors.clone();
+        let ctx = self.ctx.clone();
+        let work = move || {
+            if let Err(e) = reveal(&path) {
+                errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(e);
+                if let Some(ctx) = &ctx {
+                    ctx.request_repaint();
+                }
+            }
+        };
+        if self.run_inline {
+            work();
+        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-reveal".into()).spawn(work) {
+            self.notify_error(e);
+        }
+    }
+
+    /// Show the failures the reveal worker has reported (called each frame).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn show_reveal_errors(&mut self) {
+        let errors = std::mem::take(&mut *self.reveal_errors.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for e in errors {
+            self.notify_error(e);
+        }
+    }
+
     pub(crate) fn tab_action(&mut self, action: Action) {
         match action {
-            Action::Close(id) => {
-                if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            Action::Close(tab) => {
+                if let Some(i) = self.tab_with_key(tab) {
                     self.request_close_tab(i);
+                }
+            }
+            Action::Split { tab, down } => {
+                if let Some(i) = self.tab_with_key(tab) {
+                    self.split_tab(i, down);
                 }
             }
             Action::Reopen => {
@@ -35,10 +80,8 @@ impl crate::PdfCraftApp {
             }
             Action::Reveal(id) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(path) = self.session.get(id).and_then(|d| d.path.clone())
-                    && let Err(e) = reveal(std::path::Path::new(&path))
-                {
-                    self.notify_error(e);
+                if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
+                    self.reveal_path(std::path::Path::new(&path));
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = id;
@@ -48,6 +91,7 @@ impl crate::PdfCraftApp {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Blocking: call it from a worker thread ([`crate::PdfCraftApp::reveal_path`]).
 fn reveal(path: &std::path::Path) -> Result<(), String> {
     // Absolute paths also prevent a filename starting with '-' becoming an option.
     let path = std::path::absolute(path).map_err(|e| e.to_string())?;
@@ -57,16 +101,6 @@ fn reveal(path: &std::path::Path) -> Result<(), String> {
     let platform = std::env::consts::OS;
     let run =
         |program: &str, args: &[std::ffi::OsString]| reveal_process(program, args).output().map(|o| o.status.success()).map_err(|e| e.to_string());
-    if matches!(platform, "linux" | "freebsd") {
-        // `dbus-send --print-reply` waits up to 2 s for the file manager (then xdg-open may run),
-        // so it runs off the UI thread; a failure there is only logged.
-        let spawned = std::thread::Builder::new().name("pdfcraft-reveal".into()).spawn(move || {
-            if let Err(e) = reveal_via(platform, &path, run) {
-                log::warn!("reveal {}: {e}", path.display());
-            }
-        });
-        return spawned.map(|_| ()).map_err(|e| e.to_string());
-    }
     reveal_via(platform, &path, run)
 }
 
@@ -162,15 +196,15 @@ mod tests {
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
         let mut app = crate::PdfCraftApp::new();
         app.open_bytes("first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
-        let first = app.views[0].id;
+        let (first, first_tab) = (app.views[0].id, app.views[0].view_key());
         app.open_bytes("second.pdf", None, PDF.to_vec()).unwrap();
         app.session.apply(first, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
-        app.tab_action(Action::Close(first));
+        app.tab_action(Action::Close(first_tab));
         assert_eq!(app.views.len(), 2);
         assert!(app.closed_tabs.is_empty());
         app.resolve_close(&egui::Context::default(), None);
         assert!(app.closed_tabs.is_empty());
-        app.tab_action(Action::Close(first));
+        app.tab_action(Action::Close(first_tab));
         app.resolve_close(&egui::Context::default(), Some(false));
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.closed_tabs, ["/tmp/first.pdf"]);
@@ -228,6 +262,16 @@ mod tests {
         assert_eq!(app.views.len(), 1, "an already-open file is selected, not duplicated");
         assert!(app.closed_tabs.is_empty());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_reveal_is_reported_back_to_the_ui_thread() {
+        let mut app = crate::PdfCraftApp::new();
+        app.run_inline = true;
+        app.reveal_path(std::path::Path::new("/pdfcraft-no-such-dir/missing.pdf"));
+        assert!(app.toast.is_none(), "nothing is shown until the UI thread takes the report");
+        app.show_reveal_errors();
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("The file no longer exists"));
     }
 
     #[test]
