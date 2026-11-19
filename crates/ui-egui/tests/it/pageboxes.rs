@@ -255,6 +255,20 @@ fn a_crop_rectangle_drawn_on_a_page_mostly_scrolled_away_crops_that_page() {
 }
 
 #[test]
+fn set_page_boxes_closed_with_escape_after_a_drawn_rectangle_forgets_its_page() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.crop"));
+    h.run_steps(2);
+    drag_middle_half(&mut h);
+    assert_eq!(h.state().boxes_draft.page, Some(0));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None, "Escape closes it");
+    assert_eq!(h.state().boxes_draft.page, None, "opened again by any route, it is for the current page");
+    assert_eq!(size(&h, 0), (300.0, 400.0), "and nothing is cropped");
+}
+
+#[test]
 fn cancelling_set_page_boxes_after_a_drawn_rectangle_crops_nothing() {
     let mut h = harness();
     assert!(h.state_mut().execute("page.crop"));
