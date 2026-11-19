@@ -233,7 +233,10 @@ fn parse_tsv_bounded(tsv: &str) -> (Vec<Line>, bool) {
 const QUARTER_TURN_ASPECT: f32 = 1.5;
 
 /// Whether a line's words are shaped like text turned a quarter rather than upright characters
-/// stacked in a column. The median word decides, so one wide or narrow word is outvoted.
+/// stacked in a column. The median word decides, so one wide or narrow word is outvoted. An
+/// even count takes the upper median: a two-word line is judged by its longer box, so a short
+/// word beside it ("-", "I") cannot undo the turn. The cost is that two upright characters,
+/// one of them in an unusually tall box, read as turned (#7254 review).
 fn quarter_turned(line: &Line) -> bool {
     let mut aspects: Vec<f32> = line
         .words
@@ -244,7 +247,7 @@ fn quarter_turned(line: &Line) -> bool {
         })
         .collect();
     aspects.sort_by(f32::total_cmp);
-    aspects.get(aspects.len().saturating_sub(1) / 2).is_some_and(|a| *a >= QUARTER_TURN_ASPECT)
+    aspects.get(aspects.len() / 2).is_some_and(|a| *a >= QUARTER_TURN_ASPECT)
 }
 
 /// Whether a line reads right to left, from its first strong character: the one Unicode's
@@ -297,21 +300,19 @@ fn line_direction(line: &Line) -> Option<WordDirection> {
 }
 
 /// Give every word its line's reading direction ([`line_direction`]). A one-word line takes
-/// the direction most of its block's longer lines share (else the page's), but only when its
-/// box is shaped like a quarter turn ([`quarter_turned`]): otherwise it keeps its orientation.
+/// the direction most of its block's longer lines share, but only when its box is shaped like
+/// a quarter turn ([`quarter_turned`]): otherwise it keeps its orientation. A block with no
+/// turn of its own gets none from another block — a page-wide vote would turn an upright word
+/// because something else on the page was sideways (#7254 review).
 fn orient(lines: &mut [Line], blocks: &[u32]) {
     const ALL: [WordDirection; 3] = [WordDirection::Across, WordDirection::Down, WordDirection::Up];
     let known: Vec<Option<WordDirection>> = lines.iter().map(line_direction).collect();
-    // Votes per block and for the page, in `ALL`'s order.
+    // Votes per block, in `ALL`'s order.
     let mut by_block: std::collections::HashMap<u32, [usize; 3]> = std::collections::HashMap::new();
-    let mut page = [0usize; 3];
     for (d, block) in known.iter().zip(blocks) {
         let Some(slot) = d.and_then(|d| ALL.iter().position(|a| *a == d)) else { continue };
         let votes = by_block.entry(*block).or_default();
         if let Some(v) = votes.get_mut(slot) {
-            *v += 1;
-        }
-        if let Some(v) = page.get_mut(slot) {
             *v += 1;
         }
     }
@@ -324,7 +325,7 @@ fn orient(lines: &mut [Line], blocks: &[u32]) {
         let direction = match known.get(i).copied().flatten() {
             Some(d) => d,
             None => {
-                let inherited = blocks.get(i).and_then(|b| by_block.get(b)).and_then(winner).or_else(|| winner(&page));
+                let inherited = blocks.get(i).and_then(|b| by_block.get(b)).and_then(winner);
                 if quarter_turned(line) { inherited.unwrap_or_default() } else { WordDirection::Across }
             }
         };
@@ -794,6 +795,31 @@ mod tests {
 5\t1\t1\t1\t1\t2\t100\t300\t24\t90\t95\tBRAVO",
         );
         assert!(latin[0].words.iter().all(|w| w.direction == Down), "{latin:?}");
+    }
+
+    /// #7254 review: a two-word line is judged by its longer box, so one short word beside it
+    /// (here a hyphen, as wide as the text is tall and only as long as the rule is thick)
+    /// cannot undo the turn.
+    #[test]
+    fn tsv_keeps_a_two_word_turn_when_one_word_is_short() {
+        let lines = parse_tsv(
+            "5\t1\t1\t1\t1\t1\t100\t100\t80\t20\t95\t-
+5\t1\t1\t1\t1\t2\t100\t200\t20\t80\t95\tWORD",
+        );
+        assert!(lines[0].words.iter().all(|w| w.direction == WordDirection::Down), "{lines:?}");
+    }
+
+    /// #7254 review: another block's turn is no evidence for this one. A lone upright word in
+    /// its own block keeps its orientation even when a line elsewhere on the page is sideways.
+    #[test]
+    fn tsv_keeps_a_lone_word_upright_when_only_another_block_turned() {
+        let lines = parse_tsv(
+            "5\t1\t1\t1\t1\t1\t900\t100\t20\t80\t95\tALPHA
+5\t1\t1\t1\t1\t2\t900\t200\t20\t80\t95\tBRAVO
+5\t1\t2\t1\t1\t1\t100\t100\t8\t20\t95\tI",
+        );
+        assert!(lines[0].words.iter().all(|w| w.direction == WordDirection::Down), "{lines:?}");
+        assert_eq!(lines[1].words[0].direction, WordDirection::Across, "block 2 has no turn of its own: {lines:?}");
     }
 
     /// Conf −1 rows and level ≠ 5 rows are structure, not words; blank text is dropped.
