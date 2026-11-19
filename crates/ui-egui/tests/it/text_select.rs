@@ -514,6 +514,13 @@ fn three_pages() -> Harness<'static, PdfCraftApp> {
         app.set_option(&egui::Context::default(), "zoom", "75").unwrap();
     });
     crate::support::wait_until(&mut h, "every page's text layer", |app| {
+        eprintln!(
+            "DIAG a_flick_off_the_page_still_selects_from_the_press: glyph {:?} rect {:?} text {:?} pending {}",
+            (0..3).map(|p| app.views[0].glyph_screen_pos(p, 10).is_some()).collect::<Vec<_>>(),
+            (0..3).map(|p| app.views[0].page_screen_rect(p).is_some()).collect::<Vec<_>>(),
+            (0..3).map(|p| app.views[0].has_page_text(p)).collect::<Vec<_>>(),
+            app.render_pending()
+        );
         (0..3).all(|p| app.views[0].glyph_screen_pos(p, 10).is_some()) && !app.render_pending()
     });
     let viewport = h.state().views[0].viewport_rect();
