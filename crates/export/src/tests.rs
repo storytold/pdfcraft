@@ -1726,3 +1726,18 @@ fn word_keeps_line_breaks_and_tabs_inside_paragraphs_and_cells() {
         .collect();
     assert!(cells.contains(&"Meter\nnumber".to_string()) && cells.contains(&"kWh\tunit".to_string()), "{cells:?}");
 }
+
+#[test]
+fn checked_rtf_reports_omitted_pictures_once_per_page_without_dropping_text() {
+    let mut first = page();
+    first.images[0].rotation = f64::NAN;
+    first.images.push(first.images[0].clone());
+    let clean = page();
+    let mut third = first.clone();
+    third.blocks[0].text = "Surviving last-page text".into();
+    let pages = [first, clean, third];
+    let (output, omitted) = crate::rtf_with_title_checked(&pages, "Partial");
+    assert_eq!(omitted, [0, 2]);
+    assert!(output.contains("Surviving last-page text"));
+    assert_eq!(output, crate::rtf_with_title(&pages, "Partial"));
+}
