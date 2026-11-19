@@ -36,19 +36,20 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "8e03cd016d42032b867fef6bad86bc69bf2c1920", features = ["cos", "crypt", "filters"] }
-# The writer the RTF export maps onto (storytold/craft-libs#793), at storytold/craft-libs#1467:
-# its font and colour lookups take constant time, as PdfCraft's own writer did.
-craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f29e82f1a7a009e68312bd2e84adab72be23344d" }
+# The writers the Word and RTF exports map onto (storytold/craft-libs#793). craft-rtf, craft-wordmodel and
+# craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
+craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
 # Shared Base64 encoder; use the existing RTF revision to reuse its codepage dependency.
-craft-mime = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f29e82f1a7a009e68312bd2e84adab72be23344d" }
+craft-mime = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
 craft-csv = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
-craft-docx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
-craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
-craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
+craft-docx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
+craft-wordmodel = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
+craft-pptx = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "010702ee9b030844c852939095b1da0d0656a890" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "010702ee9b030844c852939095b1da0d0656a890" }
 craft-opc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.21.0" }
@@ -166,7 +167,7 @@ hayro-interpret = { path = "vendor/hayro-interpret" }
 hayro = { path = "vendor/hayro" }
 hayro-syntax = { path = "vendor/hayro-syntax" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
-hayro-postscript = { path = "vendor/hayro-postscript" }
+hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "e7873217287876f76a045550369c90a541693c33" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
