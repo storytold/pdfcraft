@@ -60,3 +60,54 @@ fn small_marks_still_draw_and_wide_lines_keep_their_place() {
     let row: Vec<u8> = (8..=11).map(|x| rgb_at(&rgba, w, x, 35)[0]).collect();
     assert_eq!(row, [255, 127, 127, 255]);
 }
+
+/// A glyph's content is not snapped, and stays so after the glyph shows text in another Type 3
+/// font: the flag that marks a glyph's content is restored, not cleared, when the nested glyph
+/// ends. A body ending in a thin stroke draws the same pixels whether or not it nests one.
+#[test]
+fn a_type3_glyph_that_nests_one_keeps_its_thin_strokes_unsnapped() {
+    // The body's stroke runs down the glyph's origin, a pixel edge at font size 20, and is 0.2
+    // device pixels wide: widened to a pixel and snapped unless the glyph is recognised.
+    let pdf = |body: &str| {
+        let page = "BT /F1 20 Tf 10 10 Td (A) Tj ET";
+        // The nested font's glyph paints nothing, so it can only change the page through the
+        // state its drawing leaves behind.
+        let nested_glyph = "0 0 0 0 re f";
+        let doc = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{page}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [1]
+  /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> >> endobj
+6 0 obj << /Length {} >> stream
+{body}
+endstream endobj
+7 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 66 /LastChar 66 /Widths [1]
+  /Encoding << /Differences [66 /b] >> /CharProcs << /b 8 0 R >> >> endobj
+8 0 obj << /Length {} >> stream
+{nested_glyph}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            page.len(),
+            body.len(),
+            nested_glyph.len()
+        );
+        doc.into_bytes()
+    };
+    let render = |doc: Vec<u8>| {
+        let mut r = PageRenderer::new(Arc::new(doc), RenderConfig::default());
+        let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(out.error.is_none(), "{:?}", out.error);
+        out.rgba.to_vec()
+    };
+    let stroke = "0.01 w 0 0 m 0 1 l S";
+    let plain = render(pdf(stroke));
+    let nested = render(pdf(&format!("BT /F2 1 Tf 0 0 Td (B) Tj ET {stroke}")));
+    assert!(plain.iter().any(|v| *v < 255), "the glyph's stroke is drawn");
+    assert_eq!(plain, nested, "nesting a Type 3 glyph leaves the stroke it draws alone");
+}

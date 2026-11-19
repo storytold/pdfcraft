@@ -700,14 +700,16 @@ fn paints_canvas(device: Rect, width: u16, height: u16) -> bool {
 /// fill; for a stroke, half its width times the larger of its miter limit (kurbo draws a miter
 /// only when its tip is within `limit × width / 2` of the vertex) and √2 (square caps). The box
 /// of the path's points and control points (a curve stays inside their hull) grown by that and
-/// [`DRAW_SLACK`], mapped to the device and grown by 2 pixels for antialiasing, contains
-/// everything it paints: a path whose box misses the canvas is skipped without changing a pixel,
-/// so a tile of a large page no longer strokes and fills every path on the page. Bounds that
-/// aren't finite (an empty path) are drawn as before.
+/// [`DRAW_SLACK`], mapped to the device and grown by 2 pixels for antialiasing and `pad` more,
+/// contains everything it paints: a path whose box misses the canvas is skipped without changing
+/// a pixel, so a tile of a large page no longer strokes and fills every path on the page. Bounds
+/// that aren't finite (an empty path) are drawn as before. `pad` is 0 except for a hairline about
+/// to be snapped, which can move by less than half a pixel (see [`snap_hairline`]).
 fn may_paint_canvas(
     path: &BezPath,
     transform: Affine,
     reach: f64,
+    pad: f64,
     width: u16,
     height: u16,
 ) -> bool {
@@ -736,7 +738,7 @@ fn may_paint_canvas(
     let grow = reach + DRAW_SLACK;
     let device = transform
         .transform_rect_bbox(points.inflate(grow, grow))
-        .inflate(2.0, 2.0);
+        .inflate(2.0 + pad, 2.0 + pad);
     paints_canvas(device, width, height)
 }
 
@@ -816,6 +818,24 @@ fn snap_hairline(path: &BezPath, transform: Affine) -> Option<BezPath> {
     }
     flush(&mut out, &mut given, &mut snapped, &mut ends);
     out.is_finite().then_some(out)
+}
+
+/// PdfCraft patch (#7097): the path to stroke — `snapped` when snapping happened and the dash
+/// pattern still fits it, else `given`. Snapping can lengthen a path: two points on opposite
+/// sides of a pixel edge move to centres a whole pixel apart, so a stroke of many tiny straddling
+/// segments grows by a pixel each. A pattern that fits `given` (checked in
+/// [`set_stroke_properties`]) could then cut `snapped` into more than [`MAX_DASHES_PER_STROKE`]
+/// pieces, so the pattern is checked again and `given`, which passed, is stroked instead.
+fn stroked_path<'a>(
+    given: &'a BezPath,
+    snapped: Option<&'a BezPath>,
+    dashes: &[f32],
+) -> &'a BezPath {
+    let Some(snapped) = snapped else { return given };
+    if dashes.is_empty() || !usable_dash_pattern(snapped, dashes).is_empty() {
+        return snapped;
+    }
+    given
 }
 
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
@@ -2207,11 +2227,20 @@ impl Renderer {
     ) {
         self.ctx.set_transform(transform);
         let (reach, hairline) = self.set_stroke_properties(stroke_props, is_text, path);
-        // PdfCraft patch: see `snap_hairline`.
+        // PdfCraft patch: see `may_paint_canvas`. A hairline that cannot paint the canvas even
+        // once snapped is rejected before `snap_hairline` builds its buffers for every tile of a
+        // large page. Snapping moves a point by less than half a pixel, so one pixel of padding
+        // keeps this exact; the check on the snapped path below still decides what is drawn.
+        if hairline
+            && !may_paint_canvas(path, transform, reach, 1.0, self.ctx.width(), self.ctx.height())
+        {
+            return;
+        }
+        // PdfCraft patch: see `snap_hairline` and `stroked_path`.
         let snapped = hairline.then(|| snap_hairline(path, transform)).flatten();
-        let path = snapped.as_ref().unwrap_or(path);
+        let path = stroked_path(path, snapped.as_ref(), &stroke_props.dash_array);
         // PdfCraft patch: see `may_paint_canvas`.
-        if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
+        if !may_paint_canvas(path, transform, reach, 0.0, self.ctx.width(), self.ctx.height()) {
             return;
         }
 
@@ -2240,7 +2269,7 @@ impl Renderer {
         self.ctx.set_fill_rule(convert_fill_rule(fill_rule));
         self.ctx.set_transform(transform);
         // PdfCraft patch: see `may_paint_canvas`.
-        if !may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+        if !may_paint_canvas(path, transform, 0.0, 0.0, self.ctx.width(), self.ctx.height()) {
             return;
         }
 
@@ -2282,9 +2311,12 @@ impl Renderer {
                 // PdfCraft patch: a type 3 glyph's content stream keeps painting as line art
                 // (its internal ops reach `fill_path`/`stroke_path` with `is_text: false`), so
                 // reading colours remap it only when line-art replacement is on.
-                self.in_type3_glyph = true;
+                // PdfCraft patch: saved and restored, not cleared: a glyph's content may itself
+                // show text in a Type 3 font, and what it draws after that is still inside this
+                // glyph, which keeps its strokes unwidened and unsnapped.
+                let in_type3_glyph = std::mem::replace(&mut self.in_type3_glyph, true);
                 s.interpret(self, transform, glyph_transform, paint);
-                self.in_type3_glyph = false;
+                self.in_type3_glyph = in_type3_glyph;
             }
         }
     }
@@ -2826,7 +2858,7 @@ impl<'a> Device<'a> for Renderer {
                 self.ctx.set_fill_rule(convert_fill_rule(*fill_rule));
                 self.ctx.set_transform(transform);
                 // PdfCraft patch: see `may_paint_canvas`.
-                if !may_paint_canvas(&path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+                if !may_paint_canvas(&path, transform, 0.0, 0.0, self.ctx.width(), self.ctx.height()) {
                     return;
                 }
 
@@ -3241,6 +3273,56 @@ mod snap_tests {
         assert!(snap_minified_image(&noisy, source, planned).is_some());
         let turned_noisy = Affine::new([1e-9, 0.5, -0.5, 0.0, 200.3, 0.3]);
         assert!(snap_minified_image(&turned_noisy, source, (20_000, 200)).is_some());
+    }
+}
+
+/// PdfCraft patch (#7097): snapping a hairline can lengthen it, so the dash budget is checked
+/// again on the snapped path.
+#[cfg(test)]
+mod hairline_dash_tests {
+    use super::{Affine, BezPath, Point, may_paint_canvas, snap_hairline, stroked_path};
+
+    /// A hairline zigzag along y = 20 whose points straddle the pixel edge at x = 11: snapping
+    /// moves each one to the centre of its own pixel, a whole pixel from its neighbours, so each
+    /// `0.0002` pt segment becomes one device pixel long.
+    fn straddling_zigzag(segments: usize) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(10.9999, 20.0));
+        for i in 0..segments {
+            let x = if i % 2 == 0 { 11.0001 } else { 10.9999 };
+            path.line_to(Point::new(x, 20.0));
+        }
+        path
+    }
+
+    /// A dash pattern that fits a hairline can cut the snapped one into a billion pieces: 1,000
+    /// segments of `0.0002` pt are 0.2 pt and 200,002 pieces of `[0.000001]`, under the budget,
+    /// but 1,000 px once snapped, over it. The given path is stroked instead. A solid stroke, and
+    /// a pattern that still fits after snapping, keep the snapped path.
+    #[test]
+    fn a_dash_pattern_that_fits_a_hairline_is_not_applied_to_the_snapped_one() {
+        let given = straddling_zigzag(1_000);
+        let snapped = snap_hairline(&given, Affine::IDENTITY).expect("a hairline snaps");
+        assert_eq!(stroked_path(&given, Some(&snapped), &[0.000001]), &given);
+        assert_eq!(stroked_path(&given, Some(&snapped), &[]), &snapped);
+        assert_eq!(stroked_path(&given, Some(&snapped), &[10.0]), &snapped);
+        assert_eq!(stroked_path(&given, None, &[0.000001]), &given);
+    }
+
+    /// The precheck that rejects a hairline before snapping it is conservative: a path that
+    /// snapping could pull onto the canvas is kept, and one it cannot is rejected.
+    #[test]
+    fn a_hairline_snapping_could_pull_onto_the_canvas_is_not_rejected_first() {
+        let hairline = |x: f64| {
+            let mut path = BezPath::new();
+            path.move_to(Point::new(x, 10.0));
+            path.line_to(Point::new(x, 30.0));
+            path
+        };
+        // Half a pixel outside the canvas: snapping can pull it in, so it is kept.
+        assert!(may_paint_canvas(&hairline(40.4), Affine::IDENTITY, 0.5, 1.0, 40, 40));
+        // Well outside it: no snap can reach the canvas, so it is rejected before snapping.
+        assert!(!may_paint_canvas(&hairline(45.0), Affine::IDENTITY, 0.5, 1.0, 40, 40));
     }
 }
 
