@@ -18,8 +18,8 @@ pub struct LastView {
     pub path: String,
     /// 0-based.
     pub page: usize,
-    /// As settings name it: `fit-width`, `fit-page` or a percentage, kept to its fraction
-    /// (`62.5%`; read back by `ViewDefaults::with_zoom`).
+    /// The last-view zoom: `fit-width`, `fit-page`, `fit-height` or a percentage, kept to its
+    /// fraction (`62.5%`; read back by `parse_zoom`).
     pub zoom: String,
     /// The page display token (`canvas::display_token`).
     pub display: String,
@@ -38,6 +38,15 @@ fn absolute(path: &str) -> String {
     path.to_string()
 }
 
+/// Last-view settings also keep Fit Height, which isn't a default-zoom preference.
+fn parse_zoom(zoom: &str) -> Option<ViewDefaults> {
+    if zoom == "fit-height" {
+        Some(ViewDefaults { fit: canvas::Fit::Height, ..ViewDefaults::default() })
+    } else {
+        ViewDefaults::default().with_zoom(zoom)
+    }
+}
+
 impl PdfCraftApp {
     /// How view `index` shows its document now; `None` for a document without a file. In full
     /// screen, the display it will go back to, at the page reached.
@@ -48,6 +57,7 @@ impl PdfCraftApp {
         // A fixed zoom keeps its fraction (62.5%, not 63%): `zoom_name` rounds to whole percents.
         let zoom = match shown.fit {
             canvas::Fit::None => format!("{}%", shown.zoom * 100.0),
+            canvas::Fit::Height => "fit-height".to_string(),
             fit => ViewDefaults { fit, zoom: shown.zoom, ..ViewDefaults::default() }.zoom_name(),
         };
         Some(LastView {
@@ -90,7 +100,7 @@ impl PdfCraftApp {
             .take(MAX_REMEMBERED)
             .filter_map(|e| {
                 let path = e["path"].as_str().filter(|p| !p.is_empty())?.to_string();
-                let zoom = e["zoom"].as_str().filter(|z| ViewDefaults::default().with_zoom(z).is_some())?.to_string();
+                let zoom = e["zoom"].as_str().filter(|z| parse_zoom(z).is_some())?.to_string();
                 let display = e["display"].as_str().filter(|d| canvas::parse_display_token(d).is_some())?.to_string();
                 let page = usize::try_from(e["page"].as_u64().unwrap_or(0)).unwrap_or(0);
                 let cover = e["cover"].as_bool().unwrap_or(false);
@@ -117,7 +127,7 @@ impl PdfCraftApp {
                 view.set_display(layout, continuous);
             }
             view.set_cover(last.cover);
-            if let Some(defaults) = ViewDefaults::default().with_zoom(&last.zoom) {
+            if let Some(defaults) = parse_zoom(&last.zoom) {
                 match defaults.fit {
                     canvas::Fit::None => view.set_zoom(defaults.zoom),
                     fit => view.set_fit(fit),
