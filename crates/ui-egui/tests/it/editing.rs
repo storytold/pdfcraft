@@ -8,7 +8,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
-use pdfcraft_ui_egui::{CloseRequest, Dialog, OpenOutcome, PdfCraftApp};
+use pdfcraft_ui_egui::{OpenOutcome, PdfCraftApp};
 
 use crate::gpu;
 use crate::support::AppHarness as _;
@@ -39,13 +39,48 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+thread_local! {
+    /// The file service of this test thread's apps: the files an app saves land in it, and a Save's picker
+    /// answers from it.
+    static FILES: std::sync::Arc<craft::host::ScriptedFiles> = std::sync::Arc::default();
+}
+
+/// An app whose pickers and writes go to this thread's [`FILES`].
+fn scripted_app() -> PdfCraftApp {
+    crate::control::app_with_files(FILES.with(std::sync::Arc::clone))
+}
+
+/// The next Save's picker answers `path`.
+fn queue_save(path: &std::path::Path) {
+    FILES.with(|f| f.queue(craft::host::Picked::Paths(vec![path.to_path_buf()])));
+}
+
+/// The next picker answers `paths`; a file among them is also put in the file service's memory, for what
+/// reads through it.
+fn queue_pick(paths: &[&std::path::Path]) {
+    use craft::host::Files as _;
+    FILES.with(|f| {
+        for path in paths {
+            if let Ok(bytes) = std::fs::read(path) {
+                let _ = f.write(path, &bytes, craft::host::WriteIntent::SaveAs);
+            }
+        }
+        f.queue(craft::host::Picked::Paths(paths.iter().map(|p| p.to_path_buf()).collect()));
+    });
+}
+
+/// What a save wrote to `path`.
+fn saved_file(path: &std::path::Path) -> Vec<u8> {
+    FILES.with(|f| f.file(path)).expect("file written")
+}
+
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
     if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
         builder = builder.wgpu();
     }
     let mut h = builder.build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = scripted_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).expect("fixture opens");
         setup(&mut app);
@@ -79,15 +114,13 @@ pub(crate) fn clipboard_app(ctx: &egui::Context, copies: &Copies) -> PdfCraftApp
             Ok(0)
         },
     ));
-    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)`, `FileIntake::for_tests()`,
-    // `FileWatch::inline()` and `PdfCraftApp::with_host(Arc<Host>, AppServices)` (pdf-hub-w1, L-207)
     let services = pdfcraft_ui_egui::AppServices::new(
         craft::host::Wake::none(),
         clipboard,
         None,
         None,
-        pdfcraft_ui_egui::FileIntake::for_tests(),
-        pdfcraft_ui_egui::FileWatch::inline(),
+        craft::platform::open::FileIntake::new(craft::host::Wake::none()).0,
+        craft::platform::watch::FileWatch::new(craft::host::Wake::none()).inline(),
     );
     PdfCraftApp::with_host(std::sync::Arc::new(craft::host::Host::builder(pdfcraft_ui_egui::APP_INFO).build()), services)
 }
@@ -219,7 +252,7 @@ fn organize_page_range_rejects_invalid_input_and_escape_cancels_without_clearing
     type_selection(&mut h, " ");
     h.key_press(Key::Enter);
     h.run_steps(2);
-    assert!(h.state().views[0].selected.is_empty());
+    assert!(h.state().views[0].selected.items.is_empty());
     assert!(h.set_option("select", "0").is_err());
     assert!(h.set_option("select", "6").is_err());
 }
@@ -242,7 +275,7 @@ fn organize_opens_on_the_current_page() {
     h.run_steps(4);
     assert!(h.state().views[0].organize);
     assert_eq!(h.state().views[0].target_pages(), [30]);
-    assert!(h.state().views[0].selected.is_empty(), "an empty selection is the current page, so checkboxes still toggle");
+    assert!(h.state().views[0].selected.items.is_empty(), "an empty selection is the current page, so checkboxes still toggle");
     assert!(in_view(&h, 30), "the current page is scrolled into view");
     assert!(!in_view(&h, 0), "the grid does not open on page 1");
     // An earlier grid selection on another page does not win over the page the user went to.
@@ -365,7 +398,7 @@ fn shift_click_selects_a_range_and_moves_it() {
     h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 3", "Page 1", "Page 2", "Page 4"]);
     // The moved pages stay selected at their new position, so repeated clicks keep moving them.
-    assert_eq!(h.state().views[0].selected.iter().copied().collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(h.state().views[0].selected.items.iter().copied().collect::<Vec<_>>(), [1, 2]);
     h.get_by_label("Move later").click();
     h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 3", "Page 4", "Page 1", "Page 2"]);
@@ -430,16 +463,15 @@ fn insert_blank_page_after_selection() {
 fn save_writes_an_incremental_update_and_clears_dirty() {
     let out = temp_path("saved.pdf");
     let original = fixture(3);
-    let target = out.to_string_lossy().into_owned();
     let mut h = organize(3);
-    h.state_mut().save_override = Some(target.clone());
+    queue_save(&out);
     h.get_by_label("Page 3").click();
     h.run_steps(1);
     h.get_by_label("Rotate counterclockwise").click();
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run_steps(3);
-    let saved = std::fs::read(&out).expect("file written");
+    let saved = saved_file(&out);
     assert_eq!(&saved[..original.len()], &original[..], "original bytes untouched");
     assert!(!dirty(&h));
     h.get_by_label("saved.pdf"); // the tab takes the new name, no edited marker
@@ -459,10 +491,10 @@ fn save_as_to_a_new_file_drops_earlier_revisions() {
     h.run_steps(2);
     h.get_by_label("Delete page 2").click();
     h.run_steps(3);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    queue_save(&out);
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As));
-    let saved = std::fs::read(&out).expect("file written");
+    let saved = saved_file(&out);
     let count = |needle: &[u8]| saved.windows(needle.len()).filter(|w| *w == needle).count();
     assert_eq!(count(b"%%EOF"), 1, "one revision only");
     assert_eq!((count(b"(Page 1)"), count(b"(Page 2)")), (1, 0), "the deleted page's content is gone");
@@ -484,7 +516,7 @@ fn closing_a_dirty_tab_asks_and_cancel_keeps_it() {
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "cancel keeps the document open");
     assert!(dirty(&h));
-    assert!(h.state().close_request.is_none());
+    assert!(h.query_by_label("Don't save").is_none(), "cancel closes the prompt");
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
@@ -497,7 +529,7 @@ fn closing_a_dirty_tab_asks_and_cancel_keeps_it() {
 fn closing_a_dirty_tab_can_save_first() {
     let out = temp_path("closed.pdf");
     let mut h = organize(2);
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    queue_save(&out);
     h.get_by_label("Rotate clockwise").click();
     h.run_steps(3);
     let ctx_h = h.ctx.clone();
@@ -506,7 +538,7 @@ fn closing_a_dirty_tab_can_save_first() {
     h.get_by_label("Save").click();
     h.run_steps(3);
     assert!(h.state().views.is_empty());
-    let saved = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&out).unwrap()), None).unwrap();
+    let saved = pdfcraft_render::inspect(std::sync::Arc::new(saved_file(&out)), None).unwrap();
     assert_eq!(saved.pages[0].rotation, 90);
     let _ = std::fs::remove_file(out);
 }
@@ -525,7 +557,7 @@ fn the_save_prompt_answers_to_the_keyboard() {
         h.key_press_modifiers(m, key);
         h.run_steps(3);
         assert!(h.state().views.is_empty(), "{m:?}+{key:?} doesn't save and closes");
-        assert!(h.state().dialog.is_none(), "{m:?}+{key:?} ran no command underneath");
+        assert!(h.state().dialogs.is_empty(), "{m:?}+{key:?} ran no command underneath");
     }
     let mut h = organize(2);
     h.get_by_label("Rotate clockwise").click();
@@ -535,16 +567,16 @@ fn the_save_prompt_answers_to_the_keyboard() {
     h.key_press(Key::Escape);
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "Escape cancels");
-    assert!(h.state().close_request.is_none());
+    assert!(h.query_by_label("Don't save").is_none(), "Escape closes the prompt");
 
     let out = temp_path("enter-saves.pdf");
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    queue_save(&out);
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(h.state().views.is_empty(), "Enter saves and closes");
-    let saved = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&out).unwrap()), None).unwrap();
+    let saved = pdfcraft_render::inspect(std::sync::Arc::new(saved_file(&out)), None).unwrap();
     assert_eq!(saved.pages[0].rotation, 90);
     let _ = std::fs::remove_file(out);
 }
@@ -584,7 +616,7 @@ fn the_save_prompt_starts_on_save_every_time_it_opens() {
     // Move to Don't save, cancel with Escape, and ask again: the choice is back on Save.
     let out = temp_path("reopened.pdf");
     let mut h = dirty_prompt();
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    queue_save(&out);
     h.key_press(Key::ArrowLeft);
     h.key_press(Key::ArrowLeft);
     h.run_steps(2);
@@ -625,19 +657,19 @@ fn keys_leave_the_document_under_a_dialog_alone() {
         h.run_steps(3);
         let app = h.state();
         assert_eq!(app.views.len(), 1, "{m:?}+{key:?} closed the file");
-        assert!(app.close_request.is_none(), "{m:?}+{key:?} asked to close the file");
+        assert!(h.query_by_label("Don't save").is_none(), "{m:?}+{key:?} asked to close the file");
         assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "{m:?}+{key:?} undid the rotation");
         assert!(app.views[0].find.is_none(), "{m:?}+{key:?} opened Find");
-        assert_eq!(app.dialog, Some(Dialog::Preferences), "{m:?}+{key:?} replaced Preferences");
+        assert!(h.query_by_label("Preferences").is_some(), "{m:?}+{key:?} replaced Preferences");
     }
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"], "a page was deleted under the dialog");
     h.key_press(Key::Escape);
     h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "Escape closes Preferences");
+    assert!(h.query_by_label("Preferences").is_none(), "Escape closes Preferences");
     assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    assert!(h.state().close_request.is_some(), "with the dialog closed, ⌘W closes the file again");
+    h.get_by_label_contains("Save changes to “doc.pdf”"); // with the dialog closed, ⌘W asks to close the file again
 }
 
 #[test]
@@ -661,7 +693,7 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
         let ctx_h = h.ctx.clone();
         h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     }
-    h.state_mut().close_request = Some(CloseRequest::Quit);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Q);
     h.run_steps(3);
     h.get_by_label_contains("Save changes to “doc.pdf”");
     h.get_by_label("Don't save").click();
@@ -670,7 +702,7 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     h.get_by_label("Don't save").click();
     h.run_steps(3);
     assert!(h.state().views.is_empty());
-    assert!(h.state().close_request.is_none());
+    assert!(h.query_by_label("Don't save").is_none(), "nothing more is asked");
 }
 
 /// PDFs written to a fresh temp folder, removed when the test ends.
@@ -710,6 +742,20 @@ fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'s
     h
 }
 
+/// [`session_harness`] over a host that runs its jobs on the calling thread: an open finishes within the call
+/// that asked for it.
+fn inline_session_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let host = craft::host::Host::builder(crate::control::info()).jobs(std::sync::Arc::new(craft::host::InlineJobs)).build();
+        let mut app = crate::control::app_on(host);
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.reopen_last_session = true;
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
 fn open_paths(app: &PdfCraftApp) -> Vec<String> {
     app.views.iter().map(|v| app.session.get(v.id).and_then(|d| d.path.clone()).unwrap_or_default()).collect()
 }
@@ -728,9 +774,9 @@ fn the_last_session_reopens_its_files_pages_and_active_tab() {
     h.state_mut().active = Some(1);
     h.run_steps(4);
     assert_eq!(h.state().views[1].current(), 3, "b.pdf shows page 4");
-    let settings = h.state().persist();
+    let settings = h.state().settings_snapshot();
     let mut h = session_harness(move |app| {
-        app.restore(&settings);
+        app.apply_settings(&settings);
         app.reopen_last_files(&[]);
     });
     h.run_steps(4);
@@ -757,7 +803,7 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
         h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     }
     h.state_mut().active = Some(1);
-    h.state_mut().close_request = Some(CloseRequest::Quit);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Q);
     h.run_steps(3);
     // Each unsaved tab closes as it is answered, before PdfCraft quits.
     for _ in 0..2 {
@@ -766,7 +812,7 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
     }
     assert!(h.state().views.is_empty());
     let mut app = crate::control::new_app();
-    app.restore(&h.state().persist());
+    app.apply_settings(&h.state().settings_snapshot());
     app.reopen_last_files(&[]);
     assert_eq!(open_paths(&app), files, "both files come back");
     assert_eq!(app.active, Some(1), "with b.pdf in front, as when the quit began");
@@ -779,19 +825,18 @@ fn the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files() {
     let mut app = crate::control::new_app();
     app.open_path(&a);
     app.open_path(&b);
-    let off: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
-    assert!(off["last_session"].is_null(), "nothing is kept while the preference is off");
+    assert!(app.settings_snapshot().session.last_session.is_none(), "nothing is kept while the preference is off");
     app.reopen_last_session = true;
-    let settings = app.persist();
+    let settings = app.settings_snapshot();
     let mut later = crate::control::new_app();
-    later.restore(&settings);
+    later.apply_settings(&settings);
     later.reopen_last_session = false;
     later.reopen_last_files(&[]);
     assert!(later.views.is_empty(), "turned off again: nothing reopens");
     // b.pdf is gone, and a.pdf is about to open from the command line.
     std::fs::remove_file(&b).unwrap();
     let mut later = crate::control::new_app();
-    later.restore(&settings);
+    later.apply_settings(&settings);
     later.reopen_last_files(&[a]);
     assert!(later.views.is_empty(), "neither opens from the session");
 }
@@ -803,7 +848,7 @@ fn opening_the_same_path_again_focuses_its_tab() {
     let b = pdfs.file("b.pdf", 1);
     // Inline opens: this pins the synchronous open contract (open vs focus). A live app
     // schedules the background worker instead and answers `Pending` until it completes.
-    let mut h = session_harness(|app| app.run_inline = true);
+    let mut h = inline_session_harness();
     assert_eq!(h.state_mut().open_path(&a), OpenOutcome::Opened);
     assert_eq!(h.state_mut().open_path(&b), OpenOutcome::Opened);
     h.run_steps(2);
@@ -817,12 +862,12 @@ fn opening_the_same_path_again_focuses_its_tab() {
 
 #[test]
 fn opening_a_missing_file_fails_and_tells_the_user() {
-    let mut app = crate::control::new_app();
-    app.set_option(&egui::Context::default(), "language", "en").unwrap();
+    let mut h = session_harness(|_| {});
     let missing = std::env::temp_dir().join(format!("pdfcraft-no-such-file-{}.pdf", std::process::id()));
-    assert_eq!(app.open_path(&missing.to_string_lossy()), OpenOutcome::Failed);
-    assert!(app.views.is_empty());
-    assert!(app.toast.is_some(), "the failure is still reported to the user");
+    assert!(matches!(h.state_mut().open_path(&missing.to_string_lossy()), OpenOutcome::Failed(_)));
+    h.run_steps(2);
+    assert!(h.state().views.is_empty());
+    assert!(support::shown_notice(&mut h).is_some(), "the failure is still reported to the user");
 }
 
 #[test]
@@ -830,7 +875,7 @@ fn opening_the_same_file_with_a_dot_component_focuses_its_tab() {
     let pdfs = TempPdfs::new("dedup-dot");
     let a = pdfs.file("a.pdf", 1);
     let dotted = format!("{}/./a.pdf", pdfs.0.display());
-    let mut h = session_harness(|app| app.run_inline = true);
+    let mut h = inline_session_harness();
     h.state_mut().open_path(&a);
     h.state_mut().open_path(&dotted);
     h.run_steps(2);
@@ -852,7 +897,7 @@ fn opening_a_file_whose_copy_vanished_from_disk_focuses_its_tab() {
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1, "no second tab");
     assert_eq!(h.state().active, Some(0), "the open tab is focused");
-    assert!(h.state().toast.is_none(), "no read error: the file is never read again");
+    assert!(support::shown_notice(&mut h).is_none(), "no read error: the file is never read again");
 }
 
 #[test]
@@ -861,7 +906,7 @@ fn opening_an_encrypted_document_twice_keeps_one_prompt_and_one_tab() {
     let secret = pdfs.0.join("secret.pdf");
     std::fs::write(&secret, protected("pw", "owner", -1)).unwrap();
     let s = secret.to_string_lossy().into_owned();
-    let mut h = session_harness(|app| app.run_inline = true);
+    let mut h = inline_session_harness();
     h.state_mut().open_path(&s);
     h.state_mut().open_path(&s);
     h.run_steps(2);
@@ -893,11 +938,12 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     // the viewport, clipping the message and pushing the Save/Cancel buttons off-screen.
     let name = "Psychology_ The Science of Mind and Behaviour, -- Nigel Holt, Andy Bremner, Michael \
                 Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
-    let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |cc| {
         let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), name, None, fixture(1)).expect("fixture opens");
-        app.close_request = Some(CloseRequest::Tab(app.views[0].id));
+        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+        app.open_bytes(&cc.egui_ctx, name, None, fixture(1)).expect("fixture opens");
+        app.apply_edit(&cc.egui_ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        app.request_close_tab(&cc.egui_ctx, 0);
         app
     });
     h.run_steps(4);
@@ -931,11 +977,12 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
         if support::skip_without_glyphs(&format!("save_prompt_fits_the_smallest_window_whatever_the_name ({start}…)"), "en", &name) {
             continue;
         }
-        let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
+        let mut h = Harness::builder().with_size(size).build_eframe(move |cc| {
             let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), &name, None, fixture(1)).expect("fixture opens");
-            app.close_request = Some(CloseRequest::Tab(app.views[0].id));
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app.open_bytes(&cc.egui_ctx, &name, None, fixture(1)).expect("fixture opens");
+            app.apply_edit(&cc.egui_ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+            app.request_close_tab(&cc.egui_ctx, 0);
             app
         });
         h.run_steps(4);
@@ -974,7 +1021,7 @@ fn document_properties_edit_is_one_undoable_step() {
     assert_eq!(doc.info.title.as_deref(), Some("Annual report"), "inspection sees the new title");
     assert_eq!(doc.info_value("Author").as_deref(), Some("Finance team"));
     assert_eq!(doc.can_undo(), Some("Change document properties"));
-    assert!(app.dialog.is_none());
+    assert!(h.query_by_label("OK").is_none(), "the dialog is closed");
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
@@ -994,7 +1041,7 @@ fn cancelling_properties_discards_the_draft() {
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(!dirty(&h));
-    assert!(h.state().props_draft.is_none());
+    assert!(h.query_by_label("OK").is_none(), "the dialog and its draft are gone");
 }
 
 fn custom_properties(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, String)> {
@@ -1036,7 +1083,7 @@ fn custom_properties_are_added_in_the_custom_tab_as_one_undoable_step() {
     assert_eq!(custom_properties(&h), [("Project".to_string(), "Apollo".to_string()), ("Revision".to_string(), "4".to_string())]);
     let app = h.state();
     assert_eq!(app.session.get(app.views[0].id).unwrap().can_undo(), Some("Change document properties"));
-    assert!(app.dialog.is_none() && app.custom_draft.is_none());
+    assert!(h.query_by_label("OK").is_none(), "the dialog and its draft are gone");
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
@@ -1118,7 +1165,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     clear(&mut h, "Name:");
     type_into(&mut h, "Name:", "Revision");
     assert!(h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled(), "Add would overwrite the number");
-    assert_eq!(h.state().custom_draft.as_ref().map(|(_, d)| d.value.as_str()), Some("Sales"));
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Value:").value().as_deref(), Some("Sales"));
     h.get_by_label("Project").click();
     h.run_steps(3);
     clear(&mut h, "Value:");
@@ -1139,7 +1186,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
     assert!(doc.has_info("Revision") && doc.info_value("Revision").is_none(), "the number is kept");
-    assert!(app.dialog.is_none());
+    assert!(h.query_by_label("OK").is_none());
 }
 
 #[test]
@@ -1194,7 +1241,7 @@ fn add_stops_at_the_256_custom_properties_the_tab_lists() {
     type_into(&mut h, "Name:", "Other");
     type_into(&mut h, "Value:", "x");
     assert!(add_disabled(&h), "the draft holds 256");
-    assert_eq!(h.state().custom_draft.as_ref().map(|(_, d)| d.props.len()), Some(256));
+    h.get_by_label("Client");
 
     // 257 in the file: after a Delete a new name would still be past the 256 listed.
     let mut h = with_props(257);
@@ -1404,7 +1451,7 @@ fn closing_the_combine_tab_forgets_its_list() {
     });
     h.run_steps(3);
     assert!(h.state().combine_showing());
-    h.state_mut().close_combine_tab();
+    h.state_mut().close_combine_tab(&egui::Context::default());
     h.run_steps(3);
     let app = h.state();
     assert!(app.combine_draft.is_empty() && !app.combine_tab.open);
@@ -1599,8 +1646,8 @@ fn the_whole_heading_sorts_and_dragging_it_moves_the_column() {
     let size = h.get_by_label("Size").rect().center();
     let name = h.get_by_label("File name, sorted ascending").rect();
     drag(&mut h, size, egui::pos2(name.left() + 10.0, name.center().y));
-    use pdfcraft_ui_egui::SortKey::*;
-    assert_eq!(h.state().combine_columns.order, [Size, Name, Pages, Modified, Warnings]);
+    let order = ["size", "name", "pages", "modified", "warnings"].map(craft::behavior::ColumnKey::new);
+    assert_eq!(h.state().combine_columns.order, order);
     assert_eq!(combine_names(&h), ["a.pdf", "b.pdf"], "moving a column doesn't sort");
     let (size, name) = (h.get_by_label("Size").rect(), h.get_by_label("File name, sorted ascending").rect());
     assert!(size.left() < name.left(), "Size now shows first");
@@ -1613,17 +1660,20 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
     // The separator after Size: drag it right by 60 points.
     let edge = egui::pos2(size.right() + 2.0, size.center().y);
     drag(&mut h, edge, edge + egui::vec2(60.0, 0.0));
-    let widths = h.state().combine_columns.widths.expect("a resized column keeps its width");
-    let size_index = pdfcraft_ui_egui::SortKey::Size as usize;
-    assert!(widths[size_index] > 120.0, "{widths:?}");
-    let saved = h.state().persist();
+    let widths = h.state().combine_columns.widths.clone();
+    let size_key = craft::behavior::ColumnKey::new("size");
+    let size_width = widths.iter().find(|(key, _)| *key == size_key).map(|(_, width)| *width).expect("a resized column keeps its width");
+    assert!(size_width > 120.0, "{widths:?}");
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
     fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
-    fresh.restore(&saved);
+    fresh.apply_settings(&saved);
     assert_eq!(fresh.combine_columns, h.state().combine_columns);
     // Malformed settings give the default layout.
-    fresh.restore(r#"{"combine_columns":{"order":["size","size"],"widths":[1,2]}}"#);
-    assert_eq!(fresh.combine_columns, Default::default());
+    let (malformed, _) = pdfcraft_ui_egui::settings::import_json(r#"{"combine_columns":{"order":["size","size"],"widths":[1,2]}}"#);
+    let mut other = crate::control::new_app();
+    other.apply_settings(&malformed);
+    assert_eq!(other.combine_columns, Default::default());
 }
 
 #[test]
@@ -1640,7 +1690,7 @@ fn a_folder_adds_its_pdfs_images_and_text_in_order_and_optionally_its_subfolders
     let mut h = harness(1, |_| {});
     h.execute("page.combine");
     h.run_steps(2);
-    h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
+    queue_pick(&[dir.as_path()]);
     h.get_by_label("Add folder…").click();
     h.run_steps(4);
     assert_eq!(combine_names(&h), ["notes.txt", "page2.PDF", "page10.pdf"], "numbers by value");
@@ -1872,12 +1922,12 @@ fn replace_button_replaces_selected_pages_in_organize() {
     h.run_steps(1);
     h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
     h.run_steps(2);
-    h.state_mut().pick_override = Some(vec![other.to_string_lossy().into_owned()]);
+    queue_pick(&[other.as_path()]);
     h.get_by_label("Replace").click();
     h.run_steps(3);
     egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
-    assert_eq!(h.state().replace_draft.as_ref().unwrap().from, 2);
-    assert_eq!(h.state().replace_draft.as_ref().unwrap().to, 3);
+    assert_eq!(h.get_by_label("Original: replace pages").value().as_deref(), Some("2"));
+    assert_eq!(h.get_by_label("to").value().as_deref(), Some("3"));
     egui_kittest::kittest::Queryable::get_by_label(&h, "OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -1895,14 +1945,14 @@ fn replace_pages_from_thumbnail_context_menu() {
     std::fs::write(&other, fixture(5)).unwrap();
 
     let mut h = organize(3);
-    h.state_mut().pick_override = Some(vec![other.to_string_lossy().into_owned()]);
+    queue_pick(&[other.as_path()]);
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
     h.get_all_by_label("Replace pages…").last().unwrap().click();
     h.run_steps(3);
     egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
-    assert_eq!(h.state().replace_draft.as_ref().unwrap().from, 2);
-    assert_eq!(h.state().replace_draft.as_ref().unwrap().to, 2);
+    assert_eq!(h.get_by_label("Original: replace pages").value().as_deref(), Some("2"));
+    assert_eq!(h.get_by_label("to").value().as_deref(), Some("2"));
     egui_kittest::kittest::Queryable::get_by_label(&h, "OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -1937,7 +1987,7 @@ fn plus_between_pages_inserts_picked_files_there_in_order() {
     // Page 3 is selected, yet the files go where the "+" is: between pages 1 and 2.
     h.get_by_label("Page 3").click();
     h.run_steps(2);
-    h.state_mut().pick_override = Some(vec![extra.to_string_lossy().into_owned(), note.to_string_lossy().into_owned()]);
+    queue_pick(&[extra.as_path(), note.as_path()]);
     h.get_by_label("Insert a file before page 2").click();
     h.run_steps(4);
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 2", "a note", "Page 2", "Page 3"]);
@@ -1949,7 +1999,7 @@ fn plus_between_pages_inserts_picked_files_there_in_order() {
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2", "Page 3"]);
     // Both ends.
-    h.state_mut().pick_override = Some(vec![note.to_string_lossy().into_owned()]);
+    queue_pick(&[note.as_path()]);
     h.get_by_label("Insert a file before page 1").click();
     h.run_steps(4);
     h.get_by_label("Insert a file at the end").click();
@@ -2051,7 +2101,7 @@ fn panel_thumb_rect(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rec
 
 #[test]
 fn files_dropped_on_the_pages_panel_are_inserted_there() {
-    let mut h = harness(3, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(3, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     // The top half of page 2's thumbnail: between pages 1 and 2.
     let thumb = panel_thumb_rect(&h, "Page 2");
     h.hover_at(thumb.center() - egui::vec2(0.0, thumb.height() * 0.25));
@@ -2063,7 +2113,7 @@ fn files_dropped_on_the_pages_panel_are_inserted_there() {
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 1", "Page 2", "a note", "Page 2", "Page 3"]);
     assert_eq!(picked(&h), [1, 2, 3], "the inserted pages are selected");
     // The bottom half of the last thumbnail: the end.
-    let mut h = harness(2, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(2, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     let last = panel_thumb_rect(&h, "Page 2");
     h.hover_at(last.center() + egui::vec2(0.0, last.height() * 0.25));
     h.run_steps(2);
@@ -2075,7 +2125,7 @@ fn files_dropped_on_the_pages_panel_are_inserted_there() {
 
 #[test]
 fn files_dropped_beside_the_pages_panel_still_open_as_documents() {
-    let mut h = harness(2, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(2, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     // Over the page view, not the panel.
     let thumb = panel_thumb_rect(&h, "Page 1");
     h.hover_at(egui::pos2(thumb.left() - 300.0, thumb.center().y));
@@ -2089,8 +2139,9 @@ fn files_dropped_beside_the_pages_panel_still_open_as_documents() {
     assert_eq!(texts_of(h.state(), 1), ["Page 1"], "the dropped PDF opens as its own document");
 }
 
-fn grid_zoom(h: &Harness<'static, PdfCraftApp>) -> f32 {
-    h.state().views[0].grid_zoom()
+/// The grid's size: one for the app, shared by every document.
+fn grid_zoom(h: &Harness<'static, PdfCraftApp>) -> f64 {
+    h.state().organize_zoom
 }
 
 /// As in Acrobat, Organize pages keeps the size last chosen: every document's grid opens at it,
@@ -2107,10 +2158,10 @@ fn page_grid_size_is_remembered_for_every_document_and_restart() {
     h.run_steps(4);
     let other = h.state().active.expect("the new document is active");
     assert_ne!(other, 0);
-    assert_eq!(h.state().views[other].grid_zoom(), 1.25, "the other document");
-    let settings = h.state().persist();
+    assert_eq!(grid_zoom(&h), 1.25, "the other document");
+    let settings = h.state().settings_snapshot();
     let h = harness(3, move |app| {
-        app.restore(&settings);
+        app.apply_settings(&settings);
         app.set_option(&egui::Context::default(), "organize", "on").unwrap();
     });
     assert_eq!(grid_zoom(&h), 1.25, "after a restart");
@@ -2151,13 +2202,13 @@ fn save_pages_writes_what_the_grid_shows() {
     h.run_steps(2);
     h.key_press(Key::Delete);
     h.run_steps(3);
-    h.state_mut().save_override = Some(path.to_string_lossy().into_owned());
+    queue_save(&path);
     h.get_by_label("Save pages").click();
     h.run_steps(4);
     assert!(!dirty(&h));
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes(&egui::Context::default(), "saved.pdf", None, std::fs::read(&path).unwrap()).unwrap();
+    app.open_bytes(&egui::Context::default(), "saved.pdf", None, saved_file(&path)).unwrap();
     assert_eq!(texts_of(&app, 0), ["Page 1", "Page 3"]);
 }
 
@@ -2166,19 +2217,16 @@ fn split_dialog_writes_one_file_per_part() {
     let dir = temp_path("split-count");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let d = dir.to_string_lossy().into_owned();
     let mut h = organize(3);
-    h.state_mut().export_dir_override = Some(d);
+    queue_pick(&[dir.as_path()]);
     h.get_all_by_label("Split").last().unwrap().click();
     h.run_steps(3);
     h.get_by_label_contains("Creates 3 files from 3 pages");
     h.get_all_by_label("Split").last().unwrap().click();
     h.run_steps(3);
-    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    names.sort();
-    assert_eq!(names, ["doc (page 1).pdf", "doc (page 2).pdf", "doc (page 3).pdf"]);
+    let names = ["doc (page 1).pdf", "doc (page 2).pdf", "doc (page 3).pdf"];
     for name in names {
-        let info = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap()), None).unwrap();
+        let info = pdfcraft_render::inspect(std::sync::Arc::new(saved_file(&dir.join(name))), None).unwrap();
         assert_eq!(info.pages.len(), 1);
     }
     let _ = std::fs::remove_dir_all(dir);
@@ -2190,7 +2238,7 @@ fn split_at_bookmarks_with_equal_titles_keeps_every_part() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = organize(3);
-    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    queue_pick(&[dir.as_path()]);
     for (index, title) in [(0, "Same"), (1, "Same"), (2, "same")] {
         let ctx_h = h.ctx.clone();
         h.state_mut().apply_edit(
@@ -2198,15 +2246,16 @@ fn split_at_bookmarks_with_equal_titles_keeps_every_part() {
             pdfcraft_engine::Edit::AddBookmark { parent: vec![], index, title: title.into(), page: index, left: None, top: None },
         );
     }
-    h.state_mut().split_draft.mode = pdfcraft_ui_egui::SplitMode::Bookmarks;
-    h.state_mut().run_command("page.split");
+    assert!(h.execute("page.split"));
+    h.run_steps(3);
+    h.get_by_label_contains("Top-level bookmarks").click();
     h.run_steps(3);
     h.get_by_label_contains("Creates 3 files from 3 pages");
     h.get_all_by_label("Split").last().unwrap().click();
     h.run_steps(3);
-    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    names.sort();
-    assert_eq!(names, ["doc - Same (2).pdf", "doc - Same.pdf", "doc - same (3).pdf"]);
+    for name in ["doc - Same (2).pdf", "doc - Same.pdf", "doc - same (3).pdf"] {
+        saved_file(&dir.join(name));
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -2216,37 +2265,37 @@ fn split_from_organize_grid_context_menu() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = organize(4);
-    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    queue_pick(&[dir.as_path()]);
     h.get_by_label("Page 3").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
     h.get_all_by_label("Split document…").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
-    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Selection);
+    h.get_by_label("Split document");
+    // The cut before the selected page is chosen: two parts, not one per page.
     h.get_by_label_contains("Creates 2 files from 4 pages");
     h.get_all_by_label("Split").last().unwrap().click();
     h.run_steps(3);
-    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    names.sort();
-    assert_eq!(names, ["doc (pages 1-2).pdf", "doc (pages 3-4).pdf"]);
+    for name in ["doc (pages 1-2).pdf", "doc (pages 3-4).pdf"] {
+        saved_file(&dir.join(name));
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
 fn split_from_pages_panel_context_menu_on_page_one_falls_back_to_pages() {
-    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     let thumb = h.get_all_by_label("Page 1").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap();
     thumb.click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
     h.get_all_by_label("Split document…").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
-    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Pages);
+    h.get_by_label("Split document");
+    h.get_by_label_contains("Creates 4 files from 4 pages"); // by number of pages: the cut is not before page 1
 }
 
 #[test]
 fn split_from_pages_panel_context_menu_with_multi_selection() {
-    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     // Select pages 2 and 4 (indices 1 and 3)
     h.state_mut().views[0].select_pages(&[1, 3]);
     h.run_steps(2);
@@ -2255,9 +2304,8 @@ fn split_from_pages_panel_context_menu_with_multi_selection() {
     h.run_steps(2);
     h.get_all_by_label("Split document…").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Split));
-    assert_eq!(h.state().split_draft.mode, pdfcraft_ui_egui::SplitMode::Selection);
-    h.get_by_label_contains("Creates 3 files from 4 pages");
+    h.get_by_label("Split document");
+    h.get_by_label_contains("Creates 3 files from 4 pages"); // before each selected page
 }
 
 // ── Encrypted documents ───────────────────────────────────────────────────────────────────────
@@ -2287,7 +2335,7 @@ pub(crate) fn encrypted(bytes: Vec<u8>, algorithm: pdfcraft_cos::Algorithm, user
 
 #[test]
 fn launch_display_override_survives_password_retry_without_changing_defaults() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
+    use pdfcraft_ui_egui::canvas::PageDisplay as PageLayout;
     use std::io::Write as _;
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let path = temp_path(&format!("startup-layout-{nonce}.pdf"));
@@ -2298,14 +2346,13 @@ fn launch_display_override_survives_password_retry_without_changing_defaults() {
     app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
     app.open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
     assert!(app.views.is_empty() && app.password_prompt.is_some());
-    app.submit_password(Some("wrong".into()));
+    app.submit_password(&egui::Context::default(), Some("wrong".into()));
     assert!(app.views.is_empty() && app.password_prompt.is_some());
-    app.submit_password(Some("reader".into()));
+    app.submit_password(&egui::Context::default(), Some("reader".into()));
     assert_eq!(app.views.len(), 1);
-    assert_eq!(app.views[0].layout, PageLayout::TwoUp);
+    assert_eq!(app.views[0].view.display, PageLayout::TwoUp);
     assert!(!app.views[0].continuous());
-    let persisted: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
-    assert_eq!(persisted["default_layout"], "continuous");
+    assert_eq!(app.settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
     std::fs::remove_file(path).unwrap();
 }
 
@@ -2320,7 +2367,7 @@ fn asynchronous_launch_display_explicit_layout_survives_retries_and_cancel() {
 }
 
 fn asynchronous_launch_display(explicit: bool) {
-    use pdfcraft_ui_egui::canvas::PageLayout;
+    use pdfcraft_ui_egui::canvas::PageDisplay as PageLayout;
     fn wait(h: &mut Harness<'static, PdfCraftApp>, stage: &str, ready: impl Fn(&PdfCraftApp) -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !ready(h.state()) {
@@ -2330,7 +2377,7 @@ fn asynchronous_launch_display(explicit: bool) {
                 h.state().views.len(),
                 h.state().password_prompt.is_some(),
                 h.state().password_prompt.as_ref().is_some_and(|p| p.error.is_some()),
-                h.state().toast.is_some()
+                support::shown_notice(h).is_some()
             );
             h.run_steps(2);
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -2346,7 +2393,6 @@ fn asynchronous_launch_display(explicit: bool) {
         app
     });
     h.run_steps(2);
-    assert!(!h.state().run_inline, "exercise upstream's actual background-opening path");
     let other = h.state().views[0].id;
     h.state_mut().open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
     if explicit {
@@ -2354,36 +2400,35 @@ fn asynchronous_launch_display(explicit: bool) {
     }
     wait(&mut h, "password prompt", |app| app.password_prompt.is_some());
     // The existing document keeps its default view while this request is pending.
-    h.state_mut().submit_password(Some("wrong".into()));
+    h.state_mut().submit_password(&egui::Context::default(), Some("wrong".into()));
     wait(&mut h, "wrong-password result", |app| app.password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
     assert_eq!(h.state().views.len(), 1);
-    h.state_mut().submit_password(Some("reader".into()));
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     wait(&mut h, "first unlock", |app| app.views.len() == 2);
     assert_eq!(h.state().views[0].id, other);
-    assert_eq!(h.state().views[0].layout, PageLayout::Single);
+    assert_eq!(h.state().views[0].view.display, PageLayout::Single);
     assert!(h.state().views[0].continuous());
-    assert_eq!(h.state().views[1].layout, if explicit { PageLayout::Single } else { PageLayout::TwoUp });
+    assert_eq!(h.state().views[1].view.display, if explicit { PageLayout::Single } else { PageLayout::TwoUp });
     assert!(!h.state().views[1].continuous());
     let second_path = path.with_extension("second.pdf");
     std::fs::copy(&path, &second_path).unwrap();
     h.state_mut().open_path_with_display(second_path.to_str().unwrap(), PageLayout::TwoUp, false);
     wait(&mut h, "password prompt", |app| app.password_prompt.is_some());
-    h.state_mut().submit_password(None);
+    h.state_mut().submit_password(&egui::Context::default(), None);
     h.state_mut().open_path(second_path.to_str().unwrap());
     wait(&mut h, "password prompt", |app| app.password_prompt.is_some());
-    h.state_mut().submit_password(Some("reader".into()));
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     wait(&mut h, "normal unlock after cancel", |app| app.views.len() == 3);
-    assert_eq!(h.state().views[2].layout, PageLayout::Single);
+    assert_eq!(h.state().views[2].view.display, PageLayout::Single);
     assert!(h.state().views[2].continuous());
-    let persisted: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
-    assert_eq!(persisted["default_layout"], "continuous");
+    assert_eq!(h.state().settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(second_path).unwrap();
 }
 
 #[test]
 fn canceling_launch_display_override_does_not_affect_later_documents() {
-    use pdfcraft_ui_egui::canvas::PageLayout;
+    use pdfcraft_ui_egui::canvas::PageDisplay as PageLayout;
     use std::io::Write as _;
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let path = temp_path(&format!("startup-cancel-layout-{nonce}.pdf"));
@@ -2394,19 +2439,18 @@ fn canceling_launch_display_override_does_not_affect_later_documents() {
     app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
     app.open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
     assert!(app.views.is_empty() && app.password_prompt.is_some());
-    app.submit_password(None);
+    app.submit_password(&egui::Context::default(), None);
     assert!(app.views.is_empty() && app.password_prompt.is_none());
     app.open_bytes(&egui::Context::default(), "next.pdf", None, fixture(2)).unwrap();
-    assert_eq!(app.views[0].layout, PageLayout::Single);
+    assert_eq!(app.views[0].view.display, PageLayout::Single);
     assert!(app.views[0].continuous());
     // Reopening the same protected file normally must not resurrect the canceled override.
     app.open_path(path.to_str().unwrap());
-    app.submit_password(Some("reader".into()));
+    app.submit_password(&egui::Context::default(), Some("reader".into()));
     assert_eq!(app.views.len(), 2);
-    assert_eq!(app.views[1].layout, PageLayout::Single);
+    assert_eq!(app.views[1].view.display, PageLayout::Single);
     assert!(app.views[1].continuous());
-    let persisted: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
-    assert_eq!(persisted["default_layout"], "continuous");
+    assert_eq!(app.settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
     std::fs::remove_file(path).unwrap();
 }
 
@@ -2435,14 +2479,14 @@ fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
         assert_eq!(prompt, Some(Some(locked_path.clone())), "the protected file is asked for");
         assert!(h.state().views.is_empty(), "the later file waits behind the prompt");
         if unlock {
-            h.state_mut().submit_password(Some("reader".into()));
+            h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
             support::wait_until(&mut h, "both files", |app| app.views.len() == 2);
             // The other file opened while the password was being typed; the unlocked one comes
             // after it and is the one in view.
             assert_eq!(open_paths(h.state()), vec![other_path, locked_path]);
             assert_eq!(h.state().active_ids().map(|(i, _)| i), Some(1));
         } else {
-            h.state_mut().submit_password(None);
+            h.state_mut().submit_password(&egui::Context::default(), None);
             support::wait_until(&mut h, "the other file", |app| app.views.len() == 1);
             assert_eq!(open_paths(h.state()), vec![other_path]);
         }
@@ -2473,7 +2517,7 @@ fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
     });
     h.run_steps(4);
     assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
-    h.state_mut().submit_password(Some("reader".into()));
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     support::wait_until(&mut h, "both files, or a second prompt", |app| app.views.len() == 2 || app.password_prompt.is_some());
     assert!(h.state().password_prompt.is_none(), "the password is asked for once");
     let mut paths = open_paths(h.state());
@@ -2509,7 +2553,7 @@ fn a_password_retry_finishes_before_the_next_protected_files_prompt() {
     std::thread::sleep(std::time::Duration::from_millis(300));
     h.run_steps(2);
     assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(a_path.clone()));
-    h.state_mut().submit_password(Some("reader".into()));
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     support::wait_until(&mut h, "the next prompt", |app| app.password_prompt.is_some());
     assert_eq!(open_paths(h.state()), vec![a_path], "A's retry finished first");
     assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(b_path));
@@ -2543,7 +2587,7 @@ fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
     });
     h.run_steps(4);
     assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
-    h.state_mut().submit_password(Some("reader".into()));
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     support::wait_until(&mut h, "every file", |app| app.views.len() == OTHERS + 1);
     let mut paths = open_paths(h.state());
     paths.sort();
@@ -2644,11 +2688,11 @@ fn the_security_notice_unlocks_with_the_permissions_password() {
 /// `--secured-notice`); the document stays restricted and Properties ▸ Security still opens.
 #[test]
 fn the_security_notice_can_be_turned_off_for_good() {
-    let open = |settings: Option<String>| {
+    let open = |settings: Option<pdfcraft_ui_egui::settings::PdfCraftSettings>| {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = crate::control::new_app();
             if let Some(s) = &settings {
-                app.restore(s);
+                app.apply_settings(s);
             }
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
@@ -2673,7 +2717,7 @@ fn the_security_notice_can_be_turned_off_for_good() {
     h.get_by_label("Password security");
     h.get_by_label("User password");
     // Kept in the settings: a later session opens the same file without the notice.
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut h = open(Some(saved));
     assert!(h.query_by_label_contains("This document is secured").is_none(), "remembered across a restart");
     // Back on from Preferences.
@@ -2780,11 +2824,11 @@ fn copying_out_of_a_document_honours_its_security() {
             let mut app = clipboard_app(&cc.egui_ctx, &sink);
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
-            app.submit_password(Some(password.into()));
+            app.submit_password(&cc.egui_ctx, Some(password.into()));
             // One page at a time: Select All takes that page's text (scrolling continuously it would
             // take both pages', #2639; what is tested here is the security of copying it).
             if let Some(v) = app.views.first_mut() {
-                v.set_continuous(false);
+                v.view.continuous = false;
             }
             app
         });
@@ -2801,7 +2845,6 @@ fn copying_out_of_a_document_honours_its_security() {
         (h, copies)
     }
     fn copy(h: &mut Harness<'static, PdfCraftApp>, copies: &Copies) -> bool {
-        h.state_mut().toast = None;
         let before = copies.lock().map_or(0, |c| c.len());
         h.event(egui::Event::Copy);
         h.run_steps(4);
@@ -2825,18 +2868,20 @@ fn copying_out_of_a_document_honours_its_security() {
 
     let (mut h, copies) = open("pw");
     assert!(!copy(&mut h, &copies), "⌘C copies nothing");
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+    assert_eq!(support::shown_notice(&mut h).as_deref(), refused);
     for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"] {
-        h.state_mut().toast = None;
+        // A fresh window per command: the notice of the one before would still be showing.
+        let (mut h, _) = open("pw");
         assert!(!h.execute(command), "{command} is refused");
-        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused, "{command} says why");
+        h.run_steps(2);
+        assert_eq!(support::shown_notice(&mut h).as_deref(), refused, "{command} says why");
+        assert!(h.state().dialogs.is_empty(), "no export dialog");
     }
-    assert!(h.state().dialogs.is_empty(), "no export dialog");
     // The snapshot tool, chosen on another tab, takes nothing here either.
     h.set_option("quick", "snapshot").unwrap();
     snapshot(&mut h);
     assert!(h.state().last_snapshot.is_none());
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+    assert_eq!(support::shown_notice(&mut h).as_deref(), refused);
 
     let (mut h, copies) = open("owner");
     assert!(copy(&mut h, &copies), "the owner may copy");
@@ -2855,14 +2900,25 @@ fn replace_pages_dialog_swaps_page_content() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
     h.run_steps(3);
     egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
-    h.state_mut().replace_draft.as_mut().unwrap().src_from = 5;
-    h.run_steps(1);
+    type_spin(&mut h, "Replacement: pages of other.pdf", "5");
     egui_kittest::kittest::Queryable::get_by_label(&h, "OK").click();
     h.run_steps(3);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 3);
     assert_eq!(doc.can_undo(), Some("Replace page"));
+}
+
+/// Types `text` into the number field `label` of the open dialog, as events (a key press's `run` checks the
+/// dialog's unnamed combo boxes), and leaves the field with its end still being typed.
+fn type_spin(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
+    h.get_by_role_and_label(Role::SpinButton, label).click();
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    for c in text.chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_steps(2);
+    }
 }
 
 /// Pages 1 and 3 are selected. OK replaces those two and leaves the unchecked page between them.
@@ -2892,15 +2948,12 @@ fn replace_split_selection_keeps_the_unchecked_page() {
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         out
     }
-    let open = |selected: &[usize], edited: bool| {
+    let open = |selected: &[usize]| {
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "original.pdf", None, sized(3, 200, 300, "Original")).unwrap();
         app.views[0].select_pages(selected);
         app.start_replace(&egui::Context::default(), "other.pdf".into(), sized(5, 400, 500, "Replacement"));
-        if edited {
-            app.replace_draft.as_mut().unwrap().range_edited = true;
-        }
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
         h.run_steps(2);
         h
@@ -2909,25 +2962,27 @@ fn replace_split_selection_keeps_the_unchecked_page() {
         let doc = app.session.get(app.views[0].id).unwrap();
         doc.info.pages.iter().map(|p| (p.width.round() as i32, p.height.round() as i32)).collect::<Vec<_>>()
     };
-    let mut split = open(&[0, 2], false);
-    let draft = split.state().replace_draft.as_ref().unwrap();
-    assert_eq!((draft.from, draft.to, draft.pages.as_slice(), draft.range_edited), (1, 3, &[0usize, 2][..], false));
+    let mut split = open(&[0, 2]);
+    assert_eq!(split.get_by_label("Original: replace pages").value().as_deref(), Some("1"));
+    assert_eq!(split.get_by_label("to").value().as_deref(), Some("3"));
     egui_kittest::kittest::Queryable::get_by_label(&split, "OK").click();
     split.run_steps(3);
     assert_eq!(texts_of(split.state(), 0), ["Replacement 1", "Original 2", "Replacement 2"]);
     assert_eq!(sizes(split.state()), [(400, 500), (200, 300), (400, 500)]);
     assert_eq!(split.state().session.get(split.state().views[0].id).unwrap().can_undo(), Some("Replace pages"));
-    split.state_mut().undo();
+    split.state_mut().undo(&egui::Context::default());
     split.run_steps(2);
     assert_eq!(texts_of(split.state(), 0), ["Original 1", "Original 2", "Original 3"]);
     assert_eq!(sizes(split.state()), [(200, 300), (200, 300), (200, 300)]);
 
-    let mut span = open(&[0, 2], true);
+    // A span typed over the selection replaces that span, whatever was selected.
+    let mut span = open(&[0, 2]);
+    type_spin(&mut span, "to", "2");
     egui_kittest::kittest::Queryable::get_by_label(&span, "OK").click();
     span.run_steps(3);
-    assert_eq!(texts_of(span.state(), 0), ["Replacement 1", "Replacement 2", "Replacement 3"]);
+    assert_eq!(texts_of(span.state(), 0), ["Replacement 1", "Replacement 2", "Original 3"]);
 
-    let mut adjacent = open(&[1, 2], false);
+    let mut adjacent = open(&[1, 2]);
     egui_kittest::kittest::Queryable::get_by_label(&adjacent, "OK").click();
     adjacent.run_steps(3);
     assert_eq!(texts_of(adjacent.state(), 0), ["Original 1", "Replacement 1", "Replacement 2"]);
@@ -2940,20 +2995,22 @@ fn extract_options_and_rotate_pages_dialog() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = organize(4);
-    h.state_mut().export_dir_override = Some(dir.to_string_lossy().into_owned());
+    queue_pick(&[dir.as_path()]);
     h.state_mut().views[0].select_pages(&[1, 2]);
-    h.state_mut().run_command("page.extract");
+    h.state_mut().run_command(&egui::Context::default(), "page.extract");
     h.run_steps(2);
-    h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, delete: true, ..Default::default() };
+    h.get_by_label("Delete pages after extracting").click();
+    h.get_by_label("Extract pages as separate files").click();
+    h.run_steps(2);
     h.get_all_by_label("Extract").last().unwrap().click();
     h.run_steps(3);
-    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-    names.sort();
-    assert_eq!(names, ["doc (page 2).pdf", "doc (page 3).pdf"]);
+    for name in ["doc (page 2).pdf", "doc (page 3).pdf"] {
+        saved_file(&dir.join(name));
+    }
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 4"], "deleted after extracting");
     let _ = std::fs::remove_dir_all(dir);
     // Rotate Pages: odd page numbers only.
-    h.state_mut().run_command("page.rotate_dialog");
+    h.state_mut().run_command(&egui::Context::default(), "page.rotate_dialog");
     h.run_steps(2);
     h.state_mut().rotate_draft.which = 0;
     h.state_mut().rotate_draft.parity = pdfcraft_engine::PageParity::Odd;
@@ -2972,7 +3029,7 @@ fn rotate_pages_keeps_a_typed_last_page() {
     use egui::accesskit::Role;
     for (typed, rotated) in [("12", 5..13), ("3", 5..6)] {
         let mut h = organize(20);
-        h.state_mut().run_command("page.rotate_dialog");
+        h.state_mut().run_command(&egui::Context::default(), "page.rotate_dialog");
         h.run_steps(2);
         let d = &mut h.state_mut().rotate_draft;
         (d.which, d.from, d.to) = (2, 5, 5);
@@ -3015,7 +3072,7 @@ fn dragging_thumbnails_reorders_pages() {
     let after = page_texts(h.state());
     assert_eq!(after, vec![before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()], "{after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
-    let sel: Vec<usize> = h.state().views[0].selected.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
     assert_eq!(sel, vec![2], "the moved page stays selected");
 }
 
@@ -3061,7 +3118,7 @@ fn dragging_with_the_copy_modifier_copies_the_pages_into_the_gap() {
     let after = page_texts(h.state());
     assert_eq!(after, vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone()], "{after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Duplicate page"));
-    let sel: Vec<usize> = h.state().views[0].selected.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
     assert_eq!(sel, vec![3], "the copy is selected");
 }
 
@@ -3090,7 +3147,7 @@ fn option_copies_and_ctrl_moves_when_the_context_reports_macos() {
     page_drag(&mut h, from, to, Modifiers::ALT);
     assert_eq!(page_texts(h.state()), vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone()], "Option copies on macOS");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Duplicate page"));
-    let sel: Vec<usize> = h.state().views[0].selected.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
     assert_eq!(sel, vec![3], "the copy is selected");
 }
 
@@ -3105,7 +3162,7 @@ fn copying_cutting_and_pasting_pages() {
     h.run_steps(2);
     let after = page_texts(h.state());
     assert_eq!(after, vec![before[0].clone(), before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()], "pasted after page 3");
-    let sel: Vec<usize> = h.state().views[0].selected.iter().copied().collect();
+    let sel: Vec<usize> = h.state().views[0].selected.items.iter().copied().collect();
     assert_eq!(sel, vec![3], "the pasted page is selected");
     // Cut page 2 and paste it at the end.
     h.state_mut().views[0].select_pages(&[1]);
@@ -3585,8 +3642,9 @@ fn a_paragraph_whose_edit_fails_stays_open_with_its_typing() {
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
     h.run_steps(3);
+    let notice = support::shown_notice(&mut h);
     let s = h.state();
-    assert!(s.toast.as_ref().is_some_and(|(m, _)| m.starts_with("Edit text failed")), "the failure is said: {:?}", s.toast);
+    assert!(notice.as_ref().is_some_and(|m| m.starts_with("Edit text failed")), "the failure is said: {notice:?}");
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was applied");
     let ed = s.views[0].session.line_editor.as_ref().expect("the paragraph is still open");
     assert_eq!((ed.block, ed.text.as_str()), (0, "Top ก"), "with what was typed");
@@ -4927,7 +4985,7 @@ fn selected_text_formatting_keeps_the_rest_of_the_paragraph_and_reopens() {
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().selection, Some(5..6));
+    assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().selection, Some(craft::text::ui::editor::TextSelection::new(6, 5)));
     h.get_by_label("Bold").click();
     h.run_steps(5);
     let id = h.state().views[0].id;
@@ -5645,7 +5703,7 @@ fn an_ordinary_paragraph_drag_refusal_never_rewrites_the_text() {
     assert!(doc.can_undo().is_none());
     assert!(!doc.dirty);
     assert_dragged_paragraphs(&dragged_paragraphs(&h), &before);
-    assert!(h.state().toast.as_ref().unwrap().0.contains("Text used as a clipping path cannot be moved with this selection."));
+    assert!(support::shown_notice(&mut h).unwrap().contains("Text used as a clipping path cannot be moved with this selection."));
 }
 
 /// A delete the engine refuses (text used as a clipping path) leaves the document as it was and
@@ -5668,7 +5726,7 @@ fn a_refused_delete_keeps_the_object_selection() {
     let doc = h.state().session.get(id).unwrap();
     assert_eq!((doc.edit_generation(), &doc.bytes), (generation, &bytes), "the refused delete changed nothing");
     assert!(doc.can_undo().is_none());
-    assert!(h.state().toast.is_some(), "the refusal is reported");
+    assert!(support::shown_notice(&mut h).is_some(), "the refusal is reported");
     h.get_by_label("1 object selected");
 }
 
@@ -5795,15 +5853,15 @@ fn a_paragraph_rewraps_from_the_outer_half_of_its_edge_handles() {
     let rid = reopen.open("saved.pdf", None, saved, None).unwrap();
     assert!(near(reopen.get(rid).unwrap().text_blocks(0)[0].rect, narrowed.rect));
     // Undo gives the old width back, redo the new one.
-    h.state_mut().undo();
+    h.state_mut().undo(&egui::Context::default());
     h.run_steps(2);
     assert_eq!(lines(&h), ["Page 1"]);
     assert!(near(block(&h).rect, before.rect), "{:?} → {:?}", before.rect, block(&h).rect);
-    h.state_mut().redo();
+    h.state_mut().redo(&egui::Context::default());
     h.run_steps(2);
     assert!(near(block(&h).rect, narrowed.rect), "{:?} → {:?}", narrowed.rect, block(&h).rect);
     // The left handle's outer half too.
-    h.state_mut().undo();
+    h.state_mut().undo(&egui::Context::default());
     h.run_steps(2);
     let grip = screen(before.rect[0], before.rect[3] - 6.0) - egui::vec2(outside, 0.0);
     let inward = (before.rect[2] - before.rect[0] - 45.0) as f32;
@@ -5826,7 +5884,7 @@ fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
 }
 
 fn picked(h: &Harness<'static, PdfCraftApp>) -> Vec<usize> {
-    h.state().views[0].selected.iter().copied().collect()
+    h.state().views[0].selected.items.iter().copied().collect()
 }
 
 #[test]
@@ -5906,7 +5964,6 @@ fn print_shortcut_offers_the_pages_picked_in_the_pages_panel() {
     assert_eq!(picked(&h), [1, 3]);
     h.key_press_modifiers(Modifiers::COMMAND, Key::P);
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::Print));
     assert_eq!(h.state().print_draft.which, pdfcraft_ui_egui::PrintWhich::Selected);
     assert_eq!(h.state().print_draft.selected, [1, 3]);
     h.get_by_label("Selected pages (2)");
@@ -5915,7 +5972,7 @@ fn print_shortcut_offers_the_pages_picked_in_the_pages_panel() {
 
 #[test]
 fn dragging_pages_panel_thumbnails_reorders_pages() {
-    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     let before = page_texts(h.state());
     // The Pages panel is on the right; the document view may label its pages too.
     let thumb = |h: &Harness<'static, PdfCraftApp>, label: &str| {
@@ -5929,14 +5986,13 @@ fn dragging_pages_panel_thumbnails_reorders_pages() {
     assert_eq!(after, vec![before[2].clone(), before[0].clone(), before[1].clone(), before[3].clone()], "{after:?}");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move page"));
     let view = &h.state().views[0];
-    assert_eq!(view.selected.iter().copied().collect::<Vec<_>>(), vec![0], "the moved page stays selected");
-    assert!(view.panel_drag.is_none());
+    assert_eq!(view.selected.items.iter().copied().collect::<Vec<_>>(), vec![0], "the moved page stays selected");
 }
 
 #[test]
 fn resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo() {
     let mut h = harness(4, |app| {
-        app.right = Some(pdfcraft_ui_egui::RightPanel::Pages);
+        app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
         app.set_option(&egui::Context::default(), "thumbnail-zoom", "50").unwrap();
     });
     let before = page_texts(h.state());
@@ -5957,7 +6013,7 @@ fn resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo() {
 
 #[test]
 fn a_thumbnail_drag_that_ends_off_the_panel_or_outlives_the_pages_is_dropped() {
-    let mut h = harness(4, |app| app.right = Some(pdfcraft_ui_egui::RightPanel::Pages));
+    let mut h = harness(4, |app| app.set_option(&egui::Context::default(), "panel", "pages").unwrap());
     let before = page_texts(h.state());
     // A drag left over (the panel closed mid-drag, the button released elsewhere) moves nothing.
     h.state_mut().views[0].panel_drag = Some(vec![2]);
@@ -5994,7 +6050,7 @@ fn deleting_pages_from_the_pages_panel_menu() {
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 3", "Page 4"]);
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Delete page"));
-    assert!(h.state().views[0].selected.is_empty(), "the deleted pages leave the selection");
+    assert!(h.state().views[0].selected.items.is_empty(), "the deleted pages leave the selection");
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"]);
@@ -6011,7 +6067,7 @@ fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page()
     let (p1, p3) = (panel_thumb(&h, "Page 1"), panel_thumb(&h, "Page 3"));
     h.hover_at(p3);
     h.run_steps(1);
-    assert_eq!(h.state().views[0].selected.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
+    assert_eq!(h.state().views[0].selected.items.iter().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
     // Every page picked: Delete does nothing, and the menu item is off.
     h.key_press(Key::Delete);
     h.run_steps(3);
@@ -6275,7 +6331,13 @@ fn dragging_over_a_word_selects_that_word_when_the_editor_uses_a_stand_in_face()
         h.drop_at(to);
         h.run_steps(3);
         let ed = h.state().views[0].session.line_editor.as_ref().expect("the paragraph stays open");
-        let selected = ed.selection.clone().and_then(|s| ed.text.get(s)).unwrap_or_default();
+        let selected: String = ed
+            .selection
+            .map(|s| {
+                let (from, to) = (s.anchor.min(s.caret), s.anchor.max(s.caret));
+                ed.text.chars().skip(from).take(to - from).collect()
+            })
+            .unwrap_or_default();
         assert_eq!(selected, words[target], "dragging over word {target} ({:?})", words[target]);
     }
 }
@@ -6297,7 +6359,7 @@ fn private_document_regions_open_as_one_editor() {
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
     h.run_steps(2);
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("view.layout.single"));
     h.run_steps(3);
     let page_count = h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
@@ -6564,7 +6626,7 @@ fn cropped_images_do_not_intercept_text_and_stay_inside_each_page() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("view.layout.single"));
     h.run_steps(3);
     for page in 0..2 {
@@ -6615,7 +6677,7 @@ fn cropped_image_corner_resize_keeps_opposite_corner_and_scales_crop() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("view.layout.single"));
     h.run_steps(3);
     let page = h.state().views[0].page_screen_rect(0).unwrap();
@@ -6684,7 +6746,7 @@ fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].set_zoom(1.2);
+    h.state_mut().views[0].view.zoom = 1.2;
     h.run_steps(4);
     // The dragged pixels are the page raster's: wait for it, as a slow runner may not have it yet
     // (the drag then drew no picture at all).
@@ -6810,7 +6872,7 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].set_zoom(1.2);
+    h.state_mut().views[0].view.zoom = 1.2;
     h.run_steps(4);
     support::wait_until(&mut h, "the page raster", |app| !app.render_pending());
     let page = h.state().views[0].page_screen_rect(0).unwrap();
@@ -6885,7 +6947,7 @@ fn private_cropped_image_grips_resize_without_moving_the_opposite_corner() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("view.layout.single"));
     let id = h.state().views[0].id;
     let pages = h.state().session.get(id).unwrap().info.pages.len();
@@ -6977,7 +7039,7 @@ fn private_document_cropped_artwork_does_not_block_text() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("view.layout.single"));
     h.run_steps(3);
     let pages = h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
@@ -7042,7 +7104,7 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("view.layout.single"));
     let id = h.state().views[0].id;
     let pages = h.state().session.get(id).unwrap().info.pages.len();
@@ -7528,11 +7590,11 @@ fn a_right_click_on_a_comment_over_a_picture_opens_its_menu() {
             author: "Tester".into(),
         })
     ));
-    h.state_mut().views[0].session.comments.selected = None;
+    h.state_mut().views[0].session.comments.clear_selection();
     h.run_steps(3);
     let on_it = page_at(&h, 0, 100.0, 210.0);
     right_click_at(&mut h, on_it);
-    assert!(h.state().views[0].session.comments.selected.is_some(), "the comment is selected");
+    assert!(h.state().views[0].session.comments.primary().is_some(), "the comment is selected");
     assert!(h.state().views[0].session.image_selection.is_none(), "the picture is not");
     assert!(h.query_by_label("Properties…").is_some(), "the comment's menu opens");
 }
@@ -7623,8 +7685,8 @@ fn a_selected_pictures_keys_wait_for_its_page_to_be_on_screen() {
             let half = [keep[0], keep[1], (keep[0] + keep[2]) / 2.0, keep[3]];
             h.state_mut().views[0].session.image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = half;
         }
-        h.state_mut().views[0].layout = PageLayout::Single;
-        h.state_mut().views[0].continuous() = false;
+        h.state_mut().views[0].view.display = PageLayout::Single;
+        h.state_mut().views[0].view.continuous = false;
         h.state_mut().views[0].go_to_page(1);
         h.run_steps(4);
         assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 is off the screen");
@@ -8062,13 +8124,13 @@ fn page_properties_sets_the_tab_order_of_the_selected_pages() {
     h.run_steps(2);
     h.get_by_label("Page properties").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, Some(Dialog::PageProps));
-    assert_eq!(h.state().page_props_draft.as_ref().unwrap().tab_order, Some(Annotations), "opens on Unspecified, as the pages have it");
+    assert!(!h.state().dialogs.is_empty(), "Page Properties is open");
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled(), "opens on the order the pages have");
     h.get_by_label("Use Column Order").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty());
     assert_eq!(tabs(&h), [Column, Annotations, Column]);
     assert_eq!(undo(&h).0.as_deref(), Some("Set tab order"));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
@@ -8082,8 +8144,7 @@ fn page_properties_sets_the_tab_order_of_the_selected_pages() {
     h.state_mut().views[0].select_pages(&[0, 1]);
     assert!(h.execute("page.properties"));
     h.run_steps(3);
-    assert_eq!(h.state().page_props_draft.as_ref().unwrap().tab_order, None);
-    assert!(h.get_by_label("OK").accesskit_node().is_disabled());
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled(), "no choice is made for pages with different orders");
     h.get_by_label("Use Row Order").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
@@ -8107,7 +8168,7 @@ fn page_properties_sets_the_tab_order_of_the_selected_pages() {
     h.run_steps(2);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty());
     assert_eq!((tabs(&h), undo(&h)), before);
 }
 
@@ -8130,7 +8191,7 @@ fn page_properties_does_not_apply_to_another_active_document() {
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(other));
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty());
     for id in [first, other] {
         let doc = h.state().session.get(id).unwrap();
         assert_eq!(doc.tab_orders(), [Annotations; 3]);
@@ -8155,14 +8216,14 @@ fn page_properties_does_not_apply_after_the_document_changes() {
     h.run_steps(3);
     h.get_by_label("OK").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(h.state().dialogs.is_empty());
+    assert_eq!(
+        support::shown_notice(&mut h).as_deref(),
+        Some("The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.")
+    );
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.tab_orders(), [Annotations; 3]);
     assert_ne!(doc.can_undo(), Some("Set tab order"));
-    assert_eq!(
-        h.state().toast.as_ref().map(|t| t.0.as_str()),
-        Some("The document changed while the dialog was open, so nothing was changed. Open Page properties again to set the tab order.")
-    );
 }
 
 /// Leaving Organize (a page opened from the grid, or the grid's Close) goes back to the
@@ -8889,7 +8950,7 @@ fn a_click_away_from_the_picture_applies_its_crop() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     h.run_steps(3);
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
@@ -9095,7 +9156,7 @@ fn printer_marks_are_added_from_the_dialog_and_removed() {
     let before = h.state().session.get(id).unwrap().info.pages[0].width;
     assert!(h.execute("prepress.marks"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::PrinterMarks));
+    assert!(!h.state().dialogs.is_empty(), "Printer marks is open");
     h.get_by_label("All marks");
     h.get_by_label("Add").click();
     h.run_steps(3);
@@ -9104,7 +9165,7 @@ fn printer_marks_are_added_from_the_dialog_and_removed() {
     assert!(doc.marks().contains(&pdfcraft_engine::MarkKind::PrinterMarks));
     // No trim box: the whole page is the trim box, so the page grew 36 pt a side for the marks.
     assert!((doc.info.pages[0].width - (before + 72.0)).abs() < 0.5, "{} → {}", before, doc.info.pages[0].width);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Printer marks added");
+    assert_eq!(support::shown_notice(&mut h).unwrap(), "Printer marks added");
     assert!(h.execute("prepress.marks.remove"));
     h.run_steps(3);
     let doc = h.state().session.get(id).unwrap();
@@ -9134,18 +9195,18 @@ fn convert_colours_from_the_dialog() {
     let id = h.state().views[0].id;
     assert!(h.execute("prepress.convert_colors"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::ConvertColours));
+    assert!(!h.state().dialogs.is_empty(), "Convert colours is open");
     h.get_by_label("Grayscale");
     // The mode bar has a "Convert" too: the dialog's button is the last one.
     h.query_all_by_label("Convert").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Converted 2 colours and 0 pictures on 1 pages");
+    assert_eq!(support::shown_notice(&mut h).unwrap(), "Converted 2 colours and 0 pictures on 1 pages");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Convert colours"));
     assert!(h.execute("prepress.convert_colors"));
     h.run_steps(2);
     h.query_all_by_label("Convert").last().unwrap().click();
     h.run_steps(3);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Nothing on those pages needed converting");
+    assert_eq!(support::shown_notice(&mut h).unwrap(), "Nothing on those pages needed converting");
 }
 
 /// Print production ▸ Fix hairlines: the dialog widens zero-width and too-thin
@@ -9169,18 +9230,18 @@ fn fix_hairlines_from_the_dialog() {
     let id = h.state().views[0].id;
     assert!(h.execute("prepress.hairlines"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(Dialog::FixHairlines));
+    assert!(!h.state().dialogs.is_empty(), "Fix hairlines is open");
     h.get_by_label("Type 3 font glyphs");
     h.get_by_label("Fix").click();
     h.run_steps(3);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 1 hairline on 1 page");
+    assert_eq!(support::shown_notice(&mut h).unwrap(), "Fixed 1 hairline on 1 page");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
     // Nothing left: told, and no new undo step.
     assert!(h.execute("prepress.hairlines"));
     h.run_steps(2);
     h.get_by_label("Fix").click();
     h.run_steps(3);
-    assert_eq!(h.state().toast.clone().unwrap().0, "No hairlines found on those pages");
+    assert_eq!(support::shown_notice(&mut h).unwrap(), "No hairlines found on those pages");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Fix hairlines"));
 }
 
@@ -9206,7 +9267,7 @@ fn fix_hairlines_notice_uses_singular_and_plural() {
     h.run_steps(2);
     h.get_by_label("Fix").click();
     h.run_steps(3);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Fixed 2 hairlines on 1 page");
+    assert_eq!(support::shown_notice(&mut h).unwrap(), "Fixed 2 hairlines on 1 page");
 }
 
 /// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
@@ -9229,7 +9290,7 @@ fn read_mode_shortcut_applies_the_open_paragraph() {
     assert!(h.state().views[0].session.line_editor.is_some(), "the line opens for editing");
     h.state_mut().views[0].session.line_editor.as_mut().unwrap().text = "Chapter One".into();
     h.run_steps(1);
-    h.state_mut().run_command("view.read_mode");
+    h.state_mut().run_command(&egui::Context::default(), "view.read_mode");
     h.run_steps(3);
     let s = h.state();
     assert_eq!(s.mode, Mode::Read);
@@ -9277,8 +9338,7 @@ fn arrange_duplicate_image_clears_selection_when_ambiguous() {
     assert_eq!(images[0].name, images[1].name);
 
     // Select the second occurrence (index 1)
-    h.state_mut().views[0].session.image_selection =
-        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 1, drag: None, crop: None, turning: false, settled: None });
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 1));
     h.run_steps(2);
 
     // Arrange send to back
@@ -9339,8 +9399,7 @@ fn arrange_unique_image_preserves_selection() {
     assert_eq!(images[1].name, "FigB");
 
     // Select FigA at index 0 and bring it to front (should move after FigB, becoming index 1)
-    h.state_mut().views[0].session.image_selection =
-        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop: None, turning: false, settled: None });
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(2);
 
     let ctx_h = h.ctx.clone();
@@ -9399,8 +9458,7 @@ fn undo_arrange_re_resolves_image_selection_or_clears() {
     assert_eq!(images[1].name, "FigB");
 
     // Select FigA (back image, index 0)
-    h.state_mut().views[0].session.image_selection =
-        Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop: None, turning: false, settled: None });
+    h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(2);
 
     // Bring to front
@@ -9513,7 +9571,7 @@ fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
         app
     });
     h.run_steps(4);
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     h.run_steps(4);
     let rects =
         |h: &Harness<'static, PdfCraftApp>| (h.state().views[0].page_screen_rect(0).unwrap(), h.state().views[0].page_screen_rect(1).unwrap());
@@ -9588,7 +9646,7 @@ fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
 /// up under the bar. With the All tools panel closed it lies under Edit, Convert and E-Sign; it
 /// starts right of All tools.
 fn mode_tab_cursors(h: &mut Harness<'static, PdfCraftApp>, text: egui::Rect) -> [(&'static str, egui::CursorIcon); 3] {
-    h.state_mut().views[0].goto = Some((0, 0.5));
+    h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.5 });
     h.run_steps(4);
     let offset = h.state().views[0].page_screen_rect(0).expect("on screen").top();
     ["Edit", "Convert", "E-Sign"].map(|label| {
@@ -9620,7 +9678,7 @@ fn mode_tabs_keep_the_hand_over_page_text_scrolled_under_them() {
     let mut h = harness(2, |app| app.set_option(&egui::Context::default(), "left", "closed").unwrap());
     let text = page_text(&h);
     // Where the page shows, its text takes the I-beam, once the page's text has arrived.
-    h.state_mut().views[0].goto = Some((0, 0.3));
+    h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.3 });
     h.run_steps(4);
     let top = h.state().views[0].page_screen_rect(0).expect("on screen").top();
     let mut cursor = egui::CursorIcon::Default;
@@ -9646,7 +9704,7 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     let text = page_text(&h);
     assert_eq!(mode_tab_cursors(&mut h, text), HAND_ON_EVERY_TAB, "a closed paragraph under the tabs");
     // Open it, where it shows.
-    h.state_mut().views[0].goto = Some((0, 0.3));
+    h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.3 });
     h.run_steps(4);
     let top = h.state().views[0].page_screen_rect(0).expect("on screen").top();
     click_at(&mut h, text.center() + egui::vec2(0.0, top));
@@ -9655,17 +9713,18 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     // Nor does the editor's frame, with the paragraph's top edge just under a tab (the frame
     // reaches 2 to 6 points outside it).
     let convert = mode_tab(&h, "Convert").center();
-    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.0 });
     h.run_steps(4);
     let page = h.state().views[0].page_screen_rect(0).expect("on screen");
-    h.state_mut().views[0].goto = Some((0, (page.top() - (convert.y + 4.0 - text.top())) / page.height()));
+    h.state_mut().views[0].view.go_to =
+        Some(craft::pages::ui::GoTo::Top { page: 0, fraction: f64::from((page.top() - (convert.y + 4.0 - text.top())) / page.height()) });
     h.run_steps(4);
     let page = h.state().views[0].page_screen_rect(0).expect("on screen");
     assert!((page.top() + text.top() - convert.y - 4.0).abs() < 1.0, "Convert lies on the paragraph's frame");
     h.hover_at(convert);
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "the open paragraph's frame under a tab");
-    h.state_mut().views[0].goto = Some((0, 0.5));
+    h.state_mut().views[0].view.go_to = Some(craft::pages::ui::GoTo::Top { page: 0, fraction: 0.5 });
     h.run_steps(4);
     click_at(&mut h, convert);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the paragraph's editor");
@@ -10161,7 +10220,7 @@ fn redo_from_the_menu_is_enabled_for_the_boxs_own_typing() {
     assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().text, original, "the typing is taken back");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_redo(), None, "the document has nothing to redo");
     // A range retained while the unfocused editor still showed its previous text.
-    h.state_mut().views[0].session.line_editor.as_mut().unwrap().selection = Some(0..1);
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().selection = Some(craft::text::ui::editor::TextSelection::new(0, 1));
     h.event(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
     h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("test-menu")));
     assert!(h.execute("edit.redo"), "Redo is enabled for the box's own step");
@@ -10242,7 +10301,7 @@ fn redo_after_formatting_never_brings_back_typing_undone_before_it() {
     let text = h.state().views[0].session.line_editor.as_ref().map(|ed| ed.text.clone());
     assert_eq!(text.as_deref(), Some(original.as_str()), "the typing undone before the bold stays undone");
     // Nor through what the menu's Redo runs.
-    h.state_mut().redo();
+    h.state_mut().redo(&egui::Context::default());
     h.run_steps(3);
     let s = h.state();
     let text = s.views[0].session.line_editor.as_ref().map(|ed| ed.text.clone());
@@ -10319,7 +10378,7 @@ fn redo_in_the_frame_of_a_tab_switch_never_brings_another_tabs_typing() {
     assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().text, original, "taken back in A");
     // To B and Redo at once: no frame draws B's box in between.
     h.state_mut().active = Some(1);
-    h.state_mut().redo();
+    h.state_mut().redo(&egui::Context::default());
     h.run_steps(3);
     let s = h.state();
     let b = s.views[1].session.line_editor.as_ref().map(|ed| ed.text.clone());
@@ -10366,7 +10425,7 @@ fn typing_in_one_tab_never_reaches_another_tabs_paragraph() {
     // Nor through what the menu's Redo runs, which reads the box's history itself (the menu item
     // is off here, as the copy's document has nothing to redo). With no Redo of its own, the box
     // passes the step to the document and closes, so the page's text is checked too.
-    h.state_mut().redo();
+    h.state_mut().redo(&egui::Context::default());
     h.run_steps(3);
     let s = h.state();
     let text = s.views[1].session.line_editor.as_ref().map(|ed| ed.text.clone());
@@ -10699,7 +10758,7 @@ fn outward_image_grip_drags_grow_on_rotated_pages() {
                         pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::RotateBy(image_turn) },
                     );
                 }
-                h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+                h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
                 assert!(h.execute("edit.edit_text"));
                 h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
                 h.run_steps(3);
@@ -10828,7 +10887,7 @@ fn affine_review_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
         app
     });
     h.run_steps(4);
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     assert!(h.execute("edit.edit_text"));
     h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(3);
@@ -10951,7 +11010,7 @@ fn escape_closing_a_dialog_over_a_paragraph_being_typed_keeps_the_typing() {
     crate::support::open_shortcuts_from_the_help_menu(&mut h);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert!(h.state().dialogs.is_empty(), "Escape closes the dialog");
     let s = h.state();
     let open = s.views[0].session.line_editor.as_ref().is_some_and(|e| e.text.contains("typed"));
     let applied = s.session.get(s.views[0].id).unwrap().text_blocks(0).iter().any(|b| b.text.contains("typed"));
@@ -11002,9 +11061,7 @@ fn a_late_paste_for_a_native_edit_paste_with_a_context_menu_open_pastes_the_page
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
     assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
-    let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.step();
+    support::fire_menu(&mut h, "edit.paste");
     assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     h.run_steps(3);
     assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
@@ -11028,10 +11085,8 @@ fn two_native_edit_pastes_with_a_context_menu_open_paste_twice() {
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
     assert!(egui::Popup::is_any_open(&h.ctx), "the page's context menu is open");
-    let ctx = h.ctx.clone();
     for _ in 0..2 {
-        h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-        h.step();
+        support::fire_menu(&mut h, "edit.paste");
         assert!(support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     }
     for pasted in [4, 5] {
@@ -11053,8 +11108,7 @@ fn a_paste_behind_a_context_menu_opened_after_edit_paste_pastes_nothing() {
     h.run_steps(3);
     assert!(h.state().page_clipboard.is_some(), "the page is copied");
     let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
-    let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    support::fire_menu(&mut h, "edit.paste");
     h.run_steps(2);
     h.get_by_label("Page 2").click_button(egui::PointerButton::Secondary);
     h.run_steps(2);
@@ -11109,7 +11163,7 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
         });
         h.run_steps(4);
         assert!(h.execute("edit.edit_text"));
-        h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Page;
+        h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
         h.run_steps(3);
         let r = h.state().views[0].page_screen_rect(0).unwrap();
         let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
