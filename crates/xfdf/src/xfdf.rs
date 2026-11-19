@@ -885,7 +885,7 @@ fn read_rich_text(rich: &craft_xml::El, ns: &[(String, String)], has_contents: b
         return;
     }
     let markup = match elements.as_slice() {
-        [el] => standalone(*el, ns),
+        [el] => standalone(el, ns),
         _ => elements.iter().map(|e| e.to_xml()).collect(),
     };
     // Rich text is an XML document of its own; export left its declaration out.
