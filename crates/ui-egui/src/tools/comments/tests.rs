@@ -23,9 +23,11 @@ fn placed_page(xf: &PageXform, zoom: f64) -> PlacedPage {
     PlacedPage::new(0, xf.rect, zoom, (0.0, xf.rect.height()), TextureState::Missing)
 }
 
-/// The page map the app feeds `bridge` for `placed` pages shown turned `rotation` degrees.
+/// The page map the app feeds `bridge` for `placed` pages shown turned `rotation` degrees, in a canvas view whose
+/// document space is neither the screen nor the page's units, as the page view's is not.
 fn page_map<'a>(placed: &'a [PlacedPage], info: &'a DocInfo, rotation: u16) -> PageMap<'a> {
-    PageMap::new(info, placed, rotation)
+    let view = craft::behavior::CanvasView::new(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 800.0)), Point::new(250.0, 300.0), 0.75);
+    PageMap::new(info, placed, rotation, view)
 }
 
 /// A rectangle in page units of `page` on screen, through the page map, for comparing a marker with the page's
@@ -560,7 +562,8 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     let over = Point::new(100.0, 100.0);
     let annotations = bridge::annotations(&info, &map, QuickTool::Select, true);
     let markers = bridge::markers(&info, &map, side);
-    assert_eq!(pick_at(&annotations, over, tolerance, side, &markers), Some(bridge::id_of(0, 0)), "the highlight a press there selects");
+    let at = map.to_page(0, over).expect("the page is placed");
+    assert_eq!(pick_at(&annotations, at, tolerance, side, &markers), Some(bridge::id_of(0, 0)), "the highlight a press there selects");
     // PLAN: the outline shape itself is the overlay's `HoverOutline` (pdf-comments-w8); a request to w8 for an `overlay` helper
     // the test can compare against the part's annotation. The part registered at the pointer is asserted here.
     let parts =

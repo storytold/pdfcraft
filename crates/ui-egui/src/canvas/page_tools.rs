@@ -75,6 +75,8 @@ pub(crate) struct PageToolCx<'a> {
     pub(crate) rotation: u16,
     /// The page body's rect this pass, filled from the body each run as `pages` is.
     pub(crate) viewport: egui::Rect,
+    /// The canvas view the pages are shown in this pass, filled from the body each run as `pages` is.
+    pub(crate) view: craft::behavior::CanvasView,
     /// A pointer button is down this pass, filled from the body each run as `pages` is: a key waits for it to come
     /// up where the press held would then name another item.
     pub(crate) button_held: bool,
@@ -288,7 +290,7 @@ pub(crate) fn page_tool<'a>(
     let size = move |page: usize| sizes.get(page).copied().unwrap_or_default();
     *xforms = cx.pages.iter().map(|placed| (placed.page, PageXform::of(placed, cx.rotation, size(placed.page)))).collect();
     let xforms: &'a [(usize, PageXform)] = xforms;
-    let map: &'a comments::PageMap<'a> = map_slot.insert(comments::PageMap::new(cx.info, cx.pages, cx.rotation));
+    let map: &'a comments::PageMap<'a> = map_slot.insert(comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view));
     let selects_text = tool_selects_text(tool, cx.preparing);
     let arm = match tool {
         // Prepare a form under the Select tool: the selection rectangle and the moves of fields are Prepare's.
@@ -314,7 +316,7 @@ pub(crate) fn page_tool<'a>(
                 _ => {
                     let snap = caret_snap(tool, &cx, &session.texts, session.comments.tool.page);
                     let view = &mut session.comments;
-                    let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation);
+                    let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view);
                     let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
                         .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
                         .outcome(&mut session.pending_edit, &mut view.notice);
