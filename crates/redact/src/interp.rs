@@ -733,8 +733,9 @@ pub(crate) struct Kind {
 /// an object it adds can take the number of a reference the file gave to nothing, read as such
 /// before. A rewritten form's cleanups take the forms the walk wrote for it as streams
 /// ([`form_xobject_lookup`]), but the cleanups' own reads of forms with resources of their own
-/// (`ScopedReads`) can still take such a number, given to a form rewritten further in, as
-/// nothing, and leave that form unread.
+/// (`ScopedReads`) can still take such a number, given to a form the walk writes after they
+/// first read it (one rewritten further in, or later on the page), as nothing, and leave that
+/// form unread.
 pub(crate) type Kinds = HashMap<ObjRef, Kind>;
 
 /// What `value` is: a reference is read from `kinds`, or once from the file into it.

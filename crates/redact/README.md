@@ -143,15 +143,17 @@ this bound doesn't apply there; it searches such a stream again in each scope wh
 is looked up through what draws it, up to 4,096 such searches on a page, past which it says it
 can't check. The walk, the verification pass, the check of what pages sharing a resource
 dictionary still draw, the cleanups of a rewritten page's and form's own resources (the XObjects
-replaced and fonts, and the page's properties) and the Type 3 font cleanup all read it so; a form's
-own properties are named by its own content alone, since a form it draws reads its own or, without
-resources, the page's. Two cleanups don't yet, as on `main`: unlinking a removed image or form from
-the forms that list it, and pruning the resources of a Type 3 font's forms read a form with
+replaced and fonts, and the page's properties) and the Type 3 font cleanup all read it so. The
+cleanups of a rewritten form and the unlinking of retired properties name a form's own properties
+by its own content alone, since a form it draws reads its own or, without resources, the page's;
+pruning a Type 3 font's forms still counts the marks of the forms without resources they draw, and
+keeps those properties. Two cleanups don't yet, as on `main`: unlinking a removed image or form
+from the forms that list it, and pruning the resources of a Type 3 font's forms read a form with
 resources of its own by its own names alone, so a form it draws through its caller's names goes
-unread, and what that form draws with the outer form's own names can be dropped from them. A form without resources of its own inside such a form reads the page's
-properties, and the page keeps them. The
-cleanups of a page's and form's own resources read a form with resources of its own once for the
-page, within one allowance of a page and 2,000,000 of such forms' operators that all of the page's
+unread, and what that form draws with the outer form's own names can be dropped from them. A form
+without resources of its own inside such a form reads the page's properties, and the page keeps
+them. The cleanups of a page's and form's own resources read a form with resources of its own once
+for the page, within one allowance of a page and 2,000,000 of such forms' operators that all of the page's
 cleanups share (a form taken again costs what it hands on: each name it draws and each operator it
 keeps, each once, a name counted with its bytes; of an operator only what the cleanups read is kept, its last
 two operands where they are names), not following a form drawn inside itself again nor a chain
