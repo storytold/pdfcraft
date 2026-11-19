@@ -225,7 +225,9 @@ pub(crate) struct QuickBarPick {
 
 /// A control that opens a popover under it: `opener` draws the control, a click on it opens and closes the
 /// popover, and `body` fills it; a body that reports it is done (a choice that ends the popover's use) closes it. The
-/// popover's open flag is the opener's own, kept in the UI's memory.
+/// popover's open flag is the opener's own, kept in the UI's memory. The framework runs `body` in each of its passes
+/// (sizing, then the one that takes input), so a body keeps what a pass picked rather than overwrite it with a later
+/// pass's nothing.
 pub(crate) fn popover_from(
     ui: &mut egui::Ui,
     label: &str,
@@ -265,7 +267,9 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 prefs.set_color(tool, c);
                 out.colour = Some(c);
             }
-            out.request = pick.request;
+            if pick.request.is_some() {
+                out.request = pick.request;
+            }
             false
         },
     );

@@ -1,7 +1,7 @@
 //! The Select tool on the page view: the framework's text selection, and the pick of a picture under a click.
 
 use craft::behavior::{CancelReason, Cursor};
-use craft::pages::ui::{PageTexts, PlacedPage, TextSelectState, TextSelectTool};
+use craft::pages::ui::{PageTexts, PlacedPage, TextSelectState, TextSelectTool, TextSelection};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 use pdfcraft_render::DocInfo;
@@ -9,16 +9,22 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::PageXform;
 use crate::canvas::image_pick::PickedImage;
 
-/// The two places a pick lives: the click whose picture is still being looked for, and the picture found.
+/// What a press on the page sets or lets go: the click whose picture is still being looked for, the picture found,
+/// and the selection whose action bar Copy closed.
 pub(crate) struct PickSlots<'a> {
     pending: &'a mut Option<(usize, [f64; 2], u64)>,
     picked: &'a mut Option<PickedImage>,
+    dismissed: &'a mut Option<TextSelection>,
 }
 
 impl<'a> PickSlots<'a> {
-    /// The slots over the view's `pending_pick` and `picked_image`.
-    pub(crate) fn new(pending: &'a mut Option<(usize, [f64; 2], u64)>, picked: &'a mut Option<PickedImage>) -> Self {
-        Self { pending, picked }
+    /// The slots over the view's `pending_pick`, `picked_image` and `actions_dismissed`.
+    pub(crate) fn new(
+        pending: &'a mut Option<(usize, [f64; 2], u64)>,
+        picked: &'a mut Option<PickedImage>,
+        dismissed: &'a mut Option<TextSelection>,
+    ) -> Self {
+        Self { pending, picked, dismissed }
     }
 
     fn let_go(&mut self) {
@@ -88,6 +94,9 @@ impl CanvasTool for PageSelectTool<'_> {
     }
 
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        // A drag replaces the selection without passing through none, so a re-drag over words whose bar Copy closed
+        // would keep the bar hidden.
+        *self.picks.dismissed = None;
         let action = self.text.press(pointer, cx);
         self.pick(pointer);
         action

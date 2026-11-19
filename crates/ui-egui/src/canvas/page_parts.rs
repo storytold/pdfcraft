@@ -167,7 +167,8 @@ pub(crate) struct PagePart {
     /// Its family, which ranks it against overlapping parts.
     pub(crate) layer: PageLayer,
     cursor: Option<CursorIcon>,
-    tip: Option<String>,
+    tip: Option<(String, TooltipWhen)>,
+    stacking: Option<u32>,
     passes_drag: bool,
     context_only: bool,
     focusable: bool,
@@ -177,7 +178,27 @@ impl PagePart {
     /// `owner` on `page`, hit by `shape`, ranked by `layer`. It takes clicks, drags and secondary clicks, and shows the
     /// default cursor and no tip.
     pub(crate) fn new(owner: Owner, page: usize, shape: impl Into<HitShape>, layer: PageLayer) -> Self {
-        PagePart { owner, page, shape: shape.into(), layer, cursor: None, tip: None, passes_drag: false, context_only: false, focusable: false }
+        PagePart {
+            owner,
+            page,
+            shape: shape.into(),
+            layer,
+            cursor: None,
+            tip: None,
+            stacking: None,
+            passes_drag: false,
+            context_only: false,
+            focusable: false,
+        }
+    }
+
+    /// Where the part stacks among the parts of its layer, the higher on top, in place of its place in the list: for
+    /// parts listed in another order than they overlap (form fields go in tab order, while the earlier field in the
+    /// form takes a press where two overlap).
+    #[must_use]
+    pub(crate) fn stacked(mut self, order: u32) -> Self {
+        self.stacking = Some(order);
+        self
     }
 
     /// The part takes only secondary clicks: a primary press goes to what lies below (a highlight over a link, whose
@@ -195,10 +216,18 @@ impl PagePart {
         self
     }
 
-    /// The tip shown beside the pointer over the part.
+    /// The tip shown beside the pointer over the part, after the hover delay.
     #[must_use]
     pub(crate) fn tip(mut self, tip: impl Into<String>) -> Self {
-        self.tip = Some(tip.into());
+        self.tip = Some((tip.into(), TooltipWhen::Hover));
+        self
+    }
+
+    /// The tip shown beside the pointer as soon as it is over the part: what a comment says or where a link goes,
+    /// which the page states at once (a form field's own tooltip waits for the hover delay, as other tooltips do).
+    #[must_use]
+    pub(crate) fn tip_now(mut self, tip: impl Into<String>) -> Self {
+        self.tip = Some((tip.into(), TooltipWhen::Now));
         self
     }
 
@@ -366,13 +395,13 @@ impl Component for PageParts<'_> {
                 continue;
             }
             declared.push(at);
-            let mut builder = cx.part(at, part.shape.clone()).sense(part.sense()).priority(part.layer.priority()).stacking(order);
+            let mut builder =
+                cx.part(at, part.shape.clone()).sense(part.sense()).priority(part.layer.priority()).stacking(part.stacking.unwrap_or(order));
             if let Some(cursor) = part.cursor {
                 builder = builder.cursor(cursor);
             }
-            if let Some(tip) = &part.tip {
-                // A page part's tip shows as the pointer comes onto the part, beside the pointer, as production's did.
-                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer).when(TooltipWhen::Now));
+            if let Some((tip, when)) = &part.tip {
+                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer).when(*when));
             }
             if part.focusable {
                 builder.focusable();

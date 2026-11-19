@@ -52,6 +52,27 @@ fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'st
     h
 }
 
+/// Like [`harness`], with the clipboard the app copies to, which the test reads back.
+fn harness_copying(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'static, PdfCraftApp>, support::RecordingClipboard) {
+    let clipboard = support::RecordingClipboard::default();
+    let kept = clipboard.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::app_with_clipboard(clipboard);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            setup(&mut app);
+            app
+        }
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    (h, kept)
+}
+
 /// Like [`harness`], on a host whose file picker answers from `files`.
 fn harness_on_files(files: std::sync::Arc<ScriptedFiles>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
@@ -1675,14 +1696,47 @@ const REPLY_THREAD: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
-/// The "…" of the reply row that shows `text`: the last one above it (it sits on the row's
-/// author line).
+/// Whether `label` names a reply row showing `text`: replies are group nodes in their card, named
+/// "{author}: {text}" and the reply's age.
+fn names_reply(label: &str, text: &str) -> bool {
+    label.split_once(": ").is_some_and(|(_, rest)| rest == text || rest.strip_prefix(text).is_some_and(|age| age.starts_with(", ")))
+}
+
+/// The reply rows of the Comments panel.
+fn reply_rows<'a>(h: &'a Harness<'static, PdfCraftApp>) -> Vec<egui_kittest::Node<'a>> {
+    h.query_all_by(|n| n.role() == Role::Group && n.label().is_some_and(|l| l.contains(": "))).collect()
+}
+
+/// The reply row that shows `text`.
+fn reply_row<'a>(h: &'a Harness<'static, PdfCraftApp>, text: &str) -> egui_kittest::Node<'a> {
+    let wanted = text.to_owned();
+    h.query_all_by(move |n| n.role() == Role::Group && n.label().is_some_and(|l| names_reply(&l, &wanted)))
+        .next()
+        .unwrap_or_else(|| panic!("no reply row shows {text:?}"))
+}
+
+/// How many reply rows show `text`.
+fn reply_rows_showing(h: &Harness<'static, PdfCraftApp>, text: &str) -> usize {
+    let text = text.to_owned();
+    h.query_all_by(move |n| n.role() == Role::Group && n.label().is_some_and(|l| names_reply(&l, &text))).count()
+}
+
+/// The "…" (More) of the reply row that shows `text`: the one inside that row.
 fn reply_options<'a>(h: &'a Harness<'static, PdfCraftApp>, text: &str) -> egui_kittest::Node<'a> {
-    let y = h.get_by_label(text).rect().top();
-    h.query_all_by_label("Options for this reply")
-        .filter(|b| b.rect().top() <= y)
-        .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
-        .expect("a reply menu")
+    let row = reply_row(h, text).rect();
+    h.query_all_by_label("More").find(|b| row.contains(b.rect().center())).expect("a reply menu")
+}
+
+/// The "…" (More) of a card itself, outside every reply row.
+fn card_options<'a>(h: &'a Harness<'static, PdfCraftApp>) -> egui_kittest::Node<'a> {
+    let replies: Vec<egui::Rect> = reply_rows(h).iter().map(|r| r.rect()).collect();
+    h.query_all_by_label("More").find(|b| !replies.iter().any(|r| r.contains(b.rect().center()))).expect("a card menu")
+}
+
+/// How many reply rows have their own "…".
+fn reply_menus(h: &Harness<'static, PdfCraftApp>) -> usize {
+    let replies: Vec<egui::Rect> = reply_rows(h).iter().map(|r| r.rect()).collect();
+    h.query_all_by_label("More").filter(|b| replies.iter().any(|r| r.contains(b.rect().center()))).count()
 }
 
 /// Row of `panel_and_card_actions_become_engine_edits`: one reply is deleted from its own "…"
@@ -1697,7 +1751,7 @@ fn delete_one_reply_row() {
     let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
     let all = ["Wrong reply", "The comment", "Right reply", "Answer to the wrong reply", "Accepted set by Ben"];
     assert_eq!(texts(&h), all);
-    assert_eq!(h.query_all_by_label("Options for this reply").count(), 3, "each reply has one; the status is a badge");
+    assert_eq!(reply_menus(&h), 3, "each reply has one; the status is a badge");
 
     reply_options(&h, "Wrong reply").click();
     h.run_steps(2);
@@ -1707,9 +1761,9 @@ fn delete_one_reply_row() {
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.get(id).unwrap().info.annotations[0].index, 0, "its pop-up went too");
     assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the card stays selected where the comment now is");
-    assert_eq!(h.query_all_by_label("Wrong reply").count(), 0);
-    assert_eq!(h.query_all_by_label("Answer to the wrong reply").count(), 0);
-    h.get_by_label("Right reply");
+    assert_eq!(reply_rows_showing(&h, "Wrong reply"), 0);
+    assert_eq!(reply_rows_showing(&h, "Answer to the wrong reply"), 0);
+    reply_row(&h, "Right reply");
     h.get_by_label("Ben: Accepted"); // One badge per reviewer.
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Delete comment"), "one undo step");
 
@@ -1743,7 +1797,7 @@ fn delete_one_reply_row() {
     assert_eq!(texts(&h), ["The comment", "Right reply, reworded", "Accepted set by Ben"]);
 
     // The locked reply keeps its comment too: deleting the comment would take it along.
-    h.get_by_label("More").click();
+    card_options(&h).click();
     h.run_steps(2);
     assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "the comment of a locked reply isn't deleted");
     h.key_press(egui::Key::Escape);
@@ -1754,7 +1808,7 @@ fn delete_one_reply_row() {
     undo(&mut h);
     h.run_steps(3);
     assert_eq!(texts(&h), all, "undo brings the reply and its answer back");
-    h.get_by_label("Wrong reply");
+    reply_row(&h, "Wrong reply");
 }
 
 // Contributor-original PDF: a comment and its replies A, B and C, in that `/Annots` order.
@@ -1923,7 +1977,7 @@ fn a_checkmark_on_a_reply_does_not_mark_its_comment() {
     });
     click_pt(&mut h, (110.0, 110.0));
     assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the comment is selected");
-    h.get_by_label("Checked reply");
+    reply_row(&h, "Checked reply");
     h.get_by_label("Mark with checkmark"); // The card's checkmark.
     assert_eq!(h.query_all_by_label("Accepted").count(), 0, "no status badge");
     let p = at(&h, 110.0, 110.0);
@@ -1951,7 +2005,7 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
     h.get_by_label_contains("Late root");
     h.get_by_label_contains("Late thread reply");
     assert_eq!(h.state().views[0].session.comments.panel.collapsed_pages, vec![0]);
-    h.get_by_label("More").click();
+    card_options(&h).click();
     h.run_steps(2);
     h.query_all_by_label("Edit").last().expect("comment menu edit, after the toolbar tab").click();
     h.run_steps(2);
@@ -1977,10 +2031,11 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
         app.views[0].session.comments.panel.search = "late thread reply".into();
         app.views[0].session.comments.panel.search_open = true;
     });
-    h.get_by_label("Late root edited exactly");
-    reopened.get_by_label("Late root edited exactly");
-    reopened.get_by_label("Late thread reply");
-    assert_eq!(reopened.query_all_by_label("First root").count(), 0);
+    // The panel names a card by its author, text and date.
+    h.get_by_label_contains("Late root edited exactly");
+    reopened.get_by_label_contains("Late root edited exactly");
+    reply_row(&reopened, "Late thread reply");
+    assert_eq!(reopened.query_all_by_label_contains("First root").count(), 0);
     let after = comments(&reopened);
     assert_eq!(after.len(), before.len());
     for (original, saved) in before.iter().zip(&after) {
@@ -1992,8 +2047,8 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
     assert_eq!(after.iter().find(|a| a.name.as_deref() == Some("late-reply")).unwrap().in_reply_to.as_deref(), Some("late"));
     reopened.state_mut().views[0].session.comments.panel.sort = CommentSort::Author;
     reopened.run_steps(2);
-    assert_eq!(reopened.query_all_by_label("Delta").count(), 2, "the author group and its card remain visible after sorting");
-    reopened.get_by_label("Late root edited exactly");
+    reopened.get_by_label("Delta"); // The author group.
+    reopened.get_by_label_contains("Delta: Late root edited exactly"); // And its card, still shown after sorting.
 }
 
 /// A page with one rectangle comment ("Reviewed"), the Comments panel open and nothing selected.
@@ -2046,7 +2101,7 @@ fn flatten_from_the_panel_menu_row() {
 
 #[test]
 fn comments_take_checkmarks_lock_hide_and_summarize() {
-    let mut h = harness(|app| {
+    let (mut h, clipboard) = harness_copying(|app| {
         app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.set_option(&egui::Context::default(), "quick", "square").unwrap();
     });
@@ -2067,13 +2122,8 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     h.get_by_label("More").click();
     h.run_steps(2);
     h.get_by_label("Copy text").click();
-    let mut copied = false;
-    for _ in 0..4 {
-        h.step();
-        copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Copy me"));
-    }
-    assert!(copied, "the text is copied");
-    h.run_steps(2);
+    h.run_steps(4);
+    assert_eq!(clipboard.copied().as_deref(), Some("Copy me"), "the text is copied");
 
     // Properties ▸ Locked.
     open_comment_props(&mut h, 0, 0);
@@ -2104,7 +2154,7 @@ fn comments_take_checkmarks_lock_hide_and_summarize() {
     h.run_steps(2);
     h.get_by_label("Create PDF comment summary…").click();
     h.run_steps(2);
-    h.get_by_label("Summarize Options");
+    h.get_by_role_and_label(Role::Dialog, "Summarize Options");
     h.get_by_label("Create PDF Comment Summary").click();
     h.run_steps(3);
     let s = h.state();

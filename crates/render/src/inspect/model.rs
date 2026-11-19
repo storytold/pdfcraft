@@ -111,8 +111,15 @@ impl PageInfo {
     /// A point in view space (points, y down, after `/Rotate`; what the text layer uses) →
     /// PDF user space.
     pub fn view_to_user(&self, x: f32, y: f32) -> [f32; 2] {
-        let [cx0, cy0, cx1, cy1] = self.crop;
-        let (a, b) = (x / self.width.max(1e-3), y / self.height.max(1e-3));
+        let [ux, uy] = self.view_to_user_f64(f64::from(x), f64::from(y));
+        [ux as f32, uy as f32]
+    }
+
+    /// [`Self::view_to_user`] in f64, for maps whose points must come back where they were (a moved comment's
+    /// offset): the f32 page geometry is widened, never rounded again on the way.
+    pub fn view_to_user_f64(&self, x: f64, y: f64) -> [f64; 2] {
+        let [cx0, cy0, cx1, cy1] = self.crop.map(f64::from);
+        let (a, b) = (x / f64::from(self.width).max(1e-3), y / f64::from(self.height).max(1e-3));
         let (u, v) = match self.rotation {
             90 => (b, 1.0 - a),
             180 => (1.0 - a, 1.0 - b),
@@ -124,7 +131,13 @@ impl PageInfo {
 
     /// PDF user space → view space (the inverse of [`Self::view_to_user`]).
     pub fn user_to_view(&self, x: f32, y: f32) -> [f32; 2] {
-        let [cx0, cy0, cx1, cy1] = self.crop;
+        let [vx, vy] = self.user_to_view_f64(f64::from(x), f64::from(y));
+        [vx as f32, vy as f32]
+    }
+
+    /// [`Self::user_to_view`] in f64 (the inverse of [`Self::view_to_user_f64`]).
+    pub fn user_to_view_f64(&self, x: f64, y: f64) -> [f64; 2] {
+        let [cx0, cy0, cx1, cy1] = self.crop.map(f64::from);
         let (u, v) = ((x - cx0) / (cx1 - cx0).max(1e-3), (cy1 - y) / (cy1 - cy0).max(1e-3));
         let (a, b) = match self.rotation {
             90 => (1.0 - v, u),
@@ -132,7 +145,7 @@ impl PageInfo {
             270 => (v, 1.0 - u),
             _ => (u, v),
         };
-        [a * self.width, b * self.height]
+        [a * f64::from(self.width), b * f64::from(self.height)]
     }
 
     /// A point as displayed (points from the page's top-left, y down, before any view rotation)

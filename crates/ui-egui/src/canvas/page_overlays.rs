@@ -284,11 +284,11 @@ pub(crate) fn follow_link(links: &PageLinks<'_>, press: &PagePress) -> Option<(L
     }
 }
 
-/// A link part: click-only, with the pointing hand and the link's target as its tip.
+/// A link part: click-only, with the pointing hand and the link's target as its tip, shown at once as a comment's is.
 fn link_part(owner: Owner, page: usize, shape: HitShape, tip: Option<String>) -> PagePart {
     let part = PagePart::new(owner, page, shape, PageLayer::Link).cursor(CursorIcon::PointingHand).passes_drag();
     match tip {
-        Some(tip) => part.tip(tip),
+        Some(tip) => part.tip_now(tip),
         None => part,
     }
 }
