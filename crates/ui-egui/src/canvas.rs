@@ -785,6 +785,8 @@ pub struct DocView {
     pub area_choice: Option<crate::zoom_snap::AreaChoice>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
+    /// Complete the Fill & Sign draft only after its queued edit applies.
+    pub(crate) fill_text_placement: Option<crate::fill_sign::TextPlacement>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
     pub(crate) fill_signature_page: Option<usize>,
     /// The "Signature added … Lock now" notice was dismissed; placing another signature shows it
@@ -1215,6 +1217,7 @@ impl DocView {
             area_pick: None,
             area_choice: None,
             fill_text: None,
+            fill_text_placement: None,
             fill_signature_page: None,
             lock_offer_dismissed: false,
             signature_drag: Default::default(),
