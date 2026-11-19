@@ -1270,8 +1270,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         organize_grid(&mut app.views[index], doc, &mut organize::GridCx { ui, session: &app.session, zoom: &mut app.organize_zoom, invert_middle });
         return None;
     }
-    // The room under the notice bars, inside the rect the caller gave.
-    let rect = rect.intersect(ui.available_rect_before_wrap());
+    // The room under the notice bars, inside the rect the caller gave.    let rect = rect.intersect(ui.available_rect_before_wrap());
 
     let preparing = app.is_preparing();
     // PLAN: assumed `side_panels::panel_visible(app, panel) -> bool` for the left panel's visibility (`left_open` is

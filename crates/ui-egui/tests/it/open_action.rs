@@ -163,7 +163,7 @@ fn a_full_screen_document_shows_its_non_full_screen_panel_outside_full_screen() 
     for (mode, want) in [("UseThumbs", Some(RightPanel::Pages)), ("UseOC", Some(RightPanel::Layers)), ("UseNone", None)] {
         let mut h = harness(&format!("/PageMode /FullScreen /ViewerPreferences << /NonFullScreenPageMode /{mode} >>"));
         // The prompt (`ask_full_screen`) is on the dialog host, found by its question.
-        h.get_by_label("Open in Full Screen mode?");
+        h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Open in Full Screen mode?");
         assert_eq!(crate::support::right(h.state()), want, "{mode}: the panel behind the prompt");
         // Declining it leaves that panel.
         h.get_by_label("Not now").click();
