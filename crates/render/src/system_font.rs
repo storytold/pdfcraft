@@ -548,7 +548,9 @@ mod tests {
             for c in list {
                 assert!(c.path.is_absolute(), "{}", c.path.display());
                 assert!(c.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("ttc")), "{}", c.path.display());
-                let name = c.path.to_string_lossy().to_lowercase();
+                // The file name, not the whole path: a discovered file sits under the user's home
+                // folder, whose name is the user's to choose.
+                let name = c.path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
                 assert!(
                     !["notosanscjk", "notoserifcjk", "sourcehan", "source-han", "adobe", "kozuka", "minion"].iter().any(|b| name.contains(b)),
                     "{name}"
