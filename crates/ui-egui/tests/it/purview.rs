@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_purview::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
-use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, PropsTab};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -171,6 +171,19 @@ fn harness_closed(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp
     h
 }
 
+fn harness_security(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        app.session.set_purview_provider(Arc::new(provider));
+        app.dialog = Some(Dialog::Properties(PropsTab::Security));
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
 fn harness_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
@@ -232,6 +245,30 @@ fn protect_menu_mip_entry_opens_signed_out_account_gate() {
     assert_eq!(h.state().dialog, Some(Dialog::Purview));
     h.get_by_label("Microsoft account");
     h.get_by_label("Sign in");
+}
+
+#[test]
+fn security_properties_offer_sign_in_then_sensitivity_label_action() {
+    let h = harness_security(TestPurviewProvider::signed_out());
+    h.get_by_label("Sign in to Microsoft Purview…");
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Apply sensitivity label / Microsoft Purview…")).is_none());
+
+    let ada = PurviewAccount {
+        id: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+        principal_name: "ada@example.com".into(),
+    };
+    let h = harness_security(TestPurviewProvider::signed_in(
+        ada,
+        vec![PurviewAccount {
+            id: "ada".into(),
+            display_name: "Ada Lovelace".into(),
+            email: "ada@example.com".into(),
+            principal_name: "ada@example.com".into(),
+        }],
+    ));
+    h.get_by_label("Apply sensitivity label / Microsoft Purview…");
 }
 
 #[test]
