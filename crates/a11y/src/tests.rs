@@ -2029,9 +2029,71 @@ fn marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry() {
 }
 
 #[test]
-fn an_element_is_in_the_hierarchy_only_through_structure_elements() {
-    // ISO 32000-2 §14.7.2, Table 355: an element's parent (/P) is another structure element (/S
-    // required) or the structure tree root; a dictionary that is neither ends the way up.
+fn marked_content_is_owned_only_by_the_element_that_holds_it() {
+    // ISO 32000-2 §14.7.5.2, §14.7.5.4: the element a parent-tree slot names is the parent of the
+    // marked content, which it holds among its kids: an integer MCID on its own page (/Pg), or a
+    // marked-content reference (Table 357) on its /Pg or the element's.
+    let heading = |element: &str, extra: &[&str]| {
+        let mut objs = good();
+        objs[11] = element.to_string();
+        objs.extend(extra.iter().map(ToString::to_string));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [5 0] >>", &[]), Status::Passed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K << /Type /MCR /MCID 0 >> >>", &[]), Status::Passed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /K << /Type /MCR /Pg 3 0 R /MCID 0 >> >>", &[]), Status::Passed);
+    // The reference given by reference, alone or in an array.
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 28 0 R >>", &["<< /Type /MCR /MCID 0 >>"]), Status::Passed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [28 0 R] >>", &["<< /Type /MCR /MCID 0 >>"]), Status::Passed);
+    // An element that holds another MCID, or nothing; one with no page for its integer kid; one
+    // whose reference names another page, or another content stream.
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 5 >>", &[]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [] >>", &[]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /K 0 >>", &[]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 28 0 R /MCID 0 >> >>", &["<< /Type /Page >>"]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Stm 11 0 R /MCID 0 >> >>", &[]), Status::Failed);
+    // A kid that is a structure element holds its own content, not its parent's.
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [28 0 R] >>", &["<< /S /Span /P 12 0 R /Pg 3 0 R /K 0 >>"]), Status::Failed);
+    // Kids past the limit of 65,536 are not read: an MCID not among those read may be past it.
+    let many = |first: i64| (0..70_000i64).map(|i| (first + i).to_string()).collect::<Vec<_>>().join(" ");
+    assert_eq!(heading(&format!("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [{}] >>", many(0)), &[]), Status::Passed);
+    assert_eq!(heading(&format!("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [{}] >>", many(1)), &[]), Status::Manual);
+}
+
+#[test]
+fn an_annotation_is_tagged_only_by_the_element_that_holds_it() {
+    // ISO 32000-2 §14.7.5.3, §14.7.5.4: the element an annotation's /StructParent names is its
+    // parent, which holds it through an object reference among its kids.
+    let link_held_by = |kids: &str| {
+        let mut objs = good();
+        objs[19] = format!("<< /S /Link /P 7 0 R /Pg 3 0 R /K {kids} >>");
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations)
+    };
+    assert_eq!(link_held_by("[ 0 << /Type /OBJR /Obj 9 0 R >> ]"), Status::Passed);
+    // The OBJR given by reference, alone or in an array given by reference.
+    for kids in ["28 0 R", "29 0 R"] {
+        let mut objs = good();
+        objs[19] = format!("<< /S /Link /P 7 0 R /Pg 3 0 R /K {kids} >>");
+        objs.push("<< /Type /OBJR /Obj 9 0 R >>".into());
+        objs.push("[28 0 R]".into());
+        assert_eq!(status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations), Status::Passed, "{kids}");
+    }
+    // An element of the right type that holds another object, or nothing.
+    assert_eq!(link_held_by("<< /Type /OBJR /Obj 10 0 R >>"), Status::Failed);
+    assert_eq!(link_held_by("[]"), Status::Failed);
+    // Two links under one key, as merged forms that reuse keys have: the element holds the first
+    // only.
+    let mut objs = good();
+    objs[2] = objs[2].replace("/Annots [9 0 R 10 0 R]", "/Annots [9 0 R 10 0 R 28 0 R]");
+    objs.push("<< /Type /Annot /Subtype /Link /Rect [100 20 160 40] /StructParent 1 >>".into());
+    let r = checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]);
+    assert_eq!(r.result(Rule::TaggedAnnotations).unwrap().findings.len(), 1, "{r:?}");
+}
+
+#[test]
+fn an_element_is_in_the_hierarchy_only_through_elements_up_to_the_catalogs_root() {
+    // ISO 32000-2 §14.7.2: the catalog names the structure tree root; an element's parent (/P,
+    // Table 355) is a structure element (/S required) or that root.
     let heading_parent = |p: &str, extra: &[&str]| {
         let mut objs = good();
         objs[11] = format!("<< /S /Heading1 /P {p} /Pg 3 0 R /K 0 >>");
@@ -2044,6 +2106,9 @@ fn an_element_is_in_the_hierarchy_only_through_structure_elements() {
     // A parent that is no structure element, on the way to the root: no /S, or one that is null.
     assert_eq!(heading_parent("28 0 R", &["<< /P 6 0 R >>"]), Status::Failed);
     assert_eq!(heading_parent("28 0 R", &["<< /S null /P 6 0 R >>"]), Status::Failed);
+    // A structure tree root other than the catalog's, as a merged file may keep from a source.
+    assert_eq!(heading_parent("28 0 R", &["<< /Type /StructTreeRoot /K 12 0 R >>"]), Status::Failed);
+    assert_eq!(heading_parent("28 0 R", &["<< /S /Sect /P 29 0 R >>", "<< /Type /StructTreeRoot /K 28 0 R >>"]), Status::Failed);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
-use crate::parent_tree::ParentTree;
+use crate::parent_tree::{Holdings, ParentTree, Place, both};
 use crate::{Finding, Rule};
 
 /// What the page content holds, per checked page.
@@ -28,6 +28,8 @@ pub(crate) struct Scan {
     pub undecided: bool,
     /// The structure parent tree: which element owns each tagged item.
     pub tree: ParentTree,
+    /// What the elements the parent tree names hold, read once each.
+    holdings: Holdings,
 }
 
 const MAX_FORM_DEPTH: usize = 12;
@@ -44,7 +46,8 @@ impl Scan {
                 s.incomplete.insert(p);
             }
             let key = struct_parents(doc, &page.dict);
-            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, key };
+            let place = Place { page: page.obj, stm: None };
+            let mut w = Walk { doc, scan: &mut s, page: p, forms: HashSet::new(), budget, key, place };
             w.content(&data, &res, false, 0);
         }
         s
@@ -61,6 +64,8 @@ struct Walk<'a> {
     /// The parent-tree key (/StructParents) of the content stream being walked: the page's, or a
     /// form XObject's own.
     key: Option<i64>,
+    /// Where the content stream being walked is: the page's own, or a form XObject's.
+    place: Place,
 }
 
 /// The /StructParents of a page or form XObject: the key of its entry in the parent tree.
@@ -70,10 +75,11 @@ fn struct_parents(doc: &Document, d: &Dict) -> Option<i64> {
 
 impl Walk<'_> {
     /// Whether a BDC opens an artifact, or tagged content: marked content whose MCID belongs to a
-    /// structure element through the parent tree entry `self.key` names (ISO 32000-2 §14.7.5.4).
-    /// An MCID that no element owns is not tagged: no tag in the tree answers it. One the parent
-    /// tree can't decide for (its entry may be in the part of a truncated tree not read, or its
-    /// element's parents run past the ancestor limit) is not counted either way, and noted in
+    /// structure element through the parent tree entry `self.key` names, an element that holds it
+    /// among its kids (ISO 32000-2 §14.7.5.4, [`ParentTree::owns`]). An MCID that no element owns
+    /// is not tagged: no tag in the tree answers it. One the parent tree can't decide for (its
+    /// entry may be in the part of a truncated tree not read, its element's kids were read only in
+    /// part, or its parents run past the ancestor limit) is not counted either way, and noted in
     /// [`Scan::undecided`]: the rule is then left to a manual check.
     fn bdc_marks(&mut self, op: &pdfcraft_content::Op, props: &Dict) -> bool {
         if op.name(0) == Some(b"Artifact") {
@@ -86,7 +92,7 @@ impl Walk<'_> {
             _ => None,
         };
         match (mcid, self.key) {
-            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, key, mcid).unwrap_or_else(|| {
+            (Some(mcid), Some(key)) => self.scan.tree.owns(self.doc, &mut self.scan.holdings, key, mcid, self.place).unwrap_or_else(|| {
                 self.scan.undecided = true;
                 true
             }),
@@ -155,6 +161,8 @@ impl Walk<'_> {
                             self.forms.insert(r);
                             // The form's marked content is keyed by its own /StructParents.
                             let key = std::mem::replace(&mut self.key, struct_parents(self.doc, &x.dict));
+                            let page = self.place.page;
+                            let place = std::mem::replace(&mut self.place, Place { page, stm: Some(r) });
                             let inner = x
                                 .dict
                                 .get(b"Resources")
@@ -163,6 +171,7 @@ impl Walk<'_> {
                                 .unwrap_or_else(|| res.clone());
                             self.content(&data, &inner, inside, depth + 1);
                             self.key = key;
+                            self.place = place;
                             self.forms.remove(&r);
                         }
                         _ => {}
@@ -296,15 +305,17 @@ fn annotation_rect(doc: &Document, annot: &Dict) -> Option<[f64; 4]> {
     Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
 }
 
-/// Whether annotation `a`, of subtype `st`, is tagged: its /StructParent names, in the parent tree,
-/// the structure element that holds it, and that element is of the type that holds annotations of
-/// its kind (ISO 32000-2 §14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link,
-/// Annot for any other. An element of another type can't hold it, wherever its parents lead.
-/// `None` when the parent tree can't tell ([`ParentTree::entry`], [`ParentTree::in_hierarchy`]):
-/// the annotation is then not counted against the rule, which is left to a manual check.
-fn annotation_tagged(doc: &Document, tree: &ParentTree, roles: &mut Roles, a: &Dict, st: &[u8]) -> Option<bool> {
+/// Whether annotation `r` (`a`, of subtype `st`) is tagged: its /StructParent names, in the parent
+/// tree, the structure element that holds it through an object reference (/OBJR) among its kids
+/// (ISO 32000-2 §14.7.5.3, §14.7.5.4), and that element is of the type that holds annotations of
+/// its kind (§14.8.2.5.2, §14.8.4.7.2 Table 368): Form for a widget, Link for a link, Annot for any
+/// other. An element of another type can't hold it, wherever its parents lead. `None` when the
+/// parent tree can't tell ([`ParentTree::entry`], [`Holdings::holds_object`],
+/// [`ParentTree::in_hierarchy`]): the annotation is then not counted against the rule, which is
+/// left to a manual check.
+fn annotation_tagged(doc: &Document, tree: &ParentTree, owners: &mut Owners, r: ObjRef, a: &Dict, st: &[u8]) -> Option<bool> {
     let Some(key) = a.get(b"StructParent").and_then(|k| doc.resolve(k).as_int()) else { return Some(false) };
-    let Some(element) = tree.entry(doc, key)? else { return Some(false) };
+    let Some((at, element)) = tree.entry(doc, key)? else { return Some(false) };
     let want: &[u8] = match st {
         b"Widget" => b"Form",
         b"Link" => b"Link",
@@ -312,10 +323,17 @@ fn annotation_tagged(doc: &Document, tree: &ParentTree, roles: &mut Roles, a: &D
     };
     // The type may be given by reference (ISO 32000-2 §7.3.10).
     let role = element.as_dict().and_then(|e| e.get(b"S")).and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec));
-    if !role.is_some_and(|s| roles.standard(doc, &s).is_some_and(|t| t == want)) {
+    if !role.is_some_and(|s| owners.roles.standard(doc, &s).is_some_and(|t| t == want)) {
         return Some(false);
     }
-    tree.in_hierarchy(doc, &element)
+    both(owners.holdings.holds_object(doc, at, &element, r), || tree.in_hierarchy(doc, &element))
+}
+
+/// What one rule's annotations look up in their elements, each read once: the standard type each
+/// element type reaches, and what each element holds.
+struct Owners<'a> {
+    roles: Roles<'a>,
+    holdings: Holdings,
 }
 
 /// The standard type each structure type reaches through the tree root's /RoleMap, kept for one
@@ -393,10 +411,10 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                 .and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o)))
                 .and_then(|o| o.as_dict().cloned())
                 .unwrap_or_default();
-            let mut roles = Roles::new(&role_map);
+            let mut owners = Owners { roles: Roles::new(&role_map), holdings: Holdings::default() };
             for &p in list {
                 let Some(page) = pages.get(p) else { continue };
-                for (_, obj) in annots(page) {
+                for (r, obj) in annots(page) {
                     let Some(a) = obj.as_dict() else { continue };
                     let st = a.name(b"Subtype").unwrap_or(b"");
                     let applies = match rule {
@@ -406,7 +424,7 @@ pub(crate) fn page_rule(doc: &Document, rule: Rule, pages: &[Page], list: &[usiz
                     };
                     let held = applies
                         && tagged
-                        && annotation_tagged(doc, &scan.tree, &mut roles, a, st).unwrap_or_else(|| {
+                        && annotation_tagged(doc, &scan.tree, &mut owners, r, a, st).unwrap_or_else(|| {
                             undecided = true;
                             true
                         });
