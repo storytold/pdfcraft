@@ -32,7 +32,8 @@ fn home_community_card_closes_for_this_run() {
     assert!(!crate::control::new_app().community_card_closed);
 }
 
-/// Runs frames until the node labelled `label` exists and has stopped moving, then returns it.
+/// Runs frames until the node labelled `label` exists and has stopped moving, then returns it. A table row is named by
+/// its first cell, so a name may be the row's and its cell's: the first (outer) node is the one returned.
 ///
 /// The About dialog is a modal centred on its own size, and switching tabs changes that size, so
 /// for a few frames afterwards the modal grows and recentres and every control in it moves. A
@@ -43,9 +44,9 @@ fn settled<'a>(h: &'a mut Harness<'static, PdfCraftApp>, label: &'a str) -> egui
     let mut last = None;
     for _ in 0..60 {
         h.run_steps(1);
-        let now = h.query_by_label(label).map(|n| n.rect());
+        let now = h.query_all_by_label(label).next().map(|n| n.rect());
         if now.is_some() && now == last {
-            return h.get_by_label(label);
+            return h.query_all_by_label(label).next().expect("the node was just found");
         }
         last = now;
     }

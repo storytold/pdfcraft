@@ -60,9 +60,11 @@ fn links(h: &Harness<'static, PdfCraftApp>) -> Vec<pdfcraft_engine::LinkItem> {
     s.session.get(s.views[0].id).unwrap().links().to_vec()
 }
 
-/// Types the address into Link Properties' URL field.
+/// Types the address over Link Properties' URL field, which starts with the scheme.
 fn type_url(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_role_and_label(Role::TextInput, "Link URL").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(1);
     h.get_by_role_and_label(Role::TextInput, "Link URL").type_text("https://example.org");
     h.run_steps(2);

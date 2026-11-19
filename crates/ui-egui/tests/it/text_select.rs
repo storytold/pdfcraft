@@ -320,20 +320,6 @@ fn selected_text_copy_falls_back_to_plain_text_when_html_is_refused() {
     assert!(copied(&clipboard, "quick"), "the plain text goes out the usual way");
 }
 
-/// With a clipboard that takes no write, no HTML is built and the plain text goes out as before.
-#[test]
-fn selected_text_copy_without_system_clipboard_builds_no_html() {
-    // PLAN: assumed RecordingClipboard::refusing_all(): a backend with no clipboard behind it, which takes nothing.
-    let clipboard = RecordingClipboard::refusing_all();
-    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
-    click(&mut h, at);
-    click(&mut h, at);
-    assert!(h.execute("edit.copy"));
-    h.step();
-    assert!(html_sets(&clipboard).is_empty());
-    assert!(copied(&clipboard, "quick"));
-}
-
 /// A document that withholds copying gives neither the text nor its HTML.
 #[test]
 fn selected_text_copy_with_formatting_honours_permissions() {

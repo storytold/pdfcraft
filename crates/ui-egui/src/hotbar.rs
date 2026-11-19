@@ -104,6 +104,18 @@ fn current_tool(app: &PdfCraftApp) -> String {
     }
 }
 
+/// The tool each slot shows while its tools aren't current. The comment groups and Fill & Sign show the app's own last
+/// tool of theirs, which every pick sets (a command, a menu, the control channel), with the toolbar shown or not; the
+/// other slots show the rail's own memory.
+fn last_used(app: &PdfCraftApp) -> LastUsed<String> {
+    let mut last = app.hotbar.last_used.clone();
+    for (g, tool) in app.comment_prefs.group_tool.iter().enumerate() {
+        last.set(SLOT_COMMENT + g as SlotId, tool.command().to_owned());
+    }
+    last.set(SLOT_FILL, app.fill_tool.command().to_owned());
+    last
+}
+
 /// The built-in slots, then one slot for each of `user` commands.
 fn slots_with(app: &PdfCraftApp, user: &[String]) -> Vec<ToolSlot<String>> {
     let mut slots = vec![
@@ -187,7 +199,7 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     app.hotbar.normalize();
     let toolbar = slots(app);
     let current = current_tool(app);
-    let last_used = app.hotbar.last_used.clone();
+    let last_used = last_used(app);
     let editing = app.hotbar.drawer_open;
     let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
     if editing {

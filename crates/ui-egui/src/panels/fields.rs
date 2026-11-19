@@ -198,13 +198,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                     let current = rows.rows.iter().filter(|r| is_selected(r)).map(|r| r.key.clone()).collect();
                     let keys: Vec<(String, usize)> =
                         changed(current, change).iter().filter_map(|k| rows.get(k).and_then(|r| r.select.clone())).collect();
-                    if let Some((last, rest)) = keys.split_last() {
-                        selection.selected = Some(last.clone());
-                        selection.also = rest.to_vec();
-                    } else {
-                        selection.selected = None;
-                        selection.also.clear();
-                    }
+                    // The anchor of Align and Match Size stays the field selected first while it stays selected, as
+                    // `PrepareView::select` keeps it for clicks on the page.
+                    let lead = selection.selected.clone().filter(|lead| keys.contains(lead)).or_else(|| keys.last().cloned());
+                    selection.also = keys.into_iter().filter(|key| Some(key) != lead.as_ref()).collect();
+                    selection.selected = lead;
                 }
                 if let SelectionChange::Set(keys) = change
                     && let Some(key) = keys.last()
