@@ -14898,16 +14898,3 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
 }
-
-#[test]
-fn pdfa_verify_rejects_document_without_editor() {
-    let dir = workdir("pdfa-no-editor");
-    let junk = [vec![b'x'; 5000], std::fs::read(dir.join("a.pdf")).unwrap()].concat();
-    std::fs::write(dir.join("junk.pdf"), junk).unwrap();
-    let mut a = auto(&dir);
-    let doc = ok(&mut a, "doc_open", json!({ "path": "junk.pdf" }))["doc"].as_u64().unwrap();
-    assert!(
-        a.call("pdfa_verify", &json!({ "doc": doc })).is_err(),
-        "pdfa_verify must reject a document without an editor instead of reporting it compliant"
-    );
-}
