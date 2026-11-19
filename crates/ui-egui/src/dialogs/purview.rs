@@ -87,11 +87,14 @@ fn document_protection_card(ui: &mut egui::Ui, app: &PdfCraftApp, tokens: &Token
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(if purview.protected { "Protected" } else { "Sensitivity label" })
-                        .font(theme::medium(13.0))
-                        .color(tokens.text),
-                );
+                let title = if purview.protected {
+                    "Protected"
+                } else if purview.label.is_some() {
+                    "Sensitivity label"
+                } else {
+                    "Unlabeled"
+                };
+                ui.label(egui::RichText::new(title).font(theme::medium(13.0)).color(tokens.text));
                 if purview.protected {
                     ui.label(egui::RichText::new("IRM").font(theme::regular(10.5)).color(tokens.accent_text));
                 }
@@ -167,6 +170,9 @@ fn document_capabilities_card(ui: &mut egui::Ui, app: &PdfCraftApp, tokens: &Tok
     let Some((_, id)) = app.active_ids() else { return };
     let Some(doc) = app.session.get(id) else { return };
     let Some(purview) = doc.purview() else { return };
+    if !purview.protected {
+        return;
+    }
 
     egui::Frame::group(ui.style())
         .fill(ui.visuals().faint_bg_color)
@@ -321,9 +327,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) ->
     let (cancel, apply, remove_label, remove_protection) = if ready {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let cancel = ui.button("Cancel").clicked();
-            let apply = ui.add_enabled(!app.purview_label_id.is_empty(), egui::Button::new("Apply label")).clicked();
-            let remove_label = ui.add_enabled(current_has_label && can_change_security, egui::Button::new("Remove label")).clicked();
-            let remove_protection = ui.add_enabled(current_is_protected && can_change_security, egui::Button::new("Remove protection")).clicked();
+            let apply = if !app.purview_label_id.is_empty() { ui.button("Apply label").clicked() } else { false };
+            let remove_label = if current_has_label && can_change_security { ui.button("Remove label").clicked() } else { false };
+            let remove_protection = if current_is_protected && can_change_security { ui.button("Remove protection").clicked() } else { false };
             (cancel, apply, remove_label, remove_protection)
         })
         .inner

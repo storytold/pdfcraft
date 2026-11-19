@@ -182,6 +182,8 @@ fn signed_in_dialog_shows_display_name_and_email_and_replaces_sign_in_with_sign_
     assert!(h.query_by(|node| node.label().as_deref() == Some("Sign in")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Microsoft 365 account")).is_none());
     h.get_by_label("No sensitivity labels are available to this account or tenant policy.");
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove label")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
 }
 
 #[test]
@@ -254,4 +256,55 @@ fn labeled_document_shows_owner_label_and_dynamic_capabilities() {
     h.get_by_label("Grace Hopper");
     h.get_by_label("policy-123");
     h.get_by_label("Document capabilities");
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove label")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
+}
+
+#[test]
+fn removable_label_and_protection_actions_require_change_security_rights() {
+    let ada = PurviewAccount {
+        id: "ada".into(),
+        display_name: "Ada Lovelace".into(),
+        email: "ada@example.com".into(),
+        principal_name: "ada@example.com".into(),
+    };
+    let document = PurviewDocument {
+        protected: true,
+        label: Some(PurviewLabel {
+            id: "confidential".into(),
+            name: "Confidential".into(),
+            description: "Internal project information".into(),
+            tooltip: "Use only inside Storytold".into(),
+            color: None,
+            parent_id: None,
+            sensitivity: 2,
+            active: true,
+            protection: true,
+        }),
+        rights: PurviewRights {
+            owner: true,
+            view: true,
+            edit: true,
+            save: true,
+            comment: true,
+            extract: true,
+            export: true,
+            print: true,
+            forward: false,
+            reply: false,
+            reply_all: false,
+            view_rights: true,
+            change_rights: true,
+            object_model: false,
+            document_edit: true,
+        },
+        owner: Some("Ada Lovelace".into()),
+        content_id: Some("policy-456".into()),
+        labeling_required: false,
+        default_label_id: None,
+        downgrade_justification_required: false,
+    };
+    let h = harness_with_document(TestPurviewProvider::signed_in_with_document(ada.clone(), vec![ada], document));
+    h.get_by_label("Remove label");
+    h.get_by_label("Remove protection");
 }
