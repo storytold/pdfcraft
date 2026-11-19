@@ -10004,6 +10004,45 @@ fn pdfa_through_tools() {
     assert!(matches!(a.call("standards_remove_id", &json!({ "doc": doc, "standard": "pdfa" })), Err(ToolError::Failed(_))), "nothing left");
 }
 
+/// Issue #6845: a file that already declared the requested PDF/A level keeps that identification
+/// when conversion leaves problems, so the warning says it was kept rather than saying the file
+/// isn't identified.
+#[test]
+fn pdfa_convert_reports_an_earlier_identification_it_keeps() {
+    let dir = workdir("pdfa-earlier-identification");
+    let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" pdfaid:part="2" pdfaid:conformance="B"/></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+    let body = "BT /F1 18 Tf 20 150 Td (Archive me) Tj ET";
+    let content = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        &content,
+        &metadata,
+    ];
+    std::fs::write(dir.join("declared.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "declared.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": doc, "level": "2b" }))["declared"]["pdfa"], "PDF/A-2b");
+    // Helvetica isn't embedded, which conversion can't fix: the identification the file already
+    // had stays, so the warning says it was kept.
+    let r = ok(&mut a, "pdfa_convert", json!({ "doc": doc, "level": "2b" }));
+    assert_eq!(r["compliant"], false, "{r}");
+    assert_eq!(r["declared"]["pdfa"], "PDF/A-2b", "{r}");
+    assert!(r["issues"].as_array().unwrap().iter().any(|i| i["clause"] == "6.2.11.4"), "{r}");
+    let warnings: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(warnings.iter().any(|w| w.starts_with("kept its earlier PDF/A-2b identification")), "{r}");
+    assert!(!warnings.iter().any(|w| w.starts_with("not identified as")), "{r}");
+    // A save keeps the identification the file already had.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "declared-saved.pdf" }));
+    let saved = std::fs::read(dir.join("declared-saved.pdf")).unwrap();
+    assert!(saved.windows(7).any(|w| w == b"pdfaid:"), "the saved file keeps the identification it had");
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "declared-saved.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "pdfa_verify", json!({ "doc": reopened, "level": "2b" }))["declared"]["pdfa"], "PDF/A-2b");
+}
+
 #[test]
 fn print_readiness_through_tools() {
     let dir = workdir("print-readiness");
