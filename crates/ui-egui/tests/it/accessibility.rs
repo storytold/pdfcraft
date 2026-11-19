@@ -81,7 +81,7 @@ fn checking_fixing_skipping_and_reporting() {
     h.run_steps(4);
     assert!(h.execute("a11y.check"));
     h.run_steps(2);
-    h.get_by_label("Accessibility Checker Options");
+    h.get_by_role_and_label(Role::Dialog, "Accessibility Checker Options");
     h.get_by_label_contains("31 of 32");
     h.get_by_label("Document title is showing in title bar");
     h.get_by_label("Start Checking").click();
@@ -324,7 +324,7 @@ fn setting_alternate_text_figure_by_figure() {
     h.run_steps(4);
     assert!(h.execute("a11y.alt_text"));
     h.run_steps(2);
-    h.get_by_label("Set Alternate Text");
+    h.get_by_role_and_label(Role::Dialog, "Set Alternate Text");
     h.get_by_label("Figure 1 of 2 on page 1");
     let field = h.get_by_role_and_label(Role::TextInput, "Alternate text");
     field.focus();

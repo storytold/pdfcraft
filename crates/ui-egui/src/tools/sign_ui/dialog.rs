@@ -255,18 +255,18 @@ fn choose(ui: &mut egui::Ui, d: &mut SignDraft, ids: &[DigitalIdEntry], asked: &
     } else {
         let source = IdRows(ids);
         let mut selection = d.selected.map_or_else(Selection::default, Selection::single);
-        let out = List::<usize>::new(tl!("Digital IDs")).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
-            ui,
-            &source,
-            &mut |_, icx| match ids.get(icx.at) {
+        let out = List::<usize>::new(tl!("Digital IDs"))
+            .select(SelectMode::Single)
+            .natural_height(true)
+            .selection(Bind::bound(&mut selection))
+            .show_items(ui, &source, &mut |_, icx| match ids.get(icx.at) {
                 Some(e) => {
                     let sub = details(e);
                     // Names are as long as their owners made them: the row cuts them and the tip says them whole.
                     ListRow::new(e.name.clone()).tooltip(format!("{}\n{sub}", e.name)).below(caption(sub), |_| {})
                 }
                 None => ListRow::new(String::new()),
-            },
-        );
+            });
         for event in out.events {
             match event {
                 CollectionEvent::Selection(SelectionChange::Set(keys)) => {
