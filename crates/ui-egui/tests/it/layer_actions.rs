@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -148,13 +149,13 @@ fn layer_options_reset_to_initial_visibility() {
 fn the_layers_panel_shows_the_order_tree() {
     let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     h.run_steps(2);
-    let label = h.get_by_label("Colours").rect();
+    let label = h.get_by_role_and_label(Role::TreeItem, "Colours").rect();
     let red = h.get_by_label("Red").rect();
     assert!(red.min.y > label.max.y - 1.0, "Red is listed under its label");
     assert!(h.query_by_label("Green").is_none(), "Green isn't in /Order, so it isn't presented");
     assert_eq!(shown(&h), layers(true, false), "but it is still a layer, in its state");
     // Clicking the label changes nothing; clicking Red hides it.
-    h.get_by_label("Colours").click();
+    h.get_by_role_and_label(Role::TreeItem, "Colours").click();
     h.run_steps(2);
     assert_eq!(shown(&h), layers(true, false));
     h.get_by_label("Red").click();
