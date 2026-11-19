@@ -1,16 +1,16 @@
 //! Borderless tables among auto-tagged text objects, found from where their text sits.
 //!
-//! Single-line text objects on one baseline form a row; within a row, objects closer than one
-//! font size join one chunk, and a wider gap separates two. Three or more consecutive rows of at
-//! least two chunks, each at most [`ROW_GAP_EM`] font sizes below the one before, are a
-//! candidate. Its chunks' horizontal spans, merged where they overlap or nearly touch, are its
-//! columns. A candidate is a table when it has at least two columns, every column holds text in
-//! at least two rows, in each column at least two cells and at least half of them share a left
-//! edge, a right edge or a centre to within [`ALIGN_EM`] font sizes, each column's cells average
-//! at most [`MAX_MEAN_CELL_CHARS`] characters, and no other text lies among its rows (a wrapped
-//! line, or text whose place is unknown, drawn between its cells); otherwise it stays paragraphs
-//! and is reported for review. A column of prose lines set on the rows' baselines beside a table
-//! therefore keeps the whole block paragraphs.
+//! Single-line text objects on one baseline form a row; within a row, objects closer than one font
+//! size join one chunk, and a wider gap separates two. Three or more consecutive rows of at least
+//! two chunks, each at most [`ROW_GAP_EM`] font sizes below the one before, are a candidate. Its
+//! chunks' horizontal spans, merged where they overlap or, from different rows, nearly touch, are
+//! its columns. A candidate is a table when it has at least two columns, no row has two chunks in
+//! one column, every column holds text in at least two rows, in each column at least two cells and
+//! at least half of them share a left edge, a right edge or a centre to within [`ALIGN_EM`] font
+//! sizes, each column's cells average at most [`MAX_MEAN_CELL_CHARS`] characters, and no other text
+//! lies among its rows (a wrapped line, or text whose place is unknown, drawn between its cells);
+//! otherwise it stays paragraphs and is reported for review. A column of prose lines set on the
+//! rows' baselines beside a table therefore keeps the whole block paragraphs.
 //! The first row is a header row when it is bold and the others are not, or when it is set apart
 //! by a gap at least [`APART_RATIO`] times every other row gap. Ruling lines are not read, and
 //! cells that span rows or columns are not recognised.
@@ -84,7 +84,7 @@ impl Row {
 /// The table candidates among one page's text objects, top to bottom.
 pub(crate) fn find(objects: &[Evidence]) -> Vec<Candidate> {
     let (mut items, mut others) = (Vec::new(), Vec::new());
-    for (index, e) in objects.iter().enumerate().filter(|(_, e)| e.chars > 0) {
+    for (index, e) in objects.iter().enumerate().filter(|(_, e)| e.chars > 0 || e.unmapped) {
         match e.place.filter(|_| e.lines == 1 && e.size > 0.0) {
             Some([x0, y, x1, _]) => items.push(Item { index, x0, x1, y, size: e.size, chars: e.chars, bold: e.bold }),
             None => others.push((index, e.place)),
@@ -175,13 +175,18 @@ fn grid(rows: &[&Row]) -> Result<Grid, &'static str> {
     sizes.sort_by(f64::total_cmp);
     let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
     let gutter = GUTTER_EM * median;
-    let mut spans: Vec<(f64, f64)> = rows.iter().flat_map(|r| r.chunks.iter().map(|c| (c.x0, c.x1))).collect();
+    let mut spans: Vec<(f64, f64, usize)> = rows.iter().enumerate().flat_map(|(at, r)| r.chunks.iter().map(move |c| (c.x0, c.x1, at))).collect();
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut columns: Vec<(f64, f64)> = Vec::new();
-    for (a, b) in spans {
+    // A span joins the column it overlaps, or one it nearly touches where its row has no cell yet:
+    // two cells of one row are two columns.
+    let mut columns: Vec<(f64, f64, HashSet<usize>)> = Vec::new();
+    for (a, b, row) in spans {
         match columns.last_mut() {
-            Some(c) if a < c.1 + gutter => c.1 = c.1.max(b),
-            _ => columns.push((a, b)),
+            Some(c) if a < c.1 || (a < c.1 + gutter && !c.2.contains(&row)) => {
+                c.1 = c.1.max(b);
+                c.2.insert(row);
+            }
+            _ => columns.push((a, b, HashSet::from([row]))),
         }
     }
     if columns.len() < 2 {
@@ -200,8 +205,11 @@ fn grid(rows: &[&Row]) -> Result<Grid, &'static str> {
             let (Some(cell), Some(span), Some(count)) = (out.get_mut(column), spans.get_mut(column), chars.get_mut(column)) else {
                 return Err("a cell crosses two columns");
             };
-            let (lo, hi) = span.unwrap_or((chunk.x0, chunk.x1));
-            *span = Some((lo.min(chunk.x0), hi.max(chunk.x1)));
+            if span.is_some() {
+                // A wider cell in another row spans both: cells that span columns are not read.
+                return Err("a row has two cells in one column");
+            }
+            *span = Some((chunk.x0, chunk.x1));
             cell.extend(chunk.items.iter().map(|i| i.index));
             *count = count.saturating_add(chunk.items.iter().fold(0, |n, i| n.saturating_add(i.chars)));
         }
@@ -296,16 +304,18 @@ fn element(kind: &str, parent: ObjRef) -> Dict {
 
 /// Writes `Table` › `TR` › `TH`/`TD` under `parent` for `grid` on `page`. A cell's `/K` is the
 /// marked-content ID of its text object, which is the object's index on the page, or an array of
-/// them; an empty cell has none. Header cells carry `/Scope /Column`.
+/// them; an empty cell has none and is a `TD`, in the header row too. Header cells carry
+/// `/Scope /Column`.
 pub(crate) fn write(next: &mut Document, parent: ObjRef, page: ObjRef, grid: &Grid) -> Result<Written, crate::AutoTagError> {
     let mcid = |i: usize| i64::try_from(i).map(Object::Int).map_err(|_| crate::AutoTagError::TooManyPages);
     let table = next.add(Object::Null);
     let (mut rows, mut cells) = (Vec::with_capacity(grid.rows.len()), Vec::new());
     for (at, row) in grid.rows.iter().enumerate() {
         let tr = next.add(Object::Null);
-        let kind = if grid.header && at == 0 { "TH" } else { "TD" };
         let mut kids = Vec::with_capacity(row.len());
         for objects in row {
+            // A missing cell is an empty `TD`, in the header row too.
+            let kind = if grid.header && at == 0 && !objects.is_empty() { "TH" } else { "TD" };
             let mut cell = element(kind, tr);
             cell.set(b"Pg".to_vec(), Object::Ref(page));
             match objects.as_slice() {
@@ -351,18 +361,22 @@ mod tests {
         xs.iter().zip(texts).filter(|(_, t)| !t.is_empty()).map(|(&x, t)| cell(font, x, y, t)).collect()
     }
 
-    /// A one-page document drawing `content`, with `extra` added to the page dictionary.
+    /// A one-page document drawing `content`, with `extra` added to the page dictionary, in
+    /// Helvetica (`F1`), Helvetica-Bold (`F2`) and a two-byte Type 0 font with no Unicode mapping
+    /// (`F3`).
     fn page(content: &str, extra: &str) -> Document {
         pdf(
             &[
                 "<< /Type /Catalog /Pages 2 0 R >>".into(),
                 "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
                 format!(
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R {extra} /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>"
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R {extra} /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>"
                 ),
                 stream(content),
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".into(),
+                "<< /Type /Font /Subtype /Type0 /BaseFont /House /Encoding /Identity-H /DescendantFonts [8 0 R] >>".into(),
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /House /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>".into(),
             ],
             "",
         )
@@ -679,5 +693,67 @@ mod tests {
             (0..501).map(|i| format!("BT /F1 1 Tf 72 {y} Td (a) Tj ET BT /F1 1 Tf 90 {y} Td (b) Tj ET ", y = 760.0 - f64::from(i) * 1.5)).collect();
         let found = table_candidates(&page(&tall, "")).unwrap();
         assert_eq!(found.first().and_then(|f| f.not_a_table), Some("it has more than 500 rows"));
+    }
+
+    #[test]
+    fn text_without_a_unicode_mapping_among_the_rows_keeps_them_paragraphs() {
+        let rows = [
+            row("F1", 700.0, &XS, &["Apples", "12", "Red"]),
+            row("F1", 686.0, &XS, &["Pears", "7", "Green"]),
+            row("F1", 672.0, &XS, &["Plums", "30", "Purple"]),
+        ];
+        let unmapped = "BT /F3 10 Tf 460 693 Td <00410042> Tj ET ";
+        let content = [rows[0].clone(), unmapped.to_string(), rows[1].clone(), rows[2].clone()].concat();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        assert_eq!(found.first().and_then(|f| f.not_a_table), Some("other text lies among its rows"));
+        // In an invisible render mode it is not text the table would hide.
+        let hidden = "BT /F3 10 Tf 3 Tr 460 693 Td <00410042> Tj 0 Tr ET ";
+        let content = [rows[0].clone(), hidden.to_string(), rows[1].clone(), rows[2].clone()].concat();
+        assert_eq!(table_candidates(&page(&content, "")).unwrap().first().map(|f| f.not_a_table), Some(None));
+    }
+
+    #[test]
+    fn a_missing_cell_beside_a_wider_one_keeps_its_column() {
+        // "a" is 5.56 units wide, "aaaaaa" 33.36: the middle row's first cell ends 6.64 units
+        // before the middle column starts, within a gutter, but the other rows have cells in both.
+        let xs = [72.0, 112.0, 172.0];
+        let content =
+            [row("F1", 700.0, &xs, &["a", "b", "c"]), row("F1", 686.0, &xs, &["aaaaaa", "", "c"]), row("F1", 672.0, &xs, &["a", "b", "c"])].concat();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        assert_eq!(found.first().map(|f| (f.columns, f.not_a_table)), Some((3, None)));
+        let mut doc = page(&content, "");
+        autotag_text(&mut doc).unwrap();
+        assert_eq!(kinds(&doc), table(&["TD"; 9]));
+    }
+
+    #[test]
+    fn a_cell_spanning_two_columns_is_not_read_as_a_table() {
+        // The first row's cell covers both cells below it; merging them would write two as one.
+        let content = [
+            row("F1", 700.0, &[72.0, 250.0], &["aaaaaaaaaaaaaaaaaaaa", "c"]),
+            row("F1", 686.0, &[72.0, 112.0, 250.0], &["a", "b", "c"]),
+            row("F1", 672.0, &[72.0, 112.0, 250.0], &["a", "b", "c"]),
+        ]
+        .concat();
+        let found = table_candidates(&page(&content, "")).unwrap();
+        assert_eq!(found.first().and_then(|f| f.not_a_table), Some("a row has two cells in one column"));
+    }
+
+    #[test]
+    fn a_missing_header_cell_is_an_empty_data_cell() {
+        let content = [
+            row("F2", 700.0, &XS, &["Fruit", "", "Colour"]),
+            row("F1", 686.0, &XS, &["Apples", "12", "Red"]),
+            row("F1", 672.0, &XS, &["Pears", "7", "Green"]),
+            row("F1", 658.0, &XS, &["Plums", "30", "Purple"]),
+        ]
+        .concat();
+        let mut doc = page(&content, "");
+        autotag_text(&mut doc).unwrap();
+        let mut expected = vec!["TH", "TD", "TH"];
+        expected.extend(["TD"; 9]);
+        assert_eq!(kinds(&doc), table(&expected));
+        let scopes: Vec<_> = tags(&doc).into_iter().filter(|t| t.kind == "TH").map(|t| t.scope).collect();
+        assert_eq!(scopes, vec![Some("Column".to_string()); 2]);
     }
 }
