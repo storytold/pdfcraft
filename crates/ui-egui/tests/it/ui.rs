@@ -5,7 +5,7 @@ use crate::support;
 use crate::support::AppHarness as _;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 /// A tiny PDF with two pages, two bookmarks and one sticky note.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -41,9 +41,40 @@ fn home_shows_welcome_and_tools() {
 }
 
 /// A side string of the control state's `side_panels` (`tools_side`, `rail_side`).
-// PLAN: assumed `support::ui_state(h) -> serde_json::Value`, the control channel's `ui.state` reply (pdf-hub-w3)
 fn side(h: &mut Harness<'static, PdfCraftApp>, key: &str) -> String {
-    support::ui_state(h)["side_panels"][key].as_str().unwrap_or_default().to_owned()
+    pdfcraft_ui_egui::side_panels::state(h.state())[key].as_str().unwrap_or_default().to_owned()
+}
+
+/// The side panel the workspace has open, as `ui.state` reports it (`side_panel`).
+pub(crate) fn right(app: &PdfCraftApp) -> Option<RightPanel> {
+    use pdfcraft_ui_egui::side_panels::PanelId;
+    [
+        RightPanel::Comments,
+        RightPanel::Bookmarks,
+        RightPanel::Pages,
+        RightPanel::Fields,
+        RightPanel::Layers,
+        RightPanel::Attachments,
+        RightPanel::Signatures,
+        RightPanel::Accessibility,
+        RightPanel::Tags,
+        RightPanel::Search,
+        RightPanel::Compare,
+    ]
+    .into_iter()
+    .find(|panel| app.dock.layout.contains(&PanelId::from(*panel)))
+}
+
+/// Runs the command `id` as the app's own command entry does, with the harness's context.
+fn run_command(h: &mut Harness<'static, PdfCraftApp>, id: &str) {
+    let ctx = h.ctx.clone();
+    h.state_mut().run_command(&ctx, id);
+}
+
+/// The text of every notice card the main window shows, oldest first.
+fn posted_notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
+    use craft::ui::runtime::{env::WindowKey, toast};
+    toast::cards(&h.ctx, &WindowKey::main()).into_iter().map(|card| card.toast.message.as_str().to_owned()).collect()
 }
 
 #[test]
@@ -276,11 +307,11 @@ fn expanding_all_tools_from_read_mode_restores_the_right_panel() {
     h.set_option("panel", "bookmarks").unwrap();
     h.execute("view.read_mode");
     h.run_steps(3);
-    assert_eq!((h.state().mode, h.state().right), (Mode::Read, None), "Read mode hides the panel");
+    assert_eq!((h.state().mode, right(h.state())), (Mode::Read, None), "Read mode hides the panel");
     h.set_option("tools", "full").unwrap();
     h.run_steps(3);
     assert!(h.state().all_tools_full);
-    assert_eq!((h.state().mode, h.state().right), (Mode::AllTools, Some(RightPanel::Bookmarks)));
+    assert_eq!((h.state().mode, right(h.state())), (Mode::AllTools, Some(RightPanel::Bookmarks)));
 }
 
 #[test]
@@ -314,7 +345,7 @@ fn opening_a_pdf_shows_comments_and_bookmarks() {
 fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
     use pdfcraft_ui_egui::RightPanel;
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert_eq!(right(h.state()), Some(RightPanel::Comments));
     assert!(h.state().left_open);
     h.state_mut().choose_right_panel(None);
     h.set_option("left", "closed").unwrap();
@@ -324,14 +355,14 @@ fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
         app.apply_settings(&saved);
         app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
-    assert_eq!(h.state().right, None, "the closed right pane reopened");
+    assert_eq!(right(h.state()), None, "the closed right pane reopened");
     assert!(!h.state().left_open, "the closed left pane reopened");
     assert!(h.query_by_label_contains("Check the numbers").is_none());
     // Within a session too: another document opens with them closed.
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().right, None);
+    assert_eq!(right(h.state()), None);
     assert!(!h.state().left_open);
 }
 
@@ -342,18 +373,18 @@ fn closed_right_panel_stays_closed_for_a_document_asking_for_its_outline() {
     use pdfcraft_ui_egui::RightPanel;
     let pdf = || String::from_utf8(FIXTURE.to_vec()).unwrap().replace("/Outlines 6 0 R", "/Outlines 6 0 R /PageMode /UseOutlines").into_bytes();
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert_eq!(right(h.state()), Some(RightPanel::Comments));
     h.state_mut().choose_right_panel(None);
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "outline.pdf", None, pdf()).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().right, None, "the outline request reopened the closed right panel");
+    assert_eq!(right(h.state()), None, "the outline request reopened the closed right panel");
     let saved = h.state().settings_snapshot();
     let h = harness(move |app| {
         app.apply_settings(&saved);
         app.open_bytes(&egui::Context::default(), "outline.pdf", None, pdf()).expect("outline PDF opens");
     });
-    assert_eq!(h.state().right, None, "the closed right panel reopened after a restart");
+    assert_eq!(right(h.state()), None, "the closed right panel reopened after a restart");
 }
 
 #[test]
@@ -390,17 +421,17 @@ fn read_mode_rail_buttons_open_their_panels() {
         app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
     assert_eq!(h.state().mode, Mode::Read);
-    assert_eq!(h.state().right, None, "Read mode opens with the panes closed");
+    assert_eq!(right(h.state()), None, "Read mode opens with the panes closed");
     assert!(h.query_by_label("Alpha section").is_none());
     h.get_by_label("Bookmarks").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Bookmarks));
+    assert_eq!(right(h.state()), Some(RightPanel::Bookmarks));
     h.get_by_label("Alpha section");
     h.get_by_label("Beta section");
     // The same button closes them again (the open panel's title is also "Bookmarks").
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Bookmarks").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, None);
+    assert_eq!(right(h.state()), None);
     assert!(h.query_by_label("Alpha section").is_none());
     // A document that asks for its outline (/PageMode /UseOutlines) shows it in Read mode too,
     // unless the user closed the panel (#2884), so forget that closing here.
@@ -449,24 +480,24 @@ fn a_document_asking_for_full_screen_is_asked_about_first() {
 fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
-    h.state_mut().run_command("view.read_mode");
+    assert_eq!(right(h.state()), Some(RightPanel::Comments));
+    run_command(&mut h, "view.read_mode");
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Read);
-    assert_eq!(h.state().right, None);
+    assert_eq!(right(h.state()), None);
     assert!(h.query_by_label_contains("Check the numbers").is_none(), "the Comments panel is hidden");
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools);
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert_eq!(right(h.state()), Some(RightPanel::Comments));
     // A pane opened in Read mode stays open on the way out.
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(2);
     h.get_by_label("Page thumbnails").click();
     h.run_steps(2);
     h.get_by_label("All tools").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Pages));
+    assert_eq!(right(h.state()), Some(RightPanel::Pages));
 }
 
 /// Read mode hides the quick toolbar too, and puts down the tool that was in use (#2646).
@@ -477,11 +508,11 @@ fn read_mode_hides_the_quick_toolbar() {
     h.get_by_label("Hand (H)").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(3);
     assert!(h.query_by_label("Select (V)").is_none(), "no quick toolbar in Read mode");
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools);
     h.get_by_label("Select (V)");
@@ -512,7 +543,7 @@ fn edit_a_pdf_from_all_tools_turns_on_editing() {
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
     // Read mode hides the quick toolbar and keeps the tools down, so the control channel's
     // `tool edit` there leaves editing off (review on #4605).
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(2);
     assert_eq!(h.state().mode, Mode::Read);
     h.set_option("tool", "edit").unwrap();
@@ -542,35 +573,35 @@ fn opening_into_read_mode_puts_the_tool_down() {
 fn a_pane_closed_in_read_mode_stays_closed_when_leaving_it() {
     use pdfcraft_ui_egui::{Mode, RightPanel};
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
-    h.state_mut().run_command("view.read_mode");
+    assert_eq!(right(h.state()), Some(RightPanel::Comments));
+    run_command(&mut h, "view.read_mode");
     h.run_steps(3);
-    assert_eq!(h.state().right, None);
+    assert_eq!(right(h.state()), None);
     // Open Comments from the rail, then close it again.
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Comments").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Comments));
+    assert_eq!(right(h.state()), Some(RightPanel::Comments));
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Comments").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, None);
+    assert_eq!(right(h.state()), None);
     assert!(h.state().comments_panel_closed);
     // Leave Read mode through the toolbar.
     h.get_by_label("All tools").click();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools);
-    assert_eq!(h.state().right, None, "the pane closed in Read mode stays closed");
+    assert_eq!(right(h.state()), None, "the pane closed in Read mode stays closed");
     assert!(h.state().comments_panel_closed);
     // The same through the Read mode command.
     h.state_mut().choose_right_panel(Some(RightPanel::Comments));
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(2);
     assert_eq!(h.state().mode, Mode::Read);
     h.state_mut().choose_right_panel(Some(RightPanel::Comments));
     h.state_mut().choose_right_panel(None);
-    h.state_mut().run_command("view.read_mode");
+    run_command(&mut h, "view.read_mode");
     h.run_steps(3);
     assert_ne!(h.state().mode, Mode::Read);
-    assert_eq!(h.state().right, None);
+    assert_eq!(right(h.state()), None);
     assert!(h.state().comments_panel_closed);
 }
 
@@ -717,7 +748,7 @@ fn find_counts_matches_across_pages() {
     h.get_by_label_contains("of 2");
     let v = &h.state().views[0];
     let f = v.find.as_ref().expect("find open");
-    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(f.matches.matches().iter().map(|m| m.page).collect::<Vec<_>>(), vec![0, 1]);
 }
 
 #[test]
@@ -763,10 +794,10 @@ fn persistence_round_trips_and_tolerates_garbage() {
     let mut b = crate::control::new_app();
     b.set_option(&egui::Context::default(), "language", "en").unwrap();
     b.apply_settings(&a.settings_snapshot());
-    assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
+    assert_eq!(b.theme_preference, craft::theme::ModeChoice::Dark);
     b.apply_settings(&pdfcraft_ui_egui::settings::import_json("{not json").0);
     b.apply_settings(&pdfcraft_ui_egui::settings::import_json("{\"recent\": 5, \"theme\": \"Purple\"}").0);
-    assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
+    assert_eq!(b.theme_preference, craft::theme::ModeChoice::Dark);
 }
 
 /// A tool's saved "no fill" (`"fill": null`) clears a fill it had as its default; a missing or
@@ -1126,7 +1157,7 @@ fn a_file_combine_does_not_take_is_left_out_of_a_drop_and_named() {
     std::fs::remove_file(&path).ok();
     assert_eq!(combine_names(&h), ["first.pdf", "one.pdf", "scan"]);
     let zip = path.file_name().unwrap().to_string_lossy().into_owned();
-    let notice = h.state().notices.posted().join("; ");
+    let notice = posted_notices(&h).join("; ");
     assert!(notice.contains("report.docx") && notice.contains(&zip), "the refused names are told: {notice:?}");
 }
 
@@ -1333,7 +1364,7 @@ fn newly_opened_pdfs_use_the_default_workspace() {
     app.open_bytes(&egui::Context::default(), "initial-view.pdf", None, pdf.into_bytes()).unwrap();
     assert_eq!(app.mode, Mode::Read);
     assert_eq!(app.views.last().unwrap().view.display, craft::pages::PageDisplay::TwoUp);
-    assert_eq!(app.right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+    assert_eq!(right(&app), Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
 }
 
 #[test]
@@ -1870,7 +1901,8 @@ fn a_fractional_zoom_is_remembered_exactly() {
     let path = std::env::temp_dir().join(format!("pdfcraft-last-view-frac-{}.pdf", std::process::id())).to_string_lossy().into_owned();
     let p = path.clone();
     let mut h = harness(move |app| app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
-    h.state_mut().views[0].set_zoom(0.625);
+    h.state_mut().views[0].view.zoom = 0.625;
+    h.state_mut().views[0].view.fit = Fit::None;
     h.run_steps(3);
     h.state_mut().close_tab(0);
     assert_eq!(h.state().last_views[0].zoom, "62.5%");
@@ -1913,7 +1945,7 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     let p = path.clone();
     let mut h = harness(move |app| {
         app.apply_settings(&saved);
-        app.apply_full_screen(true);
+        app.set_full_screen(true);
         app.open_bytes(&egui::Context::default(), "doc.pdf", Some(p), pages_fixture(3)).expect("opens");
     });
     let v = &h.state().views[0];
@@ -1964,5 +1996,5 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     assert_eq!(h.state().active, None);
     assert_eq!(h.state().recent.len(), 2, "reveal must not remove missing recent files");
     assert_eq!(h.state().recent[1].path, expected);
-    assert!(!h.state().notices.posted().is_empty(), "the selected path is checked and the reveal error is shown");
+    assert!(!posted_notices(&h).is_empty(), "the selected path is checked and the reveal error is shown");
 }
