@@ -33,7 +33,9 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let before = view.thumbnail_zoom();
     let mut zoom = f64::from(before);
     let current = view.current();
+    let grid_id = crate::canvas::organize::pages_panel_grid_id(view);
     let output = PageThumbnails::new(tl!("Pages"), &source, &mut view.selected, current, DataColor::new(egui::Color32::WHITE))
+        .id(grid_id)
         .editable(editable)
         .size(&mut zoom)
         .show(ui);

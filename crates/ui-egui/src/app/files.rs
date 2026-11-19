@@ -905,6 +905,17 @@ impl PdfCraftApp {
         OpenOutcome::Pending
     }
 
+    /// Reopen `path` from the last session: shown at `place` once open, and brought to the front only when `front`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reopen_path(&mut self, path: &str, place: pdfcraft_render::RemoteDestination, front: bool) {
+        if !matches!(self.open_file_request(path, Some(place), None, None), OpenOutcome::Pending) {
+            return;
+        }
+        if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            pending.activate = front;
+        }
+    }
+
     /// Apply an explicit launch layout after the command-line display overrides settle.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_launch_layout(&mut self, value: &str) -> Result<(), String> {

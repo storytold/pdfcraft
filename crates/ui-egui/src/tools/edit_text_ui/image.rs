@@ -1,6 +1,6 @@
 use super::{DocInfo, Edit, MAX_OUTLINES, PageGeometry, PageSession, PageXform, Pos2, Rect, user_box};
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
-use craft::behavior::geometry::{BoxAllow, BoxRules, BoxState, CropBox, CropGuide, ScaleRule, TransformMode};
+use craft::behavior::geometry::{BoxAllow, BoxPart, BoxRules, BoxState, CropBox, CropGuide, ScaleRule, TransformMode};
 use craft::behavior::kurbo::{BezPath, Point, Rect as DocRect, Vec2};
 use craft::behavior::{CanvasView, CursorIcon, EditEvent, HitShape, IconId, PointerButton};
 use craft::draw::ui::transform::{RotateZone, TransformBox};
@@ -249,7 +249,7 @@ pub(crate) fn picture_controls(
         let Some(image) = images.get(index) else { continue };
         let cropping = session.image_selection.as_ref().is_some_and(|s| s.crop.is_some());
         let pic = PagePicture { placed, xf: &xf, info, index, image };
-        let made = if cropping { crop_controls(ui, body, session, &pic) } else { box_controls(ui, body, session, doc, &pic) };
+        let made = if cropping { crop_controls(ui, body, session, &pic, &images) } else { box_controls(ui, body, session, doc, &pic) };
         edit = edit.or(made);
     }
     edit
@@ -329,7 +329,13 @@ fn box_controls(
     edit
 }
 
-fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, pic: &PagePicture<'_>) -> Option<Edit> {
+fn crop_controls(
+    ui: &mut egui::Ui,
+    body: &PageBody<'_>,
+    session: &mut PageSession,
+    pic: &PagePicture<'_>,
+    images: &[pdfcraft_engine::PageImage],
+) -> Option<Edit> {
     let PagePicture { placed, xf, info, image, .. } = *pic;
     let page = placed.page;
     let keep = session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep)?;
@@ -346,6 +352,20 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
         .min_side(least_side(ui, placed))
         .guide((CropGuide::Thirds, 0))
         .show_at(ui, body.rect);
+    // The overlay takes every right-click. One on the picture being cropped, its box or its grips is the crop's: crop
+    // mode stays and the page's menu stays shut. Anywhere else it goes to what lies there, as without crop mode
+    // (#5835).
+    if let Some((at, _)) = shown.context {
+        let hits = |image: &pdfcraft_engine::PageImage| HitShape::Polygon(picture_quad(xf, info, page, image).to_vec()).hit(at);
+        if hits(image) || !matches!(shown.hovered, None | Some(BoxPart::Outside)) {
+            session.context_held = true;
+        } else {
+            let under = placed.rect.contains(at).then(|| images.iter().rposition(|other| hits(other))).flatten();
+            picture_context(page, under, session);
+            session.menu_for = under.map(|index| (page, Owner::Picture { index }));
+            return None;
+        }
+    }
     if crop.is_finite() && crop.rect != before.rect {
         let to_screen = |p: Point| view.to_screen(p);
         let moved = Rect::from_two_pos(to_screen(Point::new(crop.rect.x0, crop.rect.y0)), to_screen(Point::new(crop.rect.x1, crop.rect.y1)));

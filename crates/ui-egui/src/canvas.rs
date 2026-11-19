@@ -35,7 +35,7 @@ pub(super) mod crop;
 mod find;
 pub(super) mod image_pick;
 mod navigation;
-mod organize;
+pub(crate) mod organize;
 // PLAN: no sheet assigns the `mod` lines of the four new page-body files (pdf-canvas-w9 `page_parts.rs`,
 // `page_tools.rs`; pdf-canvas-w10 `pictures.rs`; pdf-canvas-w15 `page_overlays.rs`); the host writes them here.
 pub(crate) mod page_overlays;
@@ -398,6 +398,8 @@ pub struct PageSession {
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
     /// shows its entries when it has a menu and is the one selected, or else the page's own.
     pub(crate) menu_for: Option<(usize, Owner)>,
+    /// A right-click of this pass that a page control kept for itself (a picture's crop): the page's menu stays shut.
+    pub(crate) context_held: bool,
 }
 
 impl PageSession {
@@ -455,6 +457,7 @@ impl PageSession {
             redact_gesture: Default::default(),
             stamp_press: None,
             menu_for: None,
+            context_held: false,
         }
     }
 }
@@ -554,7 +557,7 @@ impl DocView {
     /// that were already completed before cancellation.
     pub(crate) fn cancel_pointer_gestures(&mut self, ctx: &egui::Context) {
         self.session.comments.tool.cancel_drawing();
-        self.cancel_organize_press(ctx);
+        self.cancel_page_drags(ctx);
     }
 
     /// A view of a newly opened document, shown as `defaults` say, with fields highlighted when `highlight_fields`
@@ -641,7 +644,7 @@ impl DocView {
         self.view.go_to = None;
         self.session.flash = None;
         // Thumbnail drags hold page indexes from before the change.
-        self.cancel_organize_press(ctx);
+        self.cancel_page_drags(ctx);
         self.session.comments.document_changed(info);
     }
 

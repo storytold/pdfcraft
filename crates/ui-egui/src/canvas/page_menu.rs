@@ -384,6 +384,11 @@ pub(crate) fn show(
     cx: &PageMenuCx<'_>,
 ) -> PageMenuPick {
     let mut pick = PageMenuPick::default();
+    // A right-click a page control kept for itself (the picture being cropped) opens no menu: the menu does not run in
+    // the pass of its trigger.
+    if std::mem::take(&mut view.session.context_held) {
+        return pick;
+    }
     let mut menu = Menu::context(tl!("Page").to_string(), opener);
     if let Some(request) = request {
         menu = menu.anchor(Anchor::Point(request.at));
