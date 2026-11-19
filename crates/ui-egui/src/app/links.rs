@@ -217,7 +217,7 @@ impl PdfCraftApp {
         {
             self.open_url(&p.url);
             if let Some(id) = p.submit {
-                self.form_email_opened(id, false);
+                self.form_email_opened(id, None);
             }
         }
     }
@@ -230,9 +230,9 @@ impl PdfCraftApp {
         let Some(id) = self.pending_link.as_ref().and_then(|p| p.submit) else { return };
         let Some(p) = self.pending_link.take() else { return };
         let Some(index) = self.asking_tab(id) else { return };
-        self.save_then(index, crate::SaveTarget::InPlace, move |app| {
+        self.save_then(index, crate::SaveTarget::InPlace, move |app, written| {
             app.open_url(&p.url);
-            app.form_email_opened(id, true);
+            app.form_email_opened(id, Some(written));
         });
     }
 
@@ -247,10 +247,16 @@ impl PdfCraftApp {
 
     /// Say what to attach once a form's email has opened. The file isn't attached for the user:
     /// an email address that attaches a local file is what
-    /// [`pdfcraft_engine::links::document_url`] refuses. `saved`: the document was saved for it.
-    fn form_email_opened(&mut self, id: DocId, saved: bool) {
+    /// [`pdfcraft_engine::links::document_url`] refuses. `saved`: the name of the file the document
+    /// was just saved to for it, which a web download after Apply redactions names differently
+    /// from the document.
+    fn form_email_opened(&mut self, id: DocId, saved: Option<&str>) {
+        if let Some(written) = saved {
+            self.notify_fmt("Attach {name} to the new email before you send it.", &[("name", written)]);
+            return;
+        }
         let Some(name) = self.session.get(id).map(|d| d.name.clone()) else { return };
-        if !saved && self.form_email_needs_save(id) {
+        if self.form_email_needs_save(id) {
             self.notify_fmt("Save {name}, then attach it to the new email before you send it.", &[("name", &name)]);
         } else {
             self.notify_fmt("Attach {name} to the new email before you send it.", &[("name", &name)]);

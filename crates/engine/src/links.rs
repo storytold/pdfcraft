@@ -166,7 +166,7 @@ pub fn mail_draft(url: &str) -> Option<MailDraft> {
         let text = String::from_utf8_lossy(&percent_decode(s.as_bytes())).replace("\r\n", "\n");
         text.chars().map(|c| if hides_text(c) && !(line_breaks && c == '\n') { '\u{FFFD}' } else { c }).collect()
     };
-    let list = |s: &str| -> Vec<String> { decode(s, false).split(',').map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect() };
+    let list = |s: &str| -> Vec<String> { split_addresses(&decode(s, false)) };
     let mut draft = MailDraft { to: list(addresses), ..MailDraft::default() };
     let (mut subject, mut body) = (None, None);
     for field in fields.split('&') {
@@ -183,6 +183,26 @@ pub fn mail_draft(url: &str) -> Option<MailDraft> {
     draft.subject = subject.unwrap_or_default();
     draft.body = body.unwrap_or_default();
     Some(draft)
+}
+
+/// The addresses of a comma-separated list, trimmed, empty ones left out. A comma inside a quoted
+/// local part (`"a,b"@example.org`, where `\` escapes the next character) is part of the address.
+fn split_addresses(list: &str) -> Vec<String> {
+    let (mut out, mut start, mut quoted, mut escaped) = (Vec::new(), 0, false, false);
+    for (i, c) in list.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                out.extend(list.get(start..i));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.extend(list.get(start..));
+    out.into_iter().map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect()
 }
 
 /// Maximum decoded GoToR file-spec size retained by inspection and accepted by the resolver.

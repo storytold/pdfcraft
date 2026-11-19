@@ -360,3 +360,18 @@ fn an_email_draft_shows_hidden_characters_and_keeps_only_body_line_breaks() {
     let d = mail_draft("mailto:a@example.org?subject=%FF%zz").unwrap();
     assert_eq!(d.subject, "\u{FFFD}%zz");
 }
+
+#[test]
+fn a_comma_in_a_quoted_local_part_is_part_of_the_address() {
+    use super::mail_draft;
+    let to = |url: &str| mail_draft(url).map(|d| d.to);
+    assert_eq!(to("mailto:%22a%2Cb%22@example.org"), Some(vec!["\"a,b\"@example.org".into()]));
+    assert_eq!(to("mailto:a@example.org,b@example.org"), Some(vec!["a@example.org".into(), "b@example.org".into()]));
+    // An escaped quote doesn't end the quoted part, so the comma after it stays in the address.
+    assert_eq!(
+        to("mailto:%22a%5C%22%2Cb%22@example.org,c@example.org?to=%22d,e%22@example.org"),
+        Some(vec!["\"a\\\",b\"@example.org".into(), "c@example.org".into(), "\"d,e\"@example.org".into()])
+    );
+    // An unclosed quote keeps the rest as one address rather than guessing where it ends.
+    assert_eq!(to("mailto:%22a,b@example.org"), Some(vec!["\"a,b@example.org".into()]));
+}

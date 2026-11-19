@@ -130,7 +130,9 @@ fn save_and_open_writes_the_form_before_the_email_opens() {
     let doc = h.state().session.get(h.state().views[0].id).unwrap();
     assert!(!doc.dirty);
     let said = toast(&h);
-    assert!(said.starts_with("Attach ") && said.contains("to the new email"), "{said}");
+    // The file written, not the document's name before the save (a web download after Apply
+    // redactions is named with `_Redacted`).
+    assert!(said.contains("Attach filled.pdf to the new email"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
