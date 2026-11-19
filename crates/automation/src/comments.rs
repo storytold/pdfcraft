@@ -91,6 +91,13 @@ fn len_to_user(p: &PageInfo, points: f64) -> f64 {
     if user > 0.0 && user.is_finite() && shown > 0.0 && shown.is_finite() { points * user / shown } else { points }
 }
 
+/// A new comment's font size, requested in displayed points, held to the 1–400 pt the tool takes
+/// and converted to user units. A size that isn't a positive number keeps its value, for the
+/// creator's default.
+fn size_to_user(p: &PageInfo, points: f64) -> f64 {
+    len_to_user(p, if points.is_finite() && points > 0.0 { points.clamp(1.0, 400.0) } else { points })
+}
+
 /// The engine's `at` for a note or attachment icon whose top-left corner *as displayed* is the
 /// view point (x, y): the upper-left corner (`[x0, y1]`) of its `/Rect`. Notes and attachments
 /// are NoRotate, so on a turned page the icon is drawn upright with its top-left at that corner
@@ -381,7 +388,7 @@ impl Automation {
                 "rectangle" => Shape::Rectangle { rect: rect_to_user(&info, a.need::<4>("rect", "a rectangle")?) },
                 "oval" => Shape::Oval { rect: rect_to_user(&info, a.need::<4>("rect", "an oval")?) },
                 "textbox" => {
-                    let font_size = len_to_user(&info, a.opt_num("font_size")?.unwrap_or(12.0));
+                    let font_size = size_to_user(&info, a.opt_num("font_size")?.unwrap_or(12.0));
                     Shape::TextBox { rect: rect_to_user(&info, a.need::<4>("rect", "a text box")?), font_size }
                 }
                 "line" | "arrow" => {
@@ -446,7 +453,7 @@ impl Automation {
                         rect,
                         knee,
                         point,
-                        font_size: len_to_user(&info, a.opt_num("font_size")?.unwrap_or(10.0)),
+                        font_size: size_to_user(&info, a.opt_num("font_size")?.unwrap_or(10.0)),
                         ending: match endings.as_deref() {
                             None => LineEnding::OpenArrow,
                             Some([ending]) => *ending,

@@ -2656,13 +2656,26 @@ fn comment_font_sizes_are_points_on_a_user_unit_page() {
             "comment_add",
             json!({ "doc": doc, "page": 1, "type": "callout", "rect": [40, 200, 300, 250], "to": [20, 350], "font_size": 14, "contents": "Look" }),
         );
+        // 2 pt is 0.8 user units on a /UserUnit 2.5 page, below the creator's 1-unit floor.
+        ok(
+            &mut a,
+            "comment_add",
+            json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [40, 300, 300, 350], "font_size": 2, "contents": "Tiny" }),
+        );
+        let grow = ok(
+            &mut a,
+            "comment_add",
+            json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [40, 370, 300, 400], "font_size": 3, "contents": "Grow" }),
+        );
         ok(&mut a, "doc_save", json!({ "doc": doc, "path": "added.pdf" }));
         let got = sizes(&dir, "added.pdf");
-        assert!(close(&got, &[12.0 / unit, 14.0 / unit]), "UserUnit {unit}: added at {got:?}");
+        assert!(close(&got, &[12.0 / unit, 14.0 / unit, 2.0 / unit, 3.0 / unit]), "UserUnit {unit}: added at {got:?}");
         ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": text_box["comment"]["index"], "font_size": 16 }));
+        // Editing to 2 pt (0.8 user units on the 2.5 page) passes the writer's 1-unit check.
+        ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": grow["comment"]["index"], "font_size": 2 }));
         ok(&mut a, "doc_save", json!({ "doc": doc, "path": "edited.pdf" }));
         let got = sizes(&dir, "edited.pdf");
-        assert!(close(&got, &[16.0 / unit, 14.0 / unit]), "UserUnit {unit}: edited to {got:?}");
+        assert!(close(&got, &[16.0 / unit, 14.0 / unit, 2.0 / unit, 2.0 / unit]), "UserUnit {unit}: edited to {got:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

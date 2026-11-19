@@ -1256,9 +1256,17 @@ pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Op
     redraw_or_restore(doc, r, before)
 }
 
+/// The smallest font size, in user units, a text box, typewriter text or callout may have on
+/// `page`: 1 pt as displayed, which `/UserUnit` scales (ISO 32000-2 §7.7.3.3), so on a page whose
+/// unit is 2.5 a 2 pt size is 0.8 user units and must not be raised to 1.
+pub(crate) fn min_font_size(doc: &Document, page: usize) -> f64 {
+    1.0 / pdfcraft_model::pages(doc).get(page).map_or(1.0, |p| p.user_unit(doc))
+}
+
 /// Change the font size of a text box, typewriter text or callout (`/DA` keeps its colour; the
 /// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
-/// size and never shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt.
+/// size and never shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt as
+/// displayed, so `/UserUnit` scales the user-unit value stored in `/DA`.
 pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -1266,7 +1274,10 @@ pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, m
     if d.name(b"Subtype") != Some(b"FreeText") {
         return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have a font size".into()));
     }
-    if !size.is_finite() || !(1.0..=400.0).contains(&size) {
+    // A caller that converted a point size with the displayed page scale (a float) can land a
+    // hair under the minimum; allow that much.
+    let min = min_font_size(doc, page);
+    if !size.is_finite() || size < min * (1.0 - 1e-6) || size > 400.0 {
         return Err(AnnotError::Invalid("font size must be 1\u{2013}400 pt".into()));
     }
     refuse_foreign_text(doc, &d)?;
