@@ -62,9 +62,9 @@ fn links(h: &Harness<'static, PdfCraftApp>) -> Vec<pdfcraft_engine::LinkItem> {
 
 /// Types the address into Link Properties' URL field.
 fn type_url(h: &mut Harness<'static, PdfCraftApp>) {
-    h.get_by_role_and_label(Role::TextInput, "URL").click();
+    h.get_by_role_and_label(Role::TextInput, "Link URL").click();
     h.run_steps(1);
-    h.get_by_role_and_label(Role::TextInput, "URL").type_text("https://example.org");
+    h.get_by_role_and_label(Role::TextInput, "Link URL").type_text("https://example.org");
     h.run_steps(2);
 }
 
@@ -72,7 +72,7 @@ fn type_url(h: &mut Harness<'static, PdfCraftApp>) {
 fn draw_web_link(h: &mut Harness<'static, PdfCraftApp>, a: Pos2, b: Pos2) {
     assert!(h.execute("edit.link"));
     drag(h, a, b);
-    h.get_by_label("Create Link");
+    h.get_by_role_and_label(Role::Dialog, "Create Link");
     type_url(h);
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -89,7 +89,7 @@ fn drawing_editing_and_deleting_links() {
     // Double-click opens Link Properties; switch to a page action.
     let c = at(&h, 100.0, 310.0);
     double_click(&mut h, c);
-    h.get_by_label("Link Properties");
+    h.get_by_role_and_label(Role::Dialog, "Link Properties");
     h.get_by_label("Go to a page view").click();
     h.run_steps(3);
     h.get_by_label("OK").click();
@@ -108,10 +108,11 @@ fn link_properties_sets_the_page_view_zoom() {
     assert!(h.execute("edit.link"));
     let (a, b) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
     drag(&mut h, a, b);
-    h.get_by_label("Create Link");
+    h.get_by_role_and_label(Role::Dialog, "Create Link");
     h.get_by_label("Go to a page view").click();
     h.run_steps(3);
-    h.get_by_label("Zoom").click();
+    // The field around the zoom choice carries its name too: the choice is the one that isn't the group.
+    h.get_by(|n| n.label().as_deref() == Some("Zoom") && n.role() != Role::Group).click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "200%").scroll_to_me();
     h.run_steps(3);
@@ -155,7 +156,7 @@ fn an_appearance_edit_keeps_the_destination_as_written() {
     // The link lies at y 340..360 from the top of the 400 pt page.
     let c = at(&h, 100.0, 350.0);
     double_click(&mut h, c);
-    h.get_by_label("Link Properties");
+    h.get_by_role_and_label(Role::Dialog, "Link Properties");
     h.get_by_label("Red").click();
     h.run_steps(3);
     h.get_by_label("OK").click();

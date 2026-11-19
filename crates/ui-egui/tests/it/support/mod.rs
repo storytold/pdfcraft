@@ -319,7 +319,15 @@ pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) 
     open_menu(h, "Help");
     h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with("Keyboard shortcuts"))).click();
     h.run_steps(4);
-    assert!(dialog_open(h), "Keyboard shortcuts is open");
+    assert!(shortcuts_open(h), "Keyboard shortcuts is open");
+}
+
+/// Whether the Keyboard shortcuts window shows: its dialog node is in the window's tree. It is the framework's own
+/// window, not one the dialog host holds.
+pub fn shortcuts_open(h: &Harness<'_, PdfCraftApp>) -> bool {
+    use egui_kittest::kittest::Queryable;
+    h.query_by(|n| n.role() == egui::accesskit::Role::Dialog && n.label().is_some_and(|l| l.to_lowercase().starts_with("keyboard shortcuts")))
+        .is_some()
 }
 
 /// The right panel the dock has open, as the control channel's `ui.state` reports it (`side_panels::state`).

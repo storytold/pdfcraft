@@ -909,7 +909,7 @@ struct BodyOut {
 }
 
 /// The part list of a pass, in paint order: pictures, paragraphs and added items, links and text links (only under
-/// Select and Link), comments (only under Select), fields, sign tabs (painted over their fields), then prepare fields,
+/// Select and Link), comments and fields (only under Select), sign tabs (painted over their fields), then prepare fields,
 /// selected objects and the frame band. A later part outranks an earlier one of the same layer, so this order is the
 /// stacking order hit testing ranks on.
 fn page_parts_of(
@@ -943,7 +943,9 @@ fn page_parts_of(
         let (tolerance, icon_side) = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
         parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side));
     }
-    if !cx.preparing {
+    // Fields take the page's presses under Select only: another tool's press over a field is the tool's (a new
+    // text box, a mark, a stamp).
+    if cx.tool == QuickTool::Select && !cx.preparing {
         let can_fill = cx.doc.allows_form_filling();
         for placed in body.pages {
             parts.extend(crate::forms_ui::field_parts(session, cx.info, cx.doc, placed.page, can_fill, geo));
@@ -985,6 +987,43 @@ fn pressed_by(phase: &PressPhase, button: PointerButton) -> bool {
 fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
     let geo = cx.geometry(body);
     if pressed_by(&press.phase, PointerButton::Secondary) {
+        // With the primary button held (a comment being moved, a box drawn) the selections stay as they are.
+        let held = ui.input(|i| i.pointer.primary_down());
+        // Edit text: a right-click on a picture selects it for its menu, one on anything else unselects it.
+        if !held && cx.tool == QuickTool::EditText && cx.can_modify {
+            let picture = match press.owner {
+                Owner::Picture { index } => Some(index),
+                _ => None,
+            };
+            crate::edit_text_ui::picture_context(press.page, picture, session);
+        }
+        let mut menu_for = Some((press.page, press.owner.clone()));
+        // The menu is anchored on the page the right-click lies on, the first where two pages touch, whichever part
+        // took it. A right-click on another part is the comments' too, unless the tool takes it (Add text, the Link
+        // tool on a link, a field tool): the comment over the part is selected for its menu, or the selection cleared.
+        if let PressPhase::Down { start, .. } = &press.phase
+            && let Some(page) = body.pages.iter().find(|placed| placed.rect.contains(start.origin)).map(|placed| placed.page)
+            && let Some(xf) = session.page_xform(page, geo)
+        {
+            let page_cx = comments::PageCx { page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+            let tool_takes_it = match cx.tool {
+                QuickTool::AddText => cx.can_modify,
+                QuickTool::Link => cx.can_modify && matches!(press.owner, Owner::Link { .. } | Owner::TextLink { .. }),
+                QuickTool::Field(_) => true,
+                _ => false,
+            };
+            // Added text, pictures and the objects selected together lie over the comments: a right-click on them
+            // reaches no comment under them and leaves the selection cleared.
+            let over_comments = matches!(press.owner, Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects | Owner::Frame { .. });
+            if held || tool_takes_it || matches!(press.owner, Owner::Comment { .. }) {
+                comments::context_anchor(&page_cx, &mut session.comments, start.origin);
+            } else if over_comments {
+                comments::context_anchor(&page_cx, &mut session.comments, start.origin);
+                session.comments.select(None);
+            } else if let Some(index) = comments::context_target(&page_cx, &mut session.comments, start.origin) {
+                menu_for = Some((page, Owner::Comment { index }));
+            }
+        }
         // The page's menu reads what the secondary press went to; a comment is selected for its menu, as a comment's
         // menu acts on the selection.
         if let Owner::Comment { index } = press.owner
@@ -992,15 +1031,8 @@ fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: 
         {
             session.comments.select(Some((press.page, index)));
         }
-        // Editing, the picture right-clicked is selected for its menu; a right-click on anything else lets go of it.
-        if cx.tool == QuickTool::EditText {
-            let picture = if let Owner::Picture { index, .. } = press.owner { Some(index) } else { None };
-            crate::edit_text_ui::picture_context(press.page, picture, session);
-        }
-        if let Some(origin) = press.phase.start().map(|start| start.origin) {
-            session.comments.context_at = session.user_point_at(geo, cx.info, origin);
-        }
-        session.menu_for = Some((press.page, press.owner.clone()));
+        // Add text's menu is the page's.
+        session.menu_for = menu_for.filter(|_| !(cx.tool == QuickTool::AddText && cx.can_modify));
         return;
     }
     let clicked = matches!(press.phase, PressPhase::Release { click: true, .. });
@@ -1035,11 +1067,50 @@ fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: 
         Owner::PrepareField { .. } => crate::prepare::tool::field_press(session, cx.form, press),
         // The Edit text families' presses, a modified press first taking it for the objects selected together.
         Owner::Paragraph { .. } | Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects | Owner::Frame { .. } => {
-            if let Some(edit) = page_tools::edit_text_press(session, cx.doc, cx.info, press, body.pages, geo) {
+            if let Some(edit) = page_tools::edit_text_press(session, cx.doc, cx.info, press, body.pages, geo, cx.tool) {
                 session.pending_edit = Some(edit);
             }
         }
     }
+}
+
+/// A right-click no part took, or the Menu key, at `at`. The page's menu is anchored on the page under it, the first
+/// where two pages touch, and on none between the pages. With every tool but Add text and the field tools it is the
+/// comments': the comment under it is selected for its menu, or the selection cleared, between the pages too. With
+/// the primary button held (a comment being moved, a box drawn) the selections stay as they are. Under Edit text it
+/// unselects the picture.
+fn background_context(ui: &egui::Ui, session: &mut PageSession, cx: &PageBodyCx<'_>, body: &PageBody<'_>, at: Pos2) {
+    let held = ui.input(|i| i.pointer.primary_down());
+    let tool_takes_it = match cx.tool {
+        QuickTool::AddText => cx.can_modify,
+        QuickTool::Field(_) => true,
+        _ => false,
+    };
+    if !held && cx.tool == QuickTool::EditText && cx.can_modify {
+        crate::edit_text_ui::picture_context(cx.current, None, session);
+    }
+    let geo = cx.geometry(body);
+    let under =
+        body.pages.iter().find(|placed| placed.rect.contains(at)).and_then(|placed| Some((placed.page, session.page_xform(placed.page, geo)?)));
+    let Some((page, xf)) = under else {
+        session.comments.context_at = None;
+        session.menu_for = None;
+        if !held && !tool_takes_it {
+            session.comments.select(None);
+        }
+        return;
+    };
+    let page_cx = comments::PageCx { page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+    let comment = if tool_takes_it {
+        comments::context_anchor(&page_cx, &mut session.comments, at);
+        None
+    } else if held {
+        comments::context_anchor(&page_cx, &mut session.comments, at);
+        comments::context_comment(&page_cx, at)
+    } else {
+        comments::context_target(&page_cx, &mut session.comments, at)
+    };
+    session.menu_for = comment.map(|index| (page, Owner::Comment { index }));
 }
 
 /// The page body, run by the page view on every run of its canvas body. Its order is the paint order, and with it
@@ -1114,9 +1185,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             session.objects.notice = Some(why.into());
         }
         out.view = reply.view;
-        // The page menu hangs where the request is: Paste, Copy Image and a comment added there read the point.
-        if let Some(request) = &reply.context {
-            session.comments.context_at = session.user_point_at(cx.geometry(body), cx.info, request.at);
+        // The Menu key's request hangs the menu at the view's centre and leaves the comments alone.
+        let secondary = egui::PointerButton::Secondary;
+        let by_pointer = ui.input(|i| i.pointer.button_pressed(secondary) || i.pointer.button_released(secondary));
+        if let Some(request) = reply.context.as_ref().filter(|_| by_pointer) {
+            background_context(ui, session, cx, body, request.at);
         }
         out.context = reply.context;
         out.back_to_select = finish.back_to_select;
@@ -1154,6 +1227,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         // One edit per pass, the first control's that made one, as each control's own `or` keeps its first.
         if let Some(edit) = edits.into_iter().flatten().next() {
             session.pending_edit = Some(edit);
+        }
+        // Done on the open box keeps its text and goes back to Select, the new text selected; read in the real run,
+        // whose report is the one kept.
+        if body.pass.is_some() {
+            out.back_to_select |= session.content.take_done();
         }
     }
     // The focused field's editor, and the Fill & Sign text being typed, over their pages.
