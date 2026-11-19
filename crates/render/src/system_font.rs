@@ -338,8 +338,9 @@ fn unix_font_dirs() -> Vec<PathBuf> {
 
 /// Every `.ttf` and `.ttc` file under `roots`, by lower-cased file name. Paths are kept in search
 /// order: roots in order, and each folder's entries sorted, so the choice doesn't depend on disk
-/// order and every copy of a name can be tried. `max_entries` is the most entries looked at in
-/// total.
+/// order and every copy of a name can be tried. `max_entries` is the most entries kept in total;
+/// a folder that runs past it keeps its first entries in sorted order, so which ones are kept is
+/// deterministic too.
 fn scan_font_dirs(roots: &[PathBuf], max_entries: usize) -> HashMap<String, Vec<PathBuf>> {
     /// The greatest remaining depth each real folder has been explored to.
     type Explored = HashMap<PathBuf, u32>;
@@ -363,15 +364,16 @@ fn scan_font_dirs(roots: &[PathBuf], max_entries: usize) -> HashMap<String, Vec<
             Entry::Vacant(entry) => {
                 let mut paths = Vec::new();
                 if let Ok(entries) = std::fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        if *budget == 0 {
-                            break;
-                        }
-                        *budget -= 1;
-                        paths.push(entry.path());
-                    }
+                    paths.extend(entries.flatten().map(|entry| entry.path()));
                 }
+                // Read whole, then sorted before the budget is spent, so a folder with more
+                // entries than the budget has left keeps its first names in sorted order rather
+                // than whichever entries the disk returned first: the same files are found on
+                // every run.
                 paths.sort();
+                let kept = (*budget).min(paths.len());
+                *budget -= kept;
+                paths.truncate(kept);
                 // Each file is added once, on the folder's first visit; a later, deeper visit
                 // only continues below it.
                 for path in &paths {
@@ -638,6 +640,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(resolved, [expected], "found below the folder the link reached with no depth left");
+    }
+
+    /// A folder with more entries than the budget has left keeps the first names in sorted order,
+    /// not whichever entries the disk returned first, so the same files are found on every run.
+    #[test]
+    fn a_folder_over_the_entry_budget_keeps_the_first_names_in_sorted_order() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-7285-budget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // Written in an order unlike their sorted order, so a scan that stops at the budget
+        // without sorting first keeps a different set.
+        for n in (1..40).chain(std::iter::once(0)) {
+            std::fs::write(root.join(format!("face-{n:02}.ttf")), b"font").unwrap();
+        }
+        let found = scan_font_dirs(std::slice::from_ref(&root), 5);
+        let _ = std::fs::remove_dir_all(&root);
+
+        let mut names: Vec<&String> = found.keys().collect();
+        names.sort();
+        assert_eq!(names, ["face-00.ttf", "face-01.ttf", "face-02.ttf", "face-03.ttf", "face-04.ttf"]);
     }
 
     /// Two copies of a named font keep their search order, so a copy that can't be read falls
