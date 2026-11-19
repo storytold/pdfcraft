@@ -94,29 +94,9 @@ impl PdfCraftApp {
                 }
             }
             "form.calculation_order.back" => self.left = crate::LeftPanel::Tool("form"),
-            "view.zoom.actual_size"
-            | "view.zoom.page_level"
-            | "view.zoom.fit_width"
-            | "view.zoom.fit_height"
-            | "view.zoom.in"
-            | "view.zoom.out"
-            | "view.rotate.cw"
-            | "view.rotate.ccw" => {
-                use crate::canvas::Fit;
+            "view.zoom.fit_height" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
-                    match id {
-                        "view.zoom.actual_size" => {
-                            v.view.fit = Fit::None;
-                            v.view.zoom = 1.0;
-                        }
-                        "view.zoom.page_level" => v.view.fit = Fit::Page,
-                        "view.zoom.fit_width" => v.view.fit = Fit::Width,
-                        "view.zoom.fit_height" => v.view.fit = Fit::Height,
-                        "view.zoom.in" => v.view.zoom_step(true),
-                        "view.zoom.out" => v.view.zoom_step(false),
-                        "view.rotate.cw" => v.view.rotation = (v.view.rotation + 90) % 360,
-                        _ => v.view.rotation = (v.view.rotation + 270) % 360,
-                    }
+                    v.view.fit = crate::canvas::Fit::Height;
                 }
             }
             "view.fit_toggle" => {
@@ -124,18 +104,6 @@ impl PdfCraftApp {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     let fit = if v.view.fit == Fit::Page { Fit::Width } else { Fit::Page };
                     v.view.fit = fit;
-                }
-            }
-            "view.first_page" | "view.last_page" | "view.next_page" | "view.previous_page" => {
-                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
-                    let (current, last) = (v.current(), v.page_count().saturating_sub(1));
-                    let page = match id {
-                        "view.first_page" => 0,
-                        "view.last_page" => last,
-                        "view.next_page" => current.saturating_add(1).min(last),
-                        _ => current.saturating_sub(1),
-                    };
-                    v.go_to_page(page);
                 }
             }
             "view.dock_side" => {
@@ -425,6 +393,41 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
+            "view.zoom.actual_size"
+            | "view.zoom.page_level"
+            | "view.zoom.fit_width"
+            | "view.zoom.in"
+            | "view.zoom.out"
+            | "view.rotate.cw"
+            | "view.rotate.ccw" => {
+                use crate::canvas::Fit;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    match id {
+                        "view.zoom.actual_size" => {
+                            v.view.fit = Fit::None;
+                            v.view.zoom = 1.0;
+                        }
+                        "view.zoom.page_level" => v.view.fit = Fit::Page,
+                        "view.zoom.fit_width" => v.view.fit = Fit::Width,
+                        "view.zoom.in" => v.view.zoom_step(true),
+                        "view.zoom.out" => v.view.zoom_step(false),
+                        "view.rotate.cw" => v.view.rotation = (v.view.rotation + 90) % 360,
+                        _ => v.view.rotation = (v.view.rotation + 270) % 360,
+                    }
+                }
+            }
+            "view.first_page" | "view.last_page" | "view.next_page" | "view.previous_page" => {
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    let (current, last) = (v.current(), v.page_count().saturating_sub(1));
+                    let page = match id {
+                        "view.first_page" => 0,
+                        "view.last_page" => last,
+                        "view.next_page" => current.saturating_add(1).min(last),
+                        _ => current.saturating_sub(1),
+                    };
+                    v.go_to_page(page);
+                }
+            }
             "view.layout.single" | "view.layout.two_up" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     v.view.display = if id == "view.layout.single" { PageDisplay::Single } else { PageDisplay::TwoUp };

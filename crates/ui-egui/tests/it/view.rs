@@ -67,6 +67,21 @@ fn choose_in_documents_preferences(h: &mut Harness<'static, PdfCraftApp>, label:
     h.run_steps(3);
 }
 
+/// Picks `option` in the Preferences choice row `row` on the Documents and view page and applies it with OK, as a
+/// user does: the row is a select, whose options show once it is opened.
+fn pick_in_documents_preferences(h: &mut Harness<'static, PdfCraftApp>, row: &str, option: &str) {
+    h.get_by_label("Documents and view").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, row).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, row).click();
+    h.run_steps(3);
+    h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option is on screen")).click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+}
+
 fn sidebar_key(h: &mut Harness<'static, PdfCraftApp>, key: Key, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     for pressed in [true, false] {
@@ -771,7 +786,7 @@ fn preferences_set_the_default_zoom() {
     let mut h = harness(&[]);
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    choose_in_documents_preferences(&mut h, "Zoom to page level");
+    pick_in_documents_preferences(&mut h, "Default zoom", "Zoom to page level");
     assert!(h.execute("create.blank"));
     assert_eq!(h.state().views[1].fit(), pdfcraft_ui_egui::canvas::Fit::Page);
 }
@@ -1894,7 +1909,7 @@ fn sidebar_collapse_and_resize_preserves_scroll_position() {
 }
 
 /// Synthetic unequal-height spreads, generated without font or image assets.
-fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui::Rect)>, egui::Rect) {
+fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui::Rect)>, egui::Rect, f32) {
     let kids = (0..heights.len()).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
     let mut pdf = format!(
         "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [{kids}] /Count {} >> endobj\n",
@@ -1930,18 +1945,19 @@ fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui
     let last = heights.len() - 1;
     let first = if cover { last - (last + 1) % 2 } else { last - last % 2 };
     let pages = (first..=last).map(|page| (page, view.page_screen_rect(page).expect("final spread is visible"))).collect();
-    (pages, view.viewport_rect())
+    let margin = view.spacing.expect("the pages were laid out").margin as f32;
+    (pages, view.viewport_rect(), margin)
 }
 
 fn assert_final_spread_bottom_reachable(heights: &[u32], cover: bool) {
-    let (pages, viewport) = final_spread_at_scroll_end(heights, cover);
+    let (pages, viewport, margin) = final_spread_at_scroll_end(heights, cover);
     let bottom = pages.iter().map(|(_, rect)| rect.bottom()).fold(0.0_f32, f32::max);
     assert!(
         bottom <= viewport.bottom() + 1.0,
         "final spread remains below the viewport: heights={heights:?}, cover={cover}, pages={pages:?}, viewport={viewport:?}"
     );
     // The maximum-height page reaches the bottom margin after the scroll offset settles.
-    assert!((viewport.bottom() - bottom - 28.0).abs() < 1.0, "scroll end leaves the bottom margin: pages={pages:?}, viewport={viewport:?}");
+    assert!((viewport.bottom() - bottom - margin).abs() < 1.0, "scroll end leaves the bottom margin: pages={pages:?}, viewport={viewport:?}");
 }
 
 #[test]
@@ -2179,24 +2195,24 @@ fn the_pages_panel_tools_act_on_the_selected_pages() {
     let mut h = harness(&[("panel", "pages")]);
     let id = h.state().views[0].id;
     let rotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>();
-    // The panel's Page tools menu, on the right-hand side of the window.
-    let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+    // The panel's Page tools menu, on the right-hand side of the window: its rows are the page commands.
+    let tool = |h: &mut Harness<'static, PdfCraftApp>, command: &str| {
         h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Panel Menu in the Pages panel").click();
         h.run_steps(2);
-        h.get_by_label(label).click();
+        h.get_by_label(pdfcraft_engine::commands::command(command).expect("a page command").label).click();
         h.run_steps(3);
     };
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.run_steps(2);
-    tool(&mut h, "Rotate the selected pages clockwise");
+    tool(&mut h, "page.rotate");
     assert_eq!(rotations(&h), [0, 90, 90], "pages 2 and 3, the selection");
-    tool(&mut h, "Rotate the selected pages counterclockwise");
+    tool(&mut h, "page.rotate_ccw");
     assert_eq!(rotations(&h), [0, 0, 0]);
     h.state_mut().views[0].select_pages(&[0]);
     h.run_steps(2);
-    tool(&mut h, "Delete the selected pages");
+    tool(&mut h, "page.delete");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 2, "page 1 deleted");
-    tool(&mut h, "Insert a blank page after the selection");
+    tool(&mut h, "page.insert_blank");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
     h.execute("edit.undo");
     h.run_steps(2);
@@ -2234,19 +2250,19 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
     h.run_steps(8);
     let id = h.state().views[0].id;
     let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.len();
-    let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+    let tool = |h: &mut Harness<'static, PdfCraftApp>, command: &str| {
         h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Panel Menu in the Pages panel").click();
         h.run_steps(2);
-        h.get_by_label(label).click();
+        h.get_by_label(pdfcraft_engine::commands::command(command).expect("a page command").label).click();
         h.run_steps(3);
     };
     assert_eq!(count(&h), 3);
     h.state_mut().views[0].select_pages(&[0]);
-    tool(&mut h, "Insert pages from a file after the selection…");
+    tool(&mut h, "page.insert");
     assert!(crate::support::step_until(&mut h, |h| count(h) == 6), "the picked file's three pages are inserted");
 
     h.state_mut().views[0].select_pages(&[1, 2]);
-    tool(&mut h, "Extract the selected pages…");
+    tool(&mut h, "page.extract");
     assert!(h.state().dialogs.is_open::<craft::ui::patterns::form_dialogs::HostedParamDialog>(), "Extract opens for the selection");
     h.get_by_label("Extract pages as separate files").click();
     h.run_steps(2);
@@ -2278,11 +2294,15 @@ fn the_pages_panel_tools_are_off_without_page_editing_permission() {
     let i = h.state().active.unwrap();
     let id = h.state().views[i].id;
     assert!(!h.state().session.get(id).unwrap().allows_assembly());
-    let tools = h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Page tools");
-    assert!(tools.accesskit_node().is_disabled(), "Page tools is greyed out");
-    tools.click();
+    // The panel's menu also holds the dock's rows, so it opens; its page tools are greyed out.
+    h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Panel Menu in the Pages panel").click();
     h.run_steps(3);
-    assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
+    let label = |command: &str| pdfcraft_engine::commands::command(command).expect("a page command").label;
+    for command in ["page.insert_blank", "page.insert", "page.rotate_ccw", "page.rotate", "page.delete"] {
+        assert!(h.get_by_label(label(command)).accesskit_node().is_disabled(), "{command} is greyed out");
+    }
+    h.get_by_label(label("page.delete")).click();
+    h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
 }
 
