@@ -64,7 +64,8 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if hidden.toolbar {
                     return;
                 }
-                let strip = TabStrip::new(tl!("Modes")).kind(TabKind::Text);
+                // The bar lays its parts out along an unbounded row, so the strip takes its natural length (16.3).
+                let strip = TabStrip::new(tl!("Modes")).kind(TabKind::Text).natural_height(true);
                 let strip = match shown {
                     Some(at) => strip.shown(at),
                     None => strip,
