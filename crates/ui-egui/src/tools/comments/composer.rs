@@ -39,13 +39,23 @@ pub(crate) fn composer(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, pr
             anchor = None;
         }
     }
+    let hint = match c.kind {
+        ComposerKind::TextBox { .. } | ComposerKind::Callout { .. } => tl!("Type text"),
+        ComposerKind::Caret { .. } => tl!("Text to insert"),
+        ComposerKind::Replace => tl!("Replacement text"),
+        _ => tl!("Add a comment"),
+    };
     let draft = match c.kind {
         ComposerKind::Edit(_) if typewriter_edit => ComposerDraft::EditVerbatim,
         ComposerKind::Edit(_) => ComposerDraft::Edit,
         _ => ComposerDraft::New,
     };
-    let output =
-        CommentComposer::new(anchor, &mut c.text).header(tl!(title), &prefs.author).draft_kind(draft).close(ComposerClose::OnPostOrCancel).show(ui);
+    let output = CommentComposer::new(anchor, &mut c.text)
+        .header(tl!(title), &prefs.author)
+        .hint(hint)
+        .draft_kind(draft)
+        .close(ComposerClose::OnPostOrCancel)
+        .show(ui);
     if output.cancelled {
         view.session.comments.composer = None;
         return None;

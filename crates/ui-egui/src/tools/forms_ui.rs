@@ -390,7 +390,10 @@ pub(crate) fn field_parts(
             (true, FormFieldKind::Text) => CursorIcon::Text,
             _ => CursorIcon::PointingHand,
         };
-        let mut part = PagePart::new(Owner::Field { field: fi, widget: wi }, page, HitShape::Polygon(corners), PageLayer::Field).cursor(icon);
+        // Where widgets overlap, the field earlier in the form takes the press, whatever the tab order.
+        let stacking = u32::try_from(form.len().saturating_sub(fi)).unwrap_or(u32::MAX);
+        let mut part =
+            PagePart::new(Owner::Field { field: fi, widget: wi }, page, HitShape::Polygon(corners), PageLayer::Field).cursor(icon).stacked(stacking);
         if let Some(tip) = f.tooltip.as_deref().filter(|t| !t.trim().is_empty()) {
             part = part.tip(tip.to_owned());
         }

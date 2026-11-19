@@ -24,7 +24,6 @@ use super::selection::DocTexts;
 use super::zoom_snap::SnapshotTool;
 use super::{PageGeometry, PageSession, PageXform, presenter};
 use crate::QuickTool;
-use crate::image_pick::PickedImage;
 use crate::tools::camera_ui::{CameraQuad, CameraTool};
 use crate::tools::comments::{self, CommentsTool};
 use crate::tools::edit_text_tool::EditTextTool;
@@ -241,11 +240,10 @@ fn select_tool<'a>(
     cx: &PageToolCx<'a>,
     text: &'a mut TextSelectState,
     texts: &'a dyn PageTexts,
-    pending_pick: &'a mut Option<(usize, [f64; 2], u64)>,
-    picked_image: &'a mut Option<PickedImage>,
+    picks: PickSlots<'a>,
     xforms: &'a [(usize, PageXform)],
 ) -> PageSelectTool<'a> {
-    PageSelectTool::new(cx.pages, texts, text, cx.info, PickSlots::new(pending_pick, picked_image), xforms, cx.doc.edit_generation())
+    PageSelectTool::new(cx.pages, texts, text, cx.info, picks, xforms, cx.doc.edit_generation())
 }
 
 /// The Insert text tool's snap on `page`, the page the comments tool works on: the caret's tip and side in the page's
@@ -297,7 +295,8 @@ pub(crate) fn page_tool<'a>(
         QuickTool::Select if cx.preparing => Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, session, cx.info, xforms))),
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
             let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
-            let select = select_tool(&cx, &mut session.text, texts, &mut session.pending_pick, &mut session.picked_image, xforms);
+            let picks = PickSlots::new(&mut session.pending_pick, &mut session.picked_image, &mut session.actions_dismissed);
+            let select = select_tool(&cx, &mut session.text, texts, picks, xforms);
             match tool {
                 QuickTool::ColumnSelect => Arm::Select(select.column(true)),
                 QuickTool::Redact => {

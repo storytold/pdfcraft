@@ -128,12 +128,14 @@ fn clicking_a_pinned_pdf_opens_it_and_adds_it_to_recent() {
     });
     s.settle();
     s.h.get_by_label_contains("scan.pdf").click();
-    s.h.run_steps(3);
+    // The file is read on a job, as every open is.
+    s.settle();
     // The tab strip names the open document.
-    assert!(s.h.query_by_label_contains("scan.pdf").is_some(), "the PDF opens in a tab");
-    // PLAN: assumed `settings_snapshot()` serialises with a `recent` list of `{ path }` entries (pdf-shell-w9).
+    s.h.get_by_role_and_label(egui::accesskit::Role::Tab, "scan.pdf");
+    // The settings keep the recent files, newest first, as JSON text.
     let saved = serde_json::to_value(s.h.state().settings_snapshot()).unwrap();
-    assert_eq!(saved["recent"][0]["path"].as_str(), Some(path.to_string_lossy().as_ref()));
+    let recent: serde_json::Value = serde_json::from_str(saved["recent"]["recent"].as_str().expect("the recent files are saved")).unwrap();
+    assert_eq!(recent[0]["path"].as_str(), Some(path.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -217,8 +219,11 @@ fn a_pinned_folder_collapses_to_its_heading_and_stays_collapsed_after_a_restart(
 fn folders_of_the_same_name_have_buttons_that_tell_them_apart() {
     let root = TempFolder::new("same-name");
     let (a, b) = (root.0.join("work").join("Scans"), root.0.join("home").join("Scans"));
-    std::fs::create_dir_all(&a).unwrap();
-    std::fs::create_dir_all(&b).unwrap();
+    // A file in each, so each heading folds (a folder with nothing listed has nothing to fold).
+    for folder in [&a, &b] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("scan.pdf"), FIXTURE).unwrap();
+    }
     let (a, b) = (a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned());
     let pins = (a.clone(), b.clone());
     let mut s = plain(move |app| {
