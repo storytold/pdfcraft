@@ -235,13 +235,13 @@ fn save_as_writes_on_a_later_frame_including_edits_made_meanwhile() {
     let mut h = harness(&[3]);
     assert!(h.execute("file.save_as"));
     h.steps(2);
-    assert!(!out.exists(), "the command must not wait for the picker");
+    assert!(h.files.file(&out).is_none(), "the command must not wait for the picker");
     assert_eq!(h.files.open(), 1, "the Save picker is open");
     // The user keeps working while the panel is open.
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
     h.answer(Picked::Paths(vec![out.clone()]));
-    assert_eq!(page_count(std::fs::read(&out).unwrap()), 2, "the edit made while choosing is saved too");
+    assert_eq!(page_count(h.files.file(&out).unwrap()), 2, "the edit made while choosing is saved too");
     assert!(!dirty(h.state(), 0));
     assert!(matches!(h.files.requests().first().map(|r| r.kind), Some(PickKind::Save)));
     let _ = std::fs::remove_dir_all(&dir);
@@ -260,7 +260,7 @@ fn save_on_close_closes_the_tab_only_once_the_file_is_written() {
     assert_eq!(h.state().views.len(), 1, "the tab stays open until the save is written");
     assert_eq!(h.files.open(), 1, "the Save picker is open");
     h.answer(Picked::Paths(vec![out.clone()]));
-    assert!(out.exists());
+    assert!(h.files.file(&out).is_some());
     assert!(h.state().views.is_empty(), "then it closes");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -296,8 +296,8 @@ fn close_all_saves_each_untitled_document_in_turn() {
     let asked = h.files.requests();
     assert_eq!(asked.len(), 2, "one Save pick per untitled document");
     assert!(asked.iter().all(|r| r.kind == PickKind::Save));
-    assert_eq!(page_count(std::fs::read(dir.join("first.pdf")).unwrap()), 2);
-    assert_eq!(page_count(std::fs::read(dir.join("second.pdf")).unwrap()), 3);
+    assert_eq!(page_count(h.files.file(&dir.join("first.pdf")).unwrap()), 2);
+    assert_eq!(page_count(h.files.file(&dir.join("second.pdf")).unwrap()), 3);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -366,7 +366,7 @@ fn extract_and_delete_deletes_the_pages_only_after_their_files_are_written() {
     assert_eq!(h.files.open(), 1, "the folder picker is open");
     assert_eq!(pages(h.state(), 0), 3, "nothing is deleted while the folder picker is open");
     h.answer(Picked::Paths(vec![dir.clone()]));
-    assert!(dir.join("doc0 (page 1).pdf").exists());
+    assert!(h.files.file(&dir.join("doc0 (page 1).pdf")).is_some());
     assert_eq!(pages(h.state(), 0), 2, "the extracted page is deleted once written");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -389,26 +389,27 @@ fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
     );
     confirm_extract(&mut h);
     h.answer(Picked::Paths(vec![dir.clone()]));
-    assert!(dir.join("doc0 (page 1).pdf").exists());
+    let written = |h: &Rig, name: &str| h.files.file(&dir.join(name)).is_some();
+    assert!(written(&h, "doc0 (page 1).pdf"));
     // A name with nothing usable falls back to the document's.
     h.state_mut().views[0].select_pages(&[1]);
     open_extract(&mut h, separate(Some("  ..  ")));
     confirm_extract(&mut h);
     h.answer(Picked::Paths(vec![dir.clone()]));
-    assert!(dir.join("doc0 (page 2).pdf").exists());
+    assert!(written(&h, "doc0 (page 2).pdf"));
     // Several pages as separate files: each is "<name> (page N).pdf".
     h.state_mut().views[0].select_pages(&[0, 2]);
     open_extract(&mut h, separate(Some("Invoices.pdf")));
     confirm_extract(&mut h);
     h.answer(Picked::Paths(vec![dir.clone()]));
-    assert!(dir.join("Invoices (page 1).pdf").exists() && dir.join("Invoices (page 3).pdf").exists());
+    assert!(written(&h, "Invoices (page 1).pdf") && written(&h, "Invoices (page 3).pdf"));
     // One renamed page as a separate file is saved under exactly that name; characters a file
     // name can't hold become "_".
     h.state_mut().views[0].select_pages(&[1]);
     open_extract(&mut h, separate(Some(" March: 2026/receipt ")));
     confirm_extract(&mut h);
     h.answer(Picked::Paths(vec![dir.clone()]));
-    assert!(dir.join("March_ 2026_receipt.pdf").exists());
+    assert!(written(&h, "March_ 2026_receipt.pdf"));
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 5, "nothing written outside those names");
     // Into a new tab: the tab, and so Save As, has the typed name.
     open_extract(&mut h, Extract { name: Some("Chapter 2"), ..Default::default() });
@@ -516,7 +517,7 @@ fn extracted_pages_are_not_deleted_if_the_document_was_edited_while_choosing_the
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::DeletePages { pages: vec![0] });
     h.answer(Picked::Paths(vec![dir.clone()]));
-    assert!(dir.join("doc0 (page 1).pdf").exists(), "the extracted file is still written");
+    assert!(h.files.file(&dir.join("doc0 (page 1).pdf")).is_some(), "the extracted file is still written");
     assert_eq!(pages(h.state(), 0), 2, "nothing more is deleted");
     assert!(support::shown_notice(&mut h).is_some(), "the user is told");
     let _ = std::fs::remove_dir_all(&dir);
@@ -684,7 +685,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
     assert!(h.execute("file.save"));
     h.steps(2);
     h.answer(Picked::Paths(vec![path.clone()]));
-    let saved = PageRenderer::new(std::sync::Arc::new(std::fs::read(&path).unwrap()), Default::default());
+    let saved = PageRenderer::new(std::sync::Arc::new(h.files.file(&path).unwrap()), Default::default());
     assert_eq!(saved.page_count(), 2, "the saved file contains the local deletion");
     assert!(!dirty(h.state(), 0), "the local document was saved, not the startup document");
 

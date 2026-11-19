@@ -17,11 +17,14 @@ use crate::canvas::{PageBoxDrag, PageGeometry, PageSession, ToolMarks};
 /// The smallest box, in screen points on each side, that counts as a mark.
 const LEAST_BOX: f32 = 3.0;
 
-/// What the pointer's press is doing.
-enum Gesture {
+/// What the pointer's press is doing. The tool is built each pass, so the session holds this from the press to the
+/// release.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum RedactGesture {
+    #[default]
     Idle,
-    /// A text selection the select tool runs.
-    Text,
+    /// A text selection the select tool runs, begun on this page.
+    Text { page: usize },
     /// A box being drawn.
     Box,
 }
@@ -59,38 +62,29 @@ impl RedactResult {
 /// The Redact tool for one pass.
 pub(crate) struct RedactTool<'a> {
     select: PageSelectTool<'a>,
-    drag: PageBoxDrag,
+    drag: &'a mut PageBoxDrag,
+    gesture: &'a mut RedactGesture,
     placed: &'a [PlacedPage],
     /// The view's rotation, in degrees clockwise.
     rotation: u16,
     info: &'a DocInfo,
     over_text: Box<dyn Fn(Pos2) -> bool + 'a>,
-    gesture: Gesture,
-    text_page: Option<usize>,
     finished: Option<RedactResult>,
 }
 
 impl<'a> RedactTool<'a> {
-    /// The tool over the placed pages, with the select tool that runs text selections and the
-    /// test of whether a screen point is over text (the same one the I-beam uses).
+    /// The tool over the placed pages, with the select tool that runs text selections, the session's box drag and
+    /// gesture, and the test of whether a screen point is over text (the same one the I-beam uses).
     pub(crate) fn new(
         select: PageSelectTool<'a>,
+        drag: &'a mut PageBoxDrag,
+        gesture: &'a mut RedactGesture,
         placed: &'a [PlacedPage],
         rotation: u16,
         info: &'a DocInfo,
         over_text: impl Fn(Pos2) -> bool + 'a,
     ) -> Self {
-        Self {
-            select,
-            drag: PageBoxDrag::default(),
-            placed,
-            rotation,
-            info,
-            over_text: Box::new(over_text),
-            gesture: Gesture::Idle,
-            text_page: None,
-            finished: None,
-        }
+        Self { select, drag, gesture, placed, rotation, info, over_text: Box::new(over_text), finished: None }
     }
 
     /// After the host ran: the gesture the pass finished, which [`RedactResult::land`] applies once the tool's
@@ -123,10 +117,7 @@ impl CanvasTool for RedactTool<'_> {
         if (self.over_text)(pointer.pos) {
             let action = self.select.press(pointer, cx);
             match action {
-                ToolAction::Claimed => {
-                    self.gesture = Gesture::Text;
-                    self.text_page = Some(placed.page);
-                }
+                ToolAction::Claimed => *self.gesture = RedactGesture::Text { page: placed.page },
                 // A double click selects a word whole: it ends the selection at once.
                 ToolAction::Done => self.finished = Some(RedactResult::Text { page: placed.page }),
                 _ => {}
@@ -134,27 +125,25 @@ impl CanvasTool for RedactTool<'_> {
             return action;
         }
         self.drag.press(placed, pointer.pos);
-        self.gesture = Gesture::Box;
+        *self.gesture = RedactGesture::Box;
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        match self.gesture {
-            Gesture::Text => self.select.drag(pointer, cx),
-            Gesture::Box => self.drag.drag(pointer.pos),
-            Gesture::Idle => {}
+        match *self.gesture {
+            RedactGesture::Text { .. } => self.select.drag(pointer, cx),
+            RedactGesture::Box => self.drag.drag(pointer.pos),
+            RedactGesture::Idle => {}
         }
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        match std::mem::replace(&mut self.gesture, Gesture::Idle) {
-            Gesture::Text => {
+        match std::mem::take(self.gesture) {
+            RedactGesture::Text { page } => {
                 self.select.release(pointer, cx);
-                if let Some(page) = self.text_page.take() {
-                    self.finished = Some(RedactResult::Text { page });
-                }
+                self.finished = Some(RedactResult::Text { page });
             }
-            Gesture::Box => {
+            RedactGesture::Box => {
                 self.drag.drag(pointer.pos);
                 // A click with no drag marks nothing: `release` gives no box below the least size.
                 if let Some((page, rect)) = self.drag.release(LEAST_BOX)
@@ -164,7 +153,7 @@ impl CanvasTool for RedactTool<'_> {
                     self.finished = Some(RedactResult::Area { page, quad: rect_quad([a[0], a[1], b[0], b[1]]) });
                 }
             }
-            Gesture::Idle => {}
+            RedactGesture::Idle => {}
         }
     }
 
@@ -173,11 +162,10 @@ impl CanvasTool for RedactTool<'_> {
     }
 
     fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
-        if matches!(std::mem::replace(&mut self.gesture, Gesture::Idle), Gesture::Text) {
+        if matches!(std::mem::take(self.gesture), RedactGesture::Text { .. }) {
             self.select.cancel(reason, cx);
         }
-        self.text_page = None;
-        self.drag = PageBoxDrag::default();
+        *self.drag = PageBoxDrag::default();
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {

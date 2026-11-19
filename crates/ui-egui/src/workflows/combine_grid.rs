@@ -184,15 +184,12 @@ fn act_action(act: Act, key: CombineKey) -> RowAction {
     }
 }
 
-/// What Delete removes: the selection when the keys are the selected tiles, else the one tile.
-fn delete_action(selection: &Selection<CombineKey>, keys: &[CombineKey]) -> Option<RowAction> {
-    let first = *keys.first()?;
-    let selected = keys.iter().all(|k| selection.items.contains(k));
-    Some(match (first, selected) {
-        (CombineKey::File(_), true) => RowAction::Remove,
-        (CombineKey::Page(..), true) => RowAction::RemovePages(None),
-        (CombineKey::File(id), false) => RowAction::RemoveFile(id),
-        (CombineKey::Page(id, nth), false) => RowAction::RemovePages(Some((id, nth))),
+/// What Delete removes: the selection, whichever tile the keyboard is on; nothing while nothing is selected (a page
+/// let go of when its file collapsed or an undo took it, files picked through automation).
+fn delete_action(selection: &Selection<CombineKey>) -> Option<RowAction> {
+    Some(match selection.items.first()? {
+        CombineKey::File(_) => RowAction::Remove,
+        CombineKey::Page(..) => RowAction::RemovePages(None),
     })
 }
 
@@ -250,7 +247,7 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
                     _ => None,
                 });
             }
-            CollectionEvent::Delete(keys) => actions.extend(delete_action(&app.combine_tab.selection, &keys)),
+            CollectionEvent::Delete(_) => actions.extend(delete_action(&app.combine_tab.selection)),
             CollectionEvent::Preview(CombineKey::File(id)) => actions.push(RowAction::Preview(id)),
             CollectionEvent::Preview(CombineKey::Page(id, nth)) => actions.push(RowAction::PreviewAt(id, nth)),
             // PLAN: framework gap F-5: the tile's context menu (Preview, Expand/Collapse, Remove, Unlock…) needs a
