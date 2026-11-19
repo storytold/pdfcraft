@@ -1,18 +1,19 @@
 //! The one place that maps the engine's annotations and `Edit`s to the framework's `Annotation` and `AnnotationEdit`
-//! and back. The framework's page units here are the page as shown: its `/Rotate` and the view's quarter turn both
-//! applied, in points, top-left origin. [`PageMap`] carries the view's turn.
+//! and back. The framework's annotation tool and overlay work in the canvas's document space (`CanvasView::to_doc`
+//! of a screen point), where every placed page sits at its place in the layout; [`PageMap`] maps a page's user space
+//! to it and back, through the page as shown (its `/Rotate` and the view's quarter turn both applied).
 
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use craft::behavior::kurbo::{Point, Rect, Vec2};
-use craft::behavior::{Cursor, CursorIcon};
+use craft::behavior::{CanvasView, Cursor, CursorIcon};
 use craft::pages::ui::PlacedPage;
 use craft::review::annotate::{marker_rect, pick_at};
 use craft::review::ui::AnnotateTool;
 use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationId, AnnotationKind, HandleRule, Placement, ThreadId};
 
-use super::geometry::{CARET_SIZE, clamp_to, frame, is_callout, on_text, reshapable, resizable};
+use super::geometry::{CARET_SIZE, frame, is_callout, on_text, reshapable, resizable};
 use super::popups::has_popup;
 use super::state::{CommentView, Composer, ComposerKind, PageCx};
 use super::{
@@ -45,8 +46,8 @@ pub(crate) fn thread_key(thread: ThreadId) -> (usize, usize) {
     key_of(AnnotationId(thread.0))
 }
 
-/// The pages on screen this pass with the document's page geometry: the maps between a page's user space, its
-/// displayed space (the framework's page units) and the screen.
+/// The pages on screen this pass with the document's page geometry and the canvas view that shows them: the maps
+/// between a page's user space, the canvas's document space (the framework's annotation units) and the screen.
 pub(crate) struct PageMap<'a> {
     /// The pages placed on screen.
     pub pages: &'a [PlacedPage],
@@ -54,12 +55,14 @@ pub(crate) struct PageMap<'a> {
     pub info: &'a DocInfo,
     /// The view's quarter turn in degrees, which the placed pages show but `PageInfo`'s own transform does not.
     pub rotation: u16,
+    /// The canvas view the pages are shown in this pass.
+    pub view: CanvasView,
 }
 
 impl<'a> PageMap<'a> {
-    /// A map over `pages` of the document `info`, shown turned by `rotation` degrees.
-    pub(crate) fn new(info: &'a DocInfo, pages: &'a [PlacedPage], rotation: u16) -> Self {
-        Self { pages, info, rotation }
+    /// A map over `pages` of the document `info`, shown turned by `rotation` degrees in the canvas `view`.
+    pub(crate) fn new(info: &'a DocInfo, pages: &'a [PlacedPage], rotation: u16, view: CanvasView) -> Self {
+        Self { pages, info, rotation, view }
     }
 
     fn placed(&self, page: usize) -> Option<&PlacedPage> {
@@ -70,67 +73,132 @@ impl<'a> PageMap<'a> {
         self.info.pages.get(page).is_some() && self.placed(page).is_some()
     }
 
-    /// A user-space point of `page` in the page's displayed units.
+    /// The map between `page`'s displayed units and document space, when the page is placed.
+    pub(crate) fn frame(&self, page: usize) -> Option<PageFrame> {
+        let placed = self.placed(page)?;
+        Some(PageFrame { origin: Point::new(f64::from(placed.rect.min.x), f64::from(placed.rect.min.y)), scale: placed.scale, view: self.view })
+    }
+
+    /// A user-space point of `page` in the canvas's document space. A page not placed this pass has no place there:
+    /// its displayed point stands in.
     pub(crate) fn to_doc(&self, page: usize, user: [f64; 2]) -> Point {
-        match self.info.pages.get(page) {
+        let shown = match self.info.pages.get(page) {
             Some(p) => turned_point(p, self.rotation, [user[0] as f32, user[1] as f32]),
             None => Point::new(user[0], user[1]),
+        };
+        match self.frame(page) {
+            Some(frame) => frame.doc(shown),
+            None => shown,
         }
     }
 
-    /// A displayed point of `page` in the page's user space.
+    /// A document point in the user space of `page`.
     pub(crate) fn to_user(&self, page: usize, at: Point) -> [f64; 2] {
+        let shown = match self.frame(page) {
+            Some(frame) => frame.shown(at),
+            None => at,
+        };
         match self.info.pages.get(page) {
-            Some(p) => unturned_point(p, self.rotation, at),
-            None => [at.x, at.y],
+            Some(p) => unturned_point(p, self.rotation, shown),
+            None => [shown.x, shown.y],
         }
+    }
+
+    /// A user-space rectangle of `page` as the document rectangle that bounds it.
+    fn doc_rect(&self, page: usize, r: [f32; 4]) -> Rect {
+        let corners = [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]].map(|[x, y]| self.to_doc(page, [f64::from(x), f64::from(y)]));
+        bounds(&corners).unwrap_or_default()
+    }
+
+    /// A document rectangle as the user-space rectangle of `page` that bounds it.
+    fn user_rect(&self, page: usize, r: Rect) -> [f32; 4] {
+        let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| self.to_user(page, Point::new(x, y)));
+        let fold = |f: fn(f64, f64) -> f64, i: usize, seed: f64| corners.iter().fold(seed, |m, c| f(m, c[i])) as f32;
+        [fold(f64::min, 0, f64::MAX), fold(f64::min, 1, f64::MAX), fold(f64::max, 0, f64::MIN), fold(f64::max, 1, f64::MIN)]
+    }
+
+    /// A document offset as the user-space offset it makes on `page`.
+    fn user_delta(&self, page: usize, d: Vec2) -> (f64, f64) {
+        let (o, p) = (self.to_user(page, Point::ZERO), self.to_user(page, Point::ZERO + d));
+        (p[0] - o[0], p[1] - o[1])
+    }
+
+    /// A document length as the user-space length it makes on `page`.
+    fn user_len(&self, page: usize, len: f64) -> f64 {
+        let (dx, dy) = self.user_delta(page, Vec2::new(len, 0.0));
+        dx.hypot(dy)
+    }
+
+    /// A document length as a length in the displayed units of `page`.
+    pub(crate) fn shown_len(&self, page: usize, len: f64) -> f64 {
+        self.frame(page).map_or(len, |frame| frame.shown_len(len))
+    }
+
+    /// The whole of `page` in document space.
+    fn page_rect(&self, page: usize) -> Option<Rect> {
+        let placed = self.placed(page)?;
+        let r = placed.rect;
+        bounds(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| self.view.to_doc(p)))
     }
 
     /// The placed page under the screen point `screen`.
-    // PLAN: the sheet's `page_at(Point)` takes a screen point: a displayed point alone cannot say which page.
+    // PLAN: the sheet's `page_at(Point)` takes a screen point: a document point alone cannot say which page.
     pub(crate) fn page_at(&self, screen: Point) -> Option<usize> {
         let at = egui::pos2(screen.x as f32, screen.y as f32);
         self.pages.iter().find(|p| p.rect.contains(at)).map(|p| p.page)
     }
 
-    /// The displayed point of `page` under the screen point `screen`.
+    /// The document point under the screen point `screen`, where `page` is placed.
     pub(crate) fn to_page(&self, page: usize, screen: Point) -> Option<Point> {
-        Some(self.placed(page)?.to_page(egui::pos2(screen.x as f32, screen.y as f32)))
+        self.placed(page)?;
+        Some(self.view.to_doc(egui::pos2(screen.x as f32, screen.y as f32)))
     }
 
-    /// The screen position of the displayed point `at` of `page`.
+    /// The screen position of the document point `at`, where `page` is placed.
     pub(crate) fn to_screen(&self, page: usize, at: Point) -> Option<egui::Pos2> {
-        Some(self.placed(page)?.to_screen(at))
+        self.placed(page)?;
+        Some(self.view.to_screen(at))
     }
 
-    /// A length of `screen` points as page units. Every page is shown at one zoom, so the first placed page's scale
-    /// serves.
-    // PLAN: the sheet's `doc_len(screen)` has no page: the pages share one scale.
+    /// A length of `screen` points in document units.
     pub(crate) fn doc_len(&self, screen: f32) -> f64 {
-        let scale = self.pages.first().map_or(1.0, |p| p.scale);
-        if scale.is_finite() && scale > 0.0 { f64::from(screen) / scale } else { f64::from(screen) }
+        self.view.doc_len(screen)
     }
 }
 
-/// `PageInfo` has one entry per page; this names the "is there such a page" question for [`PageMap::shows`].
-trait HasPage {
-    fn contains_key_page(&self, page: usize) -> bool;
+/// One placed page's map between its displayed units (the page as shown, top-left origin) and the canvas's document
+/// space, owned, for what outlives the pass's borrows (the caret snap).
+#[derive(Clone, Copy)]
+pub(crate) struct PageFrame {
+    /// The page's top-left corner on screen.
+    origin: Point,
+    /// Screen points per displayed unit.
+    scale: f64,
+    view: CanvasView,
 }
 
-impl HasPage for Vec<PageInfo> {
-    fn contains_key_page(&self, page: usize) -> bool {
-        page < self.len()
+impl PageFrame {
+    /// The document point of the displayed point `shown`. In f64 through the view's own affine, so a point that goes
+    /// there and back comes back where it was.
+    pub(crate) fn doc(&self, shown: Point) -> Point {
+        self.view.affine().inverse() * (self.origin + shown.to_vec2() * self.scale)
     }
-}
 
-fn view_point(page: &PageInfo, user: [f32; 2]) -> Point {
-    let v = page.user_to_view(user[0], user[1]);
-    Point::new(f64::from(v[0]), f64::from(v[1]))
-}
+    /// The displayed point at the document point `at`.
+    pub(crate) fn shown(&self, at: Point) -> Point {
+        let on_screen = self.view.affine() * at;
+        Point::ORIGIN + (on_screen - self.origin) / self.scale
+    }
 
-fn user_point(page: &PageInfo, at: Point) -> [f64; 2] {
-    let u = page.view_to_user(at.x as f32, at.y as f32);
-    [f64::from(u[0]), f64::from(u[1])]
+    /// A document length in displayed units.
+    pub(crate) fn shown_len(&self, len: f64) -> f64 {
+        if self.scale > 0.0 { len * self.view.zoom / self.scale } else { len }
+    }
+
+    /// A displayed length in document units.
+    pub(crate) fn doc_len(&self, len: f64) -> f64 {
+        if self.view.zoom > 0.0 { len * self.scale / self.view.zoom } else { len }
+    }
 }
 
 /// A user-space point as the displayed point of a page the view turns clockwise by `rotation` degrees.
@@ -160,31 +228,6 @@ fn unturned_point(page: &PageInfo, rotation: u16, at: Point) -> [f64; 2] {
     [f64::from(u[0]), f64::from(u[1])]
 }
 
-/// A user-space rectangle as the displayed rectangle that bounds it.
-fn view_rect(page: &PageInfo, r: [f32; 4]) -> Rect {
-    let (a, b) = (view_point(page, [r[0], r[1]]), view_point(page, [r[2], r[3]]));
-    Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
-}
-
-/// A displayed rectangle as the user-space rectangle that bounds it.
-fn user_rect(page: &PageInfo, r: Rect) -> [f32; 4] {
-    let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| page.view_to_user(x as f32, y as f32));
-    let fold = |f: fn(f32, f32) -> f32, i: usize, seed: f32| corners.iter().fold(seed, |m, c| f(m, c[i]));
-    [fold(f32::min, 0, f32::MAX), fold(f32::min, 1, f32::MAX), fold(f32::max, 0, f32::MIN), fold(f32::max, 1, f32::MIN)]
-}
-
-/// A displayed offset as the user-space offset it makes.
-fn user_delta(page: &PageInfo, d: Vec2) -> (f64, f64) {
-    let (o, p) = (page.view_to_user(0.0, 0.0), page.view_to_user(d.x as f32, d.y as f32));
-    (f64::from(p[0]) - f64::from(o[0]), f64::from(p[1]) - f64::from(o[1]))
-}
-
-/// A displayed length as the user-space length it makes.
-fn user_len(page: &PageInfo, len: f64) -> f64 {
-    let (dx, dy) = user_delta(page, Vec2::new(len, 0.0));
-    dx.hypot(dy)
-}
-
 fn bounds(points: &[Point]) -> Option<Rect> {
     let first = points.first()?;
     let seed = Rect::new(first.x, first.y, first.x, first.y);
@@ -206,25 +249,28 @@ pub(crate) fn rgb8(c: [f32; 3]) -> [u8; 3] {
     c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// The framework's annotation for `a`, with `members` (its group's subordinates) joined to its shape.
+/// The framework's annotation for `a`, in `map`'s document space, with `members` (its group's subordinates) joined
+/// to its shape.
 // PLAN: `DocInfo` carries no ink strokes, opacity or line width, and the image signatures' aspect lives in the view's
 // signature drag: `strokes` is empty, opacity 1 and width 1, and `aspect` is only a drawn signature's box.
-pub(super) fn marked(info: &DocInfo, a: &Annotation, members: &[&Annotation], allowed: bool) -> Option<Marked> {
+pub(super) fn marked(map: &PageMap<'_>, a: &Annotation, members: &[&Annotation], allowed: bool) -> Option<Marked> {
+    let info = map.info;
     let page = info.pages.get(a.page)?;
     let kind = kind_of(&info.annotations, a);
     let rotation = page.rotation;
-    let mut rect = view_rect(page, frame(a, rotation));
+    let mut rect = map.doc_rect(a.page, frame(a, rotation));
     for m in members {
-        rect = rect.union(view_rect(page, m.shown_rect(rotation)));
+        rect = rect.union(map.doc_rect(a.page, m.shown_rect(rotation)));
     }
+    let doc = |p: [f32; 2]| map.to_doc(a.page, [f64::from(p[0]), f64::from(p[1])]);
     let points = if kind.is_pointwise() {
-        a.points.iter().map(|q| view_point(page, *q)).collect()
+        a.points.iter().map(|q| doc(*q)).collect()
     } else if kind.is_markup() {
         std::iter::once(a)
             .chain(members.iter().copied())
             .flat_map(|m| m.quads.iter())
             .flat_map(|q| [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]])
-            .map(|p| view_point(page, p))
+            .map(doc)
             .collect()
     } else {
         Vec::new()
@@ -281,23 +327,17 @@ pub(crate) fn annotations(info: &DocInfo, map: &PageMap<'_>, tool: QuickTool, al
     all.iter()
         .enumerate()
         .filter(|(_, a)| a.is_comment() && a.subtype != "Popup" && map.shows(a.page) && pick(a))
-        .filter_map(|(i, a)| marked(info, a, members.get(&i).map_or(&[][..], Vec::as_slice), allowed))
+        .filter_map(|(i, a)| marked(map, a, members.get(&i).map_or(&[][..], Vec::as_slice), allowed))
         .collect()
 }
 
-fn marker_boxes(info: &DocInfo, anns: &[Marked], icon_side: f64) -> Vec<(AnnotationId, Rect)> {
-    anns.iter()
-        .filter_map(|a| {
-            let p = info.pages.get(a.page)?;
-            let page = Rect::new(0.0, 0.0, f64::from(p.width), f64::from(p.height));
-            marker_rect(a, page, icon_side).map(|r| (a.id, r))
-        })
-        .collect()
+fn marker_boxes(map: &PageMap<'_>, anns: &[Marked], icon_side: f64) -> Vec<(AnnotationId, Rect)> {
+    anns.iter().filter_map(|a| marker_rect(a, map.page_rect(a.page)?, icon_side).map(|r| (a.id, r))).collect()
 }
 
-/// The markers of commented text markup, in displayed units, an `icon_side` square.
+/// The markers of commented text markup, in document units, an `icon_side` square.
 pub(crate) fn markers(info: &DocInfo, map: &PageMap<'_>, icon_side: f64) -> Vec<(AnnotationId, Rect)> {
-    marker_boxes(info, &annotations(info, map, QuickTool::Select, true), icon_side)
+    marker_boxes(map, &annotations(info, map, QuickTool::Select, true), icon_side)
 }
 
 /// Whether `tool` shows tips at all: not with Fill & Sign, whose placement stays clear, and not while drawing
@@ -358,7 +398,7 @@ pub(crate) fn parts(
     let _ = at;
     let Some(at) = map.to_page(page, screen) else { return Vec::new() };
     let anns: Vec<Marked> = annotations(info, map, tool, true).into_iter().filter(|a| a.page == page).collect();
-    let markers = marker_boxes(info, &anns, icon_side);
+    let markers = marker_boxes(map, &anns, icon_side);
     let Some(id) = pick_at(&anns, at, tolerance, icon_side, &markers) else { return Vec::new() };
     let Some(found) = anns.iter().find(|a| a.id == id) else { return Vec::new() };
     // A markup's lines, or its box when it has none (a highlight with no /QuadPoints is picked by its box too).
@@ -402,12 +442,12 @@ fn targets(edit: &AnnotationEdit, id: AnnotationId) -> bool {
 
 /// Where the in-flight `edit` leaves `a`, as a user-space rectangle, when it is `a`'s: what the live image, the
 /// handles and the released edit all draw.
-pub(super) fn edited_user_rect(info: &DocInfo, a: &Annotation, edit: &AnnotationEdit) -> Option<[f32; 4]> {
-    let own = marked(info, a, &[], true)?;
+pub(super) fn edited_user_rect(map: &PageMap<'_>, a: &Annotation, edit: &AnnotationEdit) -> Option<[f32; 4]> {
+    let own = marked(map, a, &[], true)?;
     if !targets(edit, own.id) {
         return None;
     }
-    Some(user_rect(info.pages.get(a.page)?, own.edited(edit)?.rect))
+    Some(map.user_rect(a.page, own.edited(edit)?.rect))
 }
 
 /// The engine edit for one framework edit. A gesture that changes nothing (a click with no drag) gives none.
@@ -419,7 +459,7 @@ pub(crate) fn edit(e: AnnotationEdit, map: &PageMap<'_>, view: &mut CommentView,
         AnnotationEdit::Resize { id, rect } => {
             let (page, index) = key_of(id);
             engine(info, page, index).filter(|a| resizable(a))?;
-            let r = user_rect(info.pages.get(page)?, rect).map(f64::from);
+            let r = map.user_rect(page, rect).map(f64::from);
             Some(Edit::ResizeAnnotation { page, index, rect: r })
         }
         AnnotationEdit::Reshape { id, points } => {
@@ -482,9 +522,8 @@ fn moved(ids: &[AnnotationId], delta: Vec2, map: &PageMap<'_>, info: &DocInfo) -
             // moved with its comment.
             let a = engine(info, page, index).filter(|a| !a.is_reply() && !on_text(a) && !a.locked)?;
             let p = info.pages.get(page)?;
-            // The delta is in the page as shown, the view's turn included: the map takes it back to user space.
-            let (from, to) = (map.to_user(page, Point::ZERO), map.to_user(page, Point::ZERO + delta));
-            let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+            // The delta is in document space: the map takes it back to user space, the view's turn included.
+            let (dx, dy) = map.user_delta(page, delta);
             if !(dx.is_finite() && dy.is_finite()) {
                 return None;
             }
@@ -536,9 +575,11 @@ fn erased(ids: &[AnnotationId], path: &[Point], radius: f64, map: &PageMap<'_>, 
     hits.dedup();
     let edits: Vec<Edit> = hits
         .into_iter()
-        .filter_map(|(page, index)| {
-            let p = info.pages.get(page)?;
-            Some(Edit::EraseInk { page, index, path: path.iter().map(|q| map.to_user(page, *q)).collect(), radius: user_len(p, radius) })
+        .map(|(page, index)| Edit::EraseInk {
+            page,
+            index,
+            path: path.iter().map(|q| map.to_user(page, *q)).collect(),
+            radius: map.user_len(page, radius),
         })
         .collect();
     (!edits.is_empty()).then(|| Edit::Batch { label: "Erase".into(), edits })
@@ -546,12 +587,8 @@ fn erased(ids: &[AnnotationId], path: &[Point], radius: f64, map: &PageMap<'_>, 
 
 fn create(a: &Marked, map: &PageMap<'_>, prefs: &CommentPrefs) -> Option<Edit> {
     let tool = CommentTool::from_kind(a.kind)?;
-    let page = map.info.pages.get(a.page)?;
-    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(page.width, page.height));
-    let user = |p: Point| {
-        let c = clamp_to(bounds, egui::pos2(p.x as f32, p.y as f32));
-        map.to_user(a.page, Point::new(f64::from(c.x), f64::from(c.y)))
-    };
+    let page = map.page_rect(a.page)?;
+    let user = |p: Point| map.to_user(a.page, Point::new(p.x.clamp(page.x0, page.x1), p.y.clamp(page.y0, page.y1)));
     let pts: Vec<[f64; 2]> = a.points.iter().map(|p| user(*p)).collect();
     let strokes = || -> Vec<Vec<[f64; 2]>> { a.strokes.iter().map(|s| s.iter().map(|p| user(*p)).collect()).collect() };
     let boxed = || {
@@ -594,12 +631,12 @@ fn place(p: &Placement, map: &PageMap<'_>, view: &mut CommentView) {
     let at = map.to_user(p.page, p.at);
     let kind = match p.kind {
         AnnotationKind::Note => ComposerKind::Note,
-        AnnotationKind::TextBox => ComposerKind::TextBox { size: p.size.map(|s| [s.x, s.y]) },
+        AnnotationKind::TextBox => ComposerKind::TextBox { size: p.size.map(|s| [map.shown_len(p.page, s.x), map.shown_len(p.page, s.y)]) },
         AnnotationKind::Callout => {
             let Some(from) = p.from else { return };
             ComposerKind::Callout { point: map.to_user(p.page, from) }
         }
-        AnnotationKind::Caret => ComposerKind::Caret { size: p.size.map_or(CARET_SIZE, |s| s.y) },
+        AnnotationKind::Caret => ComposerKind::Caret { size: p.size.map_or(CARET_SIZE, |s| map.shown_len(p.page, s.y)) },
         AnnotationKind::Attach => {
             view.attach_at = Some((p.page, at));
             view.select(None);

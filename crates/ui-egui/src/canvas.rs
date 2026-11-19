@@ -940,7 +940,7 @@ fn page_parts_of(
         // The comment a press under the pointer would take, hit within the theme's reach and with its markers at the
         // icon size, both as the tools on the canvas read them.
         let env = Env::of(ui);
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
         let pointer = ui.input(|i| i.pointer.hover_pos()).map(|p| craft::behavior::kurbo::Point::new(p.x.into(), p.y.into()));
         let (tolerance, icon_side) = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
         parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side));
@@ -1201,14 +1201,14 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             session.all_text = false;
         }
         let button_held = ui.input(|i| i.pointer.any_down());
-        let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, button_held, ..cx.tools };
+        let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, view: body.view, button_held, ..cx.tools };
         let mut bench = page_tools::ToolBench::default();
         let mut fill = None;
         let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &pass.press);
         let reply = ToolHost::new().momentary(momentary).run(ui, pass, &mut tool);
         let mut finish = tool.finish();
         // The comment gestures the run finished: each committed one is an engine edit, one undo step per drag.
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
         let now = ui.input(|i| i.time);
         if let Some(edit) = comments::take_edits(&mut session.comments, &map, cx.info, cx.prefs, now) {
             session.pending_edit = Some(edit);
@@ -1284,7 +1284,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         // The comment under the pointer is hit as the page's parts hit it: within the theme's reach, with its markers
         // at the icon size. The redaction hover is the user's setting, passed as a data colour (L-90).
         let env = Env::of(ui);
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
         let pick = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
         let pointer = ui.input(|i| i.pointer.hover_pos().filter(|_| !i.pointer.any_down()));
         let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed };
@@ -1521,6 +1521,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         sizes: &page_sizes[..],
         rotation: state.rotation,
         viewport: Rect::NOTHING,
+        view: CanvasView::new(Rect::NOTHING, craft::behavior::kurbo::Point::ORIGIN, 1.0),
         button_held: false,
         text_style: &app.text_style,
         allowed,
@@ -1586,6 +1587,9 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     );
     if let Some(canvas) = &body_out.view {
         out.adopt(&mut view.view, canvas);
+    }
+    if out.scrolled {
+        view.end_find_following();
     }
     if out.toggle_white_space {
         view.view.hide_white_space = !view.view.hide_white_space;

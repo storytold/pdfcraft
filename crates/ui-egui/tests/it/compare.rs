@@ -31,7 +31,7 @@ fn compare_two_versions() {
     assert_eq!(crate::support::right(h.state()), Some(RightPanel::Compare));
     assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("2 differences found"));
     h.get_by_label("2 Replaced");
-    h.get_by_label("\"five\" → \"three\"").click();
+    h.get_by_label_contains("\"five\" → \"three\"").click();
     h.run_steps(2);
     assert_eq!(h.state().compare.as_ref().unwrap().selected, Some(0));
     let id = h.state().active_ids().unwrap().1;
@@ -151,11 +151,11 @@ fn compare_filters_hide_text_or_visual_changes() {
     let (text_old, visual_old) = kinds(&h, old_i);
     assert!(text_new > 0 && visual_new > 0, "the fixture has both kinds on the new file: {text_new} text, {visual_new} visual");
     assert!(text_old > 0 && visual_old > 0, "and on the old file: {text_old} text, {visual_old} visual");
-    h.get_by_label("\"five\" → \"three\"");
+    h.get_by_label_contains("\"five\" → \"three\"");
 
     h.get_by_label("Text").click();
     h.run_steps(2);
-    assert!(h.query_by_label("\"five\" → \"three\"").is_none(), "text changes leave the list");
+    assert!(h.query_by_label_contains("\"five\" → \"three\"").is_none(), "text changes leave the list");
     assert_eq!(kinds(&h, new_i), (0, visual_new), "and the new file's shading");
     assert_eq!(kinds(&h, old_i), (0, visual_old), "and the old file's");
 
@@ -166,7 +166,7 @@ fn compare_filters_hide_text_or_visual_changes() {
 
     h.get_by_label("Text").click();
     h.run_steps(2);
-    h.get_by_label("\"five\" → \"three\"");
+    h.get_by_label_contains("\"five\" → \"three\"");
     assert_eq!(kinds(&h, new_i), (text_new, 0), "text back, visual still hidden");
     assert_eq!(kinds(&h, old_i), (text_old, 0));
 }
@@ -261,10 +261,18 @@ fn export_to_word_html_and_rtf() {
     for ext in ["docx", "pptx", "html", "rtf"] {
         // Each save is answered with the suggested name in the suggested folder.
         let files = std::sync::Arc::new(craft::host::ScriptedFiles::new().saving_suggested());
-        let mut app = crate::control::app_with_files(files.clone());
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "e.pdf", None, doc.clone()).unwrap();
-        assert!(app.execute(&egui::Context::default(), &format!("export.{ext}")));
+        let (app_files, doc) = (files.clone(), doc.clone());
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            let mut app = crate::control::app_with_files(app_files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "e.pdf", None, doc).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.execute(&format!("export.{ext}")));
+        // The picker's answer is taken on a later frame.
+        h.run_steps(3);
         let request = files.requests().pop().expect("the export asked where to save");
         let path = request.directory.or(request.default_directory).unwrap_or_default().join(request.file_name.expect("a suggested name"));
         let bytes = files.file(&path).unwrap_or_else(|| panic!("{ext} was written"));

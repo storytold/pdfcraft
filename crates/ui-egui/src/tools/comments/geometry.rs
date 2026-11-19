@@ -1,4 +1,4 @@
-use super::{Annotation, DocInfo, PageInfo, PageText, Pos2, Rect, pos2};
+use super::{Annotation, DocInfo, PageInfo, PageText};
 
 pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
@@ -39,10 +39,6 @@ pub(super) fn is_callout(a: &Annotation) -> bool {
 /// upright on a page turned `rotation` degrees).
 pub(super) fn frame(a: &Annotation, rotation: u16) -> [f32; 4] {
     a.text_box.unwrap_or_else(|| a.shown_rect(rotation))
-}
-
-pub(super) fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
-    pos2(p.x.clamp(r.left(), r.right()), p.y.clamp(r.top(), r.bottom()))
 }
 
 /// The side of the caret's box, in user space units, away from text.

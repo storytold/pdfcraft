@@ -69,7 +69,8 @@ fn assert_theme(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, prefer
 
 /// A click on the title bar's theme button cycles Light, Dark, System.
 fn click_toolbar(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
-    h.get_by_label(&format!("Display theme: {label}")).click();
+    // The button, not the tip that shows while the pointer is still over it from the last click.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, &format!("Display theme: {label}")).click();
     h.run_steps(3);
 }
 

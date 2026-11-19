@@ -158,7 +158,7 @@ fn the_layers_panel_shows_the_order_tree() {
     h.get_by_role_and_label(Role::TreeItem, "Colours").click();
     h.run_steps(2);
     assert_eq!(shown(&h), layers(true, false));
-    h.get_by_label("Red").click();
+    h.get_by_role_and_label(Role::TreeItem, "Red").click();
     h.run_steps(3);
     assert_eq!(shown(&h), layers(false, false));
 

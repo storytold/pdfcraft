@@ -24,7 +24,7 @@ pub(crate) struct Hover {
     pub pointer: Option<Pos2>,
     /// The user's Redaction Tool Properties fill and opacity.
     pub redact: ([f64; 3], f64),
-    /// The page-unit `(tolerance, icon side)` of the hit test.
+    /// The document-unit `(tolerance, icon side)` of the hit test.
     pub pick: (f64, f64),
     /// The document allows commenting.
     pub allowed: bool,
@@ -43,7 +43,7 @@ pub(crate) fn show(
     tool: QuickTool,
     hover: Hover,
 ) {
-    let map = PageMap::new(info, body.pages, rotation);
+    let map = PageMap::new(info, body.pages, rotation, body.view);
     let all = bridge::annotations(info, &map, QuickTool::Select, hover.allowed);
     let reached = bridge::annotations(info, &map, tool, hover.allowed);
     let markers = bridge::markers(info, &map, hover.pick.1);
@@ -68,7 +68,7 @@ pub(crate) fn show(
         }
         overlay.show(ui);
         let Some(at) = hover.pointer.filter(|p| idle && page.rect.contains(*p)) else { continue };
-        let at = page.to_page(at);
+        let at = body.view.to_doc(at);
         let (tolerance, icon_side) = hover.pick;
         let under = pick_at(&on_page, at, tolerance, icon_side, &markers).and_then(|id| on_page.iter().find(|a| a.id == id));
         if let Some(a) = under
