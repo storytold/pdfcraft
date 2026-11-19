@@ -939,8 +939,8 @@ fn redact_page_content(
             .into());
         }
         report.patterns_removed += dropped;
-        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut scoped, &mut res, &cleaned_data)?);
-        type3::prune_type3_from_resources(doc, &mut budget, &mut scoped, &mut res, &cleaned_data, Some(&page.dict))?;
+        retired_properties.extend(interp::prune_properties(doc, &mut budget, &mut scoped, &mut res, None, &cleaned_data)?);
+        type3::prune_type3_from_resources(doc, &mut budget, &mut scoped, &mut res, None, &cleaned_data, Some(&page.dict))?;
         doc.update_dict(page.obj, |d| {
             d.set(b"Contents".to_vec(), Object::Array(new_list));
             d.set(b"Resources".to_vec(), Object::Dict(res));

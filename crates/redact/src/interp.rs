@@ -510,6 +510,21 @@ pub(crate) fn form_resources(doc: &Document, own: &Dict, caller: &Dict, kinds: &
     resources
 }
 
+/// Where a form with resources of its own, rewritten, looks up the XObjects it draws, as the walk
+/// read it ([`form_resources`]): in the resources it is written back with, `written`, where they
+/// give a stream, and otherwise in `caller`, its caller's XObject names. The cleanups after the walk
+/// read what it draws through these: else a form it draws through its caller's names goes unread,
+/// and what that form draws with the form's own resources is dropped from them.
+pub(crate) fn form_xobject_lookup(doc: &Document, written: &Dict, caller: &Dict, kinds: &mut Kinds) -> Dict {
+    let mut xobjects = caller.clone();
+    for (name, value) in res_dict(doc, written, b"XObject").iter() {
+        if kind(doc, value, kinds).stream {
+            xobjects.set(name.to_vec(), value.clone());
+        }
+    }
+    xobjects
+}
+
 /// A form's resources of its own, if it has them, and the resources it is written back with: its
 /// own, or, without them, its caller's names with the page's marked-content properties (ISO
 /// 32000-2 §7.8.3), as the renderer reads them, not its caller's; with a /Resources that isn't a
@@ -1752,22 +1767,31 @@ fn xobject(
             }
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, content) {
+                // A form it draws through its caller's names draws with its own resources too.
+                let lookup = own.is_some().then(|| form_xobject_lookup(doc, &cleaned_res, xobjects, &mut scope.kinds));
+                let drawn_through = lookup.as_ref();
+                match prune_properties(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, drawn_through, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);
                         return None;
                     }
                 }
-                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, content) {
+                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, drawn_through, content) {
                     out.error = Some(error);
                     return None;
                 }
                 // No page: annotation appearances draw through a page's resources, never through a
                 // form's. The form's own soft masks are still counted.
-                if let Err(error) =
-                    crate::type3::prune_type3_from_resources(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, content, None)
-                {
+                if let Err(error) = crate::type3::prune_type3_from_resources(
+                    doc,
+                    &mut scope.budget,
+                    &mut scope.scoped,
+                    &mut cleaned_res,
+                    drawn_through,
+                    content,
+                    None,
+                ) {
                     out.error = Some(error);
                     return None;
                 }

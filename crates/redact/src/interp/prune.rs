@@ -28,7 +28,7 @@ pub(crate) fn prune(
         return Ok(());
     }
     let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
-    let read = resource_ops_with(doc, budget, scoped, &res, content)?;
+    let read = resource_ops_with(doc, budget, scoped, &res, None, content)?;
     let drawn: HashSet<&[u8]> = read.ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
     for n in replaced {
         if !drawn.contains(n.as_slice()) {
@@ -704,16 +704,19 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 /// Operators are read one at a time, and of forms with resources of their own only those kept are
 /// held, so the walk stops at one past a limit rather than holding them all.
 pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Drawn, CosError> {
-    resource_ops_with(doc, budget, &mut ScopedReads::default(), res, content)
+    resource_ops_with(doc, budget, &mut ScopedReads::default(), res, None, content)
 }
 
 /// [`resource_ops`], its reads of forms with resources of their own spending `scoped`, which the
-/// reads made for one page share.
+/// reads made for one page share. `drawn_through` is where `content` looks XObject names up when
+/// that isn't `res`'s `/XObject` alone: a form with resources of its own draws a name they don't
+/// give as a stream from its caller's ([`super::form_xobject_lookup`]).
 pub(crate) fn resource_ops_with(
     doc: &Document,
     budget: &mut DecodeBudget,
     scoped: &mut ScopedReads,
     res: &Dict,
+    drawn_through: Option<&Dict>,
     content: &[Vec<u8>],
 ) -> Result<Drawn, CosError> {
     let joined = Pieces::join(content);
@@ -723,7 +726,10 @@ pub(crate) fn resource_ops_with(
     if read.skipped() > 0 || ops.len() > MAX_OPS {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
-    resource_ops_from(doc, budget, scoped, &res_dict(doc, res, b"XObject"), ops)
+    match drawn_through {
+        Some(xobjects) => resource_ops_from(doc, budget, scoped, xobjects, ops),
+        None => resource_ops_from(doc, budget, scoped, &res_dict(doc, res, b"XObject"), ops),
+    }
 }
 
 /// What the reads of forms with resources of their own ([`resource_ops`]) spend between them where
@@ -1160,11 +1166,14 @@ fn given_in(doc: &Document, scopes: &[Scoped], scope: Option<usize>, category: C
     None
 }
 
+/// Drop the marked-content properties of `res` that `content`, and what it draws (looked up in
+/// `drawn_through` where given, [`resource_ops_with`]), no longer names, returning them.
 pub(crate) fn prune_properties(
     doc: &Document,
     budget: &mut DecodeBudget,
     scoped: &mut ScopedReads,
     res: &mut Dict,
+    drawn_through: Option<&Dict>,
     content: &[Vec<u8>],
 ) -> Result<Vec<Object>, CosError> {
     let mut properties = res_dict(doc, res, b"Properties");
@@ -1172,7 +1181,7 @@ pub(crate) fn prune_properties(
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
-    let read = resource_ops_with(doc, budget, scoped, res, content)?;
+    let read = resource_ops_with(doc, budget, scoped, res, drawn_through, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
         if !read.ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.last_name() == Some(&name)) {
@@ -1190,14 +1199,17 @@ pub(crate) fn prune_properties(
     Ok(retired)
 }
 
+/// Drop the XObjects of `res` that `content`, and what it draws (looked up in `drawn_through`
+/// where given, [`resource_ops_with`]), no longer draws.
 pub(super) fn prune_form_resources(
     doc: &Document,
     budget: &mut DecodeBudget,
     scoped: &mut ScopedReads,
     res: &mut Dict,
+    drawn_through: Option<&Dict>,
     content: &[Vec<u8>],
 ) -> Result<(), CosError> {
-    let read = resource_ops_with(doc, budget, scoped, res, content)?;
+    let read = resource_ops_with(doc, budget, scoped, res, drawn_through, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
     let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {

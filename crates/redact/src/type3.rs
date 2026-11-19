@@ -687,12 +687,14 @@ fn is_type3(doc: &Document, f: &Object) -> bool {
 /// `res` are a page's resources. What it reads is charged to `budget`, what is left of the page's
 /// allowance, when the resources list a Type 3 font, and otherwise to an allowance of a page of its
 /// own (below); forms with resources of their own to `scoped`, which the reads made for the page
-/// share, and without a Type 3 font they aren't read.
+/// share, and without a Type 3 font they aren't read. What the content draws is looked up in
+/// `drawn_through` where given ([`crate::interp::resource_ops_with`]).
 pub(crate) fn prune_type3_from_resources(
     doc: &Document,
     budget: &mut pdfcraft_cos::DecodeBudget,
     scoped: &mut crate::interp::ScopedReads,
     res: &mut Dict,
+    drawn_through: Option<&Dict>,
     content: &[Vec<u8>],
     page: Option<&Dict>,
 ) -> Result<(), CosError> {
@@ -715,9 +717,9 @@ pub(crate) fn prune_type3_from_resources(
     // partial read only marks, aren't read either.
     let mut none = crate::interp::ScopedReads::spent();
     let read = if type3 {
-        crate::interp::resource_ops_with(doc, budget, scoped, res, content)?
+        crate::interp::resource_ops_with(doc, budget, scoped, res, drawn_through, content)?
     } else {
-        crate::interp::resource_ops_with(doc, &mut own, &mut none, res, content)?
+        crate::interp::resource_ops_with(doc, &mut own, &mut none, res, drawn_through, content)?
     };
     let (mut ops, mut partial) = (read.ops, read.partial);
     // So do those of a page's annotation appearances, and of soft mask groups, without resources of
@@ -732,7 +734,7 @@ pub(crate) fn prune_type3_from_resources(
             for r in resourceless_appearances(doc, page) {
                 let Object::Stream(s) = &*doc.get(r) else { continue };
                 let data = budget.decode(&doc.with_direct_parms(s))?;
-                let more = crate::interp::resource_ops_with(doc, budget, scoped, res, std::slice::from_ref(&data))?;
+                let more = crate::interp::resource_ops_with(doc, budget, scoped, res, drawn_through, std::slice::from_ref(&data))?;
                 if ops.len().saturating_add(more.ops.len()) > 2_000_000 {
                     return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
                 }
