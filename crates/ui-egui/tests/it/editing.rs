@@ -50,6 +50,16 @@ fn scripted_app() -> PdfCraftApp {
     crate::control::app_with_files(FILES.with(std::sync::Arc::clone))
 }
 
+/// The unsaved-changes question's Save answer in the platform's words (the framework dialog asks Yes and No off macOS).
+fn save_answer() -> &'static str {
+    if cfg!(target_os = "macos") { "Save" } else { "Yes" }
+}
+
+/// The unsaved-changes question's Don't Save answer in the platform's words.
+fn dont_save() -> &'static str {
+    if cfg!(target_os = "macos") { "Don't Save" } else { "No" }
+}
+
 /// The next Save's picker answers `path`.
 fn queue_save(path: &std::path::Path) {
     FILES.with(|f| f.queue(craft::host::Picked::Paths(vec![path.to_path_buf()])));
@@ -186,10 +196,8 @@ fn organize(pages: usize) -> Harness<'static, PdfCraftApp> {
     harness(pages, |app| app.set_option(&egui::Context::default(), "organize", "on").unwrap())
 }
 
-/// Organize pages ▸ Insert ▸ `item`.
+/// Organize pages ▸ Insert ▸ `item`: the panel lists the Insert rows under their heading.
 fn insert_menu(h: &mut Harness<'static, PdfCraftApp>, item: &str) {
-    h.get_by_label("Insert").click();
-    h.run_steps(2);
     h.get_by_label(item).click();
 }
 
@@ -207,10 +215,10 @@ fn organize_page_range_tracks_thumbnails_and_applies_typed_selection() {
     use egui::accesskit::Role;
     let _gpu = gpu();
     let mut h = organize(100);
-    h.get_by_label("Select page 2").click();
+    h.get_by_label("Page 2").click();
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Selected pages").value().as_deref(), Some("2"));
-    h.get_by_label("Select page 3").click();
+    h.get_by_label("Page 3").click();
     h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Selected pages").value().as_deref(), Some("2-3"));
     let old = h.state().views[0].selected.clone();
@@ -285,7 +293,7 @@ fn organize_opens_on_the_current_page() {
     assert!(in_view(&h, 30), "the current page is scrolled into view");
     assert!(!in_view(&h, 0), "the grid does not open on page 1");
     // An earlier grid selection on another page does not win over the page the user went to.
-    h.get_by_label("Select page 32").click();
+    h.get_by_label("Page 32").click();
     h.run_steps(2);
     assert_eq!(h.state().views[0].target_pages(), [31]);
     h.get_by_label("Close").click();
@@ -321,9 +329,9 @@ fn organize_tool_chosen_before_opening_a_document_shows_its_pages() {
 #[test]
 fn organize_page_actions_rotate_only_the_named_page_and_undo() {
     let mut h = organize(3);
-    h.get_by_label("Select page 1").click();
+    h.get_by_label("Page 1").click();
     h.run_steps(2);
-    h.get_by_label("Select page 3").click();
+    h.get_by_label("Page 3").click();
     h.run_steps(2);
     h.get_by_label("Rotate page 1 clockwise").click();
     h.run_steps(3);
@@ -358,7 +366,7 @@ fn organize_local_actions_respect_document_permissions() {
         app.open_bytes(&egui::Context::default(), "restricted.pdf", None, bytes.as_ref().clone()).unwrap();
         app.set_option(&egui::Context::default(), "tool", "organize").unwrap();
     });
-    h.get_by_label("Select page 2").click();
+    h.get_by_label("Page 2").click();
     h.run_steps(2);
     assert!(h.get_by_label("Rotate page 2 clockwise").accesskit_node().is_disabled());
     assert!(h.get_by_label("Rotate page 2 counterclockwise").accesskit_node().is_disabled());
@@ -517,16 +525,16 @@ fn closing_a_dirty_tab_asks_and_cancel_keeps_it() {
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label_contains("Save changes to “doc.pdf”");
+    h.get_by_label_contains("save the changes you made to “doc.pdf”");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "cancel keeps the document open");
     assert!(dirty(&h));
-    assert!(h.query_by_label("Don't save").is_none(), "cancel closes the prompt");
+    assert!(h.query_by_label(dont_save()).is_none(), "cancel closes the prompt");
 
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label("Don't save").click();
+    h.get_by_label(dont_save()).click();
     h.run_steps(3);
     assert!(h.state().views.is_empty(), "discarding closes the tab");
 }
@@ -541,7 +549,7 @@ fn closing_a_dirty_tab_can_save_first() {
     let ctx_h = h.ctx.clone();
     h.state_mut().request_close_tab(&ctx_h, 0);
     h.run_steps(2);
-    h.get_by_label("Save").click();
+    h.get_by_label(save_answer()).click();
     h.run_steps(3);
     assert!(h.state().views.is_empty());
     let saved = pdfcraft_render::inspect(std::sync::Arc::new(saved_file(&out)), None).unwrap();
@@ -559,7 +567,7 @@ fn the_save_prompt_answers_to_the_keyboard() {
         h.run_steps(3);
         h.key_press_modifiers(Modifiers::COMMAND, Key::W);
         h.run_steps(3);
-        h.get_by_label_contains("Save changes to “doc.pdf”");
+        h.get_by_label_contains("save the changes you made to “doc.pdf”");
         h.key_press_modifiers(m, key);
         h.run_steps(3);
         assert!(h.state().views.is_empty(), "{m:?}+{key:?} doesn't save and closes");
@@ -573,7 +581,7 @@ fn the_save_prompt_answers_to_the_keyboard() {
     h.key_press(Key::Escape);
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "Escape cancels");
-    assert!(h.query_by_label("Don't save").is_none(), "Escape closes the prompt");
+    assert!(h.query_by_label(dont_save()).is_none(), "Escape closes the prompt");
 
     let out = temp_path("enter-saves.pdf");
     queue_save(&out);
@@ -594,7 +602,7 @@ fn dirty_prompt() -> Harness<'static, PdfCraftApp> {
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label_contains("Save changes to “doc.pdf”");
+    h.get_by_label_contains("save the changes you made to “doc.pdf”");
     h
 }
 
@@ -663,7 +671,7 @@ fn keys_leave_the_document_under_a_dialog_alone() {
         h.run_steps(3);
         let app = h.state();
         assert_eq!(app.views.len(), 1, "{m:?}+{key:?} closed the file");
-        assert!(h.query_by_label("Don't save").is_none(), "{m:?}+{key:?} asked to close the file");
+        assert!(h.query_by_label(dont_save()).is_none(), "{m:?}+{key:?} asked to close the file");
         assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "{m:?}+{key:?} undid the rotation");
         assert!(app.views[0].find.is_none(), "{m:?}+{key:?} opened Find");
         assert!(h.query_by_label("Preferences").is_some(), "{m:?}+{key:?} replaced Preferences");
@@ -675,7 +683,7 @@ fn keys_leave_the_document_under_a_dialog_alone() {
     assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
-    h.get_by_label_contains("Save changes to “doc.pdf”"); // with the dialog closed, ⌘W asks to close the file again
+    h.get_by_label_contains("save the changes you made to “doc.pdf”"); // with the dialog closed, ⌘W asks to close the file again
 }
 
 #[test]
@@ -684,7 +692,7 @@ fn clean_tabs_close_without_asking() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
     assert!(h.state().views.is_empty());
-    assert!(h.query_by_label("Don't save").is_none());
+    assert!(h.query_by_label(dont_save()).is_none());
 }
 
 #[test]
@@ -701,14 +709,14 @@ fn quitting_with_unsaved_changes_asks_for_each_document() {
     }
     h.key_press_modifiers(Modifiers::COMMAND, Key::Q);
     h.run_steps(3);
-    h.get_by_label_contains("Save changes to “doc.pdf”");
-    h.get_by_label("Don't save").click();
+    h.get_by_label_contains("save the changes you made to “doc.pdf”");
+    h.get_by_label(dont_save()).click();
     h.run_steps(3);
-    h.get_by_label_contains("Save changes to “second.pdf”");
-    h.get_by_label("Don't save").click();
+    h.get_by_label_contains("save the changes you made to “second.pdf”");
+    h.get_by_label(dont_save()).click();
     h.run_steps(3);
     assert!(h.state().views.is_empty());
-    assert!(h.query_by_label("Don't save").is_none(), "nothing more is asked");
+    assert!(h.query_by_label(dont_save()).is_none(), "nothing more is asked");
 }
 
 /// PDFs written to a fresh temp folder, removed when the test ends.
@@ -819,7 +827,7 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
     h.run_steps(3);
     // Each unsaved tab closes as it is answered, before PdfCraft quits.
     for _ in 0..2 {
-        h.get_by_label("Don't save").click();
+        h.get_by_label(dont_save()).click();
         h.run_steps(3);
     }
     assert!(h.state().views.is_empty());
@@ -964,10 +972,10 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     h.run_steps(4);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1365.0, 719.0));
     let inside = |r: egui::Rect| screen.contains(r.min) && screen.contains(r.max);
-    let title = h.get_by_label_contains("Save changes to");
+    let title = h.get_by_label_contains("save the changes you made to");
     let title_rect = title.rect();
     assert!(inside(title_rect), "the title rect {title_rect:?} leaves the screen");
-    for button in ["Save", "Cancel", "Don't save"] {
+    for button in [save_answer(), "Cancel", dont_save()] {
         let rect = h.get_by_label(button).rect();
         assert!(inside(rect), "the {button} button rect {rect:?} leaves the screen");
     }
@@ -1006,15 +1014,15 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
         h.run_steps(4);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let inside = |r: egui::Rect| screen.contains(r.min) && screen.contains(r.max);
-        let title = h.get_by_label_contains("Save changes to");
+        let title = h.get_by_label_contains("save the changes you made to");
         let title_rect = title.rect();
         assert!(inside(title_rect), "{start}…: the title rect {title_rect:?} leaves the screen");
-        let opening = format!("Save changes to “{start}");
+        let opening = format!("Do you want to save the changes you made to “{start}");
         assert!(
             h.query_by(|n| n.value().is_some_and(|l| l.starts_with(&opening) && l.contains('…') && l.contains(".pdf” before closing?"))).is_some(),
             "{start}…: the title keeps the start and the extension"
         );
-        for button in ["Save", "Cancel", "Don't save"] {
+        for button in [save_answer(), "Cancel", dont_save()] {
             let rect = h.get_by_label(button).rect();
             assert!(inside(rect), "{start}…: the {button} button rect {rect:?} leaves the screen");
         }
@@ -1091,7 +1099,7 @@ fn custom_properties_are_added_in_the_custom_tab_as_one_undoable_step() {
     h.get_by_role_and_label(Role::Button, "Add").click();
     h.run_steps(3);
     assert!(custom_properties(&h).is_empty(), "nothing is written before OK");
-    h.get_by_label("Project");
+    h.get_by_label_contains("Project");
     type_into(&mut h, "Name:", "Revision");
     type_into(&mut h, "Value:", "4");
     h.get_by_role_and_label(Role::Button, "Add").click();
@@ -1116,11 +1124,11 @@ fn custom_properties_are_changed_and_deleted_in_the_custom_tab() {
         }
         app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
     });
-    h.get_by_label("Revision").click();
+    h.get_by_label_contains("Revision").click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "Delete").click();
     h.run_steps(3);
-    h.get_by_label("Project").click();
+    h.get_by_label_contains("Project").click();
     h.run_steps(3);
     assert!(h.get_by_role_and_label(Role::Button, "Update").accesskit_node().is_disabled(), "the value is unchanged");
     clear(&mut h, "Value:");
@@ -1187,7 +1195,7 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     type_into(&mut h, "Name:", "Revision");
     assert!(h.get_by_role_and_label(Role::Button, "Add").accesskit_node().is_disabled(), "Add would overwrite the number");
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Value:").value().as_deref(), Some("Sales"));
-    h.get_by_label("Project").click();
+    h.get_by_label_contains("Project").click();
     h.run_steps(3);
     clear(&mut h, "Value:");
     type_into(&mut h, "Value:", "Gemini");
@@ -1226,7 +1234,7 @@ fn a_custom_property_is_deleted_from_an_info_dictionary_in_the_trailer() {
         }
     });
     h.run_steps(4);
-    h.get_by_label("Project").click();
+    h.get_by_label_contains("Project").click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "Delete").click();
     h.run_steps(3);
@@ -1268,11 +1276,11 @@ fn add_stops_at_the_256_custom_properties_the_tab_lists() {
     type_into(&mut h, "Name:", "Other");
     type_into(&mut h, "Value:", "x");
     assert!(add_disabled(&h), "the draft holds 256");
-    h.get_by_label("Client");
+    h.get_by_label_contains("Client");
 
     // 257 in the file: after a Delete a new name would still be past the 256 listed.
     let mut h = with_props(257);
-    h.get_by_label("P000").click();
+    h.get_by_label_contains("P000").click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Button, "Delete").click();
     h.run_steps(3);
@@ -1401,7 +1409,7 @@ fn combining_files_opens_a_new_unsaved_tab() {
         );
     });
     h.run_steps(3);
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.views.len(), 2);
@@ -1439,7 +1447,7 @@ fn combine_files_takes_chosen_pages_in_the_order_listed() {
     h.state_mut().combine_draft[1].range = "3, 1".into();
     h.run_steps(2);
     h.get_by_label("2 of 3");
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(texts_of(app, 1), ["Page 1", "Page 2", "Page 3", "Page 1"]);
@@ -1505,7 +1513,7 @@ fn combine_lists_size_and_warns_before_combining() {
     h.get_by_label("Its security settings don't allow copying pages");
     h.get_by_label("Password-protected");
     h.get_by_label("2 files need attention");
-    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
     // Removing them (Delete on the selection) lets Combine run.
     for _ in 0..2 {
         h.state_mut().select_combine_rows(&[1]);
@@ -1530,11 +1538,11 @@ fn a_bad_range_stops_combine_until_fixed() {
     h.state_mut().combine_draft[0].range = "1-99".into();
     h.run_steps(2);
     h.get_by_label("1 file needs attention");
-    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
     h.state_mut().combine_draft[0].range = "2-3".into();
     h.run_steps(2);
     h.get_by_label_contains("2 files · 4 pages");
-    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(!h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
 }
 
 fn combine_names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
@@ -1653,7 +1661,7 @@ fn protected_files_that_can_be_combined_are_flagged() {
     let app = h.state();
     assert!(app.combine_draft[1].problem.is_none(), "printing is withheld, extracting pages isn't");
     h.get_by_label("Protected: the combined file won't keep its security settings");
-    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled(), "a warning, not a blocker");
+    assert!(!h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled(), "a warning, not a blocker");
 }
 
 #[test]
@@ -1750,7 +1758,7 @@ fn images_and_text_files_join_the_combine_list_as_pdfs() {
     let draft = &h.state().combine_draft;
     assert!(draft.iter().all(|f| f.bytes.starts_with(b"%PDF-") && f.problem.is_none()), "made into PDFs");
     assert_eq!(draft.iter().map(|f| f.pages).collect::<Vec<_>>(), [2, 1, 1]);
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 1), ["Page 1", "Page 2", "", "Some notes"]);
 }
@@ -1772,13 +1780,13 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     }
     h.get_by_label_contains("this file type can't be converted");
     // One readable file is not enough to combine.
-    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
     let ctx_h = h.ctx.clone();
     h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::Combine, vec![("two.pdf".into(), fixture(1))]);
     h.run_steps(3);
-    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(!h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
     // Combine asks first, naming the files left out; Cancel leaves everything as it was.
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     h.get_by_label("Leave out files that can't be read?");
     h.get_by_label("• broken.jpg");
@@ -1789,7 +1797,7 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     assert_eq!(h.state().views.len(), 1, "nothing combined");
     assert_eq!(combine_names(&h).len(), 4);
     // Asked again: Combine the rest.
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     h.get_by_label("Combine the rest").click();
     h.run_steps(3);
@@ -1812,7 +1820,7 @@ fn a_password_protected_file_is_unlocked_with_its_password_and_combined() {
     h.state_mut().use_files(&ctx_h, pdfcraft_ui_egui::FilePurpose::Combine, vec![("secret.pdf".into(), protected("pw", "owner", -1))]);
     h.run_steps(3);
     h.get_by_label("Password-protected");
-    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
     // The row's link (the toolbar's Unlock… comes first).
     h.get_all_by_label("Unlock…").last().unwrap().click();
     h.run_steps(3);
@@ -1832,7 +1840,7 @@ fn a_password_protected_file_is_unlocked_with_its_password_and_combined() {
     h.get_by_label("Unlocked: the combined file won't be password-protected");
     // Never printed: debug output ends up in logs.
     assert!(!format!("{:?} {:?}", h.state().combine_draft, h.state().combine_tab).contains("pw\""));
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     assert_eq!(texts_of(h.state(), 1), ["Page 1", "Page 1", "Page 2"]);
 }
@@ -1881,7 +1889,7 @@ fn a_file_that_opens_but_forbids_combining_takes_the_permissions_password() {
     h.get_by_label("Enter the permissions password to allow combining");
     type_password(&mut h, "owner");
     assert!(h.state().combine_draft[1].lock.is_none());
-    assert!(!h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(!h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
 }
 
 #[test]
@@ -2470,22 +2478,33 @@ fn canceling_launch_display_override_does_not_affect_later_documents() {
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
     file.write_all(&protected("reader", "owner", -4)).unwrap();
     drop(file);
-    let mut app = crate::control::new_app();
-    app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
-    app.open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
-    assert!(app.views.is_empty() && app.password_prompt.is_some());
-    app.submit_password(&egui::Context::default(), None);
-    assert!(app.views.is_empty() && app.password_prompt.is_none());
-    app.open_bytes(&egui::Context::default(), "next.pdf", None, fixture(2)).unwrap();
-    assert_eq!(app.views[0].view.display, PageLayout::Single);
-    assert!(app.views[0].continuous());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
+            app
+        }
+    });
+    h.run_steps(2);
+    h.state_mut().open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
+    support::wait_until(&mut h, "the password prompt", |app| app.password_prompt.is_some());
+    assert!(h.state().views.is_empty());
+    h.state_mut().submit_password(&egui::Context::default(), None);
+    h.run_steps(2);
+    assert!(h.state().views.is_empty() && h.state().password_prompt.is_none());
+    h.state_mut().open_bytes(&egui::Context::default(), "next.pdf", None, fixture(2)).unwrap();
+    assert_eq!(h.state().views[0].view.display, PageLayout::Single);
+    assert!(h.state().views[0].continuous());
     // Reopening the same protected file normally must not resurrect the canceled override.
-    app.open_path(path.to_str().unwrap());
-    app.submit_password(&egui::Context::default(), Some("reader".into()));
-    assert_eq!(app.views.len(), 2);
-    assert_eq!(app.views[1].view.display, PageLayout::Single);
-    assert!(app.views[1].continuous());
-    assert_eq!(app.settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
+    h.state_mut().open_path(path.to_str().unwrap());
+    support::wait_until(&mut h, "the password prompt again", |app| app.password_prompt.is_some());
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
+    support::wait_until(&mut h, "the unlocked file", |app| app.views.len() == 2);
+    assert_eq!(h.state().views[1].view.display, PageLayout::Single);
+    assert!(h.state().views[1].continuous());
+    assert_eq!(h.state().settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
     std::fs::remove_file(path).unwrap();
 }
 
@@ -2512,7 +2531,7 @@ fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
                 app
             }
         });
-        h.run_steps(4);
+        support::wait_until(&mut h, "the password prompt", |app| app.password_prompt.is_some());
         let prompt = h.state().password_prompt.as_ref().map(|p| p.path.clone());
         assert_eq!(prompt, Some(Some(locked_path.clone())), "the protected file is asked for");
         assert!(h.state().views.is_empty(), "the later file waits behind the prompt");
@@ -2556,7 +2575,7 @@ fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
             app
         }
     });
-    h.run_steps(4);
+    support::wait_until(&mut h, "the password prompt", |app| app.password_prompt.is_some());
     assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
     h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     support::wait_until(&mut h, "both files, or a second prompt", |app| app.views.len() == 2 || app.password_prompt.is_some());
@@ -2592,7 +2611,7 @@ fn a_password_retry_finishes_before_the_next_protected_files_prompt() {
             app
         }
     });
-    h.run_steps(4);
+    support::wait_until(&mut h, "A's password prompt", |app| app.password_prompt.is_some());
     // B is prepared in the background meanwhile; its reply waits behind A's prompt.
     std::thread::sleep(std::time::Duration::from_millis(300));
     h.run_steps(2);
@@ -2632,7 +2651,7 @@ fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
             app
         }
     });
-    h.run_steps(4);
+    support::wait_until(&mut h, "the password prompt", |app| app.password_prompt.is_some());
     assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
     h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
     support::wait_until(&mut h, "every file", |app| app.views.len() == OTHERS + 1);
@@ -7888,7 +7907,7 @@ fn delete_in_the_page_grid_deletes_the_page_and_not_the_hidden_picture() {
     let pages = h.state().session.get(id).unwrap().info.pages.len();
     assert!(h.execute("page.organize"));
     h.run_steps(4);
-    h.get_by_label("Select page 2").click();
+    h.get_by_label("Page 2").click();
     h.run_steps(2);
     h.key_press(egui::Key::Delete);
     h.run_steps(4);
@@ -8334,7 +8353,7 @@ fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
 #[test]
 fn organize_panel_comes_with_the_grid_and_closes_it() {
     let mut h = organize(3);
-    h.get_by_label("Insert");
+    h.get_by_label("Insert a blank page after the selection");
     h.get_by_label("Bates numbering");
     h.get_by_label("Page properties");
     h.get_by_label("Close panel").click();
@@ -8356,9 +8375,9 @@ fn page_properties_sets_the_tab_order_of_the_selected_pages() {
         (doc.can_undo().map(str::to_owned), doc.can_redo().map(str::to_owned))
     };
     let mut h = organize(3);
-    h.get_by_label("Select page 1").click();
+    h.get_by_label("Page 1").click();
     h.run_steps(2);
-    h.get_by_label("Select page 3").click();
+    h.get_by_label("Page 3").click();
     h.run_steps(2);
     h.get_by_label("Page properties").click();
     h.run_steps(3);
