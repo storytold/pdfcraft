@@ -103,6 +103,91 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
         .accessible_name(name);
 }
 
+/// A wide, searchable fleet list; filtering never changes the selected destination.
+fn printer_picker(ui: &mut egui::Ui, d: &mut PrintDraft) -> egui::Response {
+    let filter_id = ui.make_persistent_id("printer-filter");
+    // Keep the search only while the combo box renders its popup contents.
+    let previous_filter = ui.data(|data| data.get_temp::<String>(filter_id));
+    let opening = previous_filter.is_none();
+    let mut filter = previous_filter.unwrap_or_default();
+    let shown = match d.printer.as_deref() {
+        Some(p) => printer_label(p),
+        None if still_looking(d) => tl!("Looking for printers…").to_string(),
+        None => tl!("Save as PDF").to_string(),
+    };
+    let screen = ui.ctx().content_rect();
+    let width = 430.0_f32.min((screen.width() - 32.0).max(0.0));
+    let height = 420.0_f32.min(screen.height() * 0.6);
+    let response = craft_ui::ComboBox::from_id_salt("printer")
+        .selected_text(&shown)
+        .width(260.0)
+        .truncate()
+        .height(height)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            ui.set_width(width);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            let search_label = ui.label(tl!("Search printers"));
+            let search = ui.add(widgets::line(&mut filter).desired_width(f32::INFINITY).char_limit(256)).labelled_by(search_label.id);
+            if opening {
+                search.request_focus();
+            }
+            let query = pdfcraft_render::text::fold_case(filter.trim());
+            if d.printers_loading {
+                ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
+            }
+            // Keep the search and Save as PDF visible while the devices scroll.
+            // The popup's actual clip can be shorter than the requested height.
+            let footer_height = ui.spacing().interact_size.y + 4.0 * ui.spacing().item_spacing.y;
+            let list_height = (ui.clip_rect().bottom() - ui.cursor().top() - footer_height).clamp(0.0, height);
+            let mut list = egui::ScrollArea::vertical().id_salt("printer-results").max_height(list_height);
+            if search.changed() {
+                list = list.vertical_scroll_offset(0.0);
+            }
+            list.show(ui, |ui| {
+                let mut matched = false;
+                for p in &d.printers {
+                    let name = printer_label(&p.name);
+                    if !query.is_empty() && !pdfcraft_render::text::fold_case(&name).contains(&query) {
+                        continue;
+                    }
+                    matched = true;
+                    let label = if p.default && p.name != crate::web_print::BROWSER_PRINTER {
+                        crate::i18n::fmt(tl!("{name} (default)"), &[("name", &name)])
+                    } else {
+                        name
+                    };
+                    let selected = d.printer.as_deref() == Some(p.name.as_str());
+                    let choice = ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
+                    if opening && selected {
+                        choice.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if choice.clicked() {
+                        d.printer_picked = true;
+                        ui.close();
+                    }
+                }
+                if !matched && !query.is_empty() && !d.printers_loading {
+                    ui.label(tl!("No printers match."));
+                }
+            });
+            ui.separator();
+            // An explicit choice also protects PDF from a late default-printer refresh.
+            if ui.selectable_value(&mut d.printer, None, tl!("Save as PDF")).clicked() {
+                d.printer_picked = true;
+                ui.close();
+            }
+        });
+    ui.data_mut(|data| {
+        if response.inner.is_some() {
+            data.insert_temp(filter_id, filter);
+        } else {
+            data.remove::<String>(filter_id);
+        }
+    });
+    response.response.on_hover_text(shown)
+}
+
 /// A standard card container for a Print dialog section matching the Preferences dialog design language.
 fn print_card<R>(
     ui: &mut egui::Ui,
@@ -252,36 +337,13 @@ pub(crate) fn body(
                     ui.spacing_mut().item_spacing.y = 3.0;
 
                     // Card 1: Printer & Paper Setup
-                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 452.0, None, |ui| {
+                    print_card(ui, t, tl!("Printer & Paper Setup"), Some("printer"), 424.0, None, |ui| {
                         egui::Grid::new("print-top").num_columns(2).spacing([8.0, 3.0]).show(ui, |ui| {
                         let printer_caption = ui.label(tl!("Printer:"));
                         let before = d.printer.clone();
                         let browser = d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER);
                         ui.horizontal(|ui| {
-                            let shown = match d.printer.as_deref() {
-                                Some(p) => printer_label(p),
-                                None if still_looking(d) => tl!("Looking for printers…").to_string(),
-                                None => tl!("Save as PDF").to_string(),
-                            };
-                            craft_ui::ComboBox::from_id_salt("printer").selected_text(shown).width(240.0).show_ui(ui, |ui| {
-                                if d.printers_loading {
-                                    ui.add_enabled(false, egui::Label::new(tl!("Looking for printers…")));
-                                }
-                                for p in &d.printers {
-                                    let name = printer_label(&p.name);
-                                    let label = if p.default && p.name != crate::web_print::BROWSER_PRINTER {
-                                        crate::i18n::fmt(tl!("{name} (default)"), &[("name", &name)])
-                                    } else {
-                                        name
-                                    };
-                                    ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
-                                }
-                                if ui.selectable_value(&mut d.printer, None, tl!("Save as PDF")).clicked() {
-                                    d.printer_picked = true;
-                                }
-                            })
-                            .response
-                            .labelled_by(printer_caption.id);
+                            printer_picker(ui, d).labelled_by(printer_caption.id);
                             let tip = if spool::HAS_PRINTER_PREFERENCES {
                                 tl!("Opens the printer driver's preferences. They are saved for every print from this computer; the copies, two-sided, grayscale and paper chosen here still apply.")
                             } else {
@@ -492,7 +554,7 @@ pub(crate) fn body(
                 });
 
                 // Card 2: Pages to Print
-                print_card(ui, t, tl!("Pages to Print"), Some("files"), 452.0, None, |ui| {
+                print_card(ui, t, tl!("Pages to Print"), Some("files"), 424.0, None, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(tl!("Range:"));
                         let area_label = d.area.as_ref().map(|(page, a)| {
@@ -549,7 +611,7 @@ pub(crate) fn body(
                 });
 
                 // Card 3: Page Sizing & Handling
-                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 452.0, None, |ui| {
+                print_card(ui, t, tl!("Page Sizing & Handling"), Some("sliders-horizontal"), 424.0, None, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (h, label) in [
                             (Handling::Size, tl!("Size")),
@@ -725,7 +787,7 @@ pub(crate) fn body(
                 });
 
                 // Card 4: Comments & Forms
-                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 452.0, None, |ui| {
+                print_card(ui, t, tl!("Comments & Forms"), Some("message-square"), 424.0, None, |ui| {
                     ui.horizontal(|ui| {
                         combo(
                             ui,
@@ -761,12 +823,13 @@ pub(crate) fn body(
                 });
             });
 
-            ui.add_space(10.0);
+            ui.add_space(12.0);
 
             // Right Column: Preview Card.
             ui.vertical(|ui| {
-                ui.set_width(358.0);
-                print_card(ui, t, tl!("Preview"), Some("eye"), 358.0, None, |ui| {
+                ui.set_width(348.0);
+                ui.set_max_width(348.0);
+                print_card(ui, t, tl!("Preview"), Some("eye"), 320.0, None, |ui| {
                     let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
                     ui.painter().rect_filled(area, 6.0, t.hover);
                     match (&settings, sheets.get(d.sheet)) {
