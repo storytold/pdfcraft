@@ -63,8 +63,12 @@ fn tool_tile(g: &'static ToolGroup, unpinnable: bool) -> Tile<'static> {
 }
 
 /// A grid of the tools `groups`; a click selects a tool and, with `unpinnable`, the hover action unpins it.
+///
+/// The start page scrolls as a whole, so the grid takes the height of its rows and owns no scroll.
 fn tool_grid(ui: &mut egui::Ui, name: &str, groups: &[&'static ToolGroup], unpinnable: bool, asked: &RefCell<Vec<Asked>>) {
-    let out = TileGrid::<usize>::new(name.to_string()).show_items(ui, &Tools(groups.len()), &mut |key, _| tool_tile(groups[*key], unpinnable));
+    let out = TileGrid::<usize>::new(name.to_string())
+        .natural_height(true)
+        .show_items(ui, &Tools(groups.len()), &mut |key, _| tool_tile(groups[*key], unpinnable));
     for event in out.response.events {
         match event {
             CollectionEvent::Activate(key) => {
