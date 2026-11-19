@@ -897,6 +897,7 @@ impl Automation {
             "accessibility_set_alt" => self.accessibility_set_alt(&a)?,
             "accessibility_tags" => self.accessibility_tags(&a)?,
             "accessibility_tag_content" => self.accessibility_tag_content(&a)?,
+            "accessibility_tag_boxes" => self.accessibility_tag_boxes(&a)?,
             "accessibility_set_tag_property" => self.accessibility_set_tag_property(&a)?,
             "accessibility_mark_tag_artifact" => self.accessibility_mark_tag_artifact(&a)?,
             "accessibility_layout_table_to_blocks" => self.accessibility_layout_table_to_blocks(&a)?,

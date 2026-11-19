@@ -1427,6 +1427,8 @@ struct PageEnv<'a> {
     t: &'a Tokens,
     table_preview: &'a Option<crate::field_table_ui::Preview>,
     tag: u64,
+    /// The Tags panel's selected tag, outlined on its pages (one box per page).
+    tag_highlight: &'a [pdfcraft_engine::a11y::TagBox],
     text_style: &'a pdfcraft_engine::AddedText,
     /// Preferences: addresses written as plain page text open like links (#4207).
     text_links: bool,
@@ -3435,6 +3437,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let prepare_tab_order = (preparing && view.prepare.show_tab_numbers).then(|| crate::forms_ui::tab_order(&form, info));
+    let tag_highlight = if app.right == Some(RightPanel::Tags) { app.tags_state.highlighted(doc) } else { Arc::default() };
     let env = PageEnv {
         added: &added,
         allowed,
@@ -3490,6 +3493,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         t: &t,
         table_preview: &table_preview,
         tag,
+        tag_highlight: &tag_highlight,
         text_style: &text_style,
         text_links: app.text_links,
         tool,

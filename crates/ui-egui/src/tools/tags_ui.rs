@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use egui::Ui;
 use pdfcraft_cos::ObjRef;
-use pdfcraft_engine::a11y::{TagContentItem, TagInfo, TagPlacement, TagProperty};
+use pdfcraft_engine::a11y::{TagBox, TagContentItem, TagInfo, TagPlacement, TagProperty};
 use pdfcraft_engine::{DocId, Edit};
 
+use crate::canvas::PageXform;
 use crate::{icons, theme::Tokens, widgets};
 
 #[derive(Clone, Debug, Default)]
@@ -23,6 +24,10 @@ pub(crate) struct State {
     /// The selected tag's marked content per (document, edit generation, tag): reading it parses
     /// page content, so it isn't repeated every frame either.
     content_cache: Option<(DocId, u64, ObjRef, Arc<Vec<TagContentItem>>)>,
+    /// Highlight content is off: the pages don't outline the selected tag.
+    hide_highlight: bool,
+    /// The selected tag's outlines, one per page, per (document, edit generation, tag).
+    boxes_cache: Option<(DocId, u64, ObjRef, Arc<Vec<TagBox>>)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -82,6 +87,23 @@ impl State {
         self.content_cache = Some((doc.id, generation, object, content.clone()));
         content
     }
+    /// What the pages outline for the selected tag: one box per page its content and its
+    /// descendants' content is on, or none while Highlight content is off.
+    pub(crate) fn highlighted(&mut self, doc: &pdfcraft_engine::Document) -> Arc<Vec<TagBox>> {
+        let Some(object) = self.selected.filter(|_| !self.hide_highlight && self.doc == Some(doc.id)) else { return Arc::default() };
+        let generation = doc.edit_generation();
+        if let Some((id, g, o, boxes)) = &self.boxes_cache
+            && *id == doc.id
+            && *g == generation
+            && *o == object
+        {
+            return boxes.clone();
+        }
+        let boxes = Arc::new(pdfcraft_engine::a11y::tag_page_bounds(&doc.tag_boxes(object).unwrap_or_default()));
+        self.boxes_cache = Some((doc.id, generation, object, boxes.clone()));
+        boxes
+    }
+
     /// The document's tags, walked again only after an edit.
     pub(crate) fn tags(&mut self, doc: &pdfcraft_engine::Document) -> Arc<Vec<TagInfo>> {
         let generation = doc.edit_generation();
@@ -198,6 +220,10 @@ pub(crate) fn panel(
     {
         page = Some(p);
     }
+    let mut highlight = !state.hide_highlight;
+    if ui.add(widgets::checkbox(&mut highlight, tl!("Highlight content"))).changed() {
+        state.hide_highlight = !highlight;
+    }
     ui.add_enabled_ui(can_edit, |ui| {
         field(ui, tl!("Tag type"), &mut state.draft.kind, false);
         field(ui, tl!("Title"), &mut state.draft.title, false);
@@ -255,6 +281,15 @@ pub(crate) fn panel(
     )
 }
 
+/// Outlines the selected tag's content on page `page`.
+pub(crate) fn paint_page(painter: &egui::Painter, t: &Tokens, xf: &PageXform, page: usize, info: &pdfcraft_render::DocInfo, boxes: &[TagBox]) {
+    for b in boxes.iter().filter(|b| b.page == page) {
+        let r = xf.user_rect_f64(info, page, b.rect).expand(1.5);
+        painter.rect_filled(r, egui::CornerRadius::same(2), t.accent.gamma_multiply(0.16));
+        painter.rect_stroke(r, egui::CornerRadius::same(2), egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Outside);
+    }
+}
+
 fn visible_tags<'a>(tags: &'a [TagInfo], query: &str, collapsed: &BTreeSet<ObjRef>) -> Vec<&'a TagInfo> {
     if query.is_empty() {
         let mut hidden_after: Option<usize> = None;
@@ -289,5 +324,58 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
         ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
     } else {
         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::PdfCraftApp;
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_engine::a11y::TagBox;
+
+    /// A figure and a filled bar, each its own tag.
+    const FIGURES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im 10 0 R >> >> >> endobj
+4 0 obj << /Length 109 >> stream
+/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC /Figure << /MCID 1 >> BDC 100 100 50 30 re f EMC
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R 8 0 R] >> endobj
+7 0 obj << /S /Figure /P 6 0 R /Pg 3 0 R /K 0 >> endobj
+8 0 obj << /S /Figure /P 6 0 R /Pg 3 0 R /K 1 >> endobj
+10 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >> stream
+\x00
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    fn highlighted(h: &mut egui_kittest::Harness<'static, PdfCraftApp>) -> Vec<TagBox> {
+        let app = h.state_mut();
+        let Some(doc) = app.session.get(app.views[0].id) else { return Vec::new() };
+        app.tags_state.highlighted(doc).to_vec()
+    }
+
+    /// The selected tag is outlined on its page (#7070), the document's tag for the whole tree, and
+    /// Highlight content turns it off.
+    #[test]
+    fn the_selected_tag_is_outlined_until_highlight_content_is_off() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("a11y.tags"));
+        h.run_steps(2);
+        assert_eq!(highlighted(&mut h), [TagBox { page: 0, rect: [10.0, 100.0, 150.0, 170.0] }], "the Document tag covers both figures");
+        h.get_by_label("Figure · 8").click();
+        h.run_steps(2);
+        assert_eq!(highlighted(&mut h), [TagBox { page: 0, rect: [100.0, 100.0, 150.0, 130.0] }]);
+        h.get_by_label("Highlight content").click();
+        h.run_steps(2);
+        assert!(highlighted(&mut h).is_empty());
     }
 }
