@@ -507,9 +507,10 @@ impl Annotation {
 /// clockwise by `rotation` (ISO 32000-2 §12.5.3): `rect` turned as far counterclockwise about its
 /// upper-left corner `(x0, y1)`, which stays where it is on the page. As displayed, the box's
 /// top-left is that corner, the rectangle's width runs across and its height down, as on an
-/// unturned page. `rect` itself for 0 or anything that isn't a quarter turn. The vendored
-/// renderer draws the appearance there (hayro-interpret patch 37).
-fn upright_rect(rect: [f64; 4], rotation: u16) -> [f64; 4] {
+/// unturned page. For 0 or anything that isn't a quarter turn, `rect` itself with its corners in
+/// order (`[x0, y0, x1, y1]`, smallest first), so the result is normalized whatever order `rect`
+/// gave them in. The vendored renderer draws the appearance there (hayro-interpret patch 37).
+pub fn upright_rect(rect: [f64; 4], rotation: u16) -> [f64; 4] {
     let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
     let (w, h) = (x1 - x0, y1 - y0);
     match rotation {

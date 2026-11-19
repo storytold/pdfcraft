@@ -38,7 +38,7 @@ use core::{inspect_structure, spend};
 pub use model::{
     Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
     MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
-    fill_group_text, group_primaries, link_replies, thread_tops,
+    fill_group_text, group_primaries, link_replies, thread_tops, upright_rect,
 };
 pub use navigation::named_destination;
 #[cfg(test)]
