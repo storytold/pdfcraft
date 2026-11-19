@@ -730,6 +730,7 @@ impl Automation {
             "form_focus" => self.form_focus(&a)?,
             "form_set_image" => self.form_set_image(&a)?,
             "form_reset" => self.form_reset(&a)?,
+            "form_submit" => self.form_submit(&a)?,
             "form_add_field" => self.form_add_field(&a)?,
             "form_add_field_table" => self.form_add_field_table(&a)?,
             "form_set_props" => self.form_set_props(&a)?,

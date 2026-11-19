@@ -459,6 +459,9 @@ impl LinkOrigin {
 pub struct PendingLink {
     pub url: String,
     pub origin: LinkOrigin,
+    /// The document whose form this email address submits (a `mailto:` submit action, #7693):
+    /// the prompt offers to save it first and says to attach it. `None` for a link.
+    pub submit: Option<DocId>,
 }
 
 /// A resolved local target and its original source/destination, independent of the active tab.

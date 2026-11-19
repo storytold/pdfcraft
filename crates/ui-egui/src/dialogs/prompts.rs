@@ -147,9 +147,15 @@ pub(crate) fn shorten_middle(name: &str, max: usize) -> String {
 pub(super) fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let Some(pending) = app.pending_link.clone() else { return };
     let t = Tokens::get(ctx);
-    let email = pending.url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"));
-    let (title, open) = if email { (tl!("Write this email?"), tl!("Open email app")) } else { (tl!("Open this web page?"), tl!("Open link")) };
-    let mut choice: Option<bool> = None;
+    let email = pdfcraft_engine::links::is_mail_address(&pending.url);
+    // A form submitted by email (#7693) is saved first when it has to be, for the user to attach.
+    let save_first = pending.submit.is_some_and(|id| app.form_email_needs_save(id));
+    let (title, open) = match (pending.submit, email) {
+        (Some(_), _) => (tl!("Email this form?"), if save_first { tl!("Open email app without saving") } else { tl!("Open email app") }),
+        (None, true) => (tl!("Write this email?"), tl!("Open email app")),
+        (None, false) => (tl!("Open this web page?"), tl!("Open link")),
+    };
+    let mut choice: Option<LinkChoice> = None;
     let modal = widgets::show_modal(ctx, "link_prompt", |ui| {
         ui.set_width(460.0);
         ui.horizontal(|ui| {
@@ -157,13 +163,21 @@ pub(super) fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ui.label(egui::RichText::new(title).font(theme::semibold(16.0)));
         });
         ui.add_space(6.0);
-        let template = if email {
-            tl!("{who} in this document wants to open your email app with this address:")
-        } else {
-            tl!("{who} in this document wants to open this address in your browser:")
+        let template = match (pending.submit, email) {
+            (Some(_), _) => tl!(
+                "{who} in this document submits the form by email. PdfCraft doesn't send it: your email app opens a new message, and you attach the saved PDF to it."
+            ),
+            (None, true) => tl!("{who} in this document wants to open your email app with this address:"),
+            (None, false) => tl!("{who} in this document wants to open this address in your browser:"),
         };
-        ui.label(crate::i18n::fmt(template, &[("who", tl!(pending.origin.noun()))]));
+        ui.add(egui::Label::new(crate::i18n::fmt(template, &[("who", tl!(pending.origin.noun()))])).wrap());
         ui.add_space(6.0);
+        if pending.submit.is_some()
+            && let Some(draft) = pdfcraft_engine::links::mail_draft(&pending.url)
+        {
+            mail_draft_rows(ui, &draft);
+            ui.add_space(6.0);
+        }
         // The host as the browser will connect to it, in punycode when it is international, so a
         // lookalike such as `pаypal.com` (Cyrillic `а`) reads as `xn--pypal-4ve.com`. Its Unicode
         // form isn't repeated here: a whole-script lookalike would read as the real site.
@@ -191,19 +205,55 @@ pub(super) fn link_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ui.add_space(14.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if widgets::pill_button(ui, tl!("Cancel"), true).clicked() {
-                choice = Some(false);
+                choice = Some(LinkChoice::Cancel);
+            }
+            if save_first && widgets::pill_button(ui, tl!("Save and open email app"), false).clicked() {
+                choice = Some(LinkChoice::SaveAndOpen);
             }
             if widgets::pill_button(ui, open, false).clicked() {
-                choice = Some(true);
+                choice = Some(LinkChoice::Open);
             }
         });
     });
     if choice.is_none() && modal.should_close() {
-        choice = Some(false);
+        choice = Some(LinkChoice::Cancel);
     }
-    if let Some(open) = choice {
-        app.resolve_pending_link(open);
+    match choice {
+        Some(LinkChoice::Cancel) => app.resolve_pending_link(false),
+        Some(LinkChoice::Open) => app.resolve_pending_link(true),
+        Some(LinkChoice::SaveAndOpen) => app.save_and_resolve_form_email(),
+        None => {}
     }
+}
+
+/// An answer to [`link_prompt`].
+#[derive(Clone, Copy)]
+enum LinkChoice {
+    Cancel,
+    Open,
+    /// Save the document whose form is emailed, then open the email.
+    SaveAndOpen,
+}
+
+/// The recipients, subject and start of the message a form's email address writes, so the user
+/// sees who gets the form before the email app opens. Fields the address leaves empty aren't shown.
+fn mail_draft_rows(ui: &mut egui::Ui, draft: &pdfcraft_engine::links::MailDraft) {
+    let rows = [
+        (tl!("To"), draft.to.join(", ")),
+        (tl!("Cc"), draft.cc.join(", ")),
+        (tl!("Bcc"), draft.bcc.join(", ")),
+        (tl!("Subject"), draft.subject.clone()),
+        (tl!("Message"), draft.body.clone()),
+    ];
+    egui::Grid::new("mail_draft_rows").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+        for (label, value) in rows.iter().filter(|(_, v)| !v.is_empty()) {
+            ui.label(egui::RichText::new(*label).strong());
+            egui::ScrollArea::vertical().id_salt(*label).max_height(80.0).show(ui, |ui| {
+                ui.add(egui::Label::new(value.as_str()).wrap().selectable(true));
+            });
+            ui.end_row();
+        }
+    });
 }
 
 /// A document that asks to open in Full Screen mode (`/PageMode /FullScreen`) is asked about

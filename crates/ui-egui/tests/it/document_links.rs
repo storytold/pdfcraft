@@ -146,7 +146,7 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 }
 
 fn pending(url: &str, origin: LinkOrigin) -> Option<PendingLink> {
-    Some(PendingLink { url: url.into(), origin })
+    Some(PendingLink { url: url.into(), origin, submit: None })
 }
 
 const BOOKMARK_URL: &str = "https://example.org/from-a-bookmark";

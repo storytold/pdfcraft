@@ -557,6 +557,9 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_reset", "Clear form", "Reset fields to their default values: all of them, or only those listed. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "fields": { "type": "array", "items": { "type": "string" } } }), &["doc"])),
+        t("form_submit", "Submit form by email", "Press push button `field` whose action submits the form, as the app does when it is clicked, without sending anything: PdfCraft never sends form data. For an email address (mailto:), returns email: the message the app opens in the email program after offering to save the document (url, the address unchanged; to, cc, bcc, subject and body as it reads them), unsaved (the document has changes not saved yet, or no file, so the app offers to save it first) and attach (the file name the user is told to attach). Any other address returns email null with the reason it isn't sent. An email address that asks to attach or insert a local file is refused with an error, as a link's is.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "field": { "type": "string" } }), &["doc", "field"])),
         t(
             "form_add_field",
             "Prepare form: add a field",
