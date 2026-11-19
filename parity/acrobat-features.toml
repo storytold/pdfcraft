@@ -1478,8 +1478,8 @@ milestone = "M12"
 status = "partial"
 commands = ["edit.advanced_search"]
 tools = ["text_find"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::advanced_search_lists_results_with_context"]
-notes = "in the current document, as a side panel; searching other open documents, folders and indexes is still to come"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::advanced_search_lists_results_with_context", "crates/ui-egui/tests/it/viewer.rs::advanced_search_heads_results_with_page_labels"]
+notes = "in the current document, as a side panel; each page's results are headed with its page label (iv, A-1), as the page box shows it. text_find reports physical page numbers (doc_info lists the labels). Searching other open documents, folders and indexes is still to come"
 
 [[feature]]
 id = "view.search-folder"
