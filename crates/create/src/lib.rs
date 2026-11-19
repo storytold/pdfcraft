@@ -5,9 +5,13 @@
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize};
 
 mod extract;
+mod image_probe;
 mod text_font;
 mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
+#[cfg(test)]
+use image_probe::JP2_SIGNATURE;
+use image_probe::{is_jpx, probe_jpeg, probe_jpx};
 pub use upright_image::jpeg_exif_orientation;
 mod office;
 #[cfg(not(target_arch = "wasm32"))]
@@ -150,15 +154,6 @@ fn icc_for(profile: Vec<u8>, n: usize) -> Option<Vec<u8>> {
     (profile.len() >= 128 && profile.get(36..40) == Some(b"acsp") && profile.get(16..20) == Some(space)).then_some(profile)
 }
 
-/// A JPEG's ICC profile from its APP2 `ICC_PROFILE` chunks: (sequence number, chunk count,
-/// data). `None` unless every chunk from 1 to the count is there exactly once.
-fn jpeg_icc(mut chunks: Vec<(u8, u8, &[u8])>) -> Option<Vec<u8>> {
-    let count = chunks.first()?.1;
-    chunks.sort_by_key(|c| c.0);
-    let complete = usize::from(count) == chunks.len() && chunks.iter().zip(1..=count).all(|(c, seq)| c.0 == seq && c.1 == count);
-    complete.then(|| chunks.iter().flat_map(|c| c.2.iter().copied()).collect())
-}
-
 /// The samples of a black-and-white image packed one bit per pixel (1 for white, each row
 /// starting on a byte): eight-bit grey (`n` 1) or RGB (`n` 3) whose every pixel is pure black or
 /// pure white, or one-bit grey, already packed (a bilevel TIFF). `None` for anything else, found
@@ -266,164 +261,26 @@ fn add_image(doc: &mut Document, img: Embedded, profiles: &mut Vec<(Vec<u8>, Obj
     doc.add(Object::Stream(stream))
 }
 
-const JP2_SIGNATURE: &[u8] = &[0, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
-
-fn be32(b: &[u8], at: usize) -> Option<u32> {
-    b.get(at..at + 4).map(|x| u32::from_be_bytes([x[0], x[1], x[2], x[3]]))
-}
-
-fn be16(b: &[u8], at: usize) -> Option<u16> {
-    b.get(at..at + 2).map(|x| u16::from_be_bytes([x[0], x[1]]))
-}
-
-/// The boxes of a JP2 box sequence: (type, payload).
-fn jp2_boxes(b: &[u8]) -> Vec<([u8; 4], &[u8])> {
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 8 <= b.len() {
-        let len = be32(b, i).unwrap_or(0) as u64;
-        let ty = [b[i + 4], b[i + 5], b[i + 6], b[i + 7]];
-        let (head, len) = match len {
-            0 => (8, (b.len() - i) as u64),
-            1 => match b.get(i + 8..i + 16) {
-                Some(x) => (16, u64::from_be_bytes([x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]])),
-                None => break,
-            },
-            n => (8, n),
-        };
-        // `len as usize` would truncate on 32-bit targets and put the end before the payload.
-        let end = i.saturating_add(usize::try_from(len).unwrap_or(usize::MAX)).min(b.len());
-        if len < head as u64 || end <= i {
-            break;
-        }
-        out.push((ty, &b[i + head..end]));
-        i = end;
-    }
-    out
-}
-
 /// A JPEG 2000 image (JP2 file or raw codestream), embedded as is (`/JPXDecode`; the colour
 /// space comes from the file).
 fn jpx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
-    let bad = |m: &str| CreateError::Image(name.into(), m.into());
-    let mut dpi = (72.0, 72.0);
-    let (w, h) = if bytes.starts_with(JP2_SIGNATURE) {
-        let header =
-            jp2_boxes(bytes).into_iter().find(|(t, _)| t == b"jp2h").map(|(_, p)| p).ok_or_else(|| bad("a JPEG 2000 file without a header"))?;
-        let inner = jp2_boxes(header);
-        let ihdr = inner.iter().find(|(t, _)| t == b"ihdr").map(|(_, p)| *p).ok_or_else(|| bad("a JPEG 2000 file without image size"))?;
-        // Capture resolution (pixels per metre), when given.
-        if let Some((_, res)) = inner.iter().find(|(t, _)| t == b"res ")
-            && let Some((_, r)) = jp2_boxes(res).into_iter().find(|(t, _)| t == b"resc" || t == b"resd")
-            && r.len() >= 10
-        {
-            let part = |n: u16, d: u16, e: i8| if d == 0 { 0.0 } else { n as f64 / d as f64 * 10f64.powi(e as i32) * 0.0254 };
-            let (v, hz) = (
-                part(be16(r, 0).unwrap_or(0), be16(r, 2).unwrap_or(0), r[8] as i8),
-                part(be16(r, 4).unwrap_or(0), be16(r, 6).unwrap_or(0), r[9] as i8),
-            );
-            if v > 1.0 && hz > 1.0 {
-                dpi = (hz, v);
-            }
-        }
-        (be32(ihdr, 4).ok_or_else(|| bad("bad image header"))?, be32(ihdr, 0).ok_or_else(|| bad("bad image header"))?)
-    } else {
-        // SIZ: Lsiz Rsiz Xsiz Ysiz XOsiz YOsiz …
-        let (x, y, xo, yo) = (be32(bytes, 8), be32(bytes, 12), be32(bytes, 16), be32(bytes, 20));
-        match (x, y, xo, yo) {
-            (Some(x), Some(y), Some(xo), Some(yo)) if x > xo && y > yo => (x - xo, y - yo),
-            _ => return Err(bad("a damaged JPEG 2000 codestream")),
-        }
-    };
-    if w == 0 || h == 0 || w > 100_000 || h > 100_000 {
-        return Err(bad("unusual JPEG 2000 image size"));
-    }
+    let probe = probe_jpx(bytes).map_err(|e| CreateError::Image(name.into(), e.message().into()))?;
     let mut d = Dict::new();
     d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
-    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc: None, px: (w, h), dpi })
+    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc: None, px: (probe.width, probe.height), dpi: probe.dpi })
 }
 
 fn jpeg(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
-    let bad = |m: &str| CreateError::Image(name.into(), m.into());
-    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
-        return Err(bad("not a JPEG file"));
-    }
-    let (mut i, mut size, mut comps, mut dpi, mut adobe) = (2usize, None, 0u8, (72.0, 72.0), false);
-    let mut icc_chunks = Vec::new();
-    while let Some(&byte) = bytes.get(i) {
-        if byte != 0xFF {
-            i += 1;
-            continue;
-        }
-        i += 1;
-        // Markers may be preceded by any number of 0xFF fill bytes.
-        while bytes.get(i) == Some(&0xFF) {
-            i += 1;
-        }
-        let marker = *bytes.get(i).ok_or_else(|| bad("truncated JPEG marker"))?;
-        i += 1;
-        // Metadata ends at the first scan; entropy-coded bytes are not segments.
-        if marker == 0xDA || marker == 0xD9 {
-            break;
-        }
-        if marker == 0xD8 || marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
-            continue;
-        }
-        let len = usize::from(be16(bytes, i).ok_or_else(|| bad("truncated JPEG segment length"))?);
-        if len < 2 {
-            return Err(bad("invalid JPEG segment length"));
-        }
-        let end = i.checked_add(len).ok_or_else(|| bad("JPEG segment length overflow"))?;
-        let seg = bytes.get(i + 2..end).ok_or_else(|| bad("truncated JPEG segment"))?;
-        match marker {
-            // APP0 JFIF density.
-            0xE0 if seg.starts_with(b"JFIF\0") && seg.len() >= 12 => {
-                let (unit, x, y) = (seg[7], u16::from_be_bytes([seg[8], seg[9]]) as f64, u16::from_be_bytes([seg[10], seg[11]]) as f64);
-                if x > 0.0 && y > 0.0 {
-                    dpi = match unit {
-                        1 => (x, y),
-                        2 => (x * 2.54, y * 2.54),
-                        _ => dpi,
-                    };
-                }
-            }
-            0xEE if seg.starts_with(b"Adobe") => adobe = true,
-            // APP2 ICC profile, possibly split over several chunks.
-            0xE2 => {
-                if let Some(([seq, count], data)) = seg.strip_prefix(b"ICC_PROFILE\0").and_then(<[u8]>::split_first_chunk::<2>) {
-                    icc_chunks.push((*seq, *count, data));
-                }
-            }
-            0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC && size.is_none() => {
-                if seg.len() < 6 {
-                    return Err(bad("bad frame header"));
-                }
-                size = Some((u16::from_be_bytes([seg[3], seg[4]]) as u32, u16::from_be_bytes([seg[1], seg[2]]) as u32));
-                comps = seg[5];
-            }
-            _ => {}
-        }
-        i = end;
-    }
-    let (w, h) = size.filter(|(w, h)| *w > 0 && *h > 0).ok_or_else(|| bad("no image size"))?;
+    let probe = probe_jpeg(bytes).map_err(|e| CreateError::Image(name.into(), e.message()))?;
     let mut d = Dict::new();
-    let cs = match comps {
-        1 => "DeviceGray",
-        3 => "DeviceRGB",
-        4 => {
-            if adobe {
-                // Adobe writes CMYK JPEGs inverted.
-                d.set(b"Decode".to_vec(), Object::Array([1, 0, 1, 0, 1, 0, 1, 0].iter().map(|v| Object::Int(*v)).collect()));
-            }
-            "DeviceCMYK"
-        }
-        n => return Err(bad(&format!("{n} colour components are not supported"))),
-    };
-    d.set(b"ColorSpace".to_vec(), Object::name(cs));
+    if probe.invert_cmyk {
+        // Adobe writes CMYK JPEGs inverted.
+        d.set(b"Decode".to_vec(), Object::Array([1, 0, 1, 0, 1, 0, 1, 0].iter().map(|v| Object::Int(*v)).collect()));
+    }
+    d.set(b"ColorSpace".to_vec(), Object::name(probe.color_space));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
-    let icc = jpeg_icc(icc_chunks);
-    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc, px: (w, h), dpi })
+    Ok(Embedded { dict: d, data: bytes.to_vec(), filtered: true, smask: None, icc: probe.icc, px: (probe.width, probe.height), dpi: probe.dpi })
 }
 
 fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
@@ -769,8 +626,7 @@ fn is_image(bytes: &[u8]) -> bool {
         || is_gif(bytes)
         || is_pcx(bytes)
         // JPEG 2000: a JP2 file or a raw codestream.
-        || bytes.starts_with(JP2_SIGNATURE)
-        || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
+        || is_jpx(bytes)
         // BMP: "BM" and a known header size (so text starting with "BM" stays text).
         || (bytes.starts_with(b"BM")
             && bytes.get(14..18).and_then(|h| <[u8; 4]>::try_from(h).ok()).is_some_and(|h| matches!(u32::from_le_bytes(h), 12 | 40 | 52 | 56 | 108 | 124)))
@@ -808,7 +664,7 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
         Ok(vec![decoded(name, bytes, craft_image_codecs::Format::Gif)?])
     } else if is_pcx(bytes) {
         Ok(vec![pcx(name, bytes)?])
-    } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
+    } else if is_jpx(bytes) {
         Ok(vec![jpx(name, bytes)?])
     } else {
         Err(CreateError::Image(name.into(), "use a PNG, JPEG, JPEG 2000, TIFF, GIF or BMP image".into()))
