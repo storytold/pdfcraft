@@ -503,7 +503,10 @@ mod sidecar_tests {
         let (mut app, files, jobs) = app_in(Some(&folder));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         assert_eq!(app.recovered.len(), 1);
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            app
+        });
         h.run_steps(4);
         h.get_by_label("Recover").click();
         for _ in 0..200 {

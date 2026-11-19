@@ -69,7 +69,10 @@ fn a_software_renderer_is_shown_to_the_user() {
     use eframe::wgpu::DeviceType;
     // The notices the window shows after one frame of `app`.
     fn shown(app: pdfcraft_ui_egui::PdfCraftApp) -> Vec<String> {
-        let mut h = egui_kittest::Harness::builder().build_eframe(move |_cc| app);
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |cc| {
+            install_runtime(&cc.egui_ctx);
+            app
+        });
         h.run_steps(2);
         let cards = craft::ui::runtime::toast::cards(&h.ctx, &craft::ui::runtime::env::WindowKey::main());
         cards.iter().map(|card| card.toast.message.as_str().to_owned()).collect()

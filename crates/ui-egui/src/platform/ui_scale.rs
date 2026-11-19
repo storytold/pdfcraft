@@ -101,10 +101,10 @@ mod tests {
         // A display that reports 200% (#456: a 1080p screen whose system reports 2×).
         // PLAN: framework gap F-12: the harness's `SystemReader` has no text-scale setter, so Auto is checked at the
         // display's scale alone until the lead rewires it.
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1000.0, 700.0))
-            .with_pixels_per_point(2.0)
-            .build_eframe(|_cc| crate::PdfCraftApp::for_unit_tests());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(2.0).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            crate::PdfCraftApp::for_unit_tests()
+        });
         h.run_steps(3);
         let ctx = h.ctx.clone();
         assert_eq!(ctx.pixels_per_point(), 2.0, "Auto follows the display's scale");

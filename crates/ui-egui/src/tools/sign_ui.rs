@@ -1021,14 +1021,17 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
-            let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
-            let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
-            draft.step = SignStep::SignAs;
-            draft.password = "secret12".into();
-            app.sign_draft = Some(draft);
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = PdfCraftApp::for_unit_tests();
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.digital_ids = vec![listed("/ids/grace.p12", "Grace Hopper")];
+                let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+                draft.step = SignStep::SignAs;
+                draft.password = "secret12".into();
+                app.sign_draft = Some(draft);
+                app
+            }
         });
         h.run_steps(2);
 

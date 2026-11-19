@@ -116,14 +116,17 @@ fn rig(docs: &[usize], files: ScriptedFiles) -> Rig {
 
     let docs = docs.to_vec();
     let run = jobs.clone();
-    let h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::with_host(host, services);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        for (i, n) in docs.iter().enumerate() {
-            app.open_bytes(&egui::Context::default(), &format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
+    let h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::with_host(host, services);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            for (i, n) in docs.iter().enumerate() {
+                app.open_bytes(&egui::Context::default(), &format!("doc{i}.pdf"), None, fixture(*n)).unwrap();
+            }
+            run.run_all();
+            app
         }
-        run.run_all();
-        app
     });
     let mut rig = Rig { h, files, jobs, intake: sender };
     rig.steps(2);

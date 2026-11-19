@@ -1416,7 +1416,10 @@ mod revert_draft_tests {
 
     /// `app` in a window, so its dialogs are drawn and answered by their buttons.
     fn shown(app: PdfCraftApp) -> egui_kittest::Harness<'static, PdfCraftApp> {
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            app
+        });
         h.run_steps(2);
         h
     }

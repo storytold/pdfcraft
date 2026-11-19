@@ -337,11 +337,14 @@ fn save_named(h: &mut Harness<'static, PdfCraftApp>, name: &str) -> String {
 fn open_letter(name: &str, content: &str, desk: &Desk) -> Harness<'static, PdfCraftApp> {
     let bytes = letter_pdf(content);
     let title = name.to_string();
-    let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |_cc| {
-        let mut app = new_app();
-        let _ = app.set_option(&egui::Context::default(), "language", "en");
-        let _ = app.open_bytes(&egui::Context::default(), &title, None, bytes);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(desk.width, desk.height)).build_eframe(move |cc| {
+        install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            let _ = app.set_option(&egui::Context::default(), "language", "en");
+            let _ = app.open_bytes(&egui::Context::default(), &title, None, bytes);
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -405,4 +408,11 @@ impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
         let ctx = self.ctx.clone();
         self.state_mut().set_option(&ctx, key, value)
     }
+}
+
+/// Installs the framework runtime on a harness context, as `tests/it/support`'s `install_runtime` (L-227).
+fn install_runtime(ctx: &egui::Context) {
+    let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN))
+        .expect("the runtime installs on a fresh context");
 }

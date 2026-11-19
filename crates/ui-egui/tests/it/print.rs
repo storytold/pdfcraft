@@ -53,11 +53,14 @@ pub(crate) fn rig_on(files: ScriptedFiles, setup: impl FnOnce(&mut PdfCraftApp) 
     let jobs = Arc::new(ManualJobs::new());
     let files = Arc::new(files);
     let (host_jobs, host_files) = (jobs.clone(), files.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::support::test_app(crate::support::host_with(host_jobs, host_files));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(crate::support::host_with(host_jobs, host_files));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     Rig { h, jobs, files }

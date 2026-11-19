@@ -25,13 +25,16 @@ fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
 
 /// Open the real Properties dialog and type a title that has not entered document history.
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(|_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes(&egui::Context::default(), "properties.pdf", None, bytes.as_ref().clone()).unwrap();
-        app.set_option(&egui::Context::default(), "dialog", "properties").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            app.open_bytes(&egui::Context::default(), "properties.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "properties").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_role_and_label(Role::TextInput, "Title").focus();

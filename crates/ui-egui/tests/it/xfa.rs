@@ -36,11 +36,14 @@ fn pdf(acroform: &str, extra: &str, objects: &[&str]) -> Vec<u8> {
 const XFA_PACKET: &str = "<< /Length 52 >>\nstream\n<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"></xdp:xdp>\nendstream";
 
 fn open(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     h

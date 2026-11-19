@@ -94,11 +94,14 @@ fn harness_with(pdf: Vec<u8>) -> Rig {
     let jobs = Arc::new(ManualJobs::new());
     let uploads = Uploads::default();
     let on = jobs.clone();
-    let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |_cc| {
-        let mut app = app_on(on.clone());
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.clone()).unwrap();
-        app
+    let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).renderer(uploads.clone()).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(on.clone());
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.clone()).unwrap();
+            app
+        }
     });
     let mut rig = Rig { h, jobs, uploads };
     rig.steps(4);

@@ -35,11 +35,14 @@ fn scan() -> Vec<u8> {
 /// The scan open in an app whose jobs wait until `run_jobs` runs them.
 fn harness() -> (Harness<'static, PdfCraftApp>, Arc<ManualJobs>) {
     let (app, jobs) = crate::control::app_with_manual_jobs();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app;
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app;
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     (h, jobs)

@@ -11,12 +11,15 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     h
@@ -25,11 +28,14 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 /// The app with the file at `path` open, whose file pickers answer from `files`: a Save writes into
 /// `files` (read back with `files.file(..)`), not to disk.
 fn harness_on_file(path: String, files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
     h
@@ -300,11 +306,14 @@ fn delivered_redactions_save_in_place() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
     h.execute("redact.pages");
@@ -412,11 +421,14 @@ fn undoing_apply_redactions_saves_in_place_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
     for _ in 0..2 {
@@ -461,11 +473,14 @@ fn reverting_after_apply_redactions_saves_in_place_again() {
     let original = dir.join("contract.pdf");
     std::fs::write(&original, include_bytes!("../data/form.pdf")).unwrap();
     let path = original.to_string_lossy().into_owned();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&path);
+            app
+        }
     });
     crate::support::settle(&mut h);
     h.execute("redact.pages");
@@ -616,11 +631,14 @@ fn redaction_properties_for_this_run_only_and_cancel() {
 #[test]
 fn redacting_an_imported_word_list() {
     let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Call Ada today\nAda is private\nPublic line").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.execute("redact.search");
@@ -645,11 +663,14 @@ fn redacting_an_imported_word_list() {
 #[test]
 fn redaction_search_can_match_case_and_whole_words() {
     let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Ada ada Adaline\nAda beta betamax").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "memo.pdf", None, memo.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.execute("redact.search");
@@ -724,11 +745,14 @@ fn bookmarked_pdf() -> Vec<u8> {
 /// as it is (here a bookmark title), in the same notification as the count of marks applied.
 #[test]
 fn applying_says_where_the_removed_text_is_still_held() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "bluefin.pdf", None, bookmarked_pdf()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "bluefin.pdf", None, bookmarked_pdf()).unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     assert!(h.execute("redact.mark"));
@@ -778,11 +802,14 @@ fn applying_says_the_pdfa_identification_was_written_back() {
         bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pdfa.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pdfa.pdf", None, bytes).unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     assert!(h.execute("redact.mark"));

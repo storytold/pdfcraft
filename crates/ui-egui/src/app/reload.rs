@@ -224,10 +224,13 @@ mod tests {
             let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, document_watch(Wake::none()).inline());
             let path = path.to_owned();
             let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-                let mut app = PdfCraftApp::with_host(host, services);
-                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-                app.open_path(&path);
-                app
+                crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+                {
+                    let mut app = PdfCraftApp::with_host(host, services);
+                    app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                    app.open_path(&path);
+                    app
+                }
             });
             let mut rig = Self { h, jobs };
             rig.steps(4);

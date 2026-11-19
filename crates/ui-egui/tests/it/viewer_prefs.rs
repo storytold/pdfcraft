@@ -36,14 +36,17 @@ const HIDE_ALL: &str = "/ViewerPreferences << /HideToolbar true /HideMenubar tru
 
 /// A plain document in the first tab and `files` after it, the last one active.
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static, files: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        for (i, catalog) in files.iter().enumerate() {
-            app.open_bytes(&egui::Context::default(), &format!("{i}.pdf"), None, fixture(catalog)).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            for (i, catalog) in files.iter().enumerate() {
+                app.open_bytes(&egui::Context::default(), &format!("{i}.pdf"), None, fixture(catalog)).unwrap();
+            }
+            app
         }
-        app
     });
     settle(&mut h);
     h
@@ -283,10 +286,13 @@ fn on_monitor(h: &mut Harness<'static, PdfCraftApp>) {
 /// A harness whose window is on a 1920 × 1080 monitor, with one document opened in the first
 /// frames.
 fn windowed(files: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     on_monitor(&mut h);
     h.run_steps(2);
@@ -326,7 +332,10 @@ fn center_window_centres_the_window_on_the_monitor() {
 
 #[test]
 fn a_maximized_window_or_a_second_tab_is_left_alone() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| crate::control::new_app());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        crate::control::new_app()
+    });
     on_monitor(&mut h);
     h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().maximized = Some(true);
     h.run_steps(2);

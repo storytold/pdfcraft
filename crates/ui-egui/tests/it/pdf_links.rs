@@ -10,12 +10,15 @@ use pdfcraft_ui_egui::PdfCraftApp;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     // 60 fps steps, so two clicks fall inside egui's double-click window.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -131,11 +134,14 @@ trailer << /Root 1 0 R >>
 #[test]
 fn an_appearance_edit_keeps_the_destination_as_written() {
     use pdfcraft_render::{DestView, LinkTarget};
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "positioned.pdf", None, POSITIONED.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "positioned.pdf", None, POSITIONED.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let positioned = LinkTarget::Page(0, DestView::Xyz { left: Some(100.0), top: Some(300.0), zoom: Some(2.0) });

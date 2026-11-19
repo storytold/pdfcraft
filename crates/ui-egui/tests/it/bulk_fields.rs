@@ -49,15 +49,18 @@ fn fixture() -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        // Saves stamp /ModDate from the clock; pinned, two saves compare equal across a second.
-        app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, fixture()).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app.execute(&egui::Context::default(), "form.prepare");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            // Saves stamp /ModDate from the clock; pinned, two saves compare equal across a second.
+            app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app.execute(&egui::Context::default(), "form.prepare");
+            app
+        }
     });
     h.run_steps(4);
     h

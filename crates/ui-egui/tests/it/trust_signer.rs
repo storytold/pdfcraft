@@ -34,12 +34,15 @@ fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
     // The signed copy is saved where the pick answers: the test's own folder.
     let files =
         std::sync::Arc::new(craft::host::ScriptedFiles::answering((0..4).map(|_| craft::host::Picked::Paths(vec![dir.join("contract_signed.pdf")]))));
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "contract.pdf", None, FIXTURE.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h

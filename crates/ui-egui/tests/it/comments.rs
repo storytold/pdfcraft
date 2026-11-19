@@ -35,14 +35,17 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 }
 
 fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "text.pdf", None, bytes).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, bytes).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -51,16 +54,19 @@ fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'st
 
 /// Like [`harness`], on a host whose file picker answers from `files`.
 fn harness_on_files(files: std::sync::Arc<ScriptedFiles>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
-        let host = Host::builder(info).files(files).build();
-        let mut app = PdfCraftApp::with_host(std::sync::Arc::new(host), crate::control::services());
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
+            let host = Host::builder(info).files(files).build();
+            let mut app = PdfCraftApp::with_host(std::sync::Arc::new(host), crate::control::services());
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -671,16 +677,19 @@ const PEN_WIDTH: f64 = 7.0;
 /// renders among them) wait until the test runs them; the pages are rendered once before it returns.
 fn pen_harness() -> (Harness<'static, PdfCraftApp>, std::sync::Arc<craft::host::ManualJobs>) {
     let (app, jobs) = crate::control::app_with_manual_jobs();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app;
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
-        app.comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_COLOUR);
-        app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_WIDTH);
-        app.set_option(&egui::Context::default(), "quick", "ink").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app;
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            app.comment_prefs.set_color(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_COLOUR);
+            app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Ink, PEN_WIDTH);
+            app.set_option(&egui::Context::default(), "quick", "ink").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     support::settle_held(&mut h, &jobs);
@@ -2660,13 +2669,16 @@ fn attachment_comment_fixture() -> Vec<u8> {
 }
 
 fn attachment_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "annexed.pdf", None, attachment_comment_fixture()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "annexed.pdf", None, attachment_comment_fixture()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -2799,14 +2811,17 @@ fn hovering_a_comment_shows_its_author_and_text() {
         "trailer",
         "8 0 obj << /Type /Annot /Subtype /Square /Rect [50 50 150 120] /C [1 0 0] /T (Ada) /Contents (Check this figure) >> endobj\ntrailer",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "hover.pdf", None, pdf.into_bytes()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        // No Comments panel: the comment's text should only appear in the hover popup.
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "hover.pdf", None, pdf.into_bytes()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            // No Comments panel: the comment's text should only appear in the hover popup.
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -2830,13 +2845,16 @@ fn preference_hides_author_only_highlight_hover_previews() {
         "trailer",
         "8 0 obj << /Type /Annot /Subtype /Highlight /Rect [50 50 150 120] /C [1 1 0] /T (Ada) /QuadPoints [50 120 150 120 50 50 150 50] >> endobj\ntrailer",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "highlight_hover.pdf", None, pdf.into_bytes()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "highlight_hover.pdf", None, pdf.into_bytes()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -2876,17 +2894,20 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
     // Give the fixture a complete xref so byte comparisons do not measure repair-on-save.
     let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(pdf)).expect("synthetic fixture parses");
     let pdf = pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes complete fixture");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "markup.pdf", None, pdf).expect("opens synthetic markup");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        // Small enough to show the whole page in every rotation: a point hovered below the window
-        // is not over the page.
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        app.views[0].view.rotation = view_rotation;
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "markup.pdf", None, pdf).expect("opens synthetic markup");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            // Small enough to show the whole page in every rotation: a point hovered below the window
+            // is not over the page.
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app.views[0].view.rotation = view_rotation;
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -3699,12 +3720,15 @@ fn a_locked_replace_text_window_shows_the_replacement_read_only() {
 fn a_double_click_on_a_replace_text_opens_its_one_window() {
     for (caret_first, on_caret) in [(true, true), (false, false)] {
         let pdf = replace_text_pdf(caret_first, false);
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "replace.pdf", None, pdf.clone()).expect("opens");
-            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "replace.pdf", None, pdf.clone()).expect("opens");
+                app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+                app
+            }
         });
         h.run_steps(4);
         crate::support::settle(&mut h);
@@ -3735,14 +3759,17 @@ fn a_double_click_on_a_replace_text_opens_its_one_window() {
 #[test]
 fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     // Frames a sixtieth apart, so two clicks land within egui's double-click time.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
-        app.set_option(&egui::Context::default(), "quick", "note").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            app.set_option(&egui::Context::default(), "quick", "note").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);

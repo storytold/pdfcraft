@@ -143,15 +143,18 @@ fn rendered_page_content_is_identical_with_and_without_decoration() {
 
 fn harness(theme: &str) -> Harness<'static, PdfCraftApp> {
     let theme = theme.to_string();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = new_app();
-        // Save comparisons must not depend on crossing a /ModDate second boundary.
-        app.session = app.session.with_clock(|| 1_700_000_000);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.set_option(&egui::Context::default(), "theme", &theme).unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, pdf()).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            // Save comparisons must not depend on crossing a /ModDate second boundary.
+            app.session = app.session.with_clock(|| 1_700_000_000);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "theme", &theme).unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, pdf()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h
@@ -246,4 +249,11 @@ impl AppHarness for egui_kittest::Harness<'_, pdfcraft_ui_egui::PdfCraftApp> {
         let ctx = self.ctx.clone();
         self.state_mut().set_option(&ctx, key, value)
     }
+}
+
+/// Installs the framework runtime on a harness context, as `tests/it/support`'s `install_runtime` (L-227).
+fn install_runtime(ctx: &egui::Context) {
+    let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN))
+        .expect("the runtime installs on a fresh context");
 }

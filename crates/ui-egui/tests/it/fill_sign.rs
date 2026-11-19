@@ -43,17 +43,20 @@ fn harness_saving(files: &Arc<ScriptedFiles>, out: &std::path::Path) -> Harness<
 
 fn harness_on(fixture: &[u8], files: Option<Arc<ScriptedFiles>>, path: Option<String>) -> Harness<'static, PdfCraftApp> {
     let fixture = fixture.to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = match &files {
-            Some(files) => crate::control::app_with_files(files.clone()),
-            None => crate::control::new_app(),
-        };
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", path.clone(), fixture.clone()).unwrap();
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app.set_option(&egui::Context::default(), "author", "Ada").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = match &files {
+                Some(files) => crate::control::app_with_files(files.clone()),
+                None => crate::control::new_app(),
+            };
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", path.clone(), fixture.clone()).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Ada").unwrap();
+            app
+        }
     });
     h.run_steps(5);
     h

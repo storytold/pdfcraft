@@ -56,13 +56,16 @@ fn fixture(pages: usize) -> Vec<u8> {
 }
 
 fn harness(names: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::support::inline_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        for name in names {
-            app.open_bytes(&egui::Context::default(), name, None, fixture(3)).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::inline_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            for name in names {
+                app.open_bytes(&egui::Context::default(), name, None, fixture(3)).unwrap();
+            }
+            app
         }
-        app
     });
     h.run_steps(4);
     h

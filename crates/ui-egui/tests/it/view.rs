@@ -33,16 +33,19 @@ fn harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static,
 
 /// [`harness`] with frames `step_dt` seconds apart (a quarter second is kittest's default).
 fn harness_stepping(step_dt: f32, options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        for (k, v) in options {
-            app.set_option(&egui::Context::default(), k, v).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step_dt).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            for (k, v) in options {
+                app.set_option(&egui::Context::default(), k, v).unwrap();
+            }
+            app
         }
-        app
     });
     h.run_steps(8);
     h
@@ -116,16 +119,19 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn mixed_harness(options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "mixed.pdf", None, MIXED.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        for (k, v) in options {
-            app.set_option(&egui::Context::default(), k, v).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "mixed.pdf", None, MIXED.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            for (k, v) in options {
+                app.set_option(&egui::Context::default(), k, v).unwrap();
+            }
+            app
         }
-        app
     });
     h.run_steps(8);
     h
@@ -189,16 +195,19 @@ fn page_gaps_in_organizer_do_not_move_the_document_scroll_position() {
 
 /// A three-page comparison, with the old pane leading while the new document stays active.
 fn page_gaps_comparison_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.open_bytes(&egui::Context::default(), "old.pdf", None, PAGES.to_vec()).unwrap();
-        app.open_bytes(&egui::Context::default(), "new.pdf", None, PAGES.to_vec()).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
-        app.compare_old = Some(app.views[0].id);
-        app.run_compare(&egui::Context::default());
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.open_bytes(&egui::Context::default(), "old.pdf", None, PAGES.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "new.pdf", None, PAGES.to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "50").unwrap();
+            app.compare_old = Some(app.views[0].id);
+            app.run_compare(&egui::Context::default());
+            app
+        }
     });
     h.run_steps(4);
     let at = h.state().views[0].viewport_rect().center();
@@ -245,7 +254,10 @@ fn page_gaps_default_survives_restart_and_applies_to_new_documents() {
     let mut restored = crate::control::new_app();
     restored.apply_settings(&app.settings_snapshot());
     restored.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| restored);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        restored
+    });
     h.run_steps(8);
     h.set_option("zoom", "50").unwrap();
     h.run_steps(4);
@@ -294,13 +306,16 @@ fn page_gaps_work_for_mixed_sizes_and_two_page_rows() {
 #[test]
 fn page_gaps_stay_closed_at_fractional_device_scales() {
     for ppp in [1.0, 1.25, 1.5, 2.0] {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_pixels_per_point(ppp).build_eframe(|_cc| {
-            let mut app = crate::control::new_app();
-            app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).unwrap();
-            for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "43"), ("page-gaps", "off")] {
-                app.set_option(&egui::Context::default(), key, value).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_pixels_per_point(ppp).build_eframe(|cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).unwrap();
+                for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "43"), ("page-gaps", "off")] {
+                    app.set_option(&egui::Context::default(), key, value).unwrap();
+                }
+                app
             }
-            app
         });
         h.run_steps(8);
         for page in 0..2 {
@@ -941,13 +956,16 @@ fn dests_harness() -> Harness<'static, PdfCraftApp> {
 
 /// `pdf` open with the Bookmarks panel showing, once the window's layout holds still.
 fn bookmarks_harness(name: &'static str, pdf: &'static [u8]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), name, None, pdf.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, pdf.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app
+        }
     });
     // The Bookmarks panel widens to fit its titles over many frames; fit-width zoom follows it.
     // Positions are checked once the window's layout holds still.
@@ -1077,12 +1095,15 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn form_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, FORM.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, FORM.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app
+        }
     });
     h.run_steps(8);
     h
@@ -1140,14 +1161,17 @@ trailer << /Root 1 0 R >>
 /// box, or one its scripts have not opened yet) is left as it is drawn, as in Acrobat.
 #[test]
 fn highlight_fields_leaves_read_only_fields_alone() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "locked.pdf", None, LOCKED.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "fields", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "locked.pdf", None, LOCKED.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "fields", "on").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
@@ -1171,14 +1195,17 @@ trailer << /Root 1 0 R >>
 /// can be chosen, is tinted.
 #[test]
 fn highlight_fields_leaves_a_groups_read_only_button_alone() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "radio.pdf", None, LOCKED_RADIO.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "fields", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "radio.pdf", None, LOCKED_RADIO.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "fields", "on").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
@@ -1200,14 +1227,17 @@ trailer << /Root 1 0 R >>
 /// animation's frames are push buttons); the text field beside it is tinted.
 #[test]
 fn highlight_fields_leaves_push_buttons_alone() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "button.pdf", None, BUTTON_AND_TEXT.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "fields", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "button.pdf", None, BUTTON_AND_TEXT.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "fields", "on").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let tint = egui::Color32::from_rgba_unmultiplied(0x6E, 0x8E, 0xF5, 48);
@@ -1226,11 +1256,14 @@ trailer << /Root 1 0 R >>
 /// The viewer runs the open action of the page being read, and its timers as they fall due.
 #[test]
 fn the_viewer_runs_the_pages_open_action_and_its_timers() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "timer.pdf", None, PAGE_TIMER.to_vec()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "timer.pdf", None, PAGE_TIMER.to_vec()).expect("opens");
+            app
+        }
     });
     h.run_steps(2);
     let id = h.state().views[0].id;
@@ -1244,12 +1277,15 @@ fn the_viewer_runs_the_pages_open_action_and_its_timers() {
 /// Under a dialog nothing acts on the document: the page's open action waits until it closes.
 #[test]
 fn page_actions_and_timers_wait_under_a_dialog() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "timer.pdf", None, PAGE_TIMER.to_vec()).expect("opens");
-        assert!(app.execute(&egui::Context::default(), "help.shortcuts"), "the shortcuts dialog opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "timer.pdf", None, PAGE_TIMER.to_vec()).expect("opens");
+            assert!(app.execute(&egui::Context::default(), "help.shortcuts"), "the shortcuts dialog opens");
+            app
+        }
     });
     h.run_steps(3);
     let id = h.state().views[0].id;
@@ -1274,11 +1310,14 @@ trailer << /Root 1 0 R >>
 /// interval that close action stops doesn't run in between.
 #[test]
 fn timers_wait_for_the_page_a_page_action_goes_to() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "hop.pdf", None, PAGE_HOP.to_vec()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "hop.pdf", None, PAGE_HOP.to_vec()).expect("opens");
+            app
+        }
     });
     h.run_steps(2);
     let id = h.state().views[0].id;
@@ -1323,13 +1362,16 @@ fn press_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 /// timer's value instead of writing the old one back.
 #[test]
 fn a_timer_writing_the_focused_field_shows_in_its_editor() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "clock.pdf", None, FIELD_TIMER.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "clock.pdf", None, FIELD_TIMER.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     for _ in 0..30 {
         h.run_steps(2);
@@ -1371,11 +1413,14 @@ trailer << /Root 1 0 R >>
 /// their flags in the document say.
 #[test]
 fn buttons_take_presses_as_the_scripts_show_them() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "frames.pdf", None, SHOWN_BY_SCRIPT.to_vec()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "frames.pdf", None, SHOWN_BY_SCRIPT.to_vec()).expect("opens");
+            app
+        }
     });
     h.run_steps(2);
     press_field(&mut h, "shown");
@@ -1389,13 +1434,16 @@ fn buttons_take_presses_as_the_scripts_show_them() {
 /// can.
 #[test]
 fn a_groups_read_only_button_is_not_chosen_by_a_click() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "radio.pdf", None, LOCKED_RADIO.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "radio.pdf", None, LOCKED_RADIO.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let r = rect(&h, 0).expect("page 1");
@@ -1435,14 +1483,17 @@ trailer << /Root 1 0 R >>
 #[test]
 fn required_radio_buttons_get_a_round_red_border() {
     let _gpu = gpu();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "radios.pdf", None, RADIOS.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "fields", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "radios.pdf", None, RADIOS.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "fields", "on").unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
@@ -1482,14 +1533,17 @@ trailer << /Root 1 0 R >>
 #[test]
 fn round_check_boxes_get_a_round_highlight() {
     let _gpu = gpu();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "checks.pdf", None, ROUND_CHECKS.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "fields", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "checks.pdf", None, ROUND_CHECKS.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "fields", "on").unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
@@ -1677,14 +1731,17 @@ trailer << /Root 1 0 R >>
     .into_bytes();
     for ppp in [1.0, 2.0] {
         let bytes = pdf.clone();
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).with_pixels_per_point(ppp).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "lines.pdf", None, bytes.clone()).expect("opens");
-            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-            app.set_option(&egui::Context::default(), "zoom", "87").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).with_pixels_per_point(ppp).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "lines.pdf", None, bytes.clone()).expect("opens");
+                app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+                app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+                app.set_option(&egui::Context::default(), "zoom", "87").unwrap();
+                app
+            }
         });
         let (mean, worst) = compare_page_with_raster(&mut h, &pdf, 0.87);
         assert!(mean < 1.0 && worst < 16, "{ppp} px/pt: the page on screen differs from its raster: mean {mean:.2}, max {worst}");
@@ -1749,13 +1806,16 @@ trailer << /Root 1 0 R >>
 }
 
 fn grid_harness(pdf: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
-    Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.open_bytes(&egui::Context::default(), "grid.pdf", None, pdf.clone()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
-        app
+    Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.open_bytes(&egui::Context::default(), "grid.pdf", None, pdf.clone()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
+            app
+        }
     })
 }
 
@@ -1775,14 +1835,17 @@ fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
 #[test]
 fn sidebar_collapse_and_resize_preserves_scroll_position() {
     use pdfcraft_ui_egui::canvas::Fit;
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
-        app.set_option(&egui::Context::default(), "layout", "continuous").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app.set_option(&egui::Context::default(), "layout", "continuous").unwrap();
+            app
+        }
     });
     let mut width = 0.0;
     for _ in 0..400 {
@@ -1850,15 +1913,18 @@ fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui
         pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 {height}] >> endobj\n", i + 3);
     }
     pdf += "trailer << /Root 1 0 R >>\n%%EOF";
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "unequal-spreads.pdf", None, pdf.as_bytes().to_vec()).unwrap();
-        for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "two-up"), ("zoom", "200")] {
-            app.set_option(&egui::Context::default(), key, value).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "unequal-spreads.pdf", None, pdf.as_bytes().to_vec()).unwrap();
+            for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "two-up"), ("zoom", "200")] {
+                app.set_option(&egui::Context::default(), key, value).unwrap();
+            }
+            app.set_option(&egui::Context::default(), "cover", if cover { "on" } else { "off" }).unwrap();
+            app
         }
-        app.set_option(&egui::Context::default(), "cover", if cover { "on" } else { "off" }).unwrap();
-        app
     });
     h.run_steps(12);
     let at = h.state().views[0].viewport_rect().center();
@@ -1924,12 +1990,15 @@ fn switching_modes_keeps_the_current_page_at_fixed_zoom() {
     }
     pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
     let other = pdf.clone().into_bytes();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, pdf.into_bytes()).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, pdf.into_bytes()).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(8);
     h.state_mut().views[0].go_to_page(17);
@@ -1969,11 +2038,14 @@ fn switching_modes_keeps_the_current_page_at_fixed_zoom() {
 #[test]
 fn long_view_menu_fits_a_short_window() {
     use egui_kittest::kittest::Queryable;
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 400.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(8);
     crate::support::open_menu(&mut h, "View");
@@ -2157,13 +2229,16 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
         craft::host::Picked::Paths(vec![more.clone()]),
         craft::host::Picked::Paths(vec![out.clone()]),
     ]));
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, PAGES.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
+            app
+        }
     });
     h.run_steps(8);
     let id = h.state().views[0].id;
@@ -2317,17 +2392,20 @@ fn presenting(options: &'static [(&'static str, &'static str)]) -> Harness<'stat
 
 /// [`presenting`] with another document.
 fn presenting_pdf(pdf: &'static [u8], options: &'static [(&'static str, &'static str)]) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.1).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "slides.pdf", None, pdf.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "none").unwrap();
-        app.set_option(&egui::Context::default(), "animation_effects", "on").unwrap();
-        for (k, v) in options {
-            app.set_option(&egui::Context::default(), k, v).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.1).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "slides.pdf", None, pdf.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "none").unwrap();
+            app.set_option(&egui::Context::default(), "animation_effects", "on").unwrap();
+            for (k, v) in options {
+                app.set_option(&egui::Context::default(), k, v).unwrap();
+            }
+            app
         }
-        app
     });
     h.run_steps(4);
     h.key_press_modifiers(Modifiers::COMMAND, Key::L);
@@ -2752,12 +2830,15 @@ fn a_page_whose_content_was_cut_is_named_in_a_notice() {
     let _gpu = gpu();
     let pdf = cut_content_pdf();
     let (client, channel) = std::sync::mpsc::channel();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(craft::automation::ControlChannel::new(channel), None);
-        app.open_bytes(&egui::Context::default(), "cut.pdf", None, pdf).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.attach_control(craft::automation::ControlChannel::new(channel), None);
+            app.open_bytes(&egui::Context::default(), "cut.pdf", None, pdf).expect("opens");
+            app
+        }
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while h.state().views[0].cut_pages().is_empty() {

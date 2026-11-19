@@ -176,16 +176,19 @@ fn services() -> AppServices {
 /// The app with `pdf` open at `zoom` percent and its first frames run. The left panel stays
 /// open only where a test places the page relative to the window's chrome.
 fn open(pdf: Vec<u8>, zoom: &'static str, left_open: bool) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
-        let mut app = PdfCraftApp::with_host(Arc::new(host), services());
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
-        if !left_open {
-            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).build();
+            let mut app = PdfCraftApp::with_host(Arc::new(host), services());
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
+            if !left_open {
+                app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            }
+            app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
+            app
         }
-        app.set_option(&egui::Context::default(), "zoom", zoom).unwrap();
-        app
     });
     for _ in 0..30 {
         h.run_steps(2);

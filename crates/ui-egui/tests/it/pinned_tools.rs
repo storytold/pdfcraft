@@ -6,11 +6,14 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{LeftPanel, PdfCraftApp};
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |_cc| {
-        let mut app = crate::support::held_app(std::sync::Arc::new(craft::host::ManualJobs::new()));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::held_app(std::sync::Arc::new(craft::host::ManualJobs::new()));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     h

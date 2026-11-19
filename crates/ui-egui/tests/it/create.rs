@@ -22,11 +22,14 @@ fn scripted(
     setup: impl FnOnce(&mut PdfCraftApp) + 'static,
 ) -> Harness<'static, PdfCraftApp> {
     let host = crate::support::host_with(jobs, files);
-    Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = crate::support::test_app(host);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        app
+    Harness::builder().with_size(size).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            app
+        }
     })
 }
 
@@ -34,10 +37,13 @@ fn scripted(
 fn image_import_dialog_chooses_dpi_and_cancels() {
     use egui::{Key, Modifiers};
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.begin_image_import(&cc.egui_ctx, vec![("scan.png".into(), png())]);
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.begin_image_import(&cc.egui_ctx, vec![("scan.png".into(), png())]);
+            app
+        }
     });
     h.run_steps(3);
     if let Ok(path) = std::env::var("PDFCRAFT_IMAGE_IMPORT_SHOT") {
@@ -185,11 +191,14 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
 
 #[test]
 fn the_pdf_optimizer_dialog_picks_a_preset() {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.txt", None, b"lorem ipsum".to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.txt", None, b"lorem ipsum".to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("optimize.advanced"));

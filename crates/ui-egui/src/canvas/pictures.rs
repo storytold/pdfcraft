@@ -293,20 +293,23 @@ mod tests {
     fn a_page_edit_makes_its_picture_a_new_revision_and_leaves_the_others() {
         let jobs = Arc::new(ManualJobs::new());
         let queue = jobs.clone();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(queue.clone()).build();
-            let services = crate::AppServices::new(
-                Wake::none(),
-                craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
-                None,
-                None,
-                craft::platform::open::FileIntake::new(Wake::none()).0,
-                craft::platform::watch::FileWatch::new(Wake::none()).inline(),
-            );
-            let mut app = PdfCraftApp::with_host(Arc::new(host), services);
-            let blank = app.session.create_blank(200.0, 300.0, 3).expect("a blank document");
-            app.open_bytes(&egui::Context::default(), "three.pdf", None, blank.as_ref().clone()).expect("opens");
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(queue.clone()).build();
+                let services = crate::AppServices::new(
+                    Wake::none(),
+                    craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+                    None,
+                    None,
+                    craft::platform::open::FileIntake::new(Wake::none()).0,
+                    craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+                );
+                let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+                let blank = app.session.create_blank(200.0, 300.0, 3).expect("a blank document");
+                app.open_bytes(&egui::Context::default(), "three.pdf", None, blank.as_ref().clone()).expect("opens");
+                app
+            }
         });
         settle(&mut h, &jobs);
         // One frame queues what the change outdates; the jobs wait for the test to run them.

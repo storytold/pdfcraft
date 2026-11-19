@@ -80,11 +80,14 @@ fn grid_of(files: Vec<(&str, Vec<u8>)>, size: egui::Vec2) -> Harness<'static, Pd
 /// The same, after only `steps` frames.
 fn grid_after(files: Vec<(&str, Vec<u8>)>, size: egui::Vec2, steps: usize) -> Harness<'static, PdfCraftApp> {
     let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|(n, b)| (n.to_string(), b)).collect();
-    let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.use_files(&egui::Context::default(), FilePurpose::Combine, files);
-        app
+    let mut h = Harness::builder().with_size(size).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.use_files(&egui::Context::default(), FilePurpose::Combine, files);
+            app
+        }
     });
     h.run_steps(steps);
     h
@@ -885,13 +888,16 @@ fn files_picked_by_automation_let_go_of_the_pages_picked() {
 fn open_documents_already_in_the_list_are_not_added_again() {
     // #1356: Add open documents left out none of the open documents, but added again the ones
     // already listed. Two documents with the same name and the same bytes are still two documents.
-    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        for (name, pages) in [("a.pdf", 1), ("b.pdf", 2), ("report.pdf", 3)] {
-            app.open_bytes(&egui::Context::default(), name, None, fixture(pages)).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            for (name, pages) in [("a.pdf", 1), ("b.pdf", 2), ("report.pdf", 3)] {
+                app.open_bytes(&egui::Context::default(), name, None, fixture(pages)).unwrap();
+            }
+            app
         }
-        app
     });
     h.run_steps(4);
     h.execute("page.combine");

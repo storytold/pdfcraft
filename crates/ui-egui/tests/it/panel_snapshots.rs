@@ -77,12 +77,15 @@ fn harness(panel: &'static str) -> Harness<'static, PdfCraftApp> {
     let bytes = fixture();
     // Shortcut labels follow the reported OS ("Ctrl+B" against "⌘B"), so pin it rather than rely
     // on kittest's default; the snapshots then match on every host.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_os(egui::os::OperatingSystem::Nix).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "panels.pdf", None, bytes).expect("opens");
-        app.set_option(&egui::Context::default(), "panel", panel).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_os(egui::os::OperatingSystem::Nix).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "panels.pdf", None, bytes).expect("opens");
+            app.set_option(&egui::Context::default(), "panel", panel).unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -216,12 +219,15 @@ fn open(p: RightPanel) -> (Harness<'static, PdfCraftApp>, &'static str) {
             let s = Session::new();
             let old = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
             let new = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-                let mut app = crate::control::new_app();
-                app.set_option(&egui::Context::default(), "language", "en").unwrap();
-                app.open_bytes(&egui::Context::default(), "old.pdf", None, old.clone()).unwrap();
-                app.open_bytes(&egui::Context::default(), "new.pdf", None, new.clone()).unwrap();
-                app
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+                crate::support::install_runtime(&cc.egui_ctx);
+                {
+                    let mut app = crate::control::new_app();
+                    app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                    app.open_bytes(&egui::Context::default(), "old.pdf", None, old.clone()).unwrap();
+                    app.open_bytes(&egui::Context::default(), "new.pdf", None, new.clone()).unwrap();
+                    app
+                }
             });
             h.run_steps(4);
             assert!(h.execute("doc.compare"));

@@ -179,14 +179,17 @@ fn hovered(h: &mut Harness<'static, PdfCraftApp>, label: &str) -> usize {
 
 /// The app with `bytes` open in `lang`, the left panel closed, settled.
 fn harness(bytes: Vec<u8>, lang: &'static str) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", lang).unwrap();
-        app.open_bytes(&egui::Context::default(), "signed.pdf", None, bytes).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        // Field highlights tint the widget; these tests read the colours its appearance draws.
-        app.set_option(&egui::Context::default(), "fields", "off").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", lang).unwrap();
+            app.open_bytes(&egui::Context::default(), "signed.pdf", None, bytes).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            // Field highlights tint the widget; these tests read the colours its appearance draws.
+            app.set_option(&egui::Context::default(), "fields", "off").unwrap();
+            app
+        }
     });
     settle(&mut h);
     h

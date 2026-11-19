@@ -15,14 +15,17 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 /// [`harness`] on `host`: its jobs run at once, and its file service answers the pickers.
 fn harness_over(host: Arc<Host>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::support::test_app(host);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        // The whole 300×400 pt page in either pane.
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            // The whole 300×400 pt page in either pane.
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h

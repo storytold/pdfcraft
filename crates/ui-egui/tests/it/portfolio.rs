@@ -76,12 +76,15 @@ fn portfolio(catalog: &str, files: &[(&str, &[u8])]) -> Vec<u8> {
 fn harness_with(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'static, PdfCraftApp>, Arc<ManualJobs>) {
     let jobs = Arc::new(ManualJobs::new());
     let parts = Mutex::new(Some((jobs.clone(), setup)));
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let (jobs, setup) = parts.lock().unwrap().take().unwrap();
-        let mut app = crate::support::test_app(crate::support::host_with(jobs, Arc::new(ScriptedFiles::held())));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let (jobs, setup) = parts.lock().unwrap().take().unwrap();
+            let mut app = crate::support::test_app(crate::support::host_with(jobs, Arc::new(ScriptedFiles::held())));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     (h, jobs)

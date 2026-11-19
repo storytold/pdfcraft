@@ -2315,7 +2315,10 @@ mod tests {
         let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = reports.clone();
         app.host_dirty = Some(Box::new(move |dirty| sink.lock().expect("not poisoned").push(dirty)));
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            app
+        });
         h.run_steps(2);
         assert_eq!(reports.lock().expect("not poisoned").last(), Some(&true), "an open review is work at risk");
         assert!(h.state_mut().ocr_verify.reject());

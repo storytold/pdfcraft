@@ -60,13 +60,16 @@ fn text_pdf() -> Vec<u8> {
 
 /// The app with `pdf` open at 150 % and its first frames run.
 fn open(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     for _ in 0..30 {
         h.run_steps(2);

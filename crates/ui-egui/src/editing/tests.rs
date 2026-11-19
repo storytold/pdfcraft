@@ -33,9 +33,12 @@ fn shown_with_picks() -> (Harness<'static, crate::PdfCraftApp>, Arc<ScriptedFile
     let watch = craft::platform::watch::FileWatch::new(Wake::none()).inline();
     let services = crate::AppServices::new(Wake::none(), clipboard, None, None, intake, watch);
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
-        let mut app = crate::PdfCraftApp::with_host(Arc::new(host), services);
-        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        app
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::PdfCraftApp::with_host(Arc::new(host), services);
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(2);
     (h, files)

@@ -64,12 +64,15 @@ fn png() -> Vec<u8> {
 
 #[test]
 fn reading_colours_preference_round_trips() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
-        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert_eq!(h.state().reading_colors, ReadingColors::default());
@@ -103,11 +106,14 @@ fn reading_colours_preference_round_trips() {
 
 #[test]
 fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     assert!(h.query_by_label("Original").is_some());
@@ -138,12 +144,15 @@ fn reading_presets_follow_appearance_and_do_not_change_the_interface_theme() {
 
 #[test]
 fn reading_colours_seed_on_open() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.reading_colors = ReadingColors::WHITE_ON_BLACK;
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.reading_colors = ReadingColors::WHITE_ON_BLACK;
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     // The document opened with the preference already applied.

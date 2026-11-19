@@ -122,11 +122,14 @@ mod tests {
     #[test]
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
         let ctx = &egui::Context::default();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-            let mut app = app();
-            app.open_bytes(ctx, "first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
-            app.open_bytes(ctx, "second.pdf", None, PDF.to_vec()).unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = app();
+                app.open_bytes(ctx, "first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
+                app.open_bytes(ctx, "second.pdf", None, PDF.to_vec()).unwrap();
+                app
+            }
         });
         h.run_steps(4);
         let (first, first_tab) = (h.state().views[0].id, h.state().views[0].view_key());
@@ -206,7 +209,10 @@ mod tests {
     fn a_failed_reveal_is_reported_back_to_the_ui_thread() {
         let jobs = Arc::new(craft::host::ManualJobs::new());
         let held = jobs.clone();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| app_on(held));
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            app_on(held)
+        });
         h.run_steps(2);
         reveal_on_jobs(h.state_mut(), PathBuf::from("/pdfcraft-no-such-dir/missing.pdf"));
         assert_eq!(jobs.waiting(), 1, "the reveal is a job on the host");
@@ -221,12 +227,15 @@ mod tests {
     #[test]
     fn inactive_tab_menu_closes_target_and_disables_unavailable_actions() {
         let ctx = &egui::Context::default();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-            let mut app = app();
-            for name in ["first.pdf", "second.pdf"] {
-                app.open_bytes(ctx, name, None, PDF.to_vec()).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = app();
+                for name in ["first.pdf", "second.pdf"] {
+                    app.open_bytes(ctx, name, None, PDF.to_vec()).unwrap();
+                }
+                app
             }
-            app
         });
         h.run_steps(8);
         h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();

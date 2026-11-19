@@ -46,12 +46,15 @@ fn fixture(n: usize) -> Vec<u8> {
 /// An app with three pages open, and the control channel attached for what only `ui.state` reports.
 fn harness_controlled() -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(craft::automation::ControlChannel::new(rx), None);
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.attach_control(craft::automation::ControlChannel::new(rx), None);
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     (h, tx)
@@ -240,10 +243,13 @@ fn every_registered_command_is_implemented() {
 /// cover page has none, so the command table fires it.
 #[test]
 fn disabled_commands_explain_themselves() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
@@ -269,11 +275,14 @@ fn harness_picking(picked: Option<&std::path::Path>, setup: impl FnOnce(&mut Pdf
         None => ScriptedFiles::new(),
     };
     let files = Arc::new(files);
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(2);
     h
@@ -497,11 +506,14 @@ fn recent_file(name: &str) -> pdfcraft_ui_egui::RecentFile {
 /// nothing to clear.
 #[test]
 fn clear_recent_files_runs_from_the_palette_and_is_saved() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.recent.extend([recent_file("first.pdf"), recent_file("second.pdf")]);
+            app
+        }
     });
     h.run_steps(3);
     assert!(h.execute("file.clear_recent"));
@@ -588,7 +600,10 @@ fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
 #[test]
 fn command_w_closes_empty_macos_window_but_not_an_empty_windows_window() {
     for (os, should_close) in [(OperatingSystem::Mac, true), (OperatingSystem::Windows, false)] {
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_cc| new_app());
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            new_app()
+        });
         h.ctx.set_os(os);
         h.run_steps(4);
         assert!(h.state().views.is_empty());

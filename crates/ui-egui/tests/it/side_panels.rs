@@ -17,12 +17,15 @@ const WIDTH: f32 = 1400.0;
 const NO_BOOKMARKS: &str = "This document has no bookmarks.";
 
 fn harness_sized(size: egui::Vec2, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(size).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(6);
     h

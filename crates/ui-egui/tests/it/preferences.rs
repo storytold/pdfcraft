@@ -20,17 +20,20 @@ struct Case {
 }
 
 fn harness() -> H {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).unwrap();
-        app.recent.extend((0..5).map(|n| pdfcraft_ui_egui::RecentFile {
-            name: format!("{n}.pdf"),
-            path: format!("/nowhere/{n}.pdf"),
-            pages: 1,
-            size: 0,
-        }));
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).unwrap();
+            app.recent.extend((0..5).map(|n| pdfcraft_ui_egui::RecentFile {
+                name: format!("{n}.pdf"),
+                path: format!("/nowhere/{n}.pdf"),
+                pages: 1,
+                size: 0,
+            }));
+            app
+        }
     });
     h.run_steps(4);
     h

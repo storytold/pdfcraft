@@ -49,11 +49,14 @@ fn scan() -> Vec<u8> {
 
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = app_on(Arc::new(ScriptedFiles::new()));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(Arc::new(ScriptedFiles::new()));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("ocr.recognize"));
@@ -86,10 +89,13 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
     // The folder pick is answered by the script; the copies are written through the host's files.
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![dir.clone()])]));
     let service = files.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app_on(service);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(service);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(2);
     let ctx_h = h.ctx.clone();
@@ -120,11 +126,14 @@ fn recognize_text_can_read_pictures_on_pages_with_text() {
         s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
         s.save_bytes(id).unwrap().to_vec()
     };
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = app_on(Arc::new(ScriptedFiles::new()));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "hybrid.pdf", None, hybrid).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(Arc::new(ScriptedFiles::new()));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "hybrid.pdf", None, hybrid).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("ocr.recognize"));
@@ -158,24 +167,27 @@ fn recognize_text_can_read_pictures_on_pages_with_text() {
 #[test]
 fn an_ocr_word_opens_for_editing_and_stays_open() {
     use pdfcraft_engine::ocr::PlacedWord;
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
-        let id = app.views[0].id;
-        let ph = app.session.get(id).unwrap().info.pages[0].height as f64;
-        let words = vec![PlacedWord {
-            text: "Recognize".into(),
-            origin: [72.0, ph - 100.0],
-            across: [80.0, 0.0],
-            up: [0.0, 14.0],
-            confidence: None,
-            source: "ocrs".into(),
-        }];
-        app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
+            let id = app.views[0].id;
+            let ph = app.session.get(id).unwrap().info.pages[0].height as f64;
+            let words = vec![PlacedWord {
+                text: "Recognize".into(),
+                origin: [72.0, ph - 100.0],
+                across: [80.0, 0.0],
+                up: [0.0, 14.0],
+                confidence: None,
+                source: "ocrs".into(),
+            }];
+            app.session.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
+            app
+        }
     });
     crate::support::settle(&mut h);
     let (r, k) = {
@@ -202,11 +214,14 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
 }
 
 fn edit_harness(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app_on(Arc::new(ScriptedFiles::new()));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(Arc::new(ScriptedFiles::new()));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -379,10 +394,13 @@ fn placed(text: &str, confidence: f32) -> PlacedWord {
 /// loaded directly, so this runs without the OCR models.
 #[test]
 fn ocr_verify_screen_controls_keyboard_and_accept() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("ocr.correct"));
@@ -443,10 +461,13 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
 /// loaded directly (no models needed).
 #[test]
 fn ocr_verify_screen_empty_walk() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.open_bytes(&egui::Context::default(), "scan.pdf", None, scan()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("ocr.correct"));

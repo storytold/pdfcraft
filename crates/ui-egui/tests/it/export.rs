@@ -22,11 +22,14 @@ fn export_dialogs_write_images_and_text() {
     let files = Arc::new(ScriptedFiles::answering((0..3).map(|_| Picked::Paths(vec!["/out".into()]))));
     let jobs = Arc::new(ManualJobs::new());
     let host = crate::support::host_with(jobs.clone(), files.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::support::test_app(host);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("export.image"));

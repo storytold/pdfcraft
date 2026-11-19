@@ -40,11 +40,14 @@ fn form_with_text_action(action: &str) -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, form()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, form()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -92,7 +95,9 @@ fn button_scripts_run_and_alert() {
 
 #[test]
 fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+crate::support::install_runtime(&cc.egui_ctx);
+{
         let mut app = crate::control::new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
@@ -101,7 +106,8 @@ fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
         );
         app.open_bytes(&egui::Context::default(), "text-action.pdf", None, bytes).unwrap();
         app
-    });
+    }
+});
     crate::support::settle(&mut h);
     let point = {
         let app = h.state();
@@ -250,10 +256,13 @@ fn merge_data_files_into_a_spreadsheet() {
     // PLAN: assumed `crate::support::host_with_files(ScriptedFiles) -> Arc<Host>` (pdf-chrome-w9) and `PdfCraftApp::with_host`
     let files = craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out.clone()])]);
     let host = crate::support::host_with_files(files);
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::support::test_app(host);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(2);
     h.state_mut().merge_data_files(vec![("form.pdf".into(), form())]);
@@ -269,11 +278,14 @@ fn merge_data_files_into_a_spreadsheet() {
 #[test]
 fn prepare_a_form_detects_fields_on_a_paper_form() {
     let paper = pdfcraft_engine::Session::new().create_from_text("t", "Name: ____________________\n\nPhone: ____________________").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "paper.pdf", None, paper.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "paper.pdf", None, paper.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("form.prepare"));
@@ -502,11 +514,14 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
     })
     .unwrap();
     let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "duplicate-buttons.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "duplicate-buttons.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let captions = |h: &Harness<'_, PdfCraftApp>| {
@@ -618,11 +633,14 @@ fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
     std::fs::write(&path, png).unwrap();
     // The image picker answers with the PNG.
     let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![path.clone()])]));
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "images.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "images.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(6);
     let rect = h.state().views[0].page_screen_rect(0).unwrap();

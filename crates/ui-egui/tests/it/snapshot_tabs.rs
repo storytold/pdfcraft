@@ -17,12 +17,15 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 /// [`harness`] whose file picks `files` answers.
 fn harness_with(files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
-        app.open_bytes(&egui::Context::default(), "b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
+            app.open_bytes(&egui::Context::default(), "b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     assert!(h.execute("edit.snapshot"));

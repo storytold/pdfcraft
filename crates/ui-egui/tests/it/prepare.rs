@@ -28,12 +28,15 @@ fn harness_with_files(files: std::sync::Arc<craft::host::ScriptedFiles>) -> Harn
 
 fn harness_on(app: PdfCraftApp, name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
-        let mut app = app;
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            cc.egui_ctx.options_mut(|options| options.warn_on_id_clash = true);
+            let mut app = app;
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
+            app
+        }
     });
     crate::support::settle(&mut h);
     h
@@ -1814,11 +1817,14 @@ fn fields_sharing_a_name_each_show_their_own_formula() {
         bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "dup.pdf", None, bytes.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "dup.pdf", None, bytes.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.execute("form.prepare");

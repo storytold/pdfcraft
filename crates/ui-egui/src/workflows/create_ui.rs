@@ -414,11 +414,14 @@ mod tests {
     fn reducing(files: Arc<dyn Files>, jobs: Arc<ManualJobs>, source: Vec<u8>) -> Harness<'static, PdfCraftApp> {
         let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).jobs(jobs).build());
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
-            let mut app = PdfCraftApp::for_unit_tests_on(host);
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
-            app.open_bytes(&egui::Context::default(), "notes.pdf", None, source).unwrap();
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = PdfCraftApp::for_unit_tests_on(host);
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
+                app.open_bytes(&egui::Context::default(), "notes.pdf", None, source).unwrap();
+                app
+            }
         });
         h.run_steps(2);
         h

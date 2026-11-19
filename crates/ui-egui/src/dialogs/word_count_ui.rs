@@ -232,11 +232,14 @@ mod tests {
         let bytes = pdfcraft_engine::Session::new().create_from_text("Words", "Hello world\u{c}Another three words").unwrap();
         let build_jobs = jobs.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
-            let mut app = app_on(build_jobs);
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "words.pdf", None, bytes.as_ref().clone()).unwrap();
-            app.run_command(&cc.egui_ctx, "file.word_count");
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = app_on(build_jobs);
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "words.pdf", None, bytes.as_ref().clone()).unwrap();
+                app.run_command(&cc.egui_ctx, "file.word_count");
+                app
+            }
         });
         // One frame submits the count, the job runs, the next frames take its result.
         let settle = |h: &mut Harness<'_, PdfCraftApp>| {

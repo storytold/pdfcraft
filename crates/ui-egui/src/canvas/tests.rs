@@ -240,12 +240,15 @@ fn markup_on_several_pages_is_one_undo_step_named_like_one() {
 /// until the pointer comes back.
 #[test]
 fn edit_text_boxes_stay_drawn_while_page_input_is_blocked() {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::for_unit_tests();
-        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
-        app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
-        app.quick_tool = QuickTool::EditText;
-        app
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::for_unit_tests();
+            let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+            app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.quick_tool = QuickTool::EditText;
+            app
+        }
     });
     h.run_steps(3);
     // Block page input the way the window losing focus does.
@@ -266,11 +269,14 @@ fn a_cut_page_is_named_beside_an_xfa_form_notice() {
     use egui_kittest::kittest::Queryable;
 
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
-        let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).unwrap();
-        app
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            let bytes = pdfcraft_xfa::fixtures::static_shell("<form1><page1><name>Ada</name></page1></form1>");
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_label_contains("XFA data are kept in step");
@@ -287,11 +293,14 @@ fn a_page_found_cut_after_a_dismissal_is_still_named() {
     use egui_kittest::kittest::Queryable;
 
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
-        let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
-        app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
-        app
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            let bytes = app.session.create_blank(300.0, 400.0, 2).unwrap();
+            app.open_bytes(&egui::Context::default(), "blank.pdf", None, bytes.as_ref().clone()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     // The reader dismissed the document's notice before the render found the cut page.
@@ -609,10 +618,13 @@ fn fox_pages_pdf() -> Vec<u8> {
 #[test]
 fn replace_all_is_one_undo_step_and_counts_pages_whose_matches_had_no_paragraph() {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|cc| {
-        let mut app = PdfCraftApp::for_unit_tests();
-        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "fox.pdf", None, fox_pages_pdf()).unwrap();
-        app
+        crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = PdfCraftApp::for_unit_tests();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "fox.pdf", None, fox_pages_pdf()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     let id = h.state().views[0].id;

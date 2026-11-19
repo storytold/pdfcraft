@@ -16,11 +16,14 @@ fn held() -> (Arc<ManualJobs>, Harness<'static, PdfCraftApp>) {
     let out = std::env::temp_dir().join(format!("pdfcraft-optimize-held-{}.pdf", std::process::id()));
     // Every Reduce asks once where to save: each ask is answered with `out`.
     let files = Arc::new(ScriptedFiles::answering((0..4).map(|_| Picked::Paths(vec![out.clone()]))));
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = support::test_app(support::host_with(queue, files));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = support::test_app(support::host_with(queue, files));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(2);
     (jobs, h)
