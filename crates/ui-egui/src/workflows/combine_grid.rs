@@ -10,8 +10,9 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use craft::behavior::{EditEvent, ReorderKeys, Selection, keyed};
-use craft::ui::contract::{Bind, CollectionEvent, ReorderMove, ReorderRule, ShowCollection as _, ShowContainer as _, SpaceAction};
+use craft::behavior::{EditEvent, IconId, ReorderKeys, Selection, keyed};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, ReorderMove, ReorderRule, ShowCollection as _, ShowContainer as _, SpaceAction};
+use craft::ui::menu::Menu;
 use craft::ui::primitives::textures::{TextureState, ThumbRequest};
 use craft::ui::tile_grid::{GridEvent, GridZoom, Tile, TileActionPlace, TileGrid, TileGroup, TilePartEvent, TileZoom};
 use pdfcraft_render::RenderConfig;
@@ -172,6 +173,13 @@ impl View<'_> {
     }
 }
 
+/// A row of a tile's menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TileRow {
+    Act(Act),
+    Unlock,
+}
+
 /// The list action for `act` on the tile of `key`.
 fn act_action(act: Act, key: CombineKey) -> RowAction {
     match (act, key) {
@@ -250,12 +258,31 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
             CollectionEvent::Delete(_) => actions.extend(delete_action(&app.combine_tab.selection)),
             CollectionEvent::Preview(CombineKey::File(id)) => actions.push(RowAction::Preview(id)),
             CollectionEvent::Preview(CombineKey::Page(id, nth)) => actions.push(RowAction::PreviewAt(id, nth)),
-            // PLAN: framework gap F-5: the tile's context menu (Preview, Expand/Collapse, Remove, Unlock…) needs a
-            // collection menu that carries the request's key; no key is kept between passes meanwhile.
             CollectionEvent::Item(key, TilePartEvent::Action(at)) => {
                 actions.extend(view.acts(&key).get(at).map(|act| act_action(*act, key)));
             }
             _ => {}
+        }
+    }
+    // A right-click offers the tile's own actions, and Unlock… on a locked file, for the tile it was opened on.
+    if let Some(key) = shown.response.menu.as_ref().map(|request| request.key) {
+        let mut entries: Vec<Entry<TileRow>> =
+            view.acts(&key).into_iter().map(|act| Entry::new(TileRow::Act(act), act.label()).icon(act.icon())).collect();
+        let locked = match key {
+            CombineKey::File(id) => view.file(id).is_some_and(|(_, f)| f.lock.is_some()),
+            CombineKey::Page(..) => false,
+        };
+        if locked {
+            entries.push(Entry::new(TileRow::Unlock, tl!("Unlock…")).icon(IconId::new("lock-open")));
+        }
+        match Menu::context(tl!("File"), &shown.response.response).pick(ui, &entries).picked {
+            Some(TileRow::Act(act)) => actions.push(act_action(act, key)),
+            Some(TileRow::Unlock) => {
+                if let CombineKey::File(id) = key {
+                    actions.push(RowAction::Unlock(Some(id)));
+                }
+            }
+            None => {}
         }
     }
     for event in shown.events {

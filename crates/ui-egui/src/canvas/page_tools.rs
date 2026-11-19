@@ -360,7 +360,7 @@ pub(crate) fn page_tool<'a>(
             Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()).button_held(cx.button_held)))
         }
         QuickTool::Stamp(kind) => {
-            Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), cx.pages, cx.info, map))
+            Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), map, &mut session.stamp_press))
         }
         QuickTool::CustomStamp(_) => match cx.custom_stamp {
             Some((stamp, line)) => Arm::Stamp(StampTool::new(
@@ -368,9 +368,8 @@ pub(crate) fn page_tool<'a>(
                 cx.by_line.to_owned(),
                 line.map(str::to_owned),
                 cx.author.to_owned(),
-                cx.pages,
-                cx.info,
                 map,
+                &mut session.stamp_press,
             )),
             // The library no longer holds the stamp: no click places one, and a drag pans as the Hand tool's.
             None => Arm::Hand(hand(session, cx.navigation)),

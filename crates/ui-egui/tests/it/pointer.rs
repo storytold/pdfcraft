@@ -257,10 +257,18 @@ fn agree(h: &Harness<'_, PdfCraftApp>) -> Vec<String> {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap().value.clone()
 }
 
-/// Whether the page's hover tip shows and says `text`.
-fn tip_says(h: &Harness<'_, PdfCraftApp>, text: &str) -> bool {
-    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover"))).filter(|_| tip_shown(h)) else { return false };
-    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+/// Whether the pointer's tip shows and says `text`. The pointer rests where it is for up to a second, past the
+/// tooltip's delay; the tip is the framework's tooltip.
+fn tip_says(h: &mut Harness<'_, PdfCraftApp>, text: &str) -> bool {
+    use egui::accesskit::Role;
+    for _ in 0..60 {
+        let tips: Vec<egui::Rect> = h.query_all_by_role(Role::Tooltip).map(|n| n.rect()).collect();
+        if !tips.is_empty() {
+            return h.query_all_by_label_contains(text).any(|n| tips.iter().any(|tip| tip.contains(n.rect().center())));
+        }
+        h.step();
+    }
+    false
 }
 
 /// Hovers `p` until `want` accepts the cursor there (text layers and paragraph boxes arrive from
@@ -414,7 +422,7 @@ fn a_click_on_stacked_comments_selects_the_one_drawn_on_top() {
     let overlap = at(&h, 125.0, 225.0);
     assert_eq!(cursor_at(&mut h, overlap), egui::CursorIcon::Move);
     h.run_steps(2);
-    assert!(tip_says(&h, "Top note") && !tip_says(&h, "Bottom note"), "the tip names the comment drawn on top");
+    assert!(tip_says(&mut h, "Top note") && !tip_says(&mut h, "Bottom note"), "the tip names the comment drawn on top");
     mouse_click(&mut h, overlap);
     assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 1)), "a click selects it too");
 }
@@ -495,7 +503,7 @@ fn link_tip_stays_off_while_the_palette_is_open() {
     let mut h = open(link_pdf(), "300", false);
     h.state_mut().palette_open = true;
     h.run_steps(4);
-    let palette = h.ctx.memory(|m| m.area_rect(egui::Id::unique("palette"))).expect("palette shown");
+    let palette = h.query_all_by_label("Find tools and commands").map(|n| n.rect()).reduce(|a, b| a.union(b)).expect("palette shown");
     let beside = [60.0, 100.0, 150.0, 200.0, 240.0]
         .into_iter()
         .flat_map(|x| [305.0, 325.0, 345.0].map(|y| at(&h, x, y)))
@@ -503,17 +511,11 @@ fn link_tip_stays_off_while_the_palette_is_open() {
         .unwrap_or_else(|| panic!("no point of the link beside the palette {palette:?}, page {:?}", page(&h)));
     h.hover_at(beside);
     h.run_steps(3);
-    assert!(h.query_by_label("https://example.org/").is_none(), "no tip beside the palette");
+    assert!(!tip_says(&mut h, "https://example.org/"), "no tip beside the palette");
     h.state_mut().palette_open = false;
-    h.hover_at(beside);
+    h.hover_at(beside + egui::vec2(1.0, 0.0));
     h.run_steps(3);
-    h.get_by_label("https://example.org/");
-}
-
-/// Whether the page's hover tip was drawn in the last frame.
-fn tip_shown(h: &Harness<'_, PdfCraftApp>) -> bool {
-    let tip = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"));
-    h.ctx.memory(|m| m.areas().is_visible(&tip))
+    assert!(tip_says(&mut h, "https://example.org/"), "the tip once the palette is closed");
 }
 
 // ---------------------------------------------------------------------------------------------

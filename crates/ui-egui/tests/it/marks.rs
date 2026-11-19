@@ -175,7 +175,7 @@ fn header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset() {
     // Update and Remove are now available.
     assert!(h.execute("edit.header_footer.update"));
     h.steps(2);
-    h.get_by_label("Update Header and Footer");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Update Header and Footer");
     h.get_by_label("Cancel").click();
     h.steps(2);
     assert!(h.execute("edit.header_footer.remove"));
@@ -228,7 +228,7 @@ fn watermark_and_background_dialogs() {
     h.execute("edit.watermark");
     h.steps(2);
     assert!(ok_disabled(&h), "OK waits for text");
-    h.get_by_label("Offset from centre");
+    h.get_by_label("Horizontal offset from centre");
     type_into(&mut h, WATERMARK_TEXT, "DRAFT");
     h.get_by_label("OK").click();
     h.steps(3);
