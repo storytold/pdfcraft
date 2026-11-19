@@ -8,7 +8,7 @@ use crate::support::AppHarness as _;
 use craft::host::{ManualJobs, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
 
 /// A one-page PDF.
 const PAGE: &[u8] = b"%PDF-1.7
@@ -122,10 +122,9 @@ fn panel_shown(h: &Harness<'static, PdfCraftApp>, label: &str) -> bool {
     h.query_by_label(label).is_some()
 }
 
-/// Run the panel command `id`.
-fn panel_command(h: &mut Harness<'static, PdfCraftApp>, id: &str) {
-    // PLAN: the right-panel command ids are assumed (pdf-chrome-w13).
-    assert!(h.execute(id), "{id}");
+/// The reader picks the right panel `panel`, or closes it with `None`.
+fn choose_panel(h: &mut Harness<'static, PdfCraftApp>, panel: Option<RightPanel>) {
+    h.state_mut().choose_right_panel(panel);
     h.run_steps(2);
 }
 
@@ -160,11 +159,11 @@ fn a_portfolio_opens_its_initial_document_and_shows_its_files_with_the_panel_clo
     select(&mut h, 0);
     assert!(panel_shown(&h, "Attachments"));
     // The reader can still close the list on the portfolio's tab.
-    panel_command(&mut h, "panel.right.close");
+    choose_panel(&mut h, None);
     assert!(!panel_shown(&h, "Attachments"));
     // A panel the reader had open comes back once they leave the portfolio's tab.
     select(&mut h, 1);
-    panel_command(&mut h, "panel.right.bookmarks");
+    choose_panel(&mut h, Some(RightPanel::Bookmarks));
     select(&mut h, 0);
     assert!(panel_shown(&h, "Attachments"));
     select(&mut h, 1);
@@ -269,7 +268,7 @@ fn a_panel_picked_in_read_mode_stays_when_the_tab_changes() {
     select(&mut h, 0);
     assert!(h.execute("view.read_mode"));
     h.run_steps(2);
-    panel_command(&mut h, "panel.right.attachments");
+    choose_panel(&mut h, Some(RightPanel::Attachments));
     select(&mut h, 1);
     assert!(panel_shown(&h, "Attachments"));
 }

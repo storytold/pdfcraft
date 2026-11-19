@@ -172,6 +172,14 @@ impl PdfCraftApp {
         }
     }
 
+    /// Opens Preferences, or leaves the open window as it is, showing the page `page` (the id its `PageSpec` has).
+    pub(crate) fn open_preferences_at(&mut self, page: &str) {
+        self.open_preferences();
+        if let Some(session) = self.preferences.as_mut() {
+            session.state.selected = page.to_string();
+        }
+    }
+
     /// Shows the Preferences window for this pass while it is open, and closes it when answered.
     pub(crate) fn show_preferences(&mut self, ui: &mut Ui) {
         let Some(mut session) = self.preferences.take() else {

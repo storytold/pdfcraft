@@ -31,15 +31,16 @@ fn held() -> (Arc<ManualJobs>, Harness<'static, PdfCraftApp>) {
 
 #[test]
 fn a_second_run_is_refused_while_one_is_going() {
-    let (jobs, mut h) = held();
+    let (_jobs, mut h) = held();
     assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
-    assert!(h.state().optimize_run.is_some(), "the first run is going");
+    // The queue holds the pages' own jobs too, so the run is told by the app's record of it, not by counting jobs.
+    let first = Arc::clone(&h.state().optimize_run.as_ref().expect("the first run is going").progress);
     assert!(h.execute("optimize.reduce"));
     h.run_steps(2);
     assert!(support::shown_notice(&h).is_some(), "the second run is refused with a notice");
-    assert!(jobs.run_next(), "the first run's job is kept");
-    assert!(!jobs.run_next(), "and no second job was queued");
+    let kept = h.state().optimize_run.as_ref().is_some_and(|run| Arc::ptr_eq(&run.progress, &first));
+    assert!(kept, "the first run is kept, and no second one started");
 }
 
 #[test]

@@ -175,7 +175,8 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
             app.views[0].session.comments.clear_selection();
             app.set_option(&egui::Context::default(), "page", "1").unwrap();
         });
-        h.get_by_label("Reveal this note").click();
+        // The panel names a card by its author, text and date.
+        h.get_by_label_contains("Reveal this note").click();
         h.run_steps(8);
         assert_eq!(h.state().views[0].session.comments.selection(), vec![(1, 0)], "the sidebar card was selected");
         let a = &comments(&h)[0];
@@ -1622,9 +1623,10 @@ fn search_finds_a_comment_by_the_status_set_on_one_of_its_replies() {
         app.views[0].session.comments.panel.search_open = true;
     });
     h.run_steps(2);
-    h.get_by_label("Plain root");
-    h.get_by_label("Ordinary reply");
-    assert_eq!(h.query_all_by_label("Other root").count(), 0, "the other comment has no such status");
+    // The panel names a card or reply row by its author, text and date.
+    h.get_by_label_contains("Plain root");
+    h.get_by_label_contains("Ordinary reply");
+    assert_eq!(h.query_all_by_label_contains("Other root").count(), 0, "the other comment has no such status");
     assert_eq!(h.query_all_by_label("No comments match.").count(), 0);
 }
 
@@ -1645,10 +1647,11 @@ trailer << /Root 1 0 R >>
 #[test]
 fn replies_follow_irt_references_when_names_repeat_on_every_page() {
     let h = harness_with_bytes(PER_PAGE_NAMES.to_vec(), |app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
-    let reply = h.get_by_label("Reply on page two");
-    assert!(reply.rect().top() > h.get_by_label("Second page note").rect().top(), "the reply sits under page 2's comment");
+    // The panel names a card or reply row by its author, text and date.
+    let reply = h.get_by_label_contains("Reply on page two");
+    assert!(reply.rect().top() > h.get_by_label_contains("Second page note").rect().top(), "the reply sits under page 2's comment");
     assert!(h.get_by_label("Page 2").rect().top() < reply.rect().top(), "not under page 1's comment, which shares the /NM");
-    h.get_by_label("Answer on page two");
+    h.get_by_label_contains("Answer on page two");
     // The header counts the two comments, not their replies (Acrobat says 2, not 4), and gives
     // the replies in small text under it.
     assert_eq!(h.query_all_by_label("4").count(), 0);
@@ -1937,12 +1940,13 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
         app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
         app.views[0].session.comments.panel.collapsed_pages = vec![0, 1];
     });
-    assert_eq!(h.query_all_by_label("Late root").count(), 0);
+    // The panel names a card or reply row by its author, text and date.
+    assert_eq!(h.query_all_by_label_contains("Late root").count(), 0);
     h.state_mut().views[0].session.comments.select_only((1, 0));
     h.state_mut().views[0].session.comments.reveal = true;
     h.run_steps(4);
-    h.get_by_label("Late root");
-    h.get_by_label("Late thread reply");
+    h.get_by_label_contains("Late root");
+    h.get_by_label_contains("Late thread reply");
     assert_eq!(h.state().views[0].session.comments.panel.collapsed_pages, vec![0]);
     h.get_by_label("More").click();
     h.run_steps(2);
@@ -3403,11 +3407,12 @@ trailer << /Root 1 0 R >>
 #[test]
 fn a_group_is_one_comment_in_the_panel_and_on_the_page() {
     let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
-    h.get_by_label("Primary");
-    h.get_by_label("Plain reply");
-    h.get_by_label("Reply to the subordinate");
-    assert_eq!(h.query_all_by_label("Subordinate").count(), 0, "the subordinate's own text is ignored");
-    assert_eq!(h.query_all_by_label("Bob").count(), 0, "the subordinate's own author is ignored");
+    // The panel names a card or reply row by its author, text and date.
+    h.get_by_label_contains("Primary");
+    h.get_by_label_contains("Plain reply");
+    h.get_by_label_contains("Reply to the subordinate");
+    assert_eq!(h.query_all_by_label_contains("Subordinate").count(), 0, "the subordinate's own text is ignored");
+    assert_eq!(h.query_all_by_label_contains("Bob").count(), 0, "the subordinate's own author is ignored");
     let p = at(&h, 220.0, 150.0);
     click(&mut h, p);
     assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "clicking the Circle selects its group");
@@ -3479,8 +3484,8 @@ fn choosing_the_groups_card_makes_delete_act_on_the_card_not_the_member_clicked(
     let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option(&egui::Context::default(), "panel", "comments").unwrap());
     click_pt(&mut h, (220.0, 150.0));
     assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the Circle's click selects the group");
-    // The selected card's header row, with its author.
-    h.get_by_label("Alice").click();
+    // The selected card, named by its author first.
+    h.get_by(|n| n.role() == Role::TreeItem && n.label().is_some_and(|l| l.starts_with("Alice:"))).click();
     h.run_steps(3);
     assert_eq!(h.state().views[0].session.comments.primary(), Some((0, 0)), "the card selects the same group");
     assert_eq!(h.state().views[0].session.comments.selection().len(), 1, "only the group's card");
