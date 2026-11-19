@@ -924,10 +924,20 @@ fn an_italic_word_stays_in_its_sentence() {
     );
     // The longest line is the slide's title; the sentence is one paragraph of the body.
     let pxml = part(&pptx(std::slice::from_ref(&p), "Opinion"), "ppt/slides/slide1.xml");
-    assert!(
-        pxml.contains("<a:p><a:r><a:rPr sz=\"1200\"></a:rPr><a:t>Before </a:t></a:r><a:r><a:rPr sz=\"1200\" i=\"1\"></a:rPr><a:t>Chevron </a:t></a:r><a:r><a:rPr sz=\"1200\"></a:rPr><a:t>after.</a:t></a:r></a:p>"),
-        "{pxml}"
-    );
+    let slide = craft_xml::parse(pxml.as_bytes()).expect("slide XML");
+    let paragraph = slide
+        .descendants()
+        .filter(|n| n.is("a:p"))
+        .find(|p| p.children("a:r").any(|r| r.child_text("a:t").as_deref() == Some("Before ")))
+        .expect("body paragraph");
+    let actual: Vec<_> = paragraph
+        .children("a:r")
+        .map(|r| {
+            let props = r.child("a:rPr").expect("run properties");
+            (r.child_text("a:t").expect("run text").into_owned(), props.attr_u32("sz"), props.flag("i", false))
+        })
+        .collect();
+    assert_eq!(actual, vec![("Before ".into(), Some(1200), false), ("Chevron ".into(), Some(1200), true), ("after.".into(), Some(1200), false)]);
 }
 
 /// #4158: the runs keep their order along the line whatever order the blocks come in, and the
