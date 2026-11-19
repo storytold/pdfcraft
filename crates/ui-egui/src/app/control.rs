@@ -47,7 +47,8 @@ impl PdfCraftApp {
             }
             ("animation_effects", _) => {
                 // PLAN: assumed `crate::settings::motion_from_name(&str) -> Option<MotionChoice>` and `set_motion(&mut self, MotionChoice)`, which writes the field and the store (pdf-shell-w9).
-                let motion = crate::settings::motion_from_name(value).ok_or("animation_effects must be system, on, or off")?;
+                // The control channel and the command line take the names in any case, as before the port.
+                let motion = crate::settings::motion_from_name(&value.to_ascii_lowercase()).ok_or("animation_effects must be system, on, or off")?;
                 self.set_motion(motion);
             }
             ("panel", _) => {

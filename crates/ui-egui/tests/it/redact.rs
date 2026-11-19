@@ -47,10 +47,9 @@ fn pick(files: &ScriptedFiles, path: &std::path::Path) {
     files.queue(Picked::Paths(vec![path.to_owned()]));
 }
 
-/// The message of the newest notice card the main window shows.
+/// The text of the newest notice card the main window shows.
 fn latest_notice(h: &Harness<'static, PdfCraftApp>) -> String {
-    use craft::ui::runtime::{env::WindowKey, toast};
-    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned()).unwrap_or_default()
+    crate::support::shown_notice(h).unwrap_or_default()
 }
 
 fn at(h: &Harness<'static, PdfCraftApp>, x: f32, y: f32) -> Pos2 {
@@ -611,6 +610,9 @@ fn redaction_properties_for_this_run_only_and_cancel() {
     for row in ["Outline colour:", "Fill colour:", "Opacity:"] {
         assert!(h.get_all_by_label(row).count() > 0, "{row} is offered");
     }
+    // The dialog's body scrolls; the check box is its last row, below the room the body shows.
+    h.get_by_label("Make properties default").scroll_to_me();
+    h.run_steps(3);
     h.get_by_label("Make properties default").click();
     h.run_steps(3);
     assert!(!h.state().redact_props.as_ref().unwrap().remember);
