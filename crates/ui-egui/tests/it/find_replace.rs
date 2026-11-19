@@ -47,6 +47,13 @@ fn has_field(h: &Harness<'static, PdfCraftApp>, placeholder: &str) -> bool {
     h.query_all_by(|n| n.placeholder() == Some(placeholder)).next().is_some()
 }
 
+/// The find bar's Replace with field: a text field named by its label, with no placeholder.
+const REPLACE_WITH: &str = "Replace with:";
+
+fn has_replace_field(h: &Harness<'static, PdfCraftApp>) -> bool {
+    h.query_by_role_and_label(egui::accesskit::Role::TextInput, REPLACE_WITH).is_some()
+}
+
 #[test]
 fn replace_all_from_the_find_bar_is_one_undo_step() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
@@ -64,13 +71,13 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     h.run_steps(3);
     assert!(h.state().views[0].find.is_some());
     assert!(has_field(&h, "Find text"));
-    assert!(!has_field(&h, "Replace with"), "outside Edit text the find bar doesn't replace");
+    assert!(!has_replace_field(&h), "outside Edit text the find bar doesn't replace");
     // ⇧⌘H: Edit text, and the Replace row.
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::H);
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
     assert!(h.state().views[0].find.as_ref().is_some_and(|f| f.replacing));
-    assert!(has_field(&h, "Replace with"), "the Replace row shows in Edit text");
+    assert!(has_replace_field(&h), "the Replace row shows in Edit text");
     h.query_by(|n| n.placeholder() == Some("Find text")).expect("find field").type_text("cat");
     // Both pages' text loads in the background before every match is listed.
     for _ in 0..400 {
@@ -81,9 +88,9 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(h.state().views[0].find.as_ref().map(|f| f.matches.len()), Some(3));
-    h.query_by(|n| n.placeholder() == Some("Replace with")).expect("replace field").click();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, REPLACE_WITH).click();
     h.run_steps(2);
-    h.query_by(|n| n.placeholder() == Some("Replace with")).expect("replace field").type_text("dog");
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, REPLACE_WITH).type_text("dog");
     h.run_steps(1);
     assert_eq!(h.state().views[0].find.as_ref().map(|f| (f.query.as_str(), f.replacement.as_str())), Some(("cat", "dog")));
     // The row may settle over a few frames once the status text changes its width.
