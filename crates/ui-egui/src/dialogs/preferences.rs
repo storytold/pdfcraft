@@ -477,7 +477,13 @@ impl PreferencesModel for Prefs<'_> {
         // PdfCraft keeps its own appearance and no favourite themes (L-224).
         let suite = self.app.suite_view();
         let system_dark = craft::ui::runtime::env::system_appearance(self.ctx).appearance.mode == Some(craft::theme::Mode::Dark);
-        AppearancePage::new(&suite, Bind::bound(&mut *self.selection)).text_size(false).system_dark(system_dark).show(ui);
+        AppearancePage::new(&suite, Bind::bound(&mut *self.selection))
+            .can_favorite(false)
+            .size(false)
+            .text_size(false)
+            .contrast(false)
+            .system_dark(system_dark)
+            .show(ui);
     }
 
     fn differs(&self) -> bool {

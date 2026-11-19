@@ -595,7 +595,7 @@ impl DocView {
             pages_focus_id: None,
             thumbnail_zoom: 1.0,
             grid_reveal: None,
-            bookmarks_open: OpenSet::default(),
+            bookmarks_open: crate::panels::bookmarks::opened_as_filed(&info.outline),
             redactions_applied: 0,
             redactions_undone_after_save: 0,
             saved_redactions_cut_off: false,

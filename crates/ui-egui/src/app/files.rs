@@ -154,6 +154,7 @@ impl PdfCraftApp {
             then: request.then,
             display_override: None,
             ready: None,
+            reopen: false,
         });
         token
     }
@@ -245,6 +246,9 @@ impl PdfCraftApp {
                     Ok(id) => {
                         if let Some(path) = pending.path.as_deref() {
                             self.watch.known_as(id, std::path::Path::new(path), pending.stamp);
+                            if pending.reopen {
+                                self.forget_closed_tab(path);
+                            }
                         }
                         if let Some(destination) = pending.after_open {
                             self.apply_remote_destination(destination);

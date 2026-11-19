@@ -105,6 +105,27 @@ pub(crate) fn expand_to(view: &mut crate::DocView, outline: &[OutlineItem], leve
     walk(outline, 0, level, &mut Vec::new(), &mut view.bookmarks_open);
 }
 
+/// The groups of `outline` open as the file says: only a positive `/Count` opens one, at every level (ISO 32000-2
+/// §12.3.3, Table 151). A view starts with them so; the reader's opening and closing changes them from there.
+pub(crate) fn opened_as_filed(outline: &[OutlineItem]) -> OpenSet<Vec<usize>> {
+    fn walk(items: &[OutlineItem], depth: usize, path: &mut Vec<usize>, open: &mut OpenSet<Vec<usize>>) {
+        if depth >= MAX_DEPTH {
+            return;
+        }
+        for (i, item) in items.iter().enumerate() {
+            path.push(i);
+            if !item.children.is_empty() {
+                open.set(path, item.open);
+                walk(&item.children, depth + 1, path, open);
+            }
+            path.pop();
+        }
+    }
+    let mut open = OpenSet::default();
+    walk(outline, 0, &mut Vec::new(), &mut open);
+    open
+}
+
 /// How a bookmark's title is drawn: bold at depth 0 and where the file says, italic where it says, in its own colour
 /// (ISO 32000-2 §12.3.3, Tables 151 and 152). The row keeps the colour readable.
 fn title_style(item: &OutlineItem, depth: usize) -> (bool, bool, Option<DataColor>) {
