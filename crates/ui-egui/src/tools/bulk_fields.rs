@@ -500,12 +500,12 @@ fn optional_colour(
     label: &str,
     c: &mut Change<Option<[f64; 3]>>,
     request: &mut Option<ColorRequest>,
-    mut choice: impl FnMut(&mut Ui, Option<[f64; 3]>) -> colours::ColourChoice,
+    mut choice: impl FnMut(&mut Ui, Option<[f64; 3]>, bool) -> colours::ColourChoice,
 ) {
     let Change { value, mixed, apply } = c;
     GroupBox::apply(tl!(label).to_owned(), Bind::bound(apply)).show(ui, |ui, _| {
         let current = if *mixed { None } else { *value };
-        let picked = choice(ui, current);
+        let picked = choice(ui, current, *mixed);
         if let Some(chosen) = picked.choice {
             *value = chosen;
             *mixed = false;
@@ -583,8 +583,8 @@ fn appearance(ui: &mut Ui, d: &mut Draft, recent: &RecentColours, request: &mut 
         });
         text_colour(ui, "Text Color:", &mut d.text, recent, request);
     }
-    optional_colour(ui, "Border Color:", &mut d.border, request, |ui, current| colours::border_choice(ui, current, BORDER_KEY, recent));
-    optional_colour(ui, "Fill Color:", &mut d.fill, request, |ui, current| colours::fill_choice(ui, current, FILL_KEY, recent));
+    optional_colour(ui, "Border Color:", &mut d.border, request, |ui, current, mixed| colours::field_choice(ui, current, mixed, BORDER_KEY, recent));
+    optional_colour(ui, "Fill Color:", &mut d.fill, request, |ui, current, mixed| colours::field_choice(ui, current, mixed, FILL_KEY, recent));
     number(ui, "Line Thickness:", &mut d.width, 0.0..=12.0, Some("pt"), |v| *v, |v| v);
     let styles: Vec<Entry<BorderStyle>> = BorderStyle::ALL.into_iter().map(|style| Entry::new(style, tl!(style.label()).to_owned())).collect();
     choose(ui, "Line Style:", &mut d.style, &styles);

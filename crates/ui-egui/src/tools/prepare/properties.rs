@@ -22,7 +22,7 @@ use craft::ui::text::{NumberField, TextField};
 use super::draft::{FieldDraft, FieldTab};
 use super::tabs::{actions_tab, calculate_tab, format_tab, validate_tab};
 use super::{BorderStyle, FieldFont, FormFieldKind};
-use crate::comments::colours::{RecentColours, border_choice, fill_choice, palette};
+use crate::comments::colours::{RecentColours, field_choice, palette};
 
 /// The Delete part of an item row of a choice field.
 const DELETE: TrailingPart = TrailingPart::new(0);
@@ -212,14 +212,14 @@ fn appearance_tab(ui: &mut egui::Ui, d: &mut FieldDraft, recent: &RecentColours,
     });
     Text::new(tl!("Borders and Colors")).show(ui);
     FieldGroup::new(tl!("Border Color:")).id_salt("border-colour").show(ui, |ui, _| {
-        let pick = border_choice(ui, l.border, "field.props.border", recent);
+        let pick = field_choice(ui, l.border, false, "field.props.border", recent);
         if let Some(c) = pick.choice {
             l.border = c;
         }
         park(pending, pick.request);
     });
     FieldGroup::new(tl!("Fill Color:")).id_salt("fill-colour").show(ui, |ui, _| {
-        let pick = fill_choice(ui, l.fill, "field.props.fill", recent);
+        let pick = field_choice(ui, l.fill, false, "field.props.fill", recent);
         if let Some(c) = pick.choice {
             l.fill = c;
         }

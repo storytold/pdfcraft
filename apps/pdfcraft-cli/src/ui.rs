@@ -14,8 +14,7 @@ use super::{CliError, stdout_line};
 /// One request to a running app's control channel (`pdfcraft --control PORT`).
 pub(crate) fn ui(args: &[String]) -> Result<(), CliError> {
     validate_options("ui", args, UI_OPTIONS)?;
-    let port = flag(args, "--control")
-        .ok_or("ui: missing --control PORT (start the app with `pdfcraft --control PORT`)")?;
+    let port = flag(args, "--control").ok_or("ui: missing --control PORT (start the app with `pdfcraft --control PORT`)")?;
     let port = control_port(port).map_err(|e| format!("ui: --control {port}: {e}"))?;
     let env = EnvNames::for_app("PDFCRAFT");
     let env_token = std::env::var(&env.token).ok().filter(|v| !v.trim().is_empty());
@@ -28,9 +27,8 @@ pub(crate) fn ui(args: &[String]) -> Result<(), CliError> {
     let token = client_token(supplied.as_deref(), token_file_given.as_deref(), &FlagNames::default(), &env).map_err(|e| format!("ui: {e}"))?;
 
     let pos = positional(args, UI_OPTIONS);
-    let method = *pos
-        .first()
-        .ok_or("ui: missing method (state, inspect, click, move, release, type, key, command, commands, set, open, screenshot, …)")?;
+    let method =
+        *pos.first().ok_or("ui: missing method (state, inspect, click, move, release, type, key, command, commands, set, open, screenshot, …)")?;
     let method = if method.starts_with("ui.") { method.to_string() } else { format!("ui.{method}") };
     let mut params = serde_json::Map::new();
     for kv in pos.iter().skip(1) {
