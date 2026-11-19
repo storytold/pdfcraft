@@ -259,6 +259,9 @@ impl Walk {
         // Bound the list before sorting it; never collect an unbounded folder listing.
         let mut paths = Vec::new();
         for entry in entries {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
             if self.seen >= MAX_ENTRIES {
                 self.cut_short = true;
                 break;

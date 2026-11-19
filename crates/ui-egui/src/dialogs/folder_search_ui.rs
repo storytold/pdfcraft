@@ -103,7 +103,9 @@ impl State {
         self.files.clear();
         self.skipped.clear();
         self.outcome = None;
-        let mut options = Options::new(self.folder.trim(), self.query.clone());
+        // Pass the folder path unchanged: a directory name can legitimately end in a space. The
+        // readiness check trims only to detect an empty field.
+        let mut options = Options::new(self.folder.clone(), self.query.clone());
         options.subfolders = self.subfolders;
         options.case_sensitive = self.case_sensitive;
         options.whole_words = self.whole_words;

@@ -38,9 +38,9 @@ impl PdfCraftApp {
     pub(crate) fn open_at_page(&mut self, path: &str, page: usize) {
         if let Some(index) = self.tab_showing(path) {
             self.active = Some(index);
-            if let Some(view) = self.views.get_mut(index) {
-                view.go_to_page(page);
-            }
+            // Through apply_destination_at so a named-destination lookup still pending for this
+            // document can't overwrite the page afterwards.
+            self.apply_destination_at(index, pdfcraft_render::RemoteDestination::Page { page, view: Default::default() });
             return;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
