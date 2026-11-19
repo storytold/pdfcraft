@@ -26,6 +26,7 @@ pub(super) mod crop;
 mod find;
 pub(super) mod fling;
 pub(super) mod image_pick;
+mod link_return;
 mod navigation;
 mod organize;
 pub(super) mod page_cursor;
@@ -532,6 +533,9 @@ pub struct DocView {
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
+    /// After a link took the reader to another place: where it came from, offered as "Back to
+    /// page N" at the pages' bottom left ([`link_return`]).
+    pub(crate) link_return: Option<link_return::LinkReturn>,
     /// Pending navigation: page and fraction down the page to align with the viewport top.
     pub goto: Option<(usize, f32)>,
     /// With `goto`: → / ← turned the page at an edge, so a page or spread wider than the window
@@ -1082,6 +1086,7 @@ impl DocView {
             cover: false,
             back: Vec::new(),
             forward: Vec::new(),
+            link_return: None,
             goto: None,
             goto_side: None,
             goto_point: None,
@@ -1464,6 +1469,8 @@ struct PageOut {
     page_action: Option<PageMenuAction>,
     paste_comments_at: Option<(usize, [f64; 2])>,
     primary_down: bool,
+    /// The pointer as the pages see it ([`PagePointer::pos`]).
+    pointer: Option<Pos2>,
     /// The pointer is over a link, comment, field or what is placed on the page: a click there is
     /// for it, and turns no page in full screen.
     on_object: bool,
@@ -2283,6 +2290,7 @@ fn draw_pages(
         page_action,
         paste_comments_at,
         primary_down: ptr.primary_down,
+        pointer: ptr.pos,
         on_object,
         refused,
         row_on_screen,
@@ -2951,18 +2959,25 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
 }
 
 /// Follows the link, or the bookmark's action, that was clicked. A link to another file comes
-/// back, to be opened once the document is no longer borrowed.
+/// back, to be opened once the document is no longer borrowed. `clicked_at` is the time of a
+/// click on a link on the page, which offers the way back to where it was ([`link_return`]).
 pub(crate) fn follow_link(
     app: &mut PdfCraftApp,
     index: usize,
     target: Option<LinkTarget>,
+    clicked_at: Option<f64>,
 ) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
     let view_id = app.views[index].id;
     match target? {
         LinkTarget::Page(p, dest) => {
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
+                // Read before the jump: it is where the reader is now.
+                let from = clicked_at.map(|now| view.link_origin(&doc.info, now));
                 view.go_to_dest(p, dest, &doc.info);
+                if from.is_some() {
+                    view.link_return = from;
+                }
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
@@ -3532,6 +3547,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         page_action,
         paste_comments_at,
         primary_down,
+        pointer,
         on_object,
         mut refused,
         row_on_screen,
@@ -3556,6 +3572,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     ));
 
     view.viewport_screen = out.inner_rect;
+    link_return::overlay(ui, view, info, pointer, now, animates, unobstructed);
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
@@ -3623,7 +3640,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some() || on_object && present.is_some());
-    let remote_open = follow_link(app, index, clicked_link);
+    let remote_open = follow_link(app, index, clicked_link, Some(now));
     if let Some((page, link)) = javascript_link {
         let id = app.views[index].id;
         app.run_link_script(id, page, link);

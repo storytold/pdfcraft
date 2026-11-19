@@ -1613,6 +1613,67 @@ fn clicking_a_link_goes_to_its_destination() {
     assert!((target.min.y - vp.min.y).abs() < 40.0, "page 3 is scrolled to the top: {target:?} in {vp:?}");
 }
 
+/// Click page 1's link to page 3, which fits the page (`/Fit`).
+fn follow_the_link(h: &mut Harness<'static, PdfCraftApp>) {
+    let r = rect(h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * (150.0 / 300.0), r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.drop_at(at);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].current, 2, "the link targets page 3");
+}
+
+#[test]
+fn the_way_back_from_a_link_returns_to_the_place_and_zoom_it_was_followed_from() {
+    let mut h = harness(&[]);
+    // A little way down page 1, with its link still in the window: the place, not the page's top.
+    h.state_mut().views[0].goto = Some((0, 0.08));
+    h.run_steps(4);
+    let before = rect(&h, 0).expect("page 1");
+    assert!(before.min.y < h.state().views[0].viewport_rect().min.y - 50.0, "scrolled into the page: {before:?}");
+    assert_eq!(h.state().views[0].fit, pdfcraft_ui_egui::canvas::Fit::Width);
+    follow_the_link(&mut h);
+    assert_eq!(h.state().views[0].fit, pdfcraft_ui_egui::canvas::Fit::Page);
+
+    h.get_by_label("Back to page 1").click();
+    h.run_steps(6);
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit), (0, pdfcraft_ui_egui::canvas::Fit::Width), "page 1 at its zoom again");
+    let after = rect(&h, 0).expect("page 1 on screen");
+    assert!((after.min.y - before.min.y).abs() < 2.0 && (after.width() - before.width()).abs() < 1.0, "{after:?} was {before:?}");
+    // Back through the view history, as Previous view goes: Next view goes to the link's page.
+    assert!(!h.state().views[0].forward.is_empty());
+    assert!(h.query_by_label("Back to page 1").is_none(), "used, it goes");
+}
+
+#[test]
+fn the_way_back_fades_and_shows_again_near_its_corner_until_the_reader_goes_back() {
+    let mut h = harness(&[]);
+    h.run_steps(4);
+    follow_the_link(&mut h);
+    assert!(h.query_by_label("Back to page 1").is_some(), "shown after the jump");
+    // Kittest's frames are a quarter second apart: four seconds on, away from the corner.
+    h.run_steps(16);
+    assert!(h.query_by_label("Back to page 1").is_none(), "faded out");
+
+    let vp = h.state().views[0].viewport_rect();
+    h.hover_at(vp.left_bottom() + egui::vec2(60.0, -40.0));
+    h.run_steps(2);
+    assert!(h.query_by_label("Back to page 1").is_some(), "back while the pointer is near it");
+    h.hover_at(vp.center());
+    h.run_steps(4);
+    assert!(h.query_by_label("Back to page 1").is_none(), "gone again once the pointer leaves");
+
+    // Previous view is the other way back: then there is nothing to return to.
+    assert!(h.state_mut().execute("view.previous_view"));
+    h.run_steps(2);
+    h.hover_at(vp.left_bottom() + egui::vec2(60.0, -40.0));
+    h.run_steps(4);
+    assert!(h.query_by_label("Back to page 1").is_none());
+}
+
 /// Bookmarks and a link with positioned destinations (ISO 32000-2 §12.3.2.2). Page 2's crop box
 /// is away from the origin (x 50..350, y 100..500), so its user-space y 420 is 20% down the page.
 const DESTS: &[u8] = b"%PDF-1.7

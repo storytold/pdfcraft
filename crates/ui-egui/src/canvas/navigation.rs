@@ -290,6 +290,8 @@ impl DocView {
             return false;
         }
         self.end_find_following();
+        // Going back or forward is the way back the overlay offers, or a step away from it.
+        self.link_return = None;
         let (from, to) = if forward { (&mut self.forward, &mut self.back) } else { (&mut self.back, &mut self.forward) };
         let Some(page) = from.pop() else { return false };
         to.push(self.current);
