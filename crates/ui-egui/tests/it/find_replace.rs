@@ -47,6 +47,12 @@ fn has_field(h: &Harness<'static, PdfCraftApp>, placeholder: &str) -> bool {
     h.query_all_by(|n| n.placeholder() == Some(placeholder)).next().is_some()
 }
 
+/// The find bar's Replace All button label, as the framework words it.
+fn replace_all() -> String {
+    use craft::i18n::WordSet as _;
+    craft::text::ui::find::FindLabels::english().replace_all.as_str().to_owned()
+}
+
 /// The find bar's Replace with field: a text field named by its label, with no placeholder.
 const REPLACE_WITH: &str = "Replace with:";
 
@@ -95,7 +101,7 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
     assert_eq!(h.state().views[0].find.as_ref().map(|f| (f.query.as_str(), f.replacement.as_str())), Some(("cat", "dog")));
     // The row may settle over a few frames once the status text changes its width.
     h.run_steps(8);
-    h.get_by_label("Replace all").click();
+    h.get_by_label(&replace_all()).click();
     h.run_steps(4);
     assert_eq!(texts(&h), ["dog and dog", "a dog"]);
     assert!(support::shown_notice(&mut h).is_some(), "Replace all says what it did");
