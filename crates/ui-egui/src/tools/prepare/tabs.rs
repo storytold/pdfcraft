@@ -7,7 +7,7 @@ use craft::ui::contract::{
     clicked,
 };
 use craft::ui::display::Text;
-use craft::ui::form::Field;
+use craft::ui::form::{Field, Help};
 use craft::ui::layout_components::Stack;
 use craft::ui::list::{List, ListRow, RowEvent, TrailingFace, TrailingPart};
 use craft::ui::notices::{Notice, NoticeLayout};
@@ -385,18 +385,22 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
         let note_text =
             crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB); its start is shown. It is kept as it is."), &[("kib", &kib)]);
         let start = js.get(..js.floor_char_boundary(MAX_EDITED_SCRIPT)).unwrap_or_default().to_string();
-        Field::new(label).id_salt("calc-script").show(ui, |ui, _| {
+        Field::new(label).id_salt("calc-script").help(Help::Text(note_text.into())).show(ui, |ui, _| {
             // A given value takes no edit: what is typed is not kept.
             TextField::new(label, Bind::given(start.clone())).lines(6).mono().show(ui);
         });
-        note(ui, note_text);
         return;
     }
     // The box edits a copy: an edit that would take the script past the limit (a large paste) is refused and
     // said so, rather than hiding the box the user is typing in. The limit is on bytes (`len`), as the JavaScript
     // engine's is, so `TextField::limit`, which counts characters, is not used.
+    // The refusal is the box's help line, under it and in its description, until an edit is taken.
     let mut draft = js.clone();
-    Field::new(label).id_salt("calc-script").show(ui, |ui, _| {
+    let mut field = Field::new(label).id_salt("calc-script");
+    if *refused {
+        field = field.help(Help::Status(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made.").into()));
+    }
+    field.show(ui, |ui, _| {
         TextField::new(label, Bind::bound(&mut draft)).lines(6).mono().tab_inserts(true).placeholder("event.value = …;").show(ui);
     });
     if draft != *js {
@@ -404,10 +408,5 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
         if !*refused {
             *js = draft;
         }
-    }
-    if *refused {
-        Notice::new(Tone::Bad, tl!("A script edited here can be at most 256 KiB long; that change wasn't made."))
-            .layout(NoticeLayout::Inline)
-            .show(ui);
     }
 }

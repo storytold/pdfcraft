@@ -771,8 +771,7 @@ fn paint_unbaked_widget(
     (f, wi, w): (&FormField, usize, &FormWidget),
     r: Rect,
 ) {
-    // PLAN: framework gap: `Draw` gives no `state.selected` colour, so the selected row still reads the visuals.
-    let selected_row = painter.ctx().global_style().visuals.selection.bg_fill;
+    let selected_row = draw.role(|c| c.state.selected).egui();
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
             let text = f.value.first().map(String::as_str).unwrap_or("");

@@ -174,9 +174,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 list_row = list_row.optional(value.clone());
             }
             if preparing && field.page.is_some() {
+                // Each arrow names the field it moves.
+                let named = |tip: &str| format!("{}: {}", tl!(tip), field.name);
                 list_row = list_row
-                    .trailing_part(EARLIER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-up"))), tl!("Earlier in tab order").to_string())
-                    .trailing_part(LATER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-down"))), tl!("Later in tab order").to_string());
+                    .trailing_part(EARLIER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-up"))), named("Earlier in tab order"))
+                    .trailing_part(LATER, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-down"))), named("Later in tab order"));
             }
             list_row
         },

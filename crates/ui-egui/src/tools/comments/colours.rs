@@ -1,5 +1,5 @@
 //! The comment colour rows: the named swatches as the framework palette takes them, the session's
-//! recent custom colours, and the "no fill" / "same as text" choices above a palette.
+//! recent custom colours, and the "no fill" / "same as text" / form fields' "no color" choices above a palette.
 
 use std::sync::{Arc, PoisonError, RwLock};
 
@@ -114,4 +114,15 @@ pub(crate) fn fill_choice(ui: &mut egui::Ui, current: Option<Rgb>, key: &str, re
 /// "Same as text" above the palette, for a border that takes the text's colour unless picked.
 pub(crate) fn border_choice(ui: &mut egui::Ui, current: Option<Rgb>, key: &str, recent: &RecentColours) -> ColourChoice {
     choice(ui, tl!("Same as text"), current, key, recent)
+}
+
+/// "No color" above the palette, for a form field's border or fill: on, the field has none; off, it is black
+/// until a colour is picked. Fields that differ (`mixed`) show it off, so it can be turned on for all of them.
+pub(crate) fn field_choice(ui: &mut egui::Ui, current: Option<Rgb>, mixed: bool, key: &str, recent: &RecentColours) -> ColourChoice {
+    let was = !mixed && current.is_none();
+    let mut none = was;
+    ToggleButton::new(tl!("No color").to_string(), Bind::bound(&mut none)).show(ui);
+    let pick = palette(ui, tl!("Colour"), current, key, recent);
+    let choice = if none != was { Some((!none).then_some([0.0; 3])) } else { pick.picked.map(Some) };
+    ColourChoice { choice, request: pick.request }
 }
