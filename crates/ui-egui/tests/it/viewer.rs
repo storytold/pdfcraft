@@ -2007,6 +2007,39 @@ fn space_held_through_a_dialog_steps_nothing_more_on_its_repeats() {
     assert_eq!(through_a_dialog(&mut h, Modifiers::NONE), one, "Space held through the dialog is no tap");
 }
 
+#[test]
+fn space_repeating_after_ctrl_is_let_go_scrolls_nothing() {
+    // #7566 review: Ctrl+Space started no tap, but once Ctrl was let go with Space still held, the
+    // key's next repeat (a plain Space now) started one, and letting go of Space scrolled.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let key = |pressed, repeat, modifiers| egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat, modifiers };
+    let start = top(&h);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    h.event(key(true, false, Modifiers::CTRL));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    for _ in 0..3 {
+        h.event(key(true, true, Modifiers::NONE));
+        h.run_steps(2);
+    }
+    h.event(key(false, false, Modifiers::NONE));
+    h.run_steps(4);
+    assert_eq!(top(&h), start, "no tap: the press that went down was Ctrl+Space");
+    // A plain press and release still goes a screen on.
+    h.event(key(true, false, Modifiers::NONE));
+    h.run_steps(2);
+    h.event(key(false, false, Modifiers::NONE));
+    h.run_steps(4);
+    assert_ne!(top(&h), start, "Space goes a screen on");
+}
+
 /// Like [`fixture`], with each page's size given.
 fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
     let n = sizes.len();

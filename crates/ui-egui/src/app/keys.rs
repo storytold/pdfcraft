@@ -151,9 +151,19 @@ impl PdfCraftApp {
             self.cancel_space_tap(ctx);
         }
         let (plain, space) = (ctx.input(|input| input.modifiers.is_none()), PageKeys::held(ctx, Key::Space));
-        // Space going down starts a tap, once: the key's repeats while it is held start none.
-        if free && plain && self.space_tap.is_none() && keys.pressed(ctx, Key::Space) {
-            self.space_tap = Some(true);
+        // Space going down starts a tap, once: the key's repeats while it is held start none, even
+        // when the press that went down was one they can't see. A first press with Ctrl, Alt or ⌘
+        // is no tap until Space is let go, so letting go of the modifier first doesn't turn the
+        // repeats into one. Shift+Space steps back below.
+        if free
+            && self.space_tap.is_none()
+            && let Some(modifiers) = keys.first_press(ctx, Key::Space)
+        {
+            if modifiers.is_none() {
+                self.space_tap = Some(true);
+            } else if !modifiers.shift_only() {
+                self.space_tap = Some(false);
+            }
         }
         // A press with the pointer while Space is down is the Hand's drag, not a tap.
         if self.space_tap.is_some() && ctx.input(|input| input.pointer.any_down() || input.pointer.any_pressed()) {
