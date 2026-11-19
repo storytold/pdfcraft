@@ -2,7 +2,6 @@ use craft::behavior::{IconId, Mixed};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::choice::Swatch;
-use craft::ui::contract::overlay::Trigger;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::SliderField;
@@ -225,15 +224,21 @@ pub(crate) struct QuickBarPick {
 }
 
 /// A control that opens a popover under it: `opener` draws the control, a click on it opens and closes the
-/// popover, and `body` fills it. The open flag is the popover's own kept value.
+/// popover, and `body` fills it. The popover's open flag is the opener's own, kept in the UI's memory.
 fn popover_from(ui: &mut egui::Ui, label: &str, opener: impl FnOnce(&mut egui::Ui) -> egui::Response, body: impl FnOnce(&mut egui::Ui)) {
     let resp = opener(ui);
+    let key = resp.id.with("popover-open");
+    let mut open = ui.memory(|m| m.data.get_temp::<bool>(key)).unwrap_or(false);
+    if resp.clicked() {
+        open = !open;
+    }
     let mut body = Some(body);
-    Popover::new(label.to_string(), Bind::kept()).overlay(|o| o.opened_by(&resp, Trigger::Click)).show(ui, |ui, _| {
+    Popover::new(label.to_string(), Bind::bound(&mut open)).opened_by(&resp).show(ui, |ui, _| {
         if let Some(body) = body.take() {
             body(ui);
         }
     });
+    ui.memory_mut(|m| m.data.insert_temp(key, open));
 }
 
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
