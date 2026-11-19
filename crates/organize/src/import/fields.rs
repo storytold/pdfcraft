@@ -934,6 +934,18 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_font_is_escaped_back_into_the_da() {
+        // The source names its font `/F#20x`, which is the name `F x`. The destination gives
+        // `F x` to Helvetica, so the Courier comes in as `F x_1`, and the `/DA` must write that
+        // name escaped, or its space would end the name and break the `/DA`.
+        let src = font_form("Courier", "imported", "F#20x", "/DA (/F#20x 12 Tf 0 g)");
+        let mut dst = font_form("Helvetica", "destination", "F#20x", "/DA (/F#20x 12 Tf 0 g)");
+        crate::import::import_pages_with(&mut dst, &src, &[0], 1, crate::import::FieldConflicts::Rename).expect("imports");
+        assert_eq!(field_font(&dst, "imported"), ("/F#20x_1 12 Tf 0 g".into(), Some("Courier".into()), 2));
+        assert_eq!(field_font(&dst, "destination"), ("/F#20x 12 Tf 0 g".into(), Some("Helvetica".into()), 2));
+    }
+
+    #[test]
     fn an_imported_font_survives_deduplication_in_an_existing_form() {
         // The destination has the same Courier under another name and its form is an object of
         // its own. The import copies the Courier, deduplication merges the copy into the font
