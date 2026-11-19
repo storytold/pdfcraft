@@ -95,12 +95,13 @@ pub(crate) fn decode_with(
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
-    // Arbitrarily chosen, but we need some limit to prevent timeouts.
-    const MAX_INSTANCES: u32 = 10_000;
-
-    if header.num_instances > MAX_INSTANCES {
-        bail!(SymbolError::TooManyInstances);
-    }
+    // PdfCraft patch: upstream refused any text region declaring more than
+    // 10,000 instances outright ("some limit to prevent timeouts"), so a dense
+    // scan's region of more than that decoded to nothing and its page drew
+    // white. The cap is dropped: each instance's placement is charged to
+    // `work_left` below, and a run of images shares its caller's allowance, so
+    // a hostile count ends as `OverflowError::DecodingWork` like any other
+    // oversized decode rather than hanging the renderer.
 
     let mut strip_t = ctx
         .read_strip_delta_t(strip_size)?

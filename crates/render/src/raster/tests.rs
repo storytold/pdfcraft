@@ -5405,6 +5405,30 @@ fn jbig2_text_region(width: u32, height: u32, instances: u32) -> Vec<u8> {
     text
 }
 
+/// A text region declaring `instances` and placing every one, each in its own
+/// strip: the strip's T is one on from the last and its first S is 0 again, so
+/// the instances stack down the region's first column.
+fn jbig2_text_region_placing(width: u32, height: u32, instances: u32) -> Vec<u8> {
+    let mut text = jbig2_region_info(width, height);
+    text.extend_from_slice(&[0x00, 0x11, 0, 0]); // Huffman, top left; tables B.6, B.8, B.11
+    text.extend_from_slice(&instances.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    for _ in 0..instances {
+        bits.put(0, 1); // delta T 1 (B.11)
+        bits.put(0, 9); // first S stays 0 (B.6)
+        bits.put(0, 1); // symbol 0
+        bits.put(0b01, 2); // end of the strip (B.8)
+    }
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
 /// A 1 × 1 text region placing one instance of symbol 0 of one, refined, Huffman-coded.
 fn jbig2_refined_text_region() -> Vec<u8> {
     let mut text = jbig2_region_info(1, 1);
@@ -5454,6 +5478,19 @@ fn jbig2_classes_of_no_symbols_decode_no_bitmap() {
     // This takes milliseconds now and took a quarter of an hour, so a margin this wide can't fail on
     // a busy machine.
     assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true));
+}
+
+/// Upstream refused a text region declaring more than 10,000 instances at its header, so a dense
+/// scan's region of more than that decoded to nothing and its page drew white (#7570's pages 19
+/// and 20). Each instance's placement is charged to the work the image may do, and a run of images
+/// shares the page's allowance, so the declared count needs no fixed cap: 10,001 strips of one
+/// zero-width symbol each decode and the page draws.
+#[test]
+fn jbig2_text_regions_of_more_than_ten_thousand_instances_draw() {
+    let mut stream = black_jbig2_page_of(8, 10_100);
+    jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(1, true));
+    jbig2_segment(&mut stream, 2, 6, &[1], &jbig2_text_region_placing(8, 10_100, 10_001));
+    assert!(jbig2_image_draws(&stream));
 }
 
 /// Each item a JBIG2 stream decodes costs its work, and the stream may ask for 2^30: four of the
