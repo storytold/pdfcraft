@@ -67,11 +67,23 @@ const TOOL_CALL: &str = "tool_call";
 pub struct McpServer {
     automation: Automation,
     compact: bool,
+    /// What `initialize` reports as `serverInfo.version`: the release version, followed by the
+    /// build label in a labelled build (`0.18.1 (titlebar)`), as `--version` and About show it.
+    version: String,
 }
 
 impl McpServer {
+    /// A server over `automation`, in full (not compact) mode, reporting this build's version.
     pub fn new(automation: Automation) -> Self {
-        Self { automation, compact: false }
+        Self { automation, compact: false, version: pdfcraft_engine::build_info::version() }
+    }
+
+    /// Report `version` instead of this build's, so a test can see a labelled version reach the
+    /// `initialize` reply in an unlabelled build.
+    #[cfg(test)]
+    fn with_version(mut self, version: &str) -> Self {
+        self.version = version.to_owned();
+        self
     }
 
     /// In compact mode `tools/list` returns only [`COMPACT_CORE_TOOLS`] plus `tool_search` and
@@ -82,6 +94,7 @@ impl McpServer {
         self
     }
 
+    /// The automation engine this server dispatches tool calls to.
     pub fn automation(&self) -> &Automation {
         &self.automation
     }
@@ -145,6 +158,8 @@ impl McpServer {
         })
     }
 
+    /// Answer one request: the result for `method` with `params`, or a JSON-RPC error code and
+    /// message. `initialize` reports this server's version and instructions.
     fn dispatch(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
@@ -153,7 +168,7 @@ impl McpServer {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
-                    "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
+                    "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": self.version, "websiteUrl": pdfcraft_engine::links::APP_PAGE },
                     "instructions": if self.compact { format!("{INSTRUCTIONS}{COMPACT_INSTRUCTIONS}") } else { INSTRUCTIONS.to_string() },
                 }))
             }
@@ -633,6 +648,68 @@ mod tests {
         drain_line(&mut overlong).unwrap();
         assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::Line);
         assert_eq!(buf, b"after", "the next line after an overlong line is read cleanly");
+    }
+
+    /// The `serverInfo.version` that `server` answers an `initialize` request with.
+    fn initialize_version(mut server: McpServer) -> String {
+        let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }).to_string();
+        let mut out = Vec::new();
+        server.serve(BufReader::new(format!("{init}\n").as_bytes()), &mut out).unwrap();
+        let reply: Value = serde_json::from_str(String::from_utf8(out).unwrap().lines().next().unwrap()).unwrap();
+        reply["result"]["serverInfo"]["version"].as_str().expect("serverInfo.version is a string").to_owned()
+    }
+
+    /// Whether `v` is a strict semver version (`1.2.3`, `1.2.3-rc.1`, `1.2.3+build.5`): three
+    /// numeric parts without leading zeros, then an optional pre-release and build.
+    fn is_strict_semver(v: &str) -> bool {
+        let (rest, build) = v.split_once('+').map_or((v, None), |(r, b)| (r, Some(b)));
+        let (core, pre) = rest.split_once('-').map_or((rest, None), |(c, p)| (c, Some(p)));
+        let numeric = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && (p == "0" || !p.starts_with('0'));
+        let ident = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        let parts: Vec<&str> = core.split('.').collect();
+        parts.len() == 3
+            && parts.iter().all(|p| numeric(p))
+            && pre.is_none_or(|p| p.split('.').all(|i| ident(i) && (!i.bytes().all(|b| b.is_ascii_digit()) || numeric(i))))
+            && build.is_none_or(|b| b.split('.').all(ident))
+    }
+
+    /// The strict semver check the version test relies on accepts release, pre-release and
+    /// build versions, and rejects labelled, short, padded and prefixed strings.
+    #[test]
+    fn strict_semver_check_accepts_versions_and_rejects_labels() {
+        for ok in ["0.18.1", "1.0.0", "10.20.30", "1.2.3-rc.1", "1.2.3-0.alpha", "1.2.3+build.5", "1.2.3-rc.1+b-7"] {
+            assert!(is_strict_semver(ok), "{ok}");
+        }
+        for bad in ["0.18.1 (probe)", "0.18", "0.18.1.2", "01.2.3", "1.2.3-", "1.2.3-01", "1.2.3+", "v1.2.3", ""] {
+            assert!(!is_strict_semver(bad), "{bad}");
+        }
+    }
+
+    /// A labelled build (PDFCRAFT_BUILD_LABEL at compile time) must be told apart from the
+    /// release over MCP too, the same way the About dialog shows it. Injecting the version
+    /// makes this fail in an unlabelled build too if the reply goes back to the bare
+    /// package version.
+    #[test]
+    fn initialize_reports_a_labelled_version_as_given() {
+        let server = McpServer::new(Automation::new()).with_version("0.18.1 (probe)");
+        assert_eq!(initialize_version(server), "0.18.1 (probe)");
+    }
+
+    /// Clients may parse serverInfo.version: it is the strict semver release version, or
+    /// that version followed by ` (<label>)` in a labelled build.
+    #[test]
+    fn initialize_reports_the_release_version_then_any_label() {
+        let version = initialize_version(McpServer::new(Automation::new()));
+        let release = pdfcraft_engine::build_info::VERSION;
+        assert!(is_strict_semver(release), "{release}");
+        match version.strip_prefix(release) {
+            Some("") => assert!(pdfcraft_engine::build_info::LABEL.is_none_or(|l| l.trim().is_empty())),
+            Some(rest) => {
+                let label = rest.strip_prefix(" (").and_then(|r| r.strip_suffix(')'));
+                assert_eq!(label, pdfcraft_engine::build_info::LABEL.map(str::trim), "{version}");
+            }
+            None => panic!("{version} does not start with the release version {release}"),
+        }
     }
 
     #[test]
