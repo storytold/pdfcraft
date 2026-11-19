@@ -218,7 +218,16 @@ impl Layouter<'_> {
             }
             for (item, kept) in rest {
                 if loose(&item) {
-                    let (upper, whole, rest_box) = split_widget(item, cut);
+                    let (mut upper, whole, rest_box) = split_widget(item, cut);
+                    // The fill of a widget whose text the page draws goes on the page, under its
+                    // lines, as the rest of its box's does ([`widget_box`]): an annotation draws
+                    // over the page, so the widget's own would hide them.
+                    if let Some(Item::Widget(w)) = &mut upper
+                        && w.page_text
+                        && let Some(color) = w.border.fill.take()
+                    {
+                        here.insert(0, Item::Fill { rect: w.rect, color });
+                    }
                     here.extend(upper);
                     below.extend(whole.map(|it| (it, None)));
                     if rest_box.is_some() {
