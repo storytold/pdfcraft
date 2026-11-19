@@ -163,10 +163,14 @@ const PAGE_SHARE: f32 = 0.8;
 
 /// The arrangement of a new install: Tools at the start edge, the toolbar at the rail's edge, the page area between
 /// the docks, and every side panel closed, remembered as a column after the toolbar's.
+/// The Tools pane's default width, as production opened it.
+const TOOLS_WIDTH: f32 = 272.0;
+
 pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let single = |panel| Column::new(vec![Group::new(vec![panel], 0)]);
     // The rail is one tool column wide: its column keeps the toolbar's grid, never the theme's column width.
-    let (tools, toolbar) = (single(PanelId::Tools), single(PanelId::Toolbar).with_steps(1));
+    // The Tools pane opens at production's width (272 points, the old `TOOLS_WIDTH`), not the theme's column width.
+    let (tools, toolbar) = (single(PanelId::Tools).with_width(TOOLS_WIDTH), single(PanelId::Toolbar).with_steps(1));
     let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![toolbar, tools], Vec::new()) } else { (vec![tools], vec![toolbar]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
