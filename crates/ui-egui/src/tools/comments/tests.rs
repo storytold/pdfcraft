@@ -28,9 +28,11 @@ fn page_map<'a>(placed: &'a [PlacedPage], info: &'a DocInfo, rotation: u16) -> P
     PageMap::new(info, placed, rotation)
 }
 
-/// A kurbo rectangle as an egui one, for comparing a marker with a page's screen rectangle.
-fn screen(r: craft::behavior::kurbo::Rect) -> Rect {
-    Rect::from_min_max(pos2(r.x0 as f32, r.y0 as f32), pos2(r.x1 as f32, r.y1 as f32))
+/// A rectangle in page units of `page` on screen, through the page map, for comparing a marker with the page's
+/// screen rectangle.
+fn screen(map: &PageMap<'_>, page: usize, r: craft::behavior::kurbo::Rect) -> Rect {
+    let corner = |x, y| map.to_screen(page, Point::new(x, y)).expect("the page is placed");
+    Rect::from_two_pos(corner(r.x0, r.y0), corner(r.x1, r.y1))
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -412,7 +414,7 @@ fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
                 let both = with(vec![top, a.clone()]);
                 let markers = bridge::markers(&both, &map, side);
                 let (_, marker) = *markers.last().expect("commented markup has a marker");
-                let inside = screen(marker);
+                let inside = screen(&map, 0, marker);
                 assert!(xf.rect.contains_rect(inside), "page/view rotation {page_rotation}/{rotation}, zoom {zoom}, anchor {rect:?}: {inside:?}");
                 let annotations = bridge::annotations(&both, &map, QuickTool::Select, true);
                 let picked = pick_at(&annotations, marker.center(), tolerance_of(&map), side, &markers);

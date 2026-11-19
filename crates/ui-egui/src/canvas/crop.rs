@@ -37,23 +37,30 @@ fn to_user(page: &pdfcraft_render::PageInfo, vx: f32, vy: f32) -> [f64; 2] {
 }
 
 /// The Crop tool, built per pass over the placed pages.
-pub(crate) struct CropTool {
+pub(crate) struct CropTool<'a> {
     allowed: bool,
     placed: Vec<PlacedPage>,
     /// Per placed page: its unrotated view-space size.
     sizes: Vec<(usize, (f32, f32))>,
     rotation: u16,
-    drag: PageBoxDrag,
+    /// The session's drag, kept from the press to the release.
+    drag: &'a mut PageBoxDrag,
     done: Option<CropResult>,
     open_boxes: Option<usize>,
 }
 
-impl CropTool {
+impl<'a> CropTool<'a> {
     // PLAN: pdf-canvas-w9 asked for `CropTool::new(allowed)`; the tool needs the placed pages to know which page a press is on.
-    /// A tool over `placed`; `allowed` is false when page editing is forbidden.
-    pub(crate) fn new(allowed: bool, placed: &[PlacedPage], rotation: u16, page_size_of: impl Fn(usize) -> (f32, f32)) -> Self {
+    /// A tool over `placed`, with its rectangle in `drag`; `allowed` is false when page editing is forbidden.
+    pub(crate) fn new(
+        allowed: bool,
+        drag: &'a mut PageBoxDrag,
+        placed: &[PlacedPage],
+        rotation: u16,
+        page_size_of: impl Fn(usize) -> (f32, f32),
+    ) -> Self {
         let sizes = placed.iter().map(|p| (p.page, page_size_of(p.page))).collect();
-        Self { allowed, placed: placed.to_vec(), sizes, rotation, drag: PageBoxDrag::default(), done: None, open_boxes: None }
+        Self { allowed, placed: placed.to_vec(), sizes, rotation, drag, done: None, open_boxes: None }
     }
 
     /// The crop the last release made, once.
@@ -72,7 +79,7 @@ impl CropTool {
     }
 }
 
-impl CanvasTool for CropTool {
+impl CanvasTool for CropTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
         if !self.allowed {
             return ToolAction::Ignored;

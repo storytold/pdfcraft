@@ -2177,7 +2177,7 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
 }
 
 /// #2149: the first save after Fill & Sign places a signature asks whether to lock it into the
-/// page. Lock and save flattens it; Keep editable keeps it a comment; Don't ask again becomes
+/// page. Lock and save flattens it; Keep editable keeps it a comment; Don't show again becomes
 /// the preference; the Fill & Sign panel has the switch too, once, and the Sign menu no longer
 /// does (review on #2348).
 #[test]
@@ -2197,21 +2197,21 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "asks first");
     h.run_steps(2);
-    h.get_by_label("Lock your signature into the page?");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Lock your signature into the page?");
     h.get_by_label("Keep editable").click();
     h.run_steps(3);
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved");
     assert_eq!(signed(&h), 1, "still a removable comment");
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "no new signature: no question");
-    // A new signature asks again; Lock and save with Don't ask again flattens and remembers.
+    // A new signature asks again; Lock and save with Don't show again flattens and remembers.
     h.execute("sign.fill.signature");
     h.run_steps(2);
     click(&mut h, 40.0, 200.0);
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
-    h.get_by_label("Don't ask again").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Don't show again").click();
     h.run_steps(1);
     h.get_by_label("Lock and save").click();
     h.run_steps(3);
@@ -2407,7 +2407,7 @@ fn locking_a_signature_clears_the_comment_selection() {
 }
 
 /// #2348 review: when locking the signature fails (here the document's security allows comments
-/// but not changes), nothing is lost: the next save asks again, and "Don't ask again" isn't
+/// but not changes), nothing is lost: the next save asks again, and "Don't show again" isn't
 /// remembered.
 #[test]
 fn a_lock_that_fails_keeps_the_question() {
@@ -2437,7 +2437,7 @@ fn a_lock_that_fails_keeps_the_question() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "asks first");
     h.run_steps(2);
-    h.get_by_label("Don't ask again").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Don't show again").click();
     h.run_steps(1);
     h.get_by_label("Lock and save").click();
     h.run_steps(3);
@@ -2446,7 +2446,7 @@ fn a_lock_that_fails_keeps_the_question() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "the next save asks again");
     h.run_steps(2);
-    h.get_by_label("Lock your signature into the page?");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Lock your signature into the page?");
     let _ = std::fs::remove_file(&out);
 }
 
@@ -2518,7 +2518,7 @@ fn the_lock_question_is_skipped_or_kept_where_it_must_be() {
     let _ = std::fs::remove_file(&out);
 }
 
-/// #2149: Cancel saves nothing, and Keep editable with Don't ask again turns the question off.
+/// #2149: Cancel saves nothing, and Keep editable with Don't show again turns the question off.
 #[test]
 fn cancelling_the_lock_question_saves_nothing() {
     let out = std::env::temp_dir().join(format!("pdfcraft-lock-cancel-{}.pdf", std::process::id()));
@@ -2538,7 +2538,7 @@ fn cancelling_the_lock_question_saves_nothing() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "asked again");
     h.run_steps(2);
-    h.get_by_label("Don't ask again").click();
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Don't show again").click();
     h.run_steps(1);
     h.get_by_label("Keep editable").click();
     h.run_steps(3);
