@@ -28,12 +28,6 @@ pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PRE
 /// Label printing reads the printed area of at most this many pages (each is a quick render on
 /// the UI thread); further pages print whole.
 pub(crate) const LABEL_CROP_PAGES: usize = 50;
-/// Two-sided reads running at once. A driver Windows can't reach holds its read for about 48 s,
-/// so picking printer after printer could otherwise start a thread for each; past this, the
-/// printer picked is asked once a read finishes.
-#[cfg(not(target_arch = "wasm32"))]
-const TWO_SIDED_READS: usize = 4;
-
 /// Lists the printers off the UI thread (the desktop app sets [`PdfCraftApp::printer_source`]):
 /// CUPS' driverless discovery can wait on the network. Without a source the dialog reads them as
 /// it opens, so tests stay deterministic.
@@ -43,6 +37,8 @@ pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send +
 /// UI language) unless a test stands in. Called off the GUI thread.
 pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption> + Send + Sync>;
 
+/// Opens the selected printer's native settings, returning only after that window closes.
+pub type PreferencesSource = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 /// Where a printer's configured default paper comes from: the spooler's DEVMODE / driver settings
 /// unless a test stands in.
 pub type DefaultPaperSource = std::sync::Arc<dyn Fn(&str) -> Option<(String, (f64, f64))> + Send + Sync>;
@@ -55,27 +51,37 @@ pub type PrinterPapersSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::Paper> 
 /// print-ready PDF and the job and answers as the spooler would. Called off the GUI thread.
 pub type Spooler = std::sync::Arc<dyn Fn(&[u8], &spool::Job) -> Result<String, String> + Send + Sync>;
 
-/// The system spooler's printers, as the desktop app's [`PrinterSource`]: its queues only, with
-/// no driver asked anything, so the list never waits on a printer (#2192).
+/// The system spooler's printers, as the desktop app's [`PrinterSource`].
+/// On Windows the executable must handle `spool::query_worker()` before normal startup.
 pub fn system_printers() -> PrinterSource {
-    std::sync::Arc::new(spool::printer_queues)
+    std::sync::Arc::new(spool::query_printers)
 }
 
 /// Reads whether one printer's driver takes two-sided settings, off the UI thread, for the
-/// printer picked (the desktop app sets [`PdfCraftApp::two_sided_source`]). The printer list
-/// leaves it unknown: reading a driver Windows can't reach takes it about 48 s, so the list
-/// doesn't wait for every printer's (#2192).
-pub type TwoSidedSource = std::sync::Arc<dyn Fn(&str) -> Option<bool> + Send + Sync>;
+/// printer picked (the desktop app sets [`PdfCraftApp::two_sided_source`]).
+pub type TwoSidedSource = spool::DuplexSource;
 
 /// The system spooler's answer, as the desktop app's [`TwoSidedSource`].
+/// Requires the Windows startup dispatch described by [`system_printers`].
 pub fn system_two_sided() -> TwoSidedSource {
-    std::sync::Arc::new(spool::two_sided)
+    std::sync::Arc::new(spool::query_two_sided)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 type PaperInfo = (Vec<spool::Paper>, Option<spool::Paper>);
 #[cfg(not(target_arch = "wasm32"))]
-type PendingPaperInfo = (String, std::sync::mpsc::Receiver<PaperInfo>);
+struct PendingPaperInfo {
+    printer: String,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    answer: std::sync::mpsc::Receiver<PaperInfo>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for PendingPaperInfo {
+    fn drop(&mut self) {
+        self.cancelled.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
 
 /// The Print dialog's work in the background: the printer list being read, and the jobs being
 /// spooled, oldest first.
@@ -83,9 +89,12 @@ type PendingPaperInfo = (String, std::sync::mpsc::Receiver<PaperInfo>);
 pub(crate) struct PrintTasks {
     #[cfg(not(target_arch = "wasm32"))]
     printers: Option<std::sync::mpsc::Receiver<Vec<spool::Printer>>>,
-    /// Two-sided support being read, by printer.
+    /// Only the current selection may have an active capability query.
     #[cfg(not(target_arch = "wasm32"))]
-    two_sided: Vec<(String, std::sync::mpsc::Receiver<Option<bool>>)>,
+    two_sided: spool::DuplexSession,
+    #[cfg(not(target_arch = "wasm32"))]
+    preferences: Vec<(String, std::sync::mpsc::Receiver<Result<(), String>>)>,
+
     #[cfg(not(target_arch = "wasm32"))]
     jobs: Vec<PrintJob>,
     /// The progress card is showing a print job (it is shared with other long jobs).
@@ -184,12 +193,15 @@ impl PdfCraftApp {
     /// Open the Print dialog, preselecting the default printer and reading papers in the background.
     pub fn open_print(&mut self) {
         let Some((i, _)) = self.active_ids() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        self.print_tasks.papers.clear();
+        self.print_draft.refresh_two_sided();
         let (printers, printers_loading) = match self.printer_source.clone() {
             // The list from the last time the dialog opened, until the fresh one arrives.
             #[cfg(not(target_arch = "wasm32"))]
             Some(source) => {
-                self.list_printers_in_background(source);
-                (self.print_draft.printers.clone(), true)
+                let loading = self.list_printers_in_background(source);
+                (if loading { self.print_draft.printers.clone() } else { Vec::new() }, loading)
             }
             _ => (listed_printers(), false),
         };
@@ -307,20 +319,25 @@ impl PdfCraftApp {
 
     /// Read the printer list in the background off the GUI thread; `poll_print` picks it up.
     #[cfg(not(target_arch = "wasm32"))]
-    fn list_printers_in_background(&mut self, source: PrinterSource) {
+    fn list_printers_in_background(&mut self, source: PrinterSource) -> bool {
         // A list already being read is as fresh as a new one would be.
         if self.print_tasks.printers.is_some() {
-            return;
+            return true;
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let wake = WakeOnExit(self.ctx.clone());
-        std::thread::spawn(move || {
+        let spawned = std::thread::Builder::new().name("printer list".into()).spawn(move || {
             let _wake = wake;
             let tx = tx;
             // The receiver may be gone (the app quit): nothing to report to then.
             let _ = tx.send(source());
         });
-        self.print_tasks.printers = Some(rx);
+        if spawned.is_ok() {
+            self.print_tasks.printers = Some(rx);
+            true
+        } else {
+            false
+        }
     }
 
     /// Read `printer`'s driver options off the GUI thread (#1818); `poll_print` picks them up.
@@ -376,7 +393,8 @@ impl PdfCraftApp {
             }
         }
         self.print_draft.papers_loading = Some(printer.clone());
-        if self.print_tasks.papers.iter().any(|(p, _)| *p == printer) {
+        self.print_tasks.papers.retain(|pending| pending.printer == printer);
+        if self.print_tasks.papers.iter().any(|pending| pending.printer == printer) {
             return;
         }
         let papers_source = self.printer_papers_source.clone();
@@ -384,11 +402,13 @@ impl PdfCraftApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let wake = WakeOnExit(self.ctx.clone());
         let name = printer.clone();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = cancelled.clone();
         let spawned = std::thread::Builder::new().name("printer papers".into()).spawn(move || {
             let _wake = wake;
             let tx = tx;
             let info = match (&papers_source, &default_source) {
-                (None, None) => spool::printer_paper_info(&name),
+                (None, None) => spool::query_paper_info(&name, &cancel).unwrap_or_default(),
                 (papers_s, def_s) => {
                     let papers = match papers_s {
                         Some(s) => s(&name),
@@ -404,7 +424,7 @@ impl PdfCraftApp {
             let _ = tx.send(info);
         });
         match spawned {
-            Ok(_) => self.print_tasks.papers.push((printer, rx)),
+            Ok(_) => self.print_tasks.papers.push(PendingPaperInfo { printer, cancelled, answer: rx }),
             Err(_) => {
                 let d = &mut self.print_draft;
                 if d.papers_loading.as_deref() == Some(printer.as_str()) {
@@ -440,18 +460,25 @@ impl PdfCraftApp {
         self.poll_web_print();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(printer) = self.print_draft.read_papers_for.take() {
+            self.poll_printer_preferences();
+            self.print_tasks
+                .papers
+                .retain(|pending| self.dialog == Some(crate::Dialog::Print) && self.print_draft.printer.as_ref() == Some(&pending.printer));
+            if let Some(printer) = self.print_draft.read_papers_for.take()
+                && self.dialog == Some(crate::Dialog::Print)
+                && self.print_draft.printer.as_ref() == Some(&printer)
+            {
                 self.read_papers_in_background(printer);
             }
             let mut arrived_papers = Vec::new();
-            self.print_tasks.papers.retain(|(printer, rx)| match rx.try_recv() {
+            self.print_tasks.papers.retain(|pending| match pending.answer.try_recv() {
                 Ok((papers, def)) => {
-                    arrived_papers.push((printer.clone(), papers, def));
+                    arrived_papers.push((pending.printer.clone(), papers, def));
                     false
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => true,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    arrived_papers.push((printer.clone(), Vec::new(), None));
+                    arrived_papers.push((pending.printer.clone(), Vec::new(), None));
                     false
                 }
             });
@@ -481,8 +508,7 @@ impl PdfCraftApp {
                 let printers = match rx.try_recv() {
                     Ok(p) => Some(p),
                     Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                    // A source that died lists nothing new; the dialog keeps what it has.
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(self.print_draft.printers.clone()),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Vec::new()),
                 };
                 if let Some(printers) = printers {
                     self.print_tasks.printers = None;
@@ -570,46 +596,88 @@ impl PdfCraftApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_printer_preferences(&mut self) {
+        let draft = &mut self.print_draft;
+        let capabilities = &mut self.print_tasks.two_sided;
+        let papers = &mut self.print_tasks.papers;
+        let paper_cache = &mut self.print_tasks.papers_cache;
+        self.print_tasks.preferences.retain(|(printer, receiver)| {
+            let answer = match receiver.try_recv() {
+                Ok(answer) => answer,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the printer's preferences window stopped unexpectedly".into()),
+            };
+            if draft.printer.as_ref() == Some(printer) {
+                draft.driver_error = answer.err();
+                draft.two_sided = None;
+                draft.read_papers_for = Some(printer.clone());
+            }
+            if let Some(listed) = draft.printers.iter_mut().find(|listed| listed.name == *printer) {
+                listed.two_sided = None;
+            }
+            capabilities.invalidate(printer);
+            papers.retain(|pending| pending.printer != *printer);
+            paper_cache.remove(printer);
+            false
+        });
+        draft.preferences_loading =
+            draft.printer.as_ref().filter(|name| self.print_tasks.preferences.iter().any(|(printer, _)| printer == *name)).cloned();
+        let Some(printer) = draft.read_preferences_for.take() else { return };
+        if self.print_tasks.preferences.iter().any(|(pending, _)| *pending == printer) {
+            return;
+        }
+        let source = self
+            .preferences_source
+            .clone()
+            .unwrap_or_else(|| std::sync::Arc::new(|printer| spool::wait_printer_preferences(printer).map_err(|error| error.to_string())));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let wake = WakeOnExit(self.ctx.clone());
+        let name = printer.clone();
+        let spawned = std::thread::Builder::new().name("printer preferences".into()).spawn(move || {
+            let _wake = wake;
+            let sender = sender;
+            let _ = sender.send(source(&name));
+        });
+        match spawned {
+            Ok(_) => {
+                draft.preferences_loading = Some(printer.clone());
+                self.print_tasks.preferences.push((printer, receiver));
+            }
+            Err(error) => draft.driver_error = Some(error.to_string()),
+        }
+    }
+
     /// Pick up two-sided answers that arrived, and ask for the picked printer's when the list
-    /// doesn't say, nobody has asked yet and fewer than [`TWO_SIDED_READS`] reads are running.
+    /// doesn't say and nobody has asked yet.
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_two_sided(&mut self) {
-        let d = &mut self.print_draft;
-        self.print_tasks.two_sided.retain(|(printer, rx)| match rx.try_recv() {
-            Ok(two_sided) => {
-                d.two_sided.insert(printer.clone(), two_sided);
-                false
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => true,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                d.two_sided.insert(printer.clone(), None);
-                false
+        let draft = &mut self.print_draft;
+        let session = &mut self.print_tasks.two_sided;
+        if std::mem::take(&mut draft.refresh_capabilities) {
+            session.refresh();
+        }
+        let Some(source) = self.two_sided_source.as_ref() else {
+            session.refresh();
+            draft.two_sided = None;
+            return;
+        };
+        let selected = if self.dialog == Some(crate::Dialog::Print) && !draft.printers_loading && draft.preferences_loading != draft.printer {
+            draft.printers.iter().find(|printer| draft.printer.as_ref() == Some(&printer.name))
+        } else {
+            None
+        };
+        let context = self.ctx.clone();
+        let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
+            if let Some(context) = &context {
+                context.request_repaint();
             }
         });
-        if self.dialog != Some(crate::Dialog::Print) {
-            return;
-        }
-        let Some(source) = self.two_sided_source.clone() else { return };
-        let Some(printer) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name)) else { return };
-        if printer.two_sided.is_some()
-            || d.two_sided.contains_key(&printer.name)
-            || self.print_tasks.two_sided.iter().any(|(n, _)| *n == printer.name)
-            || self.print_tasks.two_sided.len() >= TWO_SIDED_READS
-        {
-            return;
-        }
-        let name = printer.name.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let ctx = self.ctx.clone();
-        let asked = name.clone();
-        std::thread::spawn(move || {
-            // The receiver may be gone (the app quit): nothing to report to then.
-            let _ = tx.send(source(&asked));
-            if let Some(ctx) = ctx {
-                ctx.request_repaint();
-            }
+        session.select(selected.filter(|printer| printer.two_sided.is_none()).map(|printer| printer.name.as_str()), source, wake);
+        session.poll();
+        draft.two_sided = selected.and_then(|printer| {
+            printer.two_sided.map(Some).or_else(|| session.answer(&printer.name).copied()).map(|answer| (printer.name.clone(), answer))
         });
-        self.print_tasks.two_sided.push((name, rx));
     }
 
     /// Report the outcome of a finished print job to the user.
@@ -986,7 +1054,11 @@ mod tests {
             printers: ["Office", "Duplexer", "Network"]
                 .map(|n| spool::Printer { name: n.into(), default: n == "Office", two_sided: None, description: String::new() })
                 .to_vec(),
-            two_sided: [("Office".to_string(), Some(false)), ("Duplexer".to_string(), Some(true))].into_iter().collect(),
+            two_sided: match name {
+                "Office" => Some((name.into(), Some(false))),
+                "Duplexer" => Some((name.into(), Some(true))),
+                _ => None,
+            },
             printer: Some(name.into()),
             duplex,
             ..PrintDraft::default()
@@ -1017,12 +1089,17 @@ mod tests {
         let printer = |name: &str| spool::Printer { name: name.into(), default: false, two_sided: None, description: String::new() };
         let mut d = PrintDraft {
             printers: vec![printer("Epson"), printer("Laser"), printer("Network")],
-            two_sided: [("Epson".to_string(), Some(false)), ("Laser".to_string(), Some(true))].into_iter().collect(),
+            two_sided: Some(("Epson".to_string(), Some(false))),
             handling: Handling::Booklet,
             ..PrintDraft::default()
         };
         for (name, both) in [("Epson", None), ("Laser", Some(spool::Duplex::ShortEdge)), ("Network", Some(spool::Duplex::ShortEdge))] {
             d.printer = Some(name.into());
+            d.two_sided = match name {
+                "Epson" => Some((name.into(), Some(false))),
+                "Laser" => Some((name.into(), Some(true))),
+                _ => None,
+            };
             d.booklet_subset = BookletSubset::BothSides;
             assert_eq!(d.job("a.pdf").duplex, both, "{name}");
             d.booklet_subset = BookletSubset::FrontOnly;
@@ -1032,6 +1109,41 @@ mod tests {
         d.printer = None;
         d.booklet_subset = BookletSubset::BothSides;
         assert_eq!(d.job("a.pdf").duplex, Some(spool::Duplex::ShortEdge));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn switching_printers_and_closing_print_cancel_obsolete_paper_queries() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut app = PdfCraftApp::new();
+        app.dialog = Some(crate::Dialog::Print);
+        app.print_draft.printer = Some("Office".into());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (sender, answer) = std::sync::mpsc::channel();
+        app.print_tasks.papers.push(PendingPaperInfo { printer: "Office".into(), cancelled: cancelled.clone(), answer });
+        app.poll_print();
+        assert!(!cancelled.load(Ordering::Acquire), "the selected printer's query remains active");
+        app.print_draft.printer = Some("Other".into());
+        app.poll_print();
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(sender.send((vec![("Old paper".into(), (300.0, 500.0))], None)).is_err(), "a late reply has no receiver");
+        assert!(app.print_tasks.papers_cache.is_empty());
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (_sender, answer) = std::sync::mpsc::channel();
+        app.print_tasks.papers.push(PendingPaperInfo { printer: "Other".into(), cancelled: cancelled.clone(), answer });
+        app.dialog = None;
+        app.poll_print();
+        assert!(cancelled.load(Ordering::Acquire), "closing Print cancels the remaining paper query");
+        app.open_bytes("form.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+        app.printer_source = Some(Arc::new(Vec::new));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (stale, answer) = std::sync::mpsc::channel();
+        app.print_tasks.papers.push(PendingPaperInfo { printer: "Other".into(), cancelled: cancelled.clone(), answer });
+        app.open_print();
+        assert!(cancelled.load(Ordering::Acquire), "a new dialog cancels old reads before the next poll");
+        assert!(stale.send((Vec::new(), None)).is_err());
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports

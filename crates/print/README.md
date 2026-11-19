@@ -109,8 +109,15 @@ can't load it either still picks its substitute by that name.
 The shared dependency requires Rust 1.95. Transport and native Windows regression tests
 live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
 The desktop UI discovers printers and submits jobs on workers, so neither operation blocks
-the dialog; the Windows backend starts without a console window. Physical printer output
-still needs hardware validation.
+the dialog; the Windows backend starts without a console window.
+
+The Windows Print dialog lists queue names without waiting for driver capabilities.
+It reads two-sided support and paper sizes only for the selected printer, with bounded waiting.
+Changing printers or closing Print cancels obsolete reads. Reopening Print refreshes the selected
+printer's information. Closing native Properties refreshes only that printer's information,
+while preserving job settings.
+
+The headless `printers` tool includes capability data and can wait for an unavailable driver.
 
 In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) draws the print-ready
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which

@@ -321,11 +321,9 @@ fn walk_rich_plain(node: &craft_xml::El, out: &mut String) {
                 }
                 walk_rich_plain(el, out);
             }
-            craft_xml::Node::Text(t) => {
-                // Indentation between elements is not text.
-                if !(t.trim().is_empty() && t.contains('\n')) {
-                    out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
-                }
+            // Indentation between elements is not text.
+            craft_xml::Node::Text(t) if !(t.trim().is_empty() && t.contains('\n')) => {
+                out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
             }
             _ => {}
         }

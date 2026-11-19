@@ -201,6 +201,10 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 }
 
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    if let Some(success) = pdfcraft_engine::print::spool::query_worker() {
+        std::process::exit(i32::from(!success));
+    }
     // Before anything uses aws-lc: an `OPENSSL_ia32cap` naming a CPU feature this processor lacks
     // would stop it, so PdfCraft runs again without it (#2916, `crypto_env`).
     if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {

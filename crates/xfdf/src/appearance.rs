@@ -138,7 +138,7 @@ impl Writer<'_> {
             Object::Name(n) => self.out.push_str(&format!("<NAME{k} VAL=\"{}\"/>\n", esc(&pdfcraft_forms::name_text(n)))),
             Object::String(s) => match std::str::from_utf8(&s.bytes) {
                 // Text XML can hold as it is (`esc` would drop other control characters).
-                Ok(t) if t.chars().all(|c| !(c < ' ' && !matches!(c, '\t' | '\n' | '\r')) && c != '\u{FFFE}' && c != '\u{FFFF}') => {
+                Ok(t) if t.chars().all(|c| (c >= ' ' || matches!(c, '\t' | '\n' | '\r')) && c != '\u{FFFE}' && c != '\u{FFFF}') => {
                     self.out.push_str(&format!("<STRING{k} VAL=\"{}\"/>\n", esc(t)));
                 }
                 _ => self.out.push_str(&format!("<STRING{k} ENCODING=\"HEX\" VAL=\"{}\"/>\n", hex_of(&s.bytes, false))),
