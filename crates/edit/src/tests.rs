@@ -8812,6 +8812,73 @@ fn paragraph_font_resource_does_not_satisfy_range_italic_on_non_standard_face() 
     assert!(!fonts.iter().any(|(name, _)| name.starts_with(b"PCRange")), "unexpected synthetic PCRange font: {fonts:?}");
 }
 
+/// #7275 review: calibration fits a run to the source box at the source's own scale and spacing,
+/// so a range's scale or spacing must reach the page at its full value instead of being shrunk by
+/// the very factor that fits it to that box.
+#[test]
+fn a_range_scale_and_spacing_reach_the_page_at_their_full_value() {
+    let range = |char_spacing, scale| RangeStyle {
+        range: 0..9,
+        family: None,
+        bold: None,
+        italic: None,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing,
+        scale,
+    };
+    let content = "BT /F1 10 Tf 100 700 Td (Wide text) Tj ET";
+    let width = |style: BlockStyle| {
+        let mut doc = text_page(content);
+        let before = text::text_lines(&doc, 0).unwrap()[0].rect;
+        text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap();
+        let after = text::text_lines(&reopen(&doc), 0).unwrap()[0].rect;
+        (before[2] - before[0], after[2] - after[0])
+    };
+    let (before, doubled) = width(BlockStyle { ranges: vec![range(None, Some(200.0))], ..Default::default() });
+    assert!((doubled - 2.0 * before).abs() < 0.1, "200%: {before} → {doubled}");
+    // Nine characters take 18 more points of spacing, as the paragraph-level setting does.
+    let (before, spaced) = width(BlockStyle { ranges: vec![range(Some(2.0), None)], ..Default::default() });
+    assert!((spaced - before - 18.0).abs() < 0.1, "2 pt spacing: {before} → {spaced}");
+}
+
+/// #7275 review: the paragraph's `font_resource` is the concrete font every glyph is asked of, so a
+/// range's weight or slant asked of it was silently dropped. It is refused, and changes nothing.
+#[test]
+fn a_range_weight_with_a_paragraph_font_resource_is_refused() {
+    let range = |bold, italic| RangeStyle {
+        range: 0..4,
+        family: None,
+        bold,
+        italic,
+        resource: None,
+        size: None,
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let mut doc = styled_text_page("Helvetica");
+    let before = page_content_bytes(&doc, 0);
+    for style in [
+        BlockStyle { resource: Some("F4".into()), ranges: vec![range(Some(true), None)], ..Default::default() },
+        BlockStyle { resource: Some("F4".into()), ranges: vec![range(None, Some(true))], ..Default::default() },
+    ] {
+        let Err(EditError::Invalid(message)) = text::rewrite_block(&mut doc, 0, 0, Some("Original"), &style) else {
+            panic!("a range's weight or slant must not be accepted and dropped for the paragraph resource");
+        };
+        assert!(message.contains("F4") && message.contains("font_resource on the range"), "{message}");
+        assert_eq!(page_content_bytes(&doc, 0), before, "a refused range changes nothing");
+    }
+    // A weight the source already has asks for no new face, so the resource still applies.
+    let noop = BlockStyle { resource: Some("F4".into()), ranges: vec![range(Some(false), None)], ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some("Original"), &noop).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.iter().any(|line| line.text == "Original" && line.font == "F4"), "{lines:?}");
+}
+
 #[test]
 fn image_selection_bounds_respect_clips_and_restore_graphics_state() {
     let mut doc = image_page();

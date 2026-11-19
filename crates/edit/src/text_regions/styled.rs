@@ -900,6 +900,17 @@ fn apply_range_styles<'a>(
                                         original.base_font
                                     )));
                                 }
+                                // The paragraph's resource is one concrete font, and it is the font
+                                // each glyph is asked of, so a range's weight or slant asked of it
+                                // would be dropped without a word (#7275). Refuse instead: the
+                                // caller can name a font, or a resource of that weight or slant.
+                                if (range.bold.is_some() || range.italic.is_some())
+                                    && let Some(resource) = &style.resource
+                                {
+                                    return Err(EditError::Invalid(format!(
+                                        "a range's bold or italic cannot change the paragraph's font resource {resource:?}: name a font (helvetica, times or courier), or set font_resource on the range to a font of that weight or slant"
+                                    )));
+                                }
                                 let family = block.map_or(own, |(family, _, _)| family);
                                 Some((family, bold, italic))
                             }
@@ -930,12 +941,11 @@ fn apply_range_styles<'a>(
                     line.color = color;
                     line.origin.state.fill = vec![Op::new("rg", color.map(Object::Real).to_vec())];
                 }
-                if let Some(spacing) = range.char_spacing {
-                    line.origin.state.char_spacing = spacing / line.origin.k.max(1e-6);
-                }
-                if let Some(scale) = range.scale {
-                    line.origin.state.scale = (scale / 100.0).clamp(0.1, 10.0);
-                }
+                // A range's scale and spacing are left out of the clone: calibration measures it
+                // against the source box at the source's own scale and spacing, and the run is
+                // drawn at the range's (with its override). Writing them here would make
+                // calibration shrink the run by exactly what the range widened it, cancelling the
+                // request (#7275).
                 index = styled_lines.len();
                 styled_lines.push(line);
                 if face_changed {
