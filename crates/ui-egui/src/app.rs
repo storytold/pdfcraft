@@ -461,6 +461,7 @@ impl PdfCraftApp {
             document_fonts: None,
             pending_urls: Vec::new(),
             startup_superseded: false,
+            startup_files: Vec::new(),
             community_card_closed: false,
             pending_link: None,
             pending_window: None,
