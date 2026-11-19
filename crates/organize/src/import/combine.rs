@@ -182,6 +182,9 @@ impl Combiner {
 
     /// Add `src`'s `pages` (0-based, in that order; `None` for all of them) after the pages added so far,
     /// under a bookmark titled `title`. `src` need not outlive the call.
+    ///
+    /// After an error the builder may hold part of `src` (its pages can be copied before the
+    /// error is found), so a builder whose `add` failed must be discarded, not added to or finished.
     pub fn add(&mut self, title: &str, src: &Document, pages: Option<&[usize]>) -> Result<(), OrganizeError> {
         let n = crate::page_count(src)?;
         let pages: Vec<usize> = match pages {
@@ -201,11 +204,11 @@ impl Combiner {
         self.labels = labels;
         self.has_labels = has_labels;
         self.renamed_fields.extend(imported.renamed_fields);
-        let distinct = pages.iter().collect::<HashSet<_>>().len();
-        let whole = distinct == n;
+        let whole = pages.iter().collect::<HashSet<_>>().len() == n;
         self.tags.add(&mut self.out, src, &imported.page_map, &imported.objects, whole)?;
-        if distinct < pages.len() {
-            // A page listed twice is copied twice, but only its first copy is tagged.
+        if !pages.iter().copied().eq(0..n) {
+            // The tags keep the source's order and tag a page listed twice only once: pages
+            // reordered or repeated no longer follow them.
             self.tags.drop_claim();
         }
         if let Some(first) = imported.pages.first() {
@@ -320,11 +323,12 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         let imported = import_pages_mapped(&mut out, file.src, &file.pages, at, conflicts)?;
         copies.push(imported.pages.clone());
         renamed_fields.extend(imported.renamed_fields);
-        let distinct = file.pages.iter().collect::<HashSet<_>>().len();
-        let whole = distinct == crate::page_count(file.src)?;
+        let n = crate::page_count(file.src)?;
+        let whole = file.pages.iter().collect::<HashSet<_>>().len() == n;
         tags.add(&mut out, file.src, &imported.page_map, &imported.objects, whole)?;
-        if distinct < file.pages.len() {
-            // A page listed twice is copied twice, but only its first copy is tagged.
+        if !file.pages.iter().copied().eq(0..n) {
+            // The tags keep the file's order and tag a page listed twice only once: its runs'
+            // pages, reordered or repeated, no longer follow them.
             tags.drop_claim();
         }
         if let Some(first) = imported.pages.first() {
@@ -345,12 +349,13 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     let mut order: Vec<(ObjRef, Dict)> = Vec::new();
     let mut labels = Vec::new();
     let mut has_labels = false;
-    // A file's tags stay together, in its own order. When another file's run comes between two of
-    // its runs, the tags no longer follow the pages, so the result can't claim a logical reading
-    // order (PDF/UA).
-    let mut runs_of: Vec<usize> = slices.iter().map(|(file, _, _)| *file).collect();
+    // A file's tags stay together, in its own order, and the files' tags go in the order the files
+    // were copied. When another file's pages come between two of its runs, or the files' pages
+    // come in another order, the tags no longer follow the pages, so the result can't claim a
+    // logical reading order (PDF/UA). A run with no pages shows nothing, so it doesn't count.
+    let mut runs_of: Vec<usize> = slices.iter().filter(|(_, _, len)| *len > 0).map(|(file, _, _)| *file).collect();
     runs_of.dedup();
-    if runs_of.iter().collect::<HashSet<_>>().len() < runs_of.len() {
+    if !runs_of.windows(2).all(|w| matches!(w, [a, b] if a < b)) {
         tags.drop_claim();
     }
     for (file, start, len) in slices {

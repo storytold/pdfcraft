@@ -194,11 +194,16 @@ pub(crate) struct UaId {
 }
 
 impl UaId {
-    /// What `doc`'s XMP metadata (named by its `catalog`) declares, if it declares a part.
+    /// What `doc`'s XMP metadata (named by its `catalog`) declares, if it declares a part. A part 2
+    /// claim without its revision is incomplete, so it counts as none.
     pub(crate) fn of(doc: &Document, catalog: &Dict) -> Option<UaId> {
         let xmp = metadata(doc, catalog)?;
         let part = xmp_value(&xmp, "pdfuaid:part")?;
-        Some(UaId { part, rev: xmp_value(&xmp, "pdfuaid:rev") })
+        let rev = xmp_value(&xmp, "pdfuaid:rev");
+        if part == "2" && !rev.as_deref().is_some_and(|r| r.len() == 4 && r.bytes().all(|b| b.is_ascii_digit())) {
+            return None;
+        }
+        Some(UaId { part, rev })
     }
 }
 
@@ -212,12 +217,18 @@ fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
 
 /// A simple XMP property, written as an attribute (`pdfxid:GTS_PDFXVersion="PDF/X-4"`) or as an
 /// element (`<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>`).
+/// XML allows white space around an attribute's `=`.
 fn xmp_value(xmp: &str, key: &str) -> Option<String> {
-    for quote in ['"', '\''] {
-        let attr = format!("{key}={quote}");
-        if let Some(rest) = xmp.find(&attr).and_then(|i| xmp.get(i + attr.len()..)) {
-            return rest.find(quote).and_then(|end| rest.get(..end)).map(unescape).filter(|v| !v.is_empty());
+    for (i, _) in xmp.match_indices(key) {
+        // The whole name, not the end of a longer one.
+        if !xmp.get(..i).and_then(|b| b.chars().next_back()).is_some_and(char::is_whitespace) {
+            continue;
         }
+        let Some(rest) = xmp.get(i + key.len()..).map(str::trim_start) else { continue };
+        let Some(rest) = rest.strip_prefix('=').map(str::trim_start) else { continue };
+        let Some(quote) = rest.chars().next().filter(|q| matches!(q, '"' | '\'')) else { continue };
+        let rest = rest.get(quote.len_utf8()..)?;
+        return rest.find(quote).and_then(|end| rest.get(..end)).map(unescape).filter(|v| !v.is_empty());
     }
     let open = format!("<{key}>");
     let rest = xmp.get(xmp.find(&open)? + open.len()..)?;

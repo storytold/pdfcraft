@@ -121,7 +121,7 @@ fn kids(doc: &Document, d: &Dict) -> Vec<Dict> {
 #[test]
 fn combine_keeps_each_sources_tags_with_their_own_parent_tree_entries() {
     // #7025: the combined file had no structure tree, so it was untagged.
-    let (a, b) = (doc_tagged("A", "en-US", "H1", true), doc_tagged("B", "fr-FR", "H2", true));
+    let (a, b) = (doc_tagged("A", "en-US", "H1", true), doc_tagged("B", "fr-FR", "H1", true));
     let out = full_roundtrip(&combine(&[("a", &a), ("b", &b)]).unwrap());
     assert_eq!(labels(&out), ["A1", "A2", "B1", "B2"]);
     let cat = catalog(&out);
@@ -160,7 +160,7 @@ fn combine_keeps_each_sources_tags_with_their_own_parent_tree_entries() {
     assert_eq!(keys.iter().collect::<HashSet<_>>().len(), 4, "no two pages share a key: {keys:?}");
     assert!(root.get(b"ParentTreeNextKey").and_then(Object::as_int).unwrap() > *keys.iter().max().unwrap());
 
-    // The role maps merged, the first source's mapping standing; both IDs listed.
+    // The role maps merged; both IDs listed.
     let role_map = out.resolve(root.get(b"RoleMap").unwrap()).as_dict().cloned().unwrap();
     assert_eq!(role_map.name(b"Heading"), Some(&b"H1"[..]));
     let ids = out.resolve(root.get(b"IDTree").unwrap()).as_dict().cloned().unwrap();
@@ -434,4 +434,161 @@ fn combine_bounds_the_parent_tree_across_pages_and_sources() {
         assert!(page_dict(&out, page).contains(b"StructParents"), "page {page}");
         assert!(!page_dict(&out, page + 3).contains(b"StructParents"), "page {}", page + 3);
     }
+}
+
+/// `objs` (as [`tagged_objects`] gives them), built.
+fn build_tagged(objs: &[String]) -> Document {
+    open(build(objs, "/Root 1 0 R /Info 17 0 R"))
+}
+
+#[test]
+fn combine_claims_pdfua_only_for_a_files_pages_once_in_their_own_order() {
+    // The tags keep the file's order: with its pages reordered, page 2's content is read first.
+    let a = doc_tagged("A", "en-US", "H1", true);
+    let reordered = full_roundtrip(&combine_selected(&[("a", &a, Some(&[1, 0]))]).unwrap());
+    assert_eq!(labels(&reordered), ["A2", "A1"]);
+    assert_eq!(ua_claim(&reordered), None, "Combiner, [1, 0]");
+    // Grouped: one run in another order, or two runs next to each other in another order.
+    let one: [Run<'_>; 1] = [(0, "a", &a, Some(&[1, 0]))];
+    let two: [Run<'_>; 2] = [(0, "a", &a, Some(&[1])), (0, "a", &a, Some(&[0]))];
+    for runs in [&one[..], &two[..]] {
+        let out = full_roundtrip(&combine_grouped(runs).unwrap());
+        assert_eq!(labels(&out), ["A2", "A1"]);
+        assert_eq!(ua_claim(&out), None, "grouped, [1, 0]");
+    }
+    // In order, the claim stands on both paths.
+    let in_order: [Run<'_>; 2] = [(0, "a", &a, Some(&[0])), (0, "a", &a, Some(&[1]))];
+    assert!(ua_claim(&combine_grouped(&in_order).unwrap()).is_some());
+    assert!(ua_claim(&combine_selected(&[("a", &a, Some(&[0, 1]))]).unwrap()).is_some());
+}
+
+#[test]
+fn combine_grouped_ignores_runs_with_no_pages() {
+    let (a, b) = (doc_tagged("A", "en-US", "H1", true), doc_tagged("B", "en-US", "H1", true));
+    // B's empty run shows nothing between A's runs: the pages and the tags both go A then B.
+    let empty: [Run<'_>; 4] = [(0, "a", &a, Some(&[0])), (1, "b", &b, Some(&[])), (0, "a", &a, Some(&[1])), (1, "b", &b, Some(&[0, 1]))];
+    let out = full_roundtrip(&combine_grouped(&empty).unwrap());
+    assert_eq!(labels(&out), ["A1", "A2", "B1", "B2"]);
+    assert!(ua_claim(&out).is_some(), "an empty run doesn't split a file");
+    // B's empty run first: B is copied first, so its tags come before A's, but its pages after.
+    let first: [Run<'_>; 3] = [(1, "b", &b, Some(&[])), (0, "a", &a, None), (1, "b", &b, None)];
+    let out = full_roundtrip(&combine_grouped(&first).unwrap());
+    assert_eq!(labels(&out), ["A1", "A2", "B1", "B2"]);
+    assert_eq!(ua_claim(&out), None, "the tags don't follow the pages");
+}
+
+#[test]
+fn combine_drops_the_pdfua_claim_when_a_role_means_something_else() {
+    // A maps /Heading to /H1, B to /H2: the first stands, so B's headings become H1s.
+    let (a, b) = (doc_tagged("A", "en-US", "H1", true), doc_tagged("B", "en-US", "H2", true));
+    let out = full_roundtrip(&combine(&[("a", &a), ("b", &b)]).unwrap());
+    let role_map = out.resolve(tree_root(&out).unwrap().get(b"RoleMap").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(role_map.name(b"Heading"), Some(&b"H1"[..]));
+    assert_eq!(ua_claim(&out), None);
+    // The same mapping in both: the claim stands.
+    let same = doc_tagged("B", "en-US", "H1", true);
+    assert!(ua_claim(&combine(&[("a", &a), ("b", &same)]).unwrap()).is_some());
+}
+
+/// [`tagged_objects`] in the PDF 2.0 namespace (object 18), with a MathML namespace (19) listed
+/// too, claiming PDF/UA-2; its `Document` element in the namespace `document_ns`.
+fn namespaced_objects(p: &str, document_ns: u32) -> Vec<String> {
+    let mut objs = tagged_objects(p, "en-US", "H1", Some("pdfuaid:part=\"2\" pdfuaid:rev=\"2024\""));
+    objs[8] = "<< /Type /StructTreeRoot /K 10 0 R /ParentTree 14 0 R /ParentTreeNextKey 3 /IDTree 15 0 R /Namespaces [18 0 R 19 0 R] >>".into();
+    objs[9] = format!("<< /Type /StructElem /S /Document /NS {document_ns} 0 R /P 9 0 R /K [11 0 R 12 0 R 13 0 R] >>");
+    objs[10] = format!("<< /Type /StructElem /S /H1 /NS 18 0 R /P 10 0 R /Pg 3 0 R /K 0 /ID (h-{p}) >>");
+    objs[11] = "<< /Type /StructElem /S /P /NS 18 0 R /P 10 0 R /Pg 4 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] >>".into();
+    objs[12] = "<< /Type /StructElem /S /Link /NS 18 0 R /P 10 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 8 0 R >> >>".into();
+    objs.push("<< /Type /Namespace /NS (http://iso.org/pdf2/ssn) >>".into()); // 18
+    objs.push("<< /Type /Namespace /NS (http://www.w3.org/1998/Math/MathML) >>".into()); // 19
+    objs
+}
+
+#[test]
+fn combine_carries_the_sources_namespaces() {
+    let (a, b) = (build_tagged(&namespaced_objects("A", 18)), build_tagged(&namespaced_objects("B", 18)));
+    let out = full_roundtrip(&combine(&[("a", &a), ("b", &b)]).unwrap());
+    let root = tree_root(&out).unwrap();
+    let listed: HashSet<ObjRef> =
+        out.resolve(root.get(b"Namespaces").expect("/Namespaces")).as_array().unwrap().iter().filter_map(Object::as_ref).collect();
+    assert_eq!(listed.len(), 4, "each source's two namespaces");
+    for e in all_elements(&out) {
+        let ns = e.get(b"NS").and_then(Object::as_ref).expect("every element in a namespace");
+        assert!(listed.contains(&ns), "{:?} names a namespace the root lists", e.name(b"S"));
+        assert_eq!(text(out.resolve(&Object::Ref(ns)).as_dict().unwrap(), b"NS"), "http://iso.org/pdf2/ssn");
+    }
+    assert_eq!(document_element(&out).name(b"S"), Some(&b"Document"[..]));
+    let xmp = ua_claim(&out).expect("the PDF/UA-2 claim stands");
+    assert!(xmp.contains("<pdfuaid:part>2</pdfuaid:part>"), "{xmp}");
+    // A source's Document in another namespace can't become a Part there: no claim.
+    let math = build_tagged(&namespaced_objects("B", 19));
+    assert_eq!(ua_claim(&combine(&[("a", &a), ("b", &math)]).unwrap()), None);
+}
+
+#[test]
+fn combine_carries_a_marked_content_id_held_indirectly() {
+    let mut objs = tagged_objects("A", "en-US", "H1", None);
+    objs[10] = "<< /Type /StructElem /S /Heading /P 10 0 R /Pg 3 0 R /K 18 0 R /ID (h-A) >>".into();
+    objs.push("0".into()); // 18
+    let out = full_roundtrip(&combine(&[("a", &build_tagged(&objs))]).unwrap());
+    assert_eq!(text(&owner_of_content(&out, 0, 0), b"ID"), "h-A");
+}
+
+#[test]
+fn combine_shares_one_copy_of_a_ref_array_elements_share() {
+    let mut objs = tagged_objects("A", "en-US", "H1", None);
+    objs[10] = "<< /Type /StructElem /S /Heading /P 10 0 R /Pg 3 0 R /K 0 /ID (h-A) /Ref 18 0 R >>".into();
+    objs[11] = "<< /Type /StructElem /S /P /P 10 0 R /Pg 4 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] /Ref 18 0 R >>".into();
+    objs.push("[13 0 R]".into()); // 18
+    let out = combine(&[("a", &build_tagged(&objs))]).unwrap();
+    let (heading, para) = (owner_of_content(&out, 0, 0), owner_of_content(&out, 1, 1));
+    let shared = heading.get(b"Ref").and_then(Object::as_ref).expect("an indirect /Ref");
+    assert_eq!(para.get(b"Ref").and_then(Object::as_ref), Some(shared), "one copy for both");
+    let named = out.resolve(&Object::Ref(shared)).as_array().unwrap().clone();
+    assert_eq!(out.resolve(&named[0]).as_dict().unwrap().name(b"S"), Some(&b"Link"[..]));
+}
+
+#[test]
+fn combine_renames_headers_in_an_indirect_attribute_array() {
+    let mut objs = tagged_objects("A", "en-US", "H1", None);
+    objs[11] = "<< /Type /StructElem /S /P /P 10 0 R /Pg 4 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] /A 18 0 R >>".into();
+    objs.push("[<< /O /Table /Headers [(h-A)] >> /Unrelated]".into()); // 18
+    let a = build_tagged(&objs);
+    let out = full_roundtrip(&combine(&[("a", &a), ("again", &a)]).unwrap());
+    let attrs = |page| {
+        let held = out.resolve(owner_of_content(&out, page, 1).get(b"A").unwrap()).as_array().cloned().unwrap();
+        let headers = out.resolve(&held[0]).as_dict().unwrap().get(b"Headers").unwrap().as_array().unwrap().clone();
+        (headers.iter().map(|h| h.as_string().unwrap().to_text()).collect::<Vec<_>>(), held[1].clone())
+    };
+    assert_eq!(attrs(1).0, ["h-A"]);
+    assert_eq!(attrs(3), (vec!["h-A-2".to_string()], Object::name("Unrelated")));
+}
+
+#[test]
+fn combine_drops_the_pdfua_claim_when_attributes_are_too_deep_to_copy() {
+    let mut objs = tagged_objects("A", "en-US", "H1", Some("pdfuaid:part=\"1\""));
+    let deep = format!("{}{}", "[".repeat(40), "]".repeat(40));
+    objs[11] =
+        format!("<< /Type /StructElem /S /P /P 10 0 R /Pg 4 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] /A << /O /UserProperties /P {deep} >> >>");
+    assert_eq!(ua_claim(&combine(&[("a", &build_tagged(&objs))]).unwrap()), None);
+    // Shallow attributes copy whole, and the claim stands.
+    objs[11] =
+        "<< /Type /StructElem /S /P /P 10 0 R /Pg 4 0 R /K [0 << /Type /MCR /Pg 4 0 R /MCID 1 >>] /A << /O /UserProperties /P [[[]]] >> >>".into();
+    assert!(ua_claim(&combine(&[("a", &build_tagged(&objs))]).unwrap()).is_some());
+}
+
+#[test]
+fn combine_reads_the_pdfua_part_with_spaces_around_the_equals_sign() {
+    let objs = tagged_objects("A", "en-US", "H1", Some("pdfuaid:part = \"1\""));
+    let xmp = ua_claim(&combine(&[("a", &build_tagged(&objs))]).unwrap()).expect("the claim is read");
+    assert!(xmp.contains("<pdfuaid:part>1</pdfuaid:part>"), "{xmp}");
+}
+
+#[test]
+fn combine_does_not_claim_pdfua_2_without_a_revision() {
+    let a = build_tagged(&tagged_objects("A", "en-US", "H1", Some("pdfuaid:part=\"2\"")));
+    assert_eq!(ua_claim(&combine(&[("a", &a), ("again", &a)]).unwrap()), None);
+    // With one, it stands.
+    let a = build_tagged(&tagged_objects("A", "en-US", "H1", Some("pdfuaid:part=\"2\" pdfuaid:rev=\"2024\"")));
+    assert!(ua_claim(&combine(&[("a", &a), ("again", &a)]).unwrap()).is_some());
 }

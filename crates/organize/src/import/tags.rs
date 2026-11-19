@@ -14,7 +14,14 @@
 //! - each source's top-level elements go, in order, under one `Document` element. A source's own
 //!   top-level `Document` element becomes a `Part`, since documents don't nest;
 //! - the role and class maps are merged. Where two sources map the same name differently, the
-//!   first source's entry stands. An element whose ID an earlier element already has is given a
+//!   first source's entry stands. For a role, that changes what the later source's elements are,
+//!   so the PDF/UA claim goes. For a class it changes the attributes the later source's `/C`
+//!   names; the claim stays, as the elements' types and reading order don't change;
+//! - the sources' namespaces (the root's `/Namespaces` and the elements' `/NS`) are listed in the
+//!   combined root's `/Namespaces`. With any, or under a PDF/UA-2 claim, the new `Document` is in
+//!   the PDF 2.0 standard structure namespace. A source's `Document` in another namespace can't
+//!   become a `Part` there, so the claim goes;
+//! - an element whose ID an earlier element already has is given a
 //!   new one (`ID-2`, …), and the table headers (`/Headers`) of its source that named the old ID
 //!   name the new one, so IDs stay unique across the combined tree;
 //! - the document `/Lang` is the first tagged source's (that has one). A later source in another
@@ -25,7 +32,8 @@
 //! only its first copy is tagged. The PDF/UA identification (part and revision) is kept only when
 //! every source declares the same one, is tagged, and came along whole and once (no page left out
 //! or repeated, none of its tree cut off), and its tags still follow the pages (Combine drops it
-//! when another file's pages come between two runs of one file: see [`Tags::drop_claim`]).
+//! when a file's pages are not all there once in their own order, or another file's pages come
+//! between two runs of one file: see [`Tags::drop_claim`]).
 //!
 //! The walk is bounded: each element is visited once (a cycle ends), nesting deeper than
 //! [`MAX_DEPTH`] and marked-content IDs above [`MAX_MCID`] are not carried, at most [`MAX_NODES`]
@@ -77,6 +85,9 @@ pub(super) struct Tags {
     ua: Option<UaId>,
     /// The first source's title, which a PDF/UA claim needs (ISO 14289-1 7.1).
     title: Option<String>,
+    /// The copied namespaces of every source (each source's own copies), for the root's
+    /// `/Namespaces`.
+    namespaces: Vec<ObjRef>,
 }
 
 /// Marked content of one page or form XObject: its IDs and their elements.
@@ -113,6 +124,11 @@ struct Walk<'a> {
     cut: bool,
     /// The source's `/IDTree` entries the copies take.
     ids: Vec<(Vec<u8>, ObjRef)>,
+    /// The copied namespaces: the source root's `/Namespaces` and the elements' `/NS`, once each.
+    namespaces: Vec<ObjRef>,
+    namespace_seen: HashSet<ObjRef>,
+    /// Indirect `/Ref` arrays already remapped → their copies, which the elements sharing one share.
+    ref_arrays: HashMap<ObjRef, Option<ObjRef>>,
 }
 
 impl Tags {
@@ -157,24 +173,7 @@ impl Tags {
                 d
             }
         };
-        let mut walk = Walk {
-            src,
-            pages,
-            objects,
-            values: HashMap::new(),
-            seen: HashSet::new(),
-            elements: HashMap::new(),
-            refs: Vec::new(),
-            marked: Vec::new(),
-            marked_at: HashMap::new(),
-            slots: self.slots,
-            order: Vec::new(),
-            objr_seen: HashSet::new(),
-            objrs: Vec::new(),
-            nodes: 0,
-            cut: false,
-            ids: Vec::new(),
-        };
+        let mut walk = Walk::new(src, pages, objects, self.slots);
         let lang = catalog.get(b"Lang").and_then(|l| src.resolve(l).as_string().map(|s| s.bytes.clone())).filter(|l| !l.is_empty());
         let own_lang = match (&self.lang, &lang) {
             (None, Some(l)) => {
@@ -184,8 +183,20 @@ impl Tags {
             (Some(doc), Some(l)) if doc != l => Some(l.clone()),
             _ => None,
         };
+        // The namespaces first, so the elements' `/NS` share their copies.
+        for ns in list(src, root.get(b"Namespaces")) {
+            if let Some(copy) = walk.value(out, &ns, 0)?.as_ref() {
+                walk.namespace(copy);
+            }
+        }
         for kid in list(src, root.get(b"K")) {
             if let Some(copy) = walk.element(out, &kid, document, None, 0, whole)? {
+                let held = out.get(copy).as_dict().cloned().unwrap_or_default();
+                if held.name(b"S") == Some(b"Document") && !standard_namespace(out, held.get(b"NS")) {
+                    // `Part` means what it should only in a standard namespace: in another, the
+                    // renamed element names something else.
+                    self.ua = None;
+                }
                 out.update_dict(copy, |d| {
                     if d.name(b"S") == Some(b"Document") {
                         d.set(b"S".to_vec(), Object::name("Part"));
@@ -204,14 +215,23 @@ impl Tags {
             let role_map = key == b"RoleMap";
             for (name, value) in theirs.iter() {
                 // A role maps to a name; anything else there is junk.
-                if map.contains(name) || (role_map && !matches!(value, Object::Name(_))) {
+                if role_map && !matches!(value, Object::Name(_)) {
+                    continue;
+                }
+                if let Some(earlier) = map.get(name) {
+                    // The first source's entry stands. A role it maps elsewhere would change what
+                    // this source's elements are, so the result no longer meets PDF/UA.
+                    if role_map && earlier != value {
+                        self.ua = None;
+                    }
                     continue;
                 }
                 // With the elements' cache and budget: entries sharing a value share one copy.
-                let copied = walk_value(out, src, &mut walk.values, objects, &mut walk.nodes, value, 0)?;
+                let copied = walk.value(out, value, 0)?;
                 map.set(name.clone(), copied);
             }
         }
+        walk.resolve_refs(out)?;
         if walk.cut || walk.nodes > MAX_NODES {
             self.ua = None;
         }
@@ -219,9 +239,10 @@ impl Tags {
         walk.finish(out, self)
     }
 
-    /// The result no longer meets PDF/UA whatever the sources are. Combine says so when a page
-    /// is listed twice (its second copy is untagged) or when one file's runs are split around
-    /// another's (its tags no longer follow the pages).
+    /// The result no longer meets PDF/UA whatever the sources are. Combine says so when a file's
+    /// pages are reordered or one is listed twice (the tags keep the file's order, and a second
+    /// copy is untagged) or when one file's runs are split around another's (its tags no longer
+    /// follow the pages).
     pub(super) fn drop_claim(&mut self) {
         self.ua = None;
     }
@@ -237,6 +258,24 @@ impl Tags {
         element.set(b"S".to_vec(), Object::name("Document"));
         element.set(b"P".to_vec(), Object::Ref(root));
         element.set(b"K".to_vec(), Object::Array(self.kids));
+        let mut namespaces = self.namespaces;
+        // With namespaces, and for PDF/UA-2 in any case, the new `Document` is the PDF 2.0
+        // standard structure namespace's, as PDF/UA-2 asks: the sources' copy of it, or a new one.
+        if !namespaces.is_empty() || self.ua.as_ref().is_some_and(|u| u.part == "2") {
+            let pdf2 = namespaces.iter().copied().find(|ns| namespace_name(out, *ns).as_deref() == Some(PDF2_NAMESPACE));
+            let pdf2 = match pdf2 {
+                Some(ns) => ns,
+                None => {
+                    let mut ns = Dict::new();
+                    ns.set(b"Type".to_vec(), Object::name("Namespace"));
+                    ns.set(b"NS".to_vec(), Object::String(PdfString { bytes: PDF2_NAMESPACE.to_vec(), hex: false }));
+                    let ns = out.add(Object::Dict(ns));
+                    namespaces.push(ns);
+                    ns
+                }
+            };
+            element.set(b"NS".to_vec(), Object::Ref(pdf2));
+        }
         out.set(document, Object::Dict(element));
         let next_key = self.parents.len();
         let mut nums = Vec::with_capacity(self.parents.len().saturating_mul(2));
@@ -257,6 +296,9 @@ impl Tags {
         }
         if !self.class_map.is_empty() {
             tree.set(b"ClassMap".to_vec(), Object::Dict(self.class_map));
+        }
+        if !namespaces.is_empty() {
+            tree.set(b"Namespaces".to_vec(), Object::Array(namespaces.into_iter().map(Object::Ref).collect()));
         }
         if !self.ids.is_empty() {
             let mut ids = self.ids;
@@ -299,7 +341,77 @@ impl Tags {
     }
 }
 
+impl<'a> Walk<'a> {
+    /// A walk of `src` (see the fields), with `slots` parent-tree entries taken by earlier sources.
+    fn new(src: &'a Document, pages: &'a HashMap<ObjRef, ObjRef>, objects: &'a HashMap<ObjRef, ObjRef>, slots: usize) -> Self {
+        Walk {
+            src,
+            pages,
+            objects,
+            values: HashMap::new(),
+            seen: HashSet::new(),
+            elements: HashMap::new(),
+            refs: Vec::new(),
+            marked: Vec::new(),
+            marked_at: HashMap::new(),
+            slots,
+            order: Vec::new(),
+            objr_seen: HashSet::new(),
+            objrs: Vec::new(),
+            nodes: 0,
+            cut: false,
+            ids: Vec::new(),
+            namespaces: Vec::new(),
+            namespace_seen: HashSet::new(),
+            ref_arrays: HashMap::new(),
+        }
+    }
+}
+
 impl Walk<'_> {
+    /// List the copied namespace `ns` in the combined root's `/Namespaces`, once.
+    fn namespace(&mut self, ns: ObjRef) {
+        if self.namespace_seen.insert(ns) {
+            self.namespaces.push(ns);
+        }
+    }
+
+    /// Point each copied element's `/Ref` at the copies of the elements it names. An indirect
+    /// array shared by many elements is remapped once and shared by their copies; each entry read
+    /// counts against [`MAX_NODES`].
+    fn resolve_refs(&mut self, out: &mut Document) -> Result<(), OrganizeError> {
+        for (copy, refs) in std::mem::take(&mut self.refs) {
+            let shared = refs.as_ref();
+            let value = match shared.and_then(|r| self.ref_arrays.get(&r).copied()) {
+                Some(done) => done.map(Object::Ref),
+                None => {
+                    let mut kept = Vec::new();
+                    for r in list(self.src, Some(&refs)) {
+                        if !self.spend() {
+                            break;
+                        }
+                        if let Some(c) = r.as_ref().and_then(|r| self.elements.get(&r).copied()) {
+                            kept.push(Object::Ref(c));
+                        }
+                    }
+                    let kept = (!kept.is_empty()).then_some(Object::Array(kept));
+                    match shared {
+                        Some(r) => {
+                            let held = kept.map(|k| out.add(k));
+                            self.ref_arrays.insert(r, held);
+                            held.map(Object::Ref)
+                        }
+                        None => kept,
+                    }
+                }
+            };
+            if let Some(value) = value {
+                out.update_dict(copy, |d| d.set(b"Ref".to_vec(), value))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Count one tree entry against [`MAX_NODES`]; `false` once the budget is spent.
     fn spend(&mut self) -> bool {
         self.nodes = self.nodes.saturating_add(1);
@@ -361,6 +473,15 @@ impl Walk<'_> {
                 }
                 _ => {
                     let item = self.src.resolve(k);
+                    // A marked-content ID may be held indirectly.
+                    if let Object::Int(mcid) = &*item {
+                        if let Some(page) = page
+                            && self.content(page, *mcid, copy)
+                        {
+                            kids.push(Object::Int(*mcid));
+                        }
+                        continue;
+                    }
                     let item = item.as_dict();
                     if let Some(item) = item.filter(|i| i.name(b"Type") == Some(b"MCR") || (i.contains(b"MCID") && !i.contains(b"S"))) {
                         if let Some(c) = self.marked_reference(item, pg.as_ref(), copy) {
@@ -388,7 +509,12 @@ impl Walk<'_> {
                 b"P" | b"K" | b"Pg" => {}
                 b"Ref" => self.refs.push((copy, v.clone())),
                 _ => {
-                    let v = walk_value(out, self.src, &mut self.values, self.objects, &mut self.nodes, v, 0)?;
+                    let v = self.value(out, v, 0)?;
+                    if k.as_slice() == b"NS"
+                        && let Some(ns) = v.as_ref()
+                    {
+                        self.namespace(ns);
+                    }
                     e.set(k.clone(), v);
                 }
             }
@@ -535,15 +661,7 @@ impl Walk<'_> {
             keyed.insert(owner);
             tags.parents.push((key, Object::Ref(element)));
         }
-        for (copy, refs) in self.refs {
-            let refs: Vec<Object> = list(self.src, Some(&refs))
-                .into_iter()
-                .filter_map(|r| r.as_ref().and_then(|r| self.elements.get(&r).copied()).map(Object::Ref))
-                .collect();
-            if !refs.is_empty() {
-                out.update_dict(copy, |d| d.set(b"Ref".to_vec(), Object::Array(refs)))?;
-            }
-        }
+        tags.namespaces.extend(self.namespaces);
         unique_ids(out, &self.order, self.ids, tags)?;
         clear_stale_keys(out, self.objects, &keyed)
     }
@@ -601,13 +719,21 @@ fn unique_ids(out: &mut Document, order: &[ObjRef], tree: Vec<(Vec<u8>, ObjRef)>
     if renamed.is_empty() {
         return Ok(());
     }
-    // The attribute objects are this source's own copies (`walk_value`), so they can change.
+    // The attribute objects are this source's own copies (`Walk::value`), so they can change.
     let mut done = HashSet::new();
     for copy in order {
         let Some(attrs) = out.get(*copy).as_dict().and_then(|d| d.get(b"A").cloned()) else { continue };
-        let (list, single) = match attrs {
-            Object::Array(a) => (a, false),
-            other => (vec![other], true),
+        // `/A` may name an array of attribute objects (`held`): the array is changed where it is.
+        let held = attrs.as_ref().filter(|r| matches!(&*out.get(*r), Object::Array(_)));
+        if let Some(r) = held
+            && !done.insert(r)
+        {
+            continue;
+        }
+        let (list, single) = match (held, attrs) {
+            (Some(r), _) => (out.get(r).as_array().cloned().unwrap_or_default(), false),
+            (None, Object::Array(a)) => (a, false),
+            (None, other) => (vec![other], true),
         };
         let mut kept = Vec::with_capacity(list.len());
         let mut changed = false;
@@ -638,7 +764,10 @@ fn unique_ids(out: &mut Document, order: &[ObjRef], tree: Vec<(Vec<u8>, ObjRef)>
                 }
                 None => Object::Array(kept),
             };
-            out.update_dict(*copy, |d| d.set(b"A".to_vec(), value))?;
+            match held {
+                Some(r) => out.set(r, value),
+                None => out.update_dict(*copy, |d| d.set(b"A".to_vec(), value))?,
+            }
         }
     }
     Ok(())
@@ -713,6 +842,27 @@ fn list(src: &Document, value: Option<&Object>) -> Vec<Object> {
     }
 }
 
+/// The PDF 2.0 standard structure namespace.
+const PDF2_NAMESPACE: &[u8] = b"http://iso.org/pdf2/ssn";
+/// The PDF 1.7 one, which an element without `/NS` is in.
+const PDF1_NAMESPACE: &[u8] = b"http://iso.org/pdf/ssn";
+
+/// The name (`/NS`) of the copied namespace dictionary `ns`.
+fn namespace_name(out: &Document, ns: ObjRef) -> Option<Vec<u8>> {
+    let held = out.get(ns);
+    let name = out.resolve(held.as_dict()?.get(b"NS")?);
+    name.as_string().map(|s| s.bytes.clone())
+}
+
+/// Whether the copied element's `/NS` (`ns`) is a standard structure namespace, where `Document`
+/// and `Part` are both standard types. No `/NS` is the PDF 1.7 one.
+fn standard_namespace(out: &Document, ns: Option<&Object>) -> bool {
+    match ns {
+        None | Some(Object::Null) => true,
+        Some(ns) => ns.as_ref().and_then(|r| namespace_name(out, r)).is_some_and(|n| n == PDF2_NAMESPACE || n == PDF1_NAMESPACE),
+    }
+}
+
 /// Whether `d` is part of the page tree or the structure tree, which an element's other entries
 /// must not drag along.
 fn structural(d: &Dict) -> bool {
@@ -720,77 +870,97 @@ fn structural(d: &Dict) -> bool {
         || (d.contains(b"S") && d.contains(b"P"))
 }
 
-/// Copy an element's entry `v` from `src` into `out`: what the pages brought along already is
-/// reused (`objects`), other objects are copied once (`values`, shared by everything copied from
-/// one source). A reference to the page tree or the structure tree, a value past
-/// [`MAX_VALUE_DEPTH`], or one read once `nodes` (the source's work so far) passes [`MAX_NODES`],
-/// becomes null. An attached file the source holds encrypted (it was opened without the password
-/// its embedded files need) is refused, as the page copier refuses it.
-fn walk_value(
-    out: &mut Document,
-    src: &Document,
-    values: &mut HashMap<ObjRef, ObjRef>,
-    objects: &HashMap<ObjRef, ObjRef>,
-    nodes: &mut usize,
-    v: &Object,
-    depth: usize,
-) -> Result<Object, OrganizeError> {
-    if depth > MAX_VALUE_DEPTH {
-        return Ok(Object::Null);
+impl Walk<'_> {
+    /// Copy an element's entry `v` from the source into `out`: what the pages brought along already
+    /// is reused (`objects`), other objects are copied once (`values`, shared by everything copied
+    /// from one source). A reference to the page tree or the structure tree becomes null. A value
+    /// past [`MAX_VALUE_DEPTH`], or one read once the source's work (`nodes`) passes [`MAX_NODES`],
+    /// is left out and the walk counts as `cut` (an array or dictionary stops there). An attached
+    /// file the source holds encrypted (it was opened without the password its embedded files need)
+    /// is refused, as the page copier refuses it.
+    fn value(&mut self, out: &mut Document, v: &Object, depth: usize) -> Result<Object, OrganizeError> {
+        if depth > MAX_VALUE_DEPTH {
+            self.cut = true;
+            return Ok(Object::Null);
+        }
+        if !self.spend() {
+            return Ok(Object::Null);
+        }
+        let deeper = depth.saturating_add(1);
+        Ok(match v {
+            Object::Ref(r) => {
+                if let Some(c) = self.objects.get(r).or_else(|| self.values.get(r)) {
+                    return Ok(Object::Ref(*c));
+                }
+                let held = self.src.get(*r);
+                let skip = match &*held {
+                    Object::Dict(d) => structural(d),
+                    Object::Stream(s) => structural(&s.dict),
+                    _ => false,
+                };
+                if skip {
+                    return Ok(Object::Null);
+                }
+                let copy = out.add(Object::Null);
+                self.values.insert(*r, copy);
+                let copied = self.value(out, &held, deeper)?;
+                out.set(copy, copied);
+                Object::Ref(copy)
+            }
+            Object::Array(a) => {
+                let mut c = Vec::with_capacity(a.len().min(MAX_NODES.saturating_sub(self.nodes)));
+                for x in a {
+                    if self.nodes >= MAX_NODES {
+                        self.cut = true;
+                        break;
+                    }
+                    c.push(self.value(out, x, deeper)?);
+                }
+                Object::Array(c)
+            }
+            Object::Dict(d) => Object::Dict(self.dict(out, d, deeper)?),
+            // Copied, its encrypted bytes would read as the file (see `copy`).
+            Object::Stream(s) if self.src.reads_as_stored(s) => {
+                return Err(OrganizeError::Invalid(
+                    "an attached file is encrypted and the document was opened without its password: open it with the password to copy it".into(),
+                ));
+            }
+            Object::Stream(s) => {
+                let mut s = s.clone();
+                s.dict = self.dict(out, &s.dict, deeper)?;
+                Object::Stream(s)
+            }
+            other => other.clone(),
+        })
     }
-    *nodes = nodes.saturating_add(1);
-    if *nodes > MAX_NODES {
-        return Ok(Object::Null);
+
+    /// [`Walk::value`] of each entry of `d`, stopping once the budget is spent.
+    fn dict(&mut self, out: &mut Document, d: &Dict, depth: usize) -> Result<Dict, OrganizeError> {
+        let mut c = Dict::new();
+        for (k, x) in d.iter() {
+            if self.nodes >= MAX_NODES {
+                self.cut = true;
+                break;
+            }
+            c.set(k.clone(), self.value(out, x, depth)?);
+        }
+        Ok(c)
     }
-    Ok(match v {
-        Object::Ref(r) => {
-            if let Some(c) = objects.get(r).or_else(|| values.get(r)) {
-                return Ok(Object::Ref(*c));
-            }
-            let held = src.get(*r);
-            let skip = match &*held {
-                Object::Dict(d) => structural(d),
-                Object::Stream(s) => structural(&s.dict),
-                _ => false,
-            };
-            if skip {
-                return Ok(Object::Null);
-            }
-            let copy = out.add(Object::Null);
-            values.insert(*r, copy);
-            let copied = walk_value(out, src, values, objects, nodes, &held, depth.saturating_add(1))?;
-            out.set(copy, copied);
-            Object::Ref(copy)
-        }
-        Object::Array(a) => {
-            let mut c = Vec::with_capacity(a.len());
-            for x in a {
-                c.push(walk_value(out, src, values, objects, nodes, x, depth.saturating_add(1))?);
-            }
-            Object::Array(c)
-        }
-        Object::Dict(d) => {
-            let mut c = Dict::new();
-            for (k, x) in d.iter() {
-                c.set(k.clone(), walk_value(out, src, values, objects, nodes, x, depth.saturating_add(1))?);
-            }
-            Object::Dict(c)
-        }
-        // Copied, its encrypted bytes would read as the file (see `copy`).
-        Object::Stream(s) if src.reads_as_stored(s) => {
-            return Err(OrganizeError::Invalid(
-                "an attached file is encrypted and the document was opened without its password: open it with the password to copy it".into(),
-            ));
-        }
-        Object::Stream(s) => {
-            let mut s = s.clone();
-            let mut c = Dict::new();
-            for (k, x) in s.dict.iter() {
-                c.set(k.clone(), walk_value(out, src, values, objects, nodes, x, depth.saturating_add(1))?);
-            }
-            s.dict = c;
-            Object::Stream(s)
-        }
-        other => other.clone(),
-    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_value_stops_copying_once_the_budget_is_spent() {
+        let (src, mut out) = (Document::new_empty(), Document::new_empty());
+        let (pages, objects) = (HashMap::new(), HashMap::new());
+        let mut walk = Walk::new(&src, &pages, &objects, 0);
+        walk.nodes = MAX_NODES - 3;
+        let copied = walk.value(&mut out, &Object::Array(vec![Object::Int(1); 10]), 0).unwrap();
+        // The array itself and two entries fit; the loop stops there rather than reading on.
+        assert_eq!(copied.as_array().map(Vec::len), Some(2));
+        assert!(walk.cut);
+    }
 }
