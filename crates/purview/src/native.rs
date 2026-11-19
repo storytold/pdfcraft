@@ -229,6 +229,9 @@ impl NativePurviewProvider {
         if line == "SIGNIN" {
             return Err(PurviewError::SignInRequired);
         }
+        if line == "NO_ACCESS" {
+            return Err(PurviewError::NoAccess);
+        }
         if let Some(message) = line.strip_prefix("DENIED\t") {
             return Err(PurviewError::Native(unescape(message)));
         }
@@ -393,9 +396,15 @@ impl PurviewProvider for NativePurviewProvider {
             return Ok(None);
         }
         if helper_path().is_none() {
+            if looks_like_mip_protection(name, bytes.as_slice()) {
+                return Err(PurviewError::SdkUnavailable);
+            }
             return Ok(None);
         }
         if self.app_id.is_empty() {
+            if looks_like_mip_protection(name, bytes.as_slice()) {
+                return Err(PurviewError::NotConfigured);
+            }
             return Ok(None);
         }
         let extension = std::path::Path::new(name).extension().and_then(|ext| ext.to_str()).unwrap_or("pdf");
@@ -546,6 +555,10 @@ impl PurviewProvider for NativePurviewProvider {
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&input);
+        if line == "JUSTIFICATION" {
+            let _ = std::fs::remove_file(&output);
+            return Err(PurviewError::JustificationRequired);
+        }
         let original_output = std::fs::read(&output).ok().map(Arc::new);
         let mut opened = self
             .parse_open(&format!("{line}\t{}", output.to_string_lossy()))?
@@ -576,7 +589,7 @@ impl PurviewProvider for NativePurviewProvider {
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&input);
-        if line.starts_with("DENIED") {
+        if line == "EXPORT_REQUIRED" {
             return Err(PurviewError::ExportRequired);
         }
         let original_output = std::fs::read(&output).ok().map(Arc::new);

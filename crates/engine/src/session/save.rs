@@ -97,18 +97,46 @@ impl Session {
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
     /// so the next save appends only newer edits. Undo history is kept.
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
+        let purview_rebase = if let Some(doc) = self.get(id) {
+            if let Some(purview) = doc.purview.as_ref() {
+                match purview.provider.inspect(&doc.name, &bytes) {
+                    Ok(opened) => opened,
+                    Err(error) => return Err(EditError::Protection(error.to_string())),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let doc = self.doc_mut(id)?;
         let mut renumbered = false;
         if let Some(editor) = doc.editor.as_mut() {
             if let Some(purview) = doc.purview.as_ref() {
-                editor.saved = bytes.clone();
-                editor.saved_keys = editor.keys.clone();
-                editor.unsaved_file = false;
-                doc.bytes = bytes.clone();
-                let mut purview = purview.clone();
-                purview.original = bytes.clone();
-                doc.purview = Some(purview);
-                renumbered = false;
+                if let Some(opened) = purview_rebase {
+                    let working = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None)
+                        .map_err(|error| EditError::Reopen(error.to_string()))?;
+                    editor.cos = working;
+                    editor.saved = opened.bytes.clone();
+                    editor.saved_keys = editor.keys.clone();
+                    editor.unsaved_file = false;
+                    doc.bytes = opened.bytes.clone();
+                    let mut state = purview.clone();
+                    state.original = bytes.clone();
+                    state.document = opened.document;
+                    doc.purview = Some(state);
+                    renumbered = false;
+                } else {
+                    let working =
+                        pdfcraft_cos::Document::open_with_password(bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+                    editor.cos = working;
+                    editor.saved = bytes.clone();
+                    editor.saved_keys = editor.keys.clone();
+                    editor.unsaved_file = false;
+                    doc.bytes = bytes.clone();
+                    doc.purview = None;
+                    renumbered = false;
+                }
             } else {
                 // An encrypted file needs the password it is protected with now (the owner
                 // password when known, so saving never downgrades this session's rights).
@@ -182,9 +210,54 @@ impl Session {
     /// cleared, as in Acrobat, and the document's opening scripts run again.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         self.invalidate_javascript(id);
+        let purview_revert = if let Some(doc) = self.get(id) {
+            if let Some(purview) = doc.purview.as_ref() {
+                let base = doc.editor.as_ref().map(|editor| editor.saved.clone()).unwrap_or(doc.bytes.clone());
+                match purview.provider.inspect(&doc.name, &base) {
+                    Ok(opened) => Some((true, base, opened)),
+                    Err(error) => return Err(EditError::Protection(error.to_string())),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();
+        if let Some((_, protected_base, opened)) = purview_revert {
+            let (cos, keys, purview) = if let Some(opened) = opened {
+                let cos =
+                    pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+                let provider = doc.purview.as_ref().map(|state| state.provider.clone());
+                let state = provider.map(|provider| crate::PurviewDocumentState {
+                    handle: opened.handle,
+                    original: protected_base.clone(),
+                    document: opened.document,
+                    provider,
+                });
+                (cos, editor.keys.clone(), state)
+            } else {
+                let cos =
+                    pdfcraft_cos::Document::open_with_password(protected_base.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+                (cos, Keys::default(), None)
+            };
+            editor.cos = cos;
+            editor.saved = protected_base.clone();
+            editor.saved_keys = keys;
+            editor.undo.clear();
+            editor.redo.clear();
+            doc.bytes = protected_base;
+            doc.purview = purview;
+            Self::adopt_keys(doc);
+            Self::sync_dirty(doc);
+            doc.xfa_exited.clear();
+            doc.generation += 1;
+            Self::refresh(doc).inspect_err(|_| Self::show_released(doc))?;
+            self.run_open_scripts(id);
+            return Ok(());
+        }
         // The saved file opens with the passwords it was saved with. The current snapshot may
         // be an older revision (undo past that save), so its own base is not the saved file.
         let mut candidates = vec![editor.saved_keys.clone(), editor.keys.clone()];

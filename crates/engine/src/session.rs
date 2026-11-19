@@ -51,6 +51,11 @@ impl Session {
 
     pub fn purview_apply_label(&mut self, id: DocId, label_id: &str, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
+        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
+            return Err(EditError::Protection(
+                "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
+            ));
+        }
         let provider = self.purview.clone().ok_or(EditError::Protection("Microsoft Purview support is not configured".into()))?;
         let state = document.purview.clone().unwrap_or(crate::PurviewDocumentState {
             handle: 0,
@@ -81,6 +86,11 @@ impl Session {
 
     pub fn purview_remove_label(&mut self, id: DocId, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
+        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
+            return Err(EditError::Protection(
+                "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
+            ));
+        }
         let state =
             document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
         let working = document.bytes.clone();
@@ -106,6 +116,11 @@ impl Session {
 
     pub fn purview_remove_protection(&mut self, id: DocId) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
+        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
+            return Err(EditError::Protection(
+                "ordinary PDF password protection and Microsoft Purview protection cannot be composed in the same save".into(),
+            ));
+        }
         let state =
             document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
         let working = document.bytes.clone();

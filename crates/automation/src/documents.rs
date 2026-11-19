@@ -868,6 +868,9 @@ impl Automation {
             },
             encrypt_metadata: a.opt_bool("encrypt_metadata")?.unwrap_or(d.encrypt_metadata),
         };
+        if p.algorithm == Algorithm::Rc4_40 && p.printing == Printing::Low {
+            return Err(ToolError::InvalidArgs("low-resolution printing is not supported by 40-bit RC4 PDF encryption".into()));
+        }
         let mut out = self.apply(a, Edit::Protect(p))?;
         out["security"] = security(self.doc(a)?);
         Ok(out)

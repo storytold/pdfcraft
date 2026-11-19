@@ -353,7 +353,7 @@ static void handle_open(const std::vector<std::string>& fields) {
         bool protected_file = protection != nullptr;
         if (protected_file) {
             if (!protection->AccessCheck(mip::rights::View())) {
-                std::cout << "DENIED\tThe signed-in account does not have VIEW rights.\n";
+                std::cout << "NO_ACCESS\n";
                 native.context->ShutDown();
                 return;
             }
@@ -550,8 +550,25 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
             std::cout << "DENIED\tThe Microsoft Purview SDK did not remove the label.\n";
             return;
         }
-        std::cout << "OK\tNONE\t\t\t\t\t\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t\t\t0\t0\t"
-                  << escape_tsv(output) << "\t"
+        auto output_handler = create_handler(native.engine, output, output + ".audit");
+        auto protection = output_handler->GetProtection();
+        auto label_fields = content_label_fields(output_handler);
+        auto rights_fields = rights_line(protection);
+        std::string owner;
+        std::string content_id;
+        if (protection) {
+            owner = protection->GetOwner();
+            content_id = protection->GetContentId();
+        }
+        std::cout << "OK\t"
+                  << (protection ? "PROTECTED" : "NONE") << "\t"
+                  << label_fields << "\t"
+                  << rights_fields << "\t"
+                  << escape_tsv(owner) << "\t"
+                  << escape_tsv(content_id) << "\t"
+                  << (native.engine->IsLabelingRequired() ? "1" : "0") << "\t"
+                  << escape_tsv(native.engine->GetDefaultSensitivityLabel() ? native.engine->GetDefaultSensitivityLabel()->GetId() : "") << "\t"
+                  << "0\t"
                   << escape_tsv(output) << "\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {
@@ -577,7 +594,7 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
         auto protection = handler->GetProtection();
         if (!protection || (!protection->AccessCheck(mip::rights::Export()) &&
                             !protection->AccessCheck(mip::rights::Owner()))) {
-            std::cout << "DENIED\tExport or Owner rights are required.\n";
+            std::cout << "EXPORT_REQUIRED\n";
             return;
         }
         handler->RemoveProtection();
@@ -585,8 +602,24 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
             std::cout << "DENIED\tThe Microsoft Purview SDK did not remove protection.\n";
             return;
         }
-        std::cout << "OK\tNONE\t\t\t\t\t\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t\t\t0\t0\t"
-                  << escape_tsv(output) << "\t"
+        auto output_handler = create_handler(native.engine, output, output + ".audit");
+        auto protection_after = output_handler->GetProtection();
+        auto label_fields = content_label_fields(output_handler);
+        auto rights_fields = rights_line(protection_after);
+        std::string owner;
+        std::string content_id;
+        if (protection_after) {
+            owner = protection_after->GetOwner();
+            content_id = protection_after->GetContentId();
+        }
+        std::cout << "OK\tNONE\t"
+                  << label_fields << "\t"
+                  << rights_fields << "\t"
+                  << escape_tsv(owner) << "\t"
+                  << escape_tsv(content_id) << "\t"
+                  << (native.engine->IsLabelingRequired() ? "1" : "0") << "\t"
+                  << escape_tsv(native.engine->GetDefaultSensitivityLabel() ? native.engine->GetDefaultSensitivityLabel()->GetId() : "") << "\t"
+                  << "0\t"
                   << escape_tsv(output) << "\n";
         native.context->ShutDown();
     } catch (const std::exception& error) {

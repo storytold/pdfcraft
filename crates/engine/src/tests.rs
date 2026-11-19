@@ -3000,6 +3000,10 @@ fn protection_is_validated_undoable_and_never_logged() {
     assert!(matches!(s.apply(id, Edit::Protect(protection(Some("same"), Some("same")))), Err(EditError::Protection(_))));
     let rc4 = Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_128, ..protection(Some("pässword"), None) };
     assert!(matches!(s.apply(id, Edit::Protect(rc4)), Err(EditError::Protection(_))));
+    let rc4_40_low = Protection { algorithm: pdfcraft_cos::Algorithm::Rc4_40, printing: Printing::Low, ..protection(Some("open"), Some("owner")) };
+    assert!(matches!(s.apply(id, Edit::Protect(rc4_40_low)), Err(EditError::Protection(_))));
+    let effective_collision = Protection { open_password: Some("a\u{00ad}".into()), permissions_password: Some("a".into()), ..Protection::default() };
+    assert!(matches!(s.apply(id, Edit::Protect(effective_collision)), Err(EditError::Protection(_))));
     assert!(!format!("{:?}", Edit::Protect(protection(Some("hunter2"), Some("x")))).contains("hunter2"));
     s.apply(id, Edit::Protect(protection(Some("pw"), Some("owner")))).unwrap();
     assert!(s.get(id).unwrap().info.encrypted);
