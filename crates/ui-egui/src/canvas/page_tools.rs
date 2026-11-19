@@ -499,7 +499,8 @@ impl ToolFinish {
 
 /// A press on an Edit text part: with Shift or Cmd (Ctrl off macOS) held it adds to or takes from the objects
 /// selected together first, whatever lies under it; then the objects and the paragraph frame take their own; then
-/// each family its own. `pages` are the pages this pass placed. The edit the press ends in, if any.
+/// each family its own. `pages` are the pages this pass placed; under `tool` Add text and Edit text a click on added
+/// text opens it for typing. The edit the press ends in, if any.
 pub(crate) fn edit_text_press(
     session: &mut PageSession,
     doc: &Document,
@@ -507,6 +508,7 @@ pub(crate) fn edit_text_press(
     press: &PagePress,
     pages: &[PlacedPage],
     geo: PageGeometry<'_>,
+    tool: QuickTool,
 ) -> Option<Edit> {
     let Mods { cmd, shift, .. } = press.mods;
     if (shift || cmd) && crate::tools::object_ui::modified_press(session, doc, info, press, geo) {
@@ -515,7 +517,10 @@ pub(crate) fn edit_text_press(
     match press.owner {
         Owner::Objects | Owner::Frame { .. } => crate::tools::object_ui::objects_press(session, doc, info, press, geo),
         Owner::Paragraph { .. } => crate::tools::edit_text_ui::paragraph_press(session, doc, press, geo),
-        Owner::Added { .. } => crate::tools::content_ui::added_press(session, doc, pages, press),
+        Owner::Added { .. } => {
+            let edit_on_click = matches!(tool, QuickTool::AddText | QuickTool::EditText);
+            crate::tools::content_ui::added_press(session, doc, pages, press, edit_on_click)
+        }
         Owner::Picture { .. } => crate::tools::edit_text_ui::picture_press(session, doc, press, geo),
         Owner::Comment { .. }
         | Owner::Link { .. }
