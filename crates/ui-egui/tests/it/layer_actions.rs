@@ -150,7 +150,7 @@ fn the_layers_panel_shows_the_order_tree() {
     let mut h = harness_with(fixture_with("/Order [[(Colours) 5 0 R]]"), |app| app.set_option(&egui::Context::default(), "panel", "layers").unwrap());
     h.run_steps(2);
     let label = h.get_by_role_and_label(Role::TreeItem, "Colours").rect();
-    let red = h.get_by_label("Red").rect();
+    let red = h.get_by_role_and_label(Role::TreeItem, "Red").rect();
     assert!(red.min.y > label.max.y - 1.0, "Red is listed under its label");
     assert!(h.query_by_label("Green").is_none(), "Green isn't in /Order, so it isn't presented");
     assert_eq!(shown(&h), layers(true, false), "but it is still a layer, in its state");

@@ -30,11 +30,14 @@ pub(super) mod word_count_ui;
 pub(crate) use prompts::shorten_middle;
 pub(crate) use properties::PropsTab;
 
-/// Drop (and zeroize) the Sign password draft. Sign is a window beside the dialog host, so opening any dialog ends
-/// it: `host::open` and `host::open_over`, commands and control requests call this, since a close and a reopen can
-/// happen between frames. The control paths that start signing call it before `start_signing`.
+/// Drop (and zeroize) the Sign password draft once Sign is no longer the active window: Sign is a window beside the
+/// dialog host, so any dialog open on the host ends it. `host::open` and `host::open_over` call this after opening,
+/// and commands and control requests after they run, since a close and a reopen can happen between frames; a command
+/// that starts signing opens no dialog, so its draft stays.
 pub(crate) fn discard_inactive_password_drafts(app: &mut PdfCraftApp) {
-    app.sign_draft = None;
+    if app.dialogs.stack().top().is_some() {
+        app.sign_draft = None;
+    }
 }
 
 /// Draws the dialogs over the window and acts on the answers they gave this pass.

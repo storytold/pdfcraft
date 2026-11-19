@@ -213,6 +213,6 @@ mod tests {
             }
         });
         h.run_steps(4);
-        assert_eq!(h.get_all_by_label(tl!(label)).count(), 1);
+        assert_eq!(h.get_all_by_role_and_label(egui::accesskit::Role::ListItem, tl!(label)).count(), 1, "one tile for the tool");
     }
 }

@@ -475,9 +475,18 @@ mod tests {
         let files = Arc::new(ScriptedFiles::held());
         let jobs = Arc::new(ManualJobs::new());
         let mut h = reducing(files.clone(), jobs.clone(), text_pdf("Minutes of the harbour board"));
+        // The page's own work (its pictures and text) settles first, so the queue below holds only the reduction's.
+        while jobs.run_all() > 0 {
+            h.run_steps(2);
+        }
         let ctx_h = h.ctx.clone();
         h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
+        eprintln!(
+            "DIAG reduce_file_size_asks_where_to_save_before_it_compresses: run {} waiting {}",
+            h.state().optimize_run.is_some(),
+            jobs.waiting()
+        );
         assert!(h.state().optimize_run.is_none() && jobs.waiting() == 0, "nothing runs until the answer is in");
         assert_eq!(files.open(), 1, "the question is out");
         assert!(files.file(&out).is_none(), "no copy is written before the answer");

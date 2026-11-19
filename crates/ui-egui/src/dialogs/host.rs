@@ -19,17 +19,19 @@ pub(crate) fn run(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 /// Opens `dialog` on the host. Opening a dialog ends the Sign window's password draft.
 pub(crate) fn open<D: StackDialog>(app: &mut PdfCraftApp, dialog: D) -> DialogId {
+    let id = app.dialogs.open(dialog);
     super::discard_inactive_password_drafts(app);
-    app.dialogs.open(dialog)
+    id
 }
 
 /// Opens `dialog` above the dialog on top of the stack, which stays open under it; with none open, as [`open`].
 pub(crate) fn open_over<D: StackDialog>(app: &mut PdfCraftApp, dialog: D) -> DialogId {
-    super::discard_inactive_password_drafts(app);
-    match app.dialogs.stack().top() {
+    let id = match app.dialogs.stack().top() {
         Some(parent) => app.dialogs.open_child(dialog, parent),
         None => app.dialogs.open(dialog),
-    }
+    };
+    super::discard_inactive_password_drafts(app);
+    id
 }
 
 /// The windows the app keeps beside the host: movable, so the page under them stays in view.

@@ -1238,6 +1238,8 @@ mod tests {
         for id in ids {
             app.dialogs.cancel_by_id(&ctx, id);
         }
+        // The JavaScript console is a window beside the host; closing it drops it.
+        app.js_dialog = None;
     }
 
     /// The text of the notices posted so far.
