@@ -5854,6 +5854,21 @@ fn redacting_through_tools() {
     assert!(matches!(a.call("redact_mark", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// #7893: an SSN typeset with en or em dashes is marked and removed like one with hyphens.
+#[test]
+fn redact_pattern_finds_numbers_typeset_with_dashes() {
+    let dir = workdir("redact-dashes");
+    std::fs::write(dir.join("memo.txt"), "Ref one 321-54-9876\nRef two 432\u{2013}65\u{2013}8765\nRef three 543\u{2014}76\u{2014}7654").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({ "from": "text", "path": "memo.txt" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "redact_mark", json!({ "doc": doc, "pattern": "ssn" }));
+    assert_eq!(r["marked"].as_u64(), Some(3), "{r}");
+    ok(&mut a, "redact_apply", json!({ "doc": doc }));
+    let text = page_text(&mut a, doc)[0].clone();
+    assert!(!["9876", "8765", "7654"].iter().any(|n| text.contains(n)), "{text}");
+    assert!(text.contains("Ref one") && text.contains("Ref two") && text.contains("Ref three"), "{text}");
+}
+
 /// #2539 review: `redact_apply` says where the removed text is still held that applying leaves as
 /// it is (a bookmark title and a note's text here), and changes neither.
 #[test]
