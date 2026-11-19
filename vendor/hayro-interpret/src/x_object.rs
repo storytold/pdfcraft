@@ -1232,23 +1232,30 @@ fn decode_raster(
                 &ctx.decode_arr,
             )?;
 
-            // PdfCraft patch (107): the components in the units their conversion takes, and each
-            // one's range there: an ICC `/Lab` profile's `/Decode` array gives them in the
-            // profile's own encoding, not L\*a\*b\*.
-            let ranges = if matte_in_source {
-                ctx.color_space.to_converter_units(&mut f32_data, ctx.bits_per_component as f32)
-            } else {
-                ctx.color_space.default_decode_arr(ctx.bits_per_component as f32)
-            };
+            // PdfCraft patch (107): bring decoded components into the units `convert_f32`
+            // takes and get each component's range there: an ICC `/Lab` profile's `/Decode`
+            // array or `/Range` can use unit `[0, 1]` encoding while `ICCProfile::convert_f32`
+            // takes physical L\*a\*b\*.
+            let ranges = ctx.color_space.to_converter_units(
+                &mut f32_data,
+                ctx.bits_per_component as f32,
+                &ctx.decode_arr,
+            );
 
             fix_image_length(&mut f32_data, ctx.width, &mut height, 0.0, &ctx.color_space)?;
 
-            // PdfCraft patch (107): the matte removed from the decoded components.
+            // PdfCraft patch (107): convert `/Matte` into the same converter units before
+            // removing it from the decoded components.
             if matte_in_source
-                && let Some((alpha, matte)) = resolve_matte(obj, &ctx.color_space, target_dimension)
+                && let Some((alpha, mut matte)) = resolve_matte(obj, &ctx.color_space, target_dimension)
                 && alpha.width == ctx.width
                 && alpha.height == height
             {
+                let _ = ctx.color_space.to_converter_units(
+                    &mut matte,
+                    ctx.bits_per_component as f32,
+                    &ctx.decode_arr,
+                );
                 unpremultiply_components(&mut f32_data, &alpha.data, &matte, &ranges);
                 matte_alpha = Some(alpha);
             }

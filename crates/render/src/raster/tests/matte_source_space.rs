@@ -151,9 +151,42 @@ fn lab_profile() -> Vec<u8> {
 fn an_opaque_matte_leaves_an_icc_lab_image_as_it_was() {
     let objects = [stream_object(9, "/N 3", &lab_profile())];
     let samples = [128, 128, 128];
-    let (left, right) = squares(&render_with("[/ICCBased 9 0 R]", 1, (&samples, &samples, &[255]), "50 0 0", "", &objects));
+    let (left, right) = squares(&render_with("[/ICCBased 9 0 R]", 1, (&samples, &samples, &[255]), "0.5 0.5019608 0.5019608", "", &objects));
     assert!(close(&left, &[119, 119, 119]), "straight: {left:?}");
     assert!(close(&right, &left), "preblended {right:?}, straight {left:?}");
+}
+
+/// A non-opaque matte on an ICC `/Lab` image must be converted to physical L\*a\*b\* alongside
+/// the decoded samples, whether the space uses the default unit `/Range` or an explicit physical
+/// `/Range [0 100 -128 127 -128 127]`.
+#[test]
+fn a_matte_is_removed_from_an_icc_lab_image_at_half_alpha() {
+    let unit_objects = [stream_object(9, "/N 3", &lab_profile())];
+    let (left, right) =
+        squares(&render_with("[/ICCBased 9 0 R]", 1, (&[0, 128, 128], &[127, 128, 128], &[128]), "1 0.5019608 0.5019608", "", &unit_objects));
+    assert!(close(&left, &[0, 0, 127]), "straight unit: {left:?}");
+    assert!(close(&right, &left), "preblended unit {right:?}, straight {left:?}");
+
+    let physical_objects = [stream_object(9, "/N 3 /Range [0 100 -128 127 -128 127]", &lab_profile())];
+    let (left, right) = squares(&render_with("[/ICCBased 9 0 R]", 1, (&[0, 128, 128], &[127, 128, 128], &[128]), "100 0 0", "", &physical_objects));
+    assert!(close(&left, &[0, 0, 127]), "straight physical: {left:?}");
+    assert!(close(&right, &left), "preblended physical {right:?}, straight {left:?}");
+}
+
+/// An explicit `/Decode [0 100 -128 127 -128 127]` on an ICC `/Lab` image already produces
+/// physical L\*a\*b\* units, so it must not be rescaled again when unpremultiplying a matte.
+#[test]
+fn an_explicit_physical_lab_decode_is_not_rescaled_with_a_matte() {
+    let objects = [stream_object(9, "/N 3", &lab_profile())];
+    let decode = "/Decode [0 100 -128 127 -128 127]";
+    let samples = [128, 128, 128];
+    let (left, right) = squares(&render_with("[/ICCBased 9 0 R]", 1, (&samples, &samples, &[255]), "0 0 0", decode, &objects));
+    assert!(close(&left, &[119, 119, 119]), "straight opaque: {left:?}");
+    assert!(close(&right, &left), "preblended opaque {right:?}, straight {left:?}");
+
+    let (left, right) = squares(&render_with("[/ICCBased 9 0 R]", 1, (&[0, 128, 128], &[127, 128, 128], &[128]), "100 0 0", decode, &objects));
+    assert!(close(&left, &[0, 0, 127]), "straight half-alpha: {left:?}");
+    assert!(close(&right, &left), "preblended half-alpha {right:?}, straight {left:?}");
 }
 
 /// A tint transform may give fewer components than its alternate space takes. The matte is
