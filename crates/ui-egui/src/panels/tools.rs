@@ -187,10 +187,6 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) 
         }
     }
     let mut run = None;
-    // Redact a PDF has Acrobat's footer: Clear all / Redact all.
-    let footer = g.id == "redact";
-    let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
-
     let mut lines = Vec::new();
     for s in g.sections {
         lines.push(Line::Heading(s.title));
@@ -239,20 +235,36 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) 
         // menu over the page, where it was easy to miss (#2149).
         Checkbox::new(Bind::bound(&mut app.flatten_fill_sign_on_save)).label(tl!("Lock into the page when saving").to_owned()).show(ui);
     }
-    if footer {
-        if marks > 0 {
-            caption_row(
-                ui,
-                &if marks == 1 { crate::i18n::fmt(tl!("1 mark"), &[]) } else { crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())]) },
-                false,
-            );
-        }
-        if Button::new(tl!("Clear all").to_owned()).enabled(marks > 0).show(ui).clicked() {
-            run = Some("redact.clear");
-        }
-        if Button::new(tl!("Redact all").to_owned()).enabled(marks > 0).show(ui).clicked() {
-            run = Some("redact.apply");
-        }
+    if let Some(cmd) = run {
+        app.run_command(ui.ctx(), cmd);
+    }
+}
+
+/// Whether the Tools panel shows a tool whose actions sit in a footer pinned under the body: Redact a PDF's.
+pub(crate) fn has_footer(app: &PdfCraftApp) -> bool {
+    app.left == LeftPanel::Tool("redact") && !(app.active.is_some() && crate::organize_panel::showing(app))
+}
+
+/// The Tools panel's pinned footer: Redact a PDF's mark count, Clear all and Redact all, in view while the body
+/// scrolls, as production pinned them.
+pub(crate) fn footer(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if !has_footer(app) {
+        return;
+    }
+    let marks = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks());
+    if marks > 0 {
+        caption_row(
+            ui,
+            &if marks == 1 { crate::i18n::fmt(tl!("1 mark"), &[]) } else { crate::i18n::fmt(tl!("{n} marks"), &[("n", &marks.to_string())]) },
+            false,
+        );
+    }
+    let mut run = None;
+    if Button::new(tl!("Clear all").to_owned()).enabled(marks > 0).show(ui).clicked() {
+        run = Some("redact.clear");
+    }
+    if Button::new(tl!("Redact all").to_owned()).enabled(marks > 0).show(ui).clicked() {
+        run = Some("redact.apply");
     }
     if let Some(cmd) = run {
         app.run_command(ui.ctx(), cmd);

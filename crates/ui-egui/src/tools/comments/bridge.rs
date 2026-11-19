@@ -380,7 +380,8 @@ pub(crate) fn tips(info: &DocInfo, prefs: &CommentPrefs, tool: QuickTool) -> Vec
 
 /// The one part for the comment under the screen point `pointer`, as `pick_at` finds it (so overlapping comments
 /// never meet the arena's nearest-centre rule). `tolerance` and `icon_side` are page units ([`PageMap::doc_len`] of
-/// the tool host's slop and icon side). Registers only under Select.
+/// the tool host's slop and icon side). Registers only under Select. With `on_link` (a link lies under the pointer) a
+/// highlight there takes only its right-click: a click on it follows the link, as production's did.
 // PLAN: `pointer` is a screen point (the sheet says `Option<Point>`): `page_at` finds its page.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn parts(
@@ -392,6 +393,7 @@ pub(crate) fn parts(
     annotate: &AnnotateTool,
     tolerance: f64,
     icon_side: f64,
+    on_link: bool,
 ) -> Vec<PagePart> {
     let Some(screen) = pointer else { return Vec::new() };
     let (Some(page), at) = (map.page_at(screen), ()) else { return Vec::new() };
@@ -413,12 +415,18 @@ pub(crate) fn parts(
         Cursor::System(icon) => icon,
         _ => CursorIcon::Default,
     };
+    let index = key_of(id).1;
+    let owner = Owner::Comment { index };
+    if on_link && tool == QuickTool::Select && engine(info, page, index).is_some_and(|a| a.subtype == "Highlight") {
+        // The link's hand and tip show there.
+        return screen_shapes.into_iter().map(|shape| PagePart::new(owner, page, shape, PageLayer::Comment).context_only()).collect();
+    }
     let tip = tips(info, prefs, tool).into_iter().find(|(t, _)| *t == id).map(|(_, tip)| tip);
     // A part has one shape: a markup's lines are one part each, which a press resolves to the same comment.
     screen_shapes
         .into_iter()
         .map(|shape| {
-            let part = PagePart::new(Owner::Comment { index: key_of(id).1 }, page, shape, PageLayer::Comment).passes_drag().cursor(icon);
+            let part = PagePart::new(owner, page, shape, PageLayer::Comment).passes_drag().cursor(icon);
             match &tip {
                 Some(tip) => part.tip(tip.clone()),
                 None => part,

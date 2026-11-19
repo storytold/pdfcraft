@@ -44,12 +44,22 @@ fn transform_of(xforms: &[(usize, PageXform)], page: usize) -> Option<PageXform>
 /// moves it. The caller asks only while preparing with no field tool armed, because a field tool draws
 /// anywhere and fields are then not pressable.
 // The parts read nothing from the session; the page body hands it over so every owner's `page_parts` has one shape.
-pub(crate) fn page_parts(out: &mut Vec<PagePart>, _session: &PageSession, form: &[FormField], info: &DocInfo, pages: &[PlacedPage], rotation: u16) {
+pub(crate) fn page_parts(
+    out: &mut Vec<PagePart>,
+    _session: &PageSession,
+    form: &[FormField],
+    info: &DocInfo,
+    pages: &[PlacedPage],
+    rotation: u16,
+    field_tool: bool,
+) {
     for (page, xf) in transforms(pages, info, rotation) {
         for (field, f) in form.iter().enumerate() {
             for (widget, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page)) {
                 let rect = screen_rect(&xf, info, page, w.rect);
-                out.push(PagePart::new(Owner::PrepareField { field, widget }, page, rect, PageLayer::Placed).cursor(CursorIcon::Move).passes_drag());
+                let part = PagePart::new(Owner::PrepareField { field, widget }, page, rect, PageLayer::Placed);
+                // A field tool draws new fields over the existing ones; a right-click still reaches them.
+                out.push(if field_tool { part.context_only() } else { part.cursor(CursorIcon::Move).passes_drag() });
             }
         }
     }

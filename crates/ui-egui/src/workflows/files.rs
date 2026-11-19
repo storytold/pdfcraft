@@ -740,7 +740,7 @@ fn document_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
 impl PdfCraftApp {
     /// The files a pick answered, read: paths through the host's file service, browser contents
     /// as they are. A file that can't be read gives its name and why.
-    fn read_picked(&self, picked: Picked) -> Result<Vec<(String, Vec<u8>)>, (String, String)> {
+    pub(crate) fn read_picked(&self, picked: Picked) -> Result<Vec<(String, Vec<u8>)>, (String, String)> {
         match picked {
             Picked::Paths(paths) => paths
                 .iter()

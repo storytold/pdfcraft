@@ -567,7 +567,7 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     // PLAN: the outline shape itself is the overlay's `HoverOutline` (pdf-comments-w8); a request to w8 for an `overlay` helper
     // the test can compare against the part's annotation. The part registered at the pointer is asserted here.
     let parts =
-        |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side);
+        |view: &DocView, pointer| bridge::parts(&info, &map, &prefs, QuickTool::Select, pointer, &view.session.comments.tool, tolerance, side, false);
     assert_eq!(parts(&view, Some(over)).len(), 1, "one part for the comment under the pointer");
     assert!(parts(&view, None).is_empty(), "no pointer, no part");
     assert!(parts(&view, Some(Point::new(5.0, 5.0))).is_empty(), "nor where nothing would take the press");
