@@ -13,22 +13,9 @@ impl crate::PdfCraftApp {
         }
     }
 
-    /// The input target: active document, open dialog/prompt, palette and find state.
-    ///
-    /// Synthetic input admitted for one generation is never replayed into another document or
-    /// dialog. Only these identities are hashed, never text or document content.
-    pub(crate) fn input_epoch(&self, ctx: &egui::Context) -> u64 {
-        use std::hash::{Hash as _, Hasher as _};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.capture_epoch().hash(&mut hasher);
-        // The focused widget is part of the input target: keys typed for one field must not land
-        // in another after focus moves. Only the id value is hashed, never text.
-        let focused = ctx.memory(|m| m.focused()).map(|id| id.value());
-        focused.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// The captured content: active document and open dialog/prompt, never keyboard focus.
+    /// The captured content and the target of synthetic input: active document and open
+    /// dialog/prompt, never keyboard focus (the framework withdraws injected input itself when the
+    /// focus moves).
     pub(crate) fn capture_epoch(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
