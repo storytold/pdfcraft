@@ -10,6 +10,10 @@
 #include <future>
 #include <memory>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/stat.h>
+#endif
+
 #include "mip/common_types.h"
 #include "mip/mip_configuration.h"
 #include "mip/mip_context.h"
@@ -298,13 +302,19 @@ static std::string content_label_fields(
 }
 
 static void copy_file(const std::string& input, const std::string& output) {
+    if (std::filesystem::file_size(input) > 512ULL * 1024ULL * 1024ULL) {
+        throw std::runtime_error("Microsoft Purview staging exceeded the 512 MiB limit");
+    }
     std::ifstream source(input, std::ios::binary);
     std::ofstream destination(output, std::ios::binary | std::ios::trunc);
     destination << source.rdbuf();
+#if defined(__unix__) || defined(__APPLE__)
+    ::chmod(output.c_str(), 0600);
+#endif
 }
 
 static void handle_open(const std::vector<std::string>& fields) {
-    if (fields.size() < 8) {
+    if (fields.size() < 9) {
         std::cout << "DENIED\tinvalid open request\n";
         return;
     }
@@ -315,12 +325,13 @@ static void handle_open(const std::vector<std::string>& fields) {
     std::string input = unescape_tsv(fields[5]);
     std::string output = unescape_tsv(fields[6]);
     std::string audit = unescape_tsv(fields[7]);
+    std::string cache = unescape_tsv(fields[8]);
 
     try {
         mip::ApplicationInfo app_info{app_id, "PdfCraft", "0.21.1"};
         auto mip_configuration = std::make_shared<mip::MipConfiguration>(
             app_info,
-            std::filesystem::temp_directory_path().string(),
+            cache,
             mip::LogLevel::Error,
             false,
             mip::CacheStorageType::OnDiskEncrypted);
@@ -336,7 +347,7 @@ static void handle_open(const std::vector<std::string>& fields) {
             return;
         }
 
-        auto native = create_native_mip(app_id, username, rms_token, sync_token, std::filesystem::temp_directory_path().string());
+        auto native = create_native_mip(app_id, username, rms_token, sync_token, cache);
         auto handler = create_handler(native.engine, input, audit);
         auto protection = handler->GetProtection();
         bool protected_file = protection != nullptr;
@@ -351,6 +362,8 @@ static void handle_open(const std::vector<std::string>& fields) {
             handler->GetDecryptedTemporaryFileAsync(promise);
             std::string decrypted = future.get();
             copy_file(decrypted, output);
+            std::error_code removed_error;
+            std::filesystem::remove(decrypted, removed_error);
         } else {
             copy_file(input, output);
         }
@@ -386,7 +399,7 @@ static void handle_open(const std::vector<std::string>& fields) {
 }
 
 static void handle_labels(const std::vector<std::string>& fields) {
-    if (fields.size() < 5) {
+    if (fields.size() < 6) {
         std::cout << "END\n";
         return;
     }
@@ -396,7 +409,7 @@ static void handle_labels(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            std::filesystem::temp_directory_path().string());
+            unescape_tsv(fields[5]));
         auto labels = native.engine->ListSensitivityLabels();
         for (const auto& label : labels) {
             std::cout << "LABEL\t"
@@ -442,7 +455,7 @@ static std::string open_and_print_result(
 }
 
 static void handle_apply_label(const std::vector<std::string>& fields) {
-    if (fields.size() < 9) {
+    if (fields.size() < 10) {
         std::cout << "DENIED\tinvalid apply-label request\n";
         return;
     }
@@ -452,7 +465,7 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            std::filesystem::temp_directory_path().string());
+            unescape_tsv(fields[9]));
         std::string input = unescape_tsv(fields[5]);
         std::string output = unescape_tsv(fields[6]);
         std::string label_id = unescape_tsv(fields[7]);
@@ -476,6 +489,8 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
             output_handler->GetDecryptedTemporaryFileAsync(promise);
             std::string decrypted = future.get();
             copy_file(decrypted, working);
+            std::error_code removed_error;
+            std::filesystem::remove(decrypted, removed_error);
         } else {
             copy_file(output, working);
         }
@@ -511,7 +526,7 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
 }
 
 static void handle_remove_label(const std::vector<std::string>& fields) {
-    if (fields.size() < 7) {
+    if (fields.size() < 9) {
         std::cout << "DENIED\tinvalid remove-label request\n";
         return;
     }
@@ -521,11 +536,15 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            std::filesystem::temp_directory_path().string());
+            unescape_tsv(fields[8]));
         std::string input = unescape_tsv(fields[5]);
         std::string output = unescape_tsv(fields[6]);
+        std::string justification = unescape_tsv(fields[7]);
         auto handler = create_handler(native.engine, input, input + ".audit");
         mip::LabelingOptions options(mip::AssignmentMethod::PRIVILEGED);
+        if (!justification.empty()) {
+            options.SetDowngradeJustification(true, justification);
+        }
         handler->DeleteLabel(options);
         if (!commit_handler(handler, output)) {
             std::cout << "DENIED\tThe Microsoft Purview SDK did not remove the label.\n";
@@ -541,7 +560,7 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
 }
 
 static void handle_remove_protection(const std::vector<std::string>& fields) {
-    if (fields.size() < 7) {
+    if (fields.size() < 8) {
         std::cout << "DENIED\tinvalid remove-protection request\n";
         return;
     }
@@ -551,7 +570,7 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            std::filesystem::temp_directory_path().string());
+            unescape_tsv(fields[7]));
         std::string input = unescape_tsv(fields[5]);
         std::string output = unescape_tsv(fields[6]);
         auto handler = create_handler(native.engine, input, input + ".audit");
@@ -576,7 +595,7 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
 }
 
 static void handle_republish(const std::vector<std::string>& fields) {
-    if (fields.size() < 8) {
+    if (fields.size() < 9) {
         std::cout << "DENIED\tinvalid republish request\n";
         return;
     }
@@ -586,7 +605,7 @@ static void handle_republish(const std::vector<std::string>& fields) {
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
             unescape_tsv(fields[4]),
-            std::filesystem::temp_directory_path().string());
+            unescape_tsv(fields[8]));
         std::string original = unescape_tsv(fields[5]);
         std::string working = unescape_tsv(fields[6]);
         std::string output = unescape_tsv(fields[7]);

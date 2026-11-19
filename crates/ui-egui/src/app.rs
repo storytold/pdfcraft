@@ -333,10 +333,12 @@ impl PdfCraftApp {
             pending_full_screen: None,
             pending_window: None,
             pending_remote_link: None,
+            purview_signin_prompt: None,
             protect_draft: Default::default(),
             purview_labels: Vec::new(),
             purview_label_id: String::new(),
             purview_justification: String::new(),
+            purview_username_hint: String::new(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
@@ -462,6 +464,7 @@ impl PdfCraftApp {
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
+            || self.purview_signin_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
@@ -642,7 +645,11 @@ impl PdfCraftApp {
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         ui_scale::sync(ctx, ui_scale::zoom(self.ui_scale, self.system_text_scale, native), &mut self.ui_scale_applied);
         // Remember user work even if its tab is subsequently closed or Home is selected.
-        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
+        self.startup_superseded |= !self.views.is_empty()
+            || self.combine_showing()
+            || self.dialog.is_some()
+            || self.password_prompt.is_some()
+            || self.purview_signin_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
         // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:

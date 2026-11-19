@@ -553,24 +553,26 @@ impl Document {
 
     /// Printing is allowed (Table 22, bit 3).
     pub fn allows_printing(&self) -> bool {
+        let password_allowed = !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print());
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return purview.rights.can_print();
+            return password_allowed && purview.rights.can_print();
         }
-        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.print())
+        password_allowed
     }
 
     /// Copying or otherwise extracting text and images is allowed (Table 22, bit 5): copying
     /// selected text, snapshots, Save Image As, exporting. Assistive technology may read the
     /// content regardless (§7.6.4.2), so reading aloud and accessibility tools don't ask.
     pub fn allows_copying(&self) -> bool {
+        let password_allowed = !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy());
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return purview.rights.can_copy();
+            return password_allowed && purview.rights.can_copy();
         }
-        !self.permissions_unknown() && self.permissions().is_none_or(|p| p.copy())
+        password_allowed
     }
 
     /// [`Self::allows_copying`], as the error to report when it isn't.
@@ -583,7 +585,9 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return purview.rights.owner || purview.rights.edit || purview.rights.document_edit;
+            return (purview.rights.owner || purview.rights.edit || purview.rights.document_edit)
+                && self.editable()
+                && self.permissions().is_none_or(|p| p.assemble());
         }
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
     }
@@ -594,7 +598,7 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return purview.rights.can_export();
+            return purview.rights.can_export() && self.editable() && self.permissions().is_none_or(|p| p.extract_pages());
         }
         self.editable() && self.permissions().is_none_or(|p| p.extract_pages())
     }
@@ -657,7 +661,7 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return self.editable() && purview.rights.can_edit();
+            return self.editable() && purview.rights.can_edit() && self.permissions().is_none_or(|p| p.modify());
         }
         self.editable() && self.permissions().is_none_or(|p| p.modify())
     }
@@ -678,7 +682,7 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return self.editable() && purview.rights.can_edit();
+            return self.editable() && purview.rights.can_edit() && self.permissions().is_none_or(|p| p.fill_forms());
         }
         self.editable() && self.permissions().is_none_or(|p| p.fill_forms())
     }
@@ -688,7 +692,7 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return self.editable() && purview.rights.can_comment();
+            return self.editable() && purview.rights.can_comment() && self.permissions().is_none_or(|p| p.annotate());
         }
         self.editable() && self.permissions().is_none_or(|p| p.annotate())
     }
@@ -699,7 +703,7 @@ impl Document {
         if let Some(purview) = self.purview()
             && purview.protected
         {
-            return self.editable() && purview.rights.can_change_security();
+            return self.editable() && purview.rights.can_change_security() && self.permissions().is_none_or(|p| unrestricted(&p));
         }
         self.editable() && self.permissions().is_none_or(|p| unrestricted(&p))
     }

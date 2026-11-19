@@ -41,6 +41,14 @@ pub enum OpenError {
     NeedsPassword,
     #[error("the password is incorrect")]
     WrongPassword,
+    #[error("sign in to Microsoft 365 to open this Microsoft Purview-protected PDF")]
+    NeedsPurviewSignIn,
+    #[error("the signed-in account does not have permission to open this Microsoft Purview-protected PDF")]
+    PurviewNoAccess,
+    #[error("Microsoft Purview support is not configured: {0}")]
+    PurviewUnavailable(String),
+    #[error("Microsoft Purview protection could not be read: {0}")]
+    Purview(String),
     #[error("{0}")]
     Unsupported(String),
 }

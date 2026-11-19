@@ -54,15 +54,8 @@ fn normalize_authority(value: &str, username: &str) -> Result<(String, String), 
         return Ok((format!("{base}/oauth2/v2.0/authorize"), format!("{base}/oauth2/v2.0/token")));
     }
     let lower = authority.to_ascii_lowercase();
-    let tenant = if lower == "common"
-        || lower == "organizations"
-        || lower.ends_with("/common")
-        || lower.ends_with("/organizations")
-    {
-        username
-            .rsplit_once('@')
-            .map(|(_, domain)| domain.to_ascii_lowercase())
-            .unwrap_or_else(|| "common".to_owned())
+    let tenant = if lower == "common" || lower == "organizations" || lower.ends_with("/common") || lower.ends_with("/organizations") {
+        username.rsplit_once('@').map(|(_, domain)| domain.to_ascii_lowercase()).unwrap_or_else(|| "common".to_owned())
     } else {
         authority.rsplit('/').next().unwrap_or("common").to_ascii_lowercase()
     };
@@ -151,7 +144,7 @@ pub fn acquire_token(
     let scopes = scopes(resource, challenge_scope);
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
     let port = listener.local_addr().map_err(|e| PurviewAuthError::Callback(e.to_string()))?.port();
-    let redirect = format!("http://localhost:{port}/auth/callback");
+    let redirect = format!("http://localhost:{port}");
 
     let client = BasicClient::new(ClientId::new(app_id))
         .set_auth_uri(AuthUrl::new(authorize_url).map_err(|e| PurviewAuthError::InvalidAuthority(e.to_string()))?)
@@ -197,16 +190,10 @@ mod tests {
 
     #[test]
     fn challenge_scopes_are_space_or_comma_separated() {
-        assert_eq!(
-            scopes("https://api.aadrm.com", "https://api.aadrm.com/user_impersonation"),
-            vec!["https://api.aadrm.com/user_impersonation"]
-        );
+        assert_eq!(scopes("https://api.aadrm.com", "https://api.aadrm.com/user_impersonation"), vec!["https://api.aadrm.com/user_impersonation"]);
         assert_eq!(
             scopes("https://api.aadrm.com", "https://api.aadrm.com/.default https://psor.api.microsoft.com/.default"),
-            vec![
-                "https://api.aadrm.com/.default",
-                "https://psor.api.microsoft.com/.default"
-            ]
+            vec!["https://api.aadrm.com/.default", "https://psor.api.microsoft.com/.default"]
         );
     }
 
@@ -214,21 +201,16 @@ mod tests {
     fn resource_scopes_fall_back_to_default_scope() {
         assert_eq!(scopes("", ""), vec!["https://api.aadrm.com/.default"]);
         assert_eq!(scopes("https://api.aadrm.com", ""), vec!["https://api.aadrm.com/.default"]);
-        assert_eq!(
-            scopes("https://psor.api.microsoft.com", ""),
-            vec!["https://psor.api.microsoft.com/.default"]
-        );
+        assert_eq!(scopes("https://psor.api.microsoft.com", ""), vec!["https://psor.api.microsoft.com/.default"]);
     }
 
     #[test]
     fn authority_uses_username_domain_for_organizations() {
-        let (authorize, token) =
-            normalize_authority("organizations", "person@example.com").expect("organizations authority should resolve");
+        let (authorize, token) = normalize_authority("organizations", "person@example.com").expect("organizations authority should resolve");
         assert_eq!(authorize, "https://login.microsoftonline.com/example.com/oauth2/v2.0/authorize");
         assert_eq!(token, "https://login.microsoftonline.com/example.com/oauth2/v2.0/token");
 
-        let (authorize, token) =
-            normalize_authority("common", "person@MacCyberDoc.onmicrosoft.com").expect("common authority should resolve");
+        let (authorize, token) = normalize_authority("common", "person@MacCyberDoc.onmicrosoft.com").expect("common authority should resolve");
         assert_eq!(authorize, "https://login.microsoftonline.com/maccyberdoc.onmicrosoft.com/oauth2/v2.0/authorize");
         assert_eq!(token, "https://login.microsoftonline.com/maccyberdoc.onmicrosoft.com/oauth2/v2.0/token");
     }

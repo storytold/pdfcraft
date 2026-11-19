@@ -14,6 +14,13 @@ impl Session {
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
+        if let Some(purview) = doc.purview.as_ref()
+            && purview.document.protected
+            && (doc.dirty || editor.cos.is_modified())
+            && !(purview.document.rights.can_save() || purview.document.rights.can_export())
+        {
+            return Err(EditError::NotPermitted("saving or exporting this Microsoft Purview-protected document"));
+        }
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
         if let Some(purview) = doc.purview.as_ref()
             && !editor.cos.is_modified()
@@ -57,6 +64,12 @@ impl Session {
         if doc.is_signed() {
             return Err(EditError::Signed);
         }
+        if let Some(purview) = doc.purview.as_ref()
+            && purview.document.protected
+            && !(purview.document.rights.can_save() || purview.document.rights.can_export())
+        {
+            return Err(EditError::NotPermitted("saving or exporting this Microsoft Purview-protected document"));
+        }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         let cos = writable(&editor.cos)?;
@@ -91,9 +104,11 @@ impl Session {
                 editor.saved = bytes.clone();
                 editor.saved_keys = editor.keys.clone();
                 editor.unsaved_file = false;
-                doc.bytes = editor.cos.bytes().clone();
+                doc.bytes = bytes.clone();
+                let mut purview = purview.clone();
+                purview.original = bytes.clone();
+                doc.purview = Some(purview);
                 renumbered = false;
-                let _ = purview;
             } else {
                 // An encrypted file needs the password it is protected with now (the owner
                 // password when known, so saving never downgrades this session's rights).

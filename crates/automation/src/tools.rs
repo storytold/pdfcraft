@@ -156,7 +156,10 @@ pub fn tools() -> Vec<ToolDef> {
             }), &["doc","label_id"])),
         t("purview_remove_label", "Remove a Microsoft Purview label", "Remove the sensitivity label from an open PDF when the user's rights allow it.")
             .destructive()
-            .with(schema(json!({"doc":doc()}), &["doc"])),
+            .with(schema(json!({
+                "doc": doc(),
+                "justification": {"type":"string","maxLength":4096,"description":"Required policy-override justification when the tenant requires it."}
+            }), &["doc"])),
         t("purview_remove_protection", "Remove Microsoft Purview protection", "Remove MIP/IRM protection from an open PDF when the user has Export or Owner rights.")
             .destructive()
             .with(schema(json!({"doc":doc()}), &["doc"])),

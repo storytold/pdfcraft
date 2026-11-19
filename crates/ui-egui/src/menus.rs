@@ -137,6 +137,7 @@ const PROTECT: &[&str] = &[
     "protect.unlock",
     SEP,
     "purview.sign_in",
+    "purview.sign_out",
     "purview.status",
     "purview.apply_label",
     "purview.remove_label",

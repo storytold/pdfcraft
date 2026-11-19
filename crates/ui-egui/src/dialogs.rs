@@ -491,6 +491,9 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             let (go, cancel) = purview::body(ui, app, &t);
             req.apply = go;
             req.close = req.apply || cancel;
+            if cancel {
+                app.purview_signin_prompt = None;
+            }
             return false;
         }
         Dialog::PrinterMarks => {
@@ -747,63 +750,95 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 });
                 ui.end_row();
             }
-            PropsTab::Security => match doc.security_summary() {
-                None => {
-                    row(ui, "Security method", tl!("No security").to_string());
-                    row(ui, "Restrictions", tl!("None — everything is allowed").to_string());
-                    if doc.allows_security_change() && ui.button(tl!("Protect using password…")).clicked() {
-                        req.link_command = Some("protect.password");
-                    }
-                }
-                Some(sec) => {
-                    row(ui, "Security method", tl!("Password security").to_string());
-                    row(ui, "Encryption", sec.method.clone());
+            PropsTab::Security => {
+                if let Some(purview) = doc.purview() {
                     row(
                         ui,
-                        "Opened with",
-                        if sec.pending {
-                            tl!("— (protection is applied when you save)").to_string()
-                        } else if sec.owner {
-                            tl!("Owner password (no restrictions apply)").to_string()
+                        "Microsoft Purview",
+                        if purview.protected {
+                            tl!("Protected").to_string()
+                        } else if purview.label.is_some() {
+                            tl!("Sensitivity label").to_string()
                         } else {
-                            tl!("User password").to_string()
+                            tl!("Detected").to_string()
                         },
                     );
-                    // A restricted document asks for its permissions password first.
-                    if doc.allows_security_change() || doc.can_unlock() {
-                        ui.horizontal(|ui| {
-                            if doc.can_unlock() && ui.button(tl!("Unlock…")).clicked() {
-                                req.link_command = Some("protect.unlock");
-                            }
-                            if ui.button(tl!("Change settings…")).clicked() {
-                                req.link_command = Some("protect.password");
-                            }
-                            if ui.button(tl!("Remove security")).clicked() {
-                                req.link_command = Some("protect.remove");
-                            }
-                        });
+                    if let Some(label) = &purview.label {
+                        row(
+                            ui,
+                            "Sensitivity label",
+                            format!(
+                                "{}{}",
+                                label.name,
+                                if label.description.is_empty() { String::new() } else { format!(" — {}", label.description) }
+                            ),
+                        );
                     }
-                    let p = sec.permissions;
-                    let yes = |b: bool| tl!(if b { "Allowed" } else { "Not allowed" }).to_string();
-                    row(
-                        ui,
-                        "Printing",
-                        if !p.print() {
-                            tl!("Not allowed").to_string()
-                        } else if p.print_high_quality() {
-                            tl!("High resolution").to_string()
-                        } else {
-                            tl!("Low resolution").to_string()
-                        },
-                    );
-                    row(ui, "Changing the document", yes(p.modify()));
-                    row(ui, "Document assembly", yes(p.assemble()));
-                    row(ui, "Content copying", yes(p.copy()));
-                    row(ui, "Content copying for accessibility", yes(p.extract_for_accessibility()));
-                    row(ui, "Commenting", yes(p.annotate()));
-                    row(ui, "Filling of form fields", yes(p.fill_forms()));
+                    let mip_yes = |b: bool| tl!(if b { "Allowed" } else { "Not allowed" }).to_string();
+                    row(ui, "MIP view", mip_yes(purview.rights.view));
+                    row(ui, "MIP edit/save", mip_yes(purview.rights.can_edit() || purview.rights.can_save()));
+                    row(ui, "MIP print", mip_yes(purview.rights.can_print()));
+                    row(ui, "MIP copy/extract", mip_yes(purview.rights.can_copy()));
+                    row(ui, "MIP export/change security", mip_yes(purview.rights.can_export() || purview.rights.can_change_security()));
                 }
-            },
+                match doc.security_summary() {
+                    None => {
+                        row(ui, "Security method", tl!("No security").to_string());
+                        row(ui, "Restrictions", tl!("None — everything is allowed").to_string());
+                        if doc.allows_security_change() && ui.button(tl!("Protect using password…")).clicked() {
+                            req.link_command = Some("protect.password");
+                        }
+                    }
+                    Some(sec) => {
+                        row(ui, "Security method", tl!("Password security").to_string());
+                        row(ui, "Encryption", sec.method.clone());
+                        row(
+                            ui,
+                            "Opened with",
+                            if sec.pending {
+                                tl!("— (protection is applied when you save)").to_string()
+                            } else if sec.owner {
+                                tl!("Owner password (no restrictions apply)").to_string()
+                            } else {
+                                tl!("User password").to_string()
+                            },
+                        );
+                        // A restricted document asks for its permissions password first.
+                        if doc.allows_security_change() || doc.can_unlock() {
+                            ui.horizontal(|ui| {
+                                if doc.can_unlock() && ui.button(tl!("Unlock…")).clicked() {
+                                    req.link_command = Some("protect.unlock");
+                                }
+                                if ui.button(tl!("Change settings…")).clicked() {
+                                    req.link_command = Some("protect.password");
+                                }
+                                if ui.button(tl!("Remove security")).clicked() {
+                                    req.link_command = Some("protect.remove");
+                                }
+                            });
+                        }
+                        let p = sec.permissions;
+                        let yes = |b: bool| tl!(if b { "Allowed" } else { "Not allowed" }).to_string();
+                        row(
+                            ui,
+                            "Printing",
+                            if !p.print() {
+                                tl!("Not allowed").to_string()
+                            } else if p.print_high_quality() {
+                                tl!("High resolution").to_string()
+                            } else {
+                                tl!("Low resolution").to_string()
+                            },
+                        );
+                        row(ui, "Changing the document", yes(p.modify()));
+                        row(ui, "Document assembly", yes(p.assemble()));
+                        row(ui, "Content copying", yes(p.copy()));
+                        row(ui, "Content copying for accessibility", yes(p.extract_for_accessibility()));
+                        row(ui, "Commenting", yes(p.annotate()));
+                        row(ui, "Filling of form fields", yes(p.fill_forms()));
+                    }
+                }
+            }
             PropsTab::Fonts => {
                 if i.fonts.is_empty() {
                     row(ui, "Fonts", tl!("No fonts are referenced by the pages.").to_string());

@@ -5252,6 +5252,7 @@ name = "pdfcraft-purview"
 version = "0.21.1"
 dependencies = [
  "oauth2",
+ "pdfcraft-platform",
  "reqwest 0.12.28",
  "thiserror 2.0.21",
  "url",

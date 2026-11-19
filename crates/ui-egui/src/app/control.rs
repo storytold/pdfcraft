@@ -105,6 +105,7 @@ impl PdfCraftApp {
                 self.dialog = match value {
                     "properties" => Some(Dialog::Properties(PropsTab::Description)),
                     "security" => Some(Dialog::Properties(PropsTab::Security)),
+                    "purview" => Some(Dialog::Purview),
                     "fonts" => Some(Dialog::Properties(PropsTab::Fonts)),
                     "custom" => Some(Dialog::Properties(PropsTab::Custom)),
                     "advanced" => Some(Dialog::Properties(PropsTab::Advanced)),

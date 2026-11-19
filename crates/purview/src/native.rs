@@ -8,23 +8,7 @@ use crate::auth;
 use crate::{PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
-
-fn temp_path(extension: &str) -> std::path::PathBuf {
-    let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("pdfcraft-purview-{}-{id}.{extension}", std::process::id()))
-}
-
-fn write_temp(bytes: &Arc<Vec<u8>>, extension: &str) -> Result<std::path::PathBuf, PurviewError> {
-    let path = temp_path(extension);
-    std::fs::write(&path, bytes.as_slice()).map_err(|e| PurviewError::Native(format!("couldn't stage the document for Microsoft Purview: {e}")))?;
-    Ok(path)
-}
-
-fn read_delete(path: &std::path::Path) -> Result<Arc<Vec<u8>>, PurviewError> {
-    let bytes = std::fs::read(path).map_err(|e| PurviewError::Native(format!("couldn't read the MIP SDK output: {e}")))?;
-    let _ = std::fs::remove_file(path);
-    Ok(Arc::new(bytes))
-}
+const MAX_TEMP_BYTES: u64 = 512 * 1024 * 1024;
 
 fn unescape(field: &str) -> String {
     let mut out = String::new();
@@ -52,6 +36,22 @@ fn escape_tsv(field: &str) -> String {
     field.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n")
 }
 
+pub(crate) fn looks_like_mip_protection(name: &str, bytes: &[u8]) -> bool {
+    let name = name.to_ascii_lowercase();
+    if name.ends_with(".pfile") || name.ends_with(".ppdf") || name.ends_with(".irm") {
+        return true;
+    }
+    [
+        b"/MicrosoftIRMServices".as_slice(),
+        b"MicrosoftIRMServices Protected PDF".as_slice(),
+        b"/EncryptedPayload".as_slice(),
+        b"/Subtype /MicrosoftIRMServices".as_slice(),
+        b"Encrypted using MicrosoftIRMServices".as_slice(),
+    ]
+    .iter()
+    .any(|marker| bytes.windows(marker.len()).any(|window| window.eq_ignore_ascii_case(marker)))
+}
+
 fn helper_path() -> Option<std::path::PathBuf> {
     if let Some(path) = std::env::var_os("PDFCRAFT_PURVIEW_HELPER") {
         return Some(std::path::PathBuf::from(path));
@@ -73,8 +73,10 @@ fn helper_path() -> Option<std::path::PathBuf> {
 pub struct NativePurviewProvider {
     app_id: String,
     username_hint: Mutex<Option<String>>,
+    auth_status: Mutex<PurviewStatus>,
     rms_access_token: Mutex<Option<String>>,
     sync_access_token: Mutex<Option<String>>,
+    staging_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl NativePurviewProvider {
@@ -84,13 +86,91 @@ impl NativePurviewProvider {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .or_else(|| std::env::var("PDFCRAFT_PURVIEW_APP_ID").ok())
+            .or_else(|| option_env!("PDFCRAFT_PURVIEW_APP_ID").map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))
             .unwrap_or_default();
         Self {
             app_id,
             username_hint: Mutex::new(None),
+            auth_status: Mutex::new(PurviewStatus::SignedOut),
             rms_access_token: Mutex::new(None),
             sync_access_token: Mutex::new(None),
+            staging_dir: Mutex::new(None),
         }
+    }
+
+    fn staging_dir(&self) -> Result<std::path::PathBuf, PurviewError> {
+        if let Ok(cache) = self.staging_dir.lock()
+            && let Some(path) = cache.clone()
+        {
+            return Ok(path);
+        }
+        let staging_id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("pdfcraft-purview-{}-{staging_id}", std::process::id()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::create_dir(&dir).map_err(|e| PurviewError::Native(format!("couldn't create private Microsoft Purview staging: {e}")))?;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| PurviewError::Native(format!("couldn't restrict Microsoft Purview staging: {e}")))?;
+        }
+        #[cfg(windows)]
+        {
+            let sid = pdfcraft_platform::owner_only::current_user_sid()
+                .map_err(|e| PurviewError::Native(format!("couldn't identify the private Microsoft Purview staging owner: {e}")))?;
+            pdfcraft_platform::owner_only::create_private_dir(&dir, &sid)
+                .map_err(|e| PurviewError::Native(format!("couldn't create private Microsoft Purview staging: {e}")))?;
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            std::fs::create_dir(&dir).map_err(|e| PurviewError::Native(format!("couldn't create Microsoft Purview staging: {e}")))?;
+        }
+        if let Ok(mut cache) = self.staging_dir.lock() {
+            *cache = Some(dir.clone());
+        }
+        Ok(dir)
+    }
+
+    fn temp_path(&self, extension: &str) -> Result<std::path::PathBuf, PurviewError> {
+        let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        Ok(self.staging_dir()?.join(format!("{}-{id}.{extension}", std::process::id())))
+    }
+
+    fn write_temp(&self, bytes: &Arc<Vec<u8>>, extension: &str) -> Result<std::path::PathBuf, PurviewError> {
+        let path = self.temp_path(extension)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(|e| PurviewError::Native(format!("couldn't stage the document for Microsoft Purview: {e}")))?;
+        file.write_all(bytes.as_slice()).map_err(|e| PurviewError::Native(format!("couldn't stage the document for Microsoft Purview: {e}")))?;
+        #[cfg(windows)]
+        {
+            let sid = pdfcraft_platform::owner_only::current_user_sid()
+                .map_err(|e| PurviewError::Native(format!("couldn't identify the staged Microsoft Purview file owner: {e}")))?;
+            pdfcraft_platform::owner_only::restrict_to_owner(&path, &sid)
+                .map_err(|e| PurviewError::Native(format!("couldn't restrict the staged Microsoft Purview file: {e}")))?;
+        }
+        Ok(path)
+    }
+
+    fn read_delete(&self, path: &std::path::Path) -> Result<Arc<Vec<u8>>, PurviewError> {
+        let metadata = std::fs::metadata(path).map_err(|e| PurviewError::Native(format!("couldn't read the MIP SDK output: {e}")))?;
+        if metadata.len() > MAX_TEMP_BYTES {
+            let _ = std::fs::remove_file(path);
+            return Err(PurviewError::Native("the MIP SDK output exceeded the private staging size limit".into()));
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = std::fs::remove_file(path);
+                return Err(PurviewError::Native(format!("couldn't read the MIP SDK output: {error}")));
+            }
+        };
+        let _ = std::fs::remove_file(path);
+        Ok(Arc::new(bytes))
     }
 
     fn helper(&self) -> Result<std::path::PathBuf, PurviewError> {
@@ -197,7 +277,7 @@ impl NativePurviewProvider {
             let default_label_id = if fields[24].is_empty() { None } else { Some(unescape(fields[24])) };
             let downgrade_justification_required = fields.get(25).is_some_and(|value| *value == "1");
             let output_path = fields.get(26).copied().unwrap_or("");
-            let working = read_delete(std::path::Path::new(output_path))?;
+            let working = self.read_delete(std::path::Path::new(output_path))?;
             return Ok(Some(PurviewOpen {
                 handle,
                 original: Arc::new(Vec::new()),
@@ -224,10 +304,12 @@ impl PurviewProvider for NativePurviewProvider {
             PurviewStatus::NotConfigured
         } else if !self.sdk_ready() || helper_path().is_none() {
             PurviewStatus::SdkUnavailable
-        } else if self.has_tokens() {
-            PurviewStatus::Ready
         } else {
-            PurviewStatus::SignedOut
+            self.auth_status
+                .lock()
+                .ok()
+                .map(|status| *status)
+                .unwrap_or_else(|| if self.has_tokens() { PurviewStatus::Ready } else { PurviewStatus::SignedOut })
         }
     }
 
@@ -237,6 +319,9 @@ impl PurviewProvider for NativePurviewProvider {
         }
         if !self.sdk_ready() || helper_path().is_none() {
             return Err(PurviewError::SdkUnavailable);
+        }
+        if let Ok(mut status) = self.auth_status.lock() {
+            *status = PurviewStatus::SigningIn;
         }
         if let Ok(mut username) = self.username_hint.lock() {
             *username = username_hint.map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned);
@@ -250,7 +335,12 @@ impl PurviewProvider for NativePurviewProvider {
             "https://api.aadrm.com/.default",
             "",
         )
-        .map_err(|error| PurviewError::Native(error.to_string()))?;
+        .map_err(|error| {
+            if let Ok(mut status) = self.auth_status.lock() {
+                *status = PurviewStatus::SignedOut;
+            }
+            PurviewError::Native(error.to_string())
+        })?;
         let sync_token = auth::acquire_token(
             &self.app_id,
             &username,
@@ -259,28 +349,47 @@ impl PurviewProvider for NativePurviewProvider {
             "https://psor.api.microsoft.com/.default",
             "",
         )
-        .map_err(|error| PurviewError::Native(error.to_string()))?;
+        .map_err(|error| {
+            if let Ok(mut status) = self.auth_status.lock() {
+                *status = PurviewStatus::SignedOut;
+            }
+            PurviewError::Native(error.to_string())
+        })?;
         if let Ok(mut cached) = self.rms_access_token.lock() {
             *cached = Some(rms_token);
         }
         if let Ok(mut cached) = self.sync_access_token.lock() {
             *cached = Some(sync_token);
         }
+        if let Ok(mut status) = self.auth_status.lock() {
+            *status = PurviewStatus::Ready;
+        }
         Ok(())
     }
 
     fn sign_out(&self) -> Result<(), PurviewError> {
+        if let Ok(mut status) = self.auth_status.lock() {
+            *status = PurviewStatus::SignedOut;
+        }
         if let Ok(mut token) = self.rms_access_token.lock() {
             *token = None;
         }
         if let Ok(mut token) = self.sync_access_token.lock() {
             *token = None;
         }
+        if let Ok(mut staging) = self.staging_dir.lock()
+            && let Some(path) = staging.take()
+        {
+            let _ = std::fs::remove_dir_all(path);
+        }
         Ok(())
     }
 
     fn inspect(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<PurviewOpen>, PurviewError> {
         if !self.sdk_ready() {
+            if looks_like_mip_protection(name, bytes.as_slice()) {
+                return Err(PurviewError::SdkUnavailable);
+            }
             return Ok(None);
         }
         if helper_path().is_none() {
@@ -290,21 +399,23 @@ impl PurviewProvider for NativePurviewProvider {
             return Ok(None);
         }
         let extension = std::path::Path::new(name).extension().and_then(|ext| ext.to_str()).unwrap_or("pdf");
-        let input = write_temp(bytes, extension)?;
-        let output = temp_path(extension);
-        let audit = temp_path("audit");
+        let input = self.write_temp(bytes, extension)?;
+        let output = self.temp_path(extension)?;
+        let audit = self.temp_path("audit")?;
+        let cache = self.staging_dir()?;
         let rms_token = self.rms_token().unwrap_or_default();
         let sync_token = self.sync_token().unwrap_or_default();
         let username = self.username();
         let request = format!(
-            "open\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "open\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
-            escape_tsv(&audit.to_string_lossy())
+            escape_tsv(&audit.to_string_lossy()),
+            escape_tsv(&cache.to_string_lossy())
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&input);
@@ -327,12 +438,14 @@ impl PurviewProvider for NativePurviewProvider {
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
+        let cache = self.staging_dir()?;
         let request = format!(
-            "labels\t{}\t{}\t{}\t{}",
+            "labels\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
-            escape_tsv(&sync_token)
+            escape_tsv(&sync_token),
+            escape_tsv(&cache.to_string_lossy())
         );
         let line = self.run_helper(&request)?;
         if line == "SIGNIN" {
@@ -375,10 +488,11 @@ impl PurviewProvider for NativePurviewProvider {
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
-        let input = write_temp(working_bytes, "pdf")?;
-        let output = temp_path("pdf");
+        let input = self.write_temp(working_bytes, "pdf")?;
+        let output = self.temp_path("pdf")?;
+        let cache = self.staging_dir()?;
         let request = format!(
-            "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
@@ -386,7 +500,8 @@ impl PurviewProvider for NativePurviewProvider {
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
             escape_tsv(label_id),
-            escape_tsv(justification.unwrap_or(""))
+            escape_tsv(justification.unwrap_or("")),
+            escape_tsv(&cache.to_string_lossy())
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&input);
@@ -404,21 +519,30 @@ impl PurviewProvider for NativePurviewProvider {
         Ok(opened)
     }
 
-    fn remove_label(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError> {
+    fn remove_label(
+        &self,
+        handle: u64,
+        original: &Arc<Vec<u8>>,
+        working_bytes: &Arc<Vec<u8>>,
+        justification: Option<&str>,
+    ) -> Result<PurviewOpen, PurviewError> {
         let _ = (handle, original);
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
-        let input = write_temp(working_bytes, "pdf")?;
-        let output = temp_path("pdf");
+        let input = self.write_temp(working_bytes, "pdf")?;
+        let output = self.temp_path("pdf")?;
+        let cache = self.staging_dir()?;
         let request = format!(
-            "remove-label\t{}\t{}\t{}\t{}\t{}\t{}",
+            "remove-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
-            escape_tsv(&output.to_string_lossy())
+            escape_tsv(&output.to_string_lossy()),
+            escape_tsv(justification.unwrap_or("")),
+            escape_tsv(&cache.to_string_lossy())
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&input);
@@ -437,16 +561,18 @@ impl PurviewProvider for NativePurviewProvider {
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
-        let input = write_temp(working_bytes, "pdf")?;
-        let output = temp_path("pdf");
+        let input = self.write_temp(working_bytes, "pdf")?;
+        let output = self.temp_path("pdf")?;
+        let cache = self.staging_dir()?;
         let request = format!(
-            "remove-protection\t{}\t{}\t{}\t{}\t{}\t{}",
+            "remove-protection\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
-            escape_tsv(&output.to_string_lossy())
+            escape_tsv(&output.to_string_lossy()),
+            escape_tsv(&cache.to_string_lossy())
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&input);
@@ -468,24 +594,26 @@ impl PurviewProvider for NativePurviewProvider {
         let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
         let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
-        let original_path = write_temp(original, "pdf")?;
-        let working_path = write_temp(working_bytes, "pdf")?;
-        let output = temp_path("pdf");
+        let original_path = self.write_temp(original, "pdf")?;
+        let working_path = self.write_temp(working_bytes, "pdf")?;
+        let output = self.temp_path("pdf")?;
+        let cache = self.staging_dir()?;
         let request = format!(
-            "republish\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "republish\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
             escape_tsv(&rms_token),
             escape_tsv(&sync_token),
             escape_tsv(&original_path.to_string_lossy()),
             escape_tsv(&working_path.to_string_lossy()),
-            escape_tsv(&output.to_string_lossy())
+            escape_tsv(&output.to_string_lossy()),
+            escape_tsv(&cache.to_string_lossy())
         );
         let line = self.run_helper(&request)?;
         let _ = std::fs::remove_file(&original_path);
         let _ = std::fs::remove_file(&working_path);
         if line == "OK" {
-            read_delete(&output)
+            self.read_delete(&output)
         } else {
             let _ = std::fs::remove_file(&output);
             Err(PurviewError::Native(line))
@@ -493,4 +621,14 @@ impl PurviewProvider for NativePurviewProvider {
     }
 
     fn close(&self, _handle: u64) {}
+}
+
+impl Drop for NativePurviewProvider {
+    fn drop(&mut self) {
+        if let Ok(mut staging) = self.staging_dir.lock()
+            && let Some(path) = staging.take()
+        {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
 }

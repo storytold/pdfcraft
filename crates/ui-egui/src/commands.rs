@@ -229,9 +229,19 @@ impl PdfCraftApp {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
-            "purview.sign_in" => match self.session.purview_sign_in(None) {
-                Ok(()) => self.notify_tr("Signed in to Microsoft Purview"),
-                Err(error) => self.notify_fmt("Microsoft Purview sign-in failed: {e}", &[("e", &error.to_string())]),
+            "purview.sign_in" => {
+                let hint = if self.purview_username_hint.trim().is_empty() { None } else { Some(self.purview_username_hint.as_str()) };
+                match self.session.purview_sign_in(hint) {
+                    Ok(()) => {
+                        self.notify_tr("Signed in to Microsoft Purview");
+                        self.retry_purview_signin();
+                    }
+                    Err(error) => self.notify_fmt("Microsoft Purview sign-in failed: {e}", &[("e", &error.to_string())]),
+                }
+            }
+            "purview.sign_out" => match self.session.purview_sign_out() {
+                Ok(()) => self.notify_tr("Signed out of Microsoft Purview"),
+                Err(error) => self.notify_fmt("Microsoft Purview sign-out failed: {e}", &[("e", &error.to_string())]),
             },
             "purview.status" => {
                 let status = format!("{:?}", self.session.purview_status());
@@ -258,10 +268,13 @@ impl PdfCraftApp {
                 Err(error) => self.notify_fmt("Couldn't load Microsoft Purview labels: {e}", &[("e", &error.to_string())]),
             },
             "purview.remove_label" => match self.active_ids().map(|(_, id)| id) {
-                Some(id) => match self.session.purview_remove_label(id) {
-                    Ok(()) => self.notify_tr("Microsoft Purview label removed"),
-                    Err(error) => self.notify_fmt("Couldn't remove the Microsoft Purview label: {e}", &[("e", &error.to_string())]),
-                },
+                Some(id) => {
+                    let justification = if self.purview_justification.trim().is_empty() { None } else { Some(self.purview_justification.as_str()) };
+                    match self.session.purview_remove_label(id, justification) {
+                        Ok(()) => self.notify_tr("Microsoft Purview label removed"),
+                        Err(error) => self.notify_fmt("Couldn't remove the Microsoft Purview label: {e}", &[("e", &error.to_string())]),
+                    }
+                }
                 None => self.notify_tr("Open a PDF first"),
             },
             "purview.remove_protection" => match self.active_ids().map(|(_, id)| id) {

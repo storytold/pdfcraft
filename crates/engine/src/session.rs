@@ -51,8 +51,13 @@ impl Session {
 
     pub fn purview_apply_label(&mut self, id: DocId, label_id: &str, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
-        let state =
-            document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
+        let provider = self.purview.clone().ok_or(EditError::Protection("Microsoft Purview support is not configured".into()))?;
+        let state = document.purview.clone().unwrap_or(crate::PurviewDocumentState {
+            handle: 0,
+            original: document.bytes.clone(),
+            document: crate::PurviewDocument::default(),
+            provider: provider.clone(),
+        });
         let working = document.bytes.clone();
         let opened = state
             .provider
@@ -74,13 +79,15 @@ impl Session {
         Self::refresh(document).inspect_err(|_| Self::show_released(document))
     }
 
-    pub fn purview_remove_label(&mut self, id: DocId) -> Result<(), EditError> {
+    pub fn purview_remove_label(&mut self, id: DocId, justification: Option<&str>) -> Result<(), EditError> {
         let document = self.get(id).ok_or(EditError::NoDocument)?;
         let state =
             document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
         let working = document.bytes.clone();
-        let opened =
-            state.provider.remove_label(state.handle, &state.original, &working).map_err(|error| EditError::Protection(error.to_string()))?;
+        let opened = state
+            .provider
+            .remove_label(state.handle, &state.original, &working, justification)
+            .map_err(|error| EditError::Protection(error.to_string()))?;
         let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
         let document = self.doc_mut(id)?;
         let provider = state.provider.clone();

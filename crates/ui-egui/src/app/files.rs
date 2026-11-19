@@ -160,7 +160,7 @@ impl PdfCraftApp {
     /// is open, so the prompt's retry fits even before the worker has taken any of the others.
     #[cfg(not(target_arch = "wasm32"))]
     fn open_slots(&self) -> usize {
-        open_worker::MAX_QUEUED_OPENS - usize::from(self.password_prompt.is_some())
+        open_worker::MAX_QUEUED_OPENS - usize::from(self.password_prompt.is_some() || self.purview_signin_prompt.is_some())
     }
 
     /// Hand waiting files to the worker, oldest first, while its queue has room. Every queued
@@ -306,6 +306,40 @@ impl PdfCraftApp {
                         display_override: pending.display_override,
                     });
                 }
+                Err(pdfcraft_render::OpenError::NeedsPurviewSignIn) => {
+                    self.purview_signin_prompt = Some(PurviewSignInPrompt {
+                        name: pending.name,
+                        path: pending.path,
+                        bytes,
+                        error: None,
+                        stamp: pending.stamp,
+                        activate: pending.activate,
+                        recovered: pending.recovered,
+                        then: pending.then,
+                        after_open: pending.after_open,
+                        display_override: pending.display_override,
+                    });
+                    self.dialog = Some(Dialog::Purview);
+                }
+                Err(
+                    error @ (pdfcraft_render::OpenError::PurviewNoAccess
+                    | pdfcraft_render::OpenError::PurviewUnavailable(_)
+                    | pdfcraft_render::OpenError::Purview(_)),
+                ) => {
+                    self.purview_signin_prompt = Some(PurviewSignInPrompt {
+                        name: pending.name,
+                        path: pending.path,
+                        bytes,
+                        error: Some(error.to_string()),
+                        stamp: pending.stamp,
+                        activate: pending.activate,
+                        recovered: pending.recovered,
+                        then: pending.then,
+                        after_open: pending.after_open,
+                        display_override: pending.display_override,
+                    });
+                    self.dialog = Some(Dialog::Purview);
+                }
                 Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error.to_string())]),
             },
         }
@@ -345,6 +379,44 @@ impl PdfCraftApp {
                     after_open: None,
                     display_override: None,
                 });
+                return Ok(());
+            }
+            Err(OpenError::NeedsPurviewSignIn) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let stamp = path.as_deref().and_then(file_watch::Stamp::at);
+                self.purview_signin_prompt = Some(PurviewSignInPrompt {
+                    name: name.to_string(),
+                    path,
+                    bytes,
+                    error: None,
+                    #[cfg(not(target_arch = "wasm32"))]
+                    stamp,
+                    activate,
+                    recovered: None,
+                    then: None,
+                    after_open: None,
+                    display_override: None,
+                });
+                self.dialog = Some(Dialog::Purview);
+                return Ok(());
+            }
+            Err(error @ (OpenError::PurviewNoAccess | OpenError::PurviewUnavailable(_) | OpenError::Purview(_))) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let stamp = path.as_deref().and_then(file_watch::Stamp::at);
+                self.purview_signin_prompt = Some(PurviewSignInPrompt {
+                    name: name.to_string(),
+                    path,
+                    bytes,
+                    error: Some(error.to_string()),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    stamp,
+                    activate,
+                    recovered: None,
+                    then: None,
+                    after_open: None,
+                    display_override: None,
+                });
+                self.dialog = Some(Dialog::Purview);
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
@@ -761,6 +833,52 @@ impl PdfCraftApp {
         self.settle_launch_layout();
     }
 
+    /// Retry a document that was held at a Microsoft Purview sign-in boundary. The file bytes,
+    /// tab activation, remote destination and tool continuation are preserved.
+    pub fn retry_purview_signin(&mut self) {
+        let Some(p) = self.purview_signin_prompt.take() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.ctx.is_some() && !self.run_inline {
+            let result = self.schedule_open_priority(OpenRequest {
+                name: p.name.clone(),
+                path: p.path.clone(),
+                stamp: p.stamp,
+                input: open_worker::Input::Bytes(p.bytes),
+                password: None,
+                activate: p.activate,
+                after_open: p.after_open.clone(),
+                recovered: p.recovered,
+                then: p.then,
+            });
+            if let Ok(token) = &result
+                && let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == *token)
+            {
+                pending.display_override = p.display_override;
+            }
+            if let Err(error) = result {
+                self.notify_fmt("Couldn't retry {name}: {e}", &[("name", &p.name), ("e", &error)]);
+            }
+            return;
+        }
+        let after_open = p.after_open.clone();
+        match self.open_bytes_with_focus(&p.name, p.path.clone(), p.bytes.to_vec(), p.activate) {
+            Ok(()) => {
+                if let Some(destination) = after_open {
+                    self.apply_remote_destination(destination);
+                }
+                if let Some((layout, continuous)) = p.display_override
+                    && let Some(view) = self.views.last_mut()
+                {
+                    view.set_display(layout, continuous);
+                }
+                if let Some(command) = p.then {
+                    self.execute(command);
+                }
+            }
+            Err(error) => self.notify_fmt("Couldn't retry {name}: {e}", &[("name", &p.name), ("e", &error)]),
+        }
+    }
+
     /// Ask for the active document's permissions password, then run `then` (if any).
     pub(crate) fn request_unlock(&mut self, then: Option<&'static str>) {
         let Some(doc) = self.active_ids().and_then(|(_, id)| self.session.get(id)) else { return };
@@ -886,6 +1004,18 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Pending;
         }
+        if let Some(prompt) = self.purview_signin_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            if display_override.is_some() {
+                prompt.display_override = display_override;
+            }
+            if after_open.is_some() {
+                prompt.after_open = after_open;
+            }
+            if then.is_some() {
+                prompt.then = then;
+            }
+            return OpenOutcome::Pending;
+        }
         if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
             if display_override.is_some() {
                 deferred.display_override = display_override;
@@ -906,7 +1036,9 @@ impl PdfCraftApp {
         // the bounded worker and commit on the UI thread.
         // Keep later files behind an open password prompt: it belongs to an earlier file, and an
         // inline open would clear it. Keep flagged launch files behind any dialog or picker too.
-        let held = self.password_prompt.is_some() || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
+        let held = self.password_prompt.is_some()
+            || self.purview_signin_prompt.is_some()
+            || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
         if (self.ctx.is_none() || self.run_inline) && !held {
             match std::fs::read(path) {
                 Ok(bytes) => {
@@ -920,6 +1052,12 @@ impl PdfCraftApp {
                         p.path.as_deref() == Some(path) && previous_prompt.as_ref().is_none_or(|bytes| !std::sync::Arc::ptr_eq(bytes, &p.bytes))
                     }) {
                         // Encrypted: the destination, the layout and the tool wait for the password.
+                        prompt.then = then;
+                        prompt.display_override = display_override;
+                        prompt.after_open = after_open;
+                    } else if let Some(prompt) = self.purview_signin_prompt.as_mut().filter(|p| p.path.as_deref() == Some(path)) {
+                        // Purview: the document waits for Microsoft Entra sign-in and is retried by
+                        // the dialog, preserving its destination/tool context.
                         prompt.then = then;
                         prompt.display_override = display_override;
                         prompt.after_open = after_open;

@@ -170,8 +170,8 @@ use state::CopyPage;
 use state::OpenRequest;
 pub use state::{
     CommentClip, CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft,
-    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel,
-    UnlockPrompt,
+    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, PurviewSignInPrompt, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile,
+    RightPanel, UnlockPrompt,
 };
 use state::{DocumentCopyJob, GridFile};
 pub use tools::bulk_fields;
@@ -554,6 +554,7 @@ pub struct PdfCraftApp {
     /// Whether the window currently has the app's header bar (`None` until the first frame).
     app_frame_shown: Option<bool>,
     pub password_prompt: Option<PasswordPrompt>,
+    pub purview_signin_prompt: Option<PurviewSignInPrompt>,
     /// Copy of a whole document's text (#2639) whose pages are being read off the UI thread.
     document_copy: Option<DocumentCopy>,
     pub unlock_prompt: Option<UnlockPrompt>,
@@ -813,6 +814,8 @@ pub struct PdfCraftApp {
     pub purview_labels: Vec<pdfcraft_purview::PurviewLabel>,
     pub purview_label_id: String,
     pub purview_justification: String,
+    /// Optional account hint used for the Microsoft Entra sign-in flow.
+    pub purview_username_hint: String,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.

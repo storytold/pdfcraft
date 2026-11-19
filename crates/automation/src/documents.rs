@@ -160,7 +160,8 @@ impl Automation {
     pub(crate) fn purview_remove_label(&mut self, a: &Args) -> Result<Value> {
         let id = a.int("doc")?;
         let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
-        self.session.purview_remove_label(id).map_err(|error| failed(error.to_string()))?;
+        let justification = a.opt_str("justification")?;
+        self.session.purview_remove_label(id, justification).map_err(|error| failed(error.to_string()))?;
         Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
     }
 

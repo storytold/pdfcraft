@@ -53,6 +53,10 @@ impl PurviewRights {
         self.owner
     }
 
+    pub fn can_save(&self) -> bool {
+        self.owner || self.save || self.edit || self.document_edit
+    }
+
     pub fn can_copy(&self) -> bool {
         self.owner || self.extract
     }
@@ -138,7 +142,13 @@ pub trait PurviewProvider: Send + Sync {
         label_id: &str,
         justification: Option<&str>,
     ) -> Result<PurviewOpen, PurviewError>;
-    fn remove_label(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError>;
+    fn remove_label(
+        &self,
+        handle: u64,
+        original: &Arc<Vec<u8>>,
+        working_bytes: &Arc<Vec<u8>>,
+        justification: Option<&str>,
+    ) -> Result<PurviewOpen, PurviewError>;
     fn remove_protection(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError>;
     fn republish(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, PurviewError>;
     fn close(&self, handle: u64);
@@ -179,7 +189,13 @@ impl PurviewProvider for UnavailablePurviewProvider {
         Err(PurviewError::SdkUnavailable)
     }
 
-    fn remove_label(&self, _handle: u64, _original: &Arc<Vec<u8>>, _working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError> {
+    fn remove_label(
+        &self,
+        _handle: u64,
+        _original: &Arc<Vec<u8>>,
+        _working_bytes: &Arc<Vec<u8>>,
+        _justification: Option<&str>,
+    ) -> Result<PurviewOpen, PurviewError> {
         Err(PurviewError::SdkUnavailable)
     }
 
@@ -209,11 +225,21 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_build_recognizes_mip_payloads_without_silently_opening_them_plain() {
+        let provider = NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246"));
+        let pfile = Arc::new(b"%PDF-1.7\n/EncryptedPayload\n/Subtype /MicrosoftIRMServices\nMicrosoftIRMServices Protected PDF".to_vec());
+        assert!(matches!(provider.inspect("protected.pdf", &pfile), Err(PurviewError::SdkUnavailable)));
+        assert!(matches!(provider.inspect("protected.pfile", &Arc::new(b"pkg".to_vec())), Err(PurviewError::SdkUnavailable)));
+        assert_eq!(provider.inspect("plain.pdf", &Arc::new(b"%PDF-1.7\nplain".to_vec())).unwrap(), None);
+    }
+
+    #[test]
     fn rights_map_to_pdf_operations_conservatively() {
         let view_only = PurviewRights { view: true, ..PurviewRights::default() };
         assert!(!view_only.can_copy());
         assert!(!view_only.can_print());
         assert!(!view_only.can_edit());
+        assert!(!view_only.can_save());
 
         let extract = PurviewRights { owner: false, view: true, extract: true, export: true, ..PurviewRights::default() };
         assert!(extract.can_copy());
@@ -223,8 +249,13 @@ mod tests {
         assert!(owner.can_copy());
         assert!(owner.can_print());
         assert!(owner.can_edit());
+        assert!(owner.can_save());
         assert!(owner.can_export());
         assert!(owner.can_change_security());
+
+        let save_only = PurviewRights { save: true, view: true, ..PurviewRights::default() };
+        assert!(save_only.can_save());
+        assert!(!save_only.can_edit());
     }
 
     #[test]

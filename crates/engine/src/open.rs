@@ -133,15 +133,16 @@ impl Session {
                 }
                 Ok(None) => (bytes, None),
                 Err(PurviewError::NoAccess) => {
-                    return Err(OpenError::Invalid(
-                        "This PDF is protected by Microsoft Purview, and the signed-in account does not have permission to open it.".into(),
-                    ));
+                    return Err(OpenError::PurviewNoAccess);
                 }
                 Err(PurviewError::SignInRequired) => {
-                    return Err(OpenError::Invalid("Sign in to Microsoft 365 to open this Microsoft Purview-protected PDF.".into()));
+                    return Err(OpenError::NeedsPurviewSignIn);
                 }
-                Err(PurviewError::NotConfigured | PurviewError::SdkUnavailable) => (bytes, None),
-                Err(error) => return Err(OpenError::Invalid(format!("Microsoft Purview protection could not be read: {error}"))),
+                Err(PurviewError::NotConfigured) => return Err(OpenError::PurviewUnavailable("Microsoft Purview support is not configured".into())),
+                Err(PurviewError::SdkUnavailable) => {
+                    return Err(OpenError::PurviewUnavailable("the Microsoft Purview MIP SDK is unavailable".into()));
+                }
+                Err(error) => return Err(OpenError::Purview(error.to_string())),
             },
             None => (bytes, None),
         };
