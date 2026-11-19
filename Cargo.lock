@@ -1453,7 +1453,7 @@ dependencies = [
  "craft-dialogs",
  "craft-docpath",
  "craft-draw",
- "craft-font-catalog",
+ "craft-font-catalog 0.1.0",
  "craft-font-manager",
  "craft-host",
  "craft-i18n",
@@ -1475,6 +1475,7 @@ dependencies = [
  "craft-update",
  "craft-web-host",
  "craft-window",
+ "craft-zip",
  "egui",
  "toml",
 ]
@@ -1657,11 +1658,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-font-catalog"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=527c2750e37fb8bf576dc9a9e07ffc60b9d63717#527c2750e37fb8bf576dc9a9e07ffc60b9d63717"
+dependencies = [
+ "harfrust 0.13.3",
+ "kurbo 0.13.1",
+ "skrifa 0.47.0",
+ "thiserror 2.0.21",
+ "unicode-bidi",
+ "unicode-segmentation",
+ "windows-registry",
+]
+
+[[package]]
 name = "craft-font-manager"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
- "craft-font-catalog",
+ "craft-font-catalog 0.1.0",
  "craft-font-store",
  "craft-host",
  "craft-i18n",
@@ -1679,7 +1694,7 @@ version = "0.1.0"
 dependencies = [
  "cap-primitives",
  "craft-atomic",
- "craft-font-catalog",
+ "craft-font-catalog 0.1.0",
  "flate2",
  "log",
  "ruzstd",
@@ -1943,6 +1958,7 @@ dependencies = [
  "craft-atomic",
  "craft-docpath",
  "craft-host",
+ "craft-i18n",
  "craft-theme",
  "futures-lite",
  "js-sys",
@@ -2089,6 +2105,8 @@ dependencies = [
  "egui",
  "hypher",
  "miniz_oxide 0.8.9",
+ "regex",
+ "regex-syntax",
  "serde",
  "serde_json",
  "unicode-bidi",
@@ -2187,7 +2205,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "craft-behavior",
- "craft-font-catalog",
+ "craft-font-catalog 0.1.0",
  "craft-fonts-build",
  "craft-host",
  "craft-i18n",
@@ -2275,6 +2293,7 @@ dependencies = [
  "craft-ui-macros",
  "craft-ui-panels",
  "craft-window",
+ "eframe",
  "egui",
  "serde",
  "web-time",
@@ -3456,15 +3475,6 @@ checksum = "b8eb065f3251655b3c90e22e5e363f310fc5332fb3402e37bbc94752283248f6"
 dependencies = [
  "bytemuck",
  "serde",
-]
-
-[[package]]
-name = "fontconfig-parser"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
-dependencies = [
- "roxmltree 0.20.0",
 ]
 
 [[package]]
@@ -6016,7 +6026,6 @@ dependencies = [
 name = "pdfcraft"
 version = "0.21.1"
 dependencies = [
- "chrono",
  "craft",
  "craft-update",
  "eframe",
@@ -6033,7 +6042,6 @@ dependencies = [
  "uds_windows",
  "wayland-client",
  "wayland-protocols",
- "windows",
  "winit",
  "winresource",
  "winsafe",
@@ -6078,6 +6086,7 @@ name = "pdfcraft-automation"
 version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
+ "craft",
  "craft-cms",
  "craft-image-codecs",
  "craft-prc",
@@ -6102,6 +6111,7 @@ name = "pdfcraft-cli"
 version = "0.21.1"
 dependencies = [
  "base64 0.23.1",
+ "craft",
  "craft-image-codecs",
  "pdfcraft-audit",
  "pdfcraft-automation",
@@ -6110,7 +6120,6 @@ dependencies = [
  "pdfcraft-platform",
  "pdfcraft-preflight",
  "pdfcraft-render",
- "rustix 1.1.6",
  "serde_json",
  "winresource",
 ]
@@ -6195,6 +6204,7 @@ dependencies = [
  "chrono",
  "craft-cms",
  "craft-docpath",
+ "craft-font-catalog 0.1.0 (git+https://github.com/storytold/craft-libs?rev=527c2750e37fb8bf576dc9a9e07ffc60b9d63717)",
  "craft-image-codecs",
  "craft-tiff",
  "getrandom 0.4.3",
@@ -6525,14 +6535,12 @@ dependencies = [
  "craft-menu",
  "craft-quit",
  "craft-ui",
- "craft-update",
  "edit-session",
  "eframe",
  "egui",
  "egui_extras",
  "egui_kittest",
  "flate2",
- "fontconfig-parser",
  "getrandom 0.4.3",
  "image",
  "js-sys",
@@ -6550,7 +6558,6 @@ dependencies = [
  "pdfcraft-render",
  "pdfcraft-xfa",
  "plist",
- "pollster 1.0.1",
  "proptest",
  "rfd",
  "rustix 1.1.6",
