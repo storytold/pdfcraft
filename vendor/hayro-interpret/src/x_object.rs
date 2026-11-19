@@ -22,6 +22,7 @@ use hayro_syntax::page::Resources;
 use kurbo::{Affine, Rect, Shape};
 use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::iter;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -1123,7 +1124,37 @@ fn decode_raster(
             .color_space
             .inverted_default_decode_arr(ctx.bits_per_component as f32);
 
+    // PdfCraft patch (73): whether the mask, decoded below or kept failed by the decoded-image
+    // cache, was left out for the page's allowance or a decoder's limit: only those report
+    // `ContentTruncated` there (`decode_context`).
+    let left_out = Arc::new(AtomicBool::new(false));
+    let sink: WarningSinkFn = {
+        let (left_out, sink) = (left_out.clone(), obj.warning_sink.clone());
+        Arc::new(move |warning| {
+            if matches!(warning, InterpreterWarning::ContentTruncated) {
+                left_out.store(true, Ordering::Relaxed);
+            }
+            sink(warning);
+        })
+    };
+    let obj = &obj.reporting_to(&sink);
+
+    // PdfCraft patch (107): a `/Matte` is removed from the image's own components, before they
+    // are converted, when the conversion isn't the identity: "If a colour conversion is
+    // required, inversion of the preblending shall precede the colour conversion" (ISO
+    // 32000-1 §11.6.5.3). A nonlinear one (a CalGray gamma, an ICC profile) doesn't commute
+    // with it, so removing it from the converted RGB changed the colours (#7251). DeviceGray
+    // and DeviceRGB convert to themselves, and an Indexed image's samples are not colours, so
+    // those keep the removal from the RGB below.
+    let matte_in_source = !ctx.color_space.is_device_gray()
+        && !ctx.color_space.is_device_rgb()
+        && !ctx.color_space.is_indexed()
+        && matte_of(obj, &ctx.color_space).is_some();
+    // The mask, once the matte was removed from the components with it.
+    let mut matte_alpha = None;
+
     let image_data = if ctx.bits_per_component == 8
+        && !matte_in_source
         && ctx.color_space.supports_u8()
         && obj.transfer_function.is_none()
         && (is_default_decode || is_inverted_default_decode)
@@ -1178,16 +1209,19 @@ fn decode_raster(
         )?;
 
         // PdfCraft patch (28): an image with few possible pixel values converts each of them once.
-        let mut rgb_data = if let Some(rgb) = rgb_via_lookup(
-            &components,
-            ctx.width,
-            height,
-            ctx.scale_factors,
-            &ctx.color_space,
-            ctx.bits_per_component,
-            &ctx.decode_arr,
-            obj.interpolate,
-        ) {
+        // Patch (107): not one whose matte is removed per pixel first.
+        let mut rgb_data = if !matte_in_source
+            && let Some(rgb) = rgb_via_lookup(
+                &components,
+                ctx.width,
+                height,
+                ctx.scale_factors,
+                &ctx.color_space,
+                ctx.bits_per_component,
+                &ctx.decode_arr,
+                obj.interpolate,
+            )
+        {
             height = rgb.height;
             Some(rgb)
         } else {
@@ -1198,16 +1232,56 @@ fn decode_raster(
                 &ctx.decode_arr,
             )?;
 
+            // PdfCraft patch (107): bring decoded components into the units `convert_f32`
+            // takes and get each component's range there: an ICC `/Lab` profile's `/Decode`
+            // array or `/Range` can use unit `[0, 1]` encoding while `ICCProfile::convert_f32`
+            // takes physical L\*a\*b\*.
+            let ranges = ctx.color_space.to_converter_units(
+                &mut f32_data,
+                ctx.bits_per_component as f32,
+                &ctx.decode_arr,
+            );
+
             fix_image_length(&mut f32_data, ctx.width, &mut height, 0.0, &ctx.color_space)?;
 
-            get_rgb_data(
-                &f32_data,
-                ctx.width,
-                height,
-                ctx.scale_factors,
-                &ctx.color_space,
-                obj.interpolate,
-            )
+            // PdfCraft patch (107): convert `/Matte` into the same converter units before
+            // removing it from the decoded components.
+            if matte_in_source
+                && let Some((alpha, mut matte)) = resolve_matte(obj, &ctx.color_space, target_dimension)
+                && alpha.width == ctx.width
+                && alpha.height == height
+            {
+                let _ = ctx.color_space.to_converter_units(
+                    &mut matte,
+                    ctx.bits_per_component as f32,
+                    &ctx.decode_arr,
+                );
+                unpremultiply_components(&mut f32_data, &alpha.data, &matte, &ranges);
+                matte_alpha = Some(alpha);
+            }
+
+            // PdfCraft patch (107): a tint transform that gives the wrong number of components
+            // shifts no other pixel, and a colour is converted once however many pixels have
+            // it (patch 28), as the lookup table did before the matte took the image off it.
+            if matte_in_source && ctx.color_space.is_tinted() {
+                get_rgb_data_converted_once(
+                    &f32_data,
+                    ctx.width,
+                    height,
+                    ctx.scale_factors,
+                    &ctx.color_space,
+                    obj.interpolate,
+                )
+            } else {
+                get_rgb_data(
+                    &f32_data,
+                    ctx.width,
+                    height,
+                    ctx.scale_factors,
+                    &ctx.color_space,
+                    obj.interpolate,
+                )
+            }
         };
 
         if let Some(transfer_function) = &obj.transfer_function
@@ -1242,25 +1316,15 @@ fn decode_raster(
 
     let mut image = image_data?;
 
-    // PdfCraft patch (73): whether the mask, decoded below or kept failed by the decoded-image
-    // cache, was left out for the page's allowance or a decoder's limit: only those report
-    // `ContentTruncated` there (`decode_context`).
-    let left_out = Arc::new(AtomicBool::new(false));
-    let sink: WarningSinkFn = {
-        let (left_out, sink) = (left_out.clone(), obj.warning_sink.clone());
-        Arc::new(move |warning| {
-            if matches!(warning, InterpreterWarning::ContentTruncated) {
-                left_out.store(true, Ordering::Relaxed);
-            }
-            sink(warning);
-        })
-    };
-    let obj = &obj.reporting_to(&sink);
-    let alpha = if let Some((alpha, matte_rgb)) =
-        resolve_matte(obj, &ctx.color_space, target_dimension)
+    let alpha = if let Some(alpha) = matte_alpha {
+        Some(alpha)
+    } else if !matte_in_source
+        && let Some((alpha, matte)) = resolve_matte(obj, &ctx.color_space, target_dimension)
         && alpha.width == ctx.width
         && alpha.height == height
     {
+        let mut matte_rgb = [0_u8; 3];
+        ctx.color_space.convert_f32(&matte, &mut matte_rgb, false);
         unpremultiply(&mut image, &alpha.data, &matte_rgb);
 
         Some(alpha)
@@ -1430,24 +1494,51 @@ fn resolve_matte(
     obj: &ImageXObject<'_>,
     color_space: &ColorSpace,
     target_dimension: Option<(u32, u32)>,
-) -> Option<(LumaData, [u8; 3])> {
-    let dict = obj.stream.dict();
-    let s_mask = dict.get::<Stream<'_>>(SMASK)?;
+) -> Option<(LumaData, ColorComponents)> {
+    let (s_mask, matte) = matte_of(obj, color_space)?;
+
+    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
+    let alpha = decode_mask(&mask_obj, target_dimension)?.luma;
+
+    Some((alpha, matte))
+}
+
+/// The image's soft mask and the `/Matte` it gives, in the image's colour space, when it has
+/// one with a component for each of the space's. PdfCraft patch (107): split out of
+/// [`resolve_matte`], so whether there is one is known before the mask is decoded.
+fn matte_of<'a>(obj: &ImageXObject<'a>, color_space: &ColorSpace) -> Option<(Stream<'a>, ColorComponents)> {
+    let s_mask = obj.stream.dict().get::<Stream<'_>>(SMASK)?;
     let matte = s_mask.dict().get::<ColorComponents>(MATTE)?;
 
     if matte.len() != color_space.num_components() as usize {
         return None;
     }
 
-    // In theory, matte needs to be applied in the image's original color space,
-    // but we always do it in RGB for now.
-    let mut matte_rgb = [0_u8; 3];
-    color_space.convert_f32(&matte, &mut matte_rgb, false);
+    Some((s_mask, matte))
+}
 
-    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
-    let alpha = decode_mask(&mask_obj, target_dimension)?.luma;
-
-    Some((alpha, matte_rgb))
+/// PdfCraft patch (107): the preblending with `matte` removed from decoded components `data`,
+/// before they are converted (ISO 32000-1 §11.6.5.3): `c = m + (c′ − m) / α`, each component
+/// kept within its range of `ranges`. A pixel with no alpha stays as it is: it isn't drawn.
+fn unpremultiply_components(data: &mut [f32], alpha: &[u8], matte: &[f32], ranges: &[(f32, f32)]) {
+    let n = matte.len();
+    if n == 0 {
+        return;
+    }
+    for (pixel, &a) in data.chunks_exact_mut(n).zip(alpha) {
+        if a == 0 {
+            continue;
+        }
+        let inv_alpha = 255.0 / a as f32;
+        for ((c, &m), &(lo, hi)) in pixel.iter_mut().zip(matte).zip(ranges) {
+            let value = m + (*c - m) * inv_alpha;
+            // A NaN component (a NaN matte) is left as decoded; `max` and `min`, unlike
+            // `clamp`, can't panic on a range the file made NaN.
+            if value.is_finite() {
+                *c = value.max(lo.min(hi)).min(lo.max(hi));
+            }
+        }
+    }
 }
 
 fn unpremultiply(image: &mut ImageData, alpha: &[u8], matte_rgb: &[u8]) {
@@ -1492,6 +1583,55 @@ fn get_rgb_data(
 
     let mut output = vec![0; width as usize * height as usize * 3];
     cs.convert_f32(decoded, &mut output, false);
+
+    Some(RgbData {
+        data: output,
+        width,
+        height,
+        interpolate,
+        scale_factors,
+    })
+}
+
+/// PdfCraft patch (107): `decoded` converted to RGB with each pixel on its own, so a tint
+/// transform that gives the wrong number of components shifts no other pixel (patch 28's table
+/// converts each entry on its own), and each colour converted once however many pixels have it,
+/// as that table did before the matte took the image off it.
+fn get_rgb_data_converted_once(
+    decoded: &[f32],
+    width: u32,
+    height: u32,
+    scale_factors: (f32, f32),
+    cs: &ColorSpace,
+    interpolate: bool,
+) -> Option<RgbData> {
+    // To prevent a panic when calling the `chunks` method.
+    let n = usize::from(cs.num_components());
+    if n == 0 {
+        return None;
+    }
+
+    let mut output = vec![0; width as usize * height as usize * 3];
+    // At most this many colours are kept, so the memory stays bounded: an image with more is
+    // one whose pixels are nearly all different, which the table would convert one by one too.
+    const MAX_KEPT: usize = 4096;
+    let mut converted: HashMap<Vec<u32>, [u8; 3]> = HashMap::new();
+    let mut key = Vec::with_capacity(n);
+    for (pixel, rgb) in decoded.chunks_exact(n).zip(output.chunks_exact_mut(3)) {
+        key.clear();
+        key.extend(pixel.iter().map(|component| component.to_bits()));
+        if let Some(colour) = converted.get(key.as_slice()) {
+            rgb.copy_from_slice(colour);
+            continue;
+        }
+        // A failed conversion leaves black, as in `get_rgb_data`.
+        let mut colour = [0_u8; 3];
+        let _ = cs.convert_f32(pixel, &mut colour, false);
+        if converted.len() < MAX_KEPT {
+            converted.insert(key.clone(), colour);
+        }
+        rgb.copy_from_slice(&colour);
+    }
 
     Some(RgbData {
         data: output,

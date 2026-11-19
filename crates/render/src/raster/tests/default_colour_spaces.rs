@@ -23,14 +23,14 @@ const MID_GREY: [u8; 3] = [188, 188, 188];
 const INK_BLUE: [u8; 3] = [67, 86, 194];
 
 /// An s15Fixed16Number (ICC.1 §4.6).
-fn s15f16(value: f64) -> [u8; 4] {
+pub(super) fn s15f16(value: f64) -> [u8; 4] {
     ((value * 65536.0).round() as i32).to_be_bytes()
 }
 
 /// An ICC v2 profile (ICC.1:2001-04 §6) of device class `class` for the colour space `space`,
 /// with `tags` (signature, data) in that order. The device model is left blank: hayro takes a
 /// profile whose model reads `sRGB` for standard sRGB and skips its transform.
-fn icc(class: &[u8; 4], space: &[u8; 4], pcs: &[u8; 4], tags: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+pub(super) fn icc(class: &[u8; 4], space: &[u8; 4], pcs: &[u8; 4], tags: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
     let start = 128 + 4 + 12 * tags.len();
     let (mut table, mut data) = (Vec::new(), Vec::new());
     for (signature, tag) in tags {
@@ -58,7 +58,7 @@ fn icc(class: &[u8; 4], space: &[u8; 4], pcs: &[u8; 4], tags: &[([u8; 4], Vec<u8
 }
 
 /// An `XYZType` tag.
-fn xyz([x, y, z]: [f64; 3]) -> Vec<u8> {
+pub(super) fn xyz([x, y, z]: [f64; 3]) -> Vec<u8> {
     [b"XYZ ".as_slice(), &[0; 4], &s15f16(x), &s15f16(y), &s15f16(z)].concat()
 }
 

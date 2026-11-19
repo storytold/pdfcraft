@@ -210,7 +210,12 @@ impl ColorSpaceType {
                         cache.get_or_insert_with(hash128(&content), || {
                             cache.count_icc_profile_read();
                             let decoded = icc_stream.decoded().ok()?;
-                            Some(ICCProfile::new(&decoded, num_components).map(|icc| {
+                            let lab_range = if num_components == 3 {
+                                icc_lab_range(&dict)
+                            } else {
+                                None
+                            };
+                            Some(ICCProfile::new(&decoded, num_components, lab_range).map(|icc| {
                                 // TODO: For SVG and PNG we can assume that the output color space is
                                 // sRGB. If we ever implement PDF-to-PDF, we probably want to
                                 // let the user pass the native color type and don't make this optimization
@@ -388,7 +393,13 @@ impl ColorSpace {
             ColorSpaceType::DeviceCmyk => smallvec![(0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0)],
             ColorSpaceType::DeviceGray => smallvec![(0.0, 1.0)],
             ColorSpaceType::DeviceRgb => smallvec![(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)],
-            ColorSpaceType::ICCBased(i) => smallvec![(0.0, 1.0); i.0.number_components],
+            ColorSpaceType::ICCBased(i) => {
+                if let Some(range) = i.0.lab_range {
+                    SmallVec::from_slice(&range)
+                } else {
+                    smallvec![(0.0, 1.0); i.0.number_components]
+                }
+            }
             ColorSpaceType::CalGray(_) => smallvec![(0.0, 1.0)],
             ColorSpaceType::CalRgb(_) => smallvec![(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)],
             ColorSpaceType::Lab(l) => smallvec![
@@ -437,11 +448,58 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceGray)
     }
 
+    /// PdfCraft patch (107): whether this is `/DeviceRGB` itself, whose components are the
+    /// RGB drawn.
+    pub(crate) fn is_device_rgb(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::DeviceRgb)
+    }
+
     // PdfCraft patch (63).
     /// Whether this is `/DeviceCMYK` itself, not an ICC-based or default colour space that
     /// stands in for it.
     pub(crate) fn is_device_cmyk(&self) -> bool {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceCmyk)
+    }
+
+    /// PdfCraft patch (107): whether this is a `/Separation` or `/DeviceN` space, whose
+    /// components go through a tint transform.
+    pub(crate) fn is_tinted(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::Separation(_) | ColorSpaceType::DeviceN(_))
+    }
+
+    // PdfCraft patch (107).
+    /// The decoded components of an image in this space, in the units `convert_f32` takes, and
+    /// the range of each of those units. For an ICC `/Lab` profile the two can differ: when both
+    /// the profile's `/Range` (or omitted default `[0, 1]`) and the image's `/Decode` array are
+    /// in unit `[0, 1]` encoding, scale them to physical L\*a\*b\* (`[0..100, -128..127,
+    /// -128..127]`); when `/Range` or `/Decode` already uses physical L\*a\*b\* units, leave them
+    /// as decoded.
+    pub(crate) fn to_converter_units(
+        &self,
+        data: &mut [f32],
+        bits_per_component: f32,
+        decode_arr: &[(f32, f32)],
+    ) -> SmallVec<[(f32, f32); 4]> {
+        if let ColorSpaceType::ICCBased(icc) = self.0.as_ref()
+            && icc.is_lab()
+        {
+            let profile_is_unit = icc.0.lab_range.is_none_or(|r| is_unit_lab_range(&r));
+            if profile_is_unit && is_unit_lab_range(decode_arr) {
+                for lab in data.chunks_exact_mut(3) {
+                    lab[0] *= 100.0;
+                    lab[1] = lab[1] * 255.0 - 128.0;
+                    lab[2] = lab[2] * 255.0 - 128.0;
+                }
+                return SmallVec::from_slice(&ICC_LAB_RANGE);
+            }
+            return SmallVec::from_slice(
+                &icc.0
+                    .lab_range
+                    .filter(|r| !is_unit_lab_range(r))
+                    .unwrap_or(ICC_LAB_RANGE),
+            );
+        }
+        self.default_decode_arr(bits_per_component)
     }
 
     /// Get the number of components of the color space.
@@ -1344,12 +1402,36 @@ impl ToRgb for DeviceN {
     }
 }
 
+/// Physical L\*a\*b\* component ranges expected by `ICCProfile::convert_f32`.
+const ICC_LAB_RANGE: [(f32, f32); 3] = [(0.0, 100.0), (-128.0, 127.0), (-128.0, 127.0)];
+
+fn is_unit_lab_range(ranges: &[(f32, f32)]) -> bool {
+    ranges.len() >= 3
+        && ranges[..3]
+            .iter()
+            .all(|&(lo, hi)| lo.is_finite() && hi.is_finite() && lo.min(hi) >= 0.0 && lo.max(hi) <= 1.0)
+}
+
+fn icc_lab_range(dict: &Dict<'_>) -> Option<[(f32, f32); 3]> {
+    let [l0, l1, a0, a1, b0, b1] = dict.get::<[f32; 6]>(RANGE)?;
+    let pairs = [(l0, l1), (a0, a1), (b0, b1)];
+    if pairs
+        .iter()
+        .all(|&(lo, hi)| lo.is_finite() && hi.is_finite() && lo <= hi)
+    {
+        Some(pairs)
+    } else {
+        None
+    }
+}
+
 struct ICCColorRepr {
     src_profile: ColorProfile,
     src_layout: Layout,
     number_components: usize,
     is_srgb: bool,
     is_lab: bool,
+    lab_range: Option<[(f32, f32); 3]>,
     transform_u8: Arc<Transform8BitExecutor>,
     transform_f32: OnceLock<Arc<TransformF32Executor>>,
 }
@@ -1364,7 +1446,11 @@ impl Debug for ICCProfile {
 }
 
 impl ICCProfile {
-    fn new(profile: &[u8], number_components: usize) -> Option<Self> {
+    fn new(
+        profile: &[u8],
+        number_components: usize,
+        lab_range: Option<[(f32, f32); 3]>,
+    ) -> Option<Self> {
         let src_profile = ColorProfile::new_from_slice(profile).ok()?;
 
         const SRGB_MARKER: &[u8] = b"sRGB";
@@ -1375,13 +1461,14 @@ impl ICCProfile {
             .unwrap_or(false);
         let is_lab = src_profile.color_space == DataColorSpace::Lab;
 
-        Self::new_from_src_profile(src_profile, is_srgb, is_lab, number_components)
+        Self::new_from_src_profile(src_profile, is_srgb, is_lab, lab_range, number_components)
     }
 
     fn new_from_src_profile(
         src_profile: ColorProfile,
         is_srgb: bool,
         is_lab: bool,
+        lab_range: Option<[(f32, f32); 3]>,
         number_components: usize,
     ) -> Option<Self> {
         let src_layout = match number_components {
@@ -1412,6 +1499,7 @@ impl ICCProfile {
             number_components,
             is_srgb,
             is_lab,
+            lab_range: if is_lab { lab_range } else { None },
             transform_u8,
             transform_f32: OnceLock::new(),
         })))
@@ -1479,7 +1567,7 @@ impl ToRgb for ICCProfile {
     }
 
     fn supports_u8(&self) -> bool {
-        true
+        self.0.lab_range.is_none_or(|r| is_unit_lab_range(&r))
     }
 
     fn convert_u8(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
@@ -1613,7 +1701,7 @@ pub fn cmyk_to_srgb8(input: &[u8], output: &mut [u8]) -> Option<()> {
 pub(crate) const CMYK_PROFILE: &[u8] = include_bytes!("../assets/CGATS001Compat-v2-micro.icc");
 
 static CMYK_TRANSFORM: LazyLock<ICCProfile> =
-    LazyLock::new(|| ICCProfile::new(CMYK_PROFILE, 4).unwrap());
+    LazyLock::new(|| ICCProfile::new(CMYK_PROFILE, 4, None).unwrap());
 
 pub(crate) trait ToRgb {
     fn convert_sample(&self, input: &[f32], output: &mut [u8], manual_scale: bool) -> Option<()> {
