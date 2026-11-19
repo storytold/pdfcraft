@@ -671,7 +671,7 @@ pub struct PdfCraftApp {
     /// properties default" ticked left).
     pub redact_defaults: RedactPrefs,
     /// Redaction Tool Properties, while it is open: the values before it opened, for Cancel.
-    pub(crate) redact_props: Option<RedactPrefs>,
+    pub redact_props: Option<RedactPrefs>,
     pub redact_search: RedactSearchDraft,
     /// Find text to redact, while it is open.
     pub(crate) redact_search_open: bool,

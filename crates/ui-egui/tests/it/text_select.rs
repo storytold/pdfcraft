@@ -734,7 +734,16 @@ fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
     let doc = app.session.get(app.views[0].id).unwrap();
     let on_page_2 = doc.info.annotations.iter().find(|a| a.page == 1 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 2");
     assert_eq!(app.views[0].session.comments.primary(), Some((1, on_page_2)), "the part where the selection ends is selected");
-    assert!(app.views[0].session.comments.panel.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
+    assert!(
+        app.views[0]
+            .session
+            .comments
+            .panel
+            .editing
+            .as_ref()
+            .is_some_and(|(thread, _, _)| *thread == pdfcraft_ui_egui::comments::thread_id(1, on_page_2)),
+        "its note is open"
+    );
 }
 
 /// Review of #5017: dragged back up, from page 2 to page 1, the selection ends on page 1: the
@@ -751,7 +760,16 @@ fn a_highlight_dragged_back_across_pages_selects_its_part_where_the_drag_ended()
     let doc = app.session.get(app.views[0].id).unwrap();
     let on_page_1 = doc.info.annotations.iter().find(|a| a.page == 0 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 1");
     assert_eq!(app.views[0].session.comments.primary(), Some((0, on_page_1)), "the part where the drag ended is selected");
-    assert!(app.views[0].session.comments.panel.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (0, on_page_1)), "its note is open");
+    assert!(
+        app.views[0]
+            .session
+            .comments
+            .panel
+            .editing
+            .as_ref()
+            .is_some_and(|(thread, _, _)| *thread == pdfcraft_ui_egui::comments::thread_id(0, on_page_1)),
+        "its note is open"
+    );
 }
 
 /// Review of #5017: only markup on a text selection across pages is followed up as one markup.

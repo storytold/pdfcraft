@@ -36,7 +36,7 @@ pub(crate) fn key_of(id: AnnotationId) -> (usize, usize) {
 
 /// The panel's thread id of the comment at `(page, index)`: the comment's own annotation id. The one mapping the
 /// panel, the pop-ups and the tests use.
-pub(crate) fn thread_id(page: usize, index: usize) -> ThreadId {
+pub fn thread_id(page: usize, index: usize) -> ThreadId {
     ThreadId(id_of(page, index).0)
 }
 

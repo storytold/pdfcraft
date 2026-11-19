@@ -18,7 +18,7 @@ use crate::canvas::page_select::PageSelectTool;
 use crate::canvas::{PageGeometry, PageSession};
 
 /// Copied comments hanging on the pointer, waiting for a click to place them.
-pub(crate) struct PastePlacement {
+pub struct PastePlacement {
     /// The copied comments as XFDF.
     pub xfdf: String,
     /// The bundle's box in user space.

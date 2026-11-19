@@ -241,6 +241,11 @@ impl PdfCraftApp {
         PdfCraftSettings { layout, print, behavior, view, comment, signature, dock, recent, hotbar, session }
     }
 
+    /// Hands the app the settings store it saves the preferences to from now on (the launch opens it).
+    pub fn attach_settings(&mut self, store: settings::Store) {
+        self.settings = Some(store);
+    }
+
     /// Applies settings the store or an import produced. A value that is absent keeps what the app
     /// has; a value out of range is clamped or refused as the dialogs would.
     pub fn apply_settings(&mut self, s: &PdfCraftSettings) {
