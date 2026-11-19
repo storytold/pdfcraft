@@ -41,8 +41,8 @@ fn from_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
 }
 
 impl PdfCraftApp {
-    /// The canvas's navigation choices: the scroll speed, the middle-button direction and whether zooms ease. The
-    /// rest keep the framework's defaults.
+    /// The canvas's navigation choices: the scroll speed, the middle-button direction and whether zooms and wheel
+    /// notches ease. The rest keep the framework's defaults.
     pub(crate) fn navigation_options(&self) -> craft::ui::canvas::NavigationOptions {
         let mut options = craft::ui::canvas::NavigationOptions::default();
         options.wheel_line = self.scroll_speed.wheel_line();
@@ -52,7 +52,9 @@ impl PdfCraftApp {
         if cfg!(target_os = "linux") {
             options.middle_button = craft::behavior::MiddleButton::AutoScroll;
         }
-        options.animated_zoom = !self.animation_effects.reduced(None);
+        let eased = !self.animation_effects.reduced(None);
+        options.animated_zoom = eased;
+        options.eased_wheel = eased;
         options
     }
 

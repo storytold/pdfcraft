@@ -1886,6 +1886,7 @@ name = "craft-pages"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-keymap",
  "craft-text",
  "craft-theme",
  "craft-ui",
