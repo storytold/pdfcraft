@@ -145,6 +145,15 @@ fn settle(r: &mut Rig, what: &str, ready: impl Fn(&PdfCraftApp) -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// The unsaved-changes question's "save it" answer as the framework words it on this OS: Save on macOS, Yes on
+/// Windows and Linux.
+fn save_answer() -> String {
+    use craft::i18n::WordSet as _;
+    let words = craft::ui::dialog::DialogWords::english();
+    let save = if cfg!(target_os = "macos") { words.unsaved_save } else { words.unsaved_yes };
+    save.as_str().to_string()
+}
+
 /// Presses the button called `label` of the dialog on top (the last such node drawn).
 fn press(r: &mut Rig, label: &str) {
     r.get_all_by_label(label).last().unwrap_or_else(|| panic!("no {label:?} button on screen")).click();
@@ -256,7 +265,7 @@ fn save_on_close_closes_the_tab_only_once_the_file_is_written() {
     assert!(h.execute("file.close"));
     h.steps(2);
     assert_eq!(h.state().views.len(), 1, "a dirty document asks first");
-    press(&mut h, "Save");
+    press(&mut h, &save_answer());
     assert_eq!(h.state().views.len(), 1, "the tab stays open until the save is written");
     assert_eq!(h.files.open(), 1, "the Save picker is open");
     h.answer(Picked::Paths(vec![out.clone()]));
@@ -271,7 +280,7 @@ fn a_cancelled_save_on_close_keeps_the_tab_open() {
     rotate_first_page(h.state_mut());
     assert!(h.execute("file.close"));
     h.steps(2);
-    press(&mut h, "Save");
+    press(&mut h, &save_answer());
     h.answer(Picked::Cancelled); // the user cancels the save panel
     assert_eq!(h.state().views.len(), 1);
     assert!(dirty(h.state(), 0), "nothing was saved or lost");
@@ -288,7 +297,7 @@ fn close_all_saves_each_untitled_document_in_turn() {
     assert!(h.execute("file.close_all"));
     h.steps(2);
     for (n, name) in ["first.pdf", "second.pdf"].iter().enumerate() {
-        press(&mut h, "Save");
+        press(&mut h, &save_answer());
         assert_eq!(h.files.open(), 1, "one Save pick for document {n}");
         h.answer(Picked::Paths(vec![dir.join(name)]));
     }
@@ -536,7 +545,7 @@ fn a_close_prompt_still_means_its_own_document_after_a_pending_save_closes_anoth
     h.state_mut().active = Some(0);
     assert!(h.execute("file.close"));
     h.steps(2);
-    press(&mut h, "Save");
+    press(&mut h, &save_answer());
     assert_eq!(h.files.open(), 1, "the first tab's save panel is open");
     // ...when the user asks to close the second one.
     h.state_mut().active = Some(1);
