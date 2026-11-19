@@ -283,6 +283,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 title: "Protect",
                 items: &[
                     item("Protect with password", "lock", "protect.password", Ready),
+                    item("Protect with Microsoft Purview", "tag", "purview.apply_label", Ready),
                     item("Remove hidden information", "eye-off", "protect.remove_hidden", Ready),
                 ],
             },

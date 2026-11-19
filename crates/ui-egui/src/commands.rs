@@ -271,15 +271,27 @@ impl PdfCraftApp {
                     );
                 }
             }
-            "purview.apply_label" => match self.session.purview_labels() {
-                Ok(labels) => {
-                    self.purview_labels = labels;
-                    self.purview_label_id = self.purview_labels.first().map(|label| label.id.clone()).unwrap_or_default();
+            "purview.apply_label" => {
+                if matches!(self.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
+                    match self.session.purview_labels() {
+                        Ok(labels) => {
+                            self.purview_labels = labels;
+                            self.purview_label_id = self.purview_labels.first().map(|label| label.id.clone()).unwrap_or_default();
+                            self.purview_justification.clear();
+                            self.dialog = Some(Dialog::Purview);
+                        }
+                        Err(error) => {
+                            self.notify_fmt("Couldn't load Microsoft Purview labels: {e}", &[("e", &error.to_string())]);
+                            self.dialog = Some(Dialog::Purview);
+                        }
+                    }
+                } else {
+                    self.purview_labels.clear();
+                    self.purview_label_id.clear();
                     self.purview_justification.clear();
                     self.dialog = Some(Dialog::Purview);
                 }
-                Err(error) => self.notify_fmt("Couldn't load Microsoft Purview labels: {e}", &[("e", &error.to_string())]),
-            },
+            }
             "purview.remove_label" => match self.active_ids().map(|(_, id)| id) {
                 Some(id) => {
                     let justification = if self.purview_justification.trim().is_empty() { None } else { Some(self.purview_justification.as_str()) };

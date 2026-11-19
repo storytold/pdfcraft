@@ -2668,22 +2668,31 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Reload) => {}
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
-        Some(Notice::PurviewLabel) => match app.session.purview_labels() {
-            Ok(labels) => {
-                app.purview_labels = labels;
-                app.purview_label_id = app
-                    .views
-                    .get(index)
-                    .and_then(|view| app.session.get(view.id))
-                    .and_then(|doc| doc.purview())
-                    .and_then(|purview| purview.label.as_ref())
-                    .map(|label| label.id.clone())
-                    .unwrap_or_default();
+        Some(Notice::PurviewLabel) => {
+            if matches!(app.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
+                match app.session.purview_labels() {
+                    Ok(labels) => {
+                        app.purview_labels = labels;
+                        app.purview_label_id = app
+                            .views
+                            .get(index)
+                            .and_then(|view| app.session.get(view.id))
+                            .and_then(|doc| doc.purview())
+                            .and_then(|purview| purview.label.as_ref())
+                            .map(|label| label.id.clone())
+                            .unwrap_or_default();
+                        app.purview_justification.clear();
+                        app.dialog = Some(crate::Dialog::Purview);
+                    }
+                    Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
+                }
+            } else {
+                app.purview_labels.clear();
+                app.purview_label_id.clear();
                 app.purview_justification.clear();
                 app.dialog = Some(crate::Dialog::Purview);
             }
-            Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
-        },
+        }
         Some(Notice::Unlock) => {
             if let Some(doc) = app.views.get(index).and_then(|view| app.session.get(view.id)) {
                 app.unlock_prompt = Some(crate::UnlockPrompt::new(doc, None));

@@ -140,8 +140,6 @@ const PROTECT: &[&str] = &[
     "purview.sign_out",
     "purview.status",
     "purview.apply_label",
-    "purview.remove_label",
-    "purview.remove_protection",
     SEP,
     "protect.properties",
 ];
