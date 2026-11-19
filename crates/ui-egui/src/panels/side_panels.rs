@@ -6,7 +6,7 @@
 
 use craft::automation::dock as dock_rpc;
 use craft::behavior::dock::{
-    Action, Column, DockEdge, DockPlacement, Group, Layout, Location, Node, PanelState, Permissions, SplitSize, Target, Workspace,
+    Action, Column, DockEdge, DockError, DockPlacement, Group, Layout, Node, PanelState, Permissions, SplitSize, Target, Workspace,
 };
 use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
@@ -165,22 +165,22 @@ const START_SHARE: f32 = 0.2;
 /// Share of the rest the page area takes beside the end dock.
 const PAGE_SHARE: f32 = 0.8;
 
-/// The arrangement of a new install: Tools at the start edge, the toolbar at the rail's edge, the page area between
-/// the docks, and every side panel closed, remembered as a column after the toolbar's.
 /// The Tools pane's default width, as production opened it.
 const TOOLS_WIDTH: f32 = 272.0;
 
+/// The arrangement of a new install: Tools at the start edge, the toolbar at the rail's edge, the page area between
+/// the docks, and the side panels as one group in a column inward of the toolbar's, collapsed to their icons.
 pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let single = |panel| Column::new(vec![Group::new(vec![panel], 0)]);
     // The rail is one tool column wide: its column keeps the toolbar's grid, never the theme's column width.
     // The Tools pane opens at production's width (272 points, the old `TOOLS_WIDTH`), not the theme's column width.
     let (tools, toolbar) = (single(PanelId::Tools).with_width(TOOLS_WIDTH), single(PanelId::Toolbar).with_steps(1));
-    let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![toolbar, tools], Vec::new()) } else { (vec![tools], vec![toolbar]) };
+    let side = Column::new(vec![Group::new(SIDE.to_vec(), 0)]).with_iconic(true);
+    let (start, end) =
+        if rail_edge(rail_side) == DockEdge::Start { (vec![toolbar, side, tools], Vec::new()) } else { (vec![tools], vec![toolbar, side]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
-    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
-    workspace.hidden = SIDE.iter().map(|panel| (*panel, Location::new(Some(PanelId::Toolbar), DockPlacement::column(true)))).collect();
-    workspace
+    Workspace::new(Layout::new(Some(root), Vec::new()))
 }
 
 /// The window edge whose dock holds `panel`, `None` when it is closed or floating.
@@ -242,21 +242,19 @@ fn edge_name(edge: Option<DockEdge>) -> &'static str {
     if edge == Some(DockEdge::End) { "right" } else { "left" }
 }
 
-/// The side panel that is open, if any.
+/// The side panel that is open, if any: the front tab of the side panels' expanded column. Collapsed to its icons,
+/// the column shows none.
 fn open_side(workspace: &Workspace<PanelId>) -> Option<PanelId> {
-    // The side panels share a group: the open one is its front tab. A minimized or collapsed group
-    // shows none in front, and then the first one open stands for it.
-    let layout = &workspace.layout;
-    SIDE.into_iter().find(|panel| layout.panel_state(panel) == PanelState::Front).or_else(|| SIDE.into_iter().find(|panel| layout.contains(panel)))
+    SIDE.into_iter().find(|panel| workspace.layout.panel_state(panel) == PanelState::Front)
 }
 
-/// The tab label of a side panel: its name, and the count of what it lists where it has one.
-fn side_label(app: &PdfCraftApp, panel: RightPanel) -> String {
+/// The label of a side panel, which its icon in the collapsed column and its tab share: production's rail button name.
+fn side_label(panel: RightPanel) -> String {
     let title = match panel {
         RightPanel::Comments => "Comments",
         RightPanel::Bookmarks => "Bookmarks",
-        RightPanel::Pages => "Pages",
-        RightPanel::Fields => "Fields",
+        RightPanel::Pages => "Page thumbnails",
+        RightPanel::Fields => "Form fields",
         RightPanel::Layers => "Layers",
         RightPanel::Attachments => "Attachments",
         RightPanel::Signatures => "Signatures",
@@ -265,24 +263,23 @@ fn side_label(app: &PdfCraftApp, panel: RightPanel) -> String {
         RightPanel::Search => "Search",
         RightPanel::Compare => "Compare",
     };
-    let count = app.active_ids().and_then(|(_, id)| {
-        let doc = app.session.get(id)?;
-        let info = &doc.info;
-        match panel {
-            RightPanel::Comments => Some(crate::comments_panel::count(info)),
-            RightPanel::Pages => Some(info.pages.len()),
-            RightPanel::Fields => Some(info.fields.len()),
-            RightPanel::Layers => Some(info.layer_order.iter().filter(|r| matches!(r.item, pdfcraft_render::LayerItem::Layer(_))).count()),
-            RightPanel::Attachments => Some(info.attachments.len()),
-            RightPanel::Signatures => Some(doc.signatures.iter().filter(|s| s.signed).count()),
-            RightPanel::Compare => app.compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len()),
-            RightPanel::Bookmarks | RightPanel::Accessibility | RightPanel::Tags | RightPanel::Search => None,
-        }
-    });
-    let title = crate::i18n::t(title);
-    match count {
-        Some(n) => format!("{title} ({n})"),
-        None => title.to_owned(),
+    crate::i18n::t(title).to_owned()
+}
+
+/// The icon of a side panel's cell in its collapsed column, production's rail icon.
+fn side_icon(panel: RightPanel) -> &'static str {
+    match panel {
+        RightPanel::Comments => "message-square-text",
+        RightPanel::Bookmarks => "bookmark",
+        RightPanel::Pages => "files",
+        RightPanel::Fields => "text-cursor-input",
+        RightPanel::Layers => "layers",
+        RightPanel::Attachments => "paperclip",
+        RightPanel::Signatures => "signature",
+        RightPanel::Accessibility => "accessibility",
+        RightPanel::Tags => "tag",
+        RightPanel::Search => "search",
+        RightPanel::Compare => "git-compare",
     }
 }
 
@@ -300,12 +297,12 @@ impl DockPanels<PanelId> for Panels<'_> {
         if *panel == PanelId::Document {
             return PanelSpec::new(crate::i18n::t("Document").to_owned()).canvas();
         }
-        let label = match panel.side() {
-            Some(side) => side_label(self.app, side),
-            None if self.app.left == LeftPanel::CalculationOrder => crate::i18n::t("Calculation order").to_owned(),
-            None => crate::i18n::t("Tools").to_owned(),
-        };
-        PanelSpec::new(label).command(CommandRef::with_params("view.panel", json!({ "panel": panel.name() })))
+        let command = CommandRef::with_params("view.panel", json!({ "panel": panel.name() }));
+        match panel.side() {
+            Some(side) => PanelSpec::new(side_label(side)).icon(IconSpec::svg(IconId::new(side_icon(side)))).command(command),
+            None if self.app.left == LeftPanel::CalculationOrder => PanelSpec::new(crate::i18n::t("Calculation order").to_owned()).command(command),
+            None => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command),
+        }
     }
 
     fn permissions(&self, panel: &PanelId) -> Permissions {
@@ -431,23 +428,41 @@ pub fn dock(app: &mut PdfCraftApp, ui: &mut Ui) {
     // Full screen shows the document alone, and a document can hide the toolbars, the menu and the panels around it
     // in its tab (ISO 32000-2 Table 147); the tab strip stays, and F8 brings the rest back (`viewer_prefs`).
     let bare = app.full_screen_document() || app.hidden_interface().window_ui;
+    let toolbar = active && !app.hotbar_hidden();
     let workspace = app.dock.clone();
+    // The rail lists the Accessibility Checker once the document has a report, and Search and Compare only while
+    // they show; their commands open them.
+    let open = open_side(&workspace);
+    let checked = app.active_ids().is_some_and(|(_, id)| app.a11y.report.as_ref().is_some_and(|(d, _)| *d == id));
+    let listed = |panel: &PanelId| match panel {
+        PanelId::Accessibility => checked || open == Some(*panel),
+        PanelId::Search | PanelId::Compare => open == Some(*panel),
+        _ => true,
+    };
     let mut panels = Panels { ctx: ui.ctx().clone(), app: &mut *app };
-    // Home and Combine have no side panel and no rail, and Read mode hides the tools, not the navigation panels.
+    // Home and Combine have no side panel and no toolbar, and Read mode hides the tools and the quick toolbar, not the
+    // navigation panels.
     let shown = |panel: &PanelId| match panel {
         PanelId::Document => true,
         _ if bare => false,
-        PanelId::Toolbar => active,
+        PanelId::Toolbar => toolbar,
         PanelId::Tools => !read && !expanded,
-        _ => active && !expanded,
+        _ => active && !expanded && listed(panel),
     };
+    // An icon of the side panels' collapsed column opens its panel docked, as production's rail buttons did, not in a
+    // flyout: the pick the area writes here becomes the panel shown.
+    let mut picked = None;
     let output = DockArea::new("Dock", Bind::given(workspace), &mut panels, DockConfig::default().native_windows(false))
         .hide(HidePanels::Except(&shown))
+        .flyout(Bind::bound(&mut picked))
         .show(ui);
     let before = right_of(&app.dock);
     for action in output.actions.into_iter().chain(output.requested) {
         // The area drops what the workspace refuses; one refused here is stale, not the user's mistake.
         drop(app.dock.apply(action, false, permissions));
+    }
+    if let Some(panel) = picked {
+        set_panel_visible(app, panel, true);
     }
     let after = right_of(&app.dock);
     if after != before {
@@ -477,8 +492,25 @@ fn refused() -> String {
 
 /// Opens or closes `panel` in the workspace, the one write path for panel visibility.
 fn show_panel(app: &mut PdfCraftApp, panel: PanelId, visible: bool) -> Result<(), String> {
-    let fallback = (panel != PanelId::Toolbar && app.dock.layout.contains(&PanelId::Toolbar)).then_some(PanelId::Toolbar);
-    app.dock.set_visible(panel, visible, fallback, false, permissions).map_err(|_| refused())
+    set_shown(&mut app.dock, panel, visible).map_err(|_| refused())
+}
+
+/// Shows or hides `panel` in `workspace`. A side panel stays in the layout as an icon of its column: showing it
+/// expands the column with it in front, hiding it collapses the column to its icons. One closed from its tab comes
+/// back to its recorded place first.
+fn set_shown(workspace: &mut Workspace<PanelId>, panel: PanelId, visible: bool) -> Result<(), DockError> {
+    let fallback = (panel != PanelId::Toolbar && workspace.layout.contains(&PanelId::Toolbar)).then_some(PanelId::Toolbar);
+    if panel.side().is_none() {
+        return workspace.set_visible(panel, visible, fallback, false, permissions);
+    }
+    if visible {
+        workspace.set_visible(panel, true, fallback, false, permissions)?;
+        return workspace.apply(Action::set_iconic(panel, false), false, permissions).map(drop);
+    }
+    if workspace.layout.panel_state(&panel) != PanelState::Front {
+        return Ok(());
+    }
+    workspace.apply(Action::set_iconic(panel, true), false, permissions).map(drop)
 }
 
 /// The side panel `workspace` has open, `None` when every side panel is closed.
@@ -770,7 +802,7 @@ fn build(old: &Old, right: Option<RightPanel>, widths: bool) -> Option<Workspace
     }
     let side = right.filter(|_| old.side_open).map(PanelId::from);
     if let Some(side) = side {
-        workspace.set_visible(side, true, Some(PanelId::Toolbar), false, permissions).ok()?;
+        set_shown(&mut workspace, side, true).ok()?;
     }
     if !old.tools_open {
         workspace.set_visible(PanelId::Tools, false, None, false, permissions).ok()?;
@@ -914,8 +946,7 @@ mod tests {
             if tools_open {
                 assert_eq!(edge_of(&migrated.workspace, PanelId::Tools), Some(edge), "{name}: Tools edge");
             }
-            let side = [PanelId::Bookmarks, PanelId::Pages].into_iter().any(|p| migrated.workspace.layout.contains(&p));
-            assert_eq!(side, side_open, "{name}: side panel open");
+            assert_eq!(open_side(&migrated.workspace).is_some(), side_open, "{name}: side panel open");
             assert_eq!(migrated.rail_side, DockSide::End, "{name}: rail side");
         }
         let left = migrate(&json!({"side_panels": {"version": 1, "rail_side": "left"}})).expect("migrates");

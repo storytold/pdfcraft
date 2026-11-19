@@ -208,6 +208,8 @@ struct PendingOpen {
     /// An answer taken from the queue and kept back for later (a password prompt waiting for an
     /// earlier file's password retry).
     ready: Option<open_worker::ResultKind>,
+    /// Reopen Closed Tab asked for it: its closed-tab entry goes once it has opened, and stays when it fails.
+    reopen: bool,
 }
 
 /// A named destination being looked up in a document.

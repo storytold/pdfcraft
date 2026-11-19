@@ -1552,7 +1552,13 @@ mod revert_draft_tests {
             }
             assert!(h.state().close_guard.is_some(), "the typed box holds the close");
             h.run_steps(2);
-            press(&mut h, "Save");
+            // The question's "save it" answer as the framework words it on this OS: Save on macOS, Yes elsewhere.
+            let save = {
+                use craft::i18n::WordSet as _;
+                let words = craft::ui::dialog::DialogWords::english();
+                if cfg!(target_os = "macos") { words.unsaved_save } else { words.unsaved_yes }.as_str().to_string()
+            };
+            press(&mut h, &save);
             assert!(h.state().views.is_empty(), "the tab closes once saved");
 
             let mut reopened = PdfCraftApp::for_unit_tests();

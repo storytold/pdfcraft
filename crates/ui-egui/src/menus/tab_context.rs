@@ -36,6 +36,13 @@ impl crate::PdfCraftApp {
         }
     }
 
+    /// Drops the latest closed-tab entry of `path`, once Reopen Closed Tab has brought it back.
+    pub(crate) fn forget_closed_tab(&mut self, path: &str) {
+        if let Some(at) = self.closed_tabs.iter().rposition(|closed| closed == path) {
+            self.closed_tabs.remove(at);
+        }
+    }
+
     pub(crate) fn tab_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Close(tab) => {
@@ -51,18 +58,16 @@ impl crate::PdfCraftApp {
             Action::Reopen => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(path) = self.closed_tabs.last().cloned() {
-                    // A tab may already have been reopened through File > Open.
-                    if let Some(index) = self.views.iter().position(|v| self.session.get(v.id).is_some_and(|d| d.path.as_deref() == Some(&path))) {
-                        self.active = Some(index);
-                        self.closed_tabs.pop();
-                    } else {
-                        let tabs = self.views.len();
-                        self.open_path(&path);
-                        // open_path reports errors through notifications, not a Result.
-                        // Keep the entry until an actual document tab has been opened.
-                        if self.views.len() > tabs {
-                            self.closed_tabs.pop();
+                    // A tab that shows the file already (opened again through File > Open) comes to the front.
+                    // Otherwise the open is queued, and its entry goes only once the file has opened.
+                    match self.open_path(&path) {
+                        crate::OpenOutcome::Opened | crate::OpenOutcome::Focused => self.forget_closed_tab(&path),
+                        crate::OpenOutcome::Pending => {
+                            if let Some(pending) = self.pending_opens.iter_mut().find(|p| p.path.as_deref() == Some(path.as_str())) {
+                                pending.reopen = true;
+                            }
                         }
+                        crate::OpenOutcome::Failed(_) => {}
                     }
                 }
             }
@@ -100,6 +105,12 @@ mod tests {
         let mut app = PdfCraftApp::with_host(Arc::new(host), services);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
+    }
+
+    /// Runs the queued opens and takes their results, as the next frame would.
+    fn settle(app: &mut PdfCraftApp, jobs: &craft::host::ManualJobs) {
+        jobs.run_all();
+        app.poll_pending_opens(&egui::Context::default());
     }
 
     /// An English app whose jobs never run.
@@ -162,14 +173,18 @@ mod tests {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
         file.write_all(PDF).unwrap();
         drop(file);
-        let mut app = app();
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let mut app = app_on(jobs.clone());
         let path_text = path.to_str().unwrap();
         for _ in 0..12 {
             app.open_path(path_text);
+            settle(&mut app, &jobs);
             app.close_tab(0);
         }
         assert_eq!(app.closed_tabs.len(), 10);
         app.tab_action(&egui::Context::default(), Action::Reopen);
+        assert_eq!(app.closed_tabs.len(), 10, "the entry stays until the file has opened");
+        settle(&mut app, &jobs);
         assert_eq!(app.views.len(), 1);
         let doc = app.session.get(app.views[0].id).unwrap();
         assert_eq!(doc.path.as_deref(), Some(path_text));
@@ -187,15 +202,19 @@ mod tests {
         let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(&path).unwrap();
         file.write_all(PDF).unwrap();
         drop(file);
-        let mut app = app();
+        let jobs = Arc::new(craft::host::ManualJobs::new());
+        let mut app = app_on(jobs.clone());
         app.open_path(text);
+        settle(&mut app, &jobs);
         app.close_tab(0);
         std::fs::remove_file(&path).unwrap();
         app.tab_action(&egui::Context::default(), Action::Reopen);
+        settle(&mut app, &jobs);
         assert!(app.views.is_empty());
         assert_eq!(app.closed_tabs, [text]);
         std::fs::write(&path, PDF).unwrap();
         app.tab_action(&egui::Context::default(), Action::Reopen);
+        settle(&mut app, &jobs);
         assert_eq!(app.views.len(), 1);
         assert!(app.closed_tabs.is_empty());
         app.closed_tabs.push(text.into());

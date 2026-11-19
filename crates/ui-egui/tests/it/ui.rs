@@ -630,7 +630,7 @@ fn a_middle_click_closes_the_tab() {
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     h.run_steps(2);
-    h.get_by_label("second.pdf (edited)").click_button(egui::PointerButton::Middle);
+    h.get_by_label("second.pdf, modified").click_button(egui::PointerButton::Middle);
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "unsaved changes ask first");
     h.get_by_label("Cancel");
@@ -645,7 +645,7 @@ fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
         });
         h.run_steps(3);
         // The save prompt is the close dialog the tab's close action opens.
-        h.get_by_label("first.pdf (edited)").click_button(egui::PointerButton::Middle);
+        h.get_by_label("first.pdf, modified").click_button(egui::PointerButton::Middle);
         h.run_steps(3);
         h.state_mut().pending_link =
             Some(pdfcraft_ui_egui::PendingLink { url: "https://example.org".to_owned(), origin: pdfcraft_ui_egui::LinkOrigin::Link });
@@ -986,7 +986,7 @@ fn dropping_a_pdf_on_the_window_opens_it() {
     support::input::drop_files(&mut h, [file]);
     support::wait_until(&mut h, "dropped document", |app| app.views.len() == 1 && app.password_prompt.is_none());
     assert_eq!(h.state().views.len(), 1, "the dropped PDF opens in a tab");
-    h.get_by_label_contains("dropped.pdf");
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "dropped.pdf");
     let (_, id) = h.state().active_ids().unwrap();
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.name, "dropped.pdf");
@@ -1250,7 +1250,7 @@ fn files_and_quit_from_the_operating_system() {
     support::wait_until(&mut h, "the file the operating system opened", |app| !app.views.is_empty());
     std::fs::remove_file(&path).ok();
     assert_eq!(h.state().views.len(), 1, "the file opens in a tab");
-    h.get_by_label_contains(&name);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, &name);
     // A file opened while the app runs brings its window forward, even minimized or full screen
     // on another Space.
     std::fs::write(&path, FIXTURE).unwrap();
@@ -1569,14 +1569,14 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
     h.run_steps(3);
     h.get_by_label("middle.pdf").click();
     h.run_steps(3);
-    close_named_tab(&mut h, "first.pdf (edited)");
+    close_named_tab(&mut h, "first.pdf, modified");
     h.get_by_label("Don't save");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 3);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
     assert!(h.state().session.get(ids[0]).unwrap().dirty);
-    close_named_tab(&mut h, "first.pdf (edited)");
+    close_named_tab(&mut h, "first.pdf, modified");
     h.get_by_label("Don't save").click();
     h.run_steps(3);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[1]));
@@ -1624,11 +1624,11 @@ fn document_tab_identity_survives_dirty_labels_and_removing_an_earlier_document(
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Unsaved title".into() }));
     h.run_steps(3);
-    let dirty = h.get_by_role_and_label(Role::Tab, "middle.pdf (edited)");
+    let dirty = h.get_by_role_and_label(Role::Tab, "middle.pdf, modified");
     assert_eq!(dirty.accesskit_node().id(), middle_id);
     assert!(dirty.is_focused());
     close_named_tab(&mut h, "first.pdf");
-    assert_eq!(h.get_by_role_and_label(Role::Tab, "middle.pdf (edited)").accesskit_node().id(), middle_id);
+    assert_eq!(h.get_by_role_and_label(Role::Tab, "middle.pdf, modified").accesskit_node().id(), middle_id);
     assert_eq!(h.state().active, Some(0));
     assert_eq!(h.state().views.len(), 2);
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
