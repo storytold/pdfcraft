@@ -36,6 +36,14 @@ impl PageSession {
     pub(crate) fn page_xforms(&self, geo: PageGeometry<'_>) -> Vec<(usize, PageXform)> {
         self.placed.iter().map(|p| (p.page, geo.xform_of(p))).collect()
     }
+
+    /// The page drawn under the screen point `at` in the last pass, and the point in that page's user space.
+    pub(crate) fn user_point_at(&self, geo: PageGeometry<'_>, info: &DocInfo, at: Pos2) -> Option<(usize, [f64; 2])> {
+        let (page, xf) = self.page_xforms(geo).into_iter().find(|(_, xf)| xf.rect.contains(at))?;
+        let (vx, vy) = xf.screen_to_view(at);
+        let u = info.pages.get(page)?.view_to_user(vx, vy);
+        Some((page, [f64::from(u[0]), f64::from(u[1])]))
+    }
 }
 
 impl DocView {

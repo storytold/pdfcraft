@@ -9,7 +9,7 @@ use craft::behavior::{CancelReason, Cursor, CursorIcon, IconId, keyed};
 use craft::keymap::CommandRef;
 use craft::review::ui::signature::{SignatureSettings, paint_signature};
 use craft::review::{SavedSignature, SignatureImage as SavedImage};
-use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, SelectMode, Show as _, ShowCollection as _};
 use craft::ui::list::ThumbAspect;
 use craft::ui::primitives::Draw;
@@ -316,6 +316,8 @@ pub enum FillOutcome {
     CreateInitials,
     /// Nothing placed, and why (today's date can't be written into the PDF yet).
     Refused(String),
+    /// Escape with nothing left to close: the tool goes back to Select.
+    Leave,
 }
 
 /// Values that shape how Fill & Sign handles a pass's input, with the two session fields its text
@@ -436,6 +438,18 @@ impl CanvasTool for FillSignTool<'_> {
 
     fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
         self.dragged = false;
+    }
+
+    /// Escape steps back one thing per press, as a comment tool's does: the open type box, then the tool, so the Text
+    /// tool does not open a box at every click with no way out by the keyboard.
+    fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+        if !matches!(key, ToolKey::Cancel) {
+            return false;
+        }
+        if self.input.fill_text.take().is_none() {
+            *self.outcome = Some(FillOutcome::Leave);
+        }
+        true
     }
 
     // PLAN: framework gap: `ToolContext` and `Draw` give a tool no `egui::Context`, which `TextureCache::texture`

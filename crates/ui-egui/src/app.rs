@@ -664,13 +664,16 @@ impl PdfCraftApp {
             self.poll_pending_destinations();
         }
         self.check_restored_recent();
-        // Showing a document hides the Combine files tab.
-        if self.active.is_some() {
+        // Showing a document hides the Combine files tab, and ends its preview.
+        if self.active.is_some() && self.combine_tab.focused {
             self.combine_tab.focused = false;
+            self.close_combine_preview();
         }
+        // The picks first: a file the user picked opens ahead of a startup file that arrived with it, which then waits
+        // for that open and goes to a background tab.
+        self.process_picks(ctx);
         // PLAN: assumed PdfCraftApp::open_intake(&mut self, &egui::Context), which opens what the intake holds (pdf-shell-w13).
         self.open_intake(ctx);
-        self.process_picks(ctx);
         self.present_portfolios(ctx);
         if let Some((_, id)) = self.active_ids() {
             let out = self.session.take_js_output(id);
