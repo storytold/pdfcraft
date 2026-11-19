@@ -14,7 +14,7 @@ Dokumen contoh dalam gambar adalah *PdfCraft Showcase*, PDF 13 halaman yang memp
 Panduan ini diterjemahkan dari [README berbahasa Inggris pada revisi `175992b5a`](https://github.com/storytold/pdfcraft/blob/175992b5a2045d00cdf8a20f812ea4aac522b099/README.md).
 Angka pengujian dan kesiapan fitur mengacu pada pengukuran yang dilaporkan pada revisi tersebut. Lihat README bahasa Inggris untuk keterangan terbaru.
 
-[Membaca](#membaca-dokumen) · [Menata halaman](#menata-halaman) · [Menggabungkan dan memisahkan](#menggabungkan-dan-memisahkan-pdf) · [Keamanan](#dokumen-yang-dilindungi-kata-sandi) · [Formulir dan komentar](#komentar-formulir-lapisan-dan-lampiran) · [OCR](#memindai-dan-memeriksa-hasil-ocr) · [Otomasi](#otomasi-dan-agen-ai) · [Mulai menggunakan](#mulai-menggunakan) · [Unduhan](#pilihan-unduhan)
+[Membaca](#membaca-dokumen) · [Mengatur halaman](#mengatur-halaman) · [Menggabungkan dan memisahkan](#menggabungkan-dan-memisahkan-pdf) · [Keamanan](#dokumen-yang-dilindungi-kata-sandi) · [Formulir dan komentar](#komentar-formulir-lapisan-dan-lampiran) · [OCR](#memindai-dan-memeriksa-hasil-ocr) · [Otomasi](#otomasi-dan-agen-ai) · [Memulai](#memulai) · [Unduhan](#pilihan-unduhan)
 
 ## Komunitas
 
@@ -61,7 +61,7 @@ Pengaturan ini mempertahankan pilihan beberapa halaman dan halaman yang sedang d
 Ukuran gambar mini tetap sama saat file dimuat ulang. Aplikasi tidak menyimpan ukuran ini untuk sesi berikutnya.
 Otomasi dapat mengaturnya dengan `ui.set {"key":"thumbnail-zoom","value":"75"}` dan membacanya melalui `active.thumbnail_zoom` pada `ui.state`.
 
-## Menata halaman
+## Mengatur halaman
 
 Buka **Atur halaman** untuk melihat gambar mini semua halaman.
 Klik untuk memilih satu halaman; gunakan `⌘`-klik atau `⇧`-klik untuk memilih beberapa halaman di macOS.
@@ -265,7 +265,7 @@ Hasil diperiksa dengan implementasi pembanding: hayro dan qpdf pada CI, serta po
 PdfCraft dikembangkan dengan pendekatan *clean room*: perilaku mengacu pada spesifikasi ISO 32000 dan pengamatan keluaran perangkat lunak, tanpa menyalin kode implementasi produk lain.
 Sumber dan lisensi ikon, font, gambar, serta aset lain tercatat di [ATTRIBUTION.md](ATTRIBUTION.md).
 
-## Mulai menggunakan
+## Memulai
 
 Untuk langsung memakai aplikasi, unduh paket siap pakai dari [halaman PdfCraft](https://getartcraft.com/apps/pdfcraft).
 Untuk membangun dari sumber, diperlukan Rust 1.95 atau lebih baru.
