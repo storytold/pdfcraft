@@ -19,7 +19,7 @@
 
 use std::cell::Cell;
 
-use super::{Dict, Document, HashSet, ObjRef, Object, same_entries, same_object};
+use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, same_entries, same_object};
 
 /// The page attributes a page inherits from its ancestors (ISO 32000-2 §7.7.3.4).
 const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
@@ -54,6 +54,12 @@ fn explain(doc: &Document, old: &Document, signed_nodes: &HashSet<u32>, signed_k
     }
     let hidden = name_tree(old, b"Templates")?;
     let named = name_tree(old, b"Pages")?;
+    let templates = Templates::of(old, &hidden, &named, &signed);
+    // The hidden templates by object, the first entry naming each.
+    let mut hidden_at: HashMap<u32, &(Vec<u8>, ObjRef)> = HashMap::new();
+    for entry in &hidden.entries {
+        hidden_at.entry(entry.1.num).or_insert(entry);
+    }
     let budget = Cell::new(MAX_COMPARED);
     let mut explained = HashSet::new();
     let mut shown = Vec::new();
@@ -69,7 +75,7 @@ fn explain(doc: &Document, old: &Document, signed_nodes: &HashSet<u32>, signed_k
         }
         if existed(old, page.num) {
             // A hidden template's own page, moved into the page tree.
-            let (key, template) = hidden.entries.iter().find(|(_, r)| r.num == page.num)?;
+            let (key, template) = hidden_at.get(&page.num)?;
             let before = old.get(*template);
             let before = before.as_dict()?;
             // A template with no resources of its own would draw with the page tree's.
@@ -78,14 +84,14 @@ fn explain(doc: &Document, old: &Document, signed_nodes: &HashSet<u32>, signed_k
             }
             shown.push((key.clone(), *template));
         } else {
-            explained.extend(copied(doc, old, *page, now, [&hidden, &named], &budget)?);
+            explained.extend(copied(doc, old, *page, now, &templates, &budget)?);
         }
         explained.insert(page.num);
     }
     if !shown.is_empty() {
         explained.extend(moved_names(doc, old, &hidden, &named, &shown)?);
     }
-    explained.extend(page_tree(doc, old, &pages, &kept, signed_nodes, signed_kids)?);
+    explained.extend(page_tree(doc, old, &pages, &kept, signed_nodes, signed_kids, &budget)?);
     Some(explained)
 }
 
@@ -110,10 +116,32 @@ fn same_entry_of(a: &Dict, b: &Dict, key: &[u8]) -> bool {
     super::same_entry(a.get(key), b.get(key))
 }
 
+/// The signed revision's page templates a new page can be a copy of (§12.7.7): those its
+/// `/Templates` tree names that are hidden templates (`/Type /Template`), and those its `/Pages`
+/// tree names that are pages of its page tree.
+struct Templates<'a> {
+    all: Vec<ObjRef>,
+    by_name: HashMap<&'a [u8], Vec<ObjRef>>,
+}
+
+impl<'a> Templates<'a> {
+    fn of(old: &Document, hidden: &'a NameTree, named: &'a NameTree, signed_pages: &HashSet<u32>) -> Self {
+        let is_template = |r: ObjRef| old.get(r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Template"));
+        let eligible =
+            hidden.entries.iter().filter(|(_, r)| is_template(*r)).chain(named.entries.iter().filter(|(_, r)| signed_pages.contains(&r.num)));
+        let mut templates = Templates { all: Vec::new(), by_name: HashMap::new() };
+        for (name, r) in eligible {
+            templates.all.push(*r);
+            templates.by_name.entry(name.as_slice()).or_default().push(*r);
+        }
+        templates
+    }
+}
+
 /// The new objects of `page`, a new page (`now`), when it is a copy of one of the signed
-/// templates in `trees`: the one its `/TemplateInstantiated` names, or, without one, any of
-/// them. `None` when it copies none.
-fn copied(doc: &Document, old: &Document, page: ObjRef, now: &Dict, trees: [&NameTree; 2], budget: &Cell<usize>) -> Option<HashSet<u32>> {
+/// `templates`: the one its `/TemplateInstantiated` names, or, without one, any of them. `None`
+/// when it copies none.
+fn copied(doc: &Document, old: &Document, page: ObjRef, now: &Dict, templates: &Templates, budget: &Cell<usize>) -> Option<HashSet<u32>> {
     let instantiated = now.get(b"TemplateInstantiated");
     let wanted = match instantiated {
         Some(Object::Name(name)) => Some(name.as_slice()),
@@ -139,16 +167,17 @@ fn copied(doc: &Document, old: &Document, page: ObjRef, now: &Dict, trees: [&Nam
             }
         }
     }
-    for (key, template) in trees.iter().flat_map(|t| t.entries.iter()) {
-        if wanted.is_some_and(|w| w != key.as_slice()) {
-            continue;
-        }
+    let candidates = match wanted {
+        Some(name) => templates.by_name.get(name).map_or(&[][..], Vec::as_slice),
+        None => templates.all.as_slice(),
+    };
+    for template in candidates {
+        // Each template tried spends the budget, even one that differs before a value is
+        // compared: pages × templates stays bounded.
+        budget.set(budget.get().checked_sub(1)?);
         if let Some(found) = same_page(doc, old, page, now, *template, budget) {
             fresh.extend(found);
             return Some(fresh);
-        }
-        if budget.get() == 0 {
-            return None;
         }
     }
     None
@@ -201,8 +230,10 @@ struct Compare<'a> {
     old: &'a Document,
     budget: &'a Cell<usize>,
     /// Pairs of objects already being compared: met again, they are taken as the same (any
-    /// difference shows elsewhere), so a cycle ends.
-    seen: HashSet<(u32, u32)>,
+    /// difference shows elsewhere), so a cycle ends. Only reference against reference: a
+    /// reference met against a direct value is compared each time (two different direct values
+    /// may meet the same reference), within the depth and the budget.
+    seen: HashSet<(ObjRef, ObjRef)>,
     /// The new objects reached on the page's side.
     fresh: HashSet<u32>,
 }
@@ -218,14 +249,14 @@ impl Compare<'_> {
             // The template's own object, shared: whatever happened to it is judged on its own.
             (Object::Ref(x), Object::Ref(y)) if x == y => true,
             (Object::Ref(_), _) | (_, Object::Ref(_)) => {
-                let x = a.as_ref().map(|r| r.num).unwrap_or(u32::MAX);
-                let y = b.as_ref().map(|r| r.num).unwrap_or(u32::MAX);
                 if let Some(r) = a.as_ref()
                     && !existed(self.old, r.num)
                 {
                     self.fresh.insert(r.num);
                 }
-                if !self.seen.insert((x, y)) {
+                if let (Some(x), Some(y)) = (a.as_ref(), b.as_ref())
+                    && !self.seen.insert((x, y))
+                {
                     return true;
                 }
                 let (a, b) = (self.doc.resolve(a), self.old.resolve(b));
@@ -329,8 +360,17 @@ fn moved_names(doc: &Document, old: &Document, hidden: &NameTree, named: &NameTr
     // Each tree node is one of the signed trees', or new.
     let signed_nodes: HashSet<u32> = hidden.nodes.union(&named.nodes).copied().collect();
     for num in now_hidden.nodes.iter().chain(&now_named.nodes) {
-        if existed(old, *num) && !signed_nodes.contains(num) {
-            return None;
+        if existed(old, *num) {
+            // A signed node changes only in what holds the names: anything else it holds (a
+            // number tree's `/Nums`, were it one too) is no part of the move.
+            let (now, was) = (doc.try_get(*num).ok()?, old.try_get(*num).ok()?);
+            let kept = match (now.as_dict(), was.as_dict()) {
+                (Some(now), Some(was)) => same_entries(now, was, &[b"Names", b"Kids", b"Limits"]),
+                _ => same_object(&now, &was),
+            };
+            if !signed_nodes.contains(num) || !kept {
+                return None;
+            }
         }
         explained.insert(*num);
     }
@@ -371,6 +411,7 @@ fn page_tree(
     kept: &[ObjRef],
     signed_nodes: &HashSet<u32>,
     signed_kids: &HashSet<u32>,
+    budget: &Cell<usize>,
 ) -> Option<HashSet<u32>> {
     const NODE: [&[u8]; 8] = [b"Type", b"Kids", b"Count", b"Parent", b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
     let catalog = doc.get(doc.root()?);
@@ -457,14 +498,18 @@ fn page_tree(
         if !same_entries(now_dict, was_dict, &[b"Parent", b"Resources", b"MediaBox", b"CropBox", b"Rotate"]) {
             return None;
         }
+        // The values it shows, whether held directly or through references on either side (the
+        // budget is spent only where the two are written differently).
+        let mut compare = Compare { doc, old, budget, seen: HashSet::new(), fresh: HashSet::new() };
         let same_inherited = INHERITABLE.iter().all(|k| match (inherited(doc, *page, k), inherited(old, *page, k)) {
-            (Some(a), Some(b)) => same_object(&a, &b),
+            (Some(a), Some(b)) => same_object(&a, &b) || compare.same(&a, &b, 0),
             (None, None) => true,
             _ => false,
         });
         if !same_inherited {
             return None;
         }
+        explained.extend(compare.fresh);
         explained.insert(page.num);
     }
     Some(explained)
