@@ -17,6 +17,7 @@ use craft::ui::contract::Show as _;
 use craft::ui::display::Text;
 use craft::ui::list::OpenSet;
 use craft::ui::primitives::TextureStatistics;
+use craft::ui::primitives::textures::TextureState;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::focus::{self, FocusTarget};
 use craft::ui::style::DataColor;
@@ -839,6 +840,8 @@ struct PageBodyCx<'a> {
     rotation: u16,
     /// The view's current page this pass.
     current: usize,
+    /// The scale the pages render at this pass, which the dragged comment's layers render at too.
+    render_scale: f32,
     /// Full screen: the page, display and rotation it shows, captured before the page view holds the view state;
     /// `None` outside full screen.
     present_at: Option<presenter::PresentAt>,
@@ -1297,6 +1300,31 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed };
         comments::show(ui, body, session, cx.rotation, cx.info, cx.prefs, cx.tool, hover);
     }
+    // The comment being dragged, drawn from its own layers where it goes, over the page that still shows it where it
+    // was. A page whose picture is of this revision has the released move: its layer settles.
+    {
+        let ctx = ui.ctx().clone();
+        let movable = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_)) && !cx.comments_hidden;
+        let target = movable.then(|| session.comments.primary()).flatten();
+        let loading = |page: usize| body.pages.iter().any(|p| p.page == page && matches!(p.picture, TextureState::Loading { .. }));
+        let drag = &mut session.signature_drag;
+        drag.prepare(&ctx, cx.doc, target, cx.render_scale);
+        for placed in body.pages.iter().filter(|p| !loading(p.page)) {
+            drag.page_received(placed.page);
+            session.comments.page_rendered(placed.page);
+        }
+        let stale = drag.moving_page().is_some_and(loading);
+        drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), stale, cx.render_scale);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+        for placed in body.pages {
+            let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
+            let xf = PageXform::of(placed, cx.rotation, size);
+            let pcx =
+                comments::PageCx { page: placed.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
+            signature_drag::DragLayer::new(&session.signature_drag, &pcx, &map, cx.tool, &session.comments, session.pending_edit.as_ref())
+                .show_at(ui, body.rect);
+        }
+    }
     if cx.calc_order {
         let hovered = match &parts_out.hovered {
             Some((Owner::Field { field, .. } | Owner::PrepareField { field, .. }, _)) => {
@@ -1499,7 +1527,8 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let find_marks: Vec<TextMark> = view.find.as_ref().map(Find::marks).unwrap_or_default();
     let present_at =
         presenting.then_some(presenter::PresentAt { current: view.view.current, display: view.view.display, rotation: view.view.rotation });
-    let border = if view.view.page_gaps { PageBorder::DropShadow } else { PageBorder::None };
+    // Shadows only with the preference on, and only between gaps: they would darken the page before when pages touch.
+    let border = if view.view.page_gaps && app.show_page_edge_shadows { PageBorder::DropShadow } else { PageBorder::None };
     let keep = view.session.presenter.keep_pages();
     if view.momentary_options != navigation {
         view.momentary = Momentary::new(navigation);
@@ -1568,6 +1597,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         chosen,
         rotation: state.rotation,
         current: state.current,
+        render_scale: scale,
         sizes: &page_sizes[..],
         view_key,
         tools,

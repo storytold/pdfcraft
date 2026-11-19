@@ -41,7 +41,7 @@ fn harness() -> H {
 
 /// Whether the Preferences window is on screen: its page list names the first page while it is open.
 fn preferences_shown(h: &H) -> bool {
-    h.query_by_label("General & Interface").is_some()
+    h.query_by_role_and_label(egui::accesskit::Role::ListItem, "General & Interface").is_some()
 }
 
 fn click(h: &mut H, label: &str) {
@@ -75,6 +75,8 @@ fn cases() -> Vec<Case> {
             name: "layout and continuous on the active view",
             page: "Documents and view",
             edit: |h| {
+                // A choice row is a drop-down: its options show once it opens.
+                click(h, "Default page display");
                 click(h, "Two-page view");
                 click(h, "Continuous scrolling");
             },
@@ -83,16 +85,24 @@ fn cases() -> Vec<Case> {
                 v.display == craft::pages::PageDisplay::TwoUp && v.continuous != crate::control::new_app().views.first().map_or(true, |_| true)
             },
         },
-        Case { name: "units", page: "Documents and view", edit: |h| click(h, Unit::Millimetres.label()), applied: |a| a.units == Unit::Millimetres },
+        Case {
+            name: "units",
+            page: "Documents and view",
+            edit: |h| {
+                click(h, "Units");
+                click(h, Unit::Millimetres.label());
+            },
+            applied: |a| a.units == Unit::Millimetres,
+        },
         Case {
             name: "tools side and rail side",
             page: "General & Interface",
             edit: |h| {
-                // The tools row comes first, then the rail row; each has a Left and a Right option.
-                h.get_all_by_label("Right").next().unwrap().click();
-                h.run_steps(3);
-                h.get_all_by_label("Left").nth(1).unwrap().click();
-                h.run_steps(3);
+                // Each side row is a drop-down of Left and Right.
+                click(h, "Tools panel side");
+                click(h, "Right");
+                click(h, "Navigation rail side");
+                click(h, "Left");
             },
             applied: |a| {
                 let dock = side_panels::state(a);
@@ -102,7 +112,10 @@ fn cases() -> Vec<Case> {
         Case {
             name: "animation effects",
             page: "General & Interface",
-            edit: |h| click(h, "Off"),
+            edit: |h| {
+                click(h, "Animation effects");
+                click(h, "Off");
+            },
             applied: |a| a.animation_effects == MotionChoice::Off,
         },
         Case {
@@ -131,7 +144,9 @@ fn edited(case: &Case) -> H {
     let mut h = harness();
     h.state_mut().open_preferences();
     h.run_steps(4);
-    click(&mut h, case.page);
+    // The page list's row, not the heading of the page it shows.
+    h.get_by_role_and_label(egui::accesskit::Role::ListItem, case.page).click();
+    h.run_steps(3);
     (case.edit)(&mut h);
     h
 }

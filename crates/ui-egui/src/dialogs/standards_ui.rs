@@ -186,8 +186,12 @@ impl StackDialog for PdfaDialog {
                     Some(v) => {
                         let findings: Vec<Finding> = v.iter().enumerate().map(|(n, i)| finding(n as u64, i)).collect();
                         FindingsSummary::new(&findings).show(ui);
-                        FindingsList::new(tl!("PDF/A problems").to_string())
-                            .show_items(ui, &Findings::new(&findings), &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>()));
+                        // The dialog's body scrolls: the list takes its full height and owns no scroll of its own.
+                        FindingsList::new(tl!("PDF/A problems").to_string()).natural_height(true).show_items(
+                            ui,
+                            &Findings::new(&findings),
+                            &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>()),
+                        );
                     }
                 }
                 true

@@ -2,7 +2,7 @@ use craft::behavior::{IconId, Mixed};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::choice::Swatch;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::display::Divider;
 use craft::ui::form::SliderField;
 
@@ -229,7 +229,8 @@ fn popover_from(ui: &mut egui::Ui, label: &str, opener: impl FnOnce(&mut egui::U
     let resp = opener(ui);
     let key = resp.id.with("popover-open");
     let mut open = ui.memory(|m| m.data.get_temp::<bool>(key)).unwrap_or(false);
-    if resp.clicked() {
+    // The framework's click rule: a click, or the opener activated by key or by AccessKit.
+    if clicked(&resp) {
         open = !open;
     }
     let mut body = Some(body);

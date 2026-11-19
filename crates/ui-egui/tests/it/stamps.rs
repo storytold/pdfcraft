@@ -109,7 +109,7 @@ fn creating_placing_and_keeping_custom_stamps() {
     let ctx = h.ctx.clone();
     h.state_mut().start_custom_stamp(&ctx, "logo.png".into(), png);
     h.run_steps(2);
-    h.get_by_label("Create Custom Stamp");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Create Custom Stamp");
     h.get_by_label("Category").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
