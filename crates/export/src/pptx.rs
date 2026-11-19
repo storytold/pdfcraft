@@ -116,7 +116,8 @@ fn pptx_table(shape_id: u32, t: &Table, x: f64, y: f64, content_w: f64) -> (Shap
         id: ShapeId(shape_id),
         name: format!("Table {shape_id}"),
         xfrm: Some(Xfrm { x, y, w: table_w, h: table_h, ..Default::default() }),
-        kind: ShapeKind::Table(DmlTable { cols: widths, rows, ..Default::default() }),
+        // PDF cells already carry their formatting; do not invent a themed header or banding.
+        kind: ShapeKind::Table(DmlTable { cols: widths, rows, style: "none".into(), first_row: false, band_row: false, ..Default::default() }),
         ..Default::default()
     };
     (shape, table_h)
