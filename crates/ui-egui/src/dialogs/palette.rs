@@ -58,6 +58,11 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut hits: Vec<(usize, Hit)> = Vec::new();
     let active = app.active_ids().map(|(_, id)| id);
     for spec in pdfcraft_engine::commands::COMMANDS {
+        // Absent, not dimmed, while no cloud backend is connected: the same rule the menus and
+        // the hotbar use. A greyed palette hit with nothing behind it reads as a broken command.
+        if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(app) {
+            continue;
+        }
         let label = pdfcraft_engine::commands::current_label(spec, &app.session, active);
         let translated = crate::i18n::command_label(&label);
         if let Some(s) = score(&translated, &q).or_else(|| score(&label, &q)).or_else(|| score(spec.id, &q).map(|s| s + 50)) {

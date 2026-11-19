@@ -286,7 +286,23 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 ui.add_space(4.0);
                 let tip = crate::commands::command_tip(ui.ctx(), tl!("Open a PDF ({key})"), "file.open");
-                if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
+                if crate::cloud::available(app) {
+                    // Cloud connected: a popup lets the user choose local or cloud. No extra
+                    // widget_info call here (F13 in the review): ghost_button_sized's own
+                    // Response already carries one, built from this same response's real
+                    // enabled state rather than a second, hardcoded `true`.
+                    let open_resp = widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(&tip);
+                    egui::Popup::menu(&open_resp).show(|ui| {
+                        if ui.button(tl!("Open local file…")).clicked() {
+                            app.execute("file.open");
+                            ui.close();
+                        }
+                        if ui.button(tl!("Open from cloud…")).clicked() {
+                            app.execute("file.open_cloud");
+                            ui.close();
+                        }
+                    });
+                } else if widgets::ghost_button_sized(ui, "plus", tl!("Open"), tab_h).on_hover_text(tip).clicked() {
                     app.open_dialog();
                 }
                 ui.with_layout(far_end, |ui| {
@@ -325,6 +341,52 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     // One click to the community, from anywhere in the app.
                     if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
                         app.execute("help.discord");
+                    }
+                    // Cloud: account badge, presence, share button. The real craft-ui pages and
+                    // title-bar controls (storytold/craft-libs#160), not a local placeholder; see
+                    // cloud.rs's module doc for why nothing ever connects a backend yet, which is
+                    // what keeps every one of these drawing nothing below. The layout runs
+                    // right-to-left, so these appear to the left of the theme/help controls and
+                    // do not overlap the scrolling tabs.
+                    if crate::cloud::available(app) {
+                        ui.add_space(4.0);
+                        // Share button: shown only when the provider supports sharing.
+                        if crate::cloud::shares(app) {
+                            let copies = crate::cloud::copies();
+                            if let Some(fmt) = crate::cloud::share_button(app, ui, &copies) {
+                                // "Save a Copy as PDF": the only copy format PdfCraft offers.
+                                let _ = fmt; // the format id is always "pdf" for us
+                            }
+                        }
+                        // Who else has this document open (viewer presence only).
+                        crate::cloud::who(app, ui);
+                    }
+                    // Independent of crate::cloud::available, drawn on its own and spaced on its
+                    // own: an e-sign service and a cloud storage account are different things to
+                    // have configured. request_button itself returns None while esign's own
+                    // available() is false, so this draws nothing today for that reason alone.
+                    if app.esign.available() {
+                        ui.add_space(4.0);
+                    }
+                    let esign_labels = craft_ui::esign::EsignLabels::default();
+                    if let Some(craft_ui::menu::SplitHit::Primary) = crate::esign::request_button(ui, &esign_labels, app.esign.available(), &[]) {
+                        let (id, title, etag) = match crate::cloud::origin(app) {
+                            Some(origin) => (origin.entry.id.clone(), origin.entry.name.clone(), origin.entry.etag.clone()),
+                            None => (
+                                String::new(),
+                                app.active.and_then(|i| app.session.get(app.views.get(i)?.id)).map(|d| d.display_name()).unwrap_or_default(),
+                                None,
+                            ),
+                        };
+                        // craft_cloud::Identity (storytold/craft-libs#160), not a redeclared
+                        // copy (F6 in the review): a redeclared one would have dropped avatar.
+                        let sender = craft_cloud::Identity {
+                            id: String::new(),
+                            display: app.cloud.account.as_ref().map(|a| a.display.clone()).unwrap_or_default(),
+                            email: None,
+                            avatar: None,
+                        };
+                        app.esign.open(id, title, etag, sender);
                     }
                 });
             });

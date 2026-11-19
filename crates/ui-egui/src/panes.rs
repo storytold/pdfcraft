@@ -527,6 +527,10 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 
 /// What the main pane shows: tab `main`, or Home or Combine files while it has none.
 fn main_pane(app: &mut PdfCraftApp, main: Option<usize>, ui: &mut egui::Ui) {
+    if app.cloud_page.is_some() {
+        crate::cloud::page_ui(app, ui);
+        return;
+    }
     match main {
         None if app.combine_showing() => crate::combine_ui::page(app, ui),
         None => crate::home::show(app, ui),

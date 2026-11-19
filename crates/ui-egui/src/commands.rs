@@ -83,6 +83,10 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        // Cloud commands need a connected service; without one they are unavailable.
+        if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(self) {
+            return false;
+        }
         // Undo and Redo act on the Combine files list while its tab shows.
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
@@ -128,6 +132,12 @@ impl PdfCraftApp {
 
     /// Why the command can't run right now, for the user.
     fn disabled_reason(&self, spec: &CommandSpec) -> String {
+        // Both read Needs::Nothing, so without this they would fall to the catch-all below and
+        // tell the user to open a document first, which has nothing to do with why either is
+        // disabled (F7 in the review): what is actually missing is a connected cloud service.
+        if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") {
+            return tl!("No cloud service is configured").to_string();
+        }
         match spec.needs {
             commands::Needs::Undo => tl!("Nothing to undo").to_string(),
             commands::Needs::Redo => tl!("Nothing to redo").to_string(),
@@ -187,7 +197,22 @@ impl PdfCraftApp {
 
     fn run_file_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
-            "file.open" => self.open_dialog(),
+            "file.open" => {
+                // Leaving an unsubmitted Save As without saving (craft_ui::cloud::cancel_save_as's
+                // own contract): a copy left typed under Save As's name field must not carry over
+                // into the next Save As this window opens, cloud or local.
+                if self.cloud_page == Some(crate::CloudPage::SaveAs) {
+                    crate::cloud::cancel_save_as(self);
+                }
+                self.cloud_page = None;
+                self.open_dialog();
+            }
+            "file.open_cloud" => {
+                if self.cloud_page == Some(crate::CloudPage::SaveAs) {
+                    crate::cloud::cancel_save_as(self);
+                }
+                self.cloud_page = Some(crate::CloudPage::Open);
+            }
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.
                 Some(p) => self.open_recent(&p),
@@ -197,10 +222,24 @@ impl PdfCraftApp {
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
-                self.save_active(SaveTarget::InPlace);
+                // A document opened from the cloud saves back through its origin's etag guard
+                // (craft_ui::cloud::save); nothing populates a cloud origin today (cloud.rs's
+                // module doc says why), so `has_target` is always false and this always falls
+                // back to the local-file save.
+                if crate::cloud::has_target(self) {
+                    if let Err(error) = crate::cloud::save(self) {
+                        self.notify(error);
+                    }
+                } else {
+                    self.save_active(SaveTarget::InPlace);
+                }
             }
             "file.save_as" => {
                 self.save_active(SaveTarget::As);
+            }
+            "file.save_as_cloud" => {
+                crate::cloud::cancel_save_as(self);
+                self.cloud_page = Some(crate::CloudPage::SaveAs);
             }
             "file.close" => {
                 if let Some(i) = active {

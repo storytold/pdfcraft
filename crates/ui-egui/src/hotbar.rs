@@ -192,6 +192,12 @@ fn matches_search(spec: &pdfcraft_engine::commands::CommandSpec, query: &str) ->
 fn tool_buttons(ui: &mut egui::Ui, app: &PdfCraftApp, tools: &[String], cell: f32, run: &mut Option<&'static str>, remove: &mut Option<usize>) {
     for (index, id) in tools.iter().enumerate() {
         let Some(spec) = command(id) else { continue };
+        // Absent, not dimmed, while no cloud backend is connected (same rule the menus use):
+        // the slot survives a pin's persistence, but a greyed button with nothing behind it
+        // reads as a broken hotbar rather than a feature waiting on a backend.
+        if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(app) {
+            continue;
+        }
         let active = crate::comments::CommentTool::from_command(id).is_some_and(|tool| app.quick_tool == crate::QuickTool::Comment(tool));
         let button = ui.add_enabled_ui(app.command_enabled(spec), |ui| icons::button(ui, spec.icon, cell, active, tl!(spec.label))).inner;
         if button.clicked() {
@@ -914,6 +920,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 ui.spacing_mut().item_spacing.y = 5.0;
                 for spec in COMMANDS {
                     if !matches_search(spec, &bar.search) {
+                        continue;
+                    }
+                    // Nothing to pin into a hotbar slot that would never do anything (same rule
+                    // as the draw loop above): offering it here would let a user pin a command
+                    // that can only ever appear disabled.
+                    if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(app) {
                         continue;
                     }
                     let mut selected = bar.tools.iter().any(|id| id == spec.id);

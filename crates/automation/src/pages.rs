@@ -463,12 +463,19 @@ impl Automation {
         let list: Vec<Value> = commands::COMMANDS
             .iter()
             .map(|c| {
+                // Needs::Nothing is always satisfiable, so the engine alone would call these
+                // enabled with no cloud backend to reach: this layer never learns whether one
+                // is connected (cloud lives in crates/ui-egui, below which this crate must not
+                // reach), so the two cloud commands are reported disabled unconditionally rather
+                // than wrongly enabled. An agent asking for `enabled_only` must not be told it
+                // can run a command that only ever opens a UI page to nowhere.
+                let enabled = !matches!(c.id, "file.open_cloud" | "file.save_as_cloud") && commands::is_enabled(c, &self.session, active);
                 json!({
                     "id": c.id,
                     "label": commands::current_label(c, &self.session, active),
                     "menu": c.menu,
                     "shortcut": c.shortcut_for(cfg!(target_os = "macos")).map(|s| s.label(cfg!(target_os = "macos"))),
-                    "enabled": commands::is_enabled(c, &self.session, active),
+                    "enabled": enabled,
                     "tool": tools::tool_for_command(c.id),
                     "params": tools::tool_for_command(c.id).and_then(tools::find).map(|t| &t.input_schema),
                 })
