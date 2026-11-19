@@ -177,8 +177,15 @@ fn sign_with_created_id(h: &mut Harness<'static, PdfCraftApp>, dir: &std::path::
 }
 
 fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
-    // Signatures panel: expand, trust the signer → valid.
-    h.get_by_label_contains("Signed by Grace Hopper").click();
+    // Signatures panel: expand, trust the signer → valid. The head row is the panel list's item.
+    {
+        use egui::accesskit::Role;
+        let roles: Vec<Role> = h.query_all_by_label_contains("Signed by Grace Hopper").map(|n| n.accesskit_node().role()).collect();
+        h.query_all_by_label_contains("Signed by Grace Hopper")
+            .find(|n| matches!(n.accesskit_node().role(), Role::ListItem | Role::TreeItem | Role::Row))
+            .unwrap_or_else(|| panic!("the signature's row in the Signatures panel, among {roles:?}"))
+            .click();
+    }
     h.run_steps(2);
     h.get_by_label("Signature validity is UNKNOWN:");
     // Seed a find so the trust path proves it invalidates the view: trust rebuilds
@@ -365,8 +372,10 @@ fn save_as_keeps_a_signed_document_incremental() {
     };
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
     let ctx_h = h.ctx.clone();
-    assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As), "a signed document can be saved as a copy");
-    let saved = files.file(&out).expect("file written");
+    // Save As asks where first, and writes once the answer arrives on a later pass.
+    h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As);
+    h.run_steps(4);
+    let saved = files.file(&out).expect("a signed document can be saved as a copy");
     assert!(saved.starts_with(&signed), "the signed revision is kept as it was");
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
 }
@@ -421,8 +430,10 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::AddAnnotation(note)));
     let ctx_h = h.ctx.clone();
-    assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
-    let saved = files.file(&out).expect("file written");
+    // Save As asks where first, and writes once the answer arrives on a later pass.
+    h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As);
+    h.run_steps(4);
+    let saved = files.file(&out).expect("the document can be saved as a copy");
     assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
     let mut s = pdfcraft_engine::Session::new();
     let id = s.open("copy.pdf", None, std::sync::Arc::new(saved), None).expect("the copy opens");
@@ -494,9 +505,8 @@ fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
 
 /// Whether the page's hover tip shows and says `text`.
 fn tip_says(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
-    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"));
-    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover")).filter(|_| m.areas().is_visible(&layer))) else { return false };
-    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+    let tips: Vec<egui::Rect> = h.query_all_by_role(egui::accesskit::Role::Tooltip).map(|n| n.rect()).collect();
+    h.query_all_by_label_contains(text).any(|n| tips.iter().any(|tip| tip.contains(n.rect().center())))
 }
 
 /// A signed field's validation badge is the viewer's own mark, not part of the page: its verdict
@@ -750,8 +760,10 @@ fn os_store_identities_are_not_persisted() {
     }
     let saved = app.settings_snapshot();
     let settings = serde_json::to_value(&saved).unwrap();
-    assert_eq!(settings["digital_ids"].as_array().unwrap().len(), 1);
-    assert_eq!(settings["digital_ids"][0]["path"], "file-id.p12");
+    // Digital IDs are kept in the settings' signature table.
+    let ids = &settings["signature"]["digital_ids"];
+    assert_eq!(ids.as_array().unwrap().len(), 1);
+    assert_eq!(ids[0]["path"], "file-id.p12");
     let mut restored = crate::control::new_app();
     restored.set_option(&egui::Context::default(), "language", "en").unwrap();
     restored.apply_settings(&saved);

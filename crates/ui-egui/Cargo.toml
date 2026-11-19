@@ -112,5 +112,10 @@ toml = "1"
 # Only synthetic attribute fixtures use xattr; product reads/writes use rustix.
 xattr = "1.6"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `Updater::ready_for_tests` (through the facade): an updater whose update has installed, for the
+# Restart to Update screen tests.
+craft-update = { workspace = true, features = ["screen-testing"] }
+
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 tempfile = "3.27"

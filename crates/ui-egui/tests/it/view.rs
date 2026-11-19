@@ -2276,6 +2276,7 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
         craft::host::Picked::Paths(vec![more.clone()]),
         craft::host::Picked::Paths(vec![out.clone()]),
     ]));
+    let host_files = files.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
@@ -2307,7 +2308,9 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
     h.get_by_label("Extract pages as separate files").click();
     h.run_steps(2);
     h.get_all_by_label("Extract").last().unwrap().click();
-    assert!(crate::support::step_until(&mut h, |_| std::fs::read_dir(&out).is_ok_and(|d| d.count() == 2)), "the two selected pages, each a file");
+    // The files are written through the host's file service.
+    let extracted = |out: &std::path::Path| host_files.written().iter().filter(|p| p.parent() == Some(out)).count();
+    assert!(crate::support::step_until(&mut h, |_| extracted(&out) == 2), "the two selected pages, each a file");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

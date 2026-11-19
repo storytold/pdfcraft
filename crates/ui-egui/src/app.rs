@@ -44,7 +44,7 @@ pub struct AppServices {
     clipboard: Clipboard,
     recovery_dir: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
-    update_source: Option<UpdateSource>,
+    updater: craft::update::updater::Updater,
     intake: FileIntake,
     #[cfg(not(target_arch = "wasm32"))]
     watch: craft::platform::watch::FileWatch<DocId>,
@@ -62,16 +62,32 @@ impl AppServices {
         intake: FileIntake,
         #[cfg(not(target_arch = "wasm32"))] watch: craft::platform::watch::FileWatch<DocId>,
     ) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let updater = {
+            let updater = craft::update::updater::Updater::new(&UPDATE_APP, pdfcraft_engine::build_info::version().to_string());
+            match update_source {
+                Some(source) => updater.with_source(source),
+                None => updater,
+            }
+        };
         Self {
             wake,
             clipboard,
             recovery_dir,
             #[cfg(not(target_arch = "wasm32"))]
-            update_source,
+            updater,
             intake,
             #[cfg(not(target_arch = "wasm32"))]
             watch: reload::document_watch(watch),
         }
+    }
+
+    /// These services with `updater` in place of the one over the update source: an updater
+    /// whose update has already installed (craft-update's `Updater::ready_for_tests`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_updater(mut self, updater: craft::update::updater::Updater) -> Self {
+        self.updater = updater;
+        self
     }
 
     /// The desktop's or the browser's own services, waking `ctx`, reading the files to open from
@@ -192,7 +208,7 @@ impl PdfCraftApp {
             clipboard,
             recovery_dir,
             #[cfg(not(target_arch = "wasm32"))]
-            update_source,
+            updater,
             intake,
             #[cfg(not(target_arch = "wasm32"))]
             watch,
@@ -206,14 +222,6 @@ impl PdfCraftApp {
         });
         let recovered = store.as_ref().map(|s| s.leftovers()).unwrap_or_default();
         let autosave = Autosave::new(store.is_some().then(|| std::time::Duration::from_secs_f64(recovery::AUTOSAVE_SECS)));
-        #[cfg(not(target_arch = "wasm32"))]
-        let updater = {
-            let updater = craft::update::updater::Updater::new(&UPDATE_APP, pdfcraft_engine::build_info::version().to_string());
-            match update_source {
-                Some(source) => updater.with_source(source),
-                None => updater,
-            }
-        };
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             // PLAN: assumed open_worker::queue(&Host, Wake) -> JobQueue<u64, ResultKind> (pdf-shell-w13).

@@ -326,7 +326,8 @@ fn setting_alternate_text_figure_by_figure() {
     h.run_steps(2);
     h.get_by_role_and_label(Role::Dialog, "Set Alternate Text");
     h.get_by_label("Figure 1 of 2 on page 1");
-    let field = h.get_by_role_and_label(Role::TextInput, "Alternate text");
+    // The alternate text box takes several lines.
+    let field = h.get_by_role_and_label(Role::MultilineTextInput, "Alternate text");
     field.focus();
     field.type_text("A grey square");
     h.run_steps(2);

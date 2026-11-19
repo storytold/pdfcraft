@@ -6,7 +6,7 @@
 use craft::behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, PartKey, PartRef, PressPhase, Sense};
 use craft::keymap::Mods;
 use craft::ui::contract::{
-    Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PartsCx, Pointer as _, Props as _, Role, TooltipAt, TooltipSpec,
+    Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PartsCx, Pointer as _, Props as _, Role, TooltipAt, TooltipSpec, TooltipWhen,
 };
 use craft::ui::runtime::commands::FireSource;
 use craft::ui::runtime::env::Label;
@@ -371,7 +371,8 @@ impl Component for PageParts<'_> {
                 builder = builder.cursor(cursor);
             }
             if let Some(tip) = &part.tip {
-                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer));
+                // At once, as the canvas's hover tip always showed.
+                builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer).when(TooltipWhen::Now));
             }
             if part.focusable {
                 builder.focusable();

@@ -164,7 +164,10 @@ impl PdfCraftApp {
             close_root_window(ctx);
             return true;
         }
-        self.begin_close(ctx, CloseScope::Quit, dirty);
+        // A second quit while the quit is asking leaves the question as it is, as a second close of the window does.
+        if !self.close_guard.as_ref().is_some_and(|g| g.scope() == CloseScope::Quit) {
+            self.begin_close(ctx, CloseScope::Quit, dirty);
+        }
         ctx.request_repaint();
         false
     }
