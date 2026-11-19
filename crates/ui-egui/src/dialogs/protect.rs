@@ -249,10 +249,12 @@ mod tests {
         }
     }
 
+    /// Types into the password field `label`: its input, not the field group or its label that share the name.
     fn type_into(h: &mut Harness<'static, PdfCraftApp>, label: &str, text: &str) {
-        h.get_by_label(label).click();
+        use egui::accesskit::Role;
+        h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).click();
         h.run_steps(2);
-        h.get_by_label(label).type_text(text);
+        h.get_by(|n| n.label().as_deref() == Some(label) && matches!(n.role(), Role::PasswordInput | Role::TextInput)).type_text(text);
         h.run_steps(2);
     }
 
