@@ -16,6 +16,49 @@ pub enum PurviewStatus {
     SdkUnavailable,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PurviewAccount {
+    pub id: String,
+    pub display_name: String,
+    pub email: String,
+    pub principal_name: String,
+}
+
+impl PurviewAccount {
+    pub fn label(&self) -> String {
+        let display = self.display_name.trim();
+        let email = self.email.trim();
+        let principal = self.principal_name.trim();
+        let secondary = if !email.is_empty() {
+            email
+        } else if !principal.is_empty() {
+            principal
+        } else {
+            ""
+        };
+        if !display.is_empty() && !secondary.is_empty() && display != secondary {
+            format!("{display} - {secondary}")
+        } else if !display.is_empty() {
+            display.to_owned()
+        } else if !secondary.is_empty() {
+            secondary.to_owned()
+        } else {
+            "Microsoft account".to_owned()
+        }
+    }
+
+    pub fn initials(&self) -> String {
+        let source = if self.display_name.trim().is_empty() { self.email.trim() } else { self.display_name.trim() };
+        let mut out = String::new();
+        for word in source.split_whitespace().take(2) {
+            if let Some(first) = word.chars().next() {
+                out.extend(first.to_uppercase());
+            }
+        }
+        if out.is_empty() { "M".to_owned() } else { out }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PurviewLabel {
     pub id: String,
@@ -130,6 +173,9 @@ pub enum PurviewError {
 
 pub trait PurviewProvider: Send + Sync {
     fn status(&self) -> PurviewStatus;
+    fn account(&self) -> Option<PurviewAccount>;
+    fn accounts(&self) -> Vec<PurviewAccount>;
+    fn switch_account(&self, account_id: &str) -> Result<(), PurviewError>;
     fn sign_in(&self, username_hint: Option<&str>) -> Result<(), PurviewError>;
     fn sign_out(&self) -> Result<(), PurviewError>;
     fn inspect(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<PurviewOpen>, PurviewError>;
@@ -160,6 +206,18 @@ pub struct UnavailablePurviewProvider;
 impl PurviewProvider for UnavailablePurviewProvider {
     fn status(&self) -> PurviewStatus {
         PurviewStatus::SdkUnavailable
+    }
+
+    fn account(&self) -> Option<PurviewAccount> {
+        None
+    }
+
+    fn accounts(&self) -> Vec<PurviewAccount> {
+        Vec::new()
+    }
+
+    fn switch_account(&self, _account_id: &str) -> Result<(), PurviewError> {
+        Err(PurviewError::SdkUnavailable)
     }
 
     fn sign_in(&self, _username_hint: Option<&str>) -> Result<(), PurviewError> {

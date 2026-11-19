@@ -4,6 +4,78 @@ use crate::PdfCraftApp;
 use crate::theme;
 use crate::theme::Tokens;
 
+fn account_secondary(account: &pdfcraft_engine::PurviewAccount) -> String {
+    if !account.email.trim().is_empty() {
+        account.email.trim().to_owned()
+    } else if !account.principal_name.trim().is_empty() {
+        account.principal_name.trim().to_owned()
+    } else {
+        String::new()
+    }
+}
+
+fn account_card(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) {
+    let active = app.session.purview_account();
+    let accounts = app.session.purview_accounts();
+    let Some(active) = active else { return };
+
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 18.0, egui::Color32::from_rgb(0x35, 0x70, 0xA5));
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    active.initials(),
+                    egui::FontId::proportional(13.0),
+                    egui::Color32::WHITE,
+                );
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(if active.display_name.trim().is_empty() { "Microsoft account" } else { active.display_name.trim() })
+                            .font(theme::medium(13.0))
+                            .color(tokens.text),
+                    );
+                    let secondary = account_secondary(&active);
+                    if !secondary.is_empty() {
+                        ui.label(egui::RichText::new(secondary).font(theme::regular(11.5)).color(tokens.text_muted));
+                    }
+                });
+            });
+            if accounts.len() > 1 {
+                ui.add_space(6.0);
+                let active_id = active.id.clone();
+                let mut selected = active_id.clone();
+                egui::ComboBox::from_id_salt("purview-account-picker").selected_text(active.label()).width(290.0).show_ui(ui, |ui| {
+                    for account in &accounts {
+                        let is_active = account.id == active_id;
+                        if ui.selectable_label(is_active, account.label()).clicked() && !is_active {
+                            selected = account.id.clone();
+                        }
+                    }
+                });
+                if selected != active_id {
+                    match app.session.purview_switch_account(&selected) {
+                        Ok(()) => {
+                            app.purview_labels.clear();
+                            app.purview_label_id.clear();
+                            match app.session.purview_labels() {
+                                Ok(labels) => app.purview_labels = labels,
+                                Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
+                            }
+                        }
+                        Err(error) => app.notify_fmt("Couldn't switch Microsoft account: {e}", &[("e", &error.to_string())]),
+                    }
+                }
+            }
+        });
+}
+
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) -> (bool, bool) {
     ui.vertical(|ui| {
         ui.add_space(4.0);
@@ -13,21 +85,65 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) ->
         ui.add_space(6.0);
 
         let status = app.session.purview_status();
-        let status_text = match status {
-            pdfcraft_engine::PurviewStatus::Ready => tl!("Signed in"),
-            pdfcraft_engine::PurviewStatus::SignedOut => tl!("Signed out"),
-            pdfcraft_engine::PurviewStatus::SigningIn => tl!("Signing in"),
-            pdfcraft_engine::PurviewStatus::NotConfigured => tl!("Not configured"),
-            pdfcraft_engine::PurviewStatus::SdkUnavailable => tl!("Protection SDK unavailable"),
-        };
-        ui.horizontal(|ui| {
-            ui.label(tl!("Account status"));
-            ui.label(egui::RichText::new(status_text).color(if matches!(status, pdfcraft_engine::PurviewStatus::Ready) {
-                egui::Color32::from_rgb(0x2D, 0x9D, 0x5B)
-            } else {
-                tokens.text_muted
-            }));
-        });
+        match status {
+            pdfcraft_engine::PurviewStatus::Ready => {
+                account_card(ui, app, tokens);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(tl!("Add account"))).clicked() {
+                        match app.session.purview_sign_in(None) {
+                            Ok(()) => {
+                                app.notify_tr("Signed in");
+                                app.retry_purview_signin();
+                                match app.session.purview_labels() {
+                                    Ok(labels) => app.purview_labels = labels,
+                                    Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
+                                }
+                            }
+                            Err(error) => app.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]),
+                        }
+                    }
+                    if ui.add(egui::Button::new(tl!("Sign out"))).clicked() {
+                        match app.session.purview_sign_out() {
+                            Ok(()) => app.notify_tr("Signed out"),
+                            Err(error) => app.notify_fmt("Sign-out failed: {e}", &[("e", &error.to_string())]),
+                        }
+                    }
+                });
+            }
+            pdfcraft_engine::PurviewStatus::SignedOut => {
+                egui::Frame::group(ui.style())
+                    .fill(ui.visuals().faint_bg_color)
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(tl!("Sign in with Microsoft")).font(theme::medium(13.0)).color(tokens.text));
+                        ui.add_space(5.0);
+                        if ui.add(egui::Button::new(tl!("Sign in")).fill(tokens.accent)).clicked() {
+                            match app.session.purview_sign_in(None) {
+                                Ok(()) => {
+                                    app.notify_tr("Signed in");
+                                    app.retry_purview_signin();
+                                    match app.session.purview_labels() {
+                                        Ok(labels) => app.purview_labels = labels,
+                                        Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
+                                    }
+                                }
+                                Err(error) => app.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]),
+                            }
+                        }
+                    });
+            }
+            pdfcraft_engine::PurviewStatus::SigningIn => {
+                ui.label(egui::RichText::new(tl!("Opening Microsoft sign-in")).color(tokens.text_muted));
+            }
+            pdfcraft_engine::PurviewStatus::NotConfigured => {
+                ui.label(egui::RichText::new(tl!("Microsoft account sign-in is not configured")).color(tokens.text_muted));
+            }
+            pdfcraft_engine::PurviewStatus::SdkUnavailable => {
+                ui.label(egui::RichText::new(tl!("Protection SDK unavailable")).color(tokens.text_muted));
+            }
+        }
         if let Some(error) = app.purview_signin_prompt.as_ref().and_then(|prompt| prompt.error.as_deref()) {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(error).color(Color32::from_rgb(0xD3, 0x2F, 0x2F)));
@@ -85,73 +201,43 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) ->
             });
         }
 
-        ui.add_space(8.0);
-        let username_label = ui.label(tl!("Microsoft 365 account"));
-        ui.add(crate::widgets::line(&mut app.purview_username_hint).desired_width(290.0).id_salt("purview-username")).labelled_by(username_label.id);
+        if matches!(status, pdfcraft_engine::PurviewStatus::Ready) {
+            ui.add_space(8.0);
+            if app.purview_labels.is_empty() {
+                match app.session.purview_labels() {
+                    Ok(labels) => app.purview_labels = labels,
+                    Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
+                }
+            }
 
-        ui.horizontal(|ui| {
-            let can_sign_in = matches!(
-                status,
-                pdfcraft_engine::PurviewStatus::SignedOut
-                    | pdfcraft_engine::PurviewStatus::NotConfigured
-                    | pdfcraft_engine::PurviewStatus::SdkUnavailable
-            );
-            if ui.add_enabled(can_sign_in, egui::Button::new(tl!("Sign in"))).clicked() {
-                let hint = if app.purview_username_hint.trim().is_empty() { None } else { Some(app.purview_username_hint.as_str()) };
-                match app.session.purview_sign_in(hint) {
-                    Ok(()) => {
-                        app.notify_tr("Signed in");
-                        app.retry_purview_signin();
-                        match app.session.purview_labels() {
-                            Ok(labels) => app.purview_labels = labels,
-                            Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
-                        }
+            if app.purview_labels.is_empty() {
+                ui.label(tl!("No sensitivity labels are available for this account."));
+            } else {
+                let mut selected = app.purview_label_id.clone();
+                for label in &app.purview_labels {
+                    if !label.active {
+                        continue;
                     }
-                    Err(error) => app.notify_fmt("Sign-in failed: {e}", &[("e", &error.to_string())]),
+                    let text = if label.description.is_empty() { label.name.clone() } else { format!("{} — {}", label.name, label.description) };
+                    ui.radio_value(&mut selected, label.id.clone(), text);
                 }
+                app.purview_label_id = selected;
             }
-            if ui.add_enabled(matches!(status, pdfcraft_engine::PurviewStatus::Ready), egui::Button::new(tl!("Sign out"))).clicked() {
-                match app.session.purview_sign_out() {
-                    Ok(()) => app.notify_tr("Signed out"),
-                    Err(error) => app.notify_fmt("Sign-out failed: {e}", &[("e", &error.to_string())]),
-                }
-            }
-        });
 
-        ui.add_space(8.0);
-        if matches!(status, pdfcraft_engine::PurviewStatus::Ready) && app.purview_labels.is_empty() {
-            match app.session.purview_labels() {
-                Ok(labels) => app.purview_labels = labels,
-                Err(error) => app.notify_fmt("Couldn't load sensitivity labels: {e}", &[("e", &error.to_string())]),
-            }
+            ui.add_space(8.0);
+            let justification_label = ui.label(tl!("Justification (required for policy downgrades or removals)"));
+            ui.add(crate::widgets::block(&mut app.purview_justification).desired_rows(3).desired_width(290.0).id_salt("purview-justification"))
+                .labelled_by(justification_label.id);
         }
-
-        if app.purview_labels.is_empty() {
-            ui.label(tl!("No sensitivity labels are available. Sign in with a Microsoft 365 account, then try again."));
-        } else {
-            let mut selected = app.purview_label_id.clone();
-            for label in &app.purview_labels {
-                if !label.active {
-                    continue;
-                }
-                let text = if label.description.is_empty() { label.name.clone() } else { format!("{} — {}", label.name, label.description) };
-                ui.radio_value(&mut selected, label.id.clone(), text);
-            }
-            app.purview_label_id = selected;
-        }
-
-        ui.add_space(8.0);
-        let justification_label = ui.label(tl!("Justification (required for policy downgrades or removals)"));
-        ui.add(crate::widgets::block(&mut app.purview_justification).desired_rows(3).desired_width(290.0).id_salt("purview-justification"))
-            .labelled_by(justification_label.id);
     });
 
     let (cancel, apply, remove_label, remove_protection) = ui
         .with_layout(Layout::right_to_left(Align::Center), |ui| {
             let cancel = ui.button(tl!("Cancel")).clicked();
-            let apply = ui.add_enabled(!app.purview_label_id.is_empty(), egui::Button::new(tl!("Apply label"))).clicked();
-            let remove_label = ui.button(tl!("Remove label")).clicked();
-            let remove_protection = ui.button(tl!("Remove protection")).clicked();
+            let ready = matches!(app.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready);
+            let apply = ui.add_enabled(ready && !app.purview_label_id.is_empty(), egui::Button::new(tl!("Apply label"))).clicked();
+            let remove_label = ui.add_enabled(ready, egui::Button::new(tl!("Remove label"))).clicked();
+            let remove_protection = ui.add_enabled(ready, egui::Button::new(tl!("Remove protection"))).clicked();
             (cancel, apply, remove_label, remove_protection)
         })
         .inner;

@@ -2,8 +2,52 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use oauth2::basic::BasicClient;
-use oauth2::{AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenResponse, TokenUrl};
+use base64::Engine as _;
+use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
+use oauth2::basic::{BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse, BasicTokenType};
+use oauth2::{
+    AuthUrl, AuthorizationCode, Client, ClientId, CsrfToken, EndpointNotSet, ExtraTokenFields, PkceCodeChallenge, RedirectUrl, Scope,
+    StandardRevocableToken, StandardTokenResponse, TokenResponse, TokenUrl,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::PurviewAccount;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct MicrosoftTokenExtraFields {
+    #[serde(default)]
+    id_token: Option<String>,
+}
+
+impl ExtraTokenFields for MicrosoftTokenExtraFields {}
+
+type MicrosoftTokenResponse = StandardTokenResponse<MicrosoftTokenExtraFields, BasicTokenType>;
+
+type MicrosoftClient<
+    HasAuthUrl = EndpointNotSet,
+    HasDeviceAuthUrl = EndpointNotSet,
+    HasIntrospectionUrl = EndpointNotSet,
+    HasRevocationUrl = EndpointNotSet,
+    HasTokenUrl = EndpointNotSet,
+> = Client<
+    BasicErrorResponse,
+    MicrosoftTokenResponse,
+    BasicTokenIntrospectionResponse,
+    StandardRevocableToken,
+    BasicRevocationErrorResponse,
+    HasAuthUrl,
+    HasDeviceAuthUrl,
+    HasIntrospectionUrl,
+    HasRevocationUrl,
+    HasTokenUrl,
+>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PurviewToken {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub account: Option<PurviewAccount>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PurviewAuthError {
@@ -61,6 +105,38 @@ fn normalize_authority(value: &str, username: &str) -> Result<(String, String), 
     };
     let base = format!("https://login.microsoftonline.com/{tenant}");
     Ok((format!("{base}/oauth2/v2.0/authorize"), format!("{base}/oauth2/v2.0/token")))
+}
+
+fn claim_string(claims: &serde_json::Map<String, serde_json::Value>, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| claims.get(*name).and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))
+}
+
+fn account_from_id_token(id_token: Option<&str>, username_hint: &str) -> Option<PurviewAccount> {
+    let id_token = id_token?;
+    let payload = id_token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).or_else(|_| URL_SAFE.decode(payload)).ok()?;
+    let claims: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&decoded).ok()?;
+
+    let email = claim_string(&claims, &["email", "preferred_username", "upn", "unique_name"]).or_else(|| {
+        let username = username_hint.trim();
+        (!username.is_empty()).then(|| username.to_owned())
+    });
+    let principal_name = claim_string(&claims, &["preferred_username", "upn", "unique_name", "email"]).or_else(|| email.clone());
+    let display_name = claim_string(&claims, &["name", "displayName"]).unwrap_or_else(|| {
+        principal_name
+            .as_deref()
+            .and_then(|value| value.split('@').next())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| "Microsoft account".to_owned())
+    });
+    let id = claim_string(&claims, &["oid", "sub"])
+        .or_else(|| email.clone())
+        .or_else(|| principal_name.clone())
+        .unwrap_or_else(|| "microsoft-account".to_owned());
+    Some(PurviewAccount { id, display_name, email: email.unwrap_or_default(), principal_name: principal_name.unwrap_or_default() })
 }
 
 fn scopes(resource: &str, challenge_scope: &str) -> Vec<String> {
@@ -138,7 +214,7 @@ pub fn acquire_token(
     resource: &str,
     challenge_scope: &str,
     claims: &str,
-) -> Result<String, PurviewAuthError> {
+) -> Result<PurviewToken, PurviewAuthError> {
     let app_id = validate_app_id(app_id_value)?;
     let (authorize_url, token_url) = normalize_authority(authority, username)?;
     let scopes = scopes(resource, challenge_scope);
@@ -146,13 +222,18 @@ pub fn acquire_token(
     let port = listener.local_addr().map_err(|e| PurviewAuthError::Callback(e.to_string()))?.port();
     let redirect = format!("http://localhost:{port}");
 
-    let client = BasicClient::new(ClientId::new(app_id))
+    let client = MicrosoftClient::new(ClientId::new(app_id))
         .set_auth_uri(AuthUrl::new(authorize_url).map_err(|e| PurviewAuthError::InvalidAuthority(e.to_string()))?)
         .set_token_uri(TokenUrl::new(token_url).map_err(|e| PurviewAuthError::InvalidAuthority(e.to_string()))?)
         .set_redirect_uri(RedirectUrl::new(redirect).map_err(|e| PurviewAuthError::Callback(e.to_string()))?);
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let mut request = client.authorize_url(CsrfToken::new_random).set_pkce_challenge(pkce_challenge);
+    request = request
+        .add_scope(Scope::new("openid".to_owned()))
+        .add_scope(Scope::new("profile".to_owned()))
+        .add_scope(Scope::new("email".to_owned()))
+        .add_scope(Scope::new("offline_access".to_owned()));
     for scope in scopes {
         request = request.add_scope(Scope::new(scope));
     }
@@ -161,6 +242,8 @@ pub fn acquire_token(
     }
     if !username.trim().is_empty() {
         request = request.add_extra_param("login_hint", username);
+    } else {
+        request = request.add_extra_param("prompt", "select_account");
     }
     let (url, expected_state) = request.url();
     if webbrowser::open(url.as_str()).is_err() {
@@ -173,7 +256,9 @@ pub fn acquire_token(
     let http_client = reqwest::blocking::ClientBuilder::new().use_rustls_tls().build().map_err(|e| PurviewAuthError::Token(e.to_string()))?;
     let token =
         client.exchange_code(code).set_pkce_verifier(pkce_verifier).request(&http_client).map_err(|e| PurviewAuthError::Token(e.to_string()))?;
-    Ok(token.access_token().secret().clone())
+    let account = account_from_id_token(token.extra_fields().id_token.as_deref(), username);
+    let refresh_token = token.refresh_token().map(|value| value.secret().clone());
+    Ok(PurviewToken { access_token: token.access_token().secret().clone(), refresh_token, account })
 }
 
 #[cfg(test)]
@@ -213,5 +298,23 @@ mod tests {
         let (authorize, token) = normalize_authority("common", "person@MacCyberDoc.onmicrosoft.com").expect("common authority should resolve");
         assert_eq!(authorize, "https://login.microsoftonline.com/maccyberdoc.onmicrosoft.com/oauth2/v2.0/authorize");
         assert_eq!(token, "https://login.microsoftonline.com/maccyberdoc.onmicrosoft.com/oauth2/v2.0/token");
+    }
+
+    #[test]
+    fn id_token_profile_prefers_display_name_and_email() {
+        let payload = serde_json::json!({
+            "oid": "account-object-id",
+            "name": "Ada Lovelace",
+            "preferred_username": "ada@example.com",
+            "email": "ada@example.com"
+        })
+        .to_string();
+        let segment = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        let account = account_from_id_token(Some(&format!("header.{segment}.signature")), "").expect("profile");
+        assert_eq!(account.id, "account-object-id");
+        assert_eq!(account.display_name, "Ada Lovelace");
+        assert_eq!(account.email, "ada@example.com");
+        assert_eq!(account.principal_name, "ada@example.com");
+        assert_eq!(account.label(), "Ada Lovelace - ada@example.com");
     }
 }

@@ -37,6 +37,18 @@ impl Session {
         self.purview.as_ref().map(|provider| provider.status()).unwrap_or(crate::PurviewStatus::SdkUnavailable)
     }
 
+    pub fn purview_account(&self) -> Option<crate::PurviewAccount> {
+        self.purview.as_ref().and_then(|provider| provider.account())
+    }
+
+    pub fn purview_accounts(&self) -> Vec<crate::PurviewAccount> {
+        self.purview.as_ref().map(|provider| provider.accounts()).unwrap_or_default()
+    }
+
+    pub fn purview_switch_account(&self, account_id: &str) -> Result<(), crate::PurviewError> {
+        self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.switch_account(account_id)
+    }
+
     pub fn purview_sign_in(&self, username_hint: Option<&str>) -> Result<(), crate::PurviewError> {
         self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.sign_in(username_hint)
     }

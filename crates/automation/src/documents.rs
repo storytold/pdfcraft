@@ -105,19 +105,88 @@ impl Automation {
 
     pub(crate) fn purview_status(&self) -> Result<Value> {
         let status = format!("{:?}", self.session.purview_status());
-        Ok(json!({"status": status}))
+        let account = self.session.purview_account().map(|account| {
+            json!({
+                "id": account.id,
+                "display_name": account.display_name,
+                "email": account.email,
+                "principal_name": account.principal_name,
+                "label": account.label()
+            })
+        });
+        let accounts = self
+            .session
+            .purview_accounts()
+            .into_iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "principal_name": account.principal_name,
+                    "label": account.label()
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"status": status, "account": account, "accounts": accounts}))
+    }
+
+    pub(crate) fn purview_accounts(&self) -> Result<Vec<Value>> {
+        Ok(self
+            .session
+            .purview_accounts()
+            .into_iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "principal_name": account.principal_name,
+                    "label": account.label()
+                })
+            })
+            .collect())
+    }
+
+    pub(crate) fn purview_switch_account(&self, a: &Args) -> Result<Value> {
+        let account_id = a.str("account_id")?;
+        self.session.purview_switch_account(account_id).map_err(|error| failed(error.to_string()))?;
+        self.purview_status()
     }
 
     pub(crate) fn purview_sign_in(&self, a: &Args) -> Result<Value> {
         let username = a.opt_str("username")?;
         self.session.purview_sign_in(username).map_err(|error| failed(error.to_string()))?;
-        Ok(json!({"status": format!("{:?}", self.session.purview_status())}))
+        self.purview_status()
     }
 
     pub(crate) fn purview_sign_out(&mut self) -> Result<Value> {
         let session = &mut self.session;
         session.purview_sign_out().map_err(|error| failed(error.to_string()))?;
-        Ok(json!({"status": format!("{:?}", session.purview_status())}))
+        let status = format!("{:?}", session.purview_status());
+        let account = session.purview_account().map(|account| {
+            json!({
+                "id": account.id,
+                "display_name": account.display_name,
+                "email": account.email,
+                "principal_name": account.principal_name,
+                "label": account.label()
+            })
+        });
+        let accounts = session
+            .purview_accounts()
+            .into_iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "principal_name": account.principal_name,
+                    "label": account.label()
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"status": status, "account": account, "accounts": accounts}))
     }
 
     pub(crate) fn purview_labels(&self) -> Result<Vec<Value>> {

@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::auth;
-use crate::{PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
+use crate::{PurviewAccount, PurviewDocument, PurviewError, PurviewLabel, PurviewOpen, PurviewProvider, PurviewRights, PurviewStatus};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_TEMP_BYTES: u64 = 512 * 1024 * 1024;
@@ -84,12 +84,18 @@ fn helper_path() -> Option<std::path::PathBuf> {
     None
 }
 
+#[derive(Clone)]
+struct PurviewAccountSession {
+    account: PurviewAccount,
+    rms_access_token: String,
+    sync_access_token: String,
+}
+
 pub struct NativePurviewProvider {
     app_id: String,
-    username_hint: Mutex<Option<String>>,
     auth_status: Mutex<PurviewStatus>,
-    rms_access_token: Mutex<Option<String>>,
-    sync_access_token: Mutex<Option<String>>,
+    account_sessions: Mutex<Vec<PurviewAccountSession>>,
+    active_account_id: Mutex<Option<String>>,
     staging_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
@@ -104,10 +110,9 @@ impl NativePurviewProvider {
             .unwrap_or_default();
         Self {
             app_id,
-            username_hint: Mutex::new(None),
             auth_status: Mutex::new(PurviewStatus::SignedOut),
-            rms_access_token: Mutex::new(None),
-            sync_access_token: Mutex::new(None),
+            account_sessions: Mutex::new(Vec::new()),
+            active_account_id: Mutex::new(None),
             staging_dir: Mutex::new(None),
         }
     }
@@ -195,12 +200,18 @@ impl NativePurviewProvider {
         option_env!("PDFCRAFT_PURVIEW_SDK_READY").unwrap_or("0") == "1"
     }
 
+    fn active_session(&self) -> Option<PurviewAccountSession> {
+        let active_id = self.active_account_id.lock().ok()?.clone();
+        let sessions = self.account_sessions.lock().ok()?;
+        active_id.and_then(|active_id| sessions.iter().find(|session| session.account.id == active_id).cloned()).or_else(|| sessions.first().cloned())
+    }
+
     fn rms_token(&self) -> Option<String> {
-        self.rms_access_token.lock().ok().and_then(|token| token.clone())
+        self.active_session().map(|session| session.rms_access_token)
     }
 
     fn sync_token(&self) -> Option<String> {
-        self.sync_access_token.lock().ok().and_then(|token| token.clone())
+        self.active_session().map(|session| session.sync_access_token)
     }
 
     fn has_tokens(&self) -> bool {
@@ -208,7 +219,25 @@ impl NativePurviewProvider {
     }
 
     fn username(&self) -> String {
-        self.username_hint.lock().ok().and_then(|username| username.clone()).unwrap_or_default()
+        self.active_session()
+            .map(|session| {
+                if !session.account.principal_name.is_empty() {
+                    session.account.principal_name
+                } else if !session.account.email.is_empty() {
+                    session.account.email
+                } else {
+                    session.account.display_name
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    fn account(&self) -> Option<PurviewAccount> {
+        self.active_session().map(|session| session.account)
+    }
+
+    fn accounts(&self) -> Vec<PurviewAccount> {
+        self.account_sessions.lock().map(|sessions| sessions.iter().map(|session| session.account.clone()).collect()).unwrap_or_default()
     }
 
     fn run_helper(&self, line: &str) -> Result<String, PurviewError> {
@@ -343,6 +372,28 @@ impl PurviewProvider for NativePurviewProvider {
         }
     }
 
+    fn account(&self) -> Option<PurviewAccount> {
+        self.account()
+    }
+
+    fn accounts(&self) -> Vec<PurviewAccount> {
+        self.accounts()
+    }
+
+    fn switch_account(&self, account_id: &str) -> Result<(), PurviewError> {
+        let exists = self.account_sessions.lock().map(|sessions| sessions.iter().any(|session| session.account.id == account_id)).unwrap_or(false);
+        if !exists {
+            return Err(PurviewError::Native("that Microsoft account is not signed in".into()));
+        }
+        if let Ok(mut active) = self.active_account_id.lock() {
+            *active = Some(account_id.to_owned());
+        }
+        if let Ok(mut status) = self.auth_status.lock() {
+            *status = PurviewStatus::Ready;
+        }
+        Ok(())
+    }
+
     fn sign_in(&self, username_hint: Option<&str>) -> Result<(), PurviewError> {
         if self.app_id.is_empty() {
             return Err(PurviewError::NotConfigured);
@@ -353,13 +404,10 @@ impl PurviewProvider for NativePurviewProvider {
         if let Ok(mut status) = self.auth_status.lock() {
             *status = PurviewStatus::SigningIn;
         }
-        if let Ok(mut username) = self.username_hint.lock() {
-            *username = username_hint.map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned);
-        }
-        let username = self.username();
+        let username_hint = username_hint.map(str::trim).filter(|value| !value.is_empty()).unwrap_or_default();
         let rms_token = auth::acquire_token(
             &self.app_id,
-            &username,
+            username_hint,
             "https://login.microsoftonline.com/common",
             "https://api.aadrm.com",
             "https://api.aadrm.com/.default",
@@ -373,7 +421,7 @@ impl PurviewProvider for NativePurviewProvider {
         })?;
         let sync_token = auth::acquire_token(
             &self.app_id,
-            &username,
+            username_hint,
             "https://login.microsoftonline.com/common",
             "https://psor.api.microsoft.com",
             "https://psor.api.microsoft.com/.default",
@@ -385,11 +433,26 @@ impl PurviewProvider for NativePurviewProvider {
             }
             PurviewError::Native(error.to_string())
         })?;
-        if let Ok(mut cached) = self.rms_access_token.lock() {
-            *cached = Some(rms_token);
+        let account = rms_token.account.clone().or_else(|| sync_token.account.clone()).unwrap_or_else(|| {
+            let hint = username_hint.to_owned();
+            PurviewAccount {
+                id: if hint.is_empty() { "microsoft-account".to_owned() } else { hint.clone() },
+                display_name: if hint.is_empty() { "Microsoft account".to_owned() } else { hint.clone() },
+                email: hint.clone(),
+                principal_name: hint,
+            }
+        });
+        let session =
+            PurviewAccountSession { account: account.clone(), rms_access_token: rms_token.access_token, sync_access_token: sync_token.access_token };
+        if let Ok(mut sessions) = self.account_sessions.lock() {
+            if let Some(existing) = sessions.iter_mut().find(|existing| existing.account.id == account.id) {
+                *existing = session;
+            } else {
+                sessions.push(session);
+            }
         }
-        if let Ok(mut cached) = self.sync_access_token.lock() {
-            *cached = Some(sync_token);
+        if let Ok(mut active) = self.active_account_id.lock() {
+            *active = Some(account.id);
         }
         if let Ok(mut status) = self.auth_status.lock() {
             *status = PurviewStatus::Ready;
@@ -398,16 +461,21 @@ impl PurviewProvider for NativePurviewProvider {
     }
 
     fn sign_out(&self) -> Result<(), PurviewError> {
+        let active_id = self.active_account_id.lock().ok().and_then(|active| active.clone());
+        if let Ok(mut sessions) = self.account_sessions.lock()
+            && let Some(active_id) = active_id
+        {
+            sessions.retain(|session| session.account.id != active_id);
+        }
+        let remaining = self.account_sessions.lock().ok().and_then(|sessions| sessions.first().cloned());
+        if let Ok(mut active) = self.active_account_id.lock() {
+            *active = remaining.as_ref().map(|session| session.account.id.clone());
+        }
         if let Ok(mut status) = self.auth_status.lock() {
-            *status = PurviewStatus::SignedOut;
-        }
-        if let Ok(mut token) = self.rms_access_token.lock() {
-            *token = None;
-        }
-        if let Ok(mut token) = self.sync_access_token.lock() {
-            *token = None;
+            *status = if remaining.is_some() { PurviewStatus::Ready } else { PurviewStatus::SignedOut };
         }
         if let Ok(mut staging) = self.staging_dir.lock()
+            && remaining.is_none()
             && let Some(path) = staging.take()
         {
             let _ = std::fs::remove_dir_all(path);
@@ -683,5 +751,41 @@ mod native_tests {
         assert_eq!(provider.parse_open("NONE\t/tmp/output.pdf").unwrap(), None);
         assert!(matches!(provider.parse_open("SIGNIN\t/tmp/output.pdf"), Err(PurviewError::SignInRequired)));
         assert!(matches!(provider.parse_open("NO_ACCESS\t/tmp/output.pdf"), Err(PurviewError::NoAccess)));
+    }
+
+    #[test]
+    fn account_sessions_can_switch_and_sign_out_independently() {
+        let provider = NativePurviewProvider::new(Some("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246"));
+        let ada = PurviewAccount {
+            id: "ada".into(),
+            display_name: "Ada Lovelace".into(),
+            email: "ada@example.com".into(),
+            principal_name: "ada@example.com".into(),
+        };
+        let grace = PurviewAccount {
+            id: "grace".into(),
+            display_name: "Grace Hopper".into(),
+            email: "grace@example.com".into(),
+            principal_name: "grace@example.com".into(),
+        };
+        if let Ok(mut sessions) = provider.account_sessions.lock() {
+            sessions.push(PurviewAccountSession { account: ada.clone(), rms_access_token: "rms-ada".into(), sync_access_token: "sync-ada".into() });
+            sessions.push(PurviewAccountSession {
+                account: grace.clone(),
+                rms_access_token: "rms-grace".into(),
+                sync_access_token: "sync-grace".into(),
+            });
+        }
+        if let Ok(mut active) = provider.active_account_id.lock() {
+            *active = Some("ada".into());
+        }
+        assert_eq!(provider.account(), Some(ada));
+        assert_eq!(provider.accounts().len(), 2);
+        provider.switch_account("grace").unwrap();
+        assert_eq!(provider.account(), Some(grace.clone()));
+        assert_eq!(provider.rms_token().as_deref(), Some("rms-grace"));
+        provider.sign_out().unwrap();
+        assert_eq!(provider.accounts().len(), 1);
+        assert_eq!(provider.account().map(|account| account.id), Some("ada".to_owned()));
     }
 }

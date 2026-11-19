@@ -138,12 +138,19 @@ pub fn tools() -> Vec<ToolDef> {
         t("purview_status", "Microsoft Purview status", "Report Microsoft Purview/MIP SDK readiness and authentication status.")
             .ro()
             .with(schema(json!({}), &[])),
+        t("purview_accounts", "List signed-in Microsoft accounts", "List the Microsoft accounts currently signed in in this PdfCraft session.")
+            .ro()
+            .with(schema(json!({}), &[])),
         t("purview_sign_in", "Sign in to Microsoft Purview", "Sign in to Microsoft 365 for Microsoft Purview Information Protection operations.")
             .with(schema(json!({
-                "username": {"type":"string","minLength":1,"description":"Optional Microsoft 365 username or login hint."}
+                "username": {"type":"string","minLength":1,"description":"Optional login hint for automation. The normal PdfCraft UI lets Microsoft choose and disclose the signed-in account."}
             }), &[])),
         t("purview_sign_out", "Sign out of Microsoft Purview", "Clear the in-process Microsoft Purview/MIP authentication state.")
             .with(schema(json!({}), &[])),
+        t("purview_switch_account", "Switch signed-in Microsoft account", "Switch the active in-process Microsoft account to one of the accounts already signed in.")
+            .with(schema(json!({
+                "account_id": {"type":"string","minLength":1,"description":"Account ID from purview_accounts or purview_status."}
+            }), &["account_id"])),
         t("purview_labels", "List Microsoft Purview labels", "List the sensitivity labels available to the signed-in Microsoft 365 user.")
             .ro()
             .with(schema(json!({}), &[])),

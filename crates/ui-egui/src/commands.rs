@@ -229,33 +229,46 @@ impl PdfCraftApp {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
-            "purview.sign_in" => {
-                let hint = if self.purview_username_hint.trim().is_empty() { None } else { Some(self.purview_username_hint.as_str()) };
-                match self.session.purview_sign_in(hint) {
-                    Ok(()) => {
-                        self.notify_tr("Signed in to Microsoft Purview");
-                        self.retry_purview_signin();
+            "purview.sign_in" => match self.session.purview_sign_in(None) {
+                Ok(()) => {
+                    self.notify_tr("Signed in to Microsoft Purview");
+                    self.retry_purview_signin();
+                }
+                Err(error) => self.notify_fmt("Microsoft Purview sign-in failed: {e}", &[("e", &error.to_string())]),
+            },
+            "purview.sign_out" => {
+                if matches!(self.session.purview_status(), pdfcraft_engine::PurviewStatus::Ready) {
+                    match self.session.purview_sign_out() {
+                        Ok(()) => self.notify_tr("Signed out"),
+                        Err(error) => self.notify_fmt("Sign-out failed: {e}", &[("e", &error.to_string())]),
                     }
-                    Err(error) => self.notify_fmt("Microsoft Purview sign-in failed: {e}", &[("e", &error.to_string())]),
+                } else {
+                    self.notify_tr("No Microsoft account is signed in");
                 }
             }
-            "purview.sign_out" => match self.session.purview_sign_out() {
-                Ok(()) => self.notify_tr("Signed out of Microsoft Purview"),
-                Err(error) => self.notify_fmt("Microsoft Purview sign-out failed: {e}", &[("e", &error.to_string())]),
-            },
             "purview.status" => {
                 let status = format!("{:?}", self.session.purview_status());
+                let account = self.session.purview_account().map(|account| format!("; account: {}", account.label()));
                 if let Some((_, id)) = self.active_ids()
                     && let Some(document) = self.session.get(id)
                 {
                     if let Some(purview) = document.purview() {
                         let label = purview.label.as_ref().map(|label| format!("; label: {}", label.name)).unwrap_or_default();
-                        self.notify_fmt("Microsoft Purview: {status}{label}", &[("status", &status), ("label", &label)]);
+                        self.notify_fmt(
+                            "Microsoft Purview: {status}{account}{label}",
+                            &[("status", &status), ("account", &account.clone().unwrap_or_default()), ("label", &label)],
+                        );
                     } else {
-                        self.notify_fmt("Microsoft Purview: {status}; no label or protection detected", &[("status", &status)]);
+                        self.notify_fmt(
+                            "Microsoft Purview: {status}{account}; no label or protection detected",
+                            &[("status", &status), ("account", &account.clone().unwrap_or_default())],
+                        );
                     }
                 } else {
-                    self.notify_fmt("Microsoft Purview: {status}", &[("status", &status)]);
+                    self.notify_fmt(
+                        "Microsoft Purview: {status}{account}",
+                        &[("status", &status), ("account", &account.clone().unwrap_or_default())],
+                    );
                 }
             }
             "purview.apply_label" => match self.session.purview_labels() {

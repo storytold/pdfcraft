@@ -16,7 +16,10 @@ mip-sdk = []
 oauth2 = { workspace = true }
 pdfcraft-platform = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 webbrowser = { workspace = true }
 url = "2"
 uuid = { version = "1", features = ["std"] }
+base64 = "0.23"

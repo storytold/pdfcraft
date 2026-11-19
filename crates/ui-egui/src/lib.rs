@@ -814,8 +814,6 @@ pub struct PdfCraftApp {
     pub purview_labels: Vec<pdfcraft_purview::PurviewLabel>,
     pub purview_label_id: String,
     pub purview_justification: String,
-    /// Optional account hint used for the Microsoft Entra sign-in flow.
-    pub purview_username_hint: String,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.

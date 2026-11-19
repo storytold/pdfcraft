@@ -733,8 +733,10 @@ fn purview_status_and_tools_are_exposed() {
     let names: Vec<&str> = tools().into_iter().map(|tool| tool.name).collect();
     for name in [
         "purview_status",
+        "purview_accounts",
         "purview_sign_in",
         "purview_sign_out",
+        "purview_switch_account",
         "purview_labels",
         "purview_apply_label",
         "purview_remove_label",

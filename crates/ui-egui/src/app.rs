@@ -338,7 +338,6 @@ impl PdfCraftApp {
             purview_labels: Vec::new(),
             purview_label_id: String::new(),
             purview_justification: String::new(),
-            purview_username_hint: String::new(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),

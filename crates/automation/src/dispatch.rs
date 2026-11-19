@@ -54,8 +54,10 @@ impl Automation {
         let a = Args(args);
         let out = match name {
             "purview_status" => self.purview_status()?,
+            "purview_accounts" => json!({"accounts": self.purview_accounts()?}),
             "purview_sign_in" => self.purview_sign_in(&a)?,
             "purview_sign_out" => self.purview_sign_out()?,
+            "purview_switch_account" => self.purview_switch_account(&a)?,
             "purview_labels" => json!({"labels": self.purview_labels()?}),
             "purview_apply_label" => self.purview_apply_label(&a)?,
             "purview_remove_label" => self.purview_remove_label(&a)?,
