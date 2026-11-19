@@ -2036,7 +2036,13 @@ fn diag_page_nodes(h: &Harness<'static, PdfCraftApp>) {
 /// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
 fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
     diag_page_nodes(h);
-    h.get_all_by_label(label).find(|n| n.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect().center()
+    h.get_all_by_label(label).find(is_thumbnail).expect("the Pages panel thumbnail").rect().center()
+}
+
+/// Whether `node` is a thumbnail of the Pages panel: the panel lists its pages as list items.
+fn is_thumbnail(node: &egui_kittest::Node<'_>) -> bool {
+    use egui_kittest::kittest::NodeT;
+    node.accesskit_node().role() == egui::accesskit::Role::ListItem
 }
 
 /// Press and release `button` at `at`.
@@ -2080,7 +2086,7 @@ fn pages_panel_thumbnails_have_a_context_menu() {
 /// Where the Pages panel draws page `n`'s thumbnail.
 fn thumbnail_rect(h: &Harness<'static, PdfCraftApp>, n: usize) -> egui::Rect {
     diag_page_nodes(h);
-    h.get_all_by_label(&format!("Page {n}")).find(|t| t.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect()
+    h.get_all_by_label(&format!("Page {n}")).find(is_thumbnail).expect("the Pages panel thumbnail").rect()
 }
 
 /// Whether `r` lies wholly in the part of the Pages panel in view.
