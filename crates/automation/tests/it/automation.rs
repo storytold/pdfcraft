@@ -10840,6 +10840,8 @@ fn measurement_scale_ratio_is_worded_per_point_whatever_the_user_unit() {
             assert!((set["scale"]["x"].as_f64().unwrap() - factor).abs() < 1e-9, "{file} {args}");
             let read = ok(&mut a, "measure_info", json!({"doc":doc,"page":1,"points":line}));
             assert!((read["reading"]["value"].as_f64().unwrap() - 144.0).abs() < 1e-9, "{file} {args}");
+            // The scale read back from the page words the same ratio as the one just set.
+            assert_eq!(read["scale"]["ratio"], "1 pt = 2 in", "{file} {args}");
         }
     }
     let _ = std::fs::remove_dir_all(dir);
