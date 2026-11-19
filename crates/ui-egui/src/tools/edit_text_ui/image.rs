@@ -2,7 +2,7 @@ use super::{DocInfo, Edit, MAX_OUTLINES, PageGeometry, PageSession, PageXform, P
 use crate::canvas::page_parts::{Owner, PageLayer, PagePart, PagePress};
 use craft::behavior::geometry::{BoxAllow, BoxRules, BoxState, CropBox, CropGuide, ScaleRule, TransformMode};
 use craft::behavior::kurbo::{BezPath, Point, Rect as DocRect, Vec2};
-use craft::behavior::{CursorIcon, EditEvent, HitShape, IconId, PointerButton};
+use craft::behavior::{CanvasView, CursorIcon, EditEvent, HitShape, IconId, PointerButton};
 use craft::draw::ui::transform::{RotateZone, TransformBox};
 use craft::imaging::ui::transform_preview::{PreviewMap, PreviewPixels, PreviewTextures, TransformPreview};
 use craft::pages::ui::{PageBody, PlacedPage};
@@ -192,16 +192,18 @@ fn cut_preview(doc: &pdfcraft_engine::Document, placed: &PlacedPage, index: usiz
     Some(PreviewTextures::new(format!("picture-{}-{index}", placed.page), PreviewPixels::new(image, [1.0, 1.0])))
 }
 
-fn norm_rect(placed: &PlacedPage, xf: &PageXform, r: DocRect) -> Rect {
+/// `r`, in the canvas's document space, as the page's 0..1 coordinates.
+fn norm_rect(view: &CanvasView, xf: &PageXform, r: DocRect) -> Rect {
     let n = |x: f64, y: f64| {
-        let (u, v) = xf.screen_to_norm(placed.to_screen(Point::new(x, y)));
+        let (u, v) = xf.screen_to_norm(view.to_screen(Point::new(x, y)));
         Pos2::new(u, v)
     };
     Rect::from_two_pos(n(r.x0, r.y0), n(r.x1, r.y1))
 }
 
-fn doc_rect(placed: &PlacedPage, xf: &PageXform, r: Rect) -> DocRect {
-    let d = |p: Pos2| placed.to_page(xf.norm_to_screen(p.x, p.y));
+/// `r`, in the page's 0..1 coordinates, in the canvas's document space.
+fn doc_rect(view: &CanvasView, xf: &PageXform, r: Rect) -> DocRect {
+    let d = |p: Pos2| view.to_doc(xf.norm_to_screen(p.x, p.y));
     DocRect::from_points(d(r.min), d(r.max))
 }
 
@@ -238,7 +240,7 @@ pub(crate) fn picture_controls(
             .iter()
             .enumerate()
             .filter(|(i, _)| !(moving && Some(*i) == selected) && (all || Some(*i) == selected))
-            .map(|(_, image)| path_of(&picture_quad(&xf, info, placed.page, image).map(|p| placed.to_page(p))))
+            .map(|(_, image)| path_of(&picture_quad(&xf, info, placed.page, image).map(|p| body.view.to_doc(p))))
             .collect();
         if !paths.is_empty() {
             let _ = SelectionOutline::faint(tl!("Pictures"), &paths).show(ui);
@@ -269,7 +271,8 @@ fn box_controls(
     {
         s.preview = None;
     }
-    let quad = picture_quad(xf, info, page, image).map(|p| placed.to_page(p));
+    let view = &body.view;
+    let quad = picture_quad(xf, info, page, image).map(|p| view.to_doc(p));
     let bounds = bounds_of(&quad);
     let pivot = bounds.center();
     let rules = BoxRules::in_mode(TransformMode::Free)
@@ -283,7 +286,7 @@ fn box_controls(
         // The arrow keys nudge through the tool (`EditTextTool::key`).
         .session_arrows(false)
         .show_at(ui, body.rect);
-    let to_user = |p: Point| screen_to_user(xf, info, page, placed.to_screen(p));
+    let to_user = |p: Point| screen_to_user(xf, info, page, view.to_screen(p));
     let mut edit = None;
     for event in shown.edit.events.iter() {
         match event {
@@ -297,7 +300,7 @@ fn box_controls(
             EditEvent::Commit { after, .. } => {
                 edit = picture_edit(page, index, image.matrix, image.rect, quad, after.quad, &to_user);
                 if let Some(s) = session.image_selection.as_mut() {
-                    s.settled = edit.as_ref().map(|_| (norm_rect(placed, xf, bounds), norm_rect(placed, xf, bounds_of(&after.quad))));
+                    s.settled = edit.as_ref().map(|_| (norm_rect(view, xf, bounds), norm_rect(view, xf, bounds_of(&after.quad))));
                     if s.settled.is_none() {
                         s.preview = None;
                     }
@@ -316,11 +319,11 @@ fn box_controls(
     s.paper = None;
     let Some(textures) = s.preview.as_ref() else { return edit };
     let (from, to) = match s.settled {
-        Some((from, to)) => (corners_of(doc_rect(placed, xf, from)), corners_of(doc_rect(placed, xf, to))),
+        Some((from, to)) => (corners_of(doc_rect(view, xf, from)), corners_of(doc_rect(view, xf, to))),
         None => (quad, shown.edit.shown.as_ref().and_then(|m| m.same()).map_or(quad, |state| state.quad)),
     };
-    s.paper = Some(from);
-    let full = matrix_corners(xf, info, page, image.matrix).map(|p| placed.to_page(p));
+    s.paper = Some(from.map(|p| placed.to_page(view.to_screen(p))));
+    let full = matrix_corners(xf, info, page, image.matrix).map(|p| view.to_doc(p));
     let map = affine_between(from, to);
     let _ = TransformPreview::new(tl!("Picture"), textures).map(PreviewMap::Quad(full.map(map))).picture().show(ui);
     edit
@@ -330,9 +333,10 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
     let PagePicture { placed, xf, info, image, .. } = *pic;
     let page = placed.page;
     let keep = session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep)?;
-    let frame = picture_quad(xf, info, page, image).map(|p| placed.to_page(p));
+    let view = &body.view;
+    let frame = picture_quad(xf, info, page, image).map(|p| view.to_doc(p));
     let kept_screen = xf.user_rect(info, page, keep.map(|v| v as f32));
-    let kept = DocRect::from_points(placed.to_page(kept_screen.min), placed.to_page(kept_screen.max));
+    let kept = DocRect::from_points(view.to_doc(kept_screen.min), view.to_doc(kept_screen.max));
     let before = CropBox::upright(kept);
     let mut crop = before;
     let shown = CropOverlay::new(tl!("Crop"), Bind::bound(&mut crop))
@@ -343,7 +347,7 @@ fn crop_controls(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
         .guide((CropGuide::Thirds, 0))
         .show_at(ui, body.rect);
     if crop.is_finite() && crop.rect != before.rect {
-        let to_screen = |p: Point| placed.to_screen(p);
+        let to_screen = |p: Point| view.to_screen(p);
         let moved = Rect::from_two_pos(to_screen(Point::new(crop.rect.x0, crop.rect.y0)), to_screen(Point::new(crop.rect.x1, crop.rect.y1)));
         let keep = user_box(xf, info, page, moved);
         if let Some(mode) = session.image_selection.as_mut().and_then(|s| s.crop.as_mut()) {
@@ -426,11 +430,14 @@ fn picture_change(
     if s.iter().chain(&e).any(|p| !p.0.is_finite() || !p.1.is_finite()) {
         return None;
     }
-    let (dx, dy) = (e[0].0 - s[0].0, e[0].1 - s[0].1);
-    if (0..4).all(|i| (e[i].0 - s[i].0 - dx).abs() < EPS && (e[i].1 - s[i].1 - dy).abs() < EPS) {
-        if dx.abs() < EPS && dy.abs() < EPS {
+    // A translation is told where the box made it, in document units: user space is reached through screen
+    // points, whose rounding would make an exact move look like a slight resize.
+    let moved = end[0] - start[0];
+    if (0..4).all(|i| ((end[i] - start[i]) - moved).hypot() < EPS) {
+        if moved.hypot() < EPS {
             return None;
         }
+        let (dx, dy) = (e[0].0 - s[0].0, e[0].1 - s[0].1);
         return Some(E::Move([rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy]));
     }
     let (sw, sh, ew, eh) = (start[1] - start[0], start[3] - start[0], end[1] - end[0], end[3] - end[0]);

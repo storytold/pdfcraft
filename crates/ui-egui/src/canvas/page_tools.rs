@@ -75,6 +75,9 @@ pub(crate) struct PageToolCx<'a> {
     pub(crate) rotation: u16,
     /// The page body's rect this pass, filled from the body each run as `pages` is.
     pub(crate) viewport: egui::Rect,
+    /// A pointer button is down this pass, filled from the body each run as `pages` is: a key waits for it to come
+    /// up where the press held would then name another item.
+    pub(crate) button_held: bool,
     /// The style new text gets (Edit a PDF ▸ Format text).
     pub(crate) text_style: &'a pdfcraft_engine::AddedText,
     /// The document allows comments.
@@ -351,7 +354,9 @@ pub(crate) fn page_tool<'a>(
         }
         QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session, cx.info, xforms))),
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.pages, cx.text_style))),
-        QuickTool::EditText => Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()))),
+        QuickTool::EditText => {
+            Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()).button_held(cx.button_held)))
+        }
         QuickTool::Stamp(kind) => {
             Arm::Stamp(StampTool::new(StampChoice::Builtin(kind), cx.by_line.to_owned(), None, cx.author.to_owned(), cx.pages, cx.info, map))
         }

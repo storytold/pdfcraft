@@ -23,6 +23,8 @@ pub(crate) struct EditTextTool<'a> {
     press: &'a PressState,
     /// The page sizes and rotation the pages are placed with.
     geo: PageGeometry<'a>,
+    /// A pointer button is down this pass.
+    button_held: bool,
 }
 
 impl<'a> EditTextTool<'a> {
@@ -36,7 +38,14 @@ impl<'a> EditTextTool<'a> {
         press: &'a PressState,
         geo: PageGeometry<'a>,
     ) -> Self {
-        Self { session, doc, info, placed, press, geo }
+        Self { session, doc, info, placed, press, geo, button_held: false }
+    }
+
+    /// The tool with a pointer button down this pass (`held`): Delete waits for it to come up.
+    #[must_use]
+    pub(crate) fn button_held(mut self, held: bool) -> Self {
+        self.button_held = held;
+        self
     }
 
     /// Something is selected that an arrow moves or Delete removes.
@@ -99,6 +108,11 @@ impl CanvasTool for EditTextTool<'_> {
             ToolKey::Delete { .. } => {
                 if !self.has_selection() {
                     return false;
+                }
+                // Delete waits for the button to come up: the press held would then name another item, whose
+                // drag or click would follow. The key is still the tool's.
+                if self.button_held {
+                    return true;
                 }
                 let edit = object_ui::delete(self.session)
                     .or_else(|| crate::edit_text_ui::delete_picture(self.session, self.placed))

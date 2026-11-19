@@ -911,10 +911,12 @@ fn page_parts_of(
         for placed in body.pages {
             parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
         }
-        for placed in body.pages {
+        // A picture being cropped holds every press on its page: its paragraphs and added text take none there.
+        let cropping = session.image_selection.as_ref().filter(|s| s.crop.is_some()).map(|s| s.page);
+        for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
             parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo));
         }
-        for placed in body.pages {
+        for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
             parts.extend(crate::content_ui::page_parts(session, cx.doc, placed.page, placed));
         }
     }
@@ -963,13 +965,29 @@ fn links_of<'a>(session: &'a PageSession, cx: &'a PageBodyCx<'_>, body: &'a Page
     PageLinks::new(mode, session, cx.info, cx.doc.links(), body.pages, cx.rotation, cx.sizes).text_links(cx.text_links).tips(cx.unobstructed)
 }
 
-/// Whether `phase` is the first pass of a press of `button`.
+/// Whether `phase` is a phase of a press of `button`: a press and release in one pass report only the release.
 fn pressed_by(phase: &PressPhase, button: PointerButton) -> bool {
-    matches!(phase, PressPhase::Down { start, .. } if start.button == button)
+    phase.start().is_some_and(|start| start.button == button)
 }
 
-/// What a press on a part does, routed by its owner.
-fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
+/// The topmost picture part of `page` under `at` among `parts`, given in paint order.
+fn picture_under(parts: &[PagePart], page: usize, at: egui::Pos2) -> Option<usize> {
+    parts.iter().rev().find_map(|part| match part.owner {
+        Owner::Picture { index } if part.page == page && part.shape.hit(at) => Some(index),
+        _ => None,
+    })
+}
+
+/// What a press on a part does, routed by its owner. `parts` are the pass's parts, in paint order.
+fn route_press(
+    ui: &egui::Ui,
+    session: &mut PageSession,
+    press: &PagePress,
+    parts: &[PagePart],
+    cx: &PageBodyCx<'_>,
+    body: &PageBody<'_>,
+    out: &mut BodyOut,
+) {
     let geo = cx.geometry(body);
     if pressed_by(&press.phase, PointerButton::Secondary) {
         // The page's menu reads what the secondary press went to; a comment is selected for its menu, as a comment's
@@ -979,7 +997,24 @@ fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: 
         {
             session.comments.select(Some((press.page, index)));
         }
-        session.menu_for = Some((press.page, press.owner.clone()));
+        let mut owner = press.owner;
+        if cx.tool == QuickTool::EditText && cx.can_modify {
+            // Paragraphs, added text and an open paragraph's frame have no menu: the picture under them takes the
+            // right-click (the user's ruling). A picture is selected for its menu; a right-click on anything else
+            // lets the selected one go.
+            if matches!(owner, Owner::Paragraph { .. } | Owner::Added { .. } | Owner::Frame { .. })
+                && let Some(start) = press.phase.start()
+                && let Some(index) = picture_under(parts, press.page, start.origin)
+            {
+                owner = Owner::Picture { index };
+            }
+            let picture = match owner {
+                Owner::Picture { index } => Some(index),
+                _ => None,
+            };
+            crate::edit_text_ui::picture_context(press.page, picture, session);
+        }
+        session.menu_for = Some((press.page, owner));
         return;
     }
     let clicked = matches!(press.phase, PressPhase::Release { click: true, .. });
@@ -1054,7 +1089,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         if matches!(press.phase, PressPhase::Down { .. }) {
             session.all_text = false;
         }
-        route_press(ui, session, press, cx, body, out);
+        route_press(ui, session, press, &parts, cx, body, out);
     }
     // Focus arrived on a field (Tab, a request or a click): the field opens, a text field with its text selected.
     let field_arrived = match &parts_out.focused {
@@ -1076,7 +1111,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             // A press nobody's part took, on the page or the gap between pages, ends Select All of the document.
             session.all_text = false;
         }
-        let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, ..cx.tools };
+        let button_held = ui.input(|i| i.pointer.any_down());
+        let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, button_held, ..cx.tools };
         let mut bench = page_tools::ToolBench::default();
         let mut fill = None;
         let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &pass.press);
@@ -1379,6 +1415,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         sizes: &page_sizes[..],
         rotation: state.rotation,
         viewport: Rect::NOTHING,
+        button_held: false,
         text_style: &app.text_style,
         allowed,
         can_modify,
