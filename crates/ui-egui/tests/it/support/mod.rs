@@ -4,15 +4,19 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use egui::FontId;
-use egui::epaint::text::{Fonts, TextOptions};
-use egui_kittest::Harness;
+use craft::host::{AppInfo, Files, Host, InlineJobs, Jobs, ManualJobs, ScriptedFiles, Wake};
+use craft::keymap::CommandRef;
+use craft::platform::clipboard::{Clipboard, ClipboardBackend, ClipboardError, ClipboardImage, Flavor, TEXT};
+use craft::platform::open::FileIntake;
+use craft::platform::watch::FileWatch;
 use craft::ui::runtime::commands::{FireSource, fire};
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::toast;
-use craft::host::{Host, Wake};
-use craft::keymap::CommandRef;
-use pdfcraft_ui_egui::{AppServices, FileIntake, FileWatch, PdfCraftApp, i18n};
+use egui::FontId;
+use egui::epaint::text::{Fonts, TextOptions};
+use egui_kittest::Harness;
+use pdfcraft_ui_egui::{AppServices, PdfCraftApp, RightPanel, i18n};
+use std::path::PathBuf;
 
 pub mod fixtures;
 pub mod input;
@@ -65,43 +69,140 @@ pub fn fire_menu(h: &mut Harness<'static, PdfCraftApp>, command: impl Into<Comma
 }
 
 /// The text of the first notice card the main window shows, if any.
-pub fn shown_notice(h: &mut Harness<'static, PdfCraftApp>) -> Option<String> {
+pub fn shown_notice(h: &Harness<'_, PdfCraftApp>) -> Option<String> {
     toast::cards(&h.ctx, &WindowKey::main()).first().map(|card| card.toast.message.as_str().to_owned())
 }
 
-/// An app built over `host`, with no wake, an inline file watch and a test file intake: the one way a
-/// test gives the app a host, so jobs and picked files run when the test steps.
-pub fn host_harness(host: Arc<Host>, clipboard: RecordingClipboard) -> Harness<'static, PdfCraftApp> {
-    // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)`,
-    // `FileIntake::for_tests()`, `FileWatch::inline()` and `PdfCraftApp::with_host(Arc<Host>, AppServices)` (pdf-hub-w1, L-207)
-    let services = AppServices::new(Wake::none(), Box::new(clipboard), None, None, FileIntake::for_tests(), FileWatch::inline());
-    let app = PdfCraftApp::with_host(host, services);
-    Harness::new_ui_state(|ui, app: &mut PdfCraftApp| app.ui(ui), app)
+/// The services the tests give the app: no wake, no autosave folder, the GitHub update source, a fresh
+/// file intake and an inline file watch, over `clipboard`.
+pub fn services(clipboard: RecordingClipboard) -> AppServices {
+    let (intake, _sender) = FileIntake::new(Wake::none());
+    AppServices::new(Wake::none(), Clipboard::new(clipboard), None, None, intake, FileWatch::new(Wake::none()).inline())
 }
 
-/// A clipboard backend the tests share: what the app copies is read back through the clone the test keeps.
+fn app_info() -> AppInfo {
+    AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }
+}
+
+/// A host whose threads run its jobs and whose pickers answer Cancelled.
+pub fn host() -> Arc<Host> {
+    Arc::new(Host::builder(app_info()).build())
+}
+
+/// A host over `jobs` and `files`, for a test that scripts either.
+pub fn host_with(jobs: Arc<dyn Jobs>, files: Arc<dyn Files>) -> Arc<Host> {
+    Arc::new(Host::builder(app_info()).jobs(jobs).files(files).build())
+}
+
+/// A host whose pickers answer from `files`.
+pub fn host_with_files(files: impl Into<Arc<ScriptedFiles>>) -> Arc<Host> {
+    let files: Arc<ScriptedFiles> = files.into();
+    Arc::new(Host::builder(app_info()).files(files).build())
+}
+
+/// The app over `host` with the tests' services.
+pub fn test_app(host: Arc<Host>) -> PdfCraftApp {
+    PdfCraftApp::with_host(host, services(RecordingClipboard::default()))
+}
+
+/// The app over a host whose jobs wait in `jobs` until the test runs them.
+pub fn held_app(jobs: Arc<ManualJobs>) -> PdfCraftApp {
+    test_app(Arc::new(Host::builder(app_info()).jobs(jobs).build()))
+}
+
+/// The app over a host whose jobs run at once, where they are queued.
+pub fn inline_app() -> PdfCraftApp {
+    test_app(Arc::new(Host::builder(app_info()).jobs(Arc::new(InlineJobs)).build()))
+}
+
+/// The app over the default host and a clipboard the test keeps a clone of.
+pub fn app_with_clipboard(clipboard: RecordingClipboard) -> PdfCraftApp {
+    PdfCraftApp::with_host(host(), services(clipboard))
+}
+
+/// An app built over `host`, with the tests' services: the one way a test gives the app a host, so
+/// jobs and picked files run when the test steps.
+pub fn host_harness(host: Arc<Host>, clipboard: RecordingClipboard) -> Harness<'static, PdfCraftApp> {
+    let app = PdfCraftApp::with_host(host, services(clipboard));
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app)
+}
+
+/// A clipboard backend the tests share: what the app writes is read back through the clone the test keeps.
 #[derive(Clone, Default)]
 pub struct RecordingClipboard {
-    text: Arc<Mutex<Option<String>>>,
+    state: Arc<Mutex<Recorded>>,
+}
+
+#[derive(Default)]
+struct Recorded {
+    writes: Vec<Vec<Flavor>>,
+    held: Option<String>,
+    refused: Option<&'static str>,
+    refuse_all: bool,
 }
 
 impl RecordingClipboard {
+    /// A clipboard that refuses a write offering a flavour of `mime`; the attempt is recorded.
+    pub fn refusing(mime: &'static str) -> Self {
+        let clipboard = Self::default();
+        clipboard.lock().refused = Some(mime);
+        clipboard
+    }
+
+    /// A clipboard with no system behind it: every write is refused (and recorded).
+    pub fn refusing_all() -> Self {
+        let clipboard = Self::default();
+        clipboard.lock().refuse_all = true;
+        clipboard
+    }
+
     /// The text the app last copied.
     pub fn copied(&self) -> Option<String> {
-        self.text.lock().ok().and_then(|text| text.clone())
+        self.lock().held.clone()
+    }
+
+    /// Every write the app attempted, refused or not, each as its flavours.
+    pub fn writes(&self) -> Vec<Vec<Flavor>> {
+        self.lock().writes.clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Recorded> {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
-// PLAN: assumed `ClipboardBackend` with `get_text` and `set_text` (craft::platform::clipboard)
-impl craft::platform::clipboard::ClipboardBackend for RecordingClipboard {
-    fn get_text(&self) -> Option<String> {
-        self.copied()
+impl ClipboardBackend for RecordingClipboard {
+    fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
+        let mut state = self.lock();
+        state.writes.push(flavors.to_vec());
+        if state.refuse_all {
+            return Err(ClipboardError::Unavailable);
+        }
+        if let Some(mime) = state.refused
+            && flavors.iter().any(|f| f.mime == mime)
+        {
+            return Err(ClipboardError::NoFormat);
+        }
+        let written = flavors.iter().position(|f| f.mime == TEXT).unwrap_or(0);
+        state.held = flavors.get(written).filter(|f| f.mime == TEXT).map(|f| String::from_utf8_lossy(&f.data).into_owned());
+        Ok(written)
     }
 
-    fn set_text(&self, text: &str) {
-        if let Ok(mut held) = self.text.lock() {
-            *held = Some(text.to_owned());
-        }
+    fn read(&mut self, mimes: &[&str], _limit: u64) -> Result<Option<Flavor>, ClipboardError> {
+        let held = self.lock().held.clone();
+        Ok(held.filter(|_| mimes.contains(&TEXT)).map(|text| Flavor::text(&text)))
+    }
+
+    fn read_image(&mut self, _limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn read_files(&mut self, _limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        Ok(None)
+    }
+
+    fn has(&mut self, mimes: &[&str]) -> bool {
+        mimes.contains(&TEXT) && self.lock().held.is_some()
     }
 }
 
@@ -160,8 +261,8 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     let catalogs: Vec<&str> = i18n::Lang::from_code(language).into_iter().flat_map(i18n::Lang::catalog_texts).collect();
     let translations = catalogs.iter().flat_map(|c| c.lines()).filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(2));
     let chars: BTreeSet<char> = std::iter::once(text).chain(translations).flat_map(str::chars).filter(|c| !c.is_control()).collect();
-    // PLAN: assumed `fonts::ui_fonts(language)` (pdf-shell-w10); `fonts` must be `pub mod` for tests.
-    let defs: egui::FontDefinitions = pdfcraft_ui_egui::fonts::ui_fonts(language).stack().flat_definitions();
+    let defs: egui::FontDefinitions =
+        pdfcraft_ui_egui::fonts::ui_fonts(i18n::Lang::from_code(language).unwrap_or(i18n::Lang::EN)).stack().flat_definitions();
     let families: Vec<FontId> = defs.families.keys().map(|f| FontId::new(13.0, f.clone())).collect();
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     let missing = chars.iter().copied().find(|c| families.iter().any(|id| !fonts.has_glyphs(id, &c.to_string())));
@@ -188,7 +289,22 @@ pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) 
     open_menu(h, "Help");
     h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with("Keyboard shortcuts"))).click();
     h.run_steps(4);
-    assert!(h.state().dialog.is_some(), "Keyboard shortcuts is open");
+    assert!(dialog_open(h), "Keyboard shortcuts is open");
+}
+
+/// The right panel the dock has open, as the control channel's `ui.state` reports it (`side_panels::state`).
+pub fn right(app: &PdfCraftApp) -> Option<RightPanel> {
+    use RightPanel::*;
+    let state = pdfcraft_ui_egui::side_panels::state(app);
+    let name = state["side_panel"].as_str()?;
+    [Comments, Bookmarks, Pages, Fields, Layers, Attachments, Signatures, Accessibility, Tags, Search, Compare]
+        .into_iter()
+        .find(|panel| format!("{panel:?}") == name)
+}
+
+/// Whether the dialog host holds a dialog.
+pub fn dialog_open(h: &Harness<'_, PdfCraftApp>) -> bool {
+    !h.state().dialogs.is_empty()
 }
 
 /// The app's command and option entry points, called with the harness's own context (L-208: they take the
@@ -196,6 +312,13 @@ pub fn open_shortcuts_from_the_help_menu(h: &mut Harness<'static, PdfCraftApp>) 
 pub trait AppHarness {
     fn execute(&mut self, id: &str) -> bool;
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), String>;
+    fn undo(&mut self);
+    fn redo(&mut self);
+    fn run_command(&mut self, id: &str);
+    fn submit_password(&mut self, password: Option<String>);
+    fn run_button_script(&mut self, id: pdfcraft_engine::DocId, field: &str, script: &str);
+    fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String>;
+    fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>);
 }
 
 impl AppHarness for Harness<'_, PdfCraftApp> {
@@ -207,5 +330,40 @@ impl AppHarness for Harness<'_, PdfCraftApp> {
     fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let ctx = self.ctx.clone();
         self.state_mut().set_option(&ctx, key, value)
+    }
+
+    fn undo(&mut self) {
+        let ctx = self.ctx.clone();
+        self.state_mut().undo(&ctx);
+    }
+
+    fn redo(&mut self) {
+        let ctx = self.ctx.clone();
+        self.state_mut().redo(&ctx);
+    }
+
+    fn run_command(&mut self, id: &str) {
+        let ctx = self.ctx.clone();
+        self.state_mut().run_command(&ctx, id);
+    }
+
+    fn submit_password(&mut self, password: Option<String>) {
+        let ctx = self.ctx.clone();
+        self.state_mut().submit_password(&ctx, password);
+    }
+
+    fn run_button_script(&mut self, id: pdfcraft_engine::DocId, field: &str, script: &str) {
+        let ctx = self.ctx.clone();
+        self.state_mut().run_button_script(&ctx, id, field, script);
+    }
+
+    fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
+        let ctx = self.ctx.clone();
+        self.state_mut().snapshot(&ctx, index, page, view_rect)
+    }
+
+    fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
+        let ctx = self.ctx.clone();
+        self.state_mut().start_signing(&ctx, page, rect, field, certify);
     }
 }

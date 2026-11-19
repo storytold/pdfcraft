@@ -141,7 +141,7 @@ fn harness_on(app: PdfCraftApp, pages: usize, width: f32, scale: f32) -> (Harnes
     let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |_cc| {
         let mut app = app;
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(rx, None);
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
         app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).unwrap();
         app
     });
@@ -604,7 +604,7 @@ fn moving_before_middle_button_release_keeps_scrolling_without_starting_page_too
     h.run_steps(8);
     assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().top(), released, "no drift after releasing a held middle drag");
     assert!(h.state().views[0].crop_drag.is_none(), "the Crop tool must not receive a wheel drag");
-    assert!(h.state().dialog.is_none());
+    assert!(!crate::support::dialog_open(&h));
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 
     // Small movement within the dead zone before release still latches auto-scroll on.
@@ -1485,7 +1485,7 @@ fn a_script_opened_panel_shows() {
     h.run_steps(3);
     assert!(h.query_by_label("This document has no bookmarks.").is_none());
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "", "app.execMenuItem('ShowHideBookmarks')");
+    h.run_button_script(id, "", "app.execMenuItem('ShowHideBookmarks')");
     assert!(crate::support::step_until(&mut h, |h| h.query_by_label("This document has no bookmarks.").is_some()));
 }
 
@@ -1618,7 +1618,7 @@ fn control_open_of_an_already_open_file_replies_ok_and_focuses_its_tab() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(rx, None);
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
         app
     });
     h.run_steps(4);
@@ -1654,7 +1654,7 @@ fn control_open_replies_pending_while_the_worker_opens_and_focuses_once_it_has()
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(rx, None);
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
         app
     });
     h.run_steps(4);
@@ -1879,7 +1879,7 @@ fn control_collapses_and_expands_a_pinned_folder() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |_cc| {
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.pin_folder(&pin);
-        app.attach_control(rx, None);
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
         app
     });
     let c = tx;

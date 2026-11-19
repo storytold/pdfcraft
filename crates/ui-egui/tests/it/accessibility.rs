@@ -54,7 +54,7 @@ fn automatic_text_tagging_opens_reviewable_tags() {
     h.run_steps(3);
     assert!(h.execute("a11y.autotag"));
     h.run_steps(2);
-    assert_eq!(h.state().right, Some(RightPanel::Tags));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Tags));
     let doc = h.state().session.get(h.state().views[h.state().active.unwrap()].id).unwrap();
     let tags = doc.tags();
     assert_eq!(tags.len(), 2);
@@ -67,11 +67,9 @@ fn checking_fixing_skipping_and_reporting() {
     let files = Arc::new(ScriptedFiles::new().saving_suggested());
     let scripted = files.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = crate::control::app_with_files(scripted);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        // PLAN: assumed `PdfCraftApp::set_files(Arc<dyn Files>)` (pdf-workflows-w13, A-6)
-        app.set_files(scripted);
         app
     });
     h.run_steps(4);
@@ -83,7 +81,7 @@ fn checking_fixing_skipping_and_reporting() {
     h.get_by_label("Start Checking").click();
     h.run_steps(3);
     assert!(h.state().dialogs.is_empty());
-    assert_eq!(h.state().right, Some(RightPanel::Accessibility));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Accessibility));
     h.get_by_label("Document (3 issues)");
     h.get_by_label("Title - Failed");
     h.get_by_label("Color contrast - Skipped");
@@ -240,7 +238,7 @@ fn tagging_form_fields_opens_the_tags_panel() {
     h.run_steps(3);
     assert!(h.execute("a11y.autotag_fields"));
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Tags));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Tags));
     let id = h.state().views[0].id;
     let report = h
         .state()
@@ -334,7 +332,7 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
     h.run_steps(4);
     assert!(h.execute("a11y.tags"));
     h.run_steps(2);
-    assert_eq!(h.state().right, Some(RightPanel::Tags));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Tags));
     // The list's own disclosure: Left closes the selected group, Right opens it.
     h.get_by_label("Document · 6").click();
     h.key_press(egui::Key::ArrowLeft);
@@ -422,17 +420,17 @@ fn checker_finding_opens_its_structure_tag() {
     assert_eq!(finding.object.map(|o| o.num), Some(7));
     h.get_by_label(&finding.message).click();
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Tags));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Tags));
     h.get_by_label("7 0 R");
     let title = h.get_by_role_and_label(Role::TextInput, "Title");
     title.focus();
     title.type_text("Unsaved title");
     h.run_steps(1);
-    h.state_mut().right = Some(RightPanel::Accessibility);
+    h.set_option("panel", "accessibility").unwrap();
     h.run_steps(2);
     h.get_by_label(&finding.message).click();
     h.run_steps(2);
-    assert_eq!(h.state().right, Some(RightPanel::Accessibility), "an unfinished tag edit is preserved");
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Accessibility), "an unfinished tag edit is preserved");
 }
 
 #[test]
@@ -446,7 +444,7 @@ fn finding_untagged_content_shows_the_focused_accessibility_results() {
     h.run_steps(3);
     assert!(h.execute("a11y.find_untagged"));
     h.run_steps(2);
-    assert_eq!(h.state().right, Some(RightPanel::Accessibility));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Accessibility));
     let report = &h.state().a11y.report.as_ref().unwrap().1;
     let active: Vec<Rule> = report.results.iter().filter(|result| result.status != Status::Skipped).map(|result| result.rule).collect();
     assert_eq!(active, [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields]);

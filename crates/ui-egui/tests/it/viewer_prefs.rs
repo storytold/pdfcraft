@@ -109,7 +109,8 @@ fn a_reloaded_document_keeps_its_interface() {
     let mut h = harness(|_| {}, &["/ViewerPreferences << /HideToolbar true >>"]);
     let reload = |h: &mut Harness<'static, PdfCraftApp>| {
         let info = h.state().session.get(h.state().views[0].id).unwrap().info.clone();
-        h.state_mut().views[0].document_replaced(&info);
+        let ctx = h.ctx.clone();
+        h.state_mut().views[0].document_replaced(&ctx, &info);
         h.run_steps(3);
     };
     reload(&mut h);

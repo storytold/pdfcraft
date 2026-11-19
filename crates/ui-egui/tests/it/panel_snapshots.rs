@@ -241,7 +241,7 @@ fn every_panel_matches_its_snapshot() {
     let mut failures = Vec::new();
     for p in ALL {
         let (h, name) = open(p);
-        assert_eq!(h.state().right, Some(p), "{name} opens its own panel");
+        assert_eq!(crate::support::right(h.state()), Some(p), "{name} opens its own panel");
         if let Err(e) = check(&h, name) {
             failures.push(e);
         }

@@ -6,14 +6,14 @@
 //! does (`ui.dialog.set`, its action ids, its OK) and reads the result through its `State`.
 
 use crate::support::AppHarness as _;
-use craft::host::{AppInfo, FileIntake, FileWatch, Host, ManualJobs, Picked, ScriptedFiles, Wake};
+use craft::host::{ManualJobs, Picked, ScriptedFiles};
 use craft::print::ui::{Destination, HostedPrint};
 use craft_ui::dialog::{DialogId, HeldOk};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::print::spool;
-use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -54,8 +54,7 @@ pub(crate) fn rig_on(files: ScriptedFiles, setup: impl FnOnce(&mut PdfCraftApp) 
     let files = Arc::new(files);
     let (host_jobs, host_files) = (jobs.clone(), files.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "test" }).jobs(host_jobs).files(host_files).build();
-        let mut app = PdfCraftApp::with_host(Arc::new(host), AppServices::new(Wake::none(), FileIntake::new(Wake::none()), FileWatch::inline()));
+        let mut app = crate::support::test_app(crate::support::host_with(host_jobs, host_files));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
@@ -936,7 +935,7 @@ fn print_restricted_documents_say_so_before_the_dialog() {
     assert!(!h.execute("print.dialog"));
     h.run_steps(2);
     assert!(!h.is_open());
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("The document's security settings don't allow printing"));
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("The document's security settings don't allow printing"));
 }
 
 /// With no document open the top bar's Print button is disabled too, but not for security
@@ -975,8 +974,8 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert!(!h.is_open());
     assert_eq!(h.state().print_draft, before_cancel, "cancel keeps the existing draft behavior");
     let snapshot = h.state().settings_snapshot();
-    assert_eq!(snapshot.print.paper.as_deref(), Some("A4"), "store the canonical name, not its position");
-    assert!(snapshot.print.paper_overridden, "explicitly chosen paper records override flag");
+    assert_eq!(snapshot.print.print_paper.as_deref(), Some("A4"), "store the canonical name, not its position");
+    assert_eq!(snapshot.print.print_paper_overridden, Some(true), "explicitly chosen paper records override flag");
     let saved = saved_json(h.state());
     let mut app = crate::control::new_app();
     restore(&mut app, &saved);
@@ -1007,7 +1006,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     restarted.set("paper", json!("US Letter"));
     restarted.close();
     let saved = saved_json(restarted.state());
-    assert_eq!(restarted.state().settings_snapshot().print.paper.as_deref(), Some("US Letter"));
+    assert_eq!(restarted.state().settings_snapshot().print.print_paper.as_deref(), Some("US Letter"));
     let mut again = harness_with_settings(Some(saved));
     again.open();
     assert_eq!(again.state().print_draft.paper, letter);
@@ -1021,7 +1020,7 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
         restore(&mut app, &json!({"print_paper": name}).to_string());
         assert_eq!(app.print_draft.paper, index);
         assert!(!app.print_draft.paper_overridden);
-        assert_eq!(app.settings_snapshot().print.paper.as_deref(), Some(*name));
+        assert_eq!(app.settings_snapshot().print.print_paper.as_deref(), Some(*name));
     }
     for invalid in [
         "not JSON",
@@ -1049,7 +1048,7 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
     }
     let mut app = crate::control::new_app();
     app.print_draft.paper = usize::MAX;
-    assert_eq!(app.settings_snapshot().print.paper, None);
+    assert_eq!(app.settings_snapshot().print.print_paper, None);
 }
 
 #[test]

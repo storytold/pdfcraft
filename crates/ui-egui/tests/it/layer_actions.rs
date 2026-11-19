@@ -48,11 +48,9 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 
 fn harness_with(pdf: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        // PLAN: assumed `crate::support::test_app(Arc<Host>) -> PdfCraftApp`, the shared harness (pdf-chrome-w9, w9-1).
-        let host = Arc::new(craft::host::Host::builder(craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).build());
-        let mut app = crate::support::test_app(host);
+        let mut app = crate::support::test_app(crate::support::host());
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("layers.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "layers.pdf", None, pdf).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
         setup(&mut app);
         app

@@ -4,12 +4,13 @@
 use std::time::Duration;
 
 use crate::support::AppHarness as _;
-use craft::ui::primitives::textures::TextureState;
+use craft::ui::primitives::textures::{TextureState, ThumbRequest};
 use craft::ui::tile_grid::TileZoom;
 use egui::{Key, Modifiers, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
+use pdfcraft_ui_egui::settings::import_json;
 use pdfcraft_ui_egui::{CombineView, FilePurpose, PdfCraftApp};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1".
@@ -138,6 +139,16 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&PdfCraftApp) -> 
     false
 }
 
+/// What the grid's thumbnails are read at.
+fn request() -> ThumbRequest {
+    ThumbRequest::for_cell(256.0, 1.0)
+}
+
+/// Each file's grid thumbnail, as the harness's frames have stored them.
+fn thumbnails(h: &Harness<'static, PdfCraftApp>) -> Vec<TextureState> {
+    h.state().combine_thumbnails(&h.ctx, &request())
+}
+
 fn ready(t: &TextureState) -> bool {
     matches!(t, TextureState::Ready(_))
 }
@@ -222,14 +233,14 @@ fn combine_shows_a_grid_by_default_and_the_view_is_kept_in_the_settings() {
     assert_eq!(h.state().combine_view, CombineView::List);
     h.get_by_label("File name");
     // Kept in the settings, and read back.
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
     assert_eq!(fresh.combine_view, CombineView::Grid);
-    fresh.restore(&saved);
+    fresh.apply_settings(&saved);
     assert_eq!(fresh.combine_view, CombineView::List);
     // A damaged setting keeps the default.
     let mut damaged = crate::control::new_app();
-    damaged.restore(r#"{"combine_view": "tiles"}"#);
+    damaged.apply_settings(&import_json(r#"{"combine_view": "tiles"}"#).0);
     assert_eq!(damaged.combine_view, CombineView::Grid);
     // Scriptable, with a clear refusal for anything else.
     let app = h.state_mut();
@@ -269,12 +280,16 @@ fn thumbnails_show_the_first_page_each_file_takes() {
     let pages = fixture_pages(&[(200.0, 300.0), (200.0, 300.0), (300.0, 200.0)]);
     let mut h = grid_of(vec![("three.pdf", pages), ("one.pdf", fixture(1))], vec2(1400.0, 900.0));
     h.state_mut().combine_draft[0].range = "3, 1".into();
+    let ctx = h.ctx.clone();
     assert!(
-        settle(&mut h, |app| app.combine_thumbnails().iter().all(ready) && landscape(&app.combine_thumbnails()[0])),
+        settle(&mut h, |app| {
+            let thumbs = app.combine_thumbnails(&ctx, &request());
+            thumbs.iter().all(ready) && landscape(&thumbs[0])
+        }),
         "{:?}",
-        h.state().combine_thumbnails()
+        thumbnails(&h)
     );
-    let thumbs = h.state().combine_thumbnails();
+    let thumbs = thumbnails(&h);
     assert!(landscape(&thumbs[0]), "\"3, 1\" starts with page 3: {:?}", thumbs[0]);
     assert!(portrait(&thumbs[1]), "{:?}", thumbs[1]);
     let (width, height) = shape(&thumbs[1]).unwrap();
@@ -282,28 +297,29 @@ fn thumbnails_show_the_first_page_each_file_takes() {
     assert!(width > 0.0 && height > 0.0 && width <= 1536.0 && height <= 1536.0, "{width}×{height}");
     // A new range is a new thumbnail, never the old page.
     h.state_mut().combine_draft[0].range = "2".into();
-    assert!(settle(&mut h, |app| portrait(&app.combine_thumbnails()[0])), "{:?}", h.state().combine_thumbnails());
+    assert!(settle(&mut h, |app| portrait(&app.combine_thumbnails(&ctx, &request())[0])), "{:?}", thumbnails(&h));
     // A range that can't be used shows no page at all.
     h.state_mut().combine_draft[0].range = "9".into();
     h.run_steps(2);
-    assert_eq!(h.state().combine_thumbnails()[0], TextureState::Missing);
+    assert_eq!(thumbnails(&h)[0], TextureState::Missing);
 }
 
 #[test]
 fn a_locked_file_shows_no_page_until_unlocked_and_undo_locks_it_again() {
     let mut h = grid_of(vec![("one.pdf", fixture(1)), ("secret.pdf", protected("pw", "owner"))], vec2(1400.0, 900.0));
-    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails()[0])));
-    assert_eq!(h.state().combine_thumbnails()[1], TextureState::Missing, "nothing is drawn of a locked file");
+    let ctx = h.ctx.clone();
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &request())[0])));
+    assert_eq!(thumbnails(&h)[1], TextureState::Missing, "nothing is drawn of a locked file");
     assert!(h.state_mut().combine_unlock_rows(&[1], "pw"));
-    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails()[1])), "{:?}", h.state().combine_thumbnails());
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &request())[1])), "{:?}", thumbnails(&h));
     // Undo brings back the locked file: its unlocked thumbnail goes with the password.
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
     assert!(h.state().combine_draft[1].lock.is_some());
-    assert_eq!(h.state().combine_thumbnails()[1], TextureState::Missing);
+    assert_eq!(thumbnails(&h)[1], TextureState::Missing);
     // Unlocked again (a new branch of the history): drawn again, from this unlock.
     assert!(h.state_mut().combine_unlock_rows(&[1], "pw"));
-    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails()[1])), "{:?}", h.state().combine_thumbnails());
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &request())[1])), "{:?}", thumbnails(&h));
 }
 
 #[test]
@@ -549,13 +565,13 @@ fn the_toolbar_sizes_the_cards_within_limits_and_the_size_is_kept_in_the_setting
     let smallest_card = card(&h, "a.pdf");
     assert!(smallest_card.width() < before.width() && smallest_card.height() < before.height(), "{smallest_card:?}");
     // Kept in the settings, and read back; a damaged setting is clamped or ignored.
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
-    fresh.restore(&saved);
+    fresh.apply_settings(&saved);
     assert_eq!(fresh.combine_zoom, smallest);
-    fresh.restore(r#"{"combine_zoom": 99}"#);
+    fresh.apply_settings(&import_json(r#"{"combine_zoom": 99}"#).0);
     assert_eq!(fresh.combine_zoom, largest);
-    fresh.restore(r#"{"combine_zoom": "big"}"#);
+    fresh.apply_settings(&import_json(r#"{"combine_zoom": "big"}"#).0);
     assert_eq!(fresh.combine_zoom, largest);
     // Scriptable in percent, with a clear refusal outside the range.
     let app = h.state_mut();
@@ -594,11 +610,12 @@ fn expanding_a_file_shows_the_pages_it_adds_in_order_with_their_numbers() {
     assert!(xs.windows(2).all(|w| w[0] < w[1]), "pages 3, 1, 4 in that order: {xs:?}");
     assert!(h.query_by_label(&page_card(2, "b.pdf")).is_none(), "page 2 isn't added, so isn't shown");
     // Each renders its own page.
+    let ctx = h.ctx.clone();
     assert!(settle(&mut h, |app| {
-        let pages = app.combine_page_thumbnails(1);
+        let pages = app.combine_page_thumbnails(&ctx, 1, &request());
         pages.len() == 3 && pages.iter().all(|(_, t)| ready(t))
     }));
-    let shapes: Vec<(usize, TextureState)> = h.state().combine_page_thumbnails(1);
+    let shapes: Vec<(usize, TextureState)> = h.state().combine_page_thumbnails(&ctx, 1, &request());
     assert_eq!(shapes.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [2, 0, 3]);
     assert!(landscape(&shapes[0].1) && portrait(&shapes[1].1), "{shapes:?}");
     let (w, h4) = shape(&shapes[2].1).unwrap();

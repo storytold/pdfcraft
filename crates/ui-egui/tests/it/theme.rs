@@ -21,7 +21,7 @@ fn harness_with(settings: Option<&'static str>, system: Option<egui::Theme>, run
         if let Some(json) = settings {
             app.apply_settings(&import_json(json).0);
         }
-        app.attach_control(rx, None);
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
         app
     });
     h.input_mut().system_theme = system;
@@ -180,12 +180,9 @@ fn commands_and_options_apply_before_the_first_frame() {
 #[test]
 fn restored_system_tracks_native_input_without_rewriting_saved_preference() {
     let (mut h, c) = harness_with(Some(r#"{"theme":"system"}"#), None, true);
-    for (input, expected) in [
-        (Some(egui::Theme::Dark), "Dark"),
-        (Some(egui::Theme::Light), "Light"),
-        (None, "Light"),
-        (Some(egui::Theme::Dark), "Dark"),
-    ] {
+    for (input, expected) in
+        [(Some(egui::Theme::Dark), "Dark"), (Some(egui::Theme::Light), "Light"), (None, "Light"), (Some(egui::Theme::Dark), "Dark")]
+    {
         h.input_mut().system_theme = input;
         h.run_steps(3);
         assert_theme(&mut h, &c, "System", expected);

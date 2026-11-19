@@ -3,6 +3,7 @@
 //! script on a small and a large document, from the component runs the framework counts, so a slow or busy machine
 //! cannot fail it and a regression cannot hide behind a fast one. Rendering runs on worker threads and is not counted.
 
+use craft::pages::ui::view::GoTo;
 use craft::ui::testing::last_pass_runs;
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -64,7 +65,7 @@ fn harness(bytes: Vec<u8>, options: &'static [(&'static str, &'static str)]) -> 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("work.pdf", None, bytes).expect("opens");
+        app.open_bytes(&egui::Context::default(), "work.pdf", None, bytes).expect("opens");
         for (key, value) in options {
             app.set_option(&egui::Context::default(), key, value).unwrap();
         }
@@ -138,7 +139,7 @@ fn a_folded_page_builds_no_comment_cards_and_an_open_one_builds_only_the_rows_in
 fn jumping_through_pages_builds_only_the_pages_in_view() {
     let work = |n: usize| {
         let mut h = harness(big(n), &[]);
-        most_work(&mut h, None, 60, |h, f| h.state_mut().views[0].goto = Some(((f * 5) / 2 % 50, 0.3)))
+        most_work(&mut h, None, 60, |h, f| h.state_mut().views[0].view.go_to = Some(GoTo::Top { page: (f * 5) / 2 % 50, fraction: 0.3 }))
     };
     let (small, large) = (work(50), work(500));
     assert!(small.0 > 0, "the frames build something");
@@ -182,7 +183,7 @@ fn panels_build_only_the_rows_in_view() {
     for (panel, row, builds) in [("comments", "CommentRow", true), ("pages", "Tile", true), ("fields", "ListRow", false)] {
         let work = |n: usize| {
             let mut h = harness(big(n), &[("panel", panel)]);
-            most_work(&mut h, Some(row), 60, |h, f| h.state_mut().views[0].goto = Some(((f * 5) % 50, 0.3))).0
+            most_work(&mut h, Some(row), 60, |h, f| h.state_mut().views[0].view.go_to = Some(GoTo::Top { page: (f * 5) % 50, fraction: 0.3 })).0
         };
         let (small, large) = (work(50), work(500));
         if builds {

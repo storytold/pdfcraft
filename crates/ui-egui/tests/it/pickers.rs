@@ -655,7 +655,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(&ctx_h, Edit::DeletePages { pages: vec![1] });
     h.state_mut().mode = Mode::Edit;
-    h.state_mut().right = Some(RightPanel::Pages);
+    h.set_option("panel", "pages").unwrap();
     h.state_mut().left = LeftPanel::AllTools;
     h.state_mut().left_open = false;
     h.state_mut().quick_tool = QuickTool::Hand;
@@ -664,7 +664,7 @@ fn a_late_startup_url_preserves_the_current_edit_workspace_and_save_target() {
 
     assert_eq!(h.state().active_ids().unwrap().1, active, "Save still targets the user's document");
     assert_eq!(h.state().mode, Mode::Edit);
-    assert_eq!(h.state().right, Some(RightPanel::Pages));
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Pages));
     assert_eq!(h.state().left, LeftPanel::AllTools);
     assert!(!h.state().left_open);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
@@ -769,7 +769,7 @@ fn a_startup_url_does_not_replace_another_documents_password_prompt() {
         assert_eq!(h.state().password_prompt.as_ref().unwrap().name, "local-encrypted.pdf");
         assert!(h.state().views.is_empty());
         assert!(h.query_by_label("late.pdf").is_none(), "the startup file waits for the prompt");
-        h.state_mut().submit_password((!cancel).then(|| "test-password".into()));
+        h.submit_password((!cancel).then(|| "test-password".into()));
         settle(&mut h, "local password completion and startup open", |app| {
             app.password_prompt.is_none() && app.views.len() == if cancel { 1 } else { 2 }
         });
@@ -804,13 +804,13 @@ fn unlocking_a_late_startup_url_keeps_it_in_the_background() {
     h.steps(2);
     assert_eq!(h.state().active, Some(0));
     assert_eq!(h.state().password_prompt.as_ref().unwrap().name, "late-encrypted.pdf");
-    h.state_mut().submit_password(Some("wrong-password".into()));
+    h.submit_password(Some("wrong-password".into()));
     settle(&mut h, "startup wrong-password reply", |app| {
         app.password_prompt.as_ref().is_some_and(|p| p.name == "late-encrypted.pdf" && p.error.as_deref() == Some("Incorrect password. Try again."))
     });
     assert!(h.state().password_prompt.as_ref().unwrap().error.is_some());
     assert_eq!(h.state().active, Some(0));
-    h.state_mut().submit_password(Some("test-password".into()));
+    h.submit_password(Some("test-password".into()));
     settle(&mut h, "unlocked startup document", |app| app.password_prompt.is_none() && app.views.len() == 2);
     assert!(h.state().password_prompt.is_none());
     assert_eq!(h.state().active, Some(0));
@@ -884,7 +884,7 @@ fn a_background_startup_forms_script_notice_waits_until_its_tab_is_selected() {
 fn a_background_forms_highlight_request_applies_at_once() {
     let mut h = harness(&[3]);
     // Highlighting is on by default: start from a user who turned it off.
-    h.state_mut().view_defaults.highlight_fields = false;
+    h.state_mut().apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"highlight_fields": false}"#).0);
     h.state_mut().views[0].session.highlight_fields = false;
     h.steps(1);
     h.deliver("late-form.pdf", pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::layout_ready_template()));
@@ -892,7 +892,7 @@ fn a_background_forms_highlight_request_applies_at_once() {
     assert_eq!(h.state().active, Some(0), "it opened behind the current document");
     assert!(h.state().views[1].session.highlight_fields, "the background form is highlighted");
     assert!(!h.state().views[0].session.highlight_fields, "the current document is left as it was");
-    assert!(h.state().view_defaults.highlight_fields, "the next document opens highlighted");
+    assert_eq!(h.state().settings_snapshot().behavior.highlight_fields, Some(true), "the next document opens highlighted");
 }
 
 /// Embedded bytes and the PDF's original /UF name stay independent of the Save suggestion.

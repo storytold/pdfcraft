@@ -2,19 +2,26 @@
 //! image…), so what the menu does is about that tab's area; leaving Snapshot puts away the area in
 //! every tab, not only the one on screen.
 
+use std::sync::Arc;
+
 use crate::support::AppHarness as _;
+use craft::host::{Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
 
 /// Two tabs, a.pdf (0) and b.pdf (1), with Snapshot chosen and the system clipboard left alone.
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
+    harness_with(Arc::new(ScriptedFiles::new()))
+}
+
+/// [`harness`] whose file picks `files` answers.
+fn harness_with(files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = crate::control::app_with_files(files);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "a.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
         app.open_bytes(&egui::Context::default(), "b.pdf", None, crate::support::fixtures::pdf_pages(2)).unwrap();
-        // PLAN: the injected clipboard of pdf-shell-w17 replaces `system_clipboard`.
         app
     });
     crate::support::settle(&mut h);
@@ -27,7 +34,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 fn snapshot_in(h: &mut Harness<'static, PdfCraftApp>, index: usize, area: [f32; 4]) -> (u32, u32, Vec<u8>) {
     h.state_mut().active = Some(index);
     h.run_steps(2);
-    h.state_mut().snapshot(index, 0, area).expect("a snapshot");
+    h.snapshot(index, 0, area).expect("a snapshot");
     h.state_mut().views[index].session.area_pick = Some((0, area));
     h.run_steps(2);
     let (w, hgt, px) = h.state().last_snapshot.clone().expect("kept");
@@ -38,7 +45,10 @@ fn snapshot_in(h: &mut Harness<'static, PdfCraftApp>, index: usize, area: [f32; 
 /// snapshot B took last.
 #[test]
 fn save_as_image_writes_this_tabs_area() {
-    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-snapshot-tabs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a area.png");
+    let mut h = harness_with(Arc::new(ScriptedFiles::answering([Picked::Paths(vec![file.clone()])])));
     // Areas of different shapes, so their pictures can't be mistaken for each other.
     let (wa, ha, pa) = snapshot_in(&mut h, 0, [10.0, 130.0, 150.0, 170.0]);
     let (wb, hb, _) = snapshot_in(&mut h, 1, [20.0, 20.0, 60.0, 140.0]);
@@ -47,11 +57,6 @@ fn save_as_image_writes_this_tabs_area() {
     h.state_mut().active = Some(0);
     h.run_steps(3);
     assert_eq!(h.state().views[0].session.area_pick, Some((0, [10.0, 130.0, 150.0, 170.0])));
-    let dir = std::env::temp_dir().join(format!("pdfcraft-snapshot-tabs-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("a area.png");
-    // PLAN: `save_override` goes (pdf-shell-w16): answer the pick through `ScriptedFiles` on the host given to `with_host`.
-    h.state_mut().save_override = Some(file.to_string_lossy().into_owned());
     h.get_by_label("Save as image…").click();
     h.run_steps(3);
     let png = std::fs::read(&file).expect("written");

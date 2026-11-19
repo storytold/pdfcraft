@@ -1,12 +1,8 @@
 //! The app's rules for one optimization at a time and the exclusion with Enhance scanned file, driven as a user fires the commands.
-//!
-//! PLAN: `mod optimize;` belongs in `tests/it/main.rs` (pdf-shell-w9's hunk). The held host is assumed
-//! `support::held_app(jobs: Arc<ManualJobs>) -> PdfCraftApp` (a `PdfCraftApp::with_host` over a host with `ManualJobs`, pdf-hub-w1 L-71) and
-//! `support::shown_notice(&Harness) -> Option<String>` (pdf-chrome-w9).
 
 use std::sync::Arc;
 
-use craft::host::ManualJobs;
+use craft::host::{ManualJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
@@ -18,11 +14,12 @@ fn held() -> (Arc<ManualJobs>, Harness<'static, PdfCraftApp>) {
     let jobs = Arc::new(ManualJobs::new());
     let queue = jobs.clone();
     let out = std::env::temp_dir().join(format!("pdfcraft-optimize-held-{}.pdf", std::process::id()));
+    // Every Reduce asks once where to save: each ask is answered with `out`.
+    let files = Arc::new(ScriptedFiles::answering((0..4).map(|_| Picked::Paths(vec![out.clone()]))));
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = support::held_app(queue);
+        let mut app = support::test_app(support::host_with(queue, files));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
-        app.save_override = Some(out.to_string_lossy().into_owned());
+        app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
         app
     });
     h.run_steps(2);

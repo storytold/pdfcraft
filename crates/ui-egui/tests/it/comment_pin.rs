@@ -2,8 +2,8 @@
 
 use egui::{Pos2, pos2};
 use egui_kittest::{Harness, kittest::Queryable};
-// PLAN: path of `PdfCraftSettings` assumed to be the crate root (pdf-shell-w9).
-use pdfcraft_ui_egui::{PdfCraftApp, PdfCraftSettings, QuickTool, comments::CommentTool};
+use pdfcraft_ui_egui::settings::PdfCraftSettings;
+use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, comments::CommentTool};
 
 // Contributor-original blank page: no document assets or fonts are needed.
 const PDF: &[u8] = b"%PDF-1.7

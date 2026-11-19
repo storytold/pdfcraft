@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
+use craft::host::{ManualJobs, Picked, ScriptedFiles};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -16,10 +16,9 @@ use crate::support::AppHarness as _;
 
 /// An app over the scripted file service and manual jobs.
 fn harness(files: &Arc<ScriptedFiles>, jobs: &Arc<ManualJobs>) -> Harness<'static, PdfCraftApp> {
-    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files.clone()).jobs(jobs.clone()).build();
+    let host = support::host_with(jobs.clone(), files.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        // PLAN: assumed `PdfCraftApp::with_host(host: Host) -> PdfCraftApp` (L-71)
-        let mut app = PdfCraftApp::with_host(host);
+        let mut app = support::test_app(host);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app
     });
@@ -73,10 +72,10 @@ fn run_and_create_actions() {
     h.run_steps(3);
     assert_eq!(h.state().custom_actions.len(), 1);
     h.get_by_label("1. Add watermark: DRAFT");
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
     fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
-    fresh.restore(&saved);
+    fresh.apply_settings(&saved);
     assert_eq!(fresh.custom_actions, h.state().custom_actions);
     h.get_by_label("Start").click();
     finish(&mut h, &jobs);

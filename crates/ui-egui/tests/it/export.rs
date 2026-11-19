@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::support::AppHarness as _;
-use craft::host::{AppInfo, Host, ManualJobs, Picked, ScriptedFiles};
+use craft::host::{ManualJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -21,10 +21,9 @@ trailer << /Root 1 0 R >>
 fn export_dialogs_write_images_and_text() {
     let files = Arc::new(ScriptedFiles::answering((0..3).map(|_| Picked::Paths(vec!["/out".into()]))));
     let jobs = Arc::new(ManualJobs::new());
-    let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files.clone()).jobs(jobs.clone()).build();
+    let host = crate::support::host_with(jobs.clone(), files.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        // PLAN: assumed `PdfCraftApp::with_host(host: Host) -> PdfCraftApp` (L-71)
-        let mut app = PdfCraftApp::with_host(host);
+        let mut app = crate::support::test_app(host);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "doc.pdf", None, FIXTURE.to_vec()).unwrap();
         app

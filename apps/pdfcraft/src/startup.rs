@@ -102,7 +102,7 @@ mod tests {
 
     /// The display the saved settings name as the default: what a restart would open with.
     fn saved_display(app: &PdfCraftApp) -> PageDisplay {
-        let token = app.settings_snapshot().view.default_layout;
+        let token = app.settings_snapshot().layout.default_layout;
         token.as_deref().and_then(craft::pages::parse_display_token).map(|(display, _)| display).unwrap_or_default()
     }
 
@@ -189,7 +189,7 @@ mod tests {
         let second = second_path.to_str().unwrap();
         for enabled in [false, true] {
             let mut app = test_app();
-            app.set_option("default-layout", "single").unwrap();
+            app.set_option(&egui::Context::default(), "default-layout", "single").unwrap();
             app.open_bytes(&egui::Context::default(), "restored.pdf", None, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec())
                 .unwrap();
             let restored = app.views[0].id;
@@ -207,11 +207,11 @@ mod tests {
             if enabled {
                 app.set_launch_layout("continuous").unwrap();
             } else {
-                app.set_option("layout", "continuous").unwrap();
+                app.set_option(&egui::Context::default(), "layout", "continuous").unwrap();
             }
             assert_eq!(app.views[2].view.display, PageDisplay::Single);
             assert!(app.views[2].view.continuous);
-            app.set_option("default-layout", "two-up").unwrap();
+            app.set_option(&egui::Context::default(), "default-layout", "two-up").unwrap();
             assert_eq!(app.view_defaults.display, PageDisplay::TwoUp);
             assert!(app.view_defaults.continuous);
             assert_eq!(saved_display(&app), PageDisplay::TwoUp);
@@ -233,7 +233,7 @@ mod tests {
             for count in [1, 2] {
                 let args = Arguments::parse(prefix.into_iter().chain(names.iter().take(count).copied()).map(str::to_owned));
                 let mut app = test_app();
-                app.set_option("default-layout", "continuous").unwrap();
+                app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
                 app.open_bytes(
                     &egui::Context::default(),
                     "restored.pdf",
@@ -271,7 +271,7 @@ mod repeated_file_tests {
         std::fs::write(&path, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf")).unwrap();
         let name = path.to_str().unwrap().to_string();
         let mut app = test_app();
-        app.set_option("default-layout", "continuous").unwrap();
+        app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
         app.open_path(&name);
         let original = app.views[0].id;
         open_files(&mut app, &[name.clone(), name], true);
