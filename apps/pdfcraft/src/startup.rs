@@ -273,8 +273,20 @@ mod repeated_file_tests {
         let mut app = test_app();
         app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
         app.open_path(&name);
+        // An open lands on a frame, as the files named at launch do in the window.
+        let mut h = egui_kittest::Harness::builder().build_eframe(move |cc| {
+            crate::tests::install_runtime(&cc.egui_ctx);
+            app
+        });
+        for _ in 0..20 {
+            if !h.state().views.is_empty() {
+                break;
+            }
+            h.run_steps(1);
+        }
+        let app = h.state_mut();
         let original = app.views[0].id;
-        open_files(&mut app, &[name.clone(), name], true);
+        open_files(app, &[name.clone(), name], true);
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.views[0].id, original);
         assert_eq!(app.views[0].view.display, PageDisplay::TwoUp);

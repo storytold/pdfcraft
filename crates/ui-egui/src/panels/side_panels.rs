@@ -204,6 +204,38 @@ fn edge_of(workspace: &Workspace<PanelId>, panel: PanelId) -> Option<DockEdge> {
     None
 }
 
+/// The columns of the dock at `edge`, from the window edge inward; empty when there is no such dock.
+fn dock_columns(workspace: &Workspace<PanelId>, edge: DockEdge) -> &[Column<PanelId>] {
+    let mut pending: Vec<(&Node<PanelId>, usize)> = workspace.layout.root.iter().map(|node| (node, 0)).collect();
+    while let Some((node, depth)) = pending.pop() {
+        if depth > MAX_DEPTH {
+            continue;
+        }
+        match node {
+            Node::Split { first, second, .. } => {
+                pending.push((&**first, depth + 1));
+                pending.push((&**second, depth + 1));
+            }
+            Node::Dock { side, columns, .. } if *side == edge => return columns,
+            _ => {}
+        }
+    }
+    &[]
+}
+
+/// Where a column moved to the `edge` dock goes: a dock holding columns takes it as a new column of its own (a new
+/// dock is refused there), inward of the rail as in the default arrangement, else at the window edge.
+fn edge_target(workspace: &Workspace<PanelId>, edge: DockEdge) -> Target<PanelId> {
+    let columns = dock_columns(workspace, edge);
+    if columns.iter().any(|column| column.panels().any(|p| *p == PanelId::Toolbar)) {
+        return Target::at(PanelId::Toolbar, DockPlacement::column(true));
+    }
+    match columns.first().and_then(|column| column.panels().next()) {
+        Some(outer) => Target::at(*outer, DockPlacement::column(false)),
+        None => Target::new_dock(edge),
+    }
+}
+
 fn edge_name(edge: Option<DockEdge>) -> &'static str {
     if edge == Some(DockEdge::End) { "right" } else { "left" }
 }
@@ -464,7 +496,8 @@ fn move_to_edge(app: &mut PdfCraftApp, panel: PanelId, edge: DockEdge) -> Result
     if edge_of(&app.dock, panel) == Some(edge) {
         return Ok(());
     }
-    app.dock.apply(Action::move_column(panel, Target::new_dock(edge)), false, permissions).map(drop).map_err(|_| refused())
+    let to = edge_target(&app.dock, edge);
+    app.dock.apply(Action::move_column(panel, to), false, permissions).map(drop).map_err(|_| refused())
 }
 
 /// Puts the rail, and the side panels that share its edge, on `side`.
@@ -721,7 +754,8 @@ fn build(old: &Old, right: Option<RightPanel>, widths: bool) -> Option<Workspace
     let mut workspace = default_workspace(old.rail);
     let apply = |workspace: &mut Workspace<PanelId>, action| workspace.apply(action, false, permissions).ok();
     if old.tools_right {
-        let moved = workspace.apply(Action::move_column(PanelId::Tools, Target::new_dock(DockEdge::End)), false, permissions);
+        let to = edge_target(&workspace, DockEdge::End);
+        let moved = workspace.apply(Action::move_column(PanelId::Tools, to), false, permissions);
         moved.ok()?;
     }
     let side = right.filter(|_| old.side_open).map(PanelId::from);

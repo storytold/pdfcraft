@@ -13,7 +13,7 @@ fn gpu() -> std::sync::MutexGuard<'static, ()> {
 
 /// Installs the framework runtime on a harness's context, as the app's window does, with a system
 /// that opens no OS windows and the interface fonts of English.
-fn install_runtime(ctx: &egui::Context) {
+pub(crate) fn install_runtime(ctx: &egui::Context) {
     use pdfcraft_ui_egui::i18n::Lang;
     let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
     craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(Lang::EN)).expect("the runtime installs on a fresh context");

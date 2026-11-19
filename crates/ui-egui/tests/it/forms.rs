@@ -1379,7 +1379,9 @@ mod revert_tests {
             pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value: pdfcraft_engine::FieldValue::Text("Saved original".into()) }
         ));
         let ctx_h = h.ctx.clone();
-        assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::InPlace));
+        // A document with no file asks where to save: the scripted answer arrives on a later pass.
+        h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::InPlace);
+        crate::support::wait_until(&mut h, "the save", |s| s.views.first().and_then(|v| s.session.get(v.id)).is_some_and(|d| !d.dirty));
         let saved = std::fs::read(&path).unwrap();
         let ctx_h = h.ctx.clone();
         assert!(h.state_mut().apply_edit(
