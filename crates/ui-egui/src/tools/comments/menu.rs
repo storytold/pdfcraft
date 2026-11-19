@@ -225,12 +225,14 @@ pub(crate) struct QuickBarPick {
 
 /// A control that opens a popover under it: `opener` draws the control, a click on it opens and closes the
 /// popover, and `body` fills it; a body that reports it is done (a choice that ends the popover's use) closes it. The
-/// popover's open flag is the opener's own, kept in the UI's memory.
+/// popover's open flag is the opener's own, kept in the UI's memory. The framework runs `body` in each of its passes
+/// (sizing, then the one that takes input), so a body keeps what a pass picked rather than overwrite it with a later
+/// pass's nothing.
 pub(crate) fn popover_from(
     ui: &mut egui::Ui,
     label: &str,
     opener: impl FnOnce(&mut egui::Ui) -> egui::Response,
-    body: impl FnOnce(&mut egui::Ui) -> bool,
+    mut body: impl FnMut(&mut egui::Ui) -> bool,
 ) {
     let resp = opener(ui);
     let key = resp.id.with("popover-open");
@@ -239,12 +241,9 @@ pub(crate) fn popover_from(
     if craft::ui::contract::clicked(&resp) {
         open = !open;
     }
-    let mut body = Some(body);
     let mut done = false;
     Popover::new(label.to_string(), Bind::bound(&mut open)).opened_by(&resp).show(ui, |ui, _| {
-        if let Some(body) = body.take() {
-            done = body(ui);
-        }
+        done |= body(ui);
     });
     open &= !done;
     ui.memory_mut(|m| m.data.insert_temp(key, open));
@@ -267,7 +266,9 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
                 prefs.set_color(tool, c);
                 out.colour = Some(c);
             }
-            out.request = pick.request;
+            if pick.request.is_some() {
+                out.request = pick.request;
+            }
             false
         },
     );
