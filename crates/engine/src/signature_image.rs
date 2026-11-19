@@ -220,7 +220,6 @@ impl SignatureImage {
         pdfcraft_sign::Graphic::Image { width: side(self.size[0]), height: side(self.size[1]), rgba: self.rgba.clone() }
     }
 
-
     /// The user-space box for the image with its left edge at `at` (a user-space point on `page`),
     /// vertically centered, with the same 150 pt width cap as typed names. Left and centered are
     /// as displayed: on a page with `/Rotate` the box runs along the turned page's axes.

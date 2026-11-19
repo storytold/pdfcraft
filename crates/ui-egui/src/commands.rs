@@ -88,6 +88,13 @@ impl PdfCraftApp {
         let id = fired.command.id.as_str();
         let active = self.active;
         match id {
+            // The Combine list takes Select all and Delete while it shows, whatever has the focus
+            // there (a text field keeps them).
+            "edit.select_all" if self.combine_showing() => {
+                let rows: Vec<usize> = (0..self.combine_draft.len()).collect();
+                self.select_combine_rows(&rows);
+            }
+            crate::menus::DELETE if self.combine_showing() => self.combine_apply(crate::combine_ui::RowAction::Remove),
             "edit.select_all" => {
                 if let Some(i) = active {
                     self.select_all(i, ctx);
