@@ -54,9 +54,17 @@ echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+      (cd "$ROOT" && cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    else
+      (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target "$CROSS_TARGET")
+    fi
   else
-    (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+      (cd "$ROOT" && cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli)
+    else
+      (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+    fi
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -68,6 +76,32 @@ rm -rf "$WORK"
 install -Dm755 "$BIN/pdfcraft" "$STAGE/usr/bin/pdfcraft"
 install -Dm755 "$BIN/pdfcraft-cli" "$STAGE/usr/bin/pdfcraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/pdfcraft" "$STAGE/usr/bin/pdfcraft-cli" 2>/dev/null || true
+if [[ -n "${MIP_SDK_ROOT:-}" || -n "${PDFCRAFT_MIP_SDK_ROOT:-}" ]]; then
+  MIP_SDK_ROOT="${MIP_SDK_ROOT:-${PDFCRAFT_MIP_SDK_ROOT:-}}"
+  case "$ARCH" in
+    aarch64) MIP_ARCH=arm64 ;;
+    x86_64) MIP_ARCH=amd64 ;;
+    *) MIP_ARCH="$ARCH" ;;
+  esac
+  MIP_BIN="$MIP_SDK_ROOT/bins/release/$MIP_ARCH"
+  HELPER="$BIN/pdfcraft-purview-helper"
+  if [[ ! -f "$HELPER" ]]; then
+    HELPER="$(find "$CARGO_TARGET_DIR" -path '*/build/pdfcraft-purview-*/out/pdfcraft-purview-helper' -type f 2>/dev/null | head -n 1)"
+  fi
+  if [[ -z "$HELPER" || ! -f "$HELPER" ]]; then
+    echo "error: sdk build did not produce pdfcraft-purview-helper" >&2
+    exit 1
+  fi
+  install -Dm755 "$HELPER" "$STAGE/usr/lib/pdfcraft/pdfcraft-purview-helper"
+  for lib in "$MIP_BIN"/*.so*; do
+    [[ -f "$lib" ]] || continue
+    install -Dm755 "$lib" "$STAGE/usr/lib/pdfcraft/$(basename "$lib")"
+  done
+  if [[ ! -d "$MIP_BIN" ]]; then
+    echo "error: MIP SDK binary directory is missing: $MIP_BIN" >&2
+    exit 1
+  fi
+fi
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"

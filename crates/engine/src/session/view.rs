@@ -354,6 +354,11 @@ impl Session {
     }
 
     pub fn close(&mut self, id: DocId) {
+        if let Some(document) = self.docs.iter().find(|document| document.id == id)
+            && let Some(purview) = &document.purview
+        {
+            purview.provider.close(purview.handle);
+        }
         self.docs.retain(|d| d.id != id);
     }
 

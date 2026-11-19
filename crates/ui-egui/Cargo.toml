@@ -9,6 +9,9 @@ rust-version = "1.95"
 [lints]
 workspace = true
 
+[features]
+mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-engine/mip-sdk"]
+
 [dependencies]
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
@@ -28,6 +31,7 @@ pdfcraft-ocr = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-purview = { workspace = true }
 egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
 # `glow` is always on: `eframe::App::on_exit` takes a GL context when that feature is enabled.

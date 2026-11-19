@@ -103,6 +103,144 @@ impl Automation {
         Ok(doc)
     }
 
+    pub(crate) fn purview_status(&self) -> Result<Value> {
+        let status = format!("{:?}", self.session.purview_status());
+        let account = self.session.purview_account().map(|account| {
+            json!({
+                "id": account.id,
+                "display_name": account.display_name,
+                "email": account.email,
+                "principal_name": account.principal_name,
+                "label": account.label()
+            })
+        });
+        let accounts = self
+            .session
+            .purview_accounts()
+            .into_iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "principal_name": account.principal_name,
+                    "label": account.label()
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"status": status, "account": account, "accounts": accounts}))
+    }
+
+    pub(crate) fn purview_accounts(&self) -> Result<Vec<Value>> {
+        Ok(self
+            .session
+            .purview_accounts()
+            .into_iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "principal_name": account.principal_name,
+                    "label": account.label()
+                })
+            })
+            .collect())
+    }
+
+    pub(crate) fn purview_switch_account(&self, a: &Args) -> Result<Value> {
+        let account_id = a.str("account_id")?;
+        self.session.purview_switch_account(account_id).map_err(|error| failed(error.to_string()))?;
+        self.purview_status()
+    }
+
+    pub(crate) fn purview_sign_in(&self, a: &Args) -> Result<Value> {
+        let username = a.opt_str("username")?;
+        self.session.purview_sign_in(username).map_err(|error| failed(error.to_string()))?;
+        self.purview_status()
+    }
+
+    pub(crate) fn purview_sign_out(&mut self) -> Result<Value> {
+        let session = &mut self.session;
+        session.purview_sign_out().map_err(|error| failed(error.to_string()))?;
+        let status = format!("{:?}", session.purview_status());
+        let account = session.purview_account().map(|account| {
+            json!({
+                "id": account.id,
+                "display_name": account.display_name,
+                "email": account.email,
+                "principal_name": account.principal_name,
+                "label": account.label()
+            })
+        });
+        let accounts = session
+            .purview_accounts()
+            .into_iter()
+            .map(|account| {
+                json!({
+                    "id": account.id,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "principal_name": account.principal_name,
+                    "label": account.label()
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"status": status, "account": account, "accounts": accounts}))
+    }
+
+    pub(crate) fn purview_labels(&self) -> Result<Vec<Value>> {
+        Ok(self
+            .session
+            .purview_labels()
+            .map_err(|error| failed(error.to_string()))?
+            .into_iter()
+            .map(|label| {
+                json!({
+                    "id": label.id,
+                    "name": label.name,
+                    "description": label.description,
+                    "tooltip": label.tooltip,
+                    "color": label.color,
+                    "parent_id": label.parent_id,
+                    "sensitivity": label.sensitivity,
+                    "active": label.active,
+                    "protection": label.protection
+                })
+            })
+            .collect())
+    }
+
+    pub(crate) fn purview_apply_label(&mut self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        let label_id = a.str("label_id")?;
+        let justification = a.opt_str("justification")?;
+        self.session.purview_apply_label(id, label_id, justification).map_err(|error| failed(error.to_string()))?;
+        let doc = self.session.get(id).ok_or_else(|| failed("the document vanished"))?;
+        let mut value = summary(doc);
+        value["purview"] = json!(doc.purview().map(|purview| json!({
+            "protected": purview.protected,
+            "label": purview.label.as_ref().map(|label| json!({"id": label.id, "name": label.name}))
+        })));
+        Ok(value)
+    }
+
+    pub(crate) fn purview_remove_label(&mut self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        let justification = a.opt_str("justification")?;
+        self.session.purview_remove_label(id, justification).map_err(|error| failed(error.to_string()))?;
+        Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
+    }
+
+    pub(crate) fn purview_remove_protection(&mut self, a: &Args) -> Result<Value> {
+        let id = a.int("doc")?;
+        let id = DocId(u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?);
+        self.session.purview_remove_protection(id).map_err(|error| failed(error.to_string()))?;
+        Ok(summary(self.session.get(id).ok_or_else(|| failed("the document vanished"))?))
+    }
+
     pub(crate) fn doc_open(&mut self, a: &Args) -> Result<Value> {
         let requested = a.str("path")?;
         // `manual.pdf#nameddest=Intro`, as a help system starts a PDF reader (#3425): the file under
@@ -799,6 +937,9 @@ impl Automation {
             },
             encrypt_metadata: a.opt_bool("encrypt_metadata")?.unwrap_or(d.encrypt_metadata),
         };
+        if p.algorithm == Algorithm::Rc4_40 && p.printing == Printing::Low {
+            return Err(ToolError::InvalidArgs("low-resolution printing is not supported by 40-bit RC4 PDF encryption".into()));
+        }
         let mut out = self.apply(a, Edit::Protect(p))?;
         out["security"] = security(self.doc(a)?);
         Ok(out)

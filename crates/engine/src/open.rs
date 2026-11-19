@@ -7,9 +7,9 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
-    xfa_values_from_datasets,
+    AppearanceCache, DocId, Document, PurviewDocumentState, PurviewError, PurviewProvider, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF,
+    XfaLayout, display_bytes, display_config, guard, info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads,
+    same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -21,6 +21,7 @@ pub struct OpenContext {
     highlight: bool,
     captions: Arc<StatusCaptions>,
     xfa_time_scale: u32,
+    purview: Option<Arc<dyn PurviewProvider>>,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -32,6 +33,7 @@ struct DocumentOpenData<'a> {
     name: String,
     path: Option<String>,
     bytes: Arc<Vec<u8>>,
+    purview: Option<PurviewDocumentState>,
     info: DocInfo,
     structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
     render_password: Option<String>,
@@ -72,6 +74,7 @@ impl Session {
             highlight: self.field_highlight,
             captions: self.captions.clone(),
             xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            purview: self.purview.clone(),
         }
     }
 
@@ -120,6 +123,29 @@ impl Session {
         bytes: Arc<Vec<u8>>,
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
+        let original_bytes = bytes.clone();
+        let (bytes, purview) = match context.purview.as_ref() {
+            Some(provider) => match provider.inspect(&name, &bytes) {
+                Ok(Some(open)) => {
+                    let state =
+                        PurviewDocumentState { handle: open.handle, original: original_bytes, document: open.document, provider: provider.clone() };
+                    (open.bytes, Some(state))
+                }
+                Ok(None) => (bytes, None),
+                Err(PurviewError::NoAccess) => {
+                    return Err(OpenError::PurviewNoAccess);
+                }
+                Err(PurviewError::SignInRequired) => {
+                    return Err(OpenError::NeedsPurviewSignIn);
+                }
+                Err(PurviewError::NotConfigured) => return Err(OpenError::PurviewUnavailable("Microsoft Purview support is not configured".into())),
+                Err(PurviewError::SdkUnavailable) => {
+                    return Err(OpenError::PurviewUnavailable("the Microsoft Purview MIP SDK is unavailable".into()));
+                }
+                Err(error) => return Err(OpenError::Purview(error.to_string())),
+            },
+            None => (bytes, None),
+        };
         let cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
         // The renderer authenticates on its own. It cannot use the owner password of R2–R4
         // files, so give it the user password that owner authentication recovers.
@@ -286,7 +312,7 @@ impl Session {
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
         let mut document =
-            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+            Self::build_document(context, DocumentOpenData { name, path, bytes, purview, info, structure: cos, render_password, password, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -300,7 +326,7 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, purview, mut info, structure: cos, render_password, password, xfa } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -364,6 +390,7 @@ impl Session {
             name,
             path,
             bytes,
+            purview,
             display,
             info,
             renderer,

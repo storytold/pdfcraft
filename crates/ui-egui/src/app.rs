@@ -6,6 +6,7 @@ use super::state::{
 #[cfg(not(target_arch = "wasm32"))]
 use super::state::{OpenOutcome, OpenRequest, PendingRemoteLink};
 use super::*;
+use std::sync::Arc;
 
 mod clipboard;
 mod commands;
@@ -66,9 +67,11 @@ impl PdfCraftApp {
 
     /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
+        let mut session = Session::new();
+        session.set_purview_provider(Arc::new(pdfcraft_purview::NativePurviewProvider::new(None)));
         Self {
             panes: Default::default(),
-            session: Session::new(),
+            session,
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
@@ -330,7 +333,11 @@ impl PdfCraftApp {
             pending_full_screen: None,
             pending_window: None,
             pending_remote_link: None,
+            purview_signin_prompt: None,
             protect_draft: Default::default(),
+            purview_labels: Vec::new(),
+            purview_label_id: String::new(),
+            purview_justification: String::new(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),
@@ -456,6 +463,7 @@ impl PdfCraftApp {
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
+            || self.purview_signin_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
@@ -636,7 +644,11 @@ impl PdfCraftApp {
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         ui_scale::sync(ctx, ui_scale::zoom(self.ui_scale, self.system_text_scale, native), &mut self.ui_scale_applied);
         // Remember user work even if its tab is subsequently closed or Home is selected.
-        self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
+        self.startup_superseded |= !self.views.is_empty()
+            || self.combine_showing()
+            || self.dialog.is_some()
+            || self.password_prompt.is_some()
+            || self.purview_signin_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.
         self.scroll_speed.set_line_speed(ctx);
         // Motion reads this frame's wheel input, so it begins in `ui`, in a known UI phase:

@@ -146,6 +146,9 @@ impl Protection {
         if open.is_some() && open == permissions {
             return bad("the open password and the permissions password must be different (PDF readers treat these two as the same password)");
         }
+        if self.algorithm == pdfcraft_cos::Algorithm::Rc4_40 && self.printing == Printing::Low {
+            return bad("low-resolution printing is not supported by 40-bit RC4 PDF encryption");
+        }
         Ok(())
     }
 }

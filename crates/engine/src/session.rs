@@ -7,7 +7,7 @@ use pdfcraft_render::{LayerOp, OpenError, ReadingColors, RenderConfig, RenderPoo
 
 #[cfg(test)]
 use crate::check_refresh_panic;
-use crate::edit::{EditCtx, check_permission, run_edit};
+use crate::edit::{EditCtx, check_permission, check_purview_permission, run_edit};
 use crate::history::{Keys, MAX_UNDO, Scope, keys_after, scope_of, uses_scripts};
 use crate::{
     BookmarkPage, BookmarkRow, CombineSource, Combined, DataFormat, DocId, Document, Edit, EditError, Hairlines, HairlinesFixed, Hidden,
@@ -24,10 +24,144 @@ mod files;
 mod save;
 mod view;
 
+impl Session {
+    pub fn set_purview_provider(&mut self, provider: Arc<dyn crate::PurviewProvider>) {
+        self.purview = Some(provider);
+    }
+
+    pub fn clear_purview_provider(&mut self) {
+        self.purview = None;
+    }
+
+    pub fn purview_status(&self) -> crate::PurviewStatus {
+        self.purview.as_ref().map(|provider| provider.status()).unwrap_or(crate::PurviewStatus::SdkUnavailable)
+    }
+
+    pub fn purview_account(&self) -> Option<crate::PurviewAccount> {
+        self.purview.as_ref().and_then(|provider| provider.account())
+    }
+
+    pub fn purview_accounts(&self) -> Vec<crate::PurviewAccount> {
+        self.purview.as_ref().map(|provider| provider.accounts()).unwrap_or_default()
+    }
+
+    pub fn purview_switch_account(&self, account_id: &str) -> Result<(), crate::PurviewError> {
+        self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.switch_account(account_id)
+    }
+
+    pub fn purview_sign_in(&self, username_hint: Option<&str>) -> Result<(), crate::PurviewError> {
+        self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.sign_in(username_hint)
+    }
+
+    pub fn purview_sign_out(&mut self) -> Result<(), crate::PurviewError> {
+        self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.sign_out()
+    }
+
+    pub fn purview_labels(&self) -> Result<Vec<crate::PurviewLabel>, crate::PurviewError> {
+        self.purview.as_ref().ok_or(crate::PurviewError::SdkUnavailable)?.labels()
+    }
+
+    pub fn purview_apply_label(&mut self, id: DocId, label_id: &str, justification: Option<&str>) -> Result<(), EditError> {
+        let document = self.get(id).ok_or(EditError::NoDocument)?;
+        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
+            return Err(EditError::Protection(
+                "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
+            ));
+        }
+        let provider = self.purview.clone().ok_or(EditError::Protection("Microsoft Purview support is not configured".into()))?;
+        let state = document.purview.clone().unwrap_or(crate::PurviewDocumentState {
+            handle: 0,
+            original: document.bytes.clone(),
+            document: crate::PurviewDocument::default(),
+            provider: provider.clone(),
+        });
+        let working = document.bytes.clone();
+        let opened = state
+            .provider
+            .apply_label(state.handle, &state.original, &working, label_id, justification)
+            .map_err(|error| EditError::Protection(error.to_string()))?;
+        let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+        let document = self.doc_mut(id)?;
+        let provider = state.provider.clone();
+        if let Some(editor) = document.editor.as_mut() {
+            editor.cos = cos;
+        } else {
+            return Err(EditError::ReadOnly("this Microsoft Purview document could not be edited".into()));
+        }
+        document.bytes = opened.bytes;
+        document.dirty = true;
+        document.purview =
+            Some(crate::PurviewDocumentState { handle: opened.handle, original: opened.original, document: opened.document, provider });
+        document.generation = document.generation.saturating_add(1);
+        Self::refresh(document).inspect_err(|_| Self::show_released(document))
+    }
+
+    pub fn purview_remove_label(&mut self, id: DocId, justification: Option<&str>) -> Result<(), EditError> {
+        let document = self.get(id).ok_or(EditError::NoDocument)?;
+        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
+            return Err(EditError::Protection(
+                "ordinary PDF password protection and Microsoft Purview labels cannot be composed in the same save".into(),
+            ));
+        }
+        let state =
+            document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
+        let working = document.bytes.clone();
+        let opened = state
+            .provider
+            .remove_label(state.handle, &state.original, &working, justification)
+            .map_err(|error| EditError::Protection(error.to_string()))?;
+        let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+        let document = self.doc_mut(id)?;
+        let provider = state.provider.clone();
+        if let Some(editor) = document.editor.as_mut() {
+            editor.cos = cos;
+        } else {
+            return Err(EditError::ReadOnly("this Microsoft Purview document could not be edited".into()));
+        }
+        document.bytes = opened.bytes;
+        document.dirty = true;
+        document.purview =
+            Some(crate::PurviewDocumentState { handle: opened.handle, original: opened.original, document: opened.document, provider });
+        document.generation = document.generation.saturating_add(1);
+        Self::refresh(document).inspect_err(|_| Self::show_released(document))
+    }
+
+    pub fn purview_remove_protection(&mut self, id: DocId) -> Result<(), EditError> {
+        let document = self.get(id).ok_or(EditError::NoDocument)?;
+        if document.editor.as_ref().is_some_and(|editor| editor.cos.output_handler().is_some()) {
+            return Err(EditError::Protection(
+                "ordinary PDF password protection and Microsoft Purview protection cannot be composed in the same save".into(),
+            ));
+        }
+        let state =
+            document.purview.clone().ok_or_else(|| EditError::Invalid("This document is not Microsoft Purview-labeled or protected".into()))?;
+        let working = document.bytes.clone();
+        let opened =
+            state.provider.remove_protection(state.handle, &state.original, &working).map_err(|error| EditError::Protection(error.to_string()))?;
+        let cos = pdfcraft_cos::Document::open_with_password(opened.bytes.clone(), None).map_err(|error| EditError::Reopen(error.to_string()))?;
+        let document = self.doc_mut(id)?;
+        let provider = state.provider.clone();
+        if let Some(editor) = document.editor.as_mut() {
+            editor.cos = cos;
+        } else {
+            return Err(EditError::ReadOnly("this Microsoft Purview document could not be edited".into()));
+        }
+        document.bytes = opened.bytes;
+        document.dirty = true;
+        document.purview =
+            Some(crate::PurviewDocumentState { handle: opened.handle, original: opened.original, document: opened.document, provider });
+        document.generation = document.generation.saturating_add(1);
+        Self::refresh(document).inspect_err(|_| Self::show_released(document))
+    }
+}
+
 #[derive(Default)]
 pub struct Session {
     pub(crate) docs: Vec<Document>,
     pub(crate) next_id: u64,
+    /// Native or test Microsoft Purview provider. None when PdfCraft was built
+    /// without MIP SDK support or the app has not configured one.
+    pub(crate) purview: Option<Arc<dyn crate::PurviewProvider>>,
     /// Seconds since the Unix epoch, injected so saves are deterministic in tests.
     clock: Option<fn() -> i64>,
     /// Seconds to add to UTC for local time, read from whoever knows the zone (a browser, say).

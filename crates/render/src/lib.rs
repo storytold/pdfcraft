@@ -41,9 +41,34 @@ pub enum OpenError {
     NeedsPassword,
     #[error("the password is incorrect")]
     WrongPassword,
+    #[error("sign in to Microsoft 365 to open this Microsoft Purview-protected PDF")]
+    NeedsPurviewSignIn,
+    #[error("the signed-in account does not have permission to open this Microsoft Purview-protected PDF")]
+    PurviewNoAccess,
+    #[error("{0}")]
+    PurviewUnavailable(String),
+    #[error("Microsoft Purview protection could not be read: {0}")]
+    Purview(String),
     #[error("{0}")]
     Unsupported(String),
 }
 
 #[cfg(test)]
 mod lab_bradford_tests;
+
+#[cfg(test)]
+mod open_error_tests {
+    use super::*;
+
+    #[test]
+    fn purview_unavailable_is_not_double_prefixed() {
+        let error = OpenError::PurviewUnavailable("Microsoft Purview support is not configured".into());
+        assert_eq!(error.to_string(), "Microsoft Purview support is not configured");
+    }
+
+    #[test]
+    fn purview_sdk_unavailable_is_not_double_prefixed() {
+        let error = OpenError::PurviewUnavailable("the Microsoft Purview MIP SDK is unavailable".into());
+        assert_eq!(error.to_string(), "the Microsoft Purview MIP SDK is unavailable");
+    }
+}

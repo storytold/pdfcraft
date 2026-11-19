@@ -5587,6 +5587,18 @@ notes = "Adobe cloud"
 # ==================================================================================================
 
 [[feature]]
+id = "protect.microsoft-purview"
+title = "Microsoft Purview sensitivity labels and IRM rights"
+area = "G"
+tier = "P0"
+milestone = "M8"
+status = "partial"
+commands = ["purview.sign_in", "purview.sign_out", "purview.status", "purview.apply_label", "purview.remove_label", "purview.remove_protection"]
+tools = ["purview_status", "purview_sign_in", "purview_sign_out", "purview_labels", "purview_apply_label", "purview_remove_label", "purview_remove_protection"]
+evidence = []
+notes = "Native MIP SDK bridge and process boundary implemented; full SDK builds require an MIP SDK 1.18.x-compatible package, an Entra public-client app registration, and a signed IPIA for public release. Ordinary builds fail closed and do not claim protected-PDF support until the SDK/helper is configured."
+
+[[feature]]
 id = "protect.security-properties"
 title = "Security properties (method, which password opened it, each permission)"
 area = "G"

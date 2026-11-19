@@ -76,7 +76,11 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PDFCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
+  if ($env:MIP_SDK_ROOT -or $env:PDFCRAFT_MIP_SDK_ROOT) {
+    Invoke-Native "cargo build ($Target)" { cargo build --release --locked --features mip-sdk -p pdfcraft -p pdfcraft-cli --target $Target }
+  } else {
+    Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
+  }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -100,7 +104,23 @@ foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe') $Stage
+if ($env:MIP_SDK_ROOT -or $env:PDFCRAFT_MIP_SDK_ROOT) {
+  $MipSdkRoot = if ($env:MIP_SDK_ROOT) { $env:MIP_SDK_ROOT } else { $env:PDFCRAFT_MIP_SDK_ROOT }
+  $MipArch = switch ($Arch) { 'x64' { 'amd64' } 'x86' { 'x86' } 'arm64' { 'arm64' } }
+  $MipBin = Join-Path $MipSdkRoot "bins\release\$MipArch"
+  $Helper = Join-Path $Bin 'pdfcraft-purview-helper.exe'
+  if (-not (Test-Path $MipBin)) { throw "MIP SDK binary directory is missing: $MipBin" }
+  if (-not (Test-Path $Helper)) {
+    $Helper = Get-ChildItem (Join-Path $TargetDir '*') -Recurse -Filter 'pdfcraft-purview-helper.exe' -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -match '\\release\\build\\.*\\out\\pdfcraft-purview-helper\.exe$' } |
+      Select-Object -First 1 -ExpandProperty FullName
+  }
+  if (-not $Helper) { throw 'sdk build did not produce pdfcraft-purview-helper.exe' }
+  Copy-Item -LiteralPath $Helper -Destination (Join-Path $Stage 'pdfcraft-purview-helper.exe')
+  foreach ($dll in Get-ChildItem -LiteralPath $MipBin -File -Filter '*.dll') {
+    Copy-Item -LiteralPath $dll.FullName -Destination $Stage
+  }
+}
 # The document icon embeds Lucide artwork: carry its ISC notice and the project licences
 # beside the binaries in both distributions.
 foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
@@ -109,6 +129,15 @@ foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
 Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe')
+if ($env:MIP_SDK_ROOT -or $env:PDFCRAFT_MIP_SDK_ROOT) {
+  $SdkFiles = @(
+    (Join-Path $Stage 'pdfcraft-purview-helper.exe')
+    (Get-ChildItem -LiteralPath $Stage -File -Filter '*.dll' | Select-Object -ExpandProperty FullName)
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  if ($SdkFiles.Count -gt 0) {
+    & (Join-Path $PSScriptRoot 'sign.ps1') $SdkFiles
+  }
+}
 
 # OCR models (#103): the app looks in models\ beside pdfcraft.exe. `cargo xtask models` fetches every
 # ATTRIBUTION.toml `kind = "model"` file (verified by SHA-256) with its licence and ATTRIBUTION.txt;

@@ -6,6 +6,100 @@ use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
 use pdfcraft_content::Matrix;
 
+/// Microsoft Purview rights are enforced independently from PDF `/Encrypt`
+/// permissions. The MIP SDK is authoritative for these decisions.
+pub(crate) fn check_purview_permission(edit: &Edit, rights: &crate::PurviewRights) -> Result<(), EditError> {
+    let denied = |operation: &'static str| Err(EditError::NotPermitted(operation));
+    match edit {
+        Edit::Protect(_) | Edit::RemoveProtection | Edit::ConvertPdfA { .. } => {
+            if rights.can_change_security() {
+                Ok(())
+            } else {
+                denied("changing Microsoft Purview protection")
+            }
+        }
+        Edit::RotatePages { .. }
+        | Edit::DeletePages { .. }
+        | Edit::MovePages { .. }
+        | Edit::ReversePages { .. }
+        | Edit::InsertBlankPage { .. }
+        | Edit::DuplicatePages { .. }
+        | Edit::SpawnTemplate { .. }
+        | Edit::SetTemplateHidden { .. }
+        | Edit::ReplacePages { .. }
+        | Edit::SetPageBox { .. }
+        | Edit::SetTransition { .. }
+        | Edit::InsertPagesFrom { .. }
+        | Edit::AddBookmark { .. }
+        | Edit::RenameBookmark { .. }
+        | Edit::DeleteBookmark { .. }
+        | Edit::MoveBookmark { .. }
+        | Edit::SetBookmarkPage { .. }
+        | Edit::SetBookmarkColor { .. }
+        | Edit::SetBookmarkStyle { .. }
+        | Edit::ImportBookmarks { .. }
+        | Edit::BookmarksFromStructure
+        | Edit::NumberPages { .. } => {
+            if rights.owner || rights.edit || rights.document_edit {
+                Ok(())
+            } else {
+                denied("page changes")
+            }
+        }
+        Edit::SetFieldValue { .. }
+        | Edit::ResetForm { .. }
+        | Edit::SetFieldImage { .. }
+        | Edit::SetFieldImageTarget { .. }
+        | Edit::ApplyScriptChanges { .. }
+        | Edit::XfaEvent { .. } => {
+            if rights.owner || rights.edit || rights.document_edit {
+                Ok(())
+            } else {
+                denied("filling in form fields")
+            }
+        }
+        Edit::AddMeasurement(_)
+        | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
+        | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
+        | Edit::DeleteAnnotation { .. }
+        | Edit::SetAnnotationContents { .. }
+        | Edit::ReplyToAnnotation { .. }
+        | Edit::SetAnnotationStatus { .. }
+        | Edit::MarkAnnotation { .. }
+        | Edit::ReplaceText { .. }
+        | Edit::EraseInk { .. }
+        | Edit::LockAnnotation { .. }
+        | Edit::MoveAnnotation { .. }
+        | Edit::ReshapeAnnotation { .. }
+        | Edit::SetAnnotationPopup { .. }
+        | Edit::ResizeAnnotation { .. }
+        | Edit::StyleAnnotation { .. }
+        | Edit::FillAnnotation { .. }
+        | Edit::PartOpacity { .. }
+        | Edit::FontSizeAnnotation { .. }
+        | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
+        | Edit::SetAnnotationInfo { .. }
+        | Edit::SetMeasurementScale { .. } => {
+            if rights.can_comment() {
+                Ok(())
+            } else {
+                denied("comments")
+            }
+        }
+        Edit::Batch { edits, .. } => edits.iter().try_for_each(|edit| check_purview_permission(edit, rights)),
+        _ => {
+            if rights.can_edit() {
+                Ok(())
+            } else {
+                denied("changes to the document")
+            }
+        }
+    }
+}
+
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
     match edit {

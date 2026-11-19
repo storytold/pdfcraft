@@ -2943,6 +2943,40 @@ kind = "image"
 usage = "README hero. Shows only PdfCraft UI, Lucide icons and the showcase PDF built from the [[fetched]] OFL fonts"
 sha256 = "ecd261028d8837f7f7c013dd796d81ca7e89643bcfcbad3ab9fbfbe87ded04e3"
 
+
+[[asset]]
+path = "docs/images/pdfcraft-purview-proof.png"
+title = "PdfCraft POC screenshot: Microsoft Purview sensitivity label dialog"
+author = "PdfCraft contributors"
+source = "Generated from the native PdfCraft egui shell by `cargo run -p pdfcraft-ui-egui --example shot`"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Purview POC evidence. Shows PdfCraft's native Rust UI, the Microsoft Purview dialog, account/SDK state, label justification, and label/protection actions"
+sha256 = "049741c39df88d44ddffb433e94a55252a83df49d10f46bd54e9ee2b0991716e"
+
+[[asset]]
+path = "docs/images/pdfcraft-properties-proof.png"
+title = "PdfCraft POC screenshot: Security properties"
+author = "PdfCraft contributors"
+source = "Generated from the native PdfCraft egui shell by `cargo run -p pdfcraft-ui-egui --example shot`"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Purview POC evidence. Shows the native Document Properties security surface and the password/MIP composition layout"
+sha256 = "eede5e9a093ac0a623cbb78d4c1646ed9e855995531b37848ad9473015363d74"
+
+[[asset]]
+path = "docs/images/pdfcraft-password-proof.png"
+title = "PdfCraft POC screenshot: Protect Using Password"
+author = "PdfCraft contributors"
+source = "Generated from the native PdfCraft egui shell by `cargo run -p pdfcraft-ui-egui --example shot`"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Purview POC evidence. Shows the existing native Protect Using Password workflow, kept separate from Microsoft Purview protection"
+sha256 = "1858012b7853810b2b60759be2053c6e3853df77357ea50a4c471e3cc6c57dd6"
+
 [[asset]]
 path = "assets/icons/pin.svg"
 title = "Lucide icon \"pin\""

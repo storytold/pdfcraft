@@ -36,6 +36,8 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "8e03cd016d42032b867fef6bad86bc69bf2c1920", features = ["cos", "crypt", "filters"] }
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest-blocking", "rustls-tls"] }
+webbrowser = "1.2.7"
 # The writers the Word and RTF exports map onto (storytold/craft-libs#793). craft-rtf, craft-wordmodel and
 # craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
@@ -88,6 +90,7 @@ pdfcraft-automation = { path = "crates/automation", version = "0.21.0", default-
 pdfcraft-prc = { package = "craft-prc", git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 craft-prc = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }
 pdfcraft-prc-render = { path = "crates/prc-render", version = "0.21.0" }
+pdfcraft-purview = { path = "crates/purview", version = "0.21.0", default-features = false }
 
 # pdf
 hayro = "0.7.1"

@@ -114,8 +114,10 @@ impl Default for Automation {
 
 impl Automation {
     pub fn new() -> Self {
+        let mut session = Session::new();
+        session.set_purview_provider(Arc::new(pdfcraft_purview::NativePurviewProvider::new(None)));
         Self {
-            session: Session::new(),
+            session,
             root: None,
             roots: None,
             renderers: HashMap::new(),

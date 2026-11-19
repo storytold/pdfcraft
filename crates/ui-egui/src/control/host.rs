@@ -162,6 +162,7 @@ impl Host for crate::PdfCraftApp {
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
             "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
             "password_prompt": self.password_prompt.is_some(),
+            "purview_signin_prompt": self.purview_signin_prompt.is_some(),
             "close_prompt": self.close_request.is_some(),
         })
     }
@@ -191,7 +192,11 @@ impl Host for crate::PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn open(&mut self, path: &str) -> Reply {
         match self.open_path(path) {
-            crate::OpenOutcome::Opened => Ok(json!({ "opened": path, "password_prompt": self.password_prompt.is_some() })),
+            crate::OpenOutcome::Opened => Ok(json!({
+                "opened": path,
+                "password_prompt": self.password_prompt.is_some(),
+                "purview_signin_prompt": self.purview_signin_prompt.is_some()
+            })),
             crate::OpenOutcome::Focused => Ok(json!({ "opened": path, "focused": true })),
             crate::OpenOutcome::Pending => Ok(json!({ "accepted": path, "pending": true })),
             crate::OpenOutcome::Failed => Err(self.toast.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("couldn't open {path}"))),
