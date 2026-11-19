@@ -475,7 +475,8 @@ fn the_open_recent_menu_lists_files_and_opens_one() {
     let path = path.to_string_lossy().into_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
         let path = path.clone();
-        move |_cc| {
+        move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
             let mut app = new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
