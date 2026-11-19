@@ -360,7 +360,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, editing: bo
                         ui.horizontal(|ui| {
                             ui.add(icons::image("replace", 16.0, t.text_muted));
                             let edit = egui::TextEdit::singleline(&mut find.replacement)
-                                .id(egui::Id::unique("replace-input"))
+                                .id(egui::Id::unique(("replace-input", view.pane.key)))
                                 .hint_text(tl!("Replace with"))
                                 .desired_width(220.0)
                                 .frame(egui::Frame::NONE);
