@@ -355,6 +355,59 @@ fn save_as_keeps_a_signed_document_incremental() {
     assert_eq!(status(&h), Some(SignatureStatus::Valid));
 }
 
+/// A one-page document whose only signature field is signed but named far past the 4096 bytes the
+/// signature field walk reads, with a cross-reference table so it opens as written.
+fn signature_past_the_field_walk() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >>".into(),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(64 << 10)),
+        "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
+    // The walk stops short of the signed field, so its signature is not listed; Save As must still
+    // treat the document as signed and append to it, or that signature would no longer cover it.
+    let bytes = signature_past_the_field_walk();
+    let (original, out) = (bytes.clone(), dir().join("copy.pdf"));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    // An edit to save: an unedited copy is the original's bytes, appended to or not.
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [200.0, 120.0, 260.0, 180.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let note = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: "Checked".into(), author: "Tester".into() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
+    let saved = std::fs::read(&out).expect("file written");
+    assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("copy.pdf", None, std::sync::Arc::new(saved), None).expect("the copy opens");
+    let notes: Vec<_> = s.get(id).unwrap().info.annotations.iter().filter_map(|a| a.contents.as_deref()).collect();
+    assert!(notes.contains(&"Checked"), "the copy has the comment added before Save As: {notes:?}");
+}
+
 /// The fixture with an empty signature field across the bottom of the page.
 const WITH_FIELD: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >> endobj
@@ -364,6 +417,7 @@ const WITH_FIELD: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// Clicking an empty signature field opens Sign for that field, and signing fills it.
 #[test]
 fn clicking_an_empty_signature_field_signs_it() {
     let dir = dir().join("field");
@@ -448,6 +502,92 @@ fn a_signature_badge_says_its_verdict_with_any_tool() {
     assert_eq!(hover(&mut h, stamp, p + egui::vec2(1.0, 0.0)), (egui::CursorIcon::Crosshair, true), "so does a stamp, beside its crosshair");
 }
 
+/// Signing a dynamic form's signature box in the app runs its XFA preSign script as signing begins,
+/// so its notice and the value it sets show before the signer confirms, and that value is in the
+/// signed file; its postSign script runs once signed, its change left to save.
+#[test]
+fn signing_an_xfa_box_runs_its_signing_scripts_in_the_app() {
+    let dir = dir().join("xfa-events");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
+    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    h.state_mut().active = Some(1);
+    crate::support::settle(&mut h);
+    let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
+        let s = h.state();
+        s.session.get(s.views[1].id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap()
+    };
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[1].id).unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[1], &doc.info, &named(&h, "sign"), 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(h.query_by_label_contains("Signing notice").is_some(), "the preSign script's notice shows before signing");
+    assert_eq!(named(&h, "when").value, ["signed"], "and what it set, under the dialog");
+    let entry = {
+        let id = pdfcraft_engine::sign::pkcs12::open(
+            &std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap(),
+            "test",
+        )
+        .unwrap();
+        h.state_mut().add_digital_id(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12"), &id.certificate)
+    };
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.selected = Some(entry);
+        d.step = SignStep::SignAs;
+        d.password = "test".into();
+    }
+    h.run_steps(2);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(6);
+    // The signed file holds the preSign script's value; the postSign one waits to be saved.
+    let signed = std::fs::read(dir.join("contract_signed.pdf")).unwrap();
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("signed.pdf", None, std::sync::Arc::new(signed), None).unwrap();
+    let value =
+        |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).map(|f| f.value.clone()).unwrap();
+    assert_eq!(value("when"), ["signed"]);
+    assert!(value("after").is_empty());
+    assert_eq!(named(&h, "after").value, ["done"]);
+    let st = h.state();
+    assert!(st.session.get(st.views[1].id).unwrap().dirty, "the postSign change is not saved yet");
+}
+
+/// Signing a dynamic form's box and then cancelling takes back what its preSign script changed.
+#[test]
+fn cancelling_signing_takes_back_the_presign_scripts_changes() {
+    let dir = dir().join("xfa-events-cancel");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let bytes = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::signing_events_template());
+    h.state_mut().open_bytes("events.pdf", None, bytes).unwrap();
+    h.state_mut().active = Some(1);
+    crate::support::settle(&mut h);
+    let named = |h: &Harness<'static, PdfCraftApp>, n: &str| {
+        let s = h.state();
+        s.session.get(s.views[1].id).unwrap().form.iter().find(|f| f.name == n || f.name.ends_with(&format!(".{n}[0]"))).cloned().unwrap()
+    };
+    let sign = named(&h, "sign").name;
+    h.state_mut().start_signing(0, None, Some(sign), None);
+    h.run_steps(2);
+    assert_eq!(named(&h, "when").value, ["signed"]);
+    h.state_mut().dialog = None;
+    h.state_mut().sign_draft = None;
+    h.run_steps(3);
+    assert!(named(&h, "when").value.is_empty(), "taken back");
+    assert!(!named(&h, "when").read_only(), "and unlocked again");
+}
+
+/// A digital signature can show the Fill & Sign signature or an image where the name would be.
 #[test]
 fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     use pdfcraft_ui_egui::SignGraphic;
