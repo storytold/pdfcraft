@@ -386,6 +386,31 @@ registration or IPIA requirement. Do not enable device code as a public
 desktop default unless the app registration and security review explicitly
 approve it.
 
+### Dependency and native-platform standard
+
+The runtime MIP bridge uses Microsoft's official native MIP SDK, not an
+independent PDF decryptor, Azure CLI, or third-party MIP SDK wrapper.
+
+The Rust authentication side keeps only the dependencies needed for:
+
+- Authorization URL, PKCE, redirect callback and token response handling.
+- HTTPS token exchange.
+- Cross-platform system browser launch.
+- Account/ID-token JSON decoding.
+- URL parsing.
+- The existing Windows owner-only staging helper.
+
+There is no direct UUID, generic Base64, Azure CLI, device-code, or refresh-token
+dependency in the POC auth path. App-ID validation and ID-token Base64URL
+decoding are bounded local code.
+
+Supported native helper builds follow the target platform:
+
+- macOS arm64 and x86_64.
+- Windows amd64, x86 and arm64 where the official SDK and toolchain support
+  the target.
+- Supported Linux distribution and architecture targets.
+
 ## Step 4: Build the shared native integration
 
 Recommended Storytold layout:

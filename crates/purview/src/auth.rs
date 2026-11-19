@@ -2,8 +2,6 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use oauth2::basic::{BasicErrorResponse, BasicRevocationErrorResponse, BasicTokenIntrospectionResponse, BasicTokenType};
 use oauth2::{
     AuthUrl, AuthorizationCode, Client, ClientId, CsrfToken, EndpointNotSet, ExtraTokenFields, PkceCodeChallenge, RedirectUrl, Scope,
@@ -65,16 +63,21 @@ pub enum PurviewAuthError {
 }
 
 fn validate_app_id(value: &str) -> Result<String, PurviewAuthError> {
+    let value = value.trim();
     if value.is_empty() {
         return Err(PurviewAuthError::InvalidAppId("the app registration client ID is missing".into()));
     }
-    let Ok(id) = value.parse::<uuid::Uuid>() else {
-        return Err(PurviewAuthError::InvalidAppId(value.into()));
-    };
-    if id.is_nil() {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36
+        || ![8, 13, 18, 23].iter().all(|index| bytes.get(*index).is_some_and(|byte| *byte == b'-'))
+        || value.bytes().enumerate().any(|(index, byte)| index != 8 && index != 13 && index != 18 && index != 23 && !byte.is_ascii_hexdigit())
+    {
         return Err(PurviewAuthError::InvalidAppId(value.into()));
     }
-    Ok(id.to_string())
+    if value.chars().filter(|ch| *ch != '-').all(|ch| ch == '0') {
+        return Err(PurviewAuthError::InvalidAppId(value.into()));
+    }
+    Ok(value.to_ascii_lowercase())
 }
 
 fn normalize_authority(value: &str, username: &str) -> Result<(String, String), PurviewAuthError> {
@@ -112,10 +115,54 @@ fn claim_string(claims: &serde_json::Map<String, serde_json::Value>, names: &[&s
         .find_map(|name| claims.get(*name).and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))
 }
 
+fn base64url_decode(value: &str) -> Option<Vec<u8>> {
+    fn sextet(byte: u8) -> Option<u8> {
+        match byte {
+            b'A'..=b'Z' => Some(byte - b'A'),
+            b'a'..=b'z' => Some(byte - b'a' + 26),
+            b'0'..=b'9' => Some(byte - b'0' + 52),
+            b'-' => Some(62),
+            b'_' => Some(63),
+            b'=' => Some(0),
+            _ => None,
+        }
+    }
+
+    let value = value.as_bytes();
+    if value.len() > 1024 * 1024 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(value.len().checked_mul(3)?.checked_div(4)?);
+    let mut index = 0_usize;
+    while index < value.len() {
+        let remaining = value.len() - index;
+        let take = remaining.min(4);
+        if take < 2 {
+            return None;
+        }
+        let mut sextets = [0_u8; 4];
+        for slot in 0..take {
+            sextets[slot] = sextet(value[index + slot])?;
+        }
+        out.push((sextets[0] << 2) | (sextets[1] >> 4));
+        if take >= 3 {
+            out.push((sextets[1] << 4) | (sextets[2] >> 2));
+        }
+        if take == 4 {
+            out.push((sextets[2] << 6) | sextets[3]);
+        }
+        index = index.checked_add(take)?;
+        if take < 4 {
+            break;
+        }
+    }
+    Some(out)
+}
+
 fn account_from_id_token(id_token: Option<&str>, username_hint: &str) -> Option<PurviewAccount> {
     let id_token = id_token?;
     let payload = id_token.split('.').nth(1)?;
-    let decoded = URL_SAFE_NO_PAD.decode(payload).or_else(|_| URL_SAFE.decode(payload)).ok()?;
+    let decoded = base64url_decode(payload)?;
     let claims: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&decoded).ok()?;
 
     let email = claim_string(&claims, &["email", "preferred_username", "upn", "unique_name"]).or_else(|| {
@@ -304,7 +351,28 @@ mod tests {
             "email": "ada@example.com"
         })
         .to_string();
-        let segment = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        fn base64url_encode(value: &[u8]) -> String {
+            const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let mut out = String::new();
+            let mut index = 0;
+            while index < value.len() {
+                let remaining = value.len() - index;
+                let a = value[index];
+                let b = if remaining > 1 { value[index + 1] } else { 0 };
+                let c = if remaining > 2 { value[index + 2] } else { 0 };
+                out.push(TABLE[((a >> 2) & 0x3f) as usize] as char);
+                out.push(TABLE[(((a & 0x03) << 4) | (b >> 4)) as usize] as char);
+                if remaining > 1 {
+                    out.push(TABLE[(((b & 0x0f) << 2) | (c >> 6)) as usize] as char);
+                }
+                if remaining > 2 {
+                    out.push(TABLE[(c & 0x3f) as usize] as char);
+                }
+                index += 3;
+            }
+            out
+        }
+        let segment = base64url_encode(payload.as_bytes());
         let account = account_from_id_token(Some(&format!("header.{segment}.signature")), "").expect("profile");
         assert_eq!(account.id, "account-object-id");
         assert_eq!(account.display_name, "Ada Lovelace");

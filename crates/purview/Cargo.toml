@@ -20,8 +20,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 webbrowser = { workspace = true }
 url = "2"
-uuid = { version = "1", features = ["std"] }
-base64 = "0.23"
 
 [target.'cfg(windows)'.dependencies]
 pdfcraft-platform = { workspace = true }

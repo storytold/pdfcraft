@@ -5251,7 +5251,6 @@ dependencies = [
 name = "pdfcraft-purview"
 version = "0.21.1"
 dependencies = [
- "base64 0.23.1",
  "oauth2",
  "pdfcraft-platform",
  "reqwest 0.12.28",
@@ -5259,7 +5258,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "url",
- "uuid",
  "webbrowser",
 ]
 
