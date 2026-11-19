@@ -736,7 +736,7 @@ fn links_keep_page_targets_uri_and_dash_structure_across_renumbering() {
             .into_iter()
             .map(|l| {
                 let a = match l.action {
-                    links::LinkAction::Page { page: p, .. } => format!("page {p}"),
+                    links::LinkAction::Page { page: p, zoom: _ } => format!("page {p}"),
                     links::LinkAction::Uri(u) => u,
                     links::LinkAction::Other(o) => format!("other:{o}"),
                 };
