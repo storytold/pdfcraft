@@ -344,11 +344,13 @@ fn find_one_match_per_page(h: &mut Harness<'static, PdfCraftApp>) -> usize {
 fn late_match_leaves_current(h: &mut Harness<'static, PdfCraftApp>, view: usize) -> bool {
     let f = h.state_mut().views[view].find.as_mut().expect("the find bar is open");
     let before = f.matches.current_match().cloned().expect("a current match");
-    let mut ranges: Vec<std::ops::Range<usize>> = f.matches.matches().iter().filter(|m| m.page == before.page).map(|m| m.range.clone()).collect();
+    // Ahead of the current match on its own page, or on the page before when it starts the page.
+    let page = if before.range.start > 0 { before.page } else { before.page.checked_sub(1).expect("room for an earlier match") };
+    let mut ranges: Vec<std::ops::Range<usize>> = f.matches.matches().iter().filter(|m| m.page == page).map(|m| m.range.clone()).collect();
     if !ranges.iter().any(|r| r.start == 0) {
         ranges.insert(0, 0..1);
     }
-    f.matches.set_page(before.page, ranges);
+    f.matches.set_page(page, ranges);
     f.matches.current_match() == Some(&before)
 }
 
@@ -509,7 +511,8 @@ fn marking_while_searching_does_not_jitter_or_reset_search_state() {
     assert_eq!(h.state().views[0].find.as_ref().unwrap().matches.len(), 15);
 
     // If user is viewing page 3 and reruns find, the selected match must be on page 3 (index 9), not page 0
-    h.state_mut().views[0].view.current = 3;
+    h.state_mut().views[0].go_to_page(3);
+    h.run_steps(2);
     h.state_mut().views[0].rerun_find();
     let current_p3 = h.state().views[0].find.as_ref().unwrap().matches.current();
     assert_eq!(current_p3, Some(9), "rerun_find must select the first match at or after the viewed page (page 3), but selected {:?}", current_p3);
@@ -848,7 +851,7 @@ fn page_label_input_new_document_does_not_inherit_or_commit_the_previous_draft()
     h.run_steps(3);
     assert_eq!(h.state().views[next].current(), 0, "unchanged Enter stays on the new document's first page");
 
-    h.get_by_label("a.pdf (edited)").click();
+    tab(&h, "a.pdf").click();
     h.run_steps(3);
     assert_eq!(h.state().active, Some(0));
     assert_eq!((h.state().views[0].current(), h.state().views[0].page_input.as_str()), (3, "2"));
@@ -882,7 +885,7 @@ fn page_label_input_preserves_typing_and_refreshes_after_navigation_and_tab_chan
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!((h.state().views[1].current(), h.state().views[1].page_input.as_str()), (1, "2"), "default labels still work");
-    h.get_by_label("a.pdf (edited)").click();
+    tab(&h, "a.pdf").click();
     h.run_steps(3);
     assert_eq!(h.state().views[0].page_input, "2", "returning to a document refreshes its idle label");
 
@@ -1328,7 +1331,14 @@ fn tab_and_window_show_the_document_title_when_asked() {
     h.run_steps(2);
     // The edits are unsaved, so the title says so (#3640).
     assert_eq!(h.state().window_title, "Quarterly report • — PdfCraft");
-    h.get_by_label_contains("Quarterly report");
+    tab(&h, "Quarterly report");
+}
+
+/// The document tab named `name`, saved or modified (the tab bar adds the modified state to the name).
+fn tab<'h>(h: &'h Harness<'static, PdfCraftApp>, name: &str) -> egui_kittest::Node<'h> {
+    let modified = format!("{name},");
+    let name = name.to_owned();
+    h.get_by(move |n| n.role() == egui::accesskit::Role::Tab && n.label().is_some_and(|l| l == name || l.starts_with(&modified)))
 }
 
 #[test]
@@ -2037,18 +2047,8 @@ fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
     h
 }
 
-fn diag_page_nodes(h: &Harness<'static, PdfCraftApp>) {
-    use egui_kittest::kittest::NodeT;
-    let name = std::thread::current().name().unwrap_or("").rsplit("::").next().unwrap_or("").to_owned();
-    for n in h.query_all_by_label_contains("Page") {
-        let a = n.accesskit_node();
-        eprintln!("DIAG {name}: {:?} {:?} {:?}", a.role(), a.label(), n.rect());
-    }
-}
-
 /// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
 fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
-    diag_page_nodes(h);
     h.get_all_by_label(label).find(is_thumbnail).expect("the Pages panel thumbnail").rect().center()
 }
 
@@ -2098,7 +2098,6 @@ fn pages_panel_thumbnails_have_a_context_menu() {
 
 /// Where the Pages panel draws page `n`'s thumbnail.
 fn thumbnail_rect(h: &Harness<'static, PdfCraftApp>, n: usize) -> egui::Rect {
-    diag_page_nodes(h);
     h.get_all_by_label(&format!("Page {n}")).find(is_thumbnail).expect("the Pages panel thumbnail").rect()
 }
 
@@ -2585,12 +2584,6 @@ fn mouse_wheel_scrolls_while_selecting_text() {
     h.run_steps(1);
     h.hover_at(end);
     h.run_steps(2);
-    eprintln!(
-        "DIAG mouse_wheel_scrolls_while_selecting_text: page {page:?} start {start:?} glyph0 {:?} sel {:?} dragged {:?}",
-        h.state().views[view].glyph_screen_pos(0, 0),
-        h.state().views[view].selected_text(),
-        h.ctx.dragged_id()
-    );
     assert!(h.state().views[view].selected_text().is_some_and(|s| !s.is_empty()), "a text selection is active");
     assert!(h.ctx.dragged_id().is_some(), "the primary drag is still held");
     let before = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -2624,12 +2617,6 @@ fn selection_wheel_harness() -> (Harness<'static, PdfCraftApp>, usize, egui::Pos
     h.run_steps(1);
     h.hover_at(end);
     h.run_steps(2);
-    eprintln!(
-        "DIAG selection_wheel_harness: page {page:?} start {start:?} glyph0 {:?} sel {:?} dragged {:?}",
-        h.state().views[view].glyph_screen_pos(0, 0),
-        h.state().views[view].selected_text(),
-        h.ctx.dragged_id()
-    );
     assert!(h.state().views[view].selected_text().is_some_and(|s| !s.is_empty()), "a text selection is active");
     assert!(h.ctx.dragged_id().is_some(), "the primary drag is still held");
 
