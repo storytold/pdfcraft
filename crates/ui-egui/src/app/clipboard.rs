@@ -84,8 +84,7 @@ impl PdfCraftApp {
             Ok(_) => true,
             Err(e) => {
                 if let Some(t) = e.text() {
-                    // PLAN: framework gap F-11: `PlatformText` has no catalog lookup, so its English text is the notice
-                    self.notify_tr(t.english);
+                    self.notify(crate::i18n::platform_text(t));
                 }
                 false
             }

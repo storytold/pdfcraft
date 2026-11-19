@@ -1457,8 +1457,6 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // The room under the notice bars, inside the rect the caller gave.    let rect = rect.intersect(ui.available_rect_before_wrap());
 
     let preparing = app.is_preparing();
-    // PLAN: assumed `side_panels::panel_visible(app, panel) -> bool` for the left panel's visibility (`left_open` is
-    // not a field after L-136; pdf-shell-w13 names only the setter).
     // Prepare a form ▸ Calculation order: the order's steps and links on the page.
     let calc_order = preparing && crate::side_panels::panel_visible(app, crate::LeftPanel::CalculationOrder);
     // Edit a PDF: added text and images can be selected, moved and edited.

@@ -117,9 +117,9 @@ fn select(h: &mut Harness<'static, PdfCraftApp>, index: usize) {
     h.run_steps(2);
 }
 
-/// Whether the right panel called `label` is on screen.
-fn panel_shown(h: &Harness<'static, PdfCraftApp>, label: &str) -> bool {
-    h.query_by_label(label).is_some()
+/// Whether the dock has the side panel `panel` open; its rail icon shows whether or not it is.
+fn panel_shown(h: &Harness<'static, PdfCraftApp>, panel: RightPanel) -> bool {
+    crate::support::right(h.state()) == Some(panel)
 }
 
 /// The reader picks the right panel `panel`, or closes it with `None`.
@@ -149,25 +149,25 @@ fn a_portfolio_opens_its_initial_document_and_shows_its_files_with_the_panel_clo
     let mut h = opened(portfolio("/Collection << /D (form.pdf) /View /T >>", &[("intro.pdf", PAGE), ("form.pdf", PAGE)]), true);
     // The document `/D` names is presented, in a tab of its own, with the reader's own panels.
     assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "form.pdf".into()], Some("form.pdf".into())));
-    assert!(!panel_shown(&h, "Attachments"));
+    assert!(!panel_shown(&h, RightPanel::Attachments));
     // The portfolio's tab shows its files, without changing the reader's preference.
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
     // Leaving it gives back the closed panel; coming back shows the files again.
     select(&mut h, 1);
-    assert!(!panel_shown(&h, "Attachments"));
+    assert!(!panel_shown(&h, RightPanel::Attachments));
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
     // The reader can still close the list on the portfolio's tab.
     choose_panel(&mut h, None);
-    assert!(!panel_shown(&h, "Attachments"));
+    assert!(!panel_shown(&h, RightPanel::Attachments));
     // A panel the reader had open comes back once they leave the portfolio's tab.
     select(&mut h, 1);
     choose_panel(&mut h, Some(RightPanel::Bookmarks));
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
     select(&mut h, 1);
-    assert!(panel_shown(&h, "Bookmarks"));
+    assert!(panel_shown(&h, RightPanel::Bookmarks));
 }
 
 /// The initial document opens on its own panels, not on the portfolio's file list.
@@ -178,9 +178,9 @@ fn the_initial_document_opens_without_the_portfolios_file_list() {
     // would, here on its comments, not with the portfolio's file list.
     let mut h = opened(portfolio("/PageMode /UseAttachments /Collection << /D (form.pdf) >>", &[("intro.pdf", PAGE), ("form.pdf", NOTED)]), false);
     assert_eq!(tabs(&h).1.as_deref(), Some("form.pdf"));
-    assert!(panel_shown(&h, "Comments"));
+    assert!(panel_shown(&h, RightPanel::Comments));
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
 }
 
 /// A file opened together with a portfolio, after it, stays in front.
@@ -195,9 +195,9 @@ fn a_file_opened_after_the_portfolio_keeps_the_front() {
         app.open_bytes(&egui::Context::default(), "other.pdf", None, PAGE.to_vec()).unwrap();
     });
     assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "other.pdf".into()], Some("other.pdf".into())));
-    assert!(!panel_shown(&h, "Attachments"));
+    assert!(!panel_shown(&h, RightPanel::Attachments));
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
 }
 
 /// A password asked for a file opened together with the portfolio stays asked: the initial
@@ -248,14 +248,14 @@ fn read_mode_gives_back_the_panel_the_file_list_replaced() {
     h.state_mut().open_bytes(&ctx_h, "other.pdf", None, PAGE.to_vec()).unwrap();
     h.run_steps(2);
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
     assert!(h.execute("view.read_mode"));
     h.run_steps(2);
-    assert!(!panel_shown(&h, "Attachments"));
+    assert!(!panel_shown(&h, RightPanel::Attachments));
     select(&mut h, 1);
     assert!(h.execute("view.read_mode"));
     h.run_steps(2);
-    assert!(!panel_shown(&h, "Attachments"), "the panel was closed before the list showed");
+    assert!(!panel_shown(&h, RightPanel::Attachments), "the panel was closed before the list showed");
 }
 
 /// A panel the reader picks in Read mode on the portfolio's tab stays when they switch tabs.
@@ -270,7 +270,7 @@ fn a_panel_picked_in_read_mode_stays_when_the_tab_changes() {
     h.run_steps(2);
     choose_panel(&mut h, Some(RightPanel::Attachments));
     select(&mut h, 1);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
 }
 
 /// `/View /H` presents the initial document but leaves the file list to the reader.
@@ -279,7 +279,7 @@ fn a_portfolio_that_keeps_its_list_hidden_still_presents_its_initial_document() 
     let mut h = opened(portfolio("/Collection << /D (form.pdf) /View /H >>", &[("intro.pdf", PAGE), ("form.pdf", PAGE)]), true);
     assert_eq!(tabs(&h).1.as_deref(), Some("form.pdf"));
     select(&mut h, 0);
-    assert!(!panel_shown(&h, "Attachments"), "/View /H: the list shows when the reader asks for it");
+    assert!(!panel_shown(&h, RightPanel::Attachments), "/View /H: the list shows when the reader asks for it");
 }
 
 /// Without a PDF to present, the portfolio stays in front with its files listed.
@@ -290,7 +290,7 @@ fn a_portfolio_without_an_initial_document_shows_its_files_over_the_cover() {
     for collection in ["/Collection << /View /D >>", "/Collection << /D (notes.txt) >>"] {
         let h = opened(portfolio(collection, &[("notes.txt", b"hello"), ("form.pdf", PAGE)]), true);
         assert_eq!(tabs(&h), (vec!["portfolio.pdf".into()], Some("portfolio.pdf".into())), "{collection}");
-        assert!(panel_shown(&h, "Attachments"), "{collection}");
+        assert!(panel_shown(&h, RightPanel::Attachments), "{collection}");
     }
 }
 
@@ -304,5 +304,5 @@ fn a_portfolio_inside_the_initial_document_waits_for_the_reader() {
     assert_eq!(tabs(&h), (vec!["portfolio.pdf".into(), "inner.pdf".into()], Some("inner.pdf".into())));
     // Its own tab still shows its files.
     select(&mut h, 0);
-    assert!(panel_shown(&h, "Attachments"));
+    assert!(panel_shown(&h, RightPanel::Attachments));
 }

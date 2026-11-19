@@ -5847,7 +5847,7 @@ fn check_added_text_drag(panel_open: bool) {
         .unwrap();
     let original = h.state().session.save_bytes(id).unwrap();
     h = paragraph_drag_harness(original.as_ref().clone(), 0);
-    h.state_mut().left_open = panel_open;
+    h.state_mut().set_left_open(panel_open);
     h.run_steps(4);
     let added = |h: &Harness<'static, PdfCraftApp>| {
         let app = h.state();

@@ -415,7 +415,7 @@ impl PdfCraftApp {
             self.portfolio_initial = portfolio_initial.map(|key| (id, key));
         }
         if activate
-            && self.left_open
+            && self.left_open()
             && self.left == LeftPanel::Tool("organize")
             && let Some(view) = self.views.last_mut()
         {
@@ -431,11 +431,10 @@ impl PdfCraftApp {
         } else if activate && self.mode != self.default_mode {
             // Switch workspace like the mode bar, but a left panel the user (or `--left closed`)
             // closed stays closed, and an unchanged mode keeps the tool panel the user chose.
-            let (left, left_open) = (self.left, self.left_open);
+            let left_open = self.left_open();
             self.select_mode(ctx, self.default_mode);
-            if self.left_open != left_open {
-                self.left_open = left_open;
-                crate::side_panels::set_panel_visible(self, crate::side_panels::PanelId::from(left), left_open);
+            if self.left_open() != left_open {
+                self.set_left_open(left_open);
             }
         }
         if let Some(p) = path {

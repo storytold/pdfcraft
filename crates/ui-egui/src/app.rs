@@ -262,7 +262,6 @@ impl PdfCraftApp {
             blank_paper: crate::paper::Paper::system(),
             mode_override: None,
             left: LeftPanel::AllTools,
-            left_open: true,
             last_right: RightPanel::Comments,
             right_before_read: None,
             comments_panel_closed: false,
@@ -471,7 +470,7 @@ impl PdfCraftApp {
     /// Fields are being edited (Prepare a form or its Calculation order is open, or a field tool
     /// is picked), unless the form is being previewed.
     pub fn is_preparing(&self) -> bool {
-        ((self.left_open && matches!(self.left, LeftPanel::Tool("form") | LeftPanel::CalculationOrder))
+        ((self.left_open() && matches!(self.left, LeftPanel::Tool("form") | LeftPanel::CalculationOrder))
             || matches!(self.quick_tool, QuickTool::Field(_)))
             && !self.form_preview
     }
@@ -483,6 +482,16 @@ impl PdfCraftApp {
     /// The right panel showing, as the dock has it.
     pub(crate) fn right(&self) -> Option<RightPanel> {
         side_panels::right_of(&self.dock)
+    }
+
+    /// Whether the dock has the Tools panel open; Read mode and the expanded All tools view hide it without closing it.
+    pub fn left_open(&self) -> bool {
+        self.dock.layout.contains(&side_panels::PanelId::Tools)
+    }
+
+    /// Opens or closes the Tools panel in the dock, the one record of it (L-136).
+    pub fn set_left_open(&mut self, open: bool) {
+        side_panels::set_panel_visible(self, side_panels::PanelId::Tools, open);
     }
 
     /// The app's root values for this frame: appearance mode, motion, interface scale and the

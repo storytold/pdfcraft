@@ -157,8 +157,13 @@ fn moving_pages_cancels_an_in_progress_drawing() {
     pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
 
     // A polygon being clicked out on page 0, two points so far, drawn through the tool's pointer
-    // input; each click waits past the double-click time, so none ends the drawing.
-    let mut rig = ToolFixture::new("Document", AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Polygon), 0));
+    // input; each click waits past the double-click time, so none ends the drawing. The view puts the page's (0, 0) at
+    // the canvas's top left corner at zoom 1, so the clicks land on the page.
+    let view = |room: egui::Rect| {
+        craft::behavior::CanvasView::new(room, craft::behavior::kurbo::Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0)
+    };
+    let tool = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Polygon), 0);
+    let mut rig = ToolFixture::with_view("Document", tool, view, |_, _| {});
     for (x, y) in [(50.0, 50.0), (150.0, 50.0)] {
         let at = rig.canvas().rect.min + egui::vec2(x, y);
         let fixture = rig.fixture();

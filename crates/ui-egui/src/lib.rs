@@ -268,7 +268,6 @@ pub struct PdfCraftApp {
     /// Explicit CLI/control mode lasts for this session and is never persisted.
     mode_override: Option<Mode>,
     pub left: LeftPanel,
-    pub left_open: bool,
     /// The side panel F4 reopens: the one open last.
     pub(crate) last_right: RightPanel,
     /// The right panel that was open when the user switched to Read mode, which starts with the

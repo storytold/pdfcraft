@@ -574,6 +574,12 @@ pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
     if own_id(lang, id, label) { lang.i18n().tid(lang.lang, id, label) } else { tr(lang, label) }
 }
 
+/// A platform service's message in the current language: its catalog id's row, else the translation of its English.
+pub fn platform_text(text: craft::platform::PlatformText) -> String {
+    let lang = current();
+    lang.i18n().tid(lang.lang, text.key(), text.english).to_owned()
+}
+
 /// Whether `lang` has PdfCraft's own `@id` row for `id` ([`Lang::has_own`]: command ids are each
 /// app's own) and it keeps the `{placeholders}` and trailing `…` of the English `label`. craft-i18n
 /// can't check that, because an `@id` row's source is the id, so a row that doesn't is skipped

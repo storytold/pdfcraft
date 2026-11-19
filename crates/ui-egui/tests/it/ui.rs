@@ -40,7 +40,8 @@ fn home_shows_welcome_and_tools() {
     let h = harness(|_| {});
     h.get_by_label_contains("Welcome to PdfCraft");
     assert!(h.query_all_by_label("Organize pages").count() >= 2, "tool list + home card");
-    h.get_by_label("Open file");
+    // The start screen's own Open button, beside the menu bar's.
+    assert!(h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Open…").count() >= 2, "Home offers Open");
 }
 
 /// A side string of the control state's `side_panels` (`tools_side`, `rail_side`).
@@ -340,7 +341,8 @@ fn opening_a_pdf_shows_comments_and_bookmarks() {
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     // Documents with comments open on the Comments panel, like Acrobat.
     h.get_by_label_contains("Check the numbers");
-    h.get_by_label("Bookmarks").click();
+    // The rail's icon: the open column's tabs are named alike.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Bookmarks").click();
     h.run_steps(3);
     h.get_by_label("Alpha section");
     h.get_by_label("Beta section");
@@ -353,7 +355,7 @@ fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
     use pdfcraft_ui_egui::RightPanel;
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(right(h.state()), Some(RightPanel::Comments));
-    assert!(h.state().left_open);
+    assert!(h.state().left_open());
     h.state_mut().choose_right_panel(None);
     h.set_option("left", "closed").unwrap();
     h.run_steps(3);
@@ -363,14 +365,14 @@ fn closed_side_panes_stay_closed_after_a_restart_and_opening_a_pdf() {
         app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
     });
     assert_eq!(right(h.state()), None, "the closed right pane reopened");
-    assert!(!h.state().left_open, "the closed left pane reopened");
+    assert!(!h.state().left_open(), "the closed left pane reopened");
     assert!(h.query_by_label_contains("Check the numbers").is_none());
     // Within a session too: another document opens with them closed.
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "again.pdf", None, FIXTURE.to_vec()).unwrap();
     h.run_steps(3);
     assert_eq!(right(h.state()), None);
-    assert!(!h.state().left_open);
+    assert!(!h.state().left_open());
 }
 
 /// #2884: a right panel the user closed stays closed when a PDF asks for its outline
@@ -513,17 +515,18 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
 fn read_mode_hides_the_quick_toolbar() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
     let mut h = harness(|app| app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    h.get_by_label("Hand (H)").click();
+    // The toolbar's slots are named by their commands (L-233).
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Hand").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Hand);
     run_command(&mut h, "view.read_mode");
     h.run_steps(3);
-    assert!(h.query_by_label("Select (V)").is_none(), "no quick toolbar in Read mode");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Select").is_none(), "no quick toolbar in Read mode");
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     run_command(&mut h, "view.read_mode");
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools);
-    h.get_by_label("Select (V)");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Select");
 }
 
 /// All tools ▸ Edit a PDF turns on Edit text & images at once, as the Edit tab does, so the page
@@ -644,8 +647,8 @@ fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
             app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         });
         h.run_steps(3);
-        // The save prompt is the close dialog the tab's close action opens.
-        h.get_by_label("first.pdf, modified").click_button(egui::PointerButton::Middle);
+        // The save prompt is the close dialog closing the tab opens.
+        assert!(h.execute("file.close"));
         h.run_steps(3);
         h.state_mut().pending_link =
             Some(pdfcraft_ui_egui::PendingLink { url: "https://example.org".to_owned(), origin: pdfcraft_ui_egui::LinkOrigin::Link });
@@ -1470,10 +1473,10 @@ fn explicit_mode_preserves_independent_tool_and_panel_options() {
     app.set_option(&egui::Context::default(), "left", "closed").unwrap();
     app.set_option(&egui::Context::default(), "mode", "edit").unwrap();
     assert_eq!(app.left, LeftPanel::Tool("export"));
-    assert!(!app.left_open);
+    assert!(!app.left_open());
     app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.left, LeftPanel::Tool("export"));
-    assert!(!app.left_open);
+    assert!(!app.left_open());
 }
 
 #[test]
@@ -1486,7 +1489,7 @@ fn opening_a_pdf_keeps_a_closed_left_panel_and_the_chosen_tool() {
     app.set_option(&egui::Context::default(), "left", "closed").unwrap();
     app.open_bytes(&egui::Context::default(), "fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(app.mode, Mode::Edit);
-    assert!(!app.left_open);
+    assert!(!app.left_open());
     // Default All Tools: opening another PDF leaves the tool panel the user picked.
     let mut app = crate::control::new_app();
     app.set_option(&egui::Context::default(), "language", "en").unwrap();

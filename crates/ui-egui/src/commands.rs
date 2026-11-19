@@ -405,7 +405,7 @@ impl PdfCraftApp {
                 }
             }
             "view.side_panel" => self.toggle_side_panel(),
-            "view.tools_pane" => self.left_open = !self.left_open,
+            "view.tools_pane" => self.set_left_open(!self.left_open()),
             "view.focus_page_input" => {
                 if let Some(view) = active.and_then(|i| self.views.get_mut(i)) {
                     // The page box in the toolbar (chrome.rs); select its label so typing replaces it.

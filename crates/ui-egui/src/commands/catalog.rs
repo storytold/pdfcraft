@@ -106,7 +106,7 @@ fn second_chords(id: &str) -> Vec<Chord> {
 }
 
 /// The catalog for this platform's chords, built once.
-fn shared_catalog(mac: bool) -> Option<AppCatalog> {
+pub(crate) fn shared_catalog(mac: bool) -> Option<AppCatalog> {
     let cell = if mac { &CATALOG_MAC } else { &CATALOG_WIN };
     cell.get_or_init(|| catalog(mac).ok()).clone()
 }
@@ -206,7 +206,7 @@ fn checked(app: &PdfCraftApp, command: &CommandRef) -> Option<bool> {
         "view.full_screen" => app.full_screen(),
         "view.read_mode" => app.mode == Mode::Read,
         "view.side_panel" => app.right().is_some(),
-        "view.tools_pane" => app.left_open,
+        "view.tools_pane" => app.left_open(),
         "view.split" => app.panes.split.is_some(),
         "view.theme.system" => app.theme_preference == ModeChoice::System,
         "view.theme.light" => app.theme_preference == ModeChoice::Light,

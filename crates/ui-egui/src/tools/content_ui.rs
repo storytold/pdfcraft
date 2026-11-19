@@ -1417,7 +1417,7 @@ impl crate::PdfCraftApp {
             self.views[i].session.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
             self.quick_tool = crate::QuickTool::EditText;
             self.left = crate::LeftPanel::Tool("edit");
-            self.left_open = true;
+            self.set_left_open(true);
         }
     }
 

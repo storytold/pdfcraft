@@ -1461,7 +1461,7 @@ fn the_table_window_closes_when_its_document_is_left() {
     assert_eq!(names(&h).len(), before, "nothing added to either document");
     // So does leaving Prepare a form.
     draw_table(&mut h);
-    h.state_mut().left_open = false;
+    h.state_mut().set_left_open(false);
     h.run_steps(2);
     assert!(!table_open(&h));
 }
@@ -1475,14 +1475,14 @@ fn a_table_drawn_with_the_panel_closed_opens_it_again() {
     let before = names(&h).len();
     assert!(h.execute("form.add.text_table"));
     h.run_steps(2);
-    h.state_mut().left_open = false;
+    h.state_mut().set_left_open(false);
     h.run_steps(2);
     assert!(h.state().is_preparing(), "the picked tool keeps the form prepared");
     let (a, b) = (at(&h, 40.0, 240.0), at(&h, 240.0, 360.0));
     drag(&mut h, a, b);
     h.run_steps(3);
     assert!(table_open(&h), "the window stays open");
-    assert!(h.state().left_open && h.state().is_preparing(), "Prepare a form is open again");
+    assert!(h.state().left_open() && h.state().is_preparing(), "Prepare a form is open again");
     h.get_by_label("Add fields").click();
     h.run_steps(3);
     assert!(names(&h).len() > before, "the table is added");

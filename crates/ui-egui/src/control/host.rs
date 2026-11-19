@@ -144,7 +144,7 @@ impl crate::PdfCraftApp {
             "comment_tool_pinned": self.comment_prefs.pinned,
             // Home's pinned folders, in order, and whether each is folded down to its heading.
             "pinned_folders": self.pinned.folders.iter().map(|f| json!({ "folder": f, "collapsed": self.pinned.collapsed.contains(f) })).collect::<Vec<_>>(),
-            "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
+            "left_panel": if self.left_open() { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": dock["tools_side"].clone(),
             "rail_side": dock["rail_side"].clone(),
             "right_panel": self.right().map(|r| format!("{r:?}")),
