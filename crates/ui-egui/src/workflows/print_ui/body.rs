@@ -187,20 +187,17 @@ fn content_row(d: &PrintDraft) -> Param {
 
 fn paper_section(d: &PrintDraft, sizes: &[(f64, f64)], units: Unit, no_printers: bool) -> PrintSection {
     let detecting = d.papers_loading();
-    let mut papers: Vec<(String, Label)> = d.papers.iter().enumerate().map(|(i, (name, _))| (i.to_string(), lbl(tl!(name)))).collect();
+    // Each paper is keyed by its name, which no two papers share: a list that changes under the
+    // dialog (a printer's own sizes arriving) leaves a pick on the paper it named.
+    let mut papers: Vec<(String, Label)> = d.papers.iter().map(|(name, _)| (name.clone(), lbl(tl!(name)))).collect();
     // The line between the standard sizes and the custom ones falls before the first custom size.
     let mut separator = papers.len();
-    papers.extend(
-        d.custom_papers
-            .iter()
-            .enumerate()
-            .map(|(i, p)| ((d.papers.len() + i).to_string(), lbl(format!("{} ({})", p.name, units.size(p.width, p.height))))),
-    );
+    papers.extend(d.custom_papers.iter().map(|p| (p.name.clone(), lbl(format!("{} ({})", p.name, units.size(p.width, p.height))))));
     if detecting {
         papers.insert(0, ("detecting".to_owned(), lbl(tl!("Detecting paper…"))));
         separator += 1;
     }
-    let mut paper = Param::new("paper", row_label(tl!("Paper:")), ParamKind::choice(papers, Some(d.paper.to_string())));
+    let mut paper = Param::new("paper", row_label(tl!("Paper:")), ParamKind::choice(papers, Some(d.paper_name())));
     if !d.custom_papers.is_empty() {
         paper = paper.separated_at(separator);
     }
@@ -469,7 +466,7 @@ pub(super) fn fields_from_draft(d: &PrintDraft) -> DialogFields {
     f.set("content", id_of(&CONTENT, d.content));
     f.set("as_image", d.as_image);
     f.set("dpi", (d.dpi.round() as u32).to_string());
-    f.set("paper", d.paper.to_string());
+    f.set("paper", d.paper_name());
     f.set("custom_open", d.custom_new.is_some());
     if let Some((name, width, height)) = &d.custom_new {
         let typed = |s: &str| s.trim().parse::<f64>().unwrap_or(0.0);
@@ -525,9 +522,8 @@ pub(super) fn draft_from_fields(d: &mut PrintDraft, f: &DialogFields, edited: &[
         d.set_handling(h);
     }
     if on("paper")
-        && let Some(p) = text("paper").and_then(|t| t.parse::<usize>().ok())
+        && let Some(p) = text("paper").and_then(|t| d.paper_index(t))
         && p != d.paper
-        && p < d.paper_count()
     {
         let before = d.paper;
         d.paper = p;

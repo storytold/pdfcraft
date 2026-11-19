@@ -377,7 +377,8 @@ fn print_dialog_prints_the_selected_pages() {
 fn invalid_ranges_are_explained_in_the_preview() {
     let mut h = harness();
     h.open();
-    h.state_mut().print_draft.which = pdfcraft_ui_egui::PrintWhich::Range;
+    // The Pages box takes typing once its choice is picked, as in the dialog's row.
+    h.set("which", json!("range"));
     h.set("range", json!("7"));
     assert!(h.state().print_draft.settings(1, &[]).is_err(), "page 7 of a one-page document is out of range");
     assert!(h.has_note("note.range"), "the preview says why"); // PLAN: assumed key
@@ -404,12 +405,12 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     h.get_by_label("›").click();
     h.run_steps(2);
     assert_eq!(h.pager(), (2, 3));
-    h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
-    h.run_steps(2);
+    h.set("duplex", json!("long_edge"));
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
     assert!(h.has_note("note.duplex"));
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().print_now(&ctx_h).is_err());
-    h.state_mut().print_draft.duplex = Some(Duplex::Off);
+    h.set("duplex", json!("off"));
     h.pick(None);
     h.ok();
     assert!(!h.is_open());
@@ -1428,8 +1429,8 @@ fn a_booklet_decides_two_sided_itself() {
     h.open();
     h.settle();
     assert_eq!(h.destination(), Destination::Printer("Laser".into()));
-    h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
-    h.run_steps(1);
+    // Two-sided is the dialog's own setting, which the draft follows each pass.
+    h.set("duplex", json!("long_edge"));
     h.state_mut().print_draft.set_handling(PrintHandling::Booklet);
     h.run_steps(2);
     let d = &h.state().print_draft;
@@ -1673,9 +1674,8 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
         let d = &mut h.state_mut().print_draft;
         d.paper = LABEL_PAPER;
         d.size = SizeMode::Actual;
-        d.duplex = Some(Duplex::Off);
     }
-    h.run_steps(2);
+    h.set("duplex", json!("off"));
     assert_eq!(print(&mut h).printer.as_deref(), Some("D520BT_Z"));
     h.reopen();
     h.pick(Some("Office"));
@@ -1683,9 +1683,8 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
         let d = &mut h.state_mut().print_draft;
         d.paper = a4;
         d.size = SizeMode::Fit;
-        d.duplex = Some(Duplex::LongEdge);
     }
-    h.run_steps(2);
+    h.set("duplex", json!("long_edge"));
     assert_eq!(print(&mut h).printer.as_deref(), Some("Office"));
 
     // Choosing the label printer in the dialog brings back what it printed with.

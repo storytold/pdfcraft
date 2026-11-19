@@ -130,10 +130,10 @@ pub(crate) struct ToolBench<'a> {
 enum Arm<'a> {
     /// Select and Column Select: the text selection and the picture pick.
     Select(PageSelectTool<'a>),
-    /// The Hand tool.
-    Hand(HandTool),
-    /// Marquee Zoom: the framework's Zoom tool without scrubbing, so a drag draws the rectangle.
-    MarqueeZoom(ZoomTool),
+    /// The Hand tool, the session's.
+    Hand(&'a mut HandTool),
+    /// Marquee Zoom: the framework's Zoom tool without scrubbing, so a drag draws the rectangle; the session's.
+    MarqueeZoom(&'a mut ZoomTool),
     /// A tool whose result is all in the session it borrows.
     Area(Box<dyn CanvasTool + 'a>),
     /// The camera quadrilateral, moved to the page a click went to.
@@ -323,11 +323,12 @@ pub(crate) fn page_tool<'a>(
                 }
             }
         }
-        QuickTool::Hand => Arm::Hand(HandTool::new(cx.navigation)),
+        QuickTool::Hand => Arm::Hand(hand(session, cx.navigation)),
         QuickTool::MarqueeZoom => {
             let mut options = cx.navigation;
             options.scrubby_zoom = false;
-            Arm::MarqueeZoom(ZoomTool::new(options))
+            session.marquee_zoom.options = options;
+            Arm::MarqueeZoom(&mut session.marquee_zoom)
         }
         QuickTool::Measure(t) => {
             Arm::Measure(MeasureTool::new(&mut session.measure, cx.doc, map, cx.info, t, cx.units, cx.author, cx.host, cx.wake.clone()))
@@ -366,7 +367,7 @@ pub(crate) fn page_tool<'a>(
                 map,
             )),
             // The library no longer holds the stamp: no click places one, and a drag pans as the Hand tool's.
-            None => Arm::Hand(HandTool::new(cx.navigation)),
+            None => Arm::Hand(hand(session, cx.navigation)),
         },
         QuickTool::Link => Arm::Area(Box::new(LinkTool::new(session, cx.pages, cx.info, *press))),
         QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, &mut session.box_drag, cx.pages, cx.rotation, cx.info)),
@@ -375,12 +376,18 @@ pub(crate) fn page_tool<'a>(
     PageTool { arm, tool, selects_text, released: false, presenting: cx.presenting, presenter_keys: Vec::new() }
 }
 
+/// The session's Hand tool under the user's navigation choices of this pass.
+fn hand(session: &mut PageSession, navigation: NavigationOptions) -> &mut HandTool {
+    session.hand.options = navigation;
+    &mut session.hand
+}
+
 impl<'a> PageTool<'a> {
     fn tool(&self) -> &(dyn CanvasTool + 'a) {
         match &self.arm {
             Arm::Select(t) => t,
-            Arm::Hand(t) => t,
-            Arm::MarqueeZoom(t) => t,
+            Arm::Hand(t) => &**t,
+            Arm::MarqueeZoom(t) => &**t,
             Arm::Area(t) => &**t,
             Arm::Camera(t) => t,
             Arm::Measure(t) => t,
@@ -395,8 +402,8 @@ impl<'a> PageTool<'a> {
     fn tool_mut(&mut self) -> &mut (dyn CanvasTool + 'a) {
         match &mut self.arm {
             Arm::Select(t) => t,
-            Arm::Hand(t) => t,
-            Arm::MarqueeZoom(t) => t,
+            Arm::Hand(t) => &mut **t,
+            Arm::MarqueeZoom(t) => &mut **t,
             Arm::Area(t) => &mut **t,
             Arm::Camera(t) => t,
             Arm::Measure(t) => t,
