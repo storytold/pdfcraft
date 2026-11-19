@@ -108,7 +108,8 @@ fn the_longest_list_scrolls_in_the_smallest_window_down_to_clear() {
     let files: Vec<String> = (0..50).map(|n| format!("{n}.pdf")).collect();
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 520.0)).build_eframe({
         let files = files.clone();
-        move |_cc| {
+        move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
             let mut app = app_with(&files.iter().map(String::as_str).collect::<Vec<_>>());
             app.recent_limit = 50;
             app.open_bytes(&egui::Context::default(), "doc.pdf", None, PDF.to_vec()).unwrap();
