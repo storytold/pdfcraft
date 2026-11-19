@@ -1262,13 +1262,12 @@ impl PdfCraftApp {
                 let (left, top) = (left.map(f64::from), top.map(f64::from));
                 self.apply_edit(ctx, Edit::AddBookmark { parent: vec![], index: n, title: "Untitled".into(), page, left, top });
                 // Like Acrobat: the new bookmark starts in rename mode.
-                self.bookmark_rename = Some((vec![n], "Untitled".into()));
+                crate::panels::bookmarks::start_rename(ctx, id, &[n]);
                 self.set_right(Some(crate::RightPanel::Bookmarks));
                 return;
             }
             A::StartRename(path) => {
-                let title = self.session.get(id).and_then(|d| bookmark_at(&d.info.outline, &path)).map(|b| b.title.clone()).unwrap_or_default();
-                self.bookmark_rename = Some((path, title));
+                crate::panels::bookmarks::start_rename(ctx, id, &path);
                 return;
             }
             A::Rename(path, title) => Edit::RenameBookmark { path, title },
@@ -1363,12 +1362,6 @@ impl PdfCraftApp {
             ));
         }
     }
-}
-
-fn bookmark_at<'a>(items: &'a [pdfcraft_render::OutlineItem], path: &[usize]) -> Option<&'a pdfcraft_render::OutlineItem> {
-    let (first, rest) = path.split_first()?;
-    let item = items.get(*first)?;
-    if rest.is_empty() { Some(item) } else { bookmark_at(&item.children, rest) }
 }
 
 /// The open box's own Undo or Redo, as its keys do it: the box's text, selection and line
