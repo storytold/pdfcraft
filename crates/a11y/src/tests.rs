@@ -1684,6 +1684,43 @@ fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
     assert!(!found.is_empty() && found.len() < count, "{}", found.len());
 }
 
+/// A tree of `count` H1 elements, each with its text and page.
+fn many_headings(count: usize) -> Vec<String> {
+    let kids: String = (0..count).map(|i| format!("{} 0 R ", i + 7)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText (Head) >>".to_string()));
+    objects
+}
+
+#[test]
+fn headings_past_the_cap_are_reported() {
+    let (at_cap, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS), ""));
+    assert_eq!((at_cap.len(), cut), (MAX_HEADINGS, false));
+    let (over, cut) = headings_with_truncation(&pdf(&many_headings(MAX_HEADINGS + 1), ""));
+    assert_eq!((over.len(), cut), (MAX_HEADINGS, true), "a heading past the cap was dropped unreported");
+}
+
+#[test]
+fn a_heading_nested_past_the_depth_limit_is_reported() {
+    let mut objs = headings_doc();
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(!found.is_empty() && !cut);
+    // Element 17 opens a chain of 300 sections, each holding the next, around one H1.
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [12 0 R {first} 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    assert!(found.iter().all(|h| h.title != "Deep") && cut, "a heading too deep to reach was dropped unreported");
+}
+
 #[test]
 fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();

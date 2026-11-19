@@ -132,3 +132,26 @@ fn text_in_one_style_gets_no_suggestion_and_a_note() {
     assert_eq!((s["source"].as_str(), s["headings"].as_u64(), &s["bookmarks"]), (Some("layout"), Some(0), &json!([])));
     assert!(s["note"].as_str().is_some_and(|n| n.contains("bookmark_from_text_styles")), "{s}");
 }
+
+/// A suggested bookmark has no level to edit: bookmark_import refuses one, and the nesting changes
+/// by moving a bookmark into or out of another's children, as the tool description says.
+#[test]
+fn a_suggestion_is_renested_through_children_not_levels() {
+    let dir = tmp("renest");
+    std::fs::write(dir.join("report.pdf"), report_pdf()).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "report.pdf" }))["doc"].as_u64().unwrap();
+    let mut bookmarks = ok(&mut a, "bookmark_suggest", json!({ "doc": doc }))["bookmarks"].clone();
+    let mut leveled = bookmarks.clone();
+    leveled[0]["level"] = json!(2);
+    let refused = a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": leveled, "replace": true }));
+    assert!(refused.is_err_and(|e| e.to_string().contains("unknown key")), "a level was taken");
+    let child = bookmarks[0]["children"].as_array_mut().unwrap().remove(0);
+    bookmarks.as_array_mut().unwrap().push(child);
+    ok(&mut a, "bookmark_import", json!({ "doc": doc, "bookmarks": bookmarks, "replace": true }));
+    let back = ok(&mut a, "bookmark_export", json!({ "doc": doc }));
+    let top: Vec<String> = outline(&back["bookmarks"]).into_iter().map(|(t, _, _)| t).collect();
+    assert_eq!(top, ["Getting started with the toolkit", "Reference", "Installing"]);
+    let tool = pdfcraft_automation::tools().into_iter().find(|t| t.name == "bookmark_suggest").unwrap();
+    assert!(tool.description.contains("children") && !tool.description.contains("levels or"), "{}", tool.description);
+}

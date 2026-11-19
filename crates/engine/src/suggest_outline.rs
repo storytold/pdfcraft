@@ -40,7 +40,9 @@ pub struct OutlineSuggestion {
     /// Pages whose text was read: at most [`MAX_PAGES`](crate::text_style_bookmarks::MAX_PAGES)
     /// for a suggestion from layout, fewer when a page's text can't be read.
     pub pages_read: usize,
-    /// Headings were left out: pages weren't read, or layout found more than [`MAX_BOOKMARKS`].
+    /// Headings may have been left out: pages weren't read, layout found more than
+    /// [`MAX_BOOKMARKS`], or the structure tree ran past a limit of
+    /// [`pdfcraft_a11y::headings_with_truncation`].
     pub truncated: bool,
 }
 
@@ -75,12 +77,13 @@ fn node(e: &OutlineEntry) -> OutlineNode {
     OutlineNode { title: e.title.clone(), page: Some(e.page), view, color: None, italic: false, bold: false, open: true, children: Vec::new() }
 }
 
-/// The tagged headings as outline entries, each linked to its element (`/SE`).
-pub(crate) fn structure_entries(doc: &Document) -> Vec<OutlineEntry> {
-    pdfcraft_a11y::headings(doc)
-        .into_iter()
-        .map(|h| OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, left: None, top: None })
-        .collect()
+/// The tagged headings as outline entries, each linked to its element (`/SE`), and whether
+/// headings may be missing ([`pdfcraft_a11y::headings_with_truncation`]).
+pub(crate) fn structure_entries(doc: &Document) -> (Vec<OutlineEntry>, bool) {
+    let (found, cut) = pdfcraft_a11y::headings_with_truncation(doc);
+    let entries =
+        found.into_iter().map(|h| OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, left: None, top: None }).collect();
+    (entries, cut)
 }
 
 /// The outline suggested for `doc`: its tagged headings, or else headings inferred from the
@@ -88,9 +91,9 @@ pub(crate) fn structure_entries(doc: &Document) -> Vec<OutlineEntry> {
 /// finds a heading.
 pub fn suggest(doc: &Document) -> OutlineSuggestion {
     let pages = pdfcraft_organize::page_count(doc).unwrap_or(0);
-    let tagged = structure_entries(doc);
+    let (tagged, cut) = structure_entries(doc);
     if !tagged.is_empty() {
-        return OutlineSuggestion { source: OutlineSource::Structure, entries: tagged, pages, pages_read: pages, truncated: false };
+        return OutlineSuggestion { source: OutlineSource::Structure, entries: tagged, pages, pages_read: pages, truncated: cut };
     }
     let (lines, pages_read) = read_lines(doc);
     let (entries, capped) = inferred(lines);
@@ -271,6 +274,12 @@ mod tests {
             stream("/Filter /FlateDecode", &packed),
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
         ];
+        let s = suggest(&doc_of(&objs));
+        assert_eq!((s.pages, s.pages_read, s.truncated), (2, 1, true), "the unread page counted as read");
+    }
+
+    /// A PDF of these objects (object n = `objs[n - 1]`), the first the catalog.
+    fn doc_of(objs: &[Vec<u8>]) -> Document {
         let mut bytes = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for (i, o) in objs.iter().enumerate() {
@@ -283,8 +292,29 @@ mod tests {
             bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
         }
         bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-        let s = suggest(&Document::open(std::sync::Arc::new(bytes)).unwrap());
-        assert_eq!((s.pages, s.pages_read, s.truncated), (2, 1, true), "the unread page counted as read");
+        Document::open(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// More tagged headings than the structure reader returns: the suggestion says some are missing.
+    #[test]
+    fn tagged_headings_past_the_cap_are_reported() {
+        let tagged = |count: usize| {
+            let kids: String = (0..count).map(|i| format!("{} 0 R ", i + 6)).collect();
+            let mut objs = vec![
+                b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 4 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+                b"<< /Type /StructTreeRoot /K 5 0 R >>".to_vec(),
+                format!("<< /S /Document /K [{kids}] >>").into_bytes(),
+            ];
+            objs.extend((0..count).map(|_| b"<< /S /H1 /Pg 3 0 R /ActualText (Head) >>".to_vec()));
+            suggest(&doc_of(&objs))
+        };
+        let cap = pdfcraft_a11y::MAX_HEADINGS;
+        let at_cap = tagged(cap);
+        assert_eq!((at_cap.source, at_cap.entries.len(), at_cap.truncated), (OutlineSource::Structure, cap, false));
+        let over = tagged(cap + 1);
+        assert_eq!((over.entries.len(), over.truncated), (cap, true), "a tagged heading past the cap was dropped unreported");
     }
 
     #[test]

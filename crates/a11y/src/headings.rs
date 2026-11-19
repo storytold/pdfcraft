@@ -10,7 +10,8 @@ use pdfcraft_model::Page;
 
 use crate::alt::{page_content, standard, tree_root};
 
-const MAX_HEADINGS: usize = 10_000;
+/// The most headings [`headings`] returns.
+pub const MAX_HEADINGS: usize = 10_000;
 const MAX_VISITS: usize = 1_000_000;
 const MAX_DEPTH: usize = 256;
 /// Characters kept of a heading's title.
@@ -40,6 +41,8 @@ struct Walker<'a> {
     /// What is left of [`MAX_TITLE_SOURCE_BYTES`].
     title_left: usize,
     out: Vec<Heading>,
+    /// A limit stopped the walk where a heading could have been.
+    cut: bool,
 }
 
 /// Bytes of `/ActualText`, `/Alt` and `/T` strings the headings of one document decode in all.
@@ -49,7 +52,13 @@ const MAX_TITLE_SOURCE_BYTES: usize = 32 << 20;
 
 /// The headings, in document order. Headings without text or a page are left out.
 pub fn headings(doc: &Document) -> Vec<Heading> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
+    headings_with_truncation(doc).0
+}
+
+/// [`headings`], and whether headings may be missing from it: there were more than
+/// [`MAX_HEADINGS`], or the structure tree nests or branches past the walk's limits.
+pub fn headings_with_truncation(doc: &Document) -> (Vec<Heading>, bool) {
+    let Some(root) = tree_root(doc) else { return (Vec::new(), false) };
     let pages = pdfcraft_model::pages(doc);
     let mut w = Walker {
         doc,
@@ -61,18 +70,19 @@ pub fn headings(doc: &Document) -> Vec<Heading> {
         texts: HashMap::new(),
         title_left: MAX_TITLE_SOURCE_BYTES,
         out: Vec::new(),
+        cut: false,
     };
     if let Some(k) = root.get(b"K") {
         w.walk(k, None, 0, 0);
     }
-    w.out
+    (w.out, w.cut)
 }
 
 impl Walker<'_> {
     /// Whether `k` may be visited (bounded depth and size, each object once).
     fn enter(&mut self, k: &Object, depth: usize) -> bool {
         self.visits += 1;
-        depth <= MAX_DEPTH && self.visits <= MAX_VISITS && self.out.len() < MAX_HEADINGS && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
+        !self.cut && depth <= MAX_DEPTH && self.visits <= MAX_VISITS && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
     }
 
     fn element_of(&self, k: &Object) -> Option<(Option<ObjRef>, Dict)> {
@@ -86,6 +96,7 @@ impl Walker<'_> {
 
     fn walk(&mut self, k: &Object, pg: Option<ObjRef>, sections: u8, depth: usize) {
         if !self.enter(k, depth) {
+            self.cut |= depth > MAX_DEPTH || self.visits > MAX_VISITS;
             return;
         }
         if let Object::Array(a) = k {
@@ -101,6 +112,10 @@ impl Walker<'_> {
             _ => None,
         };
         if let Some(level) = level {
+            if self.out.len() >= MAX_HEADINGS {
+                self.cut = true;
+                return;
+            }
             self.heading(obj, &d, pg, level, depth);
             return;
         }
