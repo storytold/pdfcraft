@@ -212,8 +212,7 @@ impl PdfCraftApp {
 
     /// Switches between light and dark from the mode the interface shows now.
     fn toggle_theme(&mut self, ctx: &egui::Context) {
-        // PLAN: assumed `PdfCraftApp::root_env(&self) -> RootEnv`, hub-w1's one builder (pdf-hub-w1).
-        let next = if self.root_env().resolved(ctx).mode == craft::theme::Mode::Light { ModeChoice::Dark } else { ModeChoice::Light };
+        let next = if self.root_env(ctx).resolved(ctx).mode == craft::theme::Mode::Light { ModeChoice::Dark } else { ModeChoice::Light };
         self.set_theme_preference(next);
     }
 

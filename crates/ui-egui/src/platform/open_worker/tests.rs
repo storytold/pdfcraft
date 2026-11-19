@@ -116,6 +116,12 @@ impl Rig {
             }
         });
         h.run_steps(3);
+        // The host's queue also carries the page text layers the window asks for; they finish first, so that the
+        // oldest waiting job in a test is the open it holds.
+        for _ in 0..2 {
+            jobs.run_all();
+            h.run_steps(2);
+        }
         Self { h, jobs, files, intake: sender, control }
     }
 
