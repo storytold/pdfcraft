@@ -11,11 +11,11 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-xfa = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
-roxmltree = "0.21"
+craft-xml = { workspace = true }
 base64 = "0.23"
-png = "0.18"
+craft-image-codecs = { workspace = true }
 sha2 = "0.11"
-image = { version = "0.25", default-features = false, features = ["bmp", "gif", "tiff"] }
 thiserror = { workspace = true }

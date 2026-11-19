@@ -517,6 +517,12 @@ const MAX_URL_CHARS: usize = 2048;
 /// it would open with a scheme the text doesn't say. Brackets inside a web address belong to it
 /// when they pair up (`…/wiki/Mercury_(planet)`); an unpaired one ends it.
 pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
+    find_urls_with_scan_observer(chars, |_| {})
+}
+
+/// Observe each candidate scan offset before reading it. The production caller is a no-op;
+/// regression tests assert the work bound directly, independent of machine speed.
+pub(crate) fn find_urls_with_scan_observer(chars: &[char], mut observe: impl FnMut(usize)) -> Vec<(std::ops::Range<usize>, String)> {
     let url_char = |c: char| !c.is_whitespace() && !"<>\"'()[]{}".contains(c);
     // Characters found inside an address but not between words: a `www.` after one is part of
     // a longer address, and so is an e-mail address after a slash.
@@ -542,6 +548,7 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                     too_long = true;
                     break;
                 }
+                observe(j.saturating_sub(i));
                 match chars.get(j) {
                     Some('(') => {
                         if depth == 0 {
