@@ -177,3 +177,18 @@ fn the_crop_tool_leaves_the_page_grid_so_a_page_can_be_cropped() {
     assert!((w - 150.0).abs() < 2.0 && (hh - 200.0).abs() < 2.0, "{w}×{hh}");
     assert_eq!(size(&h, 1), (300.0, 400.0));
 }
+
+#[test]
+fn page_box_and_unit_selectors_are_named_for_accessibility() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.boxes"));
+    h.run_steps(3);
+    for label in ["Box", "Units"] {
+        h.get_by_role_and_label(Role::ComboBox, label);
+    }
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!((size(&h, 0), size(&h, 1)), ((300.0, 400.0), (300.0, 400.0)));
+}
