@@ -68,10 +68,10 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
     field.focus();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.get_all_by_label("DPI").find(|n| n.accesskit_node().role() != Role::Group).expect("the DPI field").type_text("144");
+    // Enter in the field is the dialog's default action, Create.
     h.key_press(Key::Enter);
-    h.run_steps(2);
-    h.get_by_label("Create").click();
     h.run_steps(3);
+    assert!(h.state().image_import.is_none(), "Enter creates the PDF");
     let page = &h.state().session.docs()[1].info.pages[0];
     assert_eq!((page.width, page.height), (4.0, 2.0));
     h.state_mut().begin_image_import(&ctx, vec![("scan.png".into(), png())]);

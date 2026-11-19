@@ -13,6 +13,7 @@ use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{List, ListRow, ThumbAspect};
 use craft::ui::patterns::panels::Inspector;
 use craft::ui::primitives::textures::TextureState;
+use craft::ui::runtime::focus::FocusRequest;
 use craft::ui::text::{RunWord, TextField, WordRun, WordState};
 use egui::Rect;
 use pdfcraft_engine::ocr::{OcrPage, is_suspect};
@@ -51,7 +52,10 @@ pub(super) fn pages(app: &PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     let v = &app.ocr_verify;
     let rows = PageRows(&v.pages);
     // The pane's panel scrolls its body, so the list takes its natural height and the panel carries the scroll.
+    // The screen's keys (F8) reach it while focus is inside it: the list takes the focus nothing else holds, so
+    // they work from the moment the screen opens, as they always did.
     let out = List::<usize>::new(tl!("Pages"))
+        .request_focus(FocusRequest::WhenNone)
         .select(SelectMode::Single)
         .selection(Bind::given(Selection::single(v.current)))
         .natural_height(true)

@@ -159,11 +159,12 @@ fn name_of(path: &std::path::Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into())
 }
 
-/// A picked file's name and bytes, or its name and why it can't be read.
+/// A picked file's name and bytes, read through the host's file service as every pick is, or its
+/// name and why it can't be read.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_named(path: &std::path::Path) -> Result<(String, Vec<u8>), (String, String)> {
+fn read_named(host: &craft::host::Host, path: &std::path::Path) -> Result<(String, Vec<u8>), (String, String)> {
     let name = name_of(path);
-    match std::fs::read(path) {
+    match host.files().read(path) {
         Ok(bytes) => Ok((name, bytes)),
         Err(e) => Err((name, e.to_string())),
     }
@@ -241,13 +242,15 @@ impl PdfCraftApp {
         if purpose == FilePurpose::CreateMultiple {
             // Each file is read when its turn comes, so the selection's bytes are not all held at once.
             if !paths.is_empty() {
-                self.stage_create_multiple(paths.iter().map(|p| read_named(p)));
+                let host = self.host.clone();
+                self.stage_create_multiple(paths.iter().map(|p| read_named(&host, p)));
             }
             return;
         }
         if purpose == FilePurpose::CreateMultipleSeparate {
             if !paths.is_empty() {
-                self.ask_separate_folder(paths.to_vec().into_iter().map(|p| read_named(&p)));
+                let host = self.host.clone();
+                self.ask_separate_folder(paths.to_vec().into_iter().map(move |p| read_named(&host, &p)));
             }
             return;
         }

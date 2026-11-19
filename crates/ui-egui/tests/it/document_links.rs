@@ -628,7 +628,8 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     let pending = h.state().pending_remote_link.as_ref().unwrap();
     assert_eq!(pending.source, source);
     assert_eq!(pending.path, target);
-    h.get_by_label(file);
+    // The path is an isolate of its own, so it reads left to right in any interface language.
+    h.get_by_label_contains(file);
     h.get_by_label("Allow");
     assert_eq!(h.state().views.len(), 1);
     assert_eq!(h.state().session.docs().len(), 1);
