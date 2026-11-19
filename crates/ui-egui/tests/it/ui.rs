@@ -50,7 +50,8 @@ fn side(h: &mut Harness<'static, PdfCraftApp>, key: &str) -> String {
 
 /// The side panel the workspace has open, as `ui.state` reports it (`side_panel`).
 pub(crate) fn right(app: &PdfCraftApp) -> Option<RightPanel> {
-    use pdfcraft_ui_egui::side_panels::PanelId;
+    let state = pdfcraft_ui_egui::side_panels::state(app);
+    let open = state["side_panel"].as_str()?;
     [
         RightPanel::Comments,
         RightPanel::Bookmarks,
@@ -65,7 +66,7 @@ pub(crate) fn right(app: &PdfCraftApp) -> Option<RightPanel> {
         RightPanel::Compare,
     ]
     .into_iter()
-    .find(|panel| app.dock.layout.contains(&PanelId::from(*panel)))
+    .find(|panel| format!("{panel:?}") == open)
 }
 
 /// Runs the command `id` as the app's own command entry does, with the harness's context.
