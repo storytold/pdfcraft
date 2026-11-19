@@ -10,6 +10,18 @@ use pdfcraft_ui_egui::{LinkOrigin, PdfCraftApp, PendingLink};
 use crate::gpu;
 use crate::support::AppHarness as _;
 
+/// Runs the button script of field `field` in document `id`, with the harness's context.
+fn run_button_script(h: &mut Harness<'static, PdfCraftApp>, id: pdfcraft_engine::DocId, field: &str, script: &str) {
+    let ctx = h.ctx.clone();
+    h.state_mut().run_button_script(&ctx, id, field, script);
+}
+
+/// Answers the open password prompt with `password` (`None` cancels it), with the harness's context.
+fn submit_password(h: &mut Harness<'static, PdfCraftApp>, password: Option<String>) {
+    let ctx = h.ctx.clone();
+    h.state_mut().submit_password(&ctx, password);
+}
+
 const LINK_URL: &str = "https://example.org/from-a-link";
 const BUTTON_URL: &str = "https://example.org/from-a-button";
 
@@ -284,7 +296,7 @@ fn bookmarks_go_through_the_link_policy() {
         // A fresh app per row: each row's notice is its own.
         let mut h = bookmark_harness_with(None, pdf.clone());
         click_bookmark(&mut h, title);
-        assert_eq!(support::shown_notice(&h).as_deref(), notice, "{title}");
+        assert_eq!(support::shown_notice(&mut h).as_deref(), notice, "{title}");
         let opened = support::step_collecting_urls(&mut h, 2);
         let s = h.state();
         assert_eq!((&s.pending_link, s.views.len(), s.views[0].current()), (&None, 1, 0), "{title}: nothing opened");
@@ -294,7 +306,7 @@ fn bookmarks_go_through_the_link_policy() {
     click_bookmark(&mut h, "Absolute");
     assert_eq!(h.state().pending_remote_link.as_ref().map(|p| p.path.clone()), Some(target));
     assert_eq!(h.state().views.len(), 1);
-    assert!(support::shown_notice(&h).is_none(), "the file is not touched before consent");
+    assert!(support::shown_notice(&mut h).is_none(), "the file is not touched before consent");
 }
 
 #[test]
@@ -362,14 +374,14 @@ fn a_gotor_link_to_a_named_destination_opens_at_its_page() {
         click_remote_link(&mut h);
         // The name is looked up off the UI thread, so the tab may open before it moves there.
         support::wait_until(&mut h, "remote document at its destination", |app| app.views.len() == 2 && app.views[1].current() == page);
-        assert!(support::shown_notice(&h).is_none(), "{destination}: applied, so nothing to warn about");
+        assert!(support::shown_notice(&mut h).is_none(), "{destination}: applied, so nothing to warn about");
     }
     // A name the target doesn't define opens it at its first page, with the warning.
     let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), "target.pdf", "/elsewhere");
     click_remote_link(&mut h);
     assert!(support::step_until(&mut h, |h| h.state().views.len() == 2 && support::shown_notice(h).is_some()), "remote document and the warning");
     assert_eq!(h.state().views[1].current(), 0);
-    let notice = support::shown_notice(&h);
+    let notice = support::shown_notice(&mut h);
     assert!(notice.as_deref().is_some_and(|text| text.contains("named destination was not applied")), "{notice:?}");
 }
 
@@ -386,12 +398,12 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
     support::wait_until(&mut h, "remote password prompt", |app| app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf"));
     assert!(h.state().password_prompt.is_some());
     assert_eq!(h.state().views.len(), 1);
-    h.state_mut().submit_password(Some("wrong-password".into()));
+    submit_password(&mut h, Some("wrong-password".into()));
     support::wait_until(&mut h, "wrong-password reply", |app| {
         app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf" && p.error.as_deref() == Some("Incorrect password. Try again."))
     });
     assert!(h.state().password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
-    h.state_mut().submit_password(Some("test-password".into()));
+    submit_password(&mut h, Some("test-password".into()));
     support::wait_until(&mut h, "authenticated remote document", |app| app.views.len() == 2 && app.password_prompt.is_none());
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(h.state().views[1].current(), 1, "the destination survives a wrong-password retry");
@@ -401,7 +413,7 @@ fn a_remote_destination_survives_password_retries_and_cancel_opens_no_tab() {
     support::wait_until(&mut cancelled, "cancelled target password prompt", |app| {
         app.password_prompt.as_ref().is_some_and(|p| p.name == "target.pdf")
     });
-    cancelled.state_mut().submit_password(None);
+    submit_password(&mut cancelled, None);
     assert_eq!(cancelled.state().views.len(), 1, "cancelling does not leave a half-open target tab");
 }
 
@@ -426,7 +438,7 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
         click_remote_link(&mut h);
         assert!(support::step_until(&mut h, |h| support::shown_notice(h).is_some()), "relative invalid target refusal");
         assert_eq!(h.state().views.len(), 1, "{target} opens no tab");
-        let toast = support::shown_notice(&h).unwrap().to_string();
+        let toast = support::shown_notice(&mut h).unwrap().to_string();
         assert!(toast.contains("not a regular file"), "{target}: {toast}");
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -439,7 +451,7 @@ fn an_in_memory_source_does_not_resolve_a_relative_gotor_against_cwd() {
     let mut h = remote_harness(None, "target.pdf", "[0 /Fit]");
     click_remote_link(&mut h);
     assert_eq!(h.state().views.len(), 1);
-    let toast = support::shown_notice(&h).unwrap().to_string();
+    let toast = support::shown_notice(&mut h).unwrap().to_string();
     assert!(toast.contains("relative link needs a source document path"), "{toast}");
 }
 
@@ -452,7 +464,7 @@ fn unsupported_launch_action_is_reported_without_claiming_javascript() {
     assert!(support::step_collecting_urls(&mut h, 1).is_empty());
     assert_eq!(h.state().views.len(), 1);
     assert_eq!(h.state().views[0].current(), 0);
-    let toast = support::shown_notice(&h).expect("the unsupported action is reported").to_string();
+    let toast = support::shown_notice(&mut h).expect("the unsupported action is reported").to_string();
     assert_eq!(toast, "This PDF uses the unsupported Launch action.");
 }
 
@@ -495,7 +507,7 @@ fn a_button_script_cannot_open_a_local_program() {
     assert!(support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()), "script link refusal");
     assert_eq!(h.state().pending_link, None, "a file: address is never offered");
     assert!(support::step_collecting_urls(&mut h, 1).is_empty());
-    let toast = support::shown_notice(&h).expect("the user is told").to_string();
+    let toast = support::shown_notice(&mut h).expect("the user is told").to_string();
     assert!(toast.contains("“file:” address"), "{toast}");
 }
 
@@ -505,7 +517,7 @@ fn a_script_asks_first_and_only_once() {
     let mut h = harness();
     let id = h.state().views[0].id;
     let script = "app.launchURL('https://example.org/?q=' + 'first'); app.launchURL('https://example.org/second');";
-    h.state_mut().run_button_script(id, "web", script);
+    run_button_script(&mut h, id, "web", script);
     support::wait_until(&mut h, "script link request", |app| app.pending_link.is_some());
     assert_eq!(h.state().pending_link, pending("https://example.org/?q=first", LinkOrigin::Script), "one dialog, for the first request");
     assert!(support::step_collecting_urls(&mut h, 1).is_empty());
@@ -528,11 +540,11 @@ fn a_script_cannot_open_other_kinds_of_address() {
         let mut h = harness();
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
-        h.state_mut().run_button_script(id, "web", &script);
+        run_button_script(&mut h, id, "web", &script);
         assert!(support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()), "script link decision");
         assert_eq!(h.state().pending_link, None, "{url}");
         assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "{url}");
-        let notice = support::shown_notice(&h);
+        let notice = support::shown_notice(&mut h);
         assert!(notice.as_deref().is_some_and(|t| t.contains("won't open")), "{url}: {notice:?}");
     }
 }
@@ -544,11 +556,11 @@ fn an_email_link_cannot_attach_a_local_file() {
         let mut h = harness();
         let id = h.state().views[0].id;
         let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
-        h.state_mut().run_button_script(id, "web", &script);
+        run_button_script(&mut h, id, "web", &script);
         assert!(support::step_until(&mut h, |h| h.state().pending_link.is_some() || support::shown_notice(h).is_some()), "script link decision");
         assert_eq!(h.state().pending_link, None, "{url}");
         assert!(support::step_collecting_urls(&mut h, 1).is_empty(), "{url}");
-        let toast = support::shown_notice(&h).expect("the user is told").to_string();
+        let toast = support::shown_notice(&mut h).expect("the user is told").to_string();
         assert!(toast.contains("attach or insert a file"), "{url}: {toast}");
     }
 }
@@ -558,7 +570,7 @@ fn prompt_for(url: &str) -> Harness<'static, PdfCraftApp> {
     let mut h = harness();
     let id = h.state().views[0].id;
     let script = format!("app.launchURL({});", serde_json::to_string(url).unwrap());
-    h.state_mut().run_button_script(id, "web", &script);
+    run_button_script(&mut h, id, "web", &script);
     assert!(support::step_until(&mut h, |h| h.query_by_label("Open link").is_some()), "script link prompt rendered");
     assert_eq!(h.state().pending_link, pending(url, LinkOrigin::Script));
     h
@@ -611,7 +623,7 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
     h.get_by_label("Allow");
     assert_eq!(h.state().views.len(), 1);
     assert_eq!(h.state().session.docs().len(), 1);
-    assert!(support::shown_notice(&h).is_none(), "the nonexistent target is not accessed before consent");
+    assert!(support::shown_notice(&mut h).is_none(), "the nonexistent target is not accessed before consent");
     assert!(h.state().password_prompt.is_none());
     // The target only appears AFTER the confirmation is displayed.
     let target_bytes = linked_pages(2, None);
@@ -661,7 +673,7 @@ fn cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing() 
         assert_eq!(doc.bytes, before);
         assert!(!doc.dirty);
         assert!(doc.can_undo().is_none());
-        assert!(support::shown_notice(&h).is_none());
+        assert!(support::shown_notice(&mut h).is_none());
         assert!(h.state().password_prompt.is_none());
     }
 }
@@ -696,7 +708,7 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
         let before = h.state().session.get(source).unwrap().bytes.clone();
         click_remote_link(&mut h);
         assert!(h.state().pending_remote_link.is_some());
-        assert!(support::shown_notice(&h).is_none(), "{name} isn't checked before consent");
+        assert!(support::shown_notice(&mut h).is_none(), "{name} isn't checked before consent");
         h.get_by_label("Allow").click();
         assert!(
             support::step_until(&mut h, |h| support::shown_notice(h).is_some_and(|message| message.starts_with(expected_error))),
@@ -704,7 +716,7 @@ fn consenting_to_absolute_gotor_still_validates_the_target() {
         );
         assert!(h.state().pending_remote_link.is_none());
         assert_eq!(h.state().views.len(), 1, "{name}");
-        assert!(support::shown_notice(&h).is_some(), "{name} is refused after consent");
+        assert!(support::shown_notice(&mut h).is_some(), "{name} is refused after consent");
         assert_eq!(h.state().session.docs().len(), 1);
         assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(source));
         assert_eq!(h.state().views[0].current(), 0);
@@ -735,18 +747,18 @@ fn an_approved_absolute_gotor_preserves_password_retries_and_cancellation() {
             app.password_prompt.as_ref().is_some_and(|p| p.name == "encrypted.pdf")
         });
         assert!(h.state().password_prompt.is_some());
-        h.state_mut().submit_password(Some("wrong-password".into()));
+        submit_password(&mut h, Some("wrong-password".into()));
         support::wait_until(&mut h, "absolute target wrong-password reply", |app| {
             app.password_prompt.as_ref().is_some_and(|p| p.name == "encrypted.pdf" && p.error.as_deref() == Some("Incorrect password. Try again."))
         });
         assert!(h.state().password_prompt.as_ref().unwrap().error.is_some());
         assert_eq!(h.state().views.len(), 1);
         if cancel {
-            h.state_mut().submit_password(None);
+            submit_password(&mut h, None);
             assert!(h.state().password_prompt.is_none());
             assert_eq!(h.state().views.len(), 1);
         } else {
-            h.state_mut().submit_password(Some("test-password".into()));
+            submit_password(&mut h, Some("test-password".into()));
             support::wait_until(&mut h, "authenticated absolute target", |app| app.password_prompt.is_none() && app.views.len() == 2);
             assert_eq!(h.state().views.len(), 2);
             assert_eq!(h.state().views[1].current(), 1);
@@ -768,7 +780,7 @@ fn closing_the_source_invalidates_pending_absolute_gotor_consent() {
     assert!(h.state().views.is_empty());
     assert!(h.state().session.docs().is_empty());
     assert!(h.state().pending_remote_link.is_none());
-    assert!(support::shown_notice(&h).is_none());
+    assert!(support::shown_notice(&mut h).is_none());
 }
 
 fn overlapping_annotation_fixture(subtype: &str, internal: bool) -> Vec<u8> {

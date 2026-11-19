@@ -2,12 +2,12 @@
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 use std::sync::Arc;
 
 use crate::support::AppHarness as _;
-use craft::host::{AppInfo, Host, Picked, ScriptedFiles, Wake};
+use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::toast;
 
@@ -17,8 +17,7 @@ fn scripted_harness(name: &'static str, bytes: Vec<u8>, zoom: &'static str, out:
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.to_path_buf()])]));
     let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        // PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207, pdf-hub-w1)
-        let mut app = PdfCraftApp::with_host(host, AppServices::new(Wake::none(), None, None, None, None, None));
+        let mut app = PdfCraftApp::with_host(host, crate::control::services());
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
@@ -29,10 +28,25 @@ fn scripted_harness(name: &'static str, bytes: Vec<u8>, zoom: &'static str, out:
     h
 }
 
-/// The text of the notice on screen, if one is shown.
+/// The text of the newest notice on screen, if one is shown.
 fn notice(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
-    // PLAN: assumed `app.notices.posted()` lists the posted notices, newest last, each with a `text` (L-206)
-    h.state().notices.posted().last().map(|notice| notice.text.to_string())
+    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned())
+}
+
+fn undo(h: &mut Harness<'static, PdfCraftApp>) {
+    let ctx = h.ctx.clone();
+    h.state_mut().undo(&ctx);
+}
+
+fn redo(h: &mut Harness<'static, PdfCraftApp>) {
+    let ctx = h.ctx.clone();
+    h.state_mut().redo(&ctx);
+}
+
+/// Runs the button script of field `field` in document `id`, with the harness's context.
+fn run_button_script(h: &mut Harness<'static, PdfCraftApp>, id: pdfcraft_engine::DocId, field: &str, script: &str) {
+    let ctx = h.ctx.clone();
+    h.state_mut().run_button_script(&ctx, id, field, script);
 }
 
 /// How many notices the main window shows.
@@ -455,7 +469,7 @@ fn field_keys_and_clicks_set_field_values() {
     assert!(h.execute("form.clear"));
     h.run_steps(2);
     assert!(value(&h, "country").is_empty() && value(&h, "size").is_empty());
-    h.state_mut().undo();
+    undo(&mut h);
     h.run_steps(2);
     assert_eq!(value(&h, "country"), ["fr"]);
 }
@@ -830,7 +844,7 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
         assert!(h.query_by_label("Today").is_none(), "and its calendar");
     }
     // One edit each, as a clicked day is.
-    h.state_mut().undo();
+    undo(&mut h);
     h.run_steps(2);
     assert_eq!(value(&h, "start"), Vec::<String>::new());
     assert_eq!(value(&h, "due"), ["11/14/2023"]);
@@ -963,9 +977,9 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
         // One typing action is one history entry, even after saving. Escape closes the
         // untouched editor before undoing the document rather than the TextEdit buffer.
         h.key_press(egui::Key::Escape);
-        h.state_mut().undo();
+        undo(&mut h);
         assert_eq!(value(&h, "qty"), ["4"], "{case}: a single undo restores the original");
-        h.state_mut().redo();
+        redo(&mut h);
         assert_eq!(value(&h, "qty"), ["42"], "{case}: redo restores the committed value");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1849,8 +1863,10 @@ fn guide_fixture() -> Vec<u8> {
 /// that attachment, and not to another open PDF of the same name whose bytes start with it.
 #[test]
 fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
+    let saved = std::env::temp_dir().join(format!("pdfcraft-fake-{}.pdf", std::process::id()));
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.clone()])]));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = crate::control::app_with_files(files);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "form.pdf", None, guide_fixture()).unwrap();
         // Another document named like the attachment, its bytes the attachment's and an update.
@@ -1862,23 +1878,21 @@ fn a_form_button_opens_only_a_real_pdf_and_returns_to_the_tab_it_opened() {
     let tabs = |h: &Harness<'static, PdfCraftApp>| h.state().views.len();
     let id = h.state().views[0].id;
     // A text file named .pdf is offered to save, not opened.
-    let saved = std::env::temp_dir().join(format!("pdfcraft-fake-{}.pdf", std::process::id()));
     let _ = std::fs::remove_file(&saved);
-    h.state_mut().pick_override = Some(vec![saved.to_string_lossy().into_owned()]);
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'fake.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'fake.pdf', nLaunch: 2});");
     wait_for_file(&mut h, &saved);
     assert_eq!(tabs(&h), 2, "no tab for a file that isn't a PDF: {:?}", notice(&h));
     assert_eq!(std::fs::read(&saved).ok().as_deref(), Some(&b"not a PDF at"[..]), "offered to save instead");
     let _ = std::fs::remove_file(&saved);
     // The real attached PDF opens in a tab of its own, though another inner.pdf starts with it.
     h.state_mut().active = Some(0);
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
     crate::support::wait_until(&mut h, "the attachment to open", |app| app.active == Some(2));
     assert_eq!(tabs(&h), 3, "a tab of its own");
     assert_eq!(h.state().active, Some(2));
     // Asked again, it goes back to the tab it opened.
     h.state_mut().active = Some(0);
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
     crate::support::wait_until(&mut h, "the attachment tab to activate", |app| app.active == Some(2));
     assert_eq!((tabs(&h), h.state().active), (3, Some(2)), "the tab it opened, not the other inner.pdf");
 }
@@ -1900,18 +1914,18 @@ fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
     };
     let id = h.state().views[0].id;
     // By its key in the document's attached files, as forms name it.
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
     crate::support::wait_until(&mut h, "the attachment to open", |app| app.active == Some(1));
     assert_eq!(tabs(&h), ["form.pdf", "inner.pdf"], "the attached PDF opens in its own tab");
     // Asked again from the form, it goes back to that tab rather than opening another.
     h.state_mut().active = Some(0);
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'Guide.pdf', nLaunch: 2});");
     crate::support::wait_until(&mut h, "the attachment tab to activate", |app| app.active == Some(1));
     assert_eq!(tabs(&h), ["form.pdf", "inner.pdf"], "no second copy");
     assert_eq!(h.state().active, Some(1), "its tab is shown");
     // A file the document doesn't have is said so.
     h.state_mut().active = Some(0);
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: 'nope.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: 'nope.pdf', nLaunch: 2});");
     assert!(
         crate::support::step_until(&mut h, |h| notice(h).is_some_and(|t| t.contains("nope.pdf"))),
         "the missing attachment notice: {:?}",
@@ -1920,7 +1934,7 @@ fn a_form_button_opens_its_attached_instructions_in_a_new_tab() {
     assert_eq!(tabs(&h).len(), 2);
     // A name of the form's own is shortened in the message, keeping its end. (Past a line's
     // length, the script engine cuts it first, as it cuts every name a script passes.)
-    h.state_mut().run_button_script(id, "go", "this.exportDataObject({cName: new Array(3001).join('x') + '.pdf', nLaunch: 2});");
+    run_button_script(&mut h, id, "go", "this.exportDataObject({cName: new Array(3001).join('x') + '.pdf', nLaunch: 2});");
     assert!(
         crate::support::step_until(&mut h, |h| notice(h).is_some_and(|t| t.contains("x.pdf"))),
         "the shortened attachment notice: {:?}",
@@ -1990,7 +2004,7 @@ fn an_editable_combo_box_takes_a_typed_value() {
     wait_for_file(&mut h, &out);
     assert_eq!(saved_value(&out, "fruit"), ["Damson"]);
     // Undo takes the typing back as one step.
-    h.state_mut().undo();
+    undo(&mut h);
     h.run_steps(2);
     assert_eq!(value(&h, "fruit"), ["Banana"]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -2070,11 +2084,11 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.set_option("panel", "none").unwrap();
     h.run_steps(2);
     let id = h.state().views[0].id;
-    h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
-    crate::support::wait_until(&mut h, "attachments panel to open", |app| app.right == Some(pdfcraft_ui_egui::RightPanel::Attachments));
+    run_button_script(&mut h, id, "size", "app.execMenuItem('ShowHideFileAttachment');");
+    crate::support::wait_until(&mut h, "attachments panel to open", |app| crate::ui::right(app) == Some(pdfcraft_ui_egui::RightPanel::Attachments));
     // Show/Hide, as its name says: asked again, it closes.
-    h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
-    crate::support::wait_until(&mut h, "attachments panel to close", |app| app.right.is_none());
+    run_button_script(&mut h, id, "size", "app.execMenuItem('ShowHideFileAttachment');");
+    crate::support::wait_until(&mut h, "attachments panel to close", |app| crate::ui::right(app).is_none());
 }
 
 /// Which widgets of field `name` are on (their `/AS` is their on state).
@@ -2148,7 +2162,7 @@ fn clicking_a_radio_button_that_shares_its_on_state() {
     click_field(&mut h, "free", 0);
     assert!(value(&h, "free").is_empty(), "without NoToggleToOff a second click deselects it");
     // Undo takes the last click back; the exclusive pair stays as it was.
-    h.state_mut().undo();
+    undo(&mut h);
     h.run_steps(2);
     assert_eq!(value(&h, "free"), ["S"]);
     assert_eq!(on_widgets(&h, "plain"), [false, false, true]);
@@ -2450,13 +2464,11 @@ fn an_auto_sized_drop_downs_list_shows_its_items_at_the_fields_text_size() {
             props: Box::new(pdfcraft_engine::FieldProps { options: Some(vec!["Canada".into(), long.into()]), ..Default::default() }),
         }
     ));
-    assert!(
-        let ctx_h = h.ctx.clone();
-        h.state_mut().apply_edit(&ctx_h, pdfcraft_engine::Edit::SetFieldValue {
-            name: "country".into(),
-            value: pdfcraft_engine::FieldValue::Choice(vec![long.into()])
-        })
-    );
+    let ctx_h = h.ctx.clone();
+    assert!(h.state_mut().apply_edit(
+        &ctx_h,
+        pdfcraft_engine::Edit::SetFieldValue { name: "country".into(), value: pdfcraft_engine::FieldValue::Choice(vec![long.into()]) }
+    ));
     h.run_steps(3);
     click_field(&mut h, "country", 0);
     let field = field_rect(&h, "country");
