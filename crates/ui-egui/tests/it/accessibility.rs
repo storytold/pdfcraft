@@ -82,7 +82,7 @@ fn checking_fixing_skipping_and_reporting() {
     assert!(h.execute("a11y.check"));
     h.run_steps(2);
     h.get_by_role_and_label(Role::Dialog, "Accessibility Checker Options");
-    h.get_by_label_contains("31 of 32");
+    assert!(h.query_all_by_label_contains("31 of 32").next().is_some(), "the options say how many checks run");
     h.get_by_label("Document title is showing in title bar");
     h.get_by_label("Start Checking").click();
     h.run_steps(3);

@@ -82,18 +82,11 @@ fn marking_applying_and_clearing() {
     }
     h.drop_at(b);
     h.run_steps(4);
-    eprintln!(
-        "DIAG marking_applying_and_clearing: tool {:?} mode {:?} page {:?} from {a:?} to {b:?} cursor {:?}",
-        h.state().quick_tool,
-        h.state().mode,
-        h.state().views[0].page_screen_rect(0),
-        h.output().platform_output.cursor_icon
-    );
     assert_eq!(marks(&h), 1);
     // Redact pages ▸ current page.
     h.execute("redact.pages");
     h.run_steps(2);
-    h.get_by_label("Mark Page Range");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Mark Page Range");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(marks(&h), 2);

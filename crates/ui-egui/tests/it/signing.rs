@@ -141,7 +141,7 @@ fn create_signing_id(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_label("Grace Hopper");
     h.get_by_label("Continue").click();
     h.run_steps(2);
-    h.get_by_label("Sign as \"Grace Hopper\"");
+    h.get_by_role_and_label(egui::accesskit::Role::Heading, "Sign as \"Grace Hopper\"");
 }
 
 fn sign_with_created_id(h: &mut Harness<'static, PdfCraftApp>, dir: &std::path::Path) {

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
-use craft::host::queue::{JobQueue, Priority, QueueOptions};
+use craft::host::queue::{JobQueue, Priority, QueueOptions, QueueOrder};
 use craft::host::{Jobs, Wake};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::print::ui::HostedPrint;
@@ -142,7 +142,8 @@ impl PrintTasks {
                 two_sided: JobQueue::new(
                     jobs.clone(),
                     wake.clone(),
-                    QueueOptions { lanes: TWO_SIDED_READS, name: "print-two-sided", ..QueueOptions::default() },
+                    // A read for each pick, in the order the picks came.
+                    QueueOptions { lanes: TWO_SIDED_READS, name: "print-two-sided", order: QueueOrder::OldestFirst },
                 ),
                 jobs: JobQueue::new(jobs, wake.clone(), options("print-jobs")),
                 running: Vec::new(),
@@ -410,6 +411,7 @@ impl PdfCraftApp {
         if let Some(p) = d.printer.clone() {
             self.read_papers_in_background(p);
         }
+        self.show_chosen_printer();
     }
 
     /// Pick up a printer list, driver options or a spooled job that finished (each frame).
@@ -499,10 +501,12 @@ impl PdfCraftApp {
         let Some(source) = self.two_sided_source.clone() else { return };
         let Some(name) = self.print_draft.printer.clone() else { return };
         let queue = &self.print_tasks.two_sided;
+        // A read is out from its submit until its answer arrives, whether or not its lane has started it yet.
+        let out = queue.counts();
         if !self.print_tasks.listed.iter().any(|p| p.name == name)
             || self.print_draft.two_sided.contains_key(&name)
             || queue.contains(&name)
-            || queue.counts().running >= TWO_SIDED_READS
+            || out.queued + out.running >= TWO_SIDED_READS
         {
             return;
         }

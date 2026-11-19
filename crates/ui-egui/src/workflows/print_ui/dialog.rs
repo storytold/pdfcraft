@@ -308,6 +308,19 @@ impl PdfCraftApp {
         }
     }
 
+    /// Shows the printer the app chose outside the dialog (a fresh list's default, the one printed to last) and the
+    /// two-sided choice its setup brought back in the open dialog, whose settings the next pass reads into the draft:
+    /// the dialog's own fallback for a printer the list doesn't have would otherwise win.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn show_chosen_printer(&mut self) {
+        let Some(printer) = self.print_draft.printer.clone() else { return };
+        let duplex = duplex_to_ui(self.print_draft.duplex);
+        let Some(dialog) = self.dialogs.get_mut::<HostedPrint>() else { return };
+        let settings = &mut dialog.state_mut().settings;
+        settings.destination = Destination::Printer(printer);
+        settings.duplex = duplex;
+    }
+
     fn answer_print(&mut self, answer: Result<(), Label>) {
         if let Some(dialog) = self.dialogs.get_mut::<HostedPrint>() {
             dialog.answer_ok(answer);

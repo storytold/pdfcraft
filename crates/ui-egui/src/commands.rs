@@ -450,14 +450,13 @@ impl PdfCraftApp {
             }
             "view.first_page" | "view.last_page" | "view.next_page" | "view.previous_page" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
-                    let (current, last) = (v.current(), v.page_count().saturating_sub(1));
-                    let page = match id {
-                        "view.first_page" => 0,
-                        "view.last_page" => last,
-                        "view.next_page" => current.saturating_add(1).min(last),
-                        _ => current.saturating_sub(1),
-                    };
-                    v.go_to_page(page);
+                    match id {
+                        "view.first_page" => v.go_to_page(0),
+                        "view.last_page" => v.go_to_end(),
+                        // A step turns a whole spread in two-page view.
+                        "view.next_page" => v.step_page(true),
+                        _ => v.step_page(false),
+                    }
                 }
             }
             "view.layout.single" | "view.layout.two_up" => {
