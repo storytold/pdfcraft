@@ -11,6 +11,17 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// At most this many pages a script adds or shows from templates in one run: each one copies
+/// the document, so a script looping over `spawn` must not hold the app on a large file (#1429).
+const MAX_TEMPLATE_PAGES: usize = 100;
+
+/// Whether a script run for `target` may add or show pages from templates (#1429): only a push
+/// button's may, as for field scripts (`JsOutput`), and a document-level script with no target;
+/// a target naming another field is refused that (CodeRabbit on #5332).
+fn may_change_pages(target: Option<&str>, fields: &[pdfcraft_forms::Field]) -> bool {
+    target.is_none_or(|t| fields.iter().any(|f| f.name == t && f.kind == pdfcraft_forms::FieldKind::PushButton))
+}
+
 /// Reset writeback does two full passes (preview and commit); reject amplification before either.
 const MAX_SCRIPT_RESETS: usize = pdfcraft_js::MAX_RESET_CALLS;
 const MAX_SCRIPT_RESET_SELECTORS: usize = 4096;
@@ -171,6 +182,9 @@ impl JsOutput {
                 Request::SaveAs => notes.push("A field script asked to save the document as a new file; only a button may open Save As".to_string()),
                 Request::OpenAttachment { name, .. } => {
                     notes.push(format!("A field script asked to open the attached file {name}; only a button may open an attached file"))
+                }
+                Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } => {
+                    self.console.push("A field script asked to add or show a page from a template; only a button may change the pages".into())
                 }
                 Request::OpenDoc(path) => notes.push(format!(
                     "A field script asked to open the document {path}; only a button, a link or the console may open another document"
@@ -557,6 +571,8 @@ impl JsRunner {
             c.set((g + 1, p));
         });
         let pages = pdfcraft_model::pages(cos);
+        // The page templates a script can show or add a page from (#1429).
+        let templates = pdfcraft_organize::templates(cos).into_iter().map(|t| (t.name, t.hidden)).collect();
         let doc = pdfcraft_js::DocInfo {
             file_name: file_name.to_string(),
             num_pages: pages.len(),
@@ -565,6 +581,7 @@ impl JsRunner {
             page_boxes: pdfcraft_organize::page_boxes(cos).unwrap_or_default(),
             page_rotations: pages.iter().map(|page| page.rotation(cos)).collect(),
             xfa,
+            templates,
             zoom: 100.0,
             runtime_highlight: highlight,
             icon_epoch: 0,
@@ -1220,7 +1237,7 @@ impl Session {
             answers,
         );
         let discard = o.execution_refused && !o.realm_untouched;
-        let result = self.apply_script_outcome(id, &states, o, opening);
+        let result = self.apply_script_outcome(id, &states, o, opening, may_change_pages(target, &fields));
         if discard || result.is_err() {
             self.invalidate_javascript(id);
         }
@@ -1234,6 +1251,7 @@ impl Session {
         states: &[pdfcraft_js::FieldState],
         mut o: Outcome,
         opening: bool,
+        may_change_pages: bool,
     ) -> Result<Outcome, EditError> {
         if o.execution_refused {
             o.changed.clear();
@@ -1269,6 +1287,32 @@ impl Session {
             let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
             Some(editor.cos.clone())
         };
+        // Pages from templates go in the same undo step, after the field changes (#1429). Only a
+        // push button may change the pages, as for field scripts (`JsOutput`); a target that
+        // names another field is refused that (CodeRabbit on #5332, [`may_change_pages`]).
+        let button = may_change_pages;
+        let mut pages = Vec::new();
+        let (mut over, mut overlaid, mut not_button) = (false, None, false);
+        for r in std::mem::take(&mut o.requests) {
+            match r {
+                Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } if !button => not_button = true,
+                Request::SpawnTemplate { .. } | Request::SetTemplateHidden { .. } if pages.len() >= MAX_TEMPLATE_PAGES => over = true,
+                Request::SpawnTemplate { overlay: true, name, .. } => overlaid = overlaid.or(Some(name)),
+                Request::SpawnTemplate { name, page, rename, overlay: false } => pages.push(Edit::SpawnTemplate { name, at: page, rename }),
+                Request::SetTemplateHidden { name, hidden } => pages.push(Edit::SetTemplateHidden { name, hidden }),
+                r => o.requests.push(r),
+            }
+        }
+        // Said once, however many overlays the script asked for.
+        if let Some(name) = overlaid {
+            o.console.push(format!("Laying template {name} over an existing page isn't supported yet; ask for a new page (bOverlay false)"));
+        }
+        if not_button {
+            o.console.push("A field script asked to add or show a page from a template; only a button may change the pages".into());
+        }
+        if over {
+            o.console.push(format!("A script may add or show at most {MAX_TEMPLATE_PAGES} pages from templates at a time; the rest were left out"));
+        }
         // The calculations the script's changes set off read the field highlight it asked for.
         if let Some(on) = last_highlight(&o.requests) {
             self.field_highlight = on;
@@ -1301,6 +1345,7 @@ impl Session {
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
         }
+        edits.extend(pages);
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
         }
@@ -1729,7 +1774,8 @@ impl Session {
         drop_failed_link_effects(&mut o);
         self.keep_read_only_link_requests(id, &states, &mut o);
         let discard = o.execution_refused && !o.realm_untouched;
-        let result = self.apply_script_outcome(id, &states, o, false);
+        // A link's script has the document as its target, as a document script does.
+        let result = self.apply_script_outcome(id, &states, o, false, may_change_pages(None, &[]));
         if discard || result.is_err() {
             self.invalidate_javascript(id);
         }
@@ -1764,6 +1810,8 @@ pub struct PendingScript {
     generation: u64,
     runtime: Runtime,
     states: std::sync::Arc<Vec<pdfcraft_js::FieldState>>,
+    /// Whether the script may add or show pages from templates ([`may_change_pages`]).
+    may_change_pages: bool,
     pub receiver: std::sync::mpsc::Receiver<pdfcraft_js::interaction::InteractiveEvent>,
 }
 #[cfg(not(target_arch = "wasm32"))]
@@ -1810,7 +1858,8 @@ impl Session {
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
-        Ok(PendingScript { id, link: false, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+        let may_change_pages = may_change_pages(target, &fields);
+        Ok(PendingScript { id, link: false, generation: doc.generation, runtime: doc.js_runtime.clone(), states, may_change_pages, receiver })
     }
     /// Start link `index` on page `page` as [`Session::run_link_javascript`] runs it, without
     /// blocking on its prompts; [`Session::finish_javascript`] commits nothing if it failed.
@@ -1819,7 +1868,9 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
-        Ok(PendingScript { id, link: true, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+        // A link's script has the document as its target, as a document script does.
+        let may_change_pages = may_change_pages(None, &[]);
+        Ok(PendingScript { id, link: true, generation: doc.generation, runtime: doc.js_runtime.clone(), states, may_change_pages, receiver })
     }
     /// Discard only the captured runtime, preserving a newer realm created by an intervening edit.
     pub fn discard_javascript(&mut self, p: &PendingScript) {
@@ -1854,7 +1905,7 @@ impl Session {
             self.keep_read_only_link_requests(p.id, &p.states, &mut out);
         }
         let discard = out.execution_refused && !out.realm_untouched;
-        let result = self.apply_script_outcome(p.id, &p.states, out, false);
+        let result = self.apply_script_outcome(p.id, &p.states, out, false, p.may_change_pages);
         if discard || result.is_err() {
             self.invalidate_javascript(p.id);
         }
