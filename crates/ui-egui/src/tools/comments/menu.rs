@@ -230,7 +230,7 @@ pub(crate) fn popover_from(
     ui: &mut egui::Ui,
     label: &str,
     opener: impl FnOnce(&mut egui::Ui) -> egui::Response,
-    body: impl FnOnce(&mut egui::Ui) -> bool,
+    mut body: impl FnMut(&mut egui::Ui) -> bool,
 ) {
     let resp = opener(ui);
     let key = resp.id.with("popover-open");
@@ -239,12 +239,10 @@ pub(crate) fn popover_from(
     if craft::ui::contract::clicked(&resp) {
         open = !open;
     }
-    let mut body = Some(body);
     let mut done = false;
+    // The popover runs its body in a sizing pass and again in the pass that shows it.
     Popover::new(label.to_string(), Bind::bound(&mut open)).opened_by(&resp).show(ui, |ui, _| {
-        if let Some(body) = body.take() {
-            done = body(ui);
-        }
+        done |= body(ui);
     });
     open &= !done;
     ui.memory_mut(|m| m.data.insert_temp(key, open));

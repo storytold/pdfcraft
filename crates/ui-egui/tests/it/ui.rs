@@ -79,7 +79,32 @@ fn run_command(h: &mut Harness<'static, PdfCraftApp>, id: &str) {
 /// The text of every notice card the main window shows, oldest first.
 fn posted_notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
     use craft::ui::runtime::{env::WindowKey, toast};
-    toast::cards(&h.ctx, &WindowKey::main()).into_iter().map(|card| card.toast.message.as_str().to_owned()).collect()
+    // A posted notice's text is the card's title; a message and lines may follow it.
+    toast::cards(&h.ctx, &WindowKey::main())
+        .into_iter()
+        .map(|card| {
+            let toast = &card.toast;
+            let parts = toast.title.iter().chain(std::iter::once(&toast.message)).chain(&toast.lines);
+            parts.map(|part| part.as_str()).filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n")
+        })
+        .collect()
+}
+
+/// Picks `option` in the open Preferences' drop-down named `row`, after opening `page` when given. A choice row is the
+/// preferences pattern's drop-down, so its options show only while it is open: the last node of that name is the open
+/// list's.
+fn pick_preference(h: &mut Harness<'static, PdfCraftApp>, page: Option<&str>, row: &str, option: &str) {
+    use egui::accesskit::Role;
+    if let Some(page) = page {
+        h.get_by_label(page).click();
+        h.run_steps(3);
+    }
+    h.get_by_role_and_label(Role::ComboBox, row).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::ComboBox, row).click();
+    h.run_steps(3);
+    h.get_all_by_label(option).last().unwrap_or_else(|| panic!("the {option:?} option of {row:?} is on screen")).click();
+    h.run_steps(2);
 }
 
 #[test]
@@ -87,8 +112,7 @@ fn tools_panel_side_preference_moves_and_persists() {
     let mut h = harness(|_| {});
     h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
-    h.get_by_label("Tools panel side");
-    h.get_by_label("Right").click();
+    pick_preference(&mut h, None, "Tools panel side", "Right");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(side(&mut h, "tools_side"), "right");
@@ -97,7 +121,7 @@ fn tools_panel_side_preference_moves_and_persists() {
     assert_eq!(side(&mut restored, "tools_side"), "right");
     h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
-    h.get_by_label("Left").click();
+    pick_preference(&mut h, None, "Tools panel side", "Left");
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(side(&mut h, "tools_side"), "left");
@@ -408,13 +432,13 @@ fn navigation_rail_toggles_between_right_and_left_and_persists() {
     assert_eq!(side(&mut h2, "rail_side"), "left");
     h2.set_option("dialog", "preferences").unwrap();
     h2.run_steps(3);
-    h2.get_by_label("Navigation rail side: Right").click();
+    pick_preference(&mut h2, None, "Navigation rail side", "Right");
     h2.get_by_label("OK").click();
     h2.run_steps(3);
     assert_eq!(side(&mut h2, "rail_side"), "right");
     h2.set_option("dialog", "preferences").unwrap();
     h2.run_steps(3);
-    h2.get_by_label("Navigation rail side: Left").click();
+    pick_preference(&mut h2, None, "Navigation rail side", "Left");
     h2.get_by_label("OK").click();
     h2.run_steps(3);
     assert_eq!(side(&mut h2, "rail_side"), "left");
@@ -1362,13 +1386,8 @@ fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
         assert_eq!(app.mode, Mode::AllTools);
     }
     // Chosen in Preferences, the default applies to the next open.
-    use egui::accesskit::Role;
     let mut h = harness(|app| app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap());
-    h.get_by_label("Default workspace mode");
-    h.get_by_role_and_label(Role::RadioButton, "Read").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_role_and_label(Role::RadioButton, "Read").click();
-    h.run_steps(2);
+    pick_preference(&mut h, Some("Documents and view"), "Default workspace mode", "Read");
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().default_mode, Mode::Read);
@@ -1430,18 +1449,13 @@ fn explicit_mode_overrides_default_before_and_after_open() {
 #[test]
 fn preferences_choose_animation_effects_and_the_choice_is_saved() {
     use craft::theme::MotionChoice;
-    use egui::accesskit::Role;
     let mut h = harness(|app| app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap());
     // PLAN: assumed the app keeps the choice in `animation_effects: MotionChoice` and the settings JSON key `animation_effects` (pdf-shell-w9)
     assert_eq!(h.state().animation_effects, MotionChoice::System);
-    h.get_by_label("Animation effects");
     for (label, choice) in
         [("Off", MotionChoice::Off), ("On", MotionChoice::Full), ("Use system setting", MotionChoice::System), ("Off", MotionChoice::Off)]
     {
-        h.get_by_role_and_label(Role::RadioButton, label).scroll_to_me();
-        h.run_steps(4);
-        h.get_by_role_and_label(Role::RadioButton, label).click();
-        h.run_steps(2);
+        pick_preference(&mut h, None, "Animation effects", label);
         h.get_by_label("OK").click();
         h.run_steps(2);
         assert_eq!(h.state().animation_effects, choice, "{label}");
@@ -1451,11 +1465,14 @@ fn preferences_choose_animation_effects_and_the_choice_is_saved() {
     let saved = serde_json::to_string(&h.state().settings_snapshot()).unwrap();
     assert!(saved.contains(r#""animation_effects":"off""#), "{saved}");
     let mut restored = crate::control::new_app();
-    restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(&saved).0);
+    restored.apply_settings(&serde_json::from_str::<pdfcraft_ui_egui::settings::PdfCraftSettings>(&saved).unwrap());
     assert_eq!(restored.animation_effects, MotionChoice::Off);
+    // Settings from an earlier release (the flat JSON object) are untrusted: an unknown name leaves the system choice.
+    let mut legacy = crate::control::new_app();
+    legacy.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"animation_effects":"off"}"#).0);
+    assert_eq!(legacy.animation_effects, MotionChoice::Off);
     let mut fresh = crate::control::new_app();
-    let hostile = saved.replace(r#""animation_effects":"off""#, r#""animation_effects":"sideways""#);
-    fresh.apply_settings(&pdfcraft_ui_egui::settings::import_json(&hostile).0);
+    fresh.apply_settings(&pdfcraft_ui_egui::settings::import_json(r#"{"animation_effects":"sideways"}"#).0);
     assert_eq!(fresh.animation_effects, MotionChoice::System);
     // The control channel and the command line take the same three names.
     fresh.set_option(&egui::Context::default(), "animation_effects", "ON").unwrap();

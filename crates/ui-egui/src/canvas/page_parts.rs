@@ -371,7 +371,7 @@ impl Component for PageParts<'_> {
                 builder = builder.cursor(cursor);
             }
             if let Some(tip) = &part.tip {
-                // At once, as the canvas's hover tip always showed.
+                // A page part's tip shows as the pointer comes onto the part, beside the pointer, as production's did.
                 builder = builder.tooltip(TooltipSpec::new(Label::from(tip.clone())).at(TooltipAt::Pointer).when(TooltipWhen::Now));
             }
             if part.focusable {

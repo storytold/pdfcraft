@@ -304,7 +304,7 @@ fn side_table<'a>() -> Table<'a, bool> {
 
 fn animation_table<'a>() -> Table<'a, MotionChoice> {
     vec![
-        (MotionChoice::System, "system", tl_ctx!("animation effects", "System")),
+        (MotionChoice::System, "system", tl_ctx!("animation effects", "Use system setting")),
         (MotionChoice::Full, "on", tl_ctx!("animation effects", "On")),
         (MotionChoice::Off, "off", tl_ctx!("animation effects", "Off")),
     ]

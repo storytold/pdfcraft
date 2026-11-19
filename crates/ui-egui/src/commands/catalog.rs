@@ -25,7 +25,9 @@ const CATALOG_ONLY: &[(&str, &str, &str)] = &[
     ("tools.expand", "Expand all tools", "maximize-2"),
     ("tools.collapse", "Collapse all tools", "minimize-2"),
     ("tools.all", "All tools", "layout-grid"),
-    ("view.dock_side", "Move the side panel to the other side", "arrow-left-right"),
+    // The rail's button names the side it moves the rail to.
+    ("view.rail.left", "Dock navigation rail on Left", "panel-left"),
+    ("view.rail.right", "Dock navigation rail on Right", "panel-right"),
     ("view.fit_toggle", "Toggle fit", "scan"),
     ("bookmark.paste", "Paste bookmarks", "clipboard-paste"),
     ("bookmark.expand_all", "Expand all bookmarks", "chevrons-down"),
