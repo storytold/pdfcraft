@@ -833,6 +833,37 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
 }
 
+/// Only the primary button draws in the pad: a right-button drag, which is also what a pen's
+/// barrel button held in the air sends, leaves no stroke.
+#[test]
+fn only_the_primary_button_draws_in_the_signature_pad() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("sign.fill.signature"));
+    h.run_steps(2);
+    h.get_all_by_label("Draw").last().unwrap().click();
+    h.run_steps(2);
+    let pad = h.get_by_label("Draw your signature below.").rect();
+    let start = pos2(pad.left() + 40.0, pad.bottom() + 70.0);
+    let stroke = |h: &mut Harness<'static, PdfCraftApp>, button: egui::PointerButton| {
+        h.hover_at(start);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: start, button, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        for k in 1..=6 {
+            h.hover_at(start + egui::vec2(k as f32 * 30.0, if k % 2 == 0 { -20.0 } else { 20.0 }));
+            h.run_steps(1);
+        }
+        let end = start + egui::vec2(200.0, 0.0);
+        h.event(egui::Event::PointerButton { pos: end, button, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    };
+    stroke(&mut h, egui::PointerButton::Secondary);
+    assert!(h.state().signature_draft.strokes.is_empty(), "a right-button drag draws nothing");
+    stroke(&mut h, egui::PointerButton::Primary);
+    assert_eq!(h.state().signature_draft.strokes.len(), 1, "a primary drag draws one stroke");
+    assert!(h.state().signature_draft.strokes[0].len() > 1);
+}
+
 #[test]
 fn undo_button_and_ctrl_z_take_back_one_drawn_stroke_at_a_time() {
     let mut h = harness();

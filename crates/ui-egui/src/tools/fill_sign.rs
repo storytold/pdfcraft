@@ -791,10 +791,12 @@ pub(crate) fn signature_pad(
     painter.hline(rect.x_range().shrink(24.0), rect.bottom() - 34.0, Stroke::new(1.0, t.divider));
     // Normalised: x 0–1 across the pad, y up, in units of the pad's width.
     let norm = |p: Pos2| [(p.x - rect.left()) / rect.width(), (rect.bottom() - p.y) / rect.width()];
-    if resp.drag_started() {
+    // Only the primary button draws: a right-button drag (or a pen's barrel button, which is
+    // the secondary button, held with the pen in the air) leaves the pad alone, as on the page.
+    if resp.drag_started_by(egui::PointerButton::Primary) {
         strokes.push(Vec::new());
     }
-    if resp.dragged()
+    if resp.dragged_by(egui::PointerButton::Primary)
         && let (Some(p), Some(s)) = (resp.interact_pointer_pos(), strokes.last_mut())
     {
         let n = norm(p.clamp(rect.min, rect.max));
