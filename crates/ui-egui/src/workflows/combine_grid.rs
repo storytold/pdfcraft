@@ -336,9 +336,7 @@ impl PdfCraftApp {
         }
     }
 
-    /// Closes the preview: leaving the tab ends it, and coming back does not reopen it.
-    // PLAN: called where the active tab changes away from Combine (owner: pdf-chrome-w12); closing the tab
-    // drops the preview with the tab's state.
+    /// Closes the preview: each frame the tab isn't showing ends it, so coming back does not reopen it.
     pub(crate) fn close_combine_preview(&mut self) {
         self.combine_tab.preview = None;
     }

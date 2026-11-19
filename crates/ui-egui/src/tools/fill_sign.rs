@@ -21,7 +21,6 @@ use pdfcraft_render::{DocInfo, PageInfo};
 
 use crate::canvas::PageXform;
 use crate::canvas::page_tools::PageToolCx;
-use crate::comments::CommentView;
 
 pub(crate) mod scan;
 pub mod type_box;
@@ -321,7 +320,8 @@ pub enum FillOutcome {
 }
 
 /// Values that shape how Fill & Sign handles a pass's input, with the two session fields its text
-/// click writes (the open type box, and the comment selection a new box clears).
+/// click writes (the open type box, and the group member a new box lets go of; the comments tool
+/// it runs beneath clears the selection on a press no mark takes).
 pub(crate) struct FillInput<'a> {
     pub tool: FillTool,
     pub text_size: f64,
@@ -332,7 +332,7 @@ pub(crate) struct FillInput<'a> {
     pub author: &'a str,
     pub date_text: &'a Result<String, String>,
     pub fill_text: &'a mut Option<TypeBox>,
-    pub comments: &'a mut CommentView,
+    pub member: &'a mut Option<((usize, usize), (usize, usize))>,
 }
 
 /// The Fill & Sign tool over the placed pages: a click places what the tool makes and reports it
@@ -359,6 +359,24 @@ impl<'a> FillSignTool<'a> {
         self.xforms.iter().find(|(_, xf)| xf.rect.contains(pos)).copied()
     }
 
+    /// The saved image the tool places and, for a pointer at `pos` on a page, the page's transform and info and the
+    /// image's user-space box there (`image_signature_box`, the box a click places it in).
+    fn ghost(&self, pos: Pos2) -> Option<(&'a SavedImage, PageXform, &'a PageInfo, [f64; 4])> {
+        let saved = match self.input.tool {
+            FillTool::Signature => self.input.signature,
+            FillTool::Initials => self.input.initials,
+            _ => None,
+        };
+        let Some(SavedSignature::Image(image)) = saved else { return None };
+        let (page, xf) = self.page_at(pos)?;
+        let info: &'a DocInfo = self.info;
+        let p = info.pages.get(page)?;
+        let at = to_user(&xf, info, page, pos);
+        let size = [image.width() as usize, image.height() as usize];
+        let rect = pdfcraft_engine::signature_image::image_signature_box(size, p, at, self.input.tool == FillTool::Initials)?;
+        Some((image, xf, p, rect))
+    }
+
     /// What a click at `pointer` on `page` makes. Typed text starts above the click, as displayed.
     fn click(&mut self, page: usize, xf: PageXform, pointer: Pos2) -> Option<FillOutcome> {
         let info = self.info;
@@ -375,7 +393,7 @@ impl<'a> FillSignTool<'a> {
                 // sees its lost focus, so replacing the box first would drop what was typed. A new box
                 // deselects, as a comment tool's note or text box does: Escape then closes the box and
                 // leaves the tool in two presses.
-                self.input.comments.clear_selection();
+                *self.input.member = None;
                 let open = self.input.fill_text.replace(TypeBox {
                     page,
                     at: top,
@@ -449,12 +467,25 @@ impl CanvasTool for FillSignTool<'_> {
         true
     }
 
-    // PLAN: framework gap: `ToolContext` and `Draw` give a tool no `egui::Context`, which `TextureCache::texture`
-    // needs for the saved image's ghost turned by page and view rotation (`image_signature_box` holds its box); the
-    // ghost, and the cursor that hides over it, wait for that accessor.
-    fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
+    /// A saved image signature or initials follows the pointer at the size a click places it, upright as displayed
+    /// at every page and view rotation.
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        let Some((image, xf, p, rect)) = cx.pointer.and_then(|pointer| self.ghost(pointer.pos)) else { return };
+        let size = [image.width() as usize, image.height() as usize];
+        // An image whose bytes don't fill its size paints nothing.
+        if image.rgba().len() != size[0] * size[1] * 4 {
+            return;
+        }
+        let tex = draw.cached_texture(("fill-sign-ghost", image.key()), || egui::ColorImage::from_rgba_unmultiplied(size, image.rgba()));
+        let whole = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+        draw.texture_quad(xf.user_image_corners(p, rect, i64::from(p.rotation)), tex, whole);
+    }
 
-    fn cursor(&self, _cx: &ToolContext<'_>) -> Cursor {
+    /// The image takes the pointer's place where it is shown.
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.pointer.is_some_and(|pointer| self.ghost(pointer.pos).is_some()) {
+            return Cursor::System(CursorIcon::None);
+        }
         Cursor::System(match self.input.tool {
             FillTool::Text => CursorIcon::Text,
             _ => CursorIcon::Crosshair,

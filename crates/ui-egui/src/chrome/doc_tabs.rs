@@ -55,13 +55,8 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
         match event {
             DocumentTabsEvent::Selected(StripTab::View(key)) | DocumentTabsEvent::Picked(StripTab::View(key)) => {
                 if let Some(i) = app.tab_with_key(key) {
-                    let from_combine = app.combine_showing();
                     app.active = Some(i);
                     app.combine_tab.focused = false;
-                    if from_combine {
-                        // PLAN: assumed `PdfCraftApp::close_combine_preview(&mut self)` (pdf-workflows-w7).
-                        app.close_combine_preview();
-                    }
                 }
             }
             DocumentTabsEvent::Selected(StripTab::Combine) | DocumentTabsEvent::Picked(StripTab::Combine) => {
