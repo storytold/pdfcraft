@@ -9,7 +9,7 @@ use craft::behavior::dock::{Action, Column, DockEdge, DockPlacement, Group, Layo
 use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Bind, BodyCx};
+use craft::ui::contract::{Bind, BodyCx, Show as _};
 use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, PanelSpec};
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::DockArea;
