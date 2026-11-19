@@ -1,7 +1,7 @@
 //! Marked content in a form XObject, owned through a marked-content reference's `/Stm` (#3221).
 //! The form numbers its marked content on its own, so MCID 0 in the form is not MCID 0 on the page.
 
-use pdfcraft_a11y::{figures, mark_decorative, mark_tag_artifact, tag_content, tags};
+use pdfcraft_a11y::{ContentSource, figures, mark_decorative, mark_tag_artifact, tag_content, tags};
 use pdfcraft_cos::{Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
 const PAGE: &str = "/Figure <</MCID 0>> BDC 1 0 0 rg 72 600 60 60 re f EMC\n\
@@ -225,10 +225,10 @@ fn tag_content_reads_a_form_paragraph_from_the_form() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].mcid, 0);
     assert_eq!(items[0].page, Some(0));
-    assert_eq!(items[0].stream, Some(FORM_OBJ));
+    assert_eq!(items[0].stream, ContentSource::Stream(FORM_OBJ));
     assert_eq!(items[0].text, "Form para");
     let page = tag_content(&doc, ObjRef::new(21, 0)).expect("page paragraph");
-    assert_eq!(page[0].stream, None);
+    assert_eq!(page[0].stream, ContentSource::Page);
     assert_eq!(page[0].text, "Page paragraph");
 }
 
@@ -304,4 +304,16 @@ fn stm_naming_the_page_stream_is_the_page() {
     let (page, form) = marks(&doc);
     assert_eq!(page, [("Figure".into(), Some(0)), ("Artifact".into(), None)]);
     assert_eq!(form, [("Figure".into(), Some(0))]);
+}
+
+/// A `/Stm` that isn't a reference names no stream: the mark is reported as unreadable, not as
+/// the page's content and not as object 0, and the page's own MCID 0 text is not taken for it.
+#[test]
+fn tag_content_reports_an_stm_that_is_not_a_reference_as_unreadable() {
+    let doc = fixture(FORM, "<< /Type /MCR /MCID 0 /Stm 12 /Pg 10 0 R >>", "[22 0 R]");
+    let items = tag_content(&doc, FORM_FIGURE).expect("content");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].stream, ContentSource::Unreadable);
+    assert_eq!(items[0].mcid, 0);
+    assert_eq!(items[0].text, "");
 }

@@ -4409,7 +4409,9 @@ trailer << /Root 1 0 R >>
         page.len(),
         form.len()
     );
-    std::fs::write(dir.join("stm_figures.pdf"), pdf).unwrap();
+    std::fs::write(dir.join("stm_figures.pdf"), &pdf).unwrap();
+    // The same document with a `/Stm` that isn't a reference: it names no stream at all.
+    std::fs::write(dir.join("stm_unreadable.pdf"), pdf.replace("/Stm 12 0 R", "/Stm 12")).unwrap();
     // The decoded content of the page and of the form, in a saved file.
     let saved_marks = |name: &str| {
         let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
@@ -4434,6 +4436,7 @@ trailer << /Root 1 0 R >>
         );
         let content = ok(&mut a, "accessibility_tag_content", json!({ "doc": fd, "object": 22, "generation": 0 }));
         assert_eq!(content["content"][0]["stream"], json!({ "object": 12, "generation": 0 }));
+        assert_eq!(content["content"][0]["stream_unreadable"], json!(false));
         assert_eq!(content["content"][0]["mcid"], 0);
         let page_content = ok(&mut a, "accessibility_tag_content", json!({ "doc": fd, "object": 21, "generation": 0 }));
         assert_eq!(page_content["content"][0]["stream"], Value::Null);
@@ -4455,6 +4458,14 @@ trailer << /Root 1 0 R >>
         assert!(ok(&mut a, "edit_undo", json!({ "doc": fd }))["undone"].is_string());
         assert_eq!(ok(&mut a, "accessibility_figures", json!({ "doc": fd }))["count"], 2);
     }
+    // A `/Stm` that isn't a reference names no stream: the tool says so, rather than handing out
+    // object 0 (which no PDF has) as if it were the form.
+    let mut a = auto(&dir);
+    let fd = ok(&mut a, "doc_open", json!({ "path": "stm_unreadable.pdf" }))["doc"].as_u64().unwrap();
+    let content = ok(&mut a, "accessibility_tag_content", json!({ "doc": fd, "object": 22, "generation": 0 }));
+    assert_eq!(content["content"][0]["stream"], Value::Null);
+    assert_eq!(content["content"][0]["stream_unreadable"], json!(true));
+    assert_eq!(content["content"][0]["text"], "", "the page's MCID 0 text is not the form figure's");
 }
 
 #[test]

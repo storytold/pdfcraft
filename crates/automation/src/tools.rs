@@ -1400,7 +1400,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
-        t("accessibility_tag_content", "List tag content", "List the marked-content references directly owned by one reachable indirect structure tag, including page, MCID and extracted text. stream is the form XObject (object and generation) whose content holds the mark and numbers its MCIDs on its own, or null for the page's content.")
+        t("accessibility_tag_content", "List tag content", "List the marked-content references directly owned by one reachable indirect structure tag, including page, MCID and extracted text. stream is the form XObject (object and generation) whose content holds the mark and numbers its MCIDs on its own, or null for the page's content. stream_unreadable is true when the mark's /Stm is not a reference, so the stream holding its content cannot be found: stream is then null and text empty.")
             .ro()
             .cmd("a11y.tags")
             .with(schema(json!({ "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 } }), &["doc", "object", "generation"])),

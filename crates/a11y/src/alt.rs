@@ -152,6 +152,12 @@ pub(crate) fn mcr_stm(m: &Dict) -> Option<ObjRef> {
     }
 }
 
+/// Whether `stm` is a `/Stm` that isn't a reference (see [`UNREADABLE_STM`]), which names no
+/// stream: content looked up there is never found.
+pub(crate) fn stm_unreadable(stm: Option<ObjRef>) -> bool {
+    stm == Some(UNREADABLE_STM)
+}
+
 /// The streams a page's `/Contents` names. An MCR whose `/Stm` names one of them refers to the
 /// page's own content.
 pub(crate) fn page_streams(doc: &Document, page: Option<&Dict>) -> HashSet<ObjRef> {

@@ -1,7 +1,7 @@
 //! Accessibility tools: the full check, the accessibility report, and the automatic fixes.
 
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::a11y::{Category, Options, Report, Rule, Status};
+use pdfcraft_engine::a11y::{Category, ContentSource, Options, Report, Rule, Status};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -523,7 +523,11 @@ impl Automation {
         let content = self.doc(a)?.tag_content(pdfcraft_cos::ObjRef { num: object, generation }).map_err(failed)?;
         Ok(json!({ "count": content.len(), "content": content.into_iter().map(|item| json!({
                 "page": item.page.map(|p| p + 1),
-                "stream": item.stream.map(|s| json!({ "object": s.num, "generation": s.generation })),
+                "stream": match item.stream {
+                    ContentSource::Stream(s) => json!({ "object": s.num, "generation": s.generation }),
+                    ContentSource::Page | ContentSource::Unreadable => Value::Null,
+                },
+                "stream_unreadable": item.stream == ContentSource::Unreadable,
                 "mcid": item.mcid,
                 "text": item.text,
             })).collect::<Vec<_>>() }))
