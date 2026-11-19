@@ -15,14 +15,17 @@ use crate::control::{ControlClient, answer, call, new_app, ok, send};
 /// says `system`; the control channel is attached.
 fn harness_with(settings: Option<&'static str>, system: Option<egui::Theme>, run: bool) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        if let Some(json) = settings {
-            app.apply_settings(&import_json(json).0);
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            if let Some(json) = settings {
+                app.apply_settings(&import_json(json).0);
+            }
+            app.attach_control(craft::automation::ControlChannel::new(rx), None);
+            app
         }
-        app.attach_control(craft::automation::ControlChannel::new(rx), None);
-        app
     });
     h.input_mut().system_theme = system;
     if run {

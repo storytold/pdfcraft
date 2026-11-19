@@ -138,12 +138,15 @@ fn harness_with_files(pages: usize, files: Arc<ScriptedFiles>) -> (Harness<'stat
 /// channel attached.
 fn harness_on(app: PdfCraftApp, pages: usize, width: f32, scale: f32) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |_cc| {
-        let mut app = app;
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(craft::automation::ControlChannel::new(rx), None);
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(width, 900.0)).with_pixels_per_point(scale).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app;
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.attach_control(craft::automation::ControlChannel::new(rx), None);
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     (h, tx)
@@ -1621,10 +1624,13 @@ fn control_open_of_an_already_open_file_replies_ok_and_focuses_its_tab() {
     std::fs::write(&b, fixture(3)).unwrap();
     let (mut app, jobs) = app_with_manual_jobs();
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(craft::automation::ControlChannel::new(rx), None);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.attach_control(craft::automation::ControlChannel::new(rx), None);
+            app
+        }
     });
     h.run_steps(4);
     let c = tx;
@@ -1657,10 +1663,13 @@ fn control_open_replies_pending_while_the_worker_opens_and_focuses_once_it_has()
     std::fs::write(&a, fixture(2)).unwrap();
     let (mut app, jobs) = app_with_manual_jobs();
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(craft::automation::ControlChannel::new(rx), None);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.attach_control(craft::automation::ControlChannel::new(rx), None);
+            app
+        }
     });
     h.run_steps(4);
     let c = tx;
@@ -1761,12 +1770,15 @@ fn wheel_zoom_is_scoped_to_the_viewport_and_respects_existing_limits() {
 #[test]
 fn initial_zoom_option_is_applied_before_the_first_viewport_layout() {
     for percent in [50, 100, 200, 400] {
-        let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = new_app();
-            app.open_bytes(&egui::Context::default(), "initial-zoom.pdf", None, fixture(3)).unwrap();
-            app.set_option(&egui::Context::default(), "zoom", &percent.to_string()).unwrap();
-            assert_eq!(app.views[0].zoom(), f64::from(percent) / 100.0, "initial options must work before the viewport exists");
-            app
+        let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = new_app();
+                app.open_bytes(&egui::Context::default(), "initial-zoom.pdf", None, fixture(3)).unwrap();
+                app.set_option(&egui::Context::default(), "zoom", &percent.to_string()).unwrap();
+                assert_eq!(app.views[0].zoom(), f64::from(percent) / 100.0, "initial options must work before the viewport exists");
+                app
+            }
         });
         assert_eq!(h.state().views[0].zoom(), f64::from(percent) / 100.0);
     }
@@ -1881,11 +1893,14 @@ fn control_collapses_and_expands_a_pinned_folder() {
     let (tx, rx) = std::sync::mpsc::channel();
     let (mut app, jobs) = app_with_manual_jobs();
     let pin = folder.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |_cc| {
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.pin_folder(&pin);
-        app.attach_control(craft::automation::ControlChannel::new(rx), None);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.pin_folder(&pin);
+            app.attach_control(craft::automation::ControlChannel::new(rx), None);
+            app
+        }
     });
     let c = tx;
     // The listing of the pinned folder is a job; the test runs it between frames.

@@ -38,13 +38,16 @@ fn retype(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
 
 #[test]
 fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert_eq!(h.state().session.date_format(), "m/d/yyyy");
@@ -111,13 +114,16 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
     if crate::support::skip_without_catalogs("month_names_follow_the_date_language_or_else_the_interface_language") {
         return;
     }
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.set_option(&egui::Context::default(), "date-format", "d mmmm yyyy").unwrap();
-        app.set_option(&egui::Context::default(), "language", "cs").unwrap();
-        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "date-format", "d mmmm yyyy").unwrap();
+            app.set_option(&egui::Context::default(), "language", "cs").unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     let text = |h: &Harness<'static, PdfCraftApp>| h.state().date_text(None).unwrap();
@@ -150,16 +156,19 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
     ) {
         return;
     }
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        // Japanese weekday names: Fill & Sign text can't hold them yet.
-        app.set_option(&egui::Context::default(), "date-format", "dddd").unwrap();
-        app.set_option(&egui::Context::default(), "date-language", "ja").unwrap();
-        app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, PDF.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            // Japanese weekday names: Fill & Sign text can't hold them yet.
+            app.set_option(&egui::Context::default(), "date-format", "dddd").unwrap();
+            app.set_option(&egui::Context::default(), "date-language", "ja").unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "preferences").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h.get_by_label_contains("can't be written into the PDF yet");

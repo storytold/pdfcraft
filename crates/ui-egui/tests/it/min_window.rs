@@ -7,10 +7,13 @@ use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{MIN_WINDOW_SIZE, PdfCraftApp};
 
 fn harness(size: egui::Vec2) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(size).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(size).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(8);
     h
@@ -82,11 +85,14 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
 /// A narrow window: the stacked notice bar keeps both buttons inside the window and apart.
 #[test]
 fn the_stacked_notice_keeps_its_buttons_in_view() {
-    let mut h = Harness::builder().with_size(egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1])).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1])).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app
+        }
     });
     h.run_steps(8);
     let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1]));

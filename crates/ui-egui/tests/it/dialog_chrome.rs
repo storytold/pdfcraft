@@ -40,12 +40,15 @@ fn audit(app: &PdfCraftApp) -> Vec<pdfcraft_engine::optimize::SpaceUse> {
 
 /// An app with `doc.pdf` open and the Space Audit tab of Properties showing.
 fn space_audit_harness() -> Harness<'static, PdfCraftApp> {
-    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture()).unwrap();
-        app.set_option(&egui::Context::default(), "dialog", "space-audit").unwrap();
-        app
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture()).unwrap();
+            app.set_option(&egui::Context::default(), "dialog", "space-audit").unwrap();
+            app
+        }
     })
 }
 
@@ -83,13 +86,16 @@ fn space_audit_tab_measures_again_after_an_edit() {
 
 #[test]
 fn page_hover_cursors_stay_off_while_a_dialog_is_open() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        // Large enough that the drop-down sits outside the dialog.
-        app.set_option(&egui::Context::default(), "zoom", "300").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            // Large enough that the drop-down sits outside the dialog.
+            app.set_option(&egui::Context::default(), "zoom", "300").unwrap();
+            app
+        }
     });
     for _ in 0..30 {
         h.run_steps(2);

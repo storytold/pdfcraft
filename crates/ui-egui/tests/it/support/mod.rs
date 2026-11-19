@@ -146,7 +146,10 @@ pub fn install_runtime(ctx: &egui::Context) {
 
 pub fn host_harness(host: Arc<Host>, clipboard: RecordingClipboard) -> Harness<'static, PdfCraftApp> {
     let app = PdfCraftApp::with_host(host, services(clipboard));
-    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app)
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        app
+    })
 }
 
 /// A clipboard backend the tests share: what the app writes is read back through the clone the test keeps.

@@ -46,13 +46,16 @@ fn fixture_of(sizes: &[(u32, u32)], rotate: u16) -> Vec<u8> {
 }
 
 fn harness(rotate: u16) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "text.pdf", None, fixture(rotate)).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, fixture(rotate)).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     crate::support::settle(&mut h);
@@ -172,13 +175,16 @@ fn a_bookmark_made_with_text_selected_in_a_turned_view_goes_to_the_corner_shown_
 #[test]
 fn a_bookmark_in_a_spread_of_unequal_pages_goes_to_the_page_crossing_the_top_of_the_window() {
     // Pages 1 and 2 share a row; page 1 is shorter, so it is centred and starts below page 2's top.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "spread.pdf", None, fixture_of(&[(300, 200), (300, 400), (300, 400)], 0)).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "spread.pdf", None, fixture_of(&[(300, 200), (300, 400), (300, 400)], 0)).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+            app
+        }
     });
     crate::support::fire_menu(&mut h, "view.layout.two_up");
     h.run_steps(4);

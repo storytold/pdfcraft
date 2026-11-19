@@ -82,7 +82,10 @@ fn new_app(dir: &Path) -> (PdfCraftApp, Rig) {
 }
 
 fn harness_of(app: PdfCraftApp) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        app
+    });
     h.run_steps(4);
     h
 }

@@ -43,10 +43,13 @@ fn fixture_at(rotation: u16, cropped: bool, shared: bool, collision: bool) -> Ve
 fn harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let copies = crate::editing::Copies::default();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |cc| {
-        let mut app = crate::editing::clipboard_app(&cc.egui_ctx, &copies);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "ownership.pdf", None, bytes.clone()).unwrap();
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::editing::clipboard_app(&cc.egui_ctx, &copies);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "ownership.pdf", None, bytes.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h

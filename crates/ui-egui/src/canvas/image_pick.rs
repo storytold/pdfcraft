@@ -170,19 +170,22 @@ mod picture_tests {
         let jobs = Arc::new(ManualJobs::new());
         let host_jobs = jobs.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-            let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs).build();
-            let services = crate::AppServices::new(
-                Wake::none(),
-                craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
-                None,
-                None,
-                craft::platform::open::FileIntake::new(Wake::none()).0,
-                craft::platform::watch::FileWatch::new(Wake::none()).inline(),
-            );
-            let mut app = PdfCraftApp::with_host(Arc::new(host), services);
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes(ctx, "marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs).build();
+                let services = crate::AppServices::new(
+                    Wake::none(),
+                    craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::SystemClipboard::new()),
+                    None,
+                    None,
+                    craft::platform::open::FileIntake::new(Wake::none()).0,
+                    craft::platform::watch::FileWatch::new(Wake::none()).inline(),
+                );
+                let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(ctx, "marks.pdf", None, page_with_a_comment_and_a_link()).unwrap();
+                app
+            }
         });
         let mut on_screen = None;
         for _ in 0..600 {

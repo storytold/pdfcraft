@@ -36,12 +36,15 @@ fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
     // Each signing asks where to save once: the file picker answers `contract_signed.pdf` in `dir`.
     let answers = std::iter::repeat_with(|| Picked::Paths(vec![dir.join("contract_signed.pdf")])).take(8);
     let files = Arc::new(ScriptedFiles::answering(answers));
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "contract.pdf", None, FIXTURE.to_vec()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "contract.pdf", None, FIXTURE.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app
+        }
     });
     h.run_steps(6);
     h
@@ -344,12 +347,15 @@ fn save_as_keeps_a_signed_document_incremental() {
     let (bytes, cert) = (signed.to_vec(), digital_id.certificate.clone());
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));
     let app_files = files.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(app_files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "contract.pdf", None, bytes).expect("opens");
-        app.session.set_trusted_certificates(vec![cert]);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(app_files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "contract.pdf", None, bytes).expect("opens");
+            app.session.set_trusted_certificates(vec![cert]);
+            app
+        }
     });
     h.run_steps(4);
     let status = |h: &Harness<'static, PdfCraftApp>| {
@@ -397,11 +403,14 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
     let (original, out) = (bytes.clone(), dir().join("copy.pdf"));
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));
     let app_files = files.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(app_files);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(app_files);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     // An edit to save: an unedited copy is the original's bytes, appended to or not.

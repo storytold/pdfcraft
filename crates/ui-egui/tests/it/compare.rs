@@ -12,12 +12,15 @@ fn compare_two_versions() {
     let s = Session::new();
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("doc.compare"));
@@ -65,12 +68,15 @@ fn side_by_side() -> Harness<'static, PdfCraftApp> {
     let s = Session::new();
     let v1 = s.create_from_text("t", "Delivery within five days. Returns accepted.").unwrap().to_vec();
     let v2 = s.create_from_text("t", "Delivery within three days. Returns accepted for a week.").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("doc.compare"));
@@ -118,12 +124,15 @@ fn text_and_visual_versions() -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn compare_filters_hide_text_or_visual_changes() {
     let (v1, v2) = text_and_visual_versions();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
-        app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "v1.pdf", None, v1.clone()).unwrap();
+            app.open_bytes(&egui::Context::default(), "v2.pdf", None, v2.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().compare_old = h.state().views.first().map(|v| v.id);
@@ -165,11 +174,14 @@ fn compare_filters_hide_text_or_visual_changes() {
 #[test]
 fn pdfa_dialog_verifies_and_converts() {
     let doc = Session::new().create_from_text("t", "Keep forever").unwrap().to_vec();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "keep.pdf", None, doc.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "keep.pdf", None, doc.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("standards.pdfa"));
@@ -227,11 +239,14 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
         ("pdfaid:part=\"2\" pdfaid:conformance=\"B\" pdfuaid:part=\"1\"", "Declared conformance: PDF/A-2b, PDF/UA-1"),
     ] {
         let doc = declaring(ids);
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "ua.pdf", None, doc.clone()).unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "ua.pdf", None, doc.clone()).unwrap();
+                app
+            }
         });
         h.run_steps(4);
         assert!(h.execute("standards.pdfa"));

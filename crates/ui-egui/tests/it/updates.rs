@@ -52,7 +52,10 @@ fn app_asking(source: CheckSource) -> PdfCraftApp {
 
 fn harness(answer: Result<Option<&str>, &str>) -> Harness<'static, PdfCraftApp> {
     let source = source(answer);
-    Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app_asking(source))
+    Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        app_asking(source)
+    })
 }
 
 /// Run frames until the background check has reported. By what the dialog shows, with the
@@ -116,11 +119,14 @@ fn a_newer_release_is_offered_for_download() {
 fn started_with(settings: &'static str) -> (Harness<'static, PdfCraftApp>, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let source = counting_source(&calls);
-    let h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
-        let mut app = app_asking(source);
-        app.set_startup_update_check(true);
-        app.apply_settings(&import_json(settings).0);
-        app
+    let h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_asking(source);
+            app.set_startup_update_check(true);
+            app.apply_settings(&import_json(settings).0);
+            app
+        }
     });
     (h, calls)
 }

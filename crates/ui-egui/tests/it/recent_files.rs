@@ -40,10 +40,13 @@ fn app_with(files: &[&str]) -> PdfCraftApp {
 /// Tall enough that the whole of Home is on screen without scrolling.
 fn harness(limit: usize, files: &[&str]) -> Harness<'static, PdfCraftApp> {
     let files: Vec<String> = files.iter().map(ToString::to_string).collect();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
-        let mut app = app_with(&files.iter().map(String::as_str).collect::<Vec<_>>());
-        app.recent_limit = limit;
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_with(&files.iter().map(String::as_str).collect::<Vec<_>>());
+            app.recent_limit = limit;
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -188,11 +191,14 @@ fn restoring_settings_does_not_check_recent_files_and_a_frame_drops_the_gone_one
     let paths: Vec<&str> = restored.recent.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, [here.as_str(), gone.as_str()], "restoring keeps every entry without asking whether its file exists");
 
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
-        let mut app = support::inline_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        restore(&mut app, &json);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = support::inline_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            restore(&mut app, &json);
+            app
+        }
     });
     h.run_steps(2);
     let paths: Vec<&str> = h.state().recent.iter().map(|r| r.path.as_str()).collect();

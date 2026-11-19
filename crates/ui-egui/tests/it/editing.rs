@@ -79,12 +79,15 @@ fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harn
     if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() {
         builder = builder.wgpu();
     }
-    let mut h = builder.build_eframe(move |_cc| {
-        let mut app = scripted_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).expect("fixture opens");
-        setup(&mut app);
-        app
+    let mut h = builder.build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = scripted_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).expect("fixture opens");
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -130,10 +133,13 @@ pub(crate) fn clipboard_harness(name: &'static str, bytes: Vec<u8>) -> (Harness<
     let copies = Copies::default();
     let sink = copies.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        let mut app = clipboard_app(&cc.egui_ctx, &sink);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("opens");
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = clipboard_app(&cc.egui_ctx, &sink);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     (h, copies)
@@ -731,12 +737,15 @@ impl Drop for TempPdfs {
 
 /// The app with Preferences ▸ Reopen the files that were open when PdfCraft last closed on.
 fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.reopen_last_session = true;
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.reopen_last_session = true;
+            setup(&mut app);
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -745,12 +754,15 @@ fn session_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'s
 /// [`session_harness`] over a host that runs its jobs on the calling thread: an open finishes within the call
 /// that asked for it.
 fn inline_session_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let host = craft::host::Host::builder(crate::control::info()).jobs(std::sync::Arc::new(craft::host::InlineJobs)).build();
-        let mut app = crate::control::app_on(host);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.reopen_last_session = true;
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let host = craft::host::Host::builder(crate::control::info()).jobs(std::sync::Arc::new(craft::host::InlineJobs)).build();
+            let mut app = crate::control::app_on(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.reopen_last_session = true;
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -939,12 +951,15 @@ fn save_prompt_stays_inside_the_screen_for_a_long_filename() {
     let name = "Psychology_ The Science of Mind and Behaviour, -- Nigel Holt, Andy Bremner, Michael \
                 Vliek, Ed Sutherland, -- 5, 2024 -- McGraw-Hill Education (UK) Ltd -- isbn13 97815268.pdf";
     let mut h = Harness::builder().with_size(egui::vec2(1365.0, 719.0)).build_eframe(move |cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-        app.open_bytes(&cc.egui_ctx, name, None, fixture(1)).expect("fixture opens");
-        app.apply_edit(&cc.egui_ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-        app.request_close_tab(&cc.egui_ctx, 0);
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+            app.open_bytes(&cc.egui_ctx, name, None, fixture(1)).expect("fixture opens");
+            app.apply_edit(&cc.egui_ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+            app.request_close_tab(&cc.egui_ctx, 0);
+            app
+        }
     });
     h.run_steps(4);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1365.0, 719.0));
@@ -978,12 +993,15 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
             continue;
         }
         let mut h = Harness::builder().with_size(size).build_eframe(move |cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes(&cc.egui_ctx, &name, None, fixture(1)).expect("fixture opens");
-            app.apply_edit(&cc.egui_ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-            app.request_close_tab(&cc.egui_ctx, 0);
-            app
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(&cc.egui_ctx, &name, None, fixture(1)).expect("fixture opens");
+                app.apply_edit(&cc.egui_ctx, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+                app.request_close_tab(&cc.egui_ctx, 0);
+                app
+            }
         });
         h.run_steps(4);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
@@ -1147,12 +1165,15 @@ fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
         "/Root 1 0 R >>\nstartxref",
         "/Root 1 0 R /Info << /Client#20name (Acme) /Project#20 (Padded) /Dept#E9 (Sales) /Project (Apollo) /Revision 4 >> >>\nstartxref",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
-        app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
+            app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     for name in ["Client name", "Project ", "Dept\u{FFFD}"] {
@@ -1194,12 +1215,15 @@ fn a_custom_property_is_deleted_from_an_info_dictionary_in_the_trailer() {
     let pdf = String::from_utf8(fixture(1))
         .unwrap()
         .replace("/Root 1 0 R >>\nstartxref", "/Root 1 0 R /Info << /Project (Apollo) /Revision (4) >> >>\nstartxref");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
-        app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
+            app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_label("Project").click();
@@ -1219,12 +1243,15 @@ fn add_stops_at_the_256_custom_properties_the_tab_lists() {
         let entries: String = (0..count).map(|n| format!("/P{n:03} (v) ")).collect();
         let pdf =
             String::from_utf8(fixture(1)).unwrap().replace("/Root 1 0 R >>\nstartxref", &format!("/Root 1 0 R /Info << {entries}>> >>\nstartxref"));
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
-            app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf.into_bytes()).expect("fixture opens");
+                app.set_option(&egui::Context::default(), "dialog", "custom").unwrap();
+                app
+            }
         });
         h.run_steps(4);
         h
@@ -2390,12 +2417,15 @@ fn asynchronous_launch_display(explicit: bool) {
     }
     let path = temp_path(&format!("async-startup-layout-{explicit}.pdf"));
     std::fs::write(&path, protected("reader", "owner", -4)).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
-        app.open_bytes(&egui::Context::default(), "other.pdf", None, fixture(2)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
+            app.open_bytes(&egui::Context::default(), "other.pdf", None, fixture(2)).unwrap();
+            app
+        }
     });
     h.run_steps(2);
     let other = h.state().views[0].id;
@@ -2472,12 +2502,15 @@ fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
         std::fs::write(&other, fixture(2)).unwrap();
         let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
         let (first, second) = (locked_path.clone(), other_path.clone());
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_path(&first);
-            app.open_path(&second);
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_path(&first);
+                app.open_path(&second);
+                app
+            }
         });
         h.run_steps(4);
         let prompt = h.state().password_prompt.as_ref().map(|p| p.path.clone());
@@ -2512,13 +2545,16 @@ fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
     std::fs::write(&other, fixture(2)).unwrap();
     let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
     let (first, second) = (locked_path.clone(), other_path.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&first);
-        app.open_path(&first);
-        app.open_path(&second);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&first);
+            app.open_path(&first);
+            app.open_path(&second);
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
@@ -2546,12 +2582,15 @@ fn a_password_retry_finishes_before_the_next_protected_files_prompt() {
     std::fs::write(&b, protected("reader", "owner", -4)).unwrap();
     let (a_path, b_path) = (a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string());
     let (first, second) = (a_path.clone(), b_path.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&first);
-        app.open_path(&second);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&first);
+            app.open_path(&second);
+            app
+        }
     });
     h.run_steps(4);
     // B is prepared in the background meanwhile; its reply waits behind A's prompt.
@@ -2581,14 +2620,17 @@ fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
     let locked_path = locked.to_str().unwrap().to_string();
     let other_paths: Vec<String> = others.iter().map(|p| p.to_str().unwrap().to_string()).collect();
     let (first, rest) = (locked_path.clone(), other_paths.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_path(&first);
-        for path in &rest {
-            app.open_path(path);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_path(&first);
+            for path in &rest {
+                app.open_path(path);
+            }
+            app
         }
-        app
     });
     h.run_steps(4);
     assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
@@ -2608,11 +2650,14 @@ fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
 
 #[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "secret.pdf", None, protected("pw", "owner", -1)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "secret.pdf", None, protected("pw", "owner", -1)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_label_contains("is protected");
@@ -2638,12 +2683,15 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
     // Wide: one line. Narrower: wrapped. Narrowest: cut short (the full text is on hover).
     for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
-        let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
-            app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+                app.set_option(&egui::Context::default(), "panel", "bookmarks").unwrap();
+                app
+            }
         });
         h.run_steps(4);
         let msg = h.get_by_label_contains("This document is secured").rect();
@@ -2664,11 +2712,14 @@ fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
 /// notice offers Unlock…, which takes the permissions password and lifts the restrictions.
 #[test]
 fn the_security_notice_unlocks_with_the_permissions_password() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_label_contains("This document is secured");
@@ -2694,14 +2745,17 @@ fn the_security_notice_unlocks_with_the_permissions_password() {
 #[test]
 fn the_security_notice_can_be_turned_off_for_good() {
     let open = |settings: Option<pdfcraft_ui_egui::settings::PdfCraftSettings>| {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            if let Some(s) = &settings {
-                app.apply_settings(s);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                if let Some(s) = &settings {
+                    app.apply_settings(s);
+                }
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+                app
             }
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
-            app
         });
         h.run_steps(4);
         h
@@ -2748,11 +2802,14 @@ fn the_security_notice_can_be_turned_off_for_good() {
 /// does too), then carries on.
 #[test]
 fn remove_security_asks_for_the_permissions_password_first() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("protect.remove"));
@@ -2777,11 +2834,14 @@ fn remove_security_asks_for_the_permissions_password_first() {
 fn a_secured_form_shows_its_form_notice_and_its_security() {
     // Changing and assembling withheld, filling allowed (as government forms are often set).
     let bytes = encrypted(include_bytes!("../data/form.pdf").to_vec(), pdfcraft_cos::Algorithm::Aes256, "", "owner", -1036);
-    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_label_contains("interactive form fields. This document is secured. Some changes are restricted by its security settings.");
@@ -2792,12 +2852,15 @@ fn a_secured_form_shows_its_form_notice_and_its_security() {
 
 #[test]
 fn restricted_documents_show_a_notice_and_block_page_changes() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap(); // opens without a password
-        app.set_option(&egui::Context::default(), "organize", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "locked.pdf", None, protected("", "owner", 0b0100)).unwrap(); // opens without a password
+            app.set_option(&egui::Context::default(), "organize", "on").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.get_by_label_contains("This document is secured");
@@ -2826,16 +2889,19 @@ fn copying_out_of_a_document_honours_its_security() {
         let copies = Copies::default();
         let sink = copies.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-            let mut app = clipboard_app(&cc.egui_ctx, &sink);
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
-            app.submit_password(&cc.egui_ctx, Some(password.into()));
-            // One page at a time: Select All takes that page's text (scrolling continuously it would
-            // take both pages', #2639; what is tested here is the security of copying it).
-            if let Some(v) = app.views.first_mut() {
-                v.view.continuous = false;
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = clipboard_app(&cc.egui_ctx, &sink);
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
+                app.submit_password(&cc.egui_ctx, Some(password.into()));
+                // One page at a time: Select All takes that page's text (scrolling continuously it would
+                // take both pages', #2639; what is tested here is the security of copying it).
+                if let Some(v) = app.views.first_mut() {
+                    v.view.continuous = false;
+                }
+                app
             }
-            app
         });
         // Select the page's text once its text layer is loaded (up to ~4 s: a loaded test machine
         // can take far longer than the 0.2 s this used to allow).
@@ -2902,7 +2968,10 @@ fn replace_pages_dialog_swaps_page_content() {
     app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
     app.views[0].select_pages(&[1]);
     app.start_replace(&egui::Context::default(), "other.pdf".into(), fixture(5));
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        app
+    });
     h.run_steps(3);
     egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
     type_spin(&mut h, "Replacement: pages of other.pdf", "5");
@@ -2959,7 +3028,10 @@ fn replace_split_selection_keeps_the_unchecked_page() {
         app.open_bytes(&egui::Context::default(), "original.pdf", None, sized(3, 200, 300, "Original")).unwrap();
         app.views[0].select_pages(selected);
         app.start_replace(&egui::Context::default(), "other.pdf".into(), sized(5, 400, 500, "Replacement"));
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            app
+        });
         h.run_steps(2);
         h
     };
@@ -3218,11 +3290,14 @@ fn source_font_fixture_with_text(body: &str) -> Vec<u8> {
 }
 
 fn open_source_font_fixture() -> Harness<'static, PdfCraftApp> {
-    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
-        app
+    Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "fonts.pdf", None, source_font_fixture()).expect("font fixture opens");
+            app
+        }
     })
 }
 
@@ -3307,11 +3382,14 @@ fn switching_from_a_narrow_editor_keeps_one_frame_and_a_wide_heading_on_one_line
     let bytes = source_font_fixture_with_text(
         "BT /F1 18 Tf 20 220 Td (Editable PDF heading) Tj ET BT /F2 18 Tf 20 120 Td (Mono) Tj ET BT /F2 18 Tf 20 98 Td (Text) Tj ET",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "editor.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "editor.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -3370,11 +3448,14 @@ fn switching_from_a_narrow_editor_keeps_one_frame_and_a_wide_heading_on_one_line
 fn opening_a_paragraph_leaves_the_page_as_it_is() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text("0 0 0.45 rg 10 180 280 70 re f 1 1 1 rg BT /F2 20 Tf 20 205 Td (White on a banner) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "banner.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "banner.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -3425,11 +3506,14 @@ fn opening_a_paragraph_leaves_the_page_as_it_is() {
 fn a_quick_click_into_another_paragraph_keeps_both_in_place() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -3485,11 +3569,14 @@ fn a_quick_click_into_another_paragraph_keeps_both_in_place() {
 #[test]
 fn switching_straight_to_another_box_applies_the_open_paragraph() {
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -3530,11 +3617,14 @@ fn switching_straight_to_another_box_applies_the_open_paragraph() {
 #[test]
 fn text_typed_into_an_open_paragraph_counts_as_unsaved_work() {
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "box.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "box.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -3582,11 +3672,14 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Topmost) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
     // The jobs, the page renders among them, wait until the test runs them.
     let (app, jobs) = crate::control::app_with_manual_jobs();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app;
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app;
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     support::settle_held(&mut h, &jobs);
@@ -3638,11 +3731,14 @@ fn a_paragraph_whose_edit_fails_stays_open_with_its_typing() {
         return;
     }
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -3678,11 +3774,14 @@ fn a_paragraph_whose_edit_fails_stays_open_with_its_typing() {
 /// unless the system asks for less motion, and the test harness turns them off.
 fn two_boxes_animated() -> (Harness<'static, PdfCraftApp>, [egui::Rect; 2]) {
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
+            app
+        }
     });
     h.ctx.all_styles_mut(|s| s.animation_time = 0.2);
     h.run_steps(4);
@@ -3755,11 +3854,14 @@ fn letter_text(body: &str) -> Vec<u8> {
 }
 
 fn open_letter(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 1400.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 1400.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -4107,11 +4209,14 @@ fn text_tool_clicking_source_text_edits_instead_of_adding_a_copy() {
 fn text_tool_mixed_style_row_grows_in_the_editor_and_saved_pdf() {
     let _gpu = gpu();
     let bytes = source_font_fixture_with_text("BT /F1 12 Tf 20 220 Td (Small ) Tj /F2 12 Tf (row) Tj ET");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "mixed-row.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "mixed-row.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -4183,11 +4288,14 @@ fn double_drawn() -> Vec<u8> {
 
 #[test]
 fn editing_a_double_drawn_line_replaces_every_copy() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "bold.pdf", None, double_drawn()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "bold.pdf", None, double_drawn()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -4225,11 +4333,14 @@ fn editing_existing_images_on_the_page() {
 fn add_text_places_a_box_on_a_picture_and_beside_a_paragraph() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::AddText;
@@ -4315,11 +4426,14 @@ fn add_text_finishes_a_paragraph_drag_that_leaves_its_box() {
 fn dragging_the_rotate_knob_turns_a_page_image() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -4372,11 +4486,14 @@ fn dragging_the_rotate_knob_turns_a_page_image() {
 fn dragging_rotate_knob_on_already_rotated_image_applies_delta_only() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -4465,11 +4582,14 @@ fn editing_existing_form_artwork_on_the_page() {
 }
 
 fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), name, None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -4512,11 +4632,14 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
 fn image_right_click_context_menu_items_and_actions() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -4617,11 +4740,14 @@ fn default_page_context_menu_when_not_in_edit_mode() {
 #[test]
 fn page_context_menu_items_disabled_on_protected_pdf() {
     let bytes = protected("", "owner", 0b0100);
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "protected.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "protected.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
@@ -4664,11 +4790,14 @@ fn image_edge_handle_stretch_and_crop_mode() {
     image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "square.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "square.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -4723,11 +4852,14 @@ fn image_edge_handle_stretch_and_crop_mode() {
 fn tiny_image_crop_handle_drag_does_not_panic() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(5, 5, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "tiny.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "tiny.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -5112,11 +5244,14 @@ fn selected_figure() -> Harness<'static, PdfCraftApp> {
     })
     .unwrap();
     let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figure.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figure.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -5381,15 +5516,18 @@ fn paragraph_drag_fixture(content: &str, rotation: i64, unit: i64) -> Vec<u8> {
 }
 
 fn paragraph_drag_harness(bytes: Vec<u8>, view_rotation: u16) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = scripted_app();
-        app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "paragraphs.pdf", None, bytes).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "75").unwrap();
-        app.views[0].view.rotation = view_rotation;
-        assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = scripted_app();
+            app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "paragraphs.pdf", None, bytes).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "75").unwrap();
+            app.views[0].view.rotation = view_rotation;
+            assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -5886,12 +6024,15 @@ fn a_paragraph_rewraps_from_the_outer_half_of_its_edge_handles() {
 
 /// The Pages panel, in a window tall enough to show every thumbnail of a short fixture.
 fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).expect("fixture opens");
-        app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(pages)).expect("fixture opens");
+            app.set_option(&egui::Context::default(), "panel", "pages").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h
@@ -6152,11 +6293,14 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "mixed.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "mixed.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6229,11 +6373,14 @@ fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
          BT 0 g /F2 12 Tf 20 215 Td (Plain ) Tj /F1 12 Tf 0 0.2 0.5 rg (bold) Tj /F2 12 Tf 0 g ( words) Tj ET \
          BT /F2 10 Tf 20 195 Td (Last row) Tj ET",
     );
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "mixed.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "mixed.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6328,11 +6475,14 @@ fn stand_in_words_fixture() -> (Vec<u8>, Vec<&'static str>) {
 #[test]
 fn dragging_over_a_word_selects_that_word_when_the_editor_uses_a_stand_in_face() {
     let (bytes, words) = stand_in_words_fixture();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "ocr-like.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "ocr-like.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6387,11 +6537,14 @@ fn private_document_regions_open_as_one_editor() {
     let path = std::env::var("PDFCRAFT_TEXT_REGRESSION_PDF").expect("supply a local PDF path");
     let bytes = std::fs::read(&path).unwrap();
     let original = bytes.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6519,11 +6672,14 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     font.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
     cos.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| *d = font).unwrap();
     let bytes = write_incremental(&cos, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "stable.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "stable.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6655,11 +6811,14 @@ fn artwork_drawn(content: &[u8]) -> Vec<u8> {
 
 #[test]
 fn cropped_images_do_not_intercept_text_and_stay_inside_each_page() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "clipped.pdf", None, clipped_artwork_with_labels()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "clipped.pdf", None, clipped_artwork_with_labels()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6706,11 +6865,14 @@ fn cropped_images_do_not_intercept_text_and_stay_inside_each_page() {
 
 #[test]
 fn cropped_image_corner_resize_keeps_opposite_corner_and_scales_crop() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "clipped.pdf", None, clipped_artwork_with_labels_drawn(true)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "clipped.pdf", None, clipped_artwork_with_labels_drawn(true)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6775,11 +6937,14 @@ fn cropped_image_corner_resize_keeps_opposite_corner_and_scales_crop() {
 /// old size until release (#1671).
 #[test]
 fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "clipped.pdf", None, clipped_artwork_with_labels_drawn(true)).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "clipped.pdf", None, clipped_artwork_with_labels_drawn(true)).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6903,11 +7068,14 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
     let bytes = write_incremental(&doc, &Default::default()).unwrap();
     // The jobs, the page renders among them, wait until the test runs them.
     let (app, jobs) = crate::control::app_with_manual_jobs();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = app;
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app;
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -6979,11 +7147,14 @@ fn private_cropped_image_grips_resize_without_moving_the_opposite_corner() {
     let path = std::env::var("PDFCRAFT_CLIPPED_ARTWORK_PDF").expect("supply a local PDF path");
     let original = std::fs::read(&path).unwrap();
     let bytes = original.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -7071,11 +7242,14 @@ fn private_document_cropped_artwork_does_not_block_text() {
     let path = std::env::var("PDFCRAFT_CLIPPED_ARTWORK_PDF").expect("supply a local PDF path");
     let original = std::fs::read(&path).unwrap();
     let bytes = original.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -7136,11 +7310,14 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
     let original = std::fs::read(&path).unwrap();
     let bytes = original.clone();
     let font = Arc::new(std::fs::read(font_path).unwrap());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "private.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -7296,11 +7473,14 @@ fn moving_text_offers_the_four_way_arrow() {
 fn cropping_a_picture_with_its_handles() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -7361,13 +7541,16 @@ fn picture_pages(crop: bool) -> Harness<'static, PdfCraftApp> {
 
 /// [`picture_pages`], of `pdf`.
 fn picture_pages_of(pdf: Vec<u8>, crop: bool) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "clipped.pdf", None, pdf).unwrap();
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "clipped.pdf", None, pdf).unwrap();
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -7504,11 +7687,14 @@ fn a_right_click_on_an_open_paragraphs_frame_over_a_picture_selects_the_picture(
 /// there selects the one on top.
 #[test]
 fn a_drag_from_the_selected_picture_under_another_moves_the_selected_one() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "two.pdf", None, two_image_fixture()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "two.pdf", None, two_image_fixture()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     // The second picture lies over the right half of the first.
@@ -7851,11 +8037,14 @@ fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
 /// went to crop mode's whole-page hit, which unselected every picture.
 #[test]
 fn in_crop_mode_a_right_click_on_another_picture_selects_it() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "two.pdf", None, two_image_fixture()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "two.pdf", None, two_image_fixture()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -7904,11 +8093,14 @@ fn a_drag_from_a_hole_in_the_selected_picture_moves_it() {
 fn a_right_click_on_a_crop_grip_past_the_page_edge_keeps_crop_mode() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -7933,11 +8125,14 @@ fn a_right_click_on_a_crop_grip_past_the_page_edge_keeps_crop_mode() {
 fn a_crop_grip_past_the_page_edge_drags() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -8098,11 +8293,14 @@ fn an_add_text_click_pressed_beside_a_paragraph_starts_a_box_there() {
 fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -8300,10 +8498,13 @@ fn image_copy_cut_paste_keyboard_and_context_menu() {
     let copies = Copies::default();
     let sink = copies.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        let mut app = clipboard_app(&cc.egui_ctx, &sink);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = clipboard_app(&cc.egui_ctx, &sink);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -8585,11 +8786,14 @@ fn newer_clipboard_override_beats_stale_in_app_copy() {
 fn rotated_image_selection_and_crop() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -8644,11 +8848,14 @@ fn rotated_image_selection_and_crop() {
 fn test_image_context_menu_precedence() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -8684,11 +8891,14 @@ fn test_image_context_menu_precedence() {
 fn test_image_context_menu_in_crop_mode_and_when_moved() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(100, 100, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -8786,12 +8996,15 @@ fn assert_crop_context_preserved(h: &Harness<'static, PdfCraftApp>) {
 #[test]
 fn test_image_context_menu_crop_overlapping_image_and_handle() {
     for rotation in [0, 90, 180, 270] {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "overlap.pdf", None, two_image_fixture()).unwrap();
-            app.views[0].view.rotation = rotation;
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "overlap.pdf", None, two_image_fixture()).unwrap();
+                app.views[0].view.rotation = rotation;
+                app
+            }
         });
         h.run_steps(4);
         let id = h.state().views[0].id;
@@ -8825,11 +9038,14 @@ fn test_image_context_menu_crop_overlapping_image_and_handle() {
 /// crop mode stays and no menu opens (#5835).
 #[test]
 fn a_right_click_on_the_part_a_crop_cuts_away_keeps_crop_mode() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "cut.pdf", None, two_image_fixture()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "cut.pdf", None, two_image_fixture()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -8853,11 +9069,14 @@ fn a_right_click_on_the_part_a_crop_cuts_away_keeps_crop_mode() {
 fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selection() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 80, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -8916,11 +9135,14 @@ fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selectio
 fn a_click_beside_a_turned_picture_in_its_bounds_applies_its_crop() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 80, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -8982,11 +9204,14 @@ fn picture_with_room_around() -> Vec<u8> {
 /// part being cropped away keeps crop mode (#6422).
 #[test]
 fn a_click_away_from_the_picture_applies_its_crop() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "room.pdf", None, picture_with_room_around()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "room.pdf", None, picture_with_room_around()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -9042,11 +9267,14 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
     image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "square.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "square.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -9124,11 +9352,14 @@ fn test_cropped_image_selection_and_bounding_box() {
     image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "square.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "square.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -9225,11 +9456,14 @@ fn convert_colours_from_the_dialog() {
     )));
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "colours.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "colours.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -9260,11 +9494,14 @@ fn fix_hairlines_from_the_dialog() {
         .add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), b"0 w 10 10 m 100 10 l S 2 w 10 20 m 100 20 l S")));
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "lines.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "lines.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -9295,11 +9532,14 @@ fn fix_hairlines_notice_uses_singular_and_plural() {
         doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::Object::Ref(cs))).unwrap();
     }
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "lines.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "lines.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     // The dialog's default range is every page; only the first has hairlines.
@@ -9361,11 +9601,14 @@ fn arrange_duplicate_image_clears_selection_when_ambiguous() {
     .unwrap();
     let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
 
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "dup.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "dup.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -9422,11 +9665,14 @@ fn arrange_unique_image_preserves_selection() {
     .unwrap();
     let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
 
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "unique.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "unique.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -9481,11 +9727,14 @@ fn undo_arrange_re_resolves_image_selection_or_clears() {
     .unwrap();
     let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
 
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "undo_arrange.pdf", None, bytes.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "undo_arrange.pdf", None, bytes.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -9604,11 +9853,14 @@ fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
         bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1400.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "off-page.pdf", None, bytes).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1400.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "off-page.pdf", None, bytes).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
@@ -9818,11 +10070,14 @@ fn copy_pasted_image_discards_coordinates_and_moves_without_offset() {
 fn clicking_after_image_context_menu_action_resets_menu_state_and_updates_selection() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "picture.png", None, png.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -9952,11 +10207,14 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     }
     pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n", objs.len() + 1).as_bytes());
 
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).expect("fixture opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "test.pdf", None, pdf).expect("fixture opens");
+            app
+        }
     });
     h.run_steps(4);
 
@@ -10530,11 +10788,14 @@ fn two_image_fixture() -> Vec<u8> {
 
 #[test]
 fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "dup.pdf", None, two_image_fixture()).expect("opens fixture");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "dup.pdf", None, two_image_fixture()).expect("opens fixture");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -10652,11 +10913,14 @@ fn ungroup_in_the_artwork_menu_makes_a_forms_text_editable() {
     ];
     let pdf = pdf_of_objects(&objs);
 
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "table.pdf", None, pdf.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "table.pdf", None, pdf.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -10728,11 +10992,14 @@ fn one_click_on_grouped_text_opens_it_for_editing() {
         pdf_stream("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /Resources << >>", b"0 0 1 rg 0 0 60 60 re f"),
     ];
     let pdf = pdf_of_objects(&objs);
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "grouped.pdf", None, pdf.clone()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "grouped.pdf", None, pdf.clone()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     let id = h.state().views[0].id;
@@ -10777,11 +11044,14 @@ fn outward_image_grip_drags_grow_on_rotated_pages() {
                 image::RgbImage::from_pixel(100, 80, image::Rgb([100, 150, 200]))
                     .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
                     .unwrap();
-                let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-                    let mut app = crate::control::new_app();
-                    app.set_option(&egui::Context::default(), "language", "en").unwrap();
-                    app.open_bytes(&egui::Context::default(), "grips.png", None, png.clone()).unwrap();
-                    app
+                let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+                    crate::support::install_runtime(&cc.egui_ctx);
+                    {
+                        let mut app = crate::control::new_app();
+                        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                        app.open_bytes(&egui::Context::default(), "grips.png", None, png.clone()).unwrap();
+                        app
+                    }
                 });
                 h.run_steps(4);
                 let ctx_h = h.ctx.clone();
@@ -10845,11 +11115,14 @@ fn outward_image_grip_drags_grow_on_rotated_pages() {
 
 #[test]
 fn author_image_clip_is_not_offered_as_a_removable_editor_crop() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "author-clip.pdf", None, clipped_artwork_with_labels()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "author-clip.pdf", None, clipped_artwork_with_labels()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
@@ -10920,11 +11193,14 @@ fn affine_review_image_fixture(matrix: [f64; 6], clip: Option<[f64; 4]>, rotatio
 }
 
 fn affine_review_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1000.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "affine-review.pdf", None, bytes.clone()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 1000.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "affine-review.pdf", None, bytes.clone()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
@@ -11195,11 +11471,14 @@ fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
     // the picture go, rather than taking the picture into a group and dropping its crop (#6422
     // review).
     for mods in [egui::Modifiers::SHIFT, egui::Modifiers::COMMAND] {
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "room.pdf", None, picture_with_room_around()).unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "room.pdf", None, picture_with_room_around()).unwrap();
+                app
+            }
         });
         h.run_steps(4);
         assert!(h.execute("edit.edit_text"));

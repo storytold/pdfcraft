@@ -45,11 +45,14 @@ fn right_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
 
 #[test]
 fn automatic_text_tagging_opens_reviewable_tags() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     assert!(h.execute("a11y.autotag"));
@@ -66,11 +69,14 @@ fn automatic_text_tagging_opens_reviewable_tags() {
 fn checking_fixing_skipping_and_reporting() {
     let files = Arc::new(ScriptedFiles::new().saving_suggested());
     let scripted = files.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::app_with_files(scripted);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::app_with_files(scripted);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("a11y.check"));
@@ -132,14 +138,17 @@ fn checking_fixing_skipping_and_reporting() {
 /// the other is checked again through the dialog.
 #[test]
 fn a_rule_skipped_in_one_document_is_not_skipped_in_another() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "a.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.open_bytes(&egui::Context::default(), "b.pdf", None, FIXTURE.to_vec()).unwrap();
-        app.active = Some(0);
-        app.a11y_options.show_dialog = false;
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "a.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "b.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.active = Some(0);
+            app.a11y_options.show_dialog = false;
+            app
+        }
     });
     h.run_steps(4);
     let tagged = |h: &Harness<'static, PdfCraftApp>| {
@@ -184,11 +193,14 @@ fn a_rule_skipped_in_one_document_is_not_skipped_in_another() {
 
 #[test]
 fn checker_summary_does_not_hide_manual_review() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h.state_mut().run_accessibility_check();
@@ -212,11 +224,14 @@ fn a_saved_page_range_past_the_document_still_checks_its_pages() {
     // A range picked on a longer document survives into this one-page document when the options
     // dialog is turned off. Unclamped, it selected no page, and the page rules came out Passed
     // without having looked at the untagged text (#1300).
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     let o = &mut h.state_mut().a11y_options;
@@ -229,11 +244,14 @@ fn a_saved_page_range_past_the_document_still_checks_its_pages() {
 
 #[test]
 fn tagging_form_fields_opens_the_tags_panel() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "form.pdf", None, FORM_FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, FORM_FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     assert!(h.execute("a11y.autotag_fields"));
@@ -270,11 +288,14 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn checker_shows_a_figure_finding_on_its_page() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().run_accessibility_check();
@@ -291,11 +312,14 @@ fn checker_shows_a_figure_finding_on_its_page() {
 
 #[test]
 fn setting_alternate_text_figure_by_figure() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("a11y.alt_text"));
@@ -323,11 +347,14 @@ fn setting_alternate_text_figure_by_figure() {
 
 #[test]
 fn tags_panel_edits_a_tag_property_and_undoes_it() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("a11y.tags"));
@@ -364,11 +391,14 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
 
 #[test]
 fn tags_panel_moves_a_tag_within_its_siblings() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("a11y.tags"));
@@ -385,11 +415,14 @@ fn tags_panel_moves_a_tag_within_its_siblings() {
 
 #[test]
 fn tags_panel_marks_a_leaf_tag_as_an_artifact() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("a11y.tags"));
@@ -406,11 +439,14 @@ fn tags_panel_marks_a_leaf_tag_as_an_artifact() {
 
 #[test]
 fn checker_finding_opens_its_structure_tag() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "figures.pdf", None, FIGURES.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h.state_mut().run_accessibility_check();
@@ -435,11 +471,14 @@ fn checker_finding_opens_its_structure_tag() {
 
 #[test]
 fn finding_untagged_content_shows_the_focused_accessibility_results() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "notes.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
+        }
     });
     h.run_steps(3);
     assert!(h.execute("a11y.find_untagged"));

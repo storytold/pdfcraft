@@ -77,12 +77,15 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 /// [`harness`] with frames `dt` seconds apart.
 fn harness_dt(dt: f32) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "search.pdf", None, fixture()).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(dt).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "search.pdf", None, fixture()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     settle(&mut h);

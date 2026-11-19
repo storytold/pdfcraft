@@ -99,16 +99,21 @@ impl Rig {
         let parts = Mutex::new(Some((rx, intake)));
         let (host_jobs, host_files) = (jobs.clone(), files.clone());
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |cc| {
-            let (rx, intake) = parts.lock().expect("setup slot").take().expect("built once");
-            let host =
-                Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(host_jobs.clone()).files(host_files.clone()).build();
-            let clipboard = Clipboard::new(SystemClipboard::new());
-            let services = AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
-            let mut app = PdfCraftApp::with_host(Arc::new(host), services);
-            app.set_option(&cc.egui_ctx, "language", "en").expect("language preference");
-            app.attach_control(ControlChannel::new(rx), None);
-            app.open_bytes(&egui::Context::default(), "existing.pdf", None, fixture(3)).expect("existing document");
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let (rx, intake) = parts.lock().expect("setup slot").take().expect("built once");
+                let host = Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" })
+                    .jobs(host_jobs.clone())
+                    .files(host_files.clone())
+                    .build();
+                let clipboard = Clipboard::new(SystemClipboard::new());
+                let services = AppServices::new(Wake::none(), clipboard, None, None, intake, FileWatch::new(Wake::none()).inline());
+                let mut app = PdfCraftApp::with_host(Arc::new(host), services);
+                app.set_option(&cc.egui_ctx, "language", "en").expect("language preference");
+                app.attach_control(ControlChannel::new(rx), None);
+                app.open_bytes(&egui::Context::default(), "existing.pdf", None, fixture(3)).expect("existing document");
+                app
+            }
         });
         h.run_steps(3);
         Self { h, jobs, files, intake: sender, control }

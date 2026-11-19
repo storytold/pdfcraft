@@ -47,14 +47,17 @@ fn harness_clip(
     clipboard: RecordingClipboard,
     setup: impl FnOnce(&mut PdfCraftApp) + 'static,
 ) -> (Harness<'static, PdfCraftApp>, Pos2) {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = app_on(clipboard);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "lines.pdf", None, pdf).expect("opens");
-        app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-        app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(clipboard);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "lines.pdf", None, pdf).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     // Wait for the text layer itself (#1277), not for a fixed second.
     crate::support::wait_until(&mut h, "the page's text layer", |app| app.views[0].glyph_screen_pos(0, 5).is_some() && !app.render_pending());
@@ -238,13 +241,16 @@ fn selected_text_copy_floating_button_honours_permissions() {
         })
         .unwrap();
         let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
-        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-            let mut app = app_on(RecordingClipboard::default());
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, bytes).unwrap();
-            app.submit_password(&egui::Context::default(), Some(password.into()));
-            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = app_on(RecordingClipboard::default());
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, bytes).unwrap();
+                app.submit_password(&egui::Context::default(), Some(password.into()));
+                app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+                app
+            }
         });
         let mut loaded = false;
         for _ in 0..200 {
@@ -354,11 +360,14 @@ fn selected_text_copy_with_formatting_honours_permissions() {
 
 #[test]
 fn selected_text_copy_preserves_unicode_and_page_clipboard() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = app_on(RecordingClipboard::default());
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "unicode.pdf", None, text_pdf(r"BT /F1 14 Tf 20 150 Td (caf\351) Tj ET")).unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_on(RecordingClipboard::default());
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "unicode.pdf", None, text_pdf(r"BT /F1 14 Tf 20 150 Td (caf\351) Tj ET")).unwrap();
+            app
+        }
     });
     let mut loaded = false;
     for _ in 0..200 {

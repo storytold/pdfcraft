@@ -276,9 +276,12 @@ mod tests {
     #[test]
     fn closing_the_protect_dialog_clears_the_password_draft() {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
-            let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = PdfCraftApp::for_unit_tests();
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app
+            }
         });
 
         open_and_fill(&mut h, "TopSecret123!");

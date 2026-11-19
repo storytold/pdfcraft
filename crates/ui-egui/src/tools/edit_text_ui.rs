@@ -1352,7 +1352,10 @@ mod tests {
     fn an_edge_goes_to_the_box_the_pointer_is_level_with() {
         let mut app = crate::PdfCraftApp::for_unit_tests();
         app.open_bytes(&egui::Context::default(), "two.pdf", None, two_paragraphs()).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |_cc| app);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            app
+        });
         h.run_steps(4);
         let ctx = h.ctx.clone();
         assert!(h.state_mut().execute(&ctx, "edit.edit_text"));

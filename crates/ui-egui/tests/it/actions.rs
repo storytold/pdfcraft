@@ -17,10 +17,13 @@ use crate::support::AppHarness as _;
 /// An app over the scripted file service and manual jobs.
 fn harness(files: &Arc<ScriptedFiles>, jobs: &Arc<ManualJobs>) -> Harness<'static, PdfCraftApp> {
     let host = support::host_with(jobs.clone(), files.clone());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = support::test_app(host);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = support::test_app(host);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(2);
     h

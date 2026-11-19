@@ -29,12 +29,15 @@ fn document(prefix: &str) -> std::sync::Arc<Vec<u8>> {
 
 fn organize() -> Harness<'static, PdfCraftApp> {
     let bytes = document("Page");
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "pages.pdf", None, bytes.as_ref().clone()).unwrap();
-        app.set_option(&egui::Context::default(), "organize", "on").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "pages.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.set_option(&egui::Context::default(), "organize", "on").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"]);

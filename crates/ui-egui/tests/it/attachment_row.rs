@@ -57,12 +57,15 @@ fn harness_with_pdf(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
 
 /// [`harness_with_pdf`] whose file picks `files` answers.
 fn harness_answering(pdf: Vec<u8>, files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = crate::support::test_app(crate::support::host_with_files(files));
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
-        app.set_option(&egui::Context::default(), "panel", "attachments").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::test_app(crate::support::host_with_files(files));
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
+            app.set_option(&egui::Context::default(), "panel", "attachments").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     h

@@ -49,11 +49,14 @@ fn has_field(h: &Harness<'static, PdfCraftApp>, placeholder: &str) -> bool {
 
 #[test]
 fn replace_all_from_the_find_bar_is_one_undo_step() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     // ⌘F with the Select tool: the find bar, without a Replace row.
@@ -102,11 +105,14 @@ fn replace_all_from_the_find_bar_is_one_undo_step() {
 /// Replace changes the highlighted match only: here the second "cat" on the first page.
 #[test]
 fn replace_changes_the_highlighted_match() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "cats.pdf", None, fixture()).expect("opens");
+            app
+        }
     });
     h.run_steps(4);
     assert!(h.execute("edit.replace"));

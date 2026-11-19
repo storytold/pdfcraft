@@ -783,12 +783,15 @@ mod tests {
         let stage = Arc::new(Mutex::new(OptimizeStage::Images { done: 3, total: 10 }));
         let (p, s) = (progress.clone(), stage.clone());
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
-            let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
-            let (_, doc) = app.active_ids().unwrap();
-            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p, stage: s });
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = PdfCraftApp::for_unit_tests();
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "notes.txt", None, b"hello".to_vec()).unwrap();
+                let (_, doc) = app.active_ids().unwrap();
+                app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p, stage: s });
+                app
+            }
         });
         // 1.5 s (kittest steps a quarter second): the bar has eased in.
         h.run_steps(6);

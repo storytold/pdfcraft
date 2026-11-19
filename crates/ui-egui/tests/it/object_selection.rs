@@ -66,22 +66,28 @@ fn harness_copying(clipping: bool, background: bool) -> (Harness<'static, PdfCra
     let copies = Copies::default();
     let sink = copies.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
-        let mut app = clipboard_app(&cc.egui_ctx, &sink);
-        app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "group.pdf", None, fixture_with_background(clipping, background)).unwrap();
-        let id = app.views[0].id;
-        app.session
-            .apply(
-                id,
-                Edit::AddText { page: 0, text: AddedText { text: "Added note".into(), rect: [130.0, 340.0, 230.0, 370.0], ..Default::default() } },
-            )
-            .unwrap();
-        let saved = app.session.save_bytes(id).unwrap();
-        app.session.mark_saved(id, saved, None).unwrap();
-        app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
-        assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
-        app
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = clipboard_app(&cc.egui_ctx, &sink);
+            app.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "group.pdf", None, fixture_with_background(clipping, background)).unwrap();
+            let id = app.views[0].id;
+            app.session
+                .apply(
+                    id,
+                    Edit::AddText {
+                        page: 0,
+                        text: AddedText { text: "Added note".into(), rect: [130.0, 340.0, 230.0, 370.0], ..Default::default() },
+                    },
+                )
+                .unwrap();
+            let saved = app.session.save_bytes(id).unwrap();
+            app.session.mark_saved(id, saved, None).unwrap();
+            app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
+            assert!(app.execute(&egui::Context::default(), "edit.edit_text"));
+            app
+        }
     });
     crate::support::settle(&mut h);
     (h, copies)

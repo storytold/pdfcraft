@@ -63,14 +63,17 @@ fn named_comments(n: usize) -> Vec<u8> {
 /// The app with `bytes` open and each of `options` set, stepped at 60 frames a second.
 fn harness(bytes: Vec<u8>, options: &[(&str, &str)]) -> Harness<'static, PdfCraftApp> {
     let options: Vec<(String, String)> = options.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes(&egui::Context::default(), "work.pdf", None, bytes).expect("opens");
-        for (key, value) in options {
-            app.set_option(&egui::Context::default(), &key, &value).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
+        install_runtime(&cc.egui_ctx);
+        {
+            let mut app = new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "work.pdf", None, bytes).expect("opens");
+            for (key, value) in options {
+                app.set_option(&egui::Context::default(), &key, &value).unwrap();
+            }
+            app
         }
-        app
     });
     h.run_steps(8);
     h
@@ -211,4 +214,11 @@ fn new_app() -> pdfcraft_ui_egui::PdfCraftApp {
         FileWatch::new(Wake::none()).inline(),
     );
     pdfcraft_ui_egui::PdfCraftApp::with_host(std::sync::Arc::new(host), services)
+}
+
+/// Installs the framework runtime on a harness context, as `tests/it/support`'s `install_runtime` (L-227).
+fn install_runtime(ctx: &egui::Context) {
+    let spec = craft::ui::InstallSpec::new(craft::host::target::ShellInfo::default(), std::sync::Arc::new(craft::window::system::NoWindows));
+    craft::ui::shell::embed::install(ctx, spec, &pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN))
+        .expect("the runtime installs on a fresh context");
 }

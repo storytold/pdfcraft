@@ -158,11 +158,14 @@ mod tests {
     fn harness(store: &Store, about: bool) -> Harness<'static, PdfCraftApp> {
         let dir = store.0.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
-            let mut app = app(Some(&dir));
-            app.set_option(&cc.egui_ctx, "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "a.pdf", None, pdf("First")).unwrap();
-            app.open_bytes(&egui::Context::default(), "b.pdf", None, pdf("Second")).unwrap();
-            app
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = app(Some(&dir));
+                app.set_option(&cc.egui_ctx, "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "a.pdf", None, pdf("First")).unwrap();
+                app.open_bytes(&egui::Context::default(), "b.pdf", None, pdf("Second")).unwrap();
+                app
+            }
         });
         h.run_steps(4);
         let ctx_h = h.ctx.clone();

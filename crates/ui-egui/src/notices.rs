@@ -203,10 +203,13 @@ mod tests {
     /// removes its card.
     #[test]
     fn a_progress_card_is_one_per_key_and_its_cancel_reaches_its_job() {
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
-            let mut app = PdfCraftApp::for_unit_tests();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = PdfCraftApp::for_unit_tests();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app
+            }
         });
         h.run_steps(2);
 

@@ -196,14 +196,17 @@ mod tests {
     fn review_pinned_recommended_tools_appear_once() {
         use egui_kittest::kittest::Queryable;
         let label = catalog::group("edit").map_or("", |g| g.label);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1500.0, 1200.0)).build_eframe(|_cc| {
-            let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
-            let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
-            let host = craft::host::Host::builder(info).jobs(jobs).build();
-            let mut app = PdfCraftApp::for_unit_tests_on(std::sync::Arc::new(host));
-            app.set_option(&egui::Context::default(), "language", "en").ok();
-            app.pinned_tools = vec!["edit".into()];
-            app
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1500.0, 1200.0)).build_eframe(|cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            {
+                let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
+                let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
+                let host = craft::host::Host::builder(info).jobs(jobs).build();
+                let mut app = PdfCraftApp::for_unit_tests_on(std::sync::Arc::new(host));
+                app.set_option(&egui::Context::default(), "language", "en").ok();
+                app.pinned_tools = vec!["edit".into()];
+                app
+            }
         });
         h.run_steps(4);
         assert_eq!(h.get_all_by_label(tl!(label)).count(), 1);

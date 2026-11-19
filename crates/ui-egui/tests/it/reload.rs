@@ -104,11 +104,14 @@ fn harness_with(path: &str, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> H
     let path = path.to_owned();
     let jobs = Arc::new(craft::host::ManualJobs::new());
     let queue = jobs.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = app_with(jobs);
-        setup(&mut app);
-        app.open_path(&path);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = app_with(jobs);
+            setup(&mut app);
+            app.open_path(&path);
+            app
+        }
     });
     queue.run_all();
     h.run_steps(4);

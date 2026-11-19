@@ -21,11 +21,14 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        setup(&mut app);
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            setup(&mut app);
+            app
+        }
     });
     // Fonts install on frame 1 and apply on frame 2.
     h.run_steps(4);
@@ -131,13 +134,16 @@ fn long_recent_names_and_paths_are_cut_before_the_page_count() {
 #[test]
 fn home_removes_one_recent_file_or_clears_them_all() {
     // Tall enough that the Recent list is on screen without scrolling.
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        for name in ["first.pdf", "second.pdf", "third.pdf"] {
-            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            for name in ["first.pdf", "second.pdf", "third.pdf"] {
+                app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path: format!("/nowhere/{name}"), pages: 1, size: 0 });
+            }
+            app
         }
-        app
     });
     h.run_steps(4);
     assert!(h.query_by_label("Remove second.pdf from Recent").is_none(), "the remove button shows only over its row");
@@ -964,10 +970,13 @@ impl egui::DroppedFile for Dropped {
 
 #[test]
 fn dropping_a_pdf_on_the_window_opens_it() {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     assert!(h.state().views.is_empty());
@@ -989,10 +998,13 @@ fn dropping_an_open_pdf_again_focuses_its_tab() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("dropped.pdf");
     std::fs::write(&path, FIXTURE).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: FIXTURE.to_vec() });
@@ -1016,13 +1028,16 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
     let setup = crate::control::new_app();
     let pdf = setup.session.create_from_text("dropped", "from disk").unwrap();
     std::fs::write(&path, pdf.as_slice()).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        let grid = app.session.create_from_text("grid", "one page").unwrap();
-        app.open_bytes(&egui::Context::default(), "grid.pdf", None, grid.to_vec()).unwrap();
-        app.views[0].organize = true;
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            let grid = app.session.create_from_text("grid", "one page").unwrap();
+            app.open_bytes(&egui::Context::default(), "grid.pdf", None, grid.to_vec()).unwrap();
+            app.views[0].organize = true;
+            app
+        }
     });
     h.run_steps(3);
     let pages = |h: &egui_kittest::Harness<'_, PdfCraftApp>| {
@@ -1045,10 +1060,13 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
 
 #[test]
 fn pdfs_dropped_on_the_combine_tab_join_its_list() {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h.set_option("combine-view", "list").unwrap();
@@ -1075,10 +1093,13 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
     std::fs::create_dir_all(dir.join("inner")).unwrap();
     std::fs::write(dir.join("one.pdf"), FIXTURE).unwrap();
     std::fs::write(dir.join("inner").join("two.pdf"), FIXTURE).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h.execute("page.combine");
@@ -1093,10 +1114,13 @@ fn a_folder_dropped_on_the_combine_tab_adds_its_pdfs() {
 
 /// The Combine files tab, showing, with one file in its list already.
 fn combine_tab_with_one_file() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::control::new_app();
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(3);
     h.set_option("combine-view", "list").unwrap();
@@ -1198,10 +1222,13 @@ fn intake_harness() -> (Harness<'static, PdfCraftApp>, craft::platform::open::In
     use craft::host::Wake;
     use craft::platform::open::FileIntake;
     let (intake, sender) = FileIntake::new(Wake::none());
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = host_app(std::sync::Arc::new(craft::host::ManualJobs::new()), intake);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = host_app(std::sync::Arc::new(craft::host::ManualJobs::new()), intake);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app
+        }
     });
     h.run_steps(4);
     (h, sender)
@@ -1763,11 +1790,14 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
     // The rail starts on the right; the dock button moves it to the left.
     for on_left in [false, true] {
         let (width, height) = (1000.0, 560.0);
-        let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(move |_cc| {
-            let mut app = crate::control::new_app();
-            app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "short.pdf", None, FIXTURE.to_vec()).unwrap();
-            app
+        let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(move |cc| {
+            crate::support::install_runtime(&cc.egui_ctx);
+            {
+                let mut app = crate::control::new_app();
+                app.set_option(&egui::Context::default(), "language", "en").unwrap();
+                app.open_bytes(&egui::Context::default(), "short.pdf", None, FIXTURE.to_vec()).unwrap();
+                app
+            }
         });
         crate::support::settle(&mut h);
         if on_left {
@@ -1970,14 +2000,17 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     // The existence check runs as a job the test runs itself, so no worker races the frames.
     let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
     let queue = jobs.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_| {
-        let (intake, _sender) = craft::platform::open::FileIntake::new(craft::host::Wake::none());
-        let mut app = host_app(jobs, intake);
-        app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
-            app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let (intake, _sender) = craft::platform::open::FileIntake::new(craft::host::Wake::none());
+            let mut app = host_app(jobs, intake);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            for (name, path) in [("first.pdf", ".".to_owned()), ("target.pdf", target)] {
+                app.recent.push(pdfcraft_ui_egui::RecentFile { name: name.into(), path, pages: 1, size: 0 });
+            }
+            app
         }
-        app
     });
     h.run_steps(4);
     queue.run_all();
