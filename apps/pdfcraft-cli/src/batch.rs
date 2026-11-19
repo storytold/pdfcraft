@@ -88,19 +88,21 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
             })
             .flatten()
             .collect();
-        let target = if Path::new(path).is_absolute() {
-            PathBuf::from(path)
-        } else {
-            std::env::current_dir().map_or_else(|_| PathBuf::from(path), |cwd| cwd.join(path))
-        };
-        if protected.iter().any(|p| same_file(&target, p)) {
-            log_error = Some(format!("batch: --log {path} would overwrite a batch input or output"));
-        } else if let Err(e) = pdfcraft_platform::staging::write_atomically(
-            &target,
-            log.unwrap_or_default().as_bytes(),
-            pdfcraft_platform::staging::StagingName::SuffixThenTag,
-        ) {
-            log_error = Some(format!("batch: cannot write --log {path}: {e}"));
+        match auto.resolve_path(path, true) {
+            Ok(target) => {
+                if protected.iter().any(|p| same_file(&target, p)) {
+                    log_error = Some(format!("batch: --log {path} would overwrite a batch input or output"));
+                } else if let Err(e) = pdfcraft_platform::staging::write_atomically(
+                    &target,
+                    log.unwrap_or_default().as_bytes(),
+                    pdfcraft_platform::staging::StagingName::SuffixThenTag,
+                ) {
+                    log_error = Some(format!("batch: cannot write --log {path}: {e}"));
+                }
+            }
+            Err(e) => {
+                log_error = Some(format!("batch: cannot resolve --log {path}: {e}"));
+            }
         }
     }
     print_output(&auto, content, None)?;
@@ -139,7 +141,7 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 
     if let Ok(canonical) = lexical.canonicalize() {
-        return canonical;
+        return finish_path(canonical);
     }
 
     // Canonicalize the deepest existing ancestor, then reattach the (possibly nonexistent) tail.
@@ -163,5 +165,17 @@ fn normalize_path(path: &Path) -> PathBuf {
     for name in tail.into_iter().rev() {
         result.push(name);
     }
-    result
+    finish_path(result)
+}
+
+/// Normalize casing for platforms whose filesystems are case-insensitive. This is used only for
+/// equality checks, never for opening files.
+fn finish_path(path: PathBuf) -> PathBuf {
+    #[cfg(any(windows, target_os = "macos", target_os = "ios"))]
+    {
+        if let Some(text) = path.to_str() {
+            return PathBuf::from(text.to_lowercase());
+        }
+    }
+    path
 }

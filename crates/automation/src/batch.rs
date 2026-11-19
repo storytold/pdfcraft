@@ -314,6 +314,16 @@ impl Automation {
     }
 }
 
+impl Automation {
+    /// Resolve `path` through this instance's configured root confinement.
+    ///
+    /// This is the same resolver used for tool paths, so callers such as the CLI's `--log`
+    /// handling cannot bypass `--root` by writing directly.
+    pub fn resolve_path(&self, path: &str, write: bool) -> Result<PathBuf> {
+        self.resolve(path, write)
+    }
+}
+
 /// Publish atomically without replacing any existing name, even if another writer wins a race.
 pub(crate) fn publish(target: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
