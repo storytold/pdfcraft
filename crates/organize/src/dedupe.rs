@@ -14,9 +14,11 @@
 //!   reference to a plain value (a name, number, boolean or string, such as ImageMagick's
 //!   `/ColorSpace 10 0 R` → `/DeviceRGB`) compares as that value; the value objects themselves
 //!   are never merged.
-//! - Only `candidates` (objects created by the operation) are ever replaced or rewritten. Existing
-//!   objects can serve as the merge target but are not changed, so an incremental save stays
-//!   small.
+//! - Only `candidates` (objects created by the operation) are ever replaced. Existing objects can
+//!   serve as the merge target but are not changed, so an incremental save stays small. The one
+//!   exception is an *owner* passed to [`dedupe_resources_rewriting`]: an existing object that
+//!   now refers to a copied resource, whose references are rewritten (but which is never merged
+//!   away) so that it follows a copy merged into an equal resource.
 //! - Merged objects may now be shared by several pages. Editing code must copy on write (cos
 //!   objects are immutable values, so a changed resource is always a new object).
 
@@ -234,12 +236,26 @@ fn contains_ref(o: &Object, map: &HashMap<ObjRef, ObjRef>) -> bool {
 /// Repeated candidates are processed once, by complete object reference.
 /// Returns how many objects were removed.
 pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existing: bool) -> usize {
+    dedupe_resources_rewriting(doc, candidates, &[], index_existing)
+}
+
+/// [`dedupe_resources`], and references inside `owners` are rewritten too. An owner is an
+/// existing object that now refers to a copied resource (the form and its `/DR` after a font is
+/// carried in): it must follow a copy merged into an equal resource, but it is never merged or
+/// freed itself. Other existing objects — the catalog, pages — still point at it by number, and
+/// nothing rewrites those, so freeing it would leave them dangling.
+pub(crate) fn dedupe_resources_rewriting(doc: &mut Document, candidates: &[ObjRef], owners: &[ObjRef], index_existing: bool) -> usize {
     let cand: HashSet<ObjRef> = candidates.iter().copied().collect();
     let mut sorted: Vec<ObjRef> = candidates.to_vec();
     sorted.sort_unstable_by_key(|r| (r.num, r.generation));
     // A repeated candidate must not merge into itself: that would cycle `canon` and free
     // the canonical object. Keep generations distinct when normalizing references.
     sorted.dedup();
+    // Every object whose references are rewritten: the mergeable copies, and the owners that only
+    // follow them.
+    let mut rewriting: Vec<ObjRef> = sorted.iter().chain(owners).copied().collect();
+    rewriting.sort_unstable_by_key(|r| (r.num, r.generation));
+    rewriting.dedup();
     // Existing objects first, so candidates merge into them rather than the reverse.
     let mut all: Vec<(ObjRef, std::sync::Arc<Object>)> = Vec::new();
     if index_existing {
@@ -286,7 +302,7 @@ pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existin
     if map.is_empty() {
         return 0;
     }
-    for r in &sorted {
+    for r in &rewriting {
         if map.contains_key(r) {
             continue;
         }

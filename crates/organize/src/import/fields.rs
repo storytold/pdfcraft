@@ -552,9 +552,11 @@ fn same_object(a_doc: &Document, a: &Object, b_doc: &Document, b: &Object, depth
     }
 }
 
-/// Every node of the field tree under `node` (kids before their own kids), each once.
+/// Every node of the field tree under `node` (kids before their own kids), each once, to the same
+/// depth the form reader reads fields (`pdfcraft_forms` walks them 64 levels down): a field it
+/// reads must have its `/DA` font carried, however deep it sits.
 fn field_nodes(doc: &Document, node: ObjRef, depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<ObjRef>) {
-    if depth > 32 || !seen.insert(node) {
+    if depth > 64 || !seen.insert(node) {
         return;
     }
     out.push(node);
@@ -960,6 +962,73 @@ mod tests {
             assert_eq!(base.as_deref(), Some(b"Courier".as_slice()), "the font /{} is gone", String::from_utf8_lossy(name));
         }
         assert_eq!(field_font(&dst, "imported").1.as_deref(), Some("Courier"));
+    }
+
+    #[test]
+    fn an_imported_field_brings_its_font_from_thirty_three_levels_down() {
+        // The form reader reads fields 64 levels down, and the copy follows the whole tree: a
+        // field that deep must have its font carried too, or editing it falls back to Helvetica.
+        const DEEP: usize = 33;
+        // The field tree starts at object 7, one node per level: the leaf is the last one.
+        let (first, leaf) = (7, 7 + DEEP);
+        let mut bodies = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>".to_string(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [{leaf} 0 R] >>"),
+            // The form's own `/DA` is the destination's Helvetica, which is already there: only
+            // the deep field's `/F2` needs carrying, so nothing else brings it in.
+            format!("<< /Fields [{first} 0 R] /DR << /Font << /F1 6 0 R /F2 5 0 R >> >> /DA (/F1 12 Tf 0 g) >>"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_string(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        for d in 0..DEEP {
+            let kids = format!("/Kids [{} 0 R]", first + d + 1);
+            bodies.push(match d {
+                0 => format!("<< /T (f0) {kids} >>"),
+                _ => format!("<< /T (f{d}) /Parent {} 0 R {kids} >>", first + d - 1),
+            });
+        }
+        bodies.push(format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (leaf) /Parent {} 0 R /DA (/F2 12 Tf 0 g) /Rect [0 0 10 10] /P 3 0 R >>",
+            leaf - 1
+        ));
+        let src = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>());
+        let mut dst = font_form("Helvetica", "destination", "F1", "/DA (/F1 12 Tf 0 g)");
+        crate::import::import_pages_with(&mut dst, &src, &[0], 1, crate::import::FieldConflicts::Rename).expect("imports");
+        assert_eq!(field_font(&dst, "leaf").1.as_deref(), Some("Courier"), "the deep field's font came along");
+    }
+
+    #[test]
+    fn a_carried_font_is_never_merged_away_with_the_form_it_was_carried_into() {
+        // The destination's `/DR` is a page's `/Resources` too, and another page's resources hold
+        // the same fonts the import brings in. Once the font is carried in, the `/DR` equals that
+        // resources dictionary: deduplication may rewrite it, but it must not merge it away — the
+        // catalog's `/AcroForm /DR` and the page's `/Resources` still point at it.
+        let src = font_form("Courier", "imported", "F2", "/DA (/F2 12 Tf 0 g)");
+        let mut dst = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 7 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+            "<< /Fields [] /DR 7 0 R /DA (/F1 12 Tf 0 g) >>",
+            "<< /Font << /F1 4 0 R >> >>",
+            "<< /Font << /F1 4 0 R /F2 5 0 R >> >>",
+            "<< /Type /Page /Parent 2 0 R /Resources 8 0 R >>",
+        ]);
+        let dr = ObjRef::new(7, 0);
+        crate::import::import_pages_with(&mut dst, &src, &[0], 1, crate::import::FieldConflicts::Rename).expect("imports");
+        assert!(dst.object_numbers().contains(&dr.num), "the form's /DR is still there");
+        let catalog = dst.get(dst.root().expect("root")).as_dict().cloned().expect("catalog");
+        let form = dst.resolve(catalog.get(b"AcroForm").expect("AcroForm")).as_dict().cloned().expect("form");
+        assert_eq!(form.get(b"DR"), Some(&Object::Ref(dr)), "the catalog still names the /DR that is there");
+        let page = dst.get(ObjRef::new(3, 0)).as_dict().cloned().expect("page");
+        assert_eq!(page.get(b"Resources"), Some(&Object::Ref(dr)), "the page still shares it");
+        // The copied Courier merged into the one already there, and the /DR followed it.
+        let fonts = fonts_of(&dst, &form).expect("fonts");
+        let base = |name: &[u8]| fonts.get(name).and_then(|f| dst.resolve(f).as_dict().and_then(|f| f.name(b"BaseFont")).map(|b| b.to_vec()));
+        assert_eq!(base(b"F2").as_deref(), Some(b"Courier".as_slice()));
+        assert_eq!(base(b"F1").as_deref(), Some(b"Helvetica".as_slice()));
     }
 
     #[test]

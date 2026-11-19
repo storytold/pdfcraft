@@ -90,9 +90,8 @@ pub fn import_pages_with(
     };
     // The form's own objects hold references to the copied fonts too: deduplication must rewrite
     // them as well, or a copy it merges into an equal font already there leaves them dangling.
-    let mut candidates = added_objects(dst, &before);
-    candidates.extend(imported.font_owners.iter().copied());
-    crate::dedupe::dedupe_resources(dst, &candidates, true);
+    // They are only rewritten, never merged away: the catalog and the pages still point at them.
+    crate::dedupe::dedupe_resources_rewriting(dst, &added_objects(dst, &before), &imported.font_owners, true);
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
 }
 
@@ -119,9 +118,7 @@ pub fn insert_file_pages(
 ) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
     let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
-    let mut candidates = added_objects(dst, &before);
-    candidates.extend(imported.font_owners.iter().copied());
-    crate::dedupe::dedupe_resources(dst, &candidates, true);
+    crate::dedupe::dedupe_resources_rewriting(dst, &added_objects(dst, &before), &imported.font_owners, true);
     let outline = source_outline(src, imported.page_map);
     if let Some(first) = imported.pages.first()
         && !outline.is_empty()
