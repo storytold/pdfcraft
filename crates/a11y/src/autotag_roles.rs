@@ -44,7 +44,8 @@ pub(crate) struct Evidence {
     pub text: String,
     /// `[x0, y0, x1, y1]` in user space around each shown string's run from its origin to where
     /// it advances to, and from its baseline to one font size above. `None` when any of it is in
-    /// glyphs whose widths the font does not declare ([`Metrics::width_declared`]).
+    /// glyphs whose widths the font does not declare ([`Metrics::width_declared`]) or that have no
+    /// Unicode mapping, or in a font that writes vertically.
     pub extent: Option<[f64; 4]>,
 }
 
@@ -116,6 +117,8 @@ struct State {
     /// clip-only object.
     invisible: bool,
     metrics: Option<Rc<Metrics>>,
+    /// The font writes vertically, which the extents do not measure.
+    vertical: bool,
 }
 
 /// Font metrics for a whole document, measured once per font object and capped at
@@ -157,7 +160,8 @@ struct Shown {
     text: String,
     kept: usize,
     extent: Option<[f64; 4]>,
-    /// Text shown whose run is not known: in glyphs without a declared width, or out of range.
+    /// Text shown whose run is not known: in glyphs without a declared width or a Unicode mapping,
+    /// in a vertical font, or out of range.
     unbounded: bool,
 }
 
@@ -167,6 +171,10 @@ impl Shown {
             self.unbounded |= state.metrics.is_none();
             return;
         };
+        // Codes without a Unicode mapping still paint glyphs, and a vertical font's glyphs
+        // advance down the page: either way the text's extent is not known.
+        let unmapped = metrics.codes(bytes).iter().any(|&(code, _)| metrics.text_of(code).is_none());
+        self.unbounded |= state.vertical || unmapped;
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
         if chars == 0 {
@@ -248,6 +256,21 @@ fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> (f64, bool) {
         (sum + metrics.width(code) * state.size + char_spacing + word, declared && metrics.width_declared(code))
     });
     (width * scale, declared)
+}
+
+/// Whether `font` writes vertically: a Type 0 font whose `/Encoding` is a predefined CMap name
+/// ending in `-V`, or an embedded CMap whose `/WMode` is 1 (§9.7.5).
+fn vertical(doc: &Document, font: &Object) -> bool {
+    let font = doc.resolve(font);
+    let Some(font) = font.as_dict() else { return false };
+    if font.get(b"Subtype").map(|s| doc.resolve(s)).as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
+        return false;
+    }
+    match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
+        Some(Object::Name(n)) => n.ends_with(b"-V"),
+        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
+        _ => false,
+    }
 }
 
 /// Shows `bytes` in `object`, if any, then moves the text matrix past them.
@@ -336,7 +359,7 @@ fn text_op(state: &mut State, object: Option<&mut Shown>, op: &Op) {
 /// The evidence for each `(BT, ET)` operator span of a page, in order. `resources` is the page's
 /// `/Font` resource dictionary; `fonts` is shared by the document's pages.
 pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
-    let mut by_name: HashMap<Vec<u8>, Option<Rc<Metrics>>> = HashMap::new();
+    let mut by_name: HashMap<Vec<u8>, (Option<Rc<Metrics>>, bool)> = HashMap::new();
     let mut state = State {
         ctm: Matrix::IDENTITY,
         tm: Matrix::IDENTITY,
@@ -347,6 +370,7 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
         spacing: [0.0, 0.0, 1.0],
         invisible: false,
         metrics: None,
+        vertical: false,
     };
     let (mut saved, mut unsaved) = (Vec::new(), 0usize);
     let mut out = Vec::with_capacity(spans.len());
@@ -374,9 +398,13 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
             b"BT" => (state.tm, state.tlm) = (Matrix::IDENTITY, Matrix::IDENTITY),
             b"Tf" => {
                 state.size = op.num(1).unwrap_or(state.size);
-                state.metrics = op
-                    .name(0)
-                    .and_then(|name| by_name.entry(name.to_vec()).or_insert_with(|| resources.get(name).and_then(|f| fonts.get(doc, f))).clone());
+                (state.metrics, state.vertical) = op.name(0).map_or((None, false), |name| {
+                    let font = || resources.get(name);
+                    by_name
+                        .entry(name.to_vec())
+                        .or_insert_with(|| (font().and_then(|f| fonts.get(doc, f)), font().is_some_and(|f| vertical(doc, f))))
+                        .clone()
+                });
             }
             _ => text_op(&mut state, object, op),
         }
@@ -542,5 +570,53 @@ mod tests {
         assert_eq!(found[1].lines, 4, "\" and TD each start a line, and T* uses TD's leading");
         assert_eq!(found[2].chars, 5, "render mode 3 and 7 text is not counted");
         assert_eq!(found[3], Evidence::default(), "a size past 1e6 is dropped");
+    }
+
+    /// The evidence for each `BT`..`ET` of `content` in two-byte Type 0 fonts declaring every
+    /// width as 1000: `/H` and `/V` map their codes to Unicode and write horizontally and
+    /// vertically, and `/U` has no Unicode mapping; with `/F1` as in [`walk`].
+    fn walk_type0(content: &[u8]) -> Vec<Evidence> {
+        let cmap = "begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0020> <007E> <0020> endbfrange endcmap";
+        let type0 = |encoding: &str, unicode: &str| {
+            format!("<< /Type /Font /Subtype /Type0 /BaseFont /House /Encoding /{encoding} /DescendantFonts [2 0 R] {unicode} >>")
+        };
+        let doc = crate::tests::pdf(
+            &[
+                "<< /Type /Catalog >>".into(),
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /House /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>".into(),
+                crate::tests::stream(cmap),
+                type0("Identity-H", "/ToUnicode 3 0 R"),
+                type0("Identity-V", "/ToUnicode 3 0 R"),
+                type0("Identity-H", ""),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".into(),
+            ],
+            "",
+        );
+        let mut resources = Dict::new();
+        for (name, n) in [("H", 4), ("V", 5), ("U", 6), ("F1", 7)] {
+            resources.set(name.as_bytes().to_vec(), Object::Ref(ObjRef::new(n, 0)));
+        }
+        let ops = pdfcraft_content::parse(content).ops;
+        let at = |name: &[u8]| -> Vec<usize> { ops.iter().enumerate().filter(|(_, o)| o.op == name).map(|(i, _)| i).collect() };
+        let spans: Vec<(usize, usize)> = at(b"BT").into_iter().zip(at(b"ET")).collect();
+        evidence(&doc, &mut Fonts::default(), &resources, &ops, &spans)
+    }
+
+    #[test]
+    fn text_in_glyphs_without_a_unicode_mapping_has_no_extent() {
+        // A mapped header and, in the same object, unmapped glyphs further down the page: the
+        // object reaches the body, though its text is only the header's.
+        let found = walk_type0(b"BT /F1 12 Tf 72 760 Td (Header) Tj /U 12 Tf 0 -360 Td <00410042> Tj ET BT /H 12 Tf 72 760 Td <00410042> Tj ET");
+        assert_eq!((found[0].text.as_str(), found[0].extent), ("Header", None));
+        assert_eq!(rounded(found[1].extent), Some([72.0, 760.0, 96.0, 772.0]), "mapped Type 0 text keeps its extent");
+    }
+
+    #[test]
+    fn text_in_a_vertical_font_has_no_extent() {
+        // Thirty glyphs at 12 run 360 units down the page in a vertical font, not along x.
+        let glyphs = format!("<{}>", "0041".repeat(30));
+        let found = walk_type0(format!("BT /V 12 Tf 72 760 Td {glyphs} Tj ET BT /H 12 Tf 72 760 Td {glyphs} Tj ET").as_bytes());
+        assert_eq!((found[0].chars, found[0].extent), (30, None));
+        assert_eq!(rounded(found[1].extent), Some([72.0, 760.0, 432.0, 772.0]));
     }
 }

@@ -95,10 +95,16 @@ pub(crate) fn find(pages: &[PageText<'_>], body: Option<f64>) -> Vec<Vec<Option<
 
 /// `Chapter 1`, `Chapter 2`: heading-sized text that changes, unless it reads as a page number.
 fn is_heading_sequence(window: &[Member<'_>], key: &str, body: Option<f64>) -> bool {
-    let texts_differ = window.windows(2).any(|w| matches!(w, [a, b] if a.evidence.text != b.evidence.text));
+    let texts_differ = window.windows(2).any(|w| matches!(w, [a, b] if folded(&a.evidence.text) != folded(&b.evidence.text)));
     let heading_sized = body.is_some_and(|body| window.iter().all(|m| m.evidence.size >= body * HEADING_SIZE_RATIO));
     let worded = window.iter().all(|m| m.evidence.letters) && !is_page_number(key);
     texts_differ && heading_sized && worded
+}
+
+/// Lowercase with whitespace collapsed, digits kept: `ANNUAL  REPORT` and `Annual report` are the
+/// same heading, `Chapter 1` and `Chapter 2` are not.
+fn folded(text: &str) -> String {
+    text.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A normalised key that is a page number alone or with its label: `#`, `page #`, `p. #`,
@@ -367,6 +373,13 @@ mod tests {
         assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]], "so is a large roman one");
         let found = run(&[vec![big("Page 1")], vec![big("Page 2")], vec![big("- 3 of 9 -")], vec![big("- 4 of 9 -")]], Some(10.0));
         assert!(found.iter().flatten().all(|e| *e == Some(Edge::Top)), "a labelled page number is too: {found:?}");
+    }
+
+    #[test]
+    fn a_heading_differing_only_in_case_or_spacing_does_not_change() {
+        let big = |text: &str| Evidence { size: 18.0, ..line(text, 750.0) };
+        let found = run(&[vec![big("ANNUAL REPORT")], vec![big("Annual  report")]], Some(12.0));
+        assert_eq!(found, [[Some(Edge::Top)], [Some(Edge::Top)]]);
     }
 
     #[test]
