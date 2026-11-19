@@ -19,7 +19,7 @@ const NEAR: f32 = 80.0;
 /// Its distance from the pages' bottom-left corner, in points.
 const INSET: f32 = 16.0;
 /// Its size before it has been drawn once.
-const SIZE_GUESS: Vec2 = Vec2::new(150.0, 36.0);
+const SIZE_GUESS: Vec2 = Vec2::new(170.0, 40.0);
 
 /// Where a link was followed from: the page, a point on it and where that point was in the
 /// window, with the zoom, as [`DocView::return_from_link`] restores them.
@@ -91,12 +91,13 @@ impl DocView {
 /// then while `pointer` (the pages' pointer) is near it or over it. `enabled` is false while
 /// something covers the pages, which hides it. Not shown in the page grid or full screen.
 pub(super) fn overlay(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, pointer: Option<Pos2>, now: f64, animates: bool, enabled: bool) {
+    let id = area_id(view);
+    ui.ctx().data_mut(|d| d.remove::<Rect>(id.with("drawn")));
     let Some(from) = view.link_return else { return };
     if view.organize || view.presentation.is_some() {
         return;
     }
     let ctx = ui.ctx();
-    let id = egui::Id::unique(("link-return", view.view_key()));
     let viewport = view.viewport_screen;
     let corner = viewport.left_bottom() + vec2(INSET, -INSET);
     let size = egui::AreaState::load(ctx, id).and_then(|a| a.size).unwrap_or(SIZE_GUESS);
@@ -118,22 +119,39 @@ pub(super) fn overlay(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, pointer
     let label = info.pages.get(from.page).map(|p| p.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| (from.page + 1).to_string());
     let text = crate::i18n::fmt(tl!("Back to page {p}"), &[("p", &label)]);
     let t = Tokens::get(ctx);
-    let back = egui::Area::new(id)
-        .order(egui::Order::Foreground)
-        .pivot(egui::Align2::LEFT_BOTTOM)
-        .fixed_pos(corner)
-        .show(ctx, |ui| {
-            ui.multiply_opacity(opacity);
-            let content = egui::RichText::new(text).font(theme::medium(14.0)).color(t.text);
-            let b = egui::Button::image_and_text(icons::image("chevron-left", 16.0, t.text), content)
-                .fill(t.card)
-                .stroke(egui::Stroke::new(1.0, t.border))
-                .corner_radius(8)
-                .min_size(vec2(0.0, SIZE_GUESS.y));
-            ui.add(b).on_hover_text(tl!("Go back to where you followed the link")).clicked()
-        })
-        .inner;
-    if back && enabled {
+    let shown = egui::Area::new(id).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(corner).show(ctx, |ui| {
+        ui.multiply_opacity(opacity);
+        // The accent fill stands out from the pages and the pasteboard in either theme, and
+        // the shadow lifts it off a page it sits over.
+        let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: egui::Color32::from_black_alpha(if t.dark() { 120 } else { 40 }) };
+        egui::Frame::new()
+            .corner_radius(10)
+            .shadow(shadow)
+            .show(ui, |ui| {
+                ui.spacing_mut().button_padding = vec2(14.0, 8.0);
+                let content = egui::RichText::new(text).font(theme::medium(15.0)).color(egui::Color32::WHITE);
+                let b = egui::Button::image_and_text(icons::image("chevron-left", 18.0, egui::Color32::WHITE), content)
+                    .fill(t.accent)
+                    .stroke(egui::Stroke::NONE)
+                    .corner_radius(10)
+                    .min_size(vec2(0.0, SIZE_GUESS.y));
+                ui.add(b).on_hover_text(tl!("Go back to where you followed the link")).clicked()
+            })
+            .inner
+    });
+    ctx.data_mut(|d| d.insert_temp(id.with("drawn"), shown.response.rect));
+    if shown.inner && enabled {
         view.return_from_link(info);
     }
+}
+
+/// The way back's area, per view (two panes of split view each have their own).
+fn area_id(view: &DocView) -> egui::Id {
+    egui::Id::unique(("link-return", view.view_key()))
+}
+
+/// Where the way back was drawn this frame, if it was: the page size hint, which shares its
+/// corner, goes above it.
+pub(super) fn drawn(ctx: &egui::Context, view: &DocView) -> Option<Rect> {
+    ctx.data(|d| d.get_temp(area_id(view).with("drawn")))
 }

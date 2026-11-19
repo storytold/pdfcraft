@@ -1,4 +1,4 @@
-use super::{Color32, CornerRadius, DocInfo, DocView, PdfCraftApp, Pos2, Rect, Sense, SnapshotKind, Stroke, Tokens, icons, vec2};
+use super::{Color32, CornerRadius, DocInfo, DocView, PdfCraftApp, Pos2, Rect, Sense, SnapshotKind, Stroke, Tokens, icons, pos2, vec2};
 
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
 pub(super) fn in_size_hint_zone(area: Rect, p: Pos2) -> bool {
@@ -26,7 +26,8 @@ pub(super) fn page_size_hint(
         .order(egui::Order::Foreground)
         .interactable(false)
         .pivot(egui::Align2::LEFT_BOTTOM)
-        .fixed_pos(area.left_bottom() + vec2(14.0, -14.0))
+        // Above the way back from a link, which shares the corner while it shows.
+        .fixed_pos(pos2(area.left() + 14.0, super::link_return::drawn(ui.ctx(), view).map_or(area.bottom() - 14.0, |r| r.top() - 8.0)))
         .show(ui.ctx(), |ui| {
             egui::Frame::NONE
                 .fill(t.card)
