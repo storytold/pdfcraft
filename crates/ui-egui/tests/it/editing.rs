@@ -2756,10 +2756,15 @@ fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
         if unlock {
             h.state_mut().submit_password(Some("reader".into()));
             support::wait_until(&mut h, "both files", |app| app.views.len() == 2);
-            // The other file opened while the password was being typed; the unlocked one comes
-            // after it and is the one in view.
-            assert_eq!(open_paths(h.state()), vec![other_path, locked_path]);
+            // The password retry has worker priority, so either file can finish first.
+            // Both must open exactly once; the last admitted tab is the active one.
+            let mut paths = open_paths(h.state());
+            paths.sort();
+            let mut expected = vec![other_path, locked_path];
+            expected.sort();
+            assert_eq!(paths, expected);
             assert_eq!(h.state().active_ids().map(|(i, _)| i), Some(1));
+            assert!(h.state().password_prompt.is_none(), "successful unlock leaves no stale prompt");
         } else {
             h.state_mut().submit_password(None);
             support::wait_until(&mut h, "the other file", |app| app.views.len() == 1);
