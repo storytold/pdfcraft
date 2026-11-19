@@ -20,6 +20,7 @@ use craft::text::ui::editor::{CaretLine, EditKind, EditorEnd, HostLine, HostRun,
 use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::{Bind, Props as _, Show as _};
 use craft::ui::fonts::FontRef;
+use craft::ui::runtime::focus::FocusRequest;
 use egui::epaint::text::CharIndex;
 use egui::{Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
@@ -600,58 +601,14 @@ fn look_of_line(l: &pdfcraft_engine::TextLine) -> pdfcraft_engine::AddedText {
     source_look(&l.base_font, l.size, l.color, l.bold, l.italic)
 }
 
-/// What a drag on a paragraph box's edge takes hold of, for the shape rule ([`grab_at`]).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Grip {
-    Move,
-    /// An edge (screen left or right), dragged to rewrap the paragraph.
-    Left,
-    Right,
-}
-
-/// How far an edge grip reaches either side of a box's edge (screen pixels). Wide enough to
-/// catch without aiming for the hairline (#2203); a narrow box still keeps its middle for moving.
+/// How far a closed paragraph's edge grabs either side of its line (screen pixels), along its whole
+/// height: wide enough to catch without aiming for the hairline (#2203). The width frame's edge band
+/// (`BoxRules::with_edge_band`) and the paragraph part's reach are both this wide, so the hover that
+/// shows the frame covers the band its press lands on.
 const EDGE_REACH: f32 = 8.0;
 /// How far outside an open paragraph's frame the pointer still means the frame (screen pixels):
 /// the frame's Move cursor shows, and a press there takes hold of the box (`object_ui`).
 pub(crate) const FRAME_REACH: f32 = 8.0;
-
-/// The edge of `b` that `p` grabs: anywhere along its height, within reach of the line. A narrow
-/// box keeps its middle for moving.
-fn edge_at(b: Rect, p: Pos2) -> Option<Grip> {
-    if p.y < b.top() - EDGE_REACH || p.y > b.bottom() + EDGE_REACH {
-        return None;
-    }
-    let inside = EDGE_REACH.min(b.width() / 4.0);
-    let (dl, dr) = (p.x - b.left(), b.right() - p.x);
-    match (dl >= -EDGE_REACH && dl <= inside, dr >= -EDGE_REACH && dr <= inside) {
-        (true, true) if dl <= dr => Some(Grip::Left),
-        (_, true) => Some(Grip::Right),
-        (true, false) => Some(Grip::Left),
-        _ => None,
-    }
-}
-
-/// The box under `p` and what it grabs there; edges only on an upright page. An edge reaches a
-/// little above and below its box, so where that reach overlaps another box the one `p` is level
-/// with wins: a press beside one paragraph's edge doesn't rewrap the paragraph just under it.
-/// Among boxes equally near, the topmost.
-fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
-    let mut best: Option<(f32, usize, Grip)> = None;
-    for (i, b) in boxes.iter().enumerate().rev() {
-        let grip = match upright.then(|| edge_at(*b, p)).flatten() {
-            Some(g) => g,
-            None if b.contains(p) => Grip::Move,
-            None => continue,
-        };
-        // How far above or below the box `p` is: 0 within its height.
-        let off = (b.top() - p.y).max(p.y - b.bottom()).max(0.0);
-        if best.is_none_or(|(o, ..)| off < o) {
-            best = Some((off, i, grip));
-        }
-    }
-    best.map(|(_, i, g)| (i, g))
-}
 
 /// A paragraph's box on screen: its text rect (user space), with a little room around it.
 fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
@@ -687,9 +644,9 @@ fn page_blocks(session: &mut PageSession, doc: &pdfcraft_engine::Document, page:
 }
 
 /// Where a press at the closed paragraph `i` of `boxes` reaches: its box and, on an upright page, the
-/// reach of its edges ([`edge_at`]). Where that reach runs toward a box above or below, it ends
-/// halfway between them: of two boxes the pointer is level with the nearer one ([`grab_at`]), and the
-/// arena's own tie rule (the nearest centre) would not say that.
+/// reach of its edges ([`EDGE_REACH`]). Where that reach runs toward a box above or below, it ends
+/// halfway between them: of two boxes the pointer is level with the nearer one, and the arena's own
+/// tie rule (the nearest centre) would not say that.
 fn reach_of(boxes: &[Rect], i: usize, upright: bool) -> Rect {
     let Some(b) = boxes.get(i).copied() else { return Rect::NOTHING };
     if !upright {
@@ -940,7 +897,8 @@ fn open_waiting(
         && gate
         && !open_here
         && let Some(xf) = session.page_xform(page, geo)
-        && let Some((block, _)) = grab_at(boxes, user_to_screen(&xf, &doc.info, page, x, y), false)
+        && let at = user_to_screen(&xf, &doc.info, page, x, y)
+        && let Some(block) = boxes.iter().rposition(|b| b.contains(at))
     {
         open_editor(session, doc, page, block, geo);
     }
@@ -996,13 +954,15 @@ fn width_frame(
     let (block, l, b) = framed?;
     let start = doc_rect(&body.view, b);
     let state = BoxState::from_rect(start);
-    // `TransformBox::text_frame`'s rules, showing the left and right handles only.
+    // `TransformBox::text_frame`'s rules, showing the left and right handles only, each side grabbed
+    // anywhere along the paragraph's height.
     let rules = BoxRules::default()
         .with_scale(ScaleRule::Free)
         .with_aspect_linked(false)
         .with_allow(BoxAllow::new(false, false, false).with_warp(false))
         .with_min_side(4.0)
-        .with_handles(BoxHandles::Sides);
+        .with_handles(BoxHandles::Sides)
+        .with_edge_band(EDGE_REACH);
     let output = TransformBox::text_frame(tl!("Width").to_string(), Bind::given(state), start).rules(rules).show_at(ui, body.rect);
     let after = output.edit.events.iter().find_map(|event| match event {
         EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
@@ -1250,22 +1210,22 @@ fn editor_session(
     let len = ed.text.chars().count();
     let mut selection = ed.selection.map_or_else(|| TextSelection::caret_at(len), |s| TextSelection::new(s.anchor.min(len), s.caret.min(len)));
     let origin = ed.rect.min;
+    // An editor opened in this pass takes the keys at once. The press that opened it may lie in the
+    // paragraph's reach outside the editor, where the editor sees a click away: it doesn't apply it.
+    let fresh = std::mem::replace(&mut ed.focus, false);
     let (output, galley) = {
         let mut host = ParagraphHost { ctx: &ctx, ed: &mut *ed, faces: &faces, view: body.view, scale, width, origin, galley: None };
         // Escape cancels and selects the paragraph's box (Acrobat); ⌘Enter and a press on the page
         // background apply.
-        let output =
-            TextEditor::new(tl!("Text editing line").to_string(), &mut host, Bind::bound(&mut selection)).esc_commits(false).show_at(ui, live);
+        let editor = TextEditor::new(tl!("Text editing line").to_string(), &mut host, Bind::bound(&mut selection)).esc_commits(false);
+        let output = if fresh { editor.request_focus(FocusRequest::Take) } else { editor }.show_at(ui, live);
         (output, host.galley())
     };
     ed.selection = Some(selection);
-    // PLAN: framework gap F-6: `TextEditor` has no focus-request prop, so an editor opened by a click
-    // on the paragraph's part takes the keys only with a press on it.
-    ed.focus = false;
     if ed.has_changes() {
         ParagraphText::new(origin, Arc::clone(&galley), text_color).show_at(ui, page_clip);
     }
-    let ended = output.ended;
+    let ended = output.ended.filter(|end| !(fresh && *end == EditorEnd::Commit));
     session.text_background.remember(&xf, page, block, galley, origin, text_color);
     match ended {
         None => None,

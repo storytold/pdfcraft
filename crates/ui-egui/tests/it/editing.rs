@@ -654,8 +654,8 @@ fn the_save_prompt_starts_on_save_every_time_it_opens() {
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert!(h.state().views.is_empty(), "Enter saved and closed");
-    assert!(out.exists(), "the second prompt opened on Save");
-    let _ = std::fs::remove_file(out);
+    // Saves go through the file service, which keeps them in memory.
+    assert!(FILES.with(|f| f.file(&out)).is_some(), "the second prompt opened on Save");
 }
 
 #[test]
@@ -686,12 +686,13 @@ fn keys_leave_the_document_under_a_dialog_alone() {
         assert!(h.query_by_label(dont_save()).is_none(), "{m:?}+{key:?} asked to close the file");
         assert!(app.session.get(app.views[0].id).unwrap().can_undo().is_some(), "{m:?}+{key:?} undid the rotation");
         assert!(app.views[0].find.is_none(), "{m:?}+{key:?} opened Find");
-        assert!(h.query_by_label("Preferences").is_some(), "{m:?}+{key:?} replaced Preferences");
+        // The dialog's heading carries its name too: the dialog is the node with its role.
+        assert!(h.query_by_role_and_label(Role::Dialog, "Preferences").is_some(), "{m:?}+{key:?} replaced Preferences");
     }
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"], "a page was deleted under the dialog");
     h.key_press(Key::Escape);
     h.run_steps(3);
-    assert!(h.query_by_label("Preferences").is_none(), "Escape closes Preferences");
+    assert!(h.query_by_role_and_label(Role::Dialog, "Preferences").is_none(), "Escape closes Preferences");
     assert_eq!(h.state().views[0].target_pages(), [1], "Escape went to the dialog, not the page selection");
     h.key_press_modifiers(Modifiers::COMMAND, Key::W);
     h.run_steps(3);
@@ -878,11 +879,11 @@ fn opening_the_same_path_again_focuses_its_tab() {
     let pdfs = TempPdfs::new("dedup-open");
     let a = pdfs.file("a.pdf", 1);
     let b = pdfs.file("b.pdf", 1);
-    // Inline opens: this pins the synchronous open contract (open vs focus). A live app
-    // schedules the background worker instead and answers `Pending` until it completes.
+    // Every open goes through the open queue and answers `Pending`; its tab appears when the queue is polled. A file
+    // already in a tab is focused at once.
     let mut h = inline_session_harness();
-    assert_eq!(h.state_mut().open_path(&a), OpenOutcome::Opened);
-    assert_eq!(h.state_mut().open_path(&b), OpenOutcome::Opened);
+    assert_eq!(h.state_mut().open_path(&a), OpenOutcome::Pending);
+    assert_eq!(h.state_mut().open_path(&b), OpenOutcome::Pending);
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 2, "two different files open two tabs");
     assert_eq!(h.state_mut().open_path(&a), OpenOutcome::Focused, "opening an open file focuses, it doesn't reopen");
@@ -896,8 +897,9 @@ fn opening_the_same_path_again_focuses_its_tab() {
 fn opening_a_missing_file_fails_and_tells_the_user() {
     let mut h = session_harness(|_| {});
     let missing = std::env::temp_dir().join(format!("pdfcraft-no-such-file-{}.pdf", std::process::id()));
-    assert!(matches!(h.state_mut().open_path(&missing.to_string_lossy()), OpenOutcome::Failed(_)));
-    h.run_steps(2);
+    // The open is queued; its failure is reported once the read fails.
+    assert_eq!(h.state_mut().open_path(&missing.to_string_lossy()), OpenOutcome::Pending);
+    h.run_steps(4);
     assert!(h.state().views.is_empty());
     assert!(support::shown_notice(&mut h).is_some(), "the failure is still reported to the user");
 }
@@ -943,7 +945,8 @@ fn opening_an_encrypted_document_twice_keeps_one_prompt_and_one_tab() {
     h.state_mut().open_path(&s);
     h.run_steps(2);
     assert!(h.state().views.is_empty(), "still locked");
-    let field = h.get_by_role(Role::PasswordInput);
+    // One prompt: a second would add a second field.
+    let field = password_field(&h);
     field.focus();
     field.type_text("pw");
     h.run_steps(2);
@@ -1817,8 +1820,21 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     assert_eq!(texts_of(h.state(), 1), ["Page 1", "Page 2", "Page 1"]);
 }
 
+/// The password dialog's field. Its text widget's own node is hidden in the field's, so the role alone finds two.
+fn password_field<'h>(h: &'h Harness<'static, PdfCraftApp>) -> egui_kittest::Node<'h> {
+    h.get_by_role_and_label(Role::PasswordInput, "Password")
+}
+
+/// The password dialog is open and asks for the permissions password (its OK is Unlock), or for the one that opens
+/// the file (Open).
+fn password_dialog_asks(h: &Harness<'static, PdfCraftApp>, permissions: bool) {
+    h.get_by_role(Role::Dialog);
+    let _ = password_field(h);
+    h.get_by_role_and_label(Role::Button, if permissions { "Unlock" } else { "Open" });
+}
+
 fn type_password(h: &mut Harness<'static, PdfCraftApp>, password: &str) {
-    let field = h.get_by_role(Role::PasswordInput);
+    let field = password_field(h);
     field.focus();
     field.type_text(password);
     h.run_steps(1);
@@ -1837,12 +1853,12 @@ fn a_password_protected_file_is_unlocked_with_its_password_and_combined() {
     // The row's link (the toolbar's Unlock… comes first).
     h.get_all_by_label("Unlock…").last().unwrap().click();
     h.run_steps(3);
-    h.get_by_label("Unlock secret.pdf");
+    password_dialog_asks(&h, false);
     type_password(&mut h, "nope");
     h.get_by_label("Wrong password");
     assert!(h.state().combine_draft[1].lock.is_some());
     // The box stays open for another try.
-    let field = h.get_by_role(Role::PasswordInput);
+    let field = password_field(&h);
     field.focus();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.run_steps(1);
@@ -1876,7 +1892,9 @@ fn one_password_unlocks_several_selected_files_and_undo_locks_them_again() {
     h.run_steps(1);
     h.get_all_by_label("Unlock…").next().unwrap().click(); // the toolbar's (the rows' links come after it)
     h.run_steps(3);
-    h.get_by_label("Unlock 3 files");
+    // One dialog asks for the three files' password.
+    password_dialog_asks(&h, false);
+    assert!(h.query_all_by_label_contains("3 files").next().is_some(), "the dialog names the three files");
     type_password(&mut h, "same");
     let locked: Vec<bool> = h.state().combine_draft.iter().map(|f| f.lock.is_some()).collect();
     assert_eq!(locked, [false, false, false, true]);
@@ -1900,7 +1918,7 @@ fn a_file_that_opens_but_forbids_combining_takes_the_permissions_password() {
     let _ = h.get_all_by_label_contains("Enter the permissions password");
     h.get_all_by_label("Unlock…").last().unwrap().click();
     h.run_steps(3);
-    h.get_by_label("Enter the permissions password to allow combining");
+    password_dialog_asks(&h, true);
     type_password(&mut h, "owner");
     assert!(h.state().combine_draft[1].lock.is_none());
     assert!(!h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
@@ -2694,7 +2712,7 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
     });
     h.run_steps(4);
     h.get_by_label_contains("is protected");
-    let field = h.get_by_role(Role::PasswordInput);
+    let field = password_field(&h);
     field.focus();
     field.type_text("pw");
     h.run_steps(2);
@@ -4973,7 +4991,7 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     h.run_steps(3);
     assert!(h.state().views[0].session.line_editor.is_some());
     // The Format text panel shows the paragraph's look; making it bold applies at once.
-    h.get_by_label("FORMAT TEXT");
+    assert!(h.query_all_by_label("Format text").next().is_some(), "the Format text section shows");
     h.get_by_label("Bold").click();
     h.run_steps(4);
     let s = h.state();
@@ -5012,7 +5030,7 @@ fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
     h.run_steps(1);
 
     // Click Superscript: "1" becomes "¹"
-    h.get_by_label("FORMAT TEXT");
+    assert!(h.query_all_by_label("Format text").next().is_some(), "the Format text section shows");
     let btn = h.get_by_label("Superscript");
     btn.click();
     h.run_steps(4);
@@ -5125,7 +5143,7 @@ fn typed_small_coloured_text_size_survives_save_and_reopen() {
     h.drop_at(at);
     h.run_steps(3);
     assert!(h.state().views[0].session.line_editor.is_some());
-    h.get_by_label("Font size:").click();
+    h.get_by_label("Font size").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.event(egui::Event::Text("6.5".into()));
@@ -10281,7 +10299,7 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
         h.run_steps(1);
     }
     use egui::accesskit::Role;
-    let size_node = h.get_by_role_and_label(Role::TextInput, "Font size:");
+    let size_node = h.get_by_role_and_label(Role::TextInput, "Font size");
     assert_eq!(size_node.value().as_deref(), Some("12"), "size text input value is 12");
 
     let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
