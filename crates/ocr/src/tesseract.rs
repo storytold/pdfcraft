@@ -251,24 +251,13 @@ fn quarter_turned(line: &Line) -> bool {
 }
 
 /// Whether a line reads right to left, from its first strong character: the one Unicode's
-/// bidirectional algorithm uses to decide a paragraph's direction. Digits, punctuation and
-/// spaces before it are skipped; text with no strong character reads left to right.
+/// bidirectional algorithm uses to decide a paragraph's direction. Characters that are not
+/// strong — digits, separators, punctuation and spaces — are skipped, and text with no strong
+/// character reads left to right. The classes come from Unicode's own data rather than from
+/// script ranges, which would also catch Arabic numbers and marks (#7254 review): an
+/// Arabic-Indic number like `١٫٥` holds no strong character, so it reads left to right.
 fn reads_right_to_left(text: &str) -> bool {
-    for c in text.chars() {
-        let u = c as u32;
-        // Arabic-Indic digits are numbers in the bidi algorithm, not letters.
-        if matches!(u, 0x0660..=0x0669 | 0x06F0..=0x06F9) {
-            continue;
-        }
-        // Hebrew, Arabic and the other right-to-left scripts, and their presentation forms.
-        if matches!(u, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) {
-            return true;
-        }
-        if c.is_alphabetic() {
-            return false;
-        }
-    }
-    false
+    unicode_bidi::get_base_direction(text) == unicode_bidi::Direction::Rtl
 }
 
 /// The way a line of two or more words reads, from where its words sit: Tesseract lists a
@@ -795,6 +784,22 @@ mod tests {
 5\t1\t1\t1\t1\t2\t100\t300\t24\t90\t95\tBRAVO",
         );
         assert!(latin[0].words.iter().all(|w| w.direction == Down), "{latin:?}");
+    }
+
+    /// #7254 review: Arabic numeric separators (U+066B decimal, U+066C thousands) are Arabic
+    /// numbers in Unicode's bidi algorithm, not strong right-to-left characters. A sideways
+    /// line of Arabic-Indic numbers therefore reads like a left-to-right line: down the image
+    /// is a clockwise turn, and up the image a counter-clockwise one.
+    #[test]
+    fn tsv_reads_a_sideways_line_of_arabic_numbers_as_left_to_right() {
+        use WordDirection::{Down, Up};
+        for (why, separator) in [("decimal", '\u{066B}'), ("thousands", '\u{066C}')] {
+            let row = |top: u32, first: char| format!("5\t1\t1\t1\t1\t1\t100\t{top}\t20\t60\t95\t{first}{separator}\u{0665}");
+            let down = parse_tsv(&format!("{}\n{}", row(100, '\u{0661}'), row(200, '\u{0662}')));
+            assert!(down[0].words.iter().all(|w| w.direction == Down), "{why}, down: {down:?}");
+            let up = parse_tsv(&format!("{}\n{}", row(200, '\u{0661}'), row(100, '\u{0662}')));
+            assert!(up[0].words.iter().all(|w| w.direction == Up), "{why}, up: {up:?}");
+        }
     }
 
     /// #7254 review: a two-word line is judged by its longer box, so one short word beside it
