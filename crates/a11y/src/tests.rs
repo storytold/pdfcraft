@@ -205,6 +205,27 @@ fn autotag_text_gives_a_page_of_running_text_alone_no_struct_parents() {
     assert_eq!(status(&check(&doc, &Options::default()), Rule::TaggedContent), Status::Passed);
 }
 
+/// A body line turned to run down from the top of each page starts in the header band but does
+/// not lie inside it: it is not running text.
+#[test]
+fn autotag_text_leaves_turned_text_that_runs_out_of_the_band_tagged() {
+    let body = "BT /F1 12 Tf 0 -1 1 0 72 760 Tm (A body line set turned so that it runs down the page) Tj ET";
+    let leaf = |contents: usize| format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R >>");
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> >>".into(),
+            leaf(5),
+            leaf(6),
+            stream(body),
+            stream(body),
+            FONT.into(),
+        ],
+        "",
+    );
+    assert_eq!(running_text(&doc).unwrap(), []);
+}
+
 #[test]
 fn autotag_text_leaves_a_single_page_header_tagged() {
     let mut doc = pdf(

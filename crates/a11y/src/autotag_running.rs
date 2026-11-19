@@ -8,6 +8,7 @@
 //! text changes from page to page and is all heading-sized (`Chapter 1`, `Chapter 2`) is a
 //! sequence of headings, not running text, unless it reads as a page number (`Page 3`, `3 of 9`).
 //! Each separate cluster of heights that qualifies counts. Position alone never makes running text.
+//! A text object whose extent is not known (see [`Evidence::extent`]) is never running text.
 
 use std::collections::HashMap;
 
