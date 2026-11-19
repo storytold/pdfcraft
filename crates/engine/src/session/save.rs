@@ -545,11 +545,14 @@ fn stream_draws_text(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, bud
 /// or, for a form shown for display only under a no-changes certification
 /// ([`Document::shown_not_saved`]), its signed file. That certification permits an incremental
 /// update holding only a document security store or a document timestamp (ISO 32000-2
-/// §12.8.2.2.1, Table 257); the reconciled form it shows is never written.
+/// §12.8.2.2.1, Table 257); the reconciled form it shows is never written. Nor are password
+/// values cleared from that signed file, as a save clears them ([`writable`]): that would rewrite
+/// fields or the XFA datasets in the same update, which the certification forbids, and the
+/// values would stay in the signed revision anyway.
 fn validation_base(d: &Document) -> Result<std::borrow::Cow<'_, pdfcraft_cos::Document>, EditError> {
     let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
     match d.shown_not_saved.as_ref() {
-        Some(shown) => writable(&shown.signed),
+        Some(shown) => Ok(std::borrow::Cow::Borrowed(&shown.signed)),
         None => writable(&editor.cos),
     }
 }

@@ -662,3 +662,45 @@ fn a_display_only_certified_form_refuses_marking_another_file_saved() {
     assert_eq!(refused_at_1(s.mark_saved(id, other, None)), "saving the pages laid out from its XFA template");
     assert_still_shown(&s, id, pages);
 }
+
+/// A no-changes certification over a form whose signed file holds a value in an XFA password
+/// field: the document timestamp and the revocation evidence go onto the signed file as it is.
+/// Clearing that value (which a save does, ISO 32000-2 Table 231) would rewrite the XFA datasets
+/// in the same update, a change the certification forbids (§12.8.2.2.1, Table 257), and it
+/// would not take the value out of the signed revision anyway.
+#[test]
+fn a_display_only_certified_form_with_a_password_value_takes_only_validation_data() {
+    let xdp = pdfcraft_xfa::fixtures::growable_text_template(false)
+        .replace("</field>\n </subform>", "</field>\n  <field name=\"PIN\" w=\"2in\" h=\"0.3in\"><ui><passwordEdit/></ui></field>\n </subform>")
+        .replace("<ACTIVIDADES>Short</ACTIVIDADES>", "<ACTIVIDADES>Short</ACTIVIDADES><PIN>1234</PIN>");
+    assert!(xdp.contains("<PIN>1234</PIN>") && xdp.contains("passwordEdit"), "the password field is in the form");
+    let signed = certified_as_is(pdfcraft_xfa::fixtures::shell(&xdp), 1);
+    assert!(pdfcraft_xfa::has_password_values(&pdfcraft_cos::Document::open(signed.clone()).unwrap()), "the signed file holds it");
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    s.set_trusted_certificates(vec![digital_id().certificate]);
+    let id = s.open("shell.pdf", None, signed.clone(), None).unwrap();
+    let pages = s.get(id).unwrap().info.pages.len();
+
+    let stamped = s.timestamp_document(id, &TestTsa(digital_id()), String::new()).expect("a document timestamp is permitted");
+    assert!(stamped.starts_with(&signed), "appended to the signed file");
+    let cert = certification_of(&stamped);
+    assert_eq!(cert.status, sign::Status::Valid, "{:?}", cert.details);
+    assert!(
+        matches!(&cert.modification, Modification::Allowed(k) if k.contains(&sign::kind::SIGNATURE) && !k.contains(&sign::kind::FORM_FILL)),
+        "{:?}",
+        cert.modification
+    );
+
+    let evidence = sign::dss::Evidence { certs: vec![digital_id().certificate.raw.clone()], ocsps: Vec::new(), crls: Vec::new() };
+    let ltv = s.embed_ltv(id, &evidence).expect("a document security store is permitted");
+    let cert = certification_of(&ltv);
+    assert_eq!(cert.status, sign::Status::Valid, "{:?}", cert.details);
+    assert!(
+        matches!(&cert.modification, Modification::Allowed(k) if k.contains(&sign::kind::SECURITY_STORE) && !k.contains(&sign::kind::FORM_FILL)),
+        "{:?}",
+        cert.modification
+    );
+
+    s.mark_signed(id, stamped, None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.pages.len(), pages, "the pages shown stay");
+}
