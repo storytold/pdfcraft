@@ -96,6 +96,22 @@ pub(crate) fn test_app() -> PdfCraftApp {
     PdfCraftApp::with_host(std::sync::Arc::new(host), services)
 }
 
+/// `app` in a window: an open it starts finishes on the window's next frame, as at launch.
+#[cfg(test)]
+pub(crate) fn shown(app: PdfCraftApp) -> egui_kittest::Harness<'static, PdfCraftApp> {
+    egui_kittest::Harness::builder().build_eframe(move |cc| {
+        crate::tests::install_runtime(&cc.egui_ctx);
+        app
+    })
+}
+
+/// Opens `files` as a launch does, then runs the frames that take the opened documents.
+#[cfg(test)]
+pub(crate) fn launch(h: &mut egui_kittest::Harness<'static, PdfCraftApp>, files: &[String], two_paged: bool) {
+    open_files(h.state_mut(), files, two_paged);
+    h.run_steps(2);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +209,9 @@ mod tests {
             app.open_bytes(&egui::Context::default(), "restored.pdf", None, include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec())
                 .unwrap();
             let restored = app.views[0].id;
-            open_files(&mut app, &[text.into(), second.into()], enabled);
+            let mut h = shown(app);
+            launch(&mut h, &[text.into(), second.into()], enabled);
+            let app = h.state_mut();
             assert_eq!(app.views.len(), 3);
             assert_eq!(app.views[0].id, restored);
             assert_eq!(app.views[0].view.display, PageDisplay::Single);
@@ -202,7 +220,7 @@ mod tests {
                 assert!(!view.view.continuous);
             }
             // The launch override never reaches the saved settings.
-            assert_eq!(saved_display(&app), PageDisplay::Single);
+            assert_eq!(saved_display(app), PageDisplay::Single);
             // Existing --layout applies after the flag to the active document only.
             if enabled {
                 app.set_launch_layout("continuous").unwrap();
@@ -214,9 +232,9 @@ mod tests {
             app.set_option(&egui::Context::default(), "default-layout", "two-up").unwrap();
             assert_eq!(app.view_defaults.display, PageDisplay::TwoUp);
             assert!(app.view_defaults.continuous);
-            assert_eq!(saved_display(&app), PageDisplay::TwoUp);
-            open_files(&mut app, &[], enabled);
-            assert_eq!(app.views.len(), 3);
+            assert_eq!(saved_display(app), PageDisplay::TwoUp);
+            launch(&mut h, &[], enabled);
+            assert_eq!(h.state().views.len(), 3);
         }
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(second_path).unwrap();
@@ -241,7 +259,9 @@ mod tests {
                     include_bytes!("../../../crates/ui-egui/tests/data/form.pdf").to_vec(),
                 )
                 .unwrap();
-                open_files(&mut app, &args.files, args.two_paged);
+                let mut h = shown(app);
+                launch(&mut h, &args.files, args.two_paged);
+                let app = h.state_mut();
                 for (key, value) in args.options {
                     assert_eq!(key, "layout");
                     app.set_launch_layout(&value).unwrap();
@@ -272,9 +292,11 @@ mod repeated_file_tests {
         let name = path.to_str().unwrap().to_string();
         let mut app = test_app();
         app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
-        app.open_path(&name);
-        let original = app.views[0].id;
-        open_files(&mut app, &[name.clone(), name], true);
+        let mut h = shown(app);
+        launch(&mut h, std::slice::from_ref(&name), false);
+        let original = h.state().views[0].id;
+        launch(&mut h, &[name.clone(), name], true);
+        let app = h.state_mut();
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.views[0].id, original);
         assert_eq!(app.views[0].view.display, PageDisplay::TwoUp);
