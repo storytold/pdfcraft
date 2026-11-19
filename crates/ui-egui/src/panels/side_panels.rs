@@ -5,7 +5,9 @@
 //! by earlier versions (`side_panels`, `docking`) are read once by [`migrate`].
 
 use craft::automation::dock as dock_rpc;
-use craft::behavior::dock::{Action, Column, DockEdge, DockPlacement, Group, Layout, Location, Node, Permissions, SplitSize, Target, Workspace};
+use craft::behavior::dock::{
+    Action, Column, DockEdge, DockPlacement, Group, Layout, Location, Node, PanelState, Permissions, SplitSize, Target, Workspace,
+};
 use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
@@ -242,7 +244,10 @@ fn edge_name(edge: Option<DockEdge>) -> &'static str {
 
 /// The side panel that is open, if any.
 fn open_side(workspace: &Workspace<PanelId>) -> Option<PanelId> {
-    SIDE.into_iter().find(|panel| workspace.layout.contains(panel))
+    // The side panels share a group: the open one is its front tab. A minimized or collapsed group
+    // shows none in front, and then the first one open stands for it.
+    let layout = &workspace.layout;
+    SIDE.into_iter().find(|panel| layout.panel_state(panel) == PanelState::Front).or_else(|| SIDE.into_iter().find(|panel| layout.contains(panel)))
 }
 
 /// The tab label of a side panel: its name, and the count of what it lists where it has one.
@@ -473,7 +478,7 @@ fn show_panel(app: &mut PdfCraftApp, panel: PanelId, visible: bool) -> Result<()
 
 /// The side panel `workspace` has open, `None` when every side panel is closed.
 pub(crate) fn right_of(workspace: &Workspace<PanelId>) -> Option<RightPanel> {
-    SIDE.iter().find(|panel| workspace.layout.contains(panel)).and_then(|panel| panel.side())
+    open_side(workspace).and_then(PanelId::side)
 }
 
 /// Opens or closes `panel`, telling the user when the dock refuses.
