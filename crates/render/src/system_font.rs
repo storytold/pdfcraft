@@ -10,7 +10,7 @@
 //! (AGENTS.md §1.4), Noto CJK and Source Han are left out on purpose (§1.1), and
 //! `PDFCRAFT_SYSTEM_FONTS=0` turns it off, as for the interface font.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -316,7 +316,7 @@ const MAX_SCAN_ENTRIES: usize = 50_000;
 /// The font files in the Unix font folders, searched once: lower-cased file name to path.
 fn unix_installed() -> &'static HashMap<String, PathBuf> {
     static FOUND: OnceLock<HashMap<String, PathBuf>> = OnceLock::new();
-    FOUND.get_or_init(|| scan_font_dirs(&unix_font_dirs()))
+    FOUND.get_or_init(|| scan_font_dirs(&unix_font_dirs(), MAX_SCAN_ENTRIES))
 }
 
 /// The folders fontconfig's default configuration reads: the system and local ones, and the
@@ -334,9 +334,18 @@ fn unix_font_dirs() -> Vec<PathBuf> {
 
 /// Every `.ttf` and `.ttc` file under `roots`, by lower-cased file name. The first one found wins:
 /// roots in order, and each folder's entries sorted, so the choice doesn't depend on disk order.
-fn scan_font_dirs(roots: &[PathBuf]) -> HashMap<String, PathBuf> {
+/// `max_entries` is the most entries looked at in total.
+fn scan_font_dirs(roots: &[PathBuf], max_entries: usize) -> HashMap<String, PathBuf> {
     /// Add the font files of `dir` and its subfolders down to `depth` more levels.
-    fn walk(dir: &Path, depth: u32, budget: &mut usize, found: &mut HashMap<String, PathBuf>) {
+    fn walk(dir: &Path, depth: u32, budget: &mut usize, seen: &mut HashSet<PathBuf>, found: &mut HashMap<String, PathBuf>) {
+        // A folder reached through a symbolic link is still a folder, so a link back to one
+        // already walked would read its entries again at every level and spend the budget on
+        // them, leaving a later root such as the user's font folder unsearched. Each real folder
+        // is walked once.
+        let Ok(real) = std::fs::canonicalize(dir) else { return };
+        if !seen.insert(real) {
+            return;
+        }
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         let mut paths = Vec::new();
         for entry in entries.flatten() {
@@ -350,7 +359,7 @@ fn scan_font_dirs(roots: &[PathBuf]) -> HashMap<String, PathBuf> {
         for path in paths {
             if path.is_dir() {
                 if depth > 0 {
-                    walk(&path, depth - 1, budget, found);
+                    walk(&path, depth - 1, budget, seen, found);
                 }
                 continue;
             }
@@ -361,9 +370,10 @@ fn scan_font_dirs(roots: &[PathBuf]) -> HashMap<String, PathBuf> {
         }
     }
     let mut found = HashMap::new();
-    let mut budget = MAX_SCAN_ENTRIES;
+    let mut seen = HashSet::new();
+    let mut budget = max_entries;
     for root in roots {
-        walk(root, MAX_SCAN_DEPTH, &mut budget, &mut found);
+        walk(root, MAX_SCAN_DEPTH, &mut budget, &mut seen, &mut found);
     }
     found
 }
@@ -535,7 +545,7 @@ mod tests {
         file("local/readme.txt");
         // Below the depth bound: not looked at.
         file(&format!("user/{}/simfang.ttf", ["d"; MAX_SCAN_DEPTH as usize + 1].join("/")));
-        let found = scan_font_dirs(&[root.join("local"), root.join("user"), root.join("missing")]);
+        let found = scan_font_dirs(&[root.join("local"), root.join("user"), root.join("missing")], MAX_SCAN_ENTRIES);
         let _ = std::fs::remove_dir_all(&root);
 
         let gb = Script::SimplifiedChinese;
@@ -547,6 +557,31 @@ mod tests {
         assert_eq!(unix_found(["wqy-zenhei.ttc"].into_iter(), &found), [wqy]);
         assert!(unix_found(windows_names(gb).iter().copied(), &found).contains(&simsun));
         assert!(!found.contains_key("readme.txt"));
+    }
+
+    /// A symbolic link back to a folder already walked must not read its entries again at every
+    /// level: doing so spends the entry budget, and a font in a later folder is then missed even
+    /// though the distinct entries fit within it.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_loop_does_not_spend_the_scan_budget() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-7285-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let first = root.join("first");
+        std::fs::create_dir_all(&first).unwrap();
+        for n in 0..4 {
+            std::fs::write(first.join(format!("note-{n}.txt")), b"not a font").unwrap();
+        }
+        std::os::unix::fs::symlink(&first, first.join("loop")).unwrap();
+        let later = root.join("later");
+        std::fs::create_dir_all(&later).unwrap();
+        let simhei = later.join("simhei.ttf");
+        std::fs::write(&simhei, b"font").unwrap();
+        // Enough for the linked folder to be read five times over, but not for both roots.
+        let found = scan_font_dirs(&[first, later], 20);
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(unix_named(Script::SimplifiedChinese, ChineseFamily::Hei, &found), [simhei]);
     }
 
     /// The four regional Adobe collections select their corresponding scripts; Identity
