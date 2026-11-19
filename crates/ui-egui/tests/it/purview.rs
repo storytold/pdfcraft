@@ -148,9 +148,15 @@ fn harness_with_document(provider: TestPurviewProvider) -> Harness<'static, PdfC
 #[test]
 fn signed_out_dialog_has_one_sign_in_action_and_no_email_field() {
     let h = harness(TestPurviewProvider::signed_out());
+    h.get_by_label("Microsoft account");
     h.get_by_label("Sign in");
     assert!(h.query_by(|node| node.label().as_deref() == Some("Sign out")).is_none());
     assert!(h.query_by(|node| node.label().as_deref() == Some("Microsoft 365 account")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Sensitivity labels")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Document capabilities")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Apply label")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove label")).is_none());
+    assert!(h.query_by(|node| node.label().as_deref() == Some("Remove protection")).is_none());
 }
 
 #[test]

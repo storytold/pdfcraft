@@ -194,13 +194,6 @@ fn signed_out_account_panel(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &T
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Sign in to continue").font(theme::medium(13.0)).color(tokens.text));
-            ui.label(
-                egui::RichText::new("Microsoft account sign-in is required before PdfCraft can read tenant labels, licensing and document rights.")
-                    .font(theme::regular(11.5))
-                    .color(tokens.text_muted),
-            );
-            ui.add_space(6.0);
             if ui.add(egui::Button::new("Sign in").fill(tokens.accent)).clicked() {
                 match app.session.purview_sign_in(None) {
                     Ok(()) => {
@@ -220,12 +213,13 @@ fn signed_out_account_panel(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &T
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) -> (bool, bool) {
     ui.vertical(|ui| {
         ui.add_space(4.0);
-        ui.label(egui::RichText::new("Sensitivity label").font(theme::semibold(18.0)));
+        let status = app.session.purview_status();
+        let title = if matches!(status, pdfcraft_engine::PurviewStatus::Ready) { "Sensitivity label" } else { "Microsoft account" };
+        ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(6.0);
 
-        let status = app.session.purview_status();
         match status {
             pdfcraft_engine::PurviewStatus::Ready => {
                 account_card(ui, app, tokens);
@@ -324,16 +318,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, tokens: &Tokens) ->
         app.active_ids().and_then(|(_, id)| app.session.get(id)).and_then(|doc| doc.purview().map(|purview| purview.protected)).unwrap_or(false);
     let can_change_security = active_document_rights.as_ref().is_some_and(|rights| rights.can_change_security());
 
-    let (cancel, apply, remove_label, remove_protection) = ui
-        .with_layout(Layout::right_to_left(Align::Center), |ui| {
+    let (cancel, apply, remove_label, remove_protection) = if ready {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let cancel = ui.button("Cancel").clicked();
-            let apply = ui.add_enabled(ready && !app.purview_label_id.is_empty(), egui::Button::new("Apply label")).clicked();
-            let remove_label = ui.add_enabled(ready && current_has_label && can_change_security, egui::Button::new("Remove label")).clicked();
-            let remove_protection =
-                ui.add_enabled(ready && current_is_protected && can_change_security, egui::Button::new("Remove protection")).clicked();
+            let apply = ui.add_enabled(!app.purview_label_id.is_empty(), egui::Button::new("Apply label")).clicked();
+            let remove_label = ui.add_enabled(current_has_label && can_change_security, egui::Button::new("Remove label")).clicked();
+            let remove_protection = ui.add_enabled(current_is_protected && can_change_security, egui::Button::new("Remove protection")).clicked();
             (cancel, apply, remove_label, remove_protection)
         })
-        .inner;
+        .inner
+    } else {
+        let cancel = ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.button("Cancel").clicked()).inner;
+        (cancel, false, false, false)
+    };
 
     if apply && let Some((_, id)) = app.active_ids() {
         let justification = if app.purview_justification.trim().is_empty() { None } else { Some(app.purview_justification.as_str()) };
