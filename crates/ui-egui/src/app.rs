@@ -487,11 +487,13 @@ impl PdfCraftApp {
 
     /// The app's root values for this frame: appearance mode, motion, interface scale and the
     /// interface language's direction. The one place the app's `RootEnv` is built.
-    // PLAN: `ui_scale: None` gives scale 1; following the desktop's text scale (`env::system_text_scale`) needs a ctx, and hub-w3 calls this as `root_env()`.
-    pub(crate) fn root_env(&self) -> RootEnv {
+    pub(crate) fn root_env(&self, ctx: &egui::Context) -> RootEnv {
         let lang = i18n::Lang::from_pref(&self.language);
         let direction = if lang.rtl() { craft_i18n::Direction::Rtl } else { craft_i18n::Direction::Ltr };
-        let mut root = RootEnv::new().mode(self.theme_preference).direction(direction).scale(Scale::new(self.ui_scale.unwrap_or(1.0)));
+        let system = craft::ui::runtime::env::system_text_scale(ctx).unwrap_or(1.0);
+        let native = ctx.native_pixels_per_point().unwrap_or(1.0);
+        let mut root =
+            RootEnv::new().mode(self.theme_preference).direction(direction).scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
         root.motion = self.animation_effects;
         root
     }

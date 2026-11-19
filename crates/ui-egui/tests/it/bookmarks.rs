@@ -134,7 +134,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
         h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
     }
     h.run_steps(3);
-    h.get_by_label("Bookmark options").click();
+    h.get_by_label("Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Collapse all bookmarks").click();
     h.run_steps(3);
@@ -210,7 +210,7 @@ trailer << /Root 1 0 R >>
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "tagged.pdf", None, TAGGED.to_vec()).unwrap();
     h.run_steps(3);
-    h.get_by_label("Bookmark options").click();
+    h.get_by_label("Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("New bookmarks from structure").click();
     h.run_steps(3);
@@ -267,7 +267,7 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     h.run_steps(3);
     let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.get_by_label("Bookmark options").click();
+        h.get_by_label("Panel Menu").click();
         h.run_steps(2);
         h.get_by_label("New bookmarks from text styles…").click();
         h.run_steps(3);
@@ -330,17 +330,17 @@ fn expanding_and_collapsing_all_bookmarks() {
     }
     h.run_steps(3);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
-    h.get_by_label("Bookmark options").click();
+    h.get_by_label("Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Expand all bookmarks").click();
     h.run_steps(3);
     assert!(shown(&h, "Chapter") && shown(&h, "Section"));
-    h.get_by_label("Bookmark options").click();
+    h.get_by_label("Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Collapse all bookmarks").click();
     h.run_steps(3);
     assert!(shown(&h, "Part") && !shown(&h, "Chapter"));
-    h.get_by_label("Bookmark options").click();
+    h.get_by_label("Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Expand top-level bookmarks").click();
     h.run_steps(3);
@@ -501,7 +501,7 @@ fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "one.pdf", None, ONE_PAGE.to_vec()).unwrap();
     h.run_steps(3);
-    h.get_by_label("Bookmark options").click();
+    h.get_by_label("Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Paste bookmarks").click();
     h.run_steps(3);
