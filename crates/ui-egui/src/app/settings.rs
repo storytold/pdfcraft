@@ -363,6 +363,17 @@ pub fn motion_from_name(name: &str) -> Option<MotionChoice> {
     }
 }
 
+/// The theme choice a saved name stands for: the last release's `Light`, `Dark` and `System`, and
+/// the names the framework writes.
+pub fn theme_from_name(name: &str) -> Option<ModeChoice> {
+    match name {
+        "Light" | "light" => Some(ModeChoice::Light),
+        "Dark" | "dark" => Some(ModeChoice::Dark),
+        "System" | "system" => Some(ModeChoice::System),
+        _ => None,
+    }
+}
+
 /// A restored colour: an `[r, g, b]` array of finite numbers, each clamped to 0–1 (a hostile file
 /// must not hand the painter NaN or a huge value).
 pub(crate) fn rgb_triple(v: &Value) -> Option<[f64; 3]> {
@@ -495,6 +506,13 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             }
             motion
         });
+        let theme = r.string("theme").and_then(|name| {
+            let theme = theme_from_name(&name);
+            if theme.is_none() {
+                r.fail("theme", "unknown theme name");
+            }
+            theme
+        });
         let combine_columns = r.value("combine_columns").and_then(crate::combine_ui::columns_from_legacy);
         Layout {
             reopen_last_session: r.bool("reopen_last_session"),
@@ -508,7 +526,7 @@ pub fn import_json(text: &str) -> (PdfCraftSettings, Vec<SectionError>) {
             pinned_folders: r.text("pinned_folders"),
             pinned_folders_collapsed: r.text("pinned_folders_collapsed"),
             pinned_tools: r.list("pinned_tools"),
-            theme: r.typed("theme"),
+            theme,
             scroll_speed: r.typed("scroll_speed"),
             invert_middle_drag: r.bool("invert_middle_drag"),
             animation_effects,
