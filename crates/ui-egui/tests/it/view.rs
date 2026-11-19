@@ -55,6 +55,18 @@ fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
+/// Turns on the Preferences row `label` on the Documents and view page and applies it with OK, as a user does.
+fn choose_in_documents_preferences(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_label("Documents and view").click();
+    h.run_steps(3);
+    h.get_by_label(label).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label(label).click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+}
+
 fn sidebar_key(h: &mut Harness<'static, PdfCraftApp>, key: Key, modifiers: Modifiers) {
     h.event(egui::Event::ModifiersChanged(modifiers));
     for pressed in [true, false] {
@@ -552,9 +564,9 @@ fn the_rail_zoom_field_sets_a_typed_zoom() {
     use pdfcraft_ui_egui::canvas::Fit;
     let mut h = harness(&[]);
     let type_zoom = |h: &mut Harness<'static, PdfCraftApp>, typed: &str, key: Key| {
-        h.get_by_role_and_label(Role::TextInput, "Zoom").click();
+        h.get_by_role_and_label(Role::SpinButton, "Zoom").click();
         h.run_steps(2);
-        h.get_by_role_and_label(Role::TextInput, "Zoom").type_text(typed);
+        h.get_by_role_and_label(Role::SpinButton, "Zoom").type_text(typed);
         h.run_steps(1);
         h.key_press(key);
         h.run_steps(3);
@@ -571,7 +583,7 @@ fn the_rail_zoom_field_sets_a_typed_zoom() {
     assert_eq!(h.state().views[0].zoom(), 64.0);
     h.state_mut().views[0].view.zoom = 2.0;
     h.run_steps(2);
-    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Zoom").value().as_deref(), Some("200%"));
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Zoom").value().as_deref(), Some("200%"));
 }
 
 #[test]
@@ -620,10 +632,7 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
     let mut h = harness(&[]);
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Always use my default zoom and page layout").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Always use my default zoom and page layout");
     assert!(h.state().always_default_view);
 }
 
@@ -642,10 +651,7 @@ fn preferences_turn_on_always_use_my_default_zoom_and_page_layout_updates_open_d
     assert_ne!(h.state().views[1].fit(), pdfcraft_ui_egui::canvas::Fit::Width);
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Always use my default zoom and page layout").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Always use my default zoom and page layout");
     assert!(h.state().always_default_view);
     for (i, view) in h.state().views.iter().enumerate() {
         assert!(view.continuous(), "continuous scrolling is applied to view {i}");
@@ -661,10 +667,7 @@ fn preferences_toggle_continuous_scrolling_updates_active_document() {
     assert!(!h.state().views[0].continuous());
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Continuous scrolling").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Continuous scrolling").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Continuous scrolling");
     assert!(h.state().view_defaults.continuous, "defaults are updated");
     assert!(h.state().views[0].continuous(), "active document view is updated");
 }
@@ -687,10 +690,7 @@ fn preferences_during_full_screen_updates_saved_normal_display_and_restores_on_e
 
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Always use my default zoom and page layout").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Always use my default zoom and page layout").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Always use my default zoom and page layout");
     assert!(h.state().always_default_view);
 
     {
@@ -726,10 +726,7 @@ fn preferences_toggle_continuous_during_full_screen_updates_saved_normal_display
 
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Continuous scrolling").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Continuous scrolling").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Continuous scrolling");
 
     assert!(h.state().view_defaults.continuous);
     {
@@ -760,10 +757,7 @@ fn preferences_with_always_default_view_on_toggling_continuous_preserves_custom_
 
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Continuous scrolling").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Continuous scrolling").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Continuous scrolling");
 
     assert!(h.state().view_defaults.continuous);
     let v = &h.state().views[0];
@@ -777,10 +771,7 @@ fn preferences_set_the_default_zoom() {
     let mut h = harness(&[]);
     assert!(h.execute("app.preferences"));
     h.run_steps(3);
-    h.get_by_label("Zoom to page level").scroll_to_me();
-    h.run_steps(4);
-    h.get_by_label("Zoom to page level").click();
-    h.run_steps(2);
+    choose_in_documents_preferences(&mut h, "Zoom to page level");
     assert!(h.execute("create.blank"));
     assert_eq!(h.state().views[1].fit(), pdfcraft_ui_egui::canvas::Fit::Page);
 }
@@ -792,7 +783,7 @@ fn rail_page_display_menu_offers_acrobats_view_choices() {
     let mut h = harness(&[]);
     h.run_steps(4);
     let pick = |h: &mut Harness<'static, PdfCraftApp>, item: &str| {
-        h.get_by_label_contains("Page display:").click();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Page display").click();
         h.run_steps(3);
         h.get_by_label(item).click();
         h.run_steps(4);
@@ -2190,7 +2181,7 @@ fn the_pages_panel_tools_act_on_the_selected_pages() {
     let rotations = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>();
     // The panel's Page tools menu, on the right-hand side of the window.
     let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
-        h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools in the Pages panel").click();
+        h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Panel Menu in the Pages panel").click();
         h.run_steps(2);
         h.get_by_label(label).click();
         h.run_steps(3);
@@ -2244,7 +2235,7 @@ fn the_pages_panel_tools_insert_from_a_file_and_extract() {
     let id = h.state().views[0].id;
     let count = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.pages.len();
     let tool = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
-        h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools in the Pages panel").click();
+        h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Panel Menu in the Pages panel").click();
         h.run_steps(2);
         h.get_by_label(label).click();
         h.run_steps(3);
@@ -2287,7 +2278,7 @@ fn the_pages_panel_tools_are_off_without_page_editing_permission() {
     let i = h.state().active.unwrap();
     let id = h.state().views[i].id;
     assert!(!h.state().session.get(id).unwrap().allows_assembly());
-    let tools = h.get_all_by_label("Page tools").find(|n| n.rect().left() > 1000.0).expect("Page tools");
+    let tools = h.get_all_by_label("Panel Menu").find(|n| n.rect().left() > 1000.0).expect("Page tools");
     assert!(tools.accesskit_node().is_disabled(), "Page tools is greyed out");
     tools.click();
     h.run_steps(3);

@@ -187,7 +187,7 @@ fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
         assert_eq!((doc.can_undo(), doc.can_redo()), (None, None));
         assert!(h.execute("view.focus_page_input"));
         h.run_steps(3);
-        h.get(By::new().role(egui::accesskit::Role::TextInput).value("2"));
+        assert!(h.get_all(By::new().role(egui::accesskit::Role::TextInput).value("2")).next().is_some());
         let editor = h.ctx.memory(|m| m.focused()).expect("the page editor is focused");
 
         // A build atomically publishes a whole, clean PDF. The real watcher detects it.
@@ -350,11 +350,11 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "not written yet");
     h.run_steps(2);
-    h.get_by_label("Save over the changed file?");
+    h.get_by_label("File changed");
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert_eq!(std::fs::read(&file.path).unwrap(), fixture(4), "Cancel keeps the newer file");
-    assert!(dirty(&h) && h.query_by_label("Save over the changed file?").is_none());
+    assert!(dirty(&h) && h.query_by_label("File changed").is_none());
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
@@ -381,7 +381,7 @@ fn saving_checks_the_file_with_the_watcher_off_too() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
-    h.get_by_label("Save over the changed file?");
+    h.get_by_label("File changed");
 }
 
 /// One file, one tab (#2166): opening a file that is open already brings its tab forward,
@@ -467,7 +467,8 @@ fn a_file_rebuilt_under_the_full_screen_prompt_reloads_once_it_is_answered() {
     let file = TempPdf::new("under-full-screen", &fixture_catalog(2, false, "/PageMode /FullScreen "));
     let mut h = harness(&file.path);
     h.run_steps(2);
-    h.get_by_label("Open in Full Screen mode?");
+    // The prompt's window and its title both carry the name.
+    assert!(h.get_all_by_label("Open in Full Screen mode?").next().is_some());
     file.rebuild(&fixture(4));
     h.run_steps(4);
     assert_eq!(pages(&h), 2, "not replaced under the prompt");
