@@ -365,6 +365,11 @@ impl PdfCraftApp {
             printer_marks_draft: Default::default(),
             convert_colours_draft: Default::default(),
             hairlines_draft: Default::default(),
+            cloud: cloud::CloudFiles::new(),
+            cloud_page: None,
+            sharing: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new(),
+            esign: esign::EsignDialog::new(),
         }
     }
 
@@ -808,6 +813,18 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
         self.settle_presign();
+        // Drain answers from a connected cloud backend. A no-op today: nothing connects one
+        // (crates/ui-egui/src/cloud.rs's module doc explains why). `cloud::open_bytes`'s own
+        // `CloudApp` implementation dismisses `cloud_page` once a read actually lands, so there
+        // is no tab-count heuristic to run here.
+        cloud::pump(self, ctx);
+        // Call unconditionally: both self-gate on their own state (nothing draws, and the
+        // share dialog's own answers still get collected, while neither is open).
+        cloud::conflict_modal(self, ctx);
+        self.sharing.show(ctx);
+        // Request-signatures dialog: draws and drains the same way, self-gating on is_open. A
+        // no-op today for the same reason: nothing connects a backend (esign.rs's module doc).
+        esign::pump(self, ctx);
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);

@@ -36,6 +36,8 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
+pub mod cloud;
+pub mod esign;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
@@ -867,4 +869,29 @@ pub struct PdfCraftApp {
     pub pending_window: Option<viewer_prefs::PendingWindow>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// Open and Save against cloud storage: the real contract and state object craft-ui's cloud
+    /// feature keeps (storytold/craft-libs#160; see `cloud.rs`'s module doc). Connected by the
+    /// host application when a backend exists; disconnected leaves the app local-only.
+    pub cloud: cloud::CloudFiles,
+    /// Which cloud page is shown in the central panel, when any. `None` is the normal state.
+    pub cloud_page: Option<CloudPage>,
+    /// The share dialog `CloudApp::sharing` hands back (storytold/craft-libs#160).
+    pub sharing: craft_ui::share::ShareDialog,
+    /// Who else has a document open, for `CloudApp::presence` (storytold/craft-libs#160).
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Request-signatures dialog: craft-ui's real esign feature (storytold/craft-libs#661), not
+    /// a local placeholder. See `esign.rs`'s module doc for why nothing connects a backend yet.
+    pub esign: esign::EsignDialog,
+}
+
+/// Which cloud page is shown in the central panel instead of the document or home screen.
+///
+/// `None` (the common case) means the normal document / home / docking view. `Open` draws
+/// `craft_ui::cloud::open_page` and `SaveAs` draws `craft_ui::cloud::save_page`; both are real
+/// pages now (storytold/craft-libs#160), reached only once a backend connects (`cloud.rs`'s
+/// module doc says why nothing does today).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudPage {
+    Open,
+    SaveAs,
 }

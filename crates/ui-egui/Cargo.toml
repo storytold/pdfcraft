@@ -12,6 +12,12 @@ workspace = true
 [dependencies]
 edit-session = { workspace = true }
 craft-ui = { workspace = true }
+# Entry, EntryKind, Identity and Capability: the vendor-neutral types craft-ui's cloud and share
+# pages pass through. No IO and no vendor; this crate never learns what a connected backend reaches.
+craft-cloud = { workspace = true }
+# EnvelopeDraft, Envelope, EsignCapability and CompletedDocument: the signing-service contract
+# craft-ui's esign feature and this crate's own request-signatures glue speak.
+craft-esign = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
 craft-keymap = { workspace = true }
