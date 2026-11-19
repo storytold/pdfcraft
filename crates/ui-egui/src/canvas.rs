@@ -1062,7 +1062,10 @@ fn route_press(
         }
         // Add text's menu is the page's.
         session.menu_for = menu_for.filter(|_| !(cx.tool == QuickTool::AddText && cx.can_modify));
-        return;
+        // A link reads its own right-click too: its context event selects it for the Link tool's menu.
+        if !matches!(press.owner, Owner::Link { .. } | Owner::TextLink { .. }) {
+            return;
+        }
     }
     let clicked = matches!(press.phase, PressPhase::Release { click: true, .. });
     // A press a part takes is no picture pick, and takes back an earlier click whose picture is still being found.
