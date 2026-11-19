@@ -175,8 +175,11 @@ fn alt_arrows_go_back_and_forward_through_the_view_history() {
     h.ctx.set_os(egui::os::OperatingSystem::Nix);
     assert!(h.execute("help.shortcuts"));
     h.run_steps(3);
-    h.get_by_label("Alt+← / Alt+→");
-    h.get_by_label("Previous view / Next view");
+    // The keys are the history commands' own bindings, listed with the catalog's rows; the search
+    // brings the row into the list.
+    h.get_by_label("Search:").type_text("Previous view");
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("Previous view: Alt+").next().is_some(), "Previous view is listed with its Alt chord");
 }
 
 #[test]
