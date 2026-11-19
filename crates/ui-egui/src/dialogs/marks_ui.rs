@@ -19,7 +19,7 @@ use craft::ui::patterns::form_dialogs::{
 };
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::{TextureState, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
-use craft::ui::runtime::env::UnitKind;
+use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
 use craft::ui::style::DataColor;
 use craft::ui::text::TextField;
@@ -534,7 +534,8 @@ fn boxes_row() -> Param {
                     TextField::new(tl!(BOX_NAMES[k]), craft::ui::contract::Bind::bound(&mut text)).lines(2).show(ui).response
                 })
                 .inner;
-            if r.gained_focus() || r.has_focus() {
+            // The field's focus stop is the component: egui's focus sits on its text part.
+            if craft::ui::runtime::focus::is_focused(ui.ctx(), r.id) {
                 fields.set("hf.focused", FieldValue::Int(k as i64));
             }
             if text != before {
@@ -617,13 +618,44 @@ fn rows(kind: MarkKind, g: &Geometry) -> Vec<Param> {
             rows.push(Param::new("marks.bg.colour", tl!("Colour"), ParamKind::color(None)).enabled_when("source", "colour"));
             file_rows(&mut rows);
             rows.push(percent("bg.opacity", tl!("Opacity"), 100.0));
-            // PLAN: framework gap F-15 (`HostedParamDialog::set_notes`/`set_ready`): the Replace offer
-            // (`replace_backdrop`), the "Checking pages…" line and the scan warning come from the backdrop job.
+            // Offered only once the backdrop check finds a white backdrop: its label names the pages, and the pass
+            // sets both from the check's results (`backdrop_rows`).
+            rows.push(Param::new("replace_backdrop", tl!("Replace it"), ParamKind::bool(true)).shown(false));
         }
         MarkKind::PrinterMarks => {}
     }
     rows.push(PageRangeOptions::param("range", tl!("Page Range Options"), g.count, g.current, PageRangeChoices::Acrobat));
     rows
+}
+
+/// What the backdrop check found, in the Background dialog: pages that paint their own white backdrop are offered
+/// the Replace box, named in its label; pages a picture covers (scans) are said to keep hiding the background; pages
+/// not checked yet show "Checking pages…".
+fn backdrop_rows(dialog: &mut HostedParamDialog, n: &BackdropCount) {
+    let mut notes: Vec<Label> = Vec::new();
+    if n.pending > 0 {
+        notes.push(tl!("Checking pages…").into());
+    }
+    let offered = !n.fills.is_empty();
+    dialog.set_param_shown("replace_backdrop", offered);
+    if offered {
+        let label = pages_phrase(
+            &n.fills,
+            tl!("Page {pages} paints its own white backdrop, which would hide the background. Replace it"),
+            tl!("Pages {pages} paint their own white backdrop, which would hide the background. Replace it"),
+        );
+        dialog.set_param_label("replace_backdrop", label);
+        notes.push(tl!("Removing the background puts the page's own backdrop back.").into());
+    }
+    if !n.images.is_empty() {
+        let text = pages_phrase(
+            &n.images,
+            tl!("A picture covers page {pages} (a scan?), so the background won't show there."),
+            tl!("Pictures cover pages {pages} (scans?), so the background won't show there."),
+        );
+        notes.push(text.into());
+    }
+    dialog.set_notes(notes);
 }
 
 /// The dialog's title: "Add …" or "Update …".
@@ -1031,9 +1063,7 @@ impl PdfCraftApp {
         let back = step_preview(&d.range, target, count, current, &selection, false);
         let next = step_preview(&d.range, target, count, current, &selection, true);
 
-        if kind == MarkKind::Background {
-            preview.check_backdrops(d, doc, &pages);
-        }
+        let backdrops = (kind == MarkKind::Background).then(|| preview.check_backdrops(d, doc, &pages));
         let near: Vec<usize> = back.into_iter().chain(next).collect();
         let picture = match preview.unmarked_picture_for(ctx, doc, d.replace, target, &near) {
             Some(state) => state,
@@ -1049,6 +1079,9 @@ impl PdfCraftApp {
             dialog.set_preview_pager(Some(pager));
             dialog.set_preview_overlay(overlay);
             dialog.set_preview_tint(tint);
+            if let Some(n) = &backdrops {
+                backdrop_rows(dialog, n);
+            }
         }
         self.marks_preview = Some(preview);
     }

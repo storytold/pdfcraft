@@ -98,6 +98,19 @@ fn grid_of_pages(names: &[(&str, usize)]) -> Harness<'static, PdfCraftApp> {
     grid_of(names.iter().map(|(n, p)| (*n, fixture(*p))).collect(), vec2(1400.0, 900.0))
 }
 
+/// A ⌘-click on the node named `label`, with ⌘ held first, as a platform reports it.
+fn command_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let at = h.get_by_label(label).rect().center();
+    h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::COMMAND });
+    }
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+}
+
 fn names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
     h.state().combine_draft.iter().map(|f| f.name.clone()).collect()
 }
@@ -379,7 +392,7 @@ fn row_remove_acts_on_its_own_file() {
     let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 1), ("c.pdf", 1), ("d.pdf", 1)]);
     h.get_by_label("b.pdf").click();
     h.run_steps(1);
-    h.get_by_label("c.pdf").click_modifiers(Modifiers::COMMAND);
+    command_click(&mut h, "c.pdf");
     h.run_steps(1);
     // The trash of a tile that isn't selected: that file only, the selection stays.
     hover_card(&mut h, "a.pdf");
@@ -701,7 +714,7 @@ fn dragging_a_page_moves_that_page_even_between_another_files_pages() {
     // Selected pages go together, in their order: pages 1 and 3 (now 2nd and 4th) before a.
     h.get_by_label(&page_card(1, "b.pdf")).click();
     h.run_steps(1);
-    h.get_by_label(&page_card(3, "b.pdf")).click_modifiers(Modifiers::COMMAND);
+    command_click(&mut h, &page_card(3, "b.pdf"));
     h.run_steps(2);
     let (p3, a) = (card(&h, &page_card(3, "b.pdf")), card(&h, "a.pdf"));
     drag(&mut h, p3.center(), a.center() - vec2(a.width() * 0.3, 0.0));
@@ -740,7 +753,7 @@ fn removing_pages_from_the_tile_the_toolbar_and_delete_never_touches_the_file() 
     // Two selected: the toolbar's trash says so, and takes both.
     h.get_by_label(&page_card(1, "b.pdf")).click();
     h.run_steps(1);
-    h.get_by_label(&page_card(4, "b.pdf")).click_modifiers(Modifiers::COMMAND);
+    command_click(&mut h, &page_card(4, "b.pdf"));
     h.run_steps(2);
     h.hover_at(egui::pos2(5.0, 890.0));
     h.run_steps(1);

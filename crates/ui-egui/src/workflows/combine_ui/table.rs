@@ -1,12 +1,14 @@
 use std::cell::RefCell;
 use std::time::SystemTime;
 
-use craft::behavior::{Codec, ColumnKey, ColumnWidth, DisplayOrder, EditEvent, ItemSource, NotAValue, ReorderKeys};
+use craft::behavior::{Codec, ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, NotAValue, ReorderKeys};
 use craft::theme::variant::Tone;
 use craft::ui::contract::{
-    Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Props as _, ReorderMove, ReorderRule, ShowCollection as _, SpaceAction,
+    Bind, CollectionEvent, ColumnEvent, ColumnLayout, ColumnSort, ColumnSpec, Entry, Props as _, ReorderMove, ReorderRule, ShowCollection as _,
+    SpaceAction,
 };
 use craft::ui::list::{CellStatus, ListRow, RowEvent};
+use craft::ui::menu::Menu;
 use craft::ui::table::Table;
 use craft::ui::text::TextField;
 
@@ -286,8 +288,18 @@ pub(super) fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> Option<RowActio
             CollectionEvent::Item(CombineKey::File(id), RowEvent::CellAction { column, .. }) if column == WARNINGS => {
                 action = Some(RowAction::Unlock(Some(id)));
             }
-            // PLAN: framework gap F-5: the row menu's Unlock… (`CollectionEvent::ContextMenu` on a locked file → `RowAction::Unlock(Some(id))`) waits on the item menu's key
             _ => {}
+        }
+    }
+    // A locked file's row offers Unlock… on a right-click, for the row it was opened on.
+    let locked = out.menu.as_ref().and_then(|request| match request.key {
+        CombineKey::File(id) => ids.iter().position(|i| *i == id).and_then(|at| rows.get(at)).filter(|row| row.locked.is_some()).map(|_| id),
+        CombineKey::Page(..) => None,
+    });
+    if let Some(id) = locked {
+        let entries = [Entry::new(id, tl!("Unlock…")).icon(IconId::new("lock-open"))];
+        if let Some(id) = Menu::context(tl!("File"), &out.response).pick(ui, &entries).picked {
+            action = Some(RowAction::Unlock(Some(id)));
         }
     }
     action

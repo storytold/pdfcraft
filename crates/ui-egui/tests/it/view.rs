@@ -2364,8 +2364,8 @@ fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_p
     let mut h = harness(&[("panel", "pages")]);
     h.run_steps(2);
     // The first ⌘-click on another page picks it and the current page.
-    h.get_by_label("Page 2").click_modifiers(Modifiers::COMMAND);
-    h.run_steps(2);
+    let page_2 = h.get_by_label("Page 2").rect().center();
+    click_with(&mut h, page_2, Modifiers::COMMAND);
     let selected = h.state().views[0].selected.clone();
     assert_eq!(selected.items.iter().copied().collect::<Vec<_>>(), [0, 1], "⌘-click picked pages 1 and 2");
     let thumb = h.get_by_label("Page 2").rect().center();
@@ -2823,12 +2823,15 @@ fn full_screen_every_key_and_click_goes_where_it_says() {
                 // Clear of page 1's link, which a click would follow instead.
                 let r = rect(&h, from).expect("the page is on screen");
                 let at = egui::pos2(r.center().x, r.bottom() - 20.0);
+                // The modifiers are held before the click, as a platform reports them.
+                h.event(egui::Event::ModifiersChanged(modifiers));
                 h.hover_at(at);
                 h.run_steps(1);
                 for pressed in [true, false] {
                     h.event(egui::Event::PointerButton { pos: at, button, pressed, modifiers });
                 }
                 h.run_steps(6);
+                h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
             }
         }
         assert_eq!(h.state().views[0].current(), to, "{input:?} from page {}", from + 1);

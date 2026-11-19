@@ -392,6 +392,8 @@ pub struct PageSession {
     pub(crate) marquee_zoom: craft::ui::canvas::ZoomTool,
     /// What the Redact tool's press is doing, from the press to its release.
     pub(crate) redact_gesture: crate::tools::redact_ui::tool::RedactGesture,
+    /// The Stamp tool's press, from the press to its release.
+    pub(crate) stamp_press: Option<crate::stamps_ui::StampPress>,
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
     /// shows its entries when it has a menu and is the one selected, or else the page's own.
     pub(crate) menu_for: Option<(usize, Owner)>,
@@ -450,6 +452,7 @@ impl PageSession {
             hand: craft::ui::canvas::HandTool::new(Default::default()),
             marquee_zoom: craft::ui::canvas::ZoomTool::new(Default::default()),
             redact_gesture: Default::default(),
+            stamp_press: None,
             menu_for: None,
         }
     }
@@ -906,6 +909,9 @@ struct BodyOut {
     action: Option<ViewAction>,
     /// The comment under the pointer (page, index): its pop-up's connector shows while it is.
     hovered_comment: Option<(usize, usize)>,
+    /// A part of the page (a link, a field, a comment…) is under the pointer: in full screen a click there is the
+    /// part's and turns no page.
+    over_part: bool,
 }
 
 /// The part list of a pass, in paint order: pictures, paragraphs and added items, links and text links (only under
@@ -1168,6 +1174,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         Some((Owner::Comment { index }, page)) => Some((page, index)),
         _ => None,
     };
+    out.over_part = parts_out.hovered.is_some();
     // The pointer entering or leaving a form widget runs its Mouse Enter and Exit scripts, once per real run.
     if body.pass.is_some() {
         let widget = crate::forms_ui::hovered(cx.form, parts_out.hovered.as_ref().map(|(owner, _)| owner));
@@ -1330,8 +1337,6 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     image_pick::resolve_pending(session, cx.geometry(body), cx.doc, cx.info, cx.tools.host.jobs_shared(), cx.tools.wake);
     image_pick::show_picked(ui, body, session, cx.rotation, cx.info);
     if let Some(at) = cx.present_at {
-        // PLAN: `PresentFrame::hide_pointer` asks for `CursorPriority::Hidden`; the page body has no `BodyCx` to claim
-        // it through, so the pointer is not hidden yet (pdf-canvas-w18).
         let (now, pointer) = ui.input(|i| (i.time, i.pointer.hover_pos()));
         let frame = presenter::frame(
             &mut session.presenter,
@@ -1343,6 +1348,12 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             cx.animates,
             pointer,
         );
+        // A still pointer stays hidden over every cursor, a link's included, until it moves.
+        if frame.hide_pointer
+            && let Some(pass) = body.pass
+        {
+            pass.hide_pointer(ui);
+        }
         // A full-screen key's turn first, then the display time's.
         out.turn = out.turn.or(frame.step);
     }
@@ -1611,10 +1622,22 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     // double-click time has passed with no object clicked and no selection made (#2070).
     let now = ui.input(|i| i.time);
     let has_selection = view.session.text.selection.is_some();
-    let click = (presenting && matches!(out.canvas.press.phase, PressPhase::Release { click: true, .. }))
-        .then(|| presenter::PresentClick { forward: !out.canvas.press.mods.shift, clicks: if out.canvas.press.double_pressed() { 2 } else { 1 } });
+    // A click turns forward; a Shift-click or a right-click back (*Adobe Acrobat Help*, 2019, "Full Screen
+    // preferences", p. 69).
+    let press = &out.canvas.press;
+    let start = press.phase.start();
+    let button = start.map(|start| start.button);
+    let click = (presenting
+        && matches!(press.phase, PressPhase::Release { click: true, .. })
+        && matches!(button, Some(PointerButton::Primary | PointerButton::Secondary)))
+    .then(|| presenter::PresentClick {
+        forward: !press.mods.shift && button != Some(PointerButton::Secondary),
+        clicks: start.map_or(1, |start| start.clicks),
+    });
     let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
-    let cancels = body_out.link.is_some() || has_selection;
+    // A click on a part (a link, a field, a note) is the part's (*Adobe Acrobat Help*, 2019, p. 65: the pointer stays
+    // active "so that you can click links and open notes").
+    let cancels = body_out.link.is_some() || has_selection || (click.is_some() && body_out.over_part);
     let click_turn = if presenting { view.session.presenter.click_turn(ui.ctx(), click, cancels, now, delay) } else { None };
     if let Some(forward) = body_out.turn.or(click_turn) {
         view.view.step(forward);
