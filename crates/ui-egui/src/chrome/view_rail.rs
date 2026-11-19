@@ -9,6 +9,7 @@ use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft::ui::display::Text;
 use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::runtime::focus;
 use craft::ui::text::{TextField, ZoomField, ZoomScale};
 use egui::Ui;
 
@@ -72,19 +73,26 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut Ui) {
     let of = crate::i18n::fmt(crate::i18n::t("Page {p} of {n}"), &[("p", &shown.to_string()), ("n", &page_count.to_string())]);
     Text::new(super::page_position(current, page_count, label)).role(TypeRole::Caption).tooltip(of).show(ui);
 
-    let current_label = view.current_page_label(labels.get(current).map(String::as_str));
     // Taken once, in the pass that shows the field, also while the field is not focused.
     let reselect = std::mem::take(&mut view.page_input_reselect);
     let input_id = view.page_input_id();
     let edit =
         TextField::new("Current page", Bind::bound(&mut view.page_input)).id(input_id).select_on_focus().select_all(reselect).submits().show(ui);
+    if !edit.events.is_empty() {
+        view.page_input_draft = true;
+    }
     if edit.submitted {
         let typed = view.page_input.clone();
         view.go_to_typed(&typed, &labels);
-        view.page_input = current_label.clone();
+        view.page_input_draft = false;
     }
-    // Navigation updates the idle box, never the text being edited.
-    if !edit.response.has_focus() {
+    if edit.escaped {
+        view.page_input_draft = false;
+    }
+    // Navigation updates the box, never text being typed into it: the field keeps the focus after Enter, and its
+    // focus is on its text part, which counts as the field.
+    if !(view.page_input_draft && focus::is_focused(ui.ctx(), edit.response.id)) {
+        view.page_input_draft = false;
         view.page_input = view.current_page_label(labels.get(view.current()).map(String::as_str));
     }
 }

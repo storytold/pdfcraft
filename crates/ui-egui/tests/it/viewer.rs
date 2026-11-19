@@ -135,7 +135,7 @@ fn close_all_asks_only_for_changed_documents() {
     h.run_steps(2);
     assert_eq!(h.state().views.len(), 1, "the clean document closed at once");
     // b.pdf asks to be saved: the close dialog is on screen.
-    h.get_by_label_contains("Save changes");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Unsaved changes");
 }
 
 #[test]
@@ -1641,9 +1641,10 @@ fn a_new_document_opens_at_the_top_after_a_relaunch() {
     let memory: egui::Memory = eframe::get_value(&settings, "egui").expect("egui's memory round-trips");
     // Next launch: a document never seen before, which gets a.pdf's old id.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+        // eframe restores the memory before it calls the app's creator, which installs the runtime.
+        cc.egui_ctx.memory_mut(|m| *m = memory);
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            cc.egui_ctx.memory_mut(|m| *m = memory);
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "c.pdf", None, fixture(5)).unwrap();
@@ -1910,11 +1911,24 @@ fn v_h_and_space_pick_the_quick_tools() {
     // V leaves any other tool too, as the toolbar button does.
     h.state_mut().quick_tool = QuickTool::Crop;
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);
-    // Holding Space pans with the Hand for as long as it is held, then gives the tool back.
+    // Holding Space pans with the Hand for as long as it is held (the tool host's momentary Hand), then gives the
+    // tool back: a drag while it is held moves the page, as the Hand's does, and draws no crop box.
     h.state_mut().quick_tool = QuickTool::Crop;
     h.key_down(Key::Space);
     h.run_steps(4);
-    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space held");
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let before = top(&h);
+    let from = h.state().views[0].viewport_rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(from - egui::vec2(0.0, 120.0));
+    h.run_steps(1);
+    h.drop_at(from - egui::vec2(0.0, 120.0));
+    h.run_steps(2);
+    assert!(before.zip(top(&h)).is_some_and(|(b, a)| a < b - 60.0), "Space held: the drag pans ({before:?} -> {:?})", top(&h));
+    assert_eq!(h.state().quick_tool, QuickTool::Crop, "the tool waits under the held Space");
     h.key_up(Key::Space);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Crop, "Space released");

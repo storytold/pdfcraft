@@ -184,6 +184,9 @@ pub struct DocView {
     middle_scrolling: bool,
     pub organize: bool,
     pub page_input: String,
+    /// Text was typed into the page box since it last showed a page's label: while the box keeps the focus,
+    /// navigation leaves that text alone.
+    pub(crate) page_input_draft: bool,
     /// Select the replacement page label once if its editor remains focused.
     pub(crate) page_input_reselect: bool,
     pub notice_dismissed: bool,
@@ -380,9 +383,11 @@ pub struct PageSession {
     /// The caret and selection in the Fill & Sign text being typed.
     pub fill_selection: craft::text::ui::editor::TextSelection,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
-    /// The rectangle being dragged on a page by Snapshot, Crop or a signature area: the page tools are built each
-    /// pass, so the drag lives here from its press to its release.
+    /// The rectangle being dragged on a page by Snapshot, Crop, Redact or a signature area: the page tools are built
+    /// each pass, so the drag lives here from its press to its release.
     pub(crate) box_drag: PageBoxDrag,
+    /// What the Redact tool's press is doing, from the press to its release.
+    pub(crate) redact_gesture: crate::tools::redact_ui::tool::RedactGesture,
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
     /// shows its entries when it has a menu and is the one selected, or else the page's own.
     pub(crate) menu_for: Option<(usize, Owner)>,
@@ -438,6 +443,7 @@ impl PageSession {
             fill_selection: Default::default(),
             signature_drag: Default::default(),
             box_drag: PageBoxDrag::default(),
+            redact_gesture: Default::default(),
             menu_for: None,
         }
     }
@@ -555,6 +561,7 @@ impl DocView {
             middle_scrolling: false,
             organize: false,
             page_input: "1".into(),
+            page_input_draft: false,
             page_input_reselect: false,
             notice_dismissed: false,
             scripts_off_noted: false,
@@ -979,17 +986,25 @@ fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: 
         {
             session.comments.select(Some((press.page, index)));
         }
+        // Editing, the picture right-clicked is selected for its menu; a right-click on anything else lets go of it.
+        if cx.tool == QuickTool::EditText {
+            let picture = if let Owner::Picture { index, .. } = press.owner { Some(index) } else { None };
+            crate::edit_text_ui::picture_context(press.page, picture, session);
+        }
+        if let Some(origin) = press.phase.start().map(|start| start.origin) {
+            session.comments.context_at = session.user_point_at(geo, cx.info, origin);
+        }
         session.menu_for = Some((press.page, press.owner.clone()));
         return;
     }
     let clicked = matches!(press.phase, PressPhase::Release { click: true, .. });
+    // A press a part takes is no picture pick, and takes back an earlier click whose picture is still being found.
+    session.pending_pick = None;
     match &press.owner {
         Owner::Link { .. } | Owner::TextLink { .. } => {
             // Read before acting: the links borrow the session.
             let event = links_of(session, cx, body).read(press);
             if let Some(event) = event {
-                // A click on a link is not a picture pick (pdf-canvas-w12 note 5).
-                session.pending_pick = None;
                 match event {
                     LinkEvent::Follow { target, javascript } => out.link = Some((target, javascript)),
                     LinkEvent::Select { .. } | LinkEvent::Context { .. } => crate::link_ui::link_edit_press(&mut session.links, &event),
@@ -1087,6 +1102,10 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             session.objects.notice = Some(why.into());
         }
         out.view = reply.view;
+        // The page menu hangs where the request is: Paste, Copy Image and a comment added there read the point.
+        if let Some(request) = &reply.context {
+            session.comments.context_at = session.user_point_at(cx.geometry(body), cx.info, request.at);
+        }
         out.context = reply.context;
         out.back_to_select = finish.back_to_select;
         out.snapshot = finish.snapshot;

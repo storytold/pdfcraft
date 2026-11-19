@@ -13,7 +13,7 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 100] >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R >> endobj
-4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 200] >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 

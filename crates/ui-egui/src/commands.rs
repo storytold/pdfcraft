@@ -392,7 +392,8 @@ impl PdfCraftApp {
                 if let Some(view) = active.and_then(|i| self.views.get_mut(i)) {
                     // The page box in the toolbar (chrome.rs); select its label so typing replaces it.
                     let id = view.page_input_id();
-                    if !ctx.memory(|m| m.has_focus(id))
+                    // Text being typed into the box stays; else it shows the current page's label.
+                    if !view.page_input_draft
                         && let Some(doc) = self.session.get(view.id)
                     {
                         // Navigation and this command can arrive before the next rail frame.
@@ -714,10 +715,12 @@ impl PdfCraftApp {
                 self.notify_tr("Drag a rectangle around the area to copy");
             }
             "edit.copy" => {
-                if let Some(i) = active {
-                    return Some(self.copy_selected_text(i));
+                let Some(i) = active else { return Some(false) };
+                // With no text selected, a picked picture is copied in its original format.
+                if self.views.get(i).is_some_and(|v| v.selected_text().is_none_or(|t| t.is_empty())) && self.copy_picked_image(i) {
+                    return Some(true);
                 }
-                return Some(false);
+                return Some(self.copy_selected_text(i));
             }
             "comment.copy" => {
                 let Some(i) = active else { return Some(false) };

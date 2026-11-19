@@ -303,7 +303,8 @@ pub(crate) fn page_tool<'a>(
                             .find(|placed| placed.rect.contains(at))
                             .is_some_and(|placed| texts.app(placed.page).is_some_and(|layer| layer.glyph_box_at(placed.to_page(at)).is_some()))
                     };
-                    Arm::Redact(RedactTool::new(select, cx.pages, cx.rotation, cx.info, over_text))
+                    let (drag, gesture) = (&mut session.box_drag, &mut session.redact_gesture);
+                    Arm::Redact(RedactTool::new(select, drag, gesture, cx.pages, cx.rotation, cx.info, over_text))
                 }
                 // Select runs the comments tool too: a hanging paste is placed by its press, and a press no comment
                 // part took goes on to the text.
@@ -472,6 +473,7 @@ impl ToolFinish {
             Some(FillOutcome::CreateSignature) => self.open_signature = Some(false),
             Some(FillOutcome::CreateInitials) => self.open_signature = Some(true),
             Some(FillOutcome::Refused(why)) => self.refused = Some(why),
+            Some(FillOutcome::Leave) => self.back_to_select = true,
             None => {}
         }
         // The first page key of the pass turns the page; the rest wait for the next pass's keys.
