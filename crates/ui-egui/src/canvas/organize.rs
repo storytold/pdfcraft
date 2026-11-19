@@ -1,5 +1,5 @@
 use super::{DocView, Edit, Pos2, ViewAction};
-use craft::behavior::{IconId, MiddleButton, Selection};
+use craft::behavior::{GesturePhase, IconId, MiddleButton, Selection};
 use craft::keymap::CommandRef;
 use craft::pages::ui::thumbnails::{ORGANIZE_ZOOM, PageThumbnails, ThumbnailArrangement, ThumbnailEvent};
 use craft::ui::bars::{Bar, BarKind};
@@ -218,7 +218,12 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
     for event in out.events {
         match event {
             ThumbnailEvent::Go(page) => view.go_to_page(page),
-            ThumbnailEvent::Reorder(craft::behavior::EditEvent::Commit { after, .. }) => commit_reorder(view, after.keys, after.to, after.copy),
+            // A drag ends as a commit, a keyboard move as a set; proposals during the drag move nothing.
+            ThumbnailEvent::Reorder(edit) if matches!(edit.phase(), Some(GesturePhase::Commit) | None) => {
+                if let Some(mv) = edit.value() {
+                    commit_reorder(view, mv.keys.clone(), mv.to, mv.copy);
+                }
+            }
             ThumbnailEvent::Delete(pages) => view.session.pending_edit = Some(Edit::DeletePages { pages }),
             ThumbnailEvent::Activate(page) => {
                 view.organize = false;
@@ -246,8 +251,10 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
     }
     if let Some(at) = cx.ui.data(|d| d.get_temp::<Option<Pos2>>(menu_id)).flatten() {
         let mut open = true;
-        // PLAN: assumed `Anchor::Point(Pos2)` places a menu opened from an event at the request's point.
-        Menu::new(tl!("Page")).anchor(Anchor::Point(at)).open(Bind::bound(&mut open)).show(cx.ui, |ui, _| page_menu(ui, view, editable));
+        Menu::context(tl!("Page"), &out.response)
+            .anchor(Anchor::Point(at))
+            .open(Bind::bound(&mut open))
+            .show(cx.ui, |ui, _| page_menu(ui, view, editable));
         if !open {
             cx.ui.data_mut(|d| d.insert_temp::<Option<Pos2>>(menu_id, None));
         }
