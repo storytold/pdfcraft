@@ -18,6 +18,7 @@ use craft::ui::display::Text;
 use craft::ui::list::OpenSet;
 use craft::ui::primitives::TextureStatistics;
 use craft::ui::runtime::env::Env;
+use craft::ui::runtime::focus::{self, FocusTarget};
 use craft::ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Vec2, pos2, vec2};
 use pdfcraft_engine::text_links::TextLink;
@@ -1023,6 +1024,12 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     let (parts, tabs) = page_parts_of(ui, body, &mut *session, cx);
     let focus = crate::forms_ui::focus_owner(&session.forms, cx.form);
     let parts_out = PageParts::new(&parts).focus(focus).show_at(ui, body.rect);
+    if std::mem::take(&mut session.forms.refocus)
+        && let Some(at) = focus.and_then(|owner| page_parts::focus_stop(&parts, owner))
+    {
+        // The editor handed the keys on with Tab: the field the session moved to takes them, as Tab onto its part would.
+        focus::request(ui.ctx(), FocusTarget::Part(parts_out.response.id, at));
+    }
     out.hovered_comment = match parts_out.hovered {
         Some((Owner::Comment { index }, page)) => Some((page, index)),
         _ => None,
@@ -1034,10 +1041,14 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         }
         route_press(ui, session, press, cx, body, out);
     }
-    if let Some((owner, _)) = &parts_out.focused {
-        // Focus arrived on a field (Tab, a request or a click): the field opens, a text field with its text selected.
-        crate::forms_ui::field_focused(session, cx.form, owner);
-    }
+    // Focus arrived on a field (Tab, a request or a click): the field opens, a text field with its text selected.
+    let field_arrived = match &parts_out.focused {
+        Some((owner @ Owner::Field { .. }, _)) => {
+            crate::forms_ui::field_focused(session, cx.form, owner);
+            true
+        }
+        _ => false,
+    };
     if let Some((Owner::Field { .. }, key)) = &parts_out.key
         && let Some(edit) = crate::forms_ui::field_key(session, cx.info, cx.form, key, cx.geometry(body))
     {
@@ -1100,7 +1111,12 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         }
     }
     // The focused field's editor, and the Fill & Sign text being typed, over their pages.
-    crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.geometry(body));
+    if let Some(editor) = crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.geometry(body))
+        && field_arrived
+    {
+        // The keys of a field that takes typing are its editor's: it takes the focus over from the field's part.
+        focus::request(ui.ctx(), FocusTarget::Id(editor));
+    }
     if let Some(e) = crate::fill_sign::type_box::show(ui, body, session, cx.info, &cx.prefs.author) {
         session.pending_edit = Some(e);
     }

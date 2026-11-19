@@ -215,6 +215,11 @@ impl PagePart {
     }
 }
 
+/// The Tab stop of `owner` among `parts`: the part focus moves to for it.
+pub(crate) fn focus_stop(parts: &[PagePart], owner: Owner) -> Option<PartRef> {
+    parts.iter().filter(|part| part.focusable && part.owner == owner).find_map(|part| part.owner.part_ref(part.page))
+}
+
 /// A press on a page part in this pass, as the press machine reports it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PagePress {
@@ -286,8 +291,7 @@ impl<'a> PageParts<'a> {
         PageParts { common: Common::new(), parts, focus: None, report: Report::default() }.label(Label::from(tl!("Page content")))
     }
 
-    /// Moves the focus to `owner`'s part in this pass, when it is a Tab stop and the pages hold the focus or were just
-    /// pressed. A request: send it in the one pass that asks, never every pass.
+    /// Moves the focus to `owner`'s part in this pass, when it is a Tab stop and the pages hold the focus.
     #[must_use]
     pub(crate) fn focus(mut self, owner: Option<Owner>) -> Self {
         self.focus = owner;
@@ -367,14 +371,20 @@ impl Component for PageParts<'_> {
     /// Reads the press, the hover, the focused part's key and the focus that arrived. The press machine reports a
     /// press's phases one per pass, so a second pass of a frame reads only its own phase.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let pressed = self
-            .parts
-            .iter()
-            .filter_map(|part| part.owner.part_ref(part.page))
-            .any(|at| cx.part_if_declared(at).is_some_and(|result| result.press.phase.is_press()));
-        if let Some(owner) = self.focus
-            && (cx.is_focused() || pressed)
-            && let Some(at) = self.parts.iter().filter(|part| part.focusable && part.owner == owner).find_map(|part| part.owner.part_ref(part.page))
+        // A press on a Tab stop moves the key focus to it, so the keys go on from the field clicked (#2223); else the
+        // focus follows the session's moves by key (a radio group's arrows, Tab from a box) while the pages hold it,
+        // unless it arrived on a part in this pass (Tab, a request), which the session follows instead.
+        let arrived = cx.focus_arrived();
+        let pressed_stop = self.parts.iter().filter(|part| part.focusable).find_map(|part| {
+            let at = part.owner.part_ref(part.page)?;
+            cx.part_if_declared(at).is_some_and(|result| matches!(result.press.phase, PressPhase::Down { .. })).then_some(at)
+        });
+        if let Some(at) = pressed_stop {
+            cx.focus_part(at);
+        } else if let Some(owner) = self.focus
+            && arrived.is_none()
+            && cx.is_focused()
+            && let Some(at) = focus_stop(self.parts, owner)
         {
             cx.focus_part(at);
         }
@@ -384,10 +394,6 @@ impl Component for PageParts<'_> {
             let (press, hovered) = (result.press, result.hovered);
             if hovered && self.report.hovered.is_none() {
                 self.report.hovered = Some((part.owner, part.page));
-            }
-            if press.phase.is_press() || hovered {
-                let thread = std::thread::current();
-                let name = thread.name().unwrap_or("").rsplit("::").next().unwrap_or("");
             }
             if press.phase.is_press() && self.report.press.is_none() {
                 self.report.press = Some(PagePress { owner: part.owner, page: part.page, phase: press.phase, mods: press.mods });
