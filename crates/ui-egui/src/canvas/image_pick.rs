@@ -15,7 +15,7 @@ use craft::ui::canvas_controls::SelectionOutline;
 use craft::ui::contract::Show as _;
 
 use crate::PdfCraftApp;
-use crate::canvas::{DocView, PageSession, PageXform};
+use crate::canvas::{PageGeometry, PageSession, PageXform};
 use pdfcraft_render::DocInfo;
 
 /// The selected picture: page, index in `page_images` and its box in user space, and the
@@ -28,19 +28,25 @@ pub struct PickedImage {
     pub generation: u64,
 }
 
-/// The picture a click asked for ([`DocView::pending_pick`]), once the page's pictures are known: the window stays live
+/// The picture a click asked for ([`PageSession::pending_pick`]), once the page's pictures are known: the window stays live
 /// until then. A click made before an edit asks for nothing.
-// PLAN: assumed DocView::page_xform returns an owned PageXform (pdf-canvas-w8).
-pub(crate) fn resolve_pending(view: &mut DocView, doc: &pdfcraft_engine::Document, info: &DocInfo, jobs: &Arc<dyn Jobs>, wake: &Wake) {
-    let Some((page, at, clicked_in)) = view.session.pending_pick else { return };
+pub(crate) fn resolve_pending(
+    session: &mut PageSession,
+    geo: PageGeometry<'_>,
+    doc: &pdfcraft_engine::Document,
+    info: &DocInfo,
+    jobs: &Arc<dyn Jobs>,
+    wake: &Wake,
+) {
+    let Some((page, at, clicked_in)) = session.pending_pick else { return };
     let generation = doc.edit_generation();
     if clicked_in != generation {
-        view.session.pending_pick = None;
+        session.pending_pick = None;
         return;
     }
     // A page not drawn keeps the click waiting.
-    let Some(xf) = view.page_xform(page) else { return };
-    let answer = view.session.pictures.get(jobs, wake, doc, page).map(|pictures| {
+    let Some(xf) = session.page_xform(page, geo) else { return };
+    let answer = session.pictures.get(jobs, wake, doc, page).map(|pictures| {
         // Where the click was on the page now: the view may have moved while the page was read.
         let point = xf.user_rect_f64(info, page, [at[0], at[1], at[0], at[1]]).center();
         pdfcraft_engine::picture_at(pictures, at).and_then(|(index, i)| {
@@ -54,8 +60,8 @@ pub(crate) fn resolve_pending(view: &mut DocView, doc: &pdfcraft_engine::Documen
         })
     });
     let Some(picked) = answer else { return };
-    view.session.picked_image = picked;
-    view.session.pending_pick = None;
+    session.picked_image = picked;
+    session.pending_pick = None;
 }
 
 /// Page and document generation.
@@ -289,9 +295,9 @@ mod picture_tests {
 /// Forget the selected picture once the document has been edited since it was picked: Edit text &
 /// images (or Undo) may have deleted or moved it, and its highlight would stay behind on an empty
 /// spot of the page.
-pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, view: &mut DocView) {
-    if view.session.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
-        view.session.picked_image = None;
+pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, session: &mut PageSession) {
+    if session.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
+        session.picked_image = None;
     }
 }
 

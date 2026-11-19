@@ -601,7 +601,7 @@ fn page_input_focused(h: &Harness<'static, PdfCraftApp>) -> bool {
 /// Exercise the real navigation editor, including its focus and Enter handling.
 fn focus_page_input(h: &mut Harness<'static, PdfCraftApp>) {
     let text = h.state().views[h.state().active.unwrap()].page_input.clone();
-    h.get(By::new().role(egui::accesskit::Role::TextInput).value(&text)).focus();
+    h.get(By::new().role(egui::accesskit::Role::TextInput).label("Current page").value(&text)).focus();
     h.run_steps(1);
     assert!(page_input_focused(h), "the actual page editor has focus");
 }
@@ -611,7 +611,7 @@ fn type_page_input(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(1);
     let old = h.state().views[h.state().active.unwrap()].page_input.clone();
-    h.get(By::new().role(egui::accesskit::Role::TextInput).value(&old)).type_text(text);
+    h.get(By::new().role(egui::accesskit::Role::TextInput).label("Current page").value(&old)).type_text(text);
     h.run_steps(2);
 }
 
@@ -2024,8 +2024,18 @@ fn pages_panel_harness(sizes: &[(u32, u32)]) -> Harness<'static, PdfCraftApp> {
     h
 }
 
+fn diag_page_nodes(h: &Harness<'static, PdfCraftApp>) {
+    use egui_kittest::kittest::NodeT;
+    let name = std::thread::current().name().unwrap_or("").rsplit("::").next().unwrap_or("").to_owned();
+    for n in h.query_all_by_label_contains("Page") {
+        let a = n.accesskit_node();
+        eprintln!("DIAG {name}: {:?} {:?} {:?}", a.role(), a.label(), n.rect());
+    }
+}
+
 /// A thumbnail in the Pages panel (the panel lists pages as "Page n" buttons).
 fn thumbnail(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
+    diag_page_nodes(h);
     h.get_all_by_label(label).find(|n| n.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect().center()
 }
 
@@ -2069,6 +2079,7 @@ fn pages_panel_thumbnails_have_a_context_menu() {
 
 /// Where the Pages panel draws page `n`'s thumbnail.
 fn thumbnail_rect(h: &Harness<'static, PdfCraftApp>, n: usize) -> egui::Rect {
+    diag_page_nodes(h);
     h.get_all_by_label(&format!("Page {n}")).find(|t| t.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect()
 }
 
@@ -2555,6 +2566,12 @@ fn mouse_wheel_scrolls_while_selecting_text() {
     h.run_steps(1);
     h.hover_at(end);
     h.run_steps(2);
+    eprintln!(
+        "DIAG mouse_wheel_scrolls_while_selecting_text: page {page:?} start {start:?} glyph0 {:?} sel {:?} dragged {:?}",
+        h.state().views[view].glyph_screen_pos(0, 0),
+        h.state().views[view].selected_text(),
+        h.ctx.dragged_id()
+    );
     assert!(h.state().views[view].selected_text().is_some_and(|s| !s.is_empty()), "a text selection is active");
     assert!(h.ctx.dragged_id().is_some(), "the primary drag is still held");
     let before = h.state().views[view].page_screen_rect(0).unwrap().top();
@@ -2588,6 +2605,12 @@ fn selection_wheel_harness() -> (Harness<'static, PdfCraftApp>, usize, egui::Pos
     h.run_steps(1);
     h.hover_at(end);
     h.run_steps(2);
+    eprintln!(
+        "DIAG selection_wheel_harness: page {page:?} start {start:?} glyph0 {:?} sel {:?} dragged {:?}",
+        h.state().views[view].glyph_screen_pos(0, 0),
+        h.state().views[view].selected_text(),
+        h.ctx.dragged_id()
+    );
     assert!(h.state().views[view].selected_text().is_some_and(|s| !s.is_empty()), "a text selection is active");
     assert!(h.ctx.dragged_id().is_some(), "the primary drag is still held");
 
