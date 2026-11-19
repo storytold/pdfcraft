@@ -78,17 +78,22 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
 /// never asked for.
 ///
 /// The key carries the program's length: resource names such as `F1` repeat across documents.
-// PLAN: framework gap F-8: the framework registers each face as a family of its own, so the old
-// chain of a face's sibling subsets (Word splits one face over several) is gone, and characters a
-// subset lacks fall back to the interface family. A chain option on `document_face` is the
-// framework's.
+/// Word-created PDFs often split one face into several subsets: each face chains the page's other
+/// subsets of the same face, so a character one subset lacks takes a sibling's glyph before the
+/// interface family's.
 pub(crate) fn source_faces(cx: &impl FacesCx, doc: &pdfcraft_engine::Document, page: usize) -> BTreeMap<String, FontRef> {
+    let programs: Vec<_> = doc.text_editor_fonts(page).into_iter().filter(|font| !font.choice_only).collect();
+    // Each program's face key, its resource and its document-face key.
+    let keys: Vec<(String, &str, String)> = programs
+        .iter()
+        .map(|p| (pdfcraft_fonts::embedding::face_key(&p.face), p.resource.as_str(), format!("pdf-source-{}-{}", p.resource, p.bytes.len())))
+        .collect();
     let mut faces = BTreeMap::new();
-    for program in doc.text_editor_fonts(page).into_iter().filter(|font| !font.choice_only) {
-        let key = format!("pdf-source-{}-{}", program.resource, program.bytes.len());
-        let state = cx.document_face(&key, || Some(FaceBytes::new(Arc::from(program.bytes.as_slice()), 0)));
+    for (program, (face, resource, key)) in programs.iter().zip(&keys) {
+        let siblings: Vec<String> = keys.iter().filter(|(f, r, _)| f == face && r != resource).map(|(.., k)| k.clone()).collect();
+        let state = cx.document_face(key, || Some(FaceBytes::new(Arc::from(program.bytes.as_slice()), 0).chain(siblings)));
         if let FaceState::Ready(face) = state {
-            faces.insert(program.resource, face);
+            faces.insert(program.resource.clone(), face);
         }
     }
     faces
@@ -145,13 +150,14 @@ pub(super) fn editor_job(
             if ed.look.size != ed.look0.size {
                 look.size = ed.look.size;
             }
-            let font = editor_font(&look, (look.size as f32 * scale).clamp(1.0, 300.0));
+            let mut font = editor_font(&look, (look.size as f32 * scale).clamp(1.0, 300.0));
             let original_face =
                 ed.look.family == ed.look0.family && !ed.family_chosen && ed.look.bold == ed.look0.bold && ed.look.italic == ed.look0.italic;
             let source_face = faces.get(&line.font).filter(|_| original_face);
             let embedded = source_face.is_some();
-            // PLAN: framework gap F-7: a ready `FontRef` has no public layout family, so a run cannot
-            // take its source face yet and is laid out in the interface family.
+            if let Some(face) = source_face {
+                font.family = face.family();
+            }
             let native_width = ctx.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let target_width = ((line.rect[2] - line.rect[0]) * look.size / base.max(0.01)) as f32 * scale;
             let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
