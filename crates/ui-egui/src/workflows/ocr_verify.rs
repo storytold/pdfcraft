@@ -1971,7 +1971,12 @@ mod tests {
         let host = craft::host::Host::builder(crate::APP_INFO).files(files.clone()).build();
         let mut app = PdfCraftApp::for_unit_tests_on(Arc::new(host));
         let text = app.session.create_from_text("t", "Recognize these scanned words").expect("fixture");
-        let id = app.session.open("t.pdf", None, text, None).expect("fixture");
+        // The source is a file on disk, which the destination is compared with.
+        let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-source-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp folder");
+        let source = dir.join("t.pdf");
+        std::fs::write(&source, text.as_slice()).expect("source on disk");
+        let id = app.session.open("t.pdf", Some(source.to_string_lossy().into_owned()), text, None).expect("fixture");
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
         app.ocr_verify.load(
             id,
@@ -1982,13 +1987,15 @@ mod tests {
         app.ocr_draft.output_mode = OutputMode::EditableText;
         // The source file as the destination is refused: nothing is written, the review stays
         // in ReviewReady with the edit, Accept is enabled again.
-        files.answer(Picked::Paths(vec![PathBuf::from("t.pdf")]));
+        use craft::host::Files as _;
+        // Each answer is queued for the save dialog the next Accept opens.
+        files.answer_next(Picked::Paths(vec![source.clone()])).expect("queued");
         with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
         app.process_picks(&egui::Context::default());
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "a refused destination keeps the review");
         assert_eq!(app.ocr_verify.text_of((0, 0)), Some("Edited"), "the edits are kept");
         // A cancelled save dialog: nothing is written, nothing changes.
-        files.answer(Picked::Cancelled);
+        files.answer_next(Picked::Cancelled).expect("queued");
         with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
         app.process_picks(&egui::Context::default());
         assert_eq!(app.ocr_verify.phase, Phase::ReviewReady, "a cancelled save keeps the review");
@@ -1996,11 +2003,12 @@ mod tests {
         assert_eq!(app.ocr_verify.doc, Some(id), "the review still belongs to its document");
         // A real destination: the file lands under `<name>_ocr.pdf` and the review ends.
         let target = PathBuf::from("out/t_ocr.pdf");
-        files.answer(Picked::Paths(vec![target.clone()]));
+        files.answer_next(Picked::Paths(vec![target.clone()])).expect("queued");
         with_state(&mut app, |v, app| do_accept(v, app, &egui::Context::default()));
         app.process_picks(&egui::Context::default());
         assert!(files.file(&target).is_some(), "the editable copy is written");
         assert_eq!(app.ocr_verify.phase, Phase::Idle, "a successful save ends the review");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Region re-OCR refuses an empty, inverted or out-of-page rectangle BEFORE running: no

@@ -44,9 +44,10 @@ pub(crate) use colours::{RecentColours, border_choice, fill_choice, palette, to_
 pub(crate) use composer::composer;
 #[cfg(test)]
 use composer::edited_in_view;
+pub(crate) use geometry::caret_snap;
 pub(crate) use geometry::page_rotation;
 #[cfg(test)]
-pub(crate) use geometry::{caret_snap, snapped_caret};
+pub(crate) use geometry::snapped_caret;
 pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 pub use menu::CanvasAction;
 pub(crate) use menu::{CommentMenuCx, MenuRights, QuickBarPick, attachment_items, context_rows, quick_bar_controls};

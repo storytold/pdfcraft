@@ -1027,6 +1027,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         Some((Owner::Comment { index }, page)) => Some((page, index)),
         _ => None,
     };
+    // The pointer entering or leaving a form widget runs its Mouse Enter and Exit scripts, once per real run.
+    if body.pass.is_some() {
+        let widget = crate::forms_ui::hovered(cx.form, parts_out.hovered.as_ref().map(|(owner, _)| owner));
+        crate::forms_ui::hover_moved(session, widget);
+    }
     if let Some(press) = &parts_out.press {
         // Any press on a page ends Select All of the document, on a link too.
         if matches!(press.phase, PressPhase::Down { .. }) {

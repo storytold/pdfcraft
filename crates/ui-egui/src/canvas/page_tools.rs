@@ -243,6 +243,28 @@ fn select_tool<'a>(
     PageSelectTool::new(cx.pages, texts, text, cx.info, PickSlots::new(pending_pick, picked_image), xforms, cx.doc.edit_generation())
 }
 
+/// The Insert text tool's snap on `page`, the page the comments tool works on: the caret's tip and side in the page's
+/// displayed units, from the page's text ([`comments::caret_snap`]). The caret is drawn upright, so it snaps only
+/// where up on the page is up on screen; other tools have no snap.
+fn caret_snap(
+    tool: QuickTool,
+    cx: &PageToolCx<'_>,
+    texts: &std::collections::HashMap<usize, std::sync::Arc<pdfcraft_render::PageText>>,
+    page: usize,
+) -> Option<impl Fn(craft::behavior::kurbo::Point) -> Option<(craft::behavior::kurbo::Point, f64)> + Send + 'static> {
+    if tool != QuickTool::Comment(comments::CommentTool::Caret) || cx.rotation % 360 != 0 {
+        return None;
+    }
+    if !cx.info.pages.get(page)?.rotation.is_multiple_of(360) {
+        return None;
+    }
+    let text = texts.get(&page)?.clone();
+    Some(move |at: craft::behavior::kurbo::Point| {
+        let ([x, y], side) = comments::caret_snap(&text, at.x as f32, at.y as f32)?;
+        Some((craft::behavior::kurbo::Point::new(f64::from(x), f64::from(y)), f64::from(side)))
+    })
+}
+
 /// The page tool for `chosen` this pass. The placing rule applies first ([`seen_tool`]); Fill & Sign leaves its
 /// click's outcome in `fill`, which the caller applies after the run with [`ToolFinish::apply`]. `press` is the canvas
 /// background's press of the pass, whose span the area tools read.
@@ -286,9 +308,16 @@ pub(crate) fn page_tool<'a>(
                 // Select runs the comments tool too: a hanging paste is placed by its press, and a press no comment
                 // part took goes on to the text.
                 _ => {
+                    let snap = caret_snap(tool, &cx, &session.texts, session.comments.tool.page);
                     let view = &mut session.comments;
                     let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation);
-                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done);
+                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done)
+                        .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
+                        .outcome(&mut session.pending_edit, &mut view.notice);
+                    let annotate = match snap {
+                        Some(snap) => annotate.caret_snap(snap),
+                        None => annotate,
+                    };
                     let annotate = if selects_text { annotate.text(select) } else { annotate };
                     Arm::Area(Box::new(annotate))
                 }
