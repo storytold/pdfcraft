@@ -18,13 +18,14 @@ pub struct Page {
     pub dict: Dict,
 }
 
-/// The side, in points, at or below which a `/MediaBox` has no area and the page falls back to
-/// US Letter (the renderer's `is_nearly_zero`, 1/4096).
+/// The side, in points, at or below which a `/MediaBox` or clipped `/CropBox` has no area and
+/// falls back (the renderer's `is_nearly_zero`, 1/4096).
 const MIN_BOX_SIDE: f64 = 1.0 / 4096.0;
 
 /// Normalized `[x0, y0, x1, y1]` of a page box when its first four entries form a finite, positive rectangle.
-/// A page box as four finite coordinates with a positive width and height, origin and size
-/// unscaled. Overflowing widths are still returned so [`Page::crop`] can clip them to the media box.
+///
+/// Origin and size are unscaled; overflowing widths are returned so [`Page::crop`] can clip them
+/// to the media box.
 fn box_coords(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let [a, b, c, d, ..] = o.as_array()?.as_slice() else { return None };
@@ -37,6 +38,7 @@ fn box_coords(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     (w > 0.0 && h > 0.0).then_some(r)
 }
 
+/// Like [`box_coords`], also rejecting boxes whose span overflows when scaled by [`MAX_USER_UNIT`].
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let r = box_coords(doc, o)?;
     let (w, h) = (r[2] - r[0], r[3] - r[1]);
@@ -54,7 +56,7 @@ impl Page {
         match box_coords(doc, self.dict.get(b"CropBox")) {
             Some(c) => {
                 let r = [c[0].max(media[0]), c[1].max(media[1]), c[2].min(media[2]), c[3].min(media[3])];
-                if r[2] > r[0] && r[3] > r[1] { r } else { media }
+                if r[2] - r[0] > MIN_BOX_SIDE && r[3] - r[1] > MIN_BOX_SIDE { r } else { media }
             }
             None => media,
         }
@@ -544,9 +546,14 @@ mod tests {
         let trailing = doc_with(0, "", "/CropBox [0 0 300 792 /Extra]");
         assert_eq!(pages(&trailing)[0].crop(&trailing), [0.0, 0.0, 300.0, 792.0]);
         // An overflowing /CropBox still intersects a normal /MediaBox; the visible region is that
-        // intersection, not the full media box (hidden-text cleanup uses this crop).
+        // intersection, not the full media box (hidden-text cleanup uses this crop), unless the
+        // clipped intersection is a sliver at or below MIN_BOX_SIDE, matching the renderer.
         let overflow = doc_with(0, "/MediaBox [0 0 600 800]", "/CropBox [-1e308 0 1e308 792]");
         assert_eq!(pages(&overflow)[0].crop(&overflow), [0.0, 0.0, 600.0, 792.0]);
+        for sliver in ["/CropBox [-1e308 0 1e308 0.0001]", "/CropBox [-1e308 0 0.0001 800]"] {
+            let d = doc_with(0, "/MediaBox [0 0 600 800]", sliver);
+            assert_eq!(pages(&d)[0].crop(&d), [0.0, 0.0, 600.0, 800.0], "{sliver}");
+        }
 
         let mut d = doc_with(0, "", "/CropBox null");
         let leaf = ObjRef { num: 3, generation: 0 };
