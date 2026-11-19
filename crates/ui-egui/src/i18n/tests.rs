@@ -1295,6 +1295,26 @@ fn ukrainian_integer_plurals_cover_teens_and_large_counts() {
     }
 }
 
+#[test]
+fn hebrew_is_registered_and_persists() {
+    needs_catalogs!();
+    let he = Lang::from_code("he").expect("he registered");
+    assert_eq!(he.name(), "עברית");
+    assert_eq!(he.english_name(), "Hebrew");
+    assert!(he.rtl());
+    for tag in ["he", "he-IL", "he_IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    assert_eq!(first_supported("he-IL\\r\\nen-US"), Some(he));
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "HE").unwrap();
+    assert_eq!(app.language, "he");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "he");
+}
+
 fn arabic() -> Lang {
     Lang::from_code("ar").expect("ar registered")
 }
@@ -1306,7 +1326,7 @@ fn arabic_is_registered_and_persists() {
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["he", "ar", "ckb", "fa"], "Hebrew, Arabic, Kurdish and Persian are the right-to-left languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
