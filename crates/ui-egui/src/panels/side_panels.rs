@@ -165,7 +165,8 @@ const PAGE_SHARE: f32 = 0.8;
 /// the docks, and every side panel closed, remembered as a column after the toolbar's.
 pub fn default_workspace(rail_side: DockSide) -> Workspace<PanelId> {
     let single = |panel| Column::new(vec![Group::new(vec![panel], 0)]);
-    let (tools, toolbar) = (single(PanelId::Tools), single(PanelId::Toolbar));
+    // The rail is one tool column wide: its column keeps the toolbar's grid, never the theme's column width.
+    let (tools, toolbar) = (single(PanelId::Tools), single(PanelId::Toolbar).with_steps(1));
     let (start, end) = if rail_edge(rail_side) == DockEdge::Start { (vec![toolbar, tools], Vec::new()) } else { (vec![tools], vec![toolbar]) };
     let page = Node::split(Axis::X, SplitSize::Ratio(PAGE_SHARE), Node::tabs(vec![PanelId::Document], 0), Node::dock(DockEdge::End, end));
     let root = Node::split(Axis::X, SplitSize::Ratio(START_SHARE), Node::dock(DockEdge::Start, start), page);
@@ -287,6 +288,14 @@ impl DockPanels<PanelId> for Panels<'_> {
         if panels.contains(&PanelId::Toolbar) {
             crate::hotbar::show_rail(self.app, ui);
         } else if panels.contains(&PanelId::Document) {
+            if rect.width() < 100.0 {
+                eprintln!(
+                    "DIAG checker_summary_does_not_hide_manual_review: document panel {rect:?}, ui max_rect {:?}, screen {:?}, dock {:?}",
+                    ui.max_rect(),
+                    ui.ctx().content_rect(),
+                    self.app.dock.layout.root
+                );
+            }
             document_view(self.app, ui, rect);
         } else {
             return None;

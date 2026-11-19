@@ -1265,16 +1265,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         return None;
     }
     // The room under the notice bars, inside the rect the caller gave.
-    let given_rect = rect;
     let rect = rect.intersect(ui.available_rect_before_wrap());
-    if !(rect.is_finite() && rect.width() >= 0.0 && rect.height() >= 0.0) {
-        eprintln!(
-            "DIAG checker_summary_does_not_hide_manual_review: page view rect {rect:?} from given {given_rect:?}, available {:?}, max_rect {:?}, sizing {}",
-            ui.available_rect_before_wrap(),
-            ui.max_rect(),
-            ui.is_sizing_pass()
-        );
-    }
 
     let preparing = app.is_preparing();
     // PLAN: assumed `side_panels::panel_visible(app, panel) -> bool` for the left panel's visibility (`left_open` is
