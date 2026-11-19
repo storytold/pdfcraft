@@ -236,11 +236,9 @@ impl Automation {
                     }
                     let dir = target.parent().ok_or_else(|| failed("output has no parent"))?;
                     let stem = target.file_stem().ok_or_else(|| failed("output has no stem"))?.to_string_lossy().into_owned();
-                    // A dry run only plans this batch's outputs; the real write numbers any name
-                    // that already exists on disk, so avoid only outputs planned in this batch.
                     for n in 1..=10_000 {
                         let candidate = if n == 1 { target.clone() } else { dir.join(format!("{stem} ({n}).pdf")) };
-                        if planned_outputs.contains(&candidate) {
+                        if candidate.symlink_metadata().is_ok() || planned_outputs.contains(&candidate) {
                             continue;
                         }
                         planned_outputs.insert(candidate.clone());
