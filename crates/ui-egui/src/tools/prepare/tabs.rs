@@ -386,8 +386,7 @@ fn custom_script(ui: &mut egui::Ui, js: &mut String, refused: &mut bool) {
             crate::i18n::fmt(tl!("This script is too long to edit here ({kib} KiB); its start is shown. It is kept as it is."), &[("kib", &kib)]);
         let start = js.get(..js.floor_char_boundary(MAX_EDITED_SCRIPT)).unwrap_or_default().to_string();
         Field::new(label).id_salt("calc-script").help(Help::Text(note_text.into())).show(ui, |ui, _| {
-            // A given value takes no edit: what is typed is not kept.
-            TextField::new(label, Bind::given(start.clone())).lines(6).mono().show(ui);
+            TextField::new(label, Bind::given(start.clone())).lines(6).mono().read_only(true).show(ui);
         });
         return;
     }

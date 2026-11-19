@@ -11,7 +11,7 @@ use craft::draw::ui::transform::TransformBox;
 use craft::pages::ui::PlacedPage;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, Props, Role, Show as _};
-use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
+use craft::ui::primitives::{Draw, PaintShape, StrokePlace, StrokeWidth, TextRun};
 use craft::ui::style::{ComponentStyle, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, vec2};
 use pdfcraft_engine::{Edit, FieldProps, FormField};
@@ -149,8 +149,8 @@ impl<'a> PrepareTool<'a> {
 
     fn finish_draw(&mut self, mut drag: PageBoxDrag, origin: Pos2) {
         let Some(tool) = self.tool else { return };
-        // PLAN: assumed `PageBoxDrag::release(min: f32) -> Option<(usize, Rect)>` (pdf-canvas-w18 note 7)
-        let Some((page, rect)) = drag.release(CLICK_SIZE) else { return };
+        // Any box, a click's included: a click places the default size below.
+        let Some((page, rect)) = drag.release(0.0) else { return };
         let Some(xf) = transform_of(self.xforms, page) else { return };
         let click = rect.width() < CLICK_SIZE || rect.height() < CLICK_SIZE;
         if tool == FieldTool::TextTable {
@@ -503,8 +503,9 @@ impl Component for PrepareOverlay {
         for field in &self.fields {
             let r = field.rect;
             draw.fill(&PaintShape::Rect(r, CornerRadius::ZERO), style.fill);
-            let (line, width) = if field.selected { (style.selected, StrokeWidth::Thick) } else { (style.outline, StrokeWidth::Thin) };
-            draw.stroke(&PaintShape::Rect(r, CornerRadius::ZERO), width, line);
+            if !field.selected {
+                draw.stroke(&PaintShape::Rect(r, CornerRadius::ZERO), StrokeWidth::Thin, style.outline);
+            }
             // The full name, as Acrobat shows it: MASTER.first, not first (#2696), clipped to the field.
             let (tag_fill, tag_text) = if field.selected { (style.selected_tag, style.selected_tag_text) } else { (style.tag, style.tag_text) };
             let run = TextRun::new(field.name.clone()).role(TypeRole::Caption).color(tag_text);
@@ -514,6 +515,10 @@ impl Component for PrepareOverlay {
             if tag.is_positive() {
                 draw.fill(&PaintShape::Rect(tag, CornerRadius::same(1)), tag_fill);
                 draw.galley(Rect::from_center_size(r.center(), size).min + vec2(3.0, 1.0), &layout);
+            }
+            // A selected field's outline goes around it, over its tag, so a small widget's tag never hides it.
+            if field.selected {
+                draw.stroke_placed(&PaintShape::Rect(r, CornerRadius::ZERO), StrokePlace::Outside, StrokeWidth::Thick, style.selected);
             }
         }
         let mut placed: Vec<Rect> = Vec::new();

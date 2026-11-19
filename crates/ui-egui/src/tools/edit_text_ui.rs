@@ -1279,15 +1279,17 @@ mod tests {
     fn two_paragraphs() -> Vec<u8> {
         let streams = [
             "BT /F1 12 Tf 20 160 Td (Alpha beta gamma delta epsilon zeta eta theta) Tj ET",
-            "BT /F1 9 Tf 20 143 Td (Iota kappa lambda mu nu xi omicron pi rho) Tj ET",
+            "BT /F2 9 Tf 20 143 Td (Iota kappa lambda mu nu xi omicron pi rho) Tj ET",
         ];
         let body = streams.join("\n");
         let objs = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
             "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_string(),
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R /F2 6 0 R >> >> >>".to_string(),
             format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+            // A face of its own, so the lower paragraph is not read as the upper one's next line.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>".to_string(),
         ];
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();

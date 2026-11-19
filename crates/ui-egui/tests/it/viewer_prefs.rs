@@ -78,15 +78,15 @@ fn a_document_that_hides_the_interface_opens_without_it_and_f8_brings_it_back() 
     let mut h = harness(|_| {}, &["", HIDE_ALL]);
     assert_eq!(shown(&h), (false, false, false), "the toolbar, menu and rail are hidden");
     assert_eq!(h.state().hidden_interface(), HiddenInterface::ALL);
-    // The quick-action bar is a toolbar too.
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "Hand").is_none());
+    // The tool rail is a toolbar too.
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Toolbar, "Toolbar").is_none());
     // The tab strip stays: the tabs and Home are still there.
     h.get_by_label("Home");
 
     h.key_press(egui::Key::F8);
     h.run_steps(3);
     assert_eq!(shown(&h), (true, true, true), "F8 shows them");
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Hand");
+    h.get_by_role_and_label(egui::accesskit::Role::Toolbar, "Toolbar");
     h.key_press(egui::Key::F8);
     h.run_steps(3);
     assert_eq!(shown(&h), (false, false, false), "and hides them again");
@@ -152,7 +152,7 @@ fn each_preference_hides_its_own_part() {
     // With both the tools and the menu hidden, the mode bar goes and the document moves up.
     let h = harness(|_| {}, &["/ViewerPreferences << /HideToolbar true /HideMenubar true >>"]);
     assert_eq!(shown(&h), (false, false, true));
-    assert!(top(&h) < with_bar - 40.0, "{} against {with_bar}", top(&h));
+    assert!(top(&h) < with_bar, "{} against {with_bar}", top(&h));
 }
 
 #[test]

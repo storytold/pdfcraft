@@ -1118,9 +1118,9 @@ fn initial_view_magnification_offers_25_and_100_percent() {
         h.get_by_role_and_label(Role::ComboBox, "Magnification").click();
         h.run_steps(3);
         // The list is taller than the popup, so the item may need scrolling into view.
-        h.get_by_role_and_label(Role::Button, label).scroll_to_me();
+        h.get_by_role_and_label(Role::ListBoxOption, label).scroll_to_me();
         h.run_steps(3);
-        h.get_by_role_and_label(Role::Button, label).click();
+        h.get_by_role_and_label(Role::ListBoxOption, label).click();
         h.run_steps(2);
     }
     /// Clicks OK, then reopens the saved file: its initial magnification, and the zoom and fit
@@ -2109,6 +2109,12 @@ fn in_panel_view(h: &Harness<'static, PdfCraftApp>, r: egui::Rect) -> bool {
     h.state().views[0].pages_panel.expect("the Pages panel is shown").contains_rect(r)
 }
 
+/// Whether page `n`'s thumbnail is wholly in the Pages panel's view. The panel builds only the thumbnails near its
+/// view, so one it has not built is out of sight.
+fn thumbnail_in_view(h: &Harness<'static, PdfCraftApp>, n: usize) -> bool {
+    h.query_all_by_label(&format!("Page {n}")).find(is_thumbnail).is_some_and(|node| in_panel_view(h, node.rect()))
+}
+
 #[test]
 fn pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection() {
     let mut h = pages_panel_harness(&[(200, 300); 30]);
@@ -2116,7 +2122,7 @@ fn pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection() 
     h.run_steps(2);
     let usual = thumbnail_rect(&h, 1).width();
     let zoom = h.state().views[0].zoom();
-    let visible = |h: &Harness<'static, PdfCraftApp>| (1..=30).filter(|n| in_panel_view(h, thumbnail_rect(h, *n))).count();
+    let visible = |h: &Harness<'static, PdfCraftApp>| (1..=30).filter(|n| thumbnail_in_view(h, *n)).count();
     let before = visible(&h);
     h.get_by_label("Smaller thumbnails").click();
     h.run_steps(4);
@@ -2197,7 +2203,7 @@ fn pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible() {
 #[test]
 fn going_to_a_far_page_scrolls_its_thumbnail_into_view() {
     let mut h = pages_panel_harness(&[(200, 300); 30]);
-    assert!(!in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 starts out of sight");
+    assert!(!thumbnail_in_view(&h, 25), "page 25 starts out of sight");
     h.state_mut().views[0].go_to_page(24);
     h.run_steps(4);
     assert_eq!(h.state().views[0].current(), 24);
