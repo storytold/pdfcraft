@@ -879,11 +879,8 @@ impl Walk<'_> {
     /// file the source holds encrypted (it was opened without the password its embedded files need)
     /// is refused, as the page copier refuses it.
     fn value(&mut self, out: &mut Document, v: &Object, depth: usize) -> Result<Object, OrganizeError> {
-        if depth > MAX_VALUE_DEPTH {
+        if !self.spend() || depth > MAX_VALUE_DEPTH {
             self.cut = true;
-            return Ok(Object::Null);
-        }
-        if !self.spend() {
             return Ok(Object::Null);
         }
         let deeper = depth.saturating_add(1);
@@ -956,11 +953,26 @@ mod tests {
     fn a_value_stops_copying_once_the_budget_is_spent() {
         let (src, mut out) = (Document::new_empty(), Document::new_empty());
         let (pages, objects) = (HashMap::new(), HashMap::new());
-        let mut walk = Walk::new(&src, &pages, &objects, 0);
-        walk.nodes = MAX_NODES - 3;
-        let copied = walk.value(&mut out, &Object::Array(vec![Object::Int(1); 10]), 0).unwrap();
-        // The array itself and two entries fit; the loop stops there rather than reading on.
-        assert_eq!(copied.as_array().map(Vec::len), Some(2));
-        assert!(walk.cut);
+        let mut dict = Dict::new();
+        for i in 0..10 {
+            dict.set(format!("K{i}").into_bytes(), Object::Int(1));
+        }
+        for (depth, expected) in [(0, Object::Int(1)), (MAX_VALUE_DEPTH, Object::Null)] {
+            let mut walk = Walk::new(&src, &pages, &objects, 0);
+            walk.nodes = MAX_NODES - 3;
+            let copied = walk.value(&mut out, &Object::Array(vec![Object::Int(1); 10]), depth).unwrap();
+            // The array itself and two entries fit; the loop stops there rather than reading on.
+            assert_eq!(copied.as_array().map(Vec::as_slice), Some([expected.clone(), expected.clone()].as_slice()));
+            assert_eq!(walk.nodes, MAX_NODES);
+            assert!(walk.cut);
+
+            let mut walk = Walk::new(&src, &pages, &objects, 0);
+            walk.nodes = MAX_NODES - 3;
+            let copied = walk.value(&mut out, &Object::Dict(dict.clone()), depth).unwrap();
+            assert_eq!(copied.as_dict().map(Dict::len), Some(2));
+            assert_eq!(copied.as_dict().and_then(|d| d.get(b"K0")), Some(&expected));
+            assert_eq!(walk.nodes, MAX_NODES);
+            assert!(walk.cut);
+        }
     }
 }
