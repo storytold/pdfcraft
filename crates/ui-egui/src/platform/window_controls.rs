@@ -1,11 +1,7 @@
-//! Window buttons and resize edges for desktops that leave the window frame to the app.
+//! Window buttons and resize edges for the integrated title bar.
 //!
-//! GNOME on Wayland has no server-side decorations (the compositor offers no
-//! `zxdg_decoration_manager_v1`), so winit drew its own imitation frame. Instead the app turns the
-//! frame off and the tab strip becomes the header bar, as in GNOME's own apps: it carries the
-//! minimize, maximize and close buttons in the desktop's order (GNOME's `button-layout`), and
-//! thin zones along the window's edges resize it. Desktops with server-side decorations (KDE,
-//! Sway, Hyprland, X11) keep their own frame and never get here.
+//! When the app turns off the separate frame (for example, on GNOME Wayland or KDE Plasma), the
+//! tab strip carries the window buttons and thin zones along the window's edges resize it.
 
 use crate::theme::Tokens;
 use egui::viewport::ResizeDirection;
@@ -19,17 +15,26 @@ pub enum Button {
     Close,
 }
 
-/// Which buttons go on which end of the header bar, outermost last.
+/// The desktop's caption-button appearance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Style {
+    #[default]
+    Adwaita,
+    Breeze,
+}
+
+/// The caption style and which buttons go on each end of the header bar, outermost last.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub left: Vec<Button>,
     pub right: Vec<Button>,
+    pub style: Style,
 }
 
 impl Default for Layout {
     /// What a desktop that names no layout gets: all three, on the right.
     fn default() -> Self {
-        Self { left: Vec::new(), right: vec![Button::Minimize, Button::Maximize, Button::Close] }
+        Self { left: Vec::new(), right: vec![Button::Minimize, Button::Maximize, Button::Close], style: Style::Adwaita }
     }
 }
 
@@ -61,11 +66,11 @@ impl Layout {
         };
         let left = side(left);
         let right = side(right);
-        Self { left, right }
+        Self { left, right, style: Style::Adwaita }
     }
 }
 
-/// The round button's diameter, as in Adwaita.
+/// The square hit target, shared by both caption styles.
 pub const BUTTON: f32 = 24.0;
 /// Between two window buttons.
 pub const GAP: f32 = 6.0;
@@ -82,7 +87,7 @@ pub fn width(buttons: &[Button]) -> f32 {
 
 /// Draw the window buttons for one end of the strip, in reading order, inside a horizontal
 /// layout running left to right; the caller adds [`SIDE_GAP`] where the strip continues.
-pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
+pub fn buttons(ui: &mut egui::Ui, buttons: &[Button], style: Style) {
     let t = Tokens::get(ui.ctx());
     let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
     for (n, &button) in buttons.iter().enumerate() {
@@ -99,7 +104,10 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         let response = response.on_hover_text(label);
         if ui.is_rect_visible(rect) {
-            paint(ui.painter(), rect, button, maximized, &t, &response);
+            match style {
+                Style::Adwaita => paint_adwaita(ui.painter(), rect, button, maximized, &t, &response),
+                Style::Breeze => paint_breeze(ui.painter(), rect, button, maximized, &t, &response),
+            }
         }
         if response.clicked() {
             let command = match button {
@@ -115,7 +123,7 @@ pub fn buttons(ui: &mut egui::Ui, buttons: &[Button]) {
 
 /// Adwaita's look: a round wash of the text colour, stronger on hover and press, and a 16-point
 /// symbolic glyph drawn with lines (no icon files).
-fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t: &Tokens, response: &egui::Response) {
+fn paint_adwaita(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t: &Tokens, response: &egui::Response) {
     let alpha = if response.is_pointer_button_down_on() {
         0.28
     } else if response.hovered() {
@@ -149,6 +157,42 @@ fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t
         Button::Close => {
             painter.line_segment([at(4.0, 4.0), at(11.0, 11.0)], stroke);
             painter.line_segment([at(11.0, 4.0), at(4.0, 11.0)], stroke);
+        }
+    }
+}
+
+/// Breeze leaves the buttons bare at rest. Hover inverts the glyph over a small disc (red for Close).
+/// `craft-window` exposes a caption family, but its shared painter is not available at our pin.
+fn paint_breeze(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t: &Tokens, response: &egui::Response) {
+    let center = rect.center();
+    let pressed = response.is_pointer_button_down_on();
+    let ink = if response.hovered() || pressed {
+        let fill = match (button, t.dark()) {
+            (Button::Close, true) => Color32::from_rgb(255, 154, 163),
+            (Button::Close, false) => Color32::from_rgb(180, 46, 66),
+            _ => t.text,
+        };
+        painter.circle_filled(center, 9.0, if pressed { fill.gamma_multiply(0.82) } else { fill });
+        t.titlebar
+    } else {
+        t.text
+    };
+    if response.has_focus() {
+        painter.circle_stroke(center, BUTTON / 2.0 - 1.0, Stroke::new(1.0, t.accent));
+    }
+    let stroke = Stroke::new(1.35, ink);
+    let at = |x, y| center + Vec2::new(x, y);
+    match (button, maximized) {
+        (Button::Minimize, _) | (Button::Maximize, false) => {
+            let y = if button == Button::Minimize { 2.5 } else { -2.5 };
+            painter.add(egui::Shape::line(vec![at(-5.0, -y), at(0.0, y), at(5.0, -y)], stroke));
+        }
+        (Button::Maximize, true) => {
+            painter.add(egui::Shape::closed_line(vec![at(0.0, -4.5), at(4.5, 0.0), at(0.0, 4.5), at(-4.5, 0.0)], stroke));
+        }
+        (Button::Close, _) => {
+            painter.line_segment([at(-4.2, -4.2), at(4.2, 4.2)], stroke);
+            painter.line_segment([at(-4.2, 4.2), at(4.2, -4.2)], stroke);
         }
     }
 }
@@ -290,24 +334,24 @@ pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput)
 
 #[cfg(test)]
 mod tests {
-    use super::{Button, Layout, ResizeDirection, zones};
+    use super::{Button, Layout, ResizeDirection, Style, zones};
     use egui::{Pos2, Rect};
 
     #[test]
     fn gnome_button_layouts_parse() {
-        let close = Layout { left: vec![], right: vec![Button::Close] };
+        let close = Layout { left: vec![], right: vec![Button::Close], style: Style::Adwaita };
         assert_eq!(Layout::parse("'appmenu:close'"), close);
         assert_eq!(Layout::parse("appmenu:close\n"), close);
         assert_eq!(Layout::parse(":minimize,maximize,close"), Layout::default());
         assert_eq!(
             Layout::parse("close,minimize,maximize:appmenu"),
-            Layout { left: vec![Button::Close, Button::Minimize, Button::Maximize], right: vec![] }
+            Layout { left: vec![Button::Close, Button::Minimize, Button::Maximize], right: vec![], style: Style::Adwaita }
         );
         // No colon: the left side, as GTK reads it.
-        assert_eq!(Layout::parse("close"), Layout { left: vec![Button::Close], right: vec![] });
+        assert_eq!(Layout::parse("close"), Layout { left: vec![Button::Close], right: vec![], style: Style::Adwaita });
         // Unknown names, spaces and repeats.
         assert_eq!(Layout::parse("icon,spacer: close , close,bogus"), close);
-        assert_eq!(Layout::parse(""), Layout { left: vec![], right: vec![] });
+        assert_eq!(Layout::parse(""), Layout { left: vec![], right: vec![], style: Style::Adwaita });
     }
 
     #[test]

@@ -545,8 +545,8 @@ pub struct PdfCraftApp {
     /// Whether AppKit put those traffic lights at the right end of the title bar, as it does when
     /// the system language is right-to-left (`None` until a window has said).
     pub titlebar_lights_right: Option<bool>,
-    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
-    /// carries these window buttons and the window's edges resize it.
+    /// The button layout for desktops where the app can draw its own frame: the tab strip carries
+    /// these window buttons and the window's edges resize it.
     pub window_controls: Option<window_controls::Layout>,
     /// Preferences ▸ Use system title bar: where `window_controls` is set, give the window back
     /// winit's frame instead of drawing the header bar (#1001).

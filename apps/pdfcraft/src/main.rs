@@ -247,7 +247,7 @@ fn main() -> eframe::Result {
     let may_hand_off = startup.may_hand_off();
     let startup::Arguments { files, options, control_file, create_images, combine, two_paged, .. } = startup;
     let integrated = cfg!(target_os = "macos");
-    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
+    // The tab strip can double as the title bar (src/decorations.rs).
     let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
@@ -393,7 +393,7 @@ struct Launch {
     /// `--combine`: the files go to the Combine files tab.
     combine: bool,
     integrated: bool,
-    /// The window buttons the app draws, when the desktop leaves the frame to it.
+    /// The window button layout when the app can draw its own frame.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
     two_paged: bool,
 }
