@@ -703,7 +703,7 @@ fn is_name(doc: &Document, d: &Dict, key: &[u8], want: &[u8]) -> bool {
 }
 
 /// `d`'s integer `key`, directly or through an indirect object.
-fn int_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<i64> {
+pub(crate) fn int_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<i64> {
     d.get(key).and_then(|v| doc.resolve(v).as_int())
 }
 
