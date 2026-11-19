@@ -282,38 +282,44 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     // Set once the app is created, which is after the renderer has started.
     let started = Rc::new(Cell::new(false));
-    let first = if choice == RendererChoice::Gl { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
-    let result = eframe::run_native(
-        "PdfCraft",
-        native_options(launch.integrated, launch.window_controls.is_some(), first),
-        app_creator(
-            launch.clone(),
-            Rc::clone(&started),
-            instance.as_ref(),
-            #[cfg(target_os = "macos")]
-            &apple_events,
-        ),
-    );
-    match result {
-        // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
-        // help either, and winit's own error says more.
-        Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
-            // Old or unusual GPUs and drivers (#461, #435, #392) can't give wgpu a device; OpenGL
-            // usually still works there, so that's better than quitting.
-            log::error!("the GPU renderer (wgpu) didn't start: {e}. Starting with OpenGL instead; set PDFCRAFT_RENDERER=gl to skip wgpu.");
-            eframe::run_native(
-                "PdfCraft",
-                native_options(launch.integrated, launch.window_controls.is_some(), eframe::Renderer::Glow),
-                app_creator(
-                    launch,
-                    started,
-                    instance.as_ref(),
-                    #[cfg(target_os = "macos")]
-                    &apple_events,
-                ),
-            )
+    let run = |renderer, hardware_only| {
+        eframe::run_native(
+            "PdfCraft",
+            native_options(launch.integrated, launch.window_controls.is_some(), renderer, hardware_only),
+            app_creator(
+                launch.clone(),
+                Rc::clone(&started),
+                instance.as_ref(),
+                #[cfg(target_os = "macos")]
+                &apple_events,
+            ),
+        )
+    };
+    run_renderer(choice, || started.get(), run)
+}
+
+fn run_renderer(choice: RendererChoice, started: impl Fn() -> bool, run: impl Fn(eframe::Renderer, bool) -> eframe::Result) -> eframe::Result {
+    use eframe::Renderer::{Glow, Wgpu};
+    if choice == RendererChoice::Gl {
+        return run(Glow, false);
+    }
+    // WARP can start successfully on a machine whose real GPU only has a legacy OpenGL driver.
+    // Give that driver a chance before falling back to WARP. Explicit adapter overrides still win.
+    let hardware_only = cfg!(target_os = "windows")
+        && choice == RendererChoice::Auto
+        && ["WGPU_BACKEND", "WGPU_POWER_PREF"].into_iter().all(|key| std::env::var_os(key).is_none());
+    match run(Wgpu, hardware_only) {
+        Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started()) => {
+            log::warn!("wgpu renderer didn't start: {e}. Trying native OpenGL.");
         }
-        other => other,
+        result => return result,
+    }
+    match run(Glow, false) {
+        Err(e @ (eframe::Error::Glutin(_) | eframe::Error::NoGlutinConfigs(..) | eframe::Error::OpenGL(_))) if hardware_only && !started() => {
+            log::warn!("native OpenGL didn't start: {e}. Trying wgpu with software rendering allowed.");
+            run(Wgpu, false)
+        }
+        result => result,
     }
 }
 
@@ -343,7 +349,7 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 }
 
 /// The window and renderer settings for one run.
-fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
+fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer, hardware_only: bool) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
@@ -378,7 +384,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
     // provider would read every installed face, including proprietary ones, into every UI pass.
     native.system_font_fallback = false;
     if renderer == eframe::Renderer::Wgpu {
-        configure_gpu(&mut native);
+        configure_gpu(&mut native, hardware_only);
     }
     native
 }
@@ -719,7 +725,7 @@ fn stage_control_file(
 ///   is being resized, Windows stretched the window's swap chain, still at the old size, to the
 ///   new one, so the text shimmered and the left panel's width bounced for as long as the drag
 ///   lasted (issue #2738). A visual's last frame is shown at its own size instead.
-fn configure_gpu(native: &mut eframe::NativeOptions) {
+fn configure_gpu(native: &mut eframe::NativeOptions, hardware_only: bool) {
     let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut native.wgpu_options.wgpu_setup else { return };
     // Nothing draws or dispatches indirectly, so wgpu's check of indirect arguments only costs a
     // compute shader when the device is created, one that Metal can't compile on an Intel Iris
@@ -740,7 +746,7 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
         setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
         let displays = display_gpus();
         let compositor = compositor_gpu::compositor_gpu();
-        if !displays.is_empty() || compositor.is_some() {
+        if hardware_only || !displays.is_empty() || compositor.is_some() {
             setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
                 let usable: Vec<&eframe::wgpu::Adapter> = adapters.iter().filter(|a| surface.is_none_or(|s| a.is_surface_supported(s))).collect();
                 let infos: Vec<(u32, u32, eframe::wgpu::DeviceType)> = usable
@@ -750,7 +756,7 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
                         (info.vendor, info.device, info.device_type)
                     })
                     .collect();
-                let picked = pick_adapter(&infos, &displays, compositor).and_then(|i| usable.get(i)).map(|a| (*a).clone());
+                let picked = pick_adapter_with_policy(&infos, &displays, compositor, hardware_only).and_then(|i| usable.get(i)).map(|a| (*a).clone());
                 match &picked {
                     // Which GPU draws is the first question when a window stays black (#8, #378, #445).
                     Some(a) => {
@@ -898,13 +904,24 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
 /// primary display (a hybrid laptop's panel, #8; the primary display on Windows, #378), or else,
 /// with no primary display known (a Linux desktop with a monitor on each GPU, #445), the discrete
 /// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software.
+#[cfg(test)]
 fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu], compositor: Option<(u32, u32)>) -> Option<usize> {
+    pick_adapter_with_policy(adapters, displays, compositor, false)
+}
+
+fn pick_adapter_with_policy(
+    adapters: &[(u32, u32, eframe::wgpu::DeviceType)],
+    displays: &[DisplayGpu],
+    compositor: Option<(u32, u32)>,
+    hardware_only: bool,
+) -> Option<usize> {
     use eframe::wgpu::DeviceType;
     let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);
     let multi_gpu_desktop = displays.len() > 1 && !displays.iter().any(|g| g.primary);
     adapters
         .iter()
         .enumerate()
+        .filter(|(_, (_, _, kind))| !hardware_only || *kind != DeviceType::Cpu)
         .min_by_key(|(_, (vendor, device, kind))| {
             let shown = display((*vendor, *device));
             let drives_display = shown.is_some();

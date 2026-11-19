@@ -1,6 +1,7 @@
 use crate::CMapResolverFn;
 use crate::context::{
     Context, HeldContent, MAX_CACHED_TYPE3_PROCS, Type3Procs, content_left, hold_content,
+    path_as_rect,
 };
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
@@ -11,8 +12,8 @@ use crate::font::{
 };
 use crate::interpret::state::TextState;
 use crate::soft_mask::SoftMask;
-use crate::util::RectExt;
-use crate::{BlendMode, interpret};
+use crate::util::{BezPathExt, RectExt};
+use crate::{BlendMode, FillRule, interpret};
 use crate::{CacheKey, ClipPath, GlyphDrawMode, PathDrawMode};
 use crate::{Image, Paint};
 use hayro_cmap::{BfString, CMap};
@@ -22,12 +23,12 @@ use hayro_syntax::object::Dict;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::{CHAR_PROCS, FONT_BBOX, FONT_MATRIX, RESOURCES};
 use hayro_syntax::page::Resources;
-use kurbo::{Affine, BezPath, Rect};
+use kurbo::{Affine, BezPath, Point, Rect};
 use skrifa::GlyphId;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, atomic::Ordering};
 
 #[derive(Debug)]
 pub(crate) struct Type3<'a> {
@@ -49,7 +50,7 @@ pub(crate) struct Type3<'a> {
     /// thousands of times) isn't inflated again for every copy. Only procedures of at most
     /// [`MAX_CACHED_PROC`] bytes are kept, and the fonts of one interpreter cache keep at most
     /// `context::MAX_CACHED_TYPE3_PROCS` bytes together.
-    decoded_procs: RefCell<HashMap<String, Rc<[u8]>>>,
+    decoded_procs: RefCell<HashMap<String, Rc<DecodedProc>>>,
     /// PdfCraft patch: whether the font's numbered glyph names all name their own codes
     /// (`numbered_names_name_their_codes`), worked out on first use.
     own_code_names: OnceLock<bool>,
@@ -59,7 +60,67 @@ pub(crate) struct Type3<'a> {
 const MAX_CACHED_PROC: usize = 64 << 10;
 /// PdfCraft patch (87): what a kept procedure costs the cache besides its bytes and its glyph
 /// name (the map entry and the shared allocation's counts), so many empty procedures count too.
-const CACHED_PROC_OVERHEAD: usize = 64;
+const CACHED_PROC_OVERHEAD: usize = 128;
+
+#[derive(Debug)]
+struct DecodedProc {
+    bytes: Rc<[u8]>,
+    shape: Option<(BezPath, FillRule)>,
+}
+
+/// Recognize an uncoloured glyph consisting of just one filled outline. There is no graphics
+/// state to interpret or resource to resolve. All other procedures use the regular interpreter.
+fn simple_outline(bytes: &[u8]) -> Option<(BezPath, FillRule)> {
+    if bytes.len() > 8 * 1024 {
+        return None;
+    }
+    let mut ops = TypedIter::new(bytes);
+    if !matches!(ops.next(), Some(TypedInstruction::ShapeGlyph(_))) {
+        return None;
+    }
+    let mut path = BezPath::new();
+    let mut open = false;
+    let fill = loop {
+        if path.elements().len() >= 256 {
+            return None;
+        }
+        match ops.next()? {
+            TypedInstruction::MoveTo(m) => {
+                path.move_to(outline_point(m.0.as_f64(), m.1.as_f64())?);
+                open = true;
+            }
+            TypedInstruction::LineTo(l) if open => {
+                path.line_to(outline_point(l.0.as_f64(), l.1.as_f64())?);
+            }
+            TypedInstruction::CubicTo(c) if open => {
+                path.curve_to(
+                    outline_point(c.0.as_f64(), c.1.as_f64())?,
+                    outline_point(c.2.as_f64(), c.3.as_f64())?,
+                    outline_point(c.4.as_f64(), c.5.as_f64())?,
+                );
+            }
+            TypedInstruction::ClosePath(_) if open => {
+                path.close_path();
+                open = false;
+            }
+            TypedInstruction::FillPathNonZero(_) => break FillRule::NonZero,
+            TypedInstruction::FillPathEvenOdd(_) => break FillRule::EvenOdd,
+            _ => return None,
+        }
+    };
+    let bounds = path.fast_bounding_box();
+    // Degenerate fills and rectangles have special drawing rules in `fill_path_impl`.
+    (ops.next().is_none()
+        && bounds.width() > 0.0
+        && bounds.height() > 0.0
+        && path_as_rect(&path).is_none())
+    .then_some((path, fill))
+}
+
+fn outline_point(x: f64, y: f64) -> Option<Point> {
+    let range = -1.0e7..=1.0e7;
+    (range.contains(&x) && range.contains(&y)).then_some(Point::new(x, y))
+}
 
 impl<'a> Type3<'a> {
     pub(crate) fn new(dict: &Dict<'a>, cmap_resolver: &CMapResolverFn) -> Option<Self> {
@@ -118,11 +179,11 @@ impl<'a> Type3<'a> {
         name: &str,
         program: &Stream<'a>,
         procs: &Type3Procs,
-    ) -> Option<(Rc<[u8]>, HeldContent)> {
+    ) -> Option<(Rc<DecodedProc>, HeldContent)> {
         let kept = self.decoded_procs.borrow().get(name).cloned();
-        if let Some(bytes) = kept {
-            let held = hold_content(bytes.len())?;
-            return Some((bytes, held));
+        if let Some(proc) = kept {
+            let held = hold_content(proc.bytes.len())?;
+            return Some((proc, held));
         }
         let left = content_left();
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
@@ -135,17 +196,30 @@ impl<'a> Type3<'a> {
             .len()
             .saturating_add(name.len())
             .saturating_add(CACHED_PROC_OVERHEAD);
-        let total = procs.held.get().saturating_add(cost);
+        let base_total = procs.held.get().saturating_add(cost);
         if left > MAX_CACHED_PROC
             && bytes.len() <= MAX_CACHED_PROC
-            && total <= MAX_CACHED_TYPE3_PROCS
+            && base_total <= MAX_CACHED_TYPE3_PROCS
         {
-            procs.held.set(total);
+            let mut total = base_total;
+            let shape = simple_outline(&bytes).filter(|(path, _)| {
+                // Account for spare capacity in the path's vector as well as its elements.
+                let size = size_of_val(path.elements()).saturating_mul(2);
+                let with_shape = total.saturating_add(size);
+                if with_shape > MAX_CACHED_TYPE3_PROCS {
+                    return false;
+                }
+                total = with_shape;
+                true
+            });
+            let proc = Rc::new(DecodedProc { bytes, shape });
             self.decoded_procs
                 .borrow_mut()
-                .insert(name.to_string(), bytes.clone());
+                .insert(name.to_string(), proc.clone());
+            procs.held.set(total);
+            return Some((proc, held));
         }
-        Some((bytes, held))
+        Some((Rc::new(DecodedProc { bytes, shape: None }), held))
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
@@ -264,19 +338,35 @@ impl<'a> Type3<'a> {
         {
             return None;
         }
-        let mut state = glyph.state.clone();
         let root_transform =
             transform * glyph_transform * self.matrix * Affine::scale(UNITS_PER_EM as f64);
+        let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
+        let program = self.char_procs.get(&name)?;
+        let (decoded, _held) = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
+        if let Some((path, fill)) = &decoded.shape
+            && matches!(paint, Paint::Color(_))
+            && glyph.state.graphics_state.soft_mask.is_none()
+        {
+            if !glyph
+                .settings
+                .cancelled
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                device.set_soft_mask(None);
+                device.draw_path(path, root_transform, paint, &PathDrawMode::Fill(*fill));
+            }
+            return Some(());
+        }
+
+        let mut state = glyph.state.clone();
         state.ctm = root_transform;
 
         // Not sure if this is mentioned anywhere, but I do think we need to reset the text state
         // (though the graphics state itself should be preserved).
         state.text_state = TextState::default();
 
-        let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
-        let program = self.char_procs.get(&name)?;
-        let (decoded, _held) = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
-        let iter = TypedIter::new(&decoded);
+        let iter = TypedIter::new(&decoded.bytes);
 
         let is_shape_glyph = {
             let mut iter = iter.clone();

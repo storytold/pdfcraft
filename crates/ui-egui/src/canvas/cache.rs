@@ -522,6 +522,9 @@ impl DocView {
                 self.thumbs.clear();
                 self.stale_thumbs.clear();
             }
+            // Speculative whole-page work competes with visible pixels too. Cancel it when
+            // navigation exposes an uncached page, and resume once that page has arrived.
+            queue.retain(|r| self.frame_visible.contains(&r.page) || r.tag & (GRID_TAG | PRINT_TAG) != 0);
             return queue;
         }
         let thumbs = self.thumbnail_requests(info, ppp);
@@ -710,8 +713,8 @@ impl DocView {
         if r.width == 0 || r.height == 0 || r.width as usize > max_side || r.height as usize > max_side {
             return 0;
         }
-        // Remember heavy pages: only these get the zoom/pan settle holds, so fast pages
-        // never pay added latency. Stale entries die with the tiles on edits.
+        // Remember heavy pages for the longer zoom hold and the pan hold. Stale entries die
+        // with the tiles on edits.
         if r.millis >= SLOW_MILLIS {
             self.slow_pages.insert(r.request.page);
         }

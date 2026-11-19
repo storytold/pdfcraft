@@ -834,7 +834,7 @@ pub struct DocView {
     /// Sharp renders of the pages the grid shows larger than a thumbnail: only those in view,
     /// at the size drawn (device pixels wide).
     grid_pages: HashMap<usize, (u32, TextureHandle)>,
-    /// Zoom-settle debounce for heavy pages: the last requested device scale, and the egui
+    /// Zoom-settle debounce: the last requested device scale, and the egui
     /// time until which sharp whole-page/tile re-renders are held back. While the zoom is
     /// still moving, every frame would otherwise cancel the in-flight full-page interpret
     /// (seconds on image-heavy CAD plots) and start it over, so a sharp raster never
@@ -859,8 +859,8 @@ pub struct DocView {
     /// The page widget's id, by which the Hand tool finds its drag before the pages are laid out.
     page_widget: Option<egui::Id>,
     pan_hold_until: f64,
-    /// Pages whose raster proved slow (see `SLOW_MILLIS`): only these get the zoom/pan
-    /// settle holds. Fast pages render straight through, with no added latency.
+    /// Pages whose raster proved slow (see `SLOW_MILLIS`): these get a longer zoom hold
+    /// and also defer new tiles during a pan.
     slow_pages: HashSet<usize>,
 }
 
@@ -2609,9 +2609,12 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
     if sharp_held || pan_held {
         let main_tag = tag;
         queue.retain(|req| {
-            // Fast pages render straight through: the hold only protects heavy pages
-            // whose full-page interpret costs seconds.
-            if !view.slow_pages.contains(&req.page) {
+            // Intermediate zoom levels have little reuse off screen. During the gesture, let
+            // the GPU stretch existing textures, and spend raster work on newly visible pages.
+            if sharp_held && !on_screen.contains(&req.page) {
+                return false;
+            }
+            if !sharp_held && !view.slow_pages.contains(&req.page) {
                 return true;
             }
             if req.tile.is_some() {
@@ -3179,17 +3182,20 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
 }
 
 /// Holds sharp re-renders while the zoom is still moving: a new scale every frame would cancel the
-/// in-flight full-page interpret and restart it, so on a heavy page (a CAD plot with ~1000 images
-/// renders for seconds) the sharp raster never arrives and the view looks stuck on a soft image.
-/// The stale raster stays stretched meanwhile; the sharp request goes out once the zoom settles.
+/// in-flight full-page interpret and restart it. The renderer stretches the previous texture
+/// meanwhile and requests sharp pixels as soon as the zoom settles.
 fn hold_sharp_renders(ui: &egui::Ui, view: &mut DocView, scale: f32) -> bool {
     let now_scale = ui.input(|i| i.time);
     if (scale - view.last_scale).abs() > f32::EPSILON {
         view.last_scale = scale;
-        view.sharp_hold_until = now_scale + 0.35;
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(380));
+        let hold = if view.slow_pages.contains(&view.current) { 0.35 } else { 0.12 };
+        view.sharp_hold_until = now_scale + hold;
     }
-    now_scale < view.sharp_hold_until
+    let remaining = view.sharp_hold_until - now_scale;
+    if remaining > 0.0 {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+    }
+    remaining > 0.0
 }
 
 /// A destination's position (bookmarks, links) refines `goto`: its point at the window's top-left,
