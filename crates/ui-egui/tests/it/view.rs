@@ -1662,11 +1662,12 @@ fn the_way_back_fades_and_shows_again_near_its_corner_until_the_reader_goes_back
     h.hover_at(vp.left_bottom() + egui::vec2(60.0, -40.0));
     h.run_steps(2);
     assert!(h.query_by_label("Back to page 1").is_some(), "back while the pointer is near it");
-    // The page size, which shows in that corner too, goes above it.
+    // It sits above the page size, which shows in that corner too, on one line.
     let key = h.state().views[0].view_key();
     let area = |id: egui::Id| h.ctx.memory(|m| m.area_rect(id)).expect("drawn");
     let (back, size) = (area(egui::Id::unique(("link-return", key))), area(egui::Id::unique("page-size-hint")));
-    assert!(size.bottom() <= back.top(), "the page size {size:?} clear of the way back {back:?}");
+    assert!(back.bottom() <= size.top(), "the way back {back:?} above the page size {size:?}");
+    assert!(back.height() < 48.0 && back.width() > back.height() * 3.0, "one line: {back:?}");
     h.hover_at(vp.center());
     h.run_steps(4);
     assert!(h.query_by_label("Back to page 1").is_none(), "gone again once the pointer leaves");

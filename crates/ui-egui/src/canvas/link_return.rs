@@ -4,7 +4,7 @@
 //! pointer is near that corner, until the reader goes back (with it, or Previous / Next view) or
 //! follows another link or bookmark.
 
-use egui::{Pos2, Rect, Vec2};
+use egui::{Pos2, Rect, Vec2, pos2};
 
 use super::{DestView, DocInfo, DocView, Fit, SIDE, vec2};
 use crate::icons;
@@ -16,8 +16,10 @@ const SHOWN_FOR: f64 = 3.0;
 const FADE: f32 = 0.25;
 /// How close the pointer comes to it, in points, to bring it back.
 const NEAR: f32 = 80.0;
-/// Its distance from the pages' bottom-left corner, in points.
-const INSET: f32 = 16.0;
+/// Its distance from the pages' left edge, in points, the page size hint's.
+const INSET: f32 = 14.0;
+/// The space between it and the page size hint under it, in points.
+const GAP: f32 = 8.0;
 /// Its size before it has been drawn once.
 const SIZE_GUESS: Vec2 = Vec2::new(170.0, 40.0);
 
@@ -100,15 +102,16 @@ impl DocView {
 /// then while `pointer` (the pages' pointer) is near it or over it. `enabled` is false while
 /// something covers the pages, which hides it. Not shown in the page grid or full screen.
 pub(super) fn overlay(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, pointer: Option<Pos2>, now: f64, animates: bool, enabled: bool) {
-    let id = area_id(view);
-    ui.ctx().data_mut(|d| d.remove::<Rect>(id.with("drawn")));
+    let id = egui::Id::unique(("link-return", view.view_key()));
     let Some(from) = view.link_return else { return };
     if view.organize || view.presentation.is_some() {
         return;
     }
     let ctx = ui.ctx();
     let viewport = view.viewport_screen;
-    let corner = viewport.left_bottom() + vec2(INSET, -INSET);
+    // Above the page size hint's place, which it would otherwise cover (or be covered by) while
+    // the pointer is in that corner, and at the same distance from the edge.
+    let corner = pos2(viewport.left() + INSET, super::bars::size_hint_top(ui, viewport) - GAP);
     let size = egui::AreaState::load(ctx, id).and_then(|a| a.size).unwrap_or(SIZE_GUESS);
     let button = Rect::from_min_size(corner - vec2(0.0, size.y), size);
     // The pages' pointer is `None` over the button itself, which is drawn over them.
@@ -128,8 +131,10 @@ pub(super) fn overlay(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, pointer
     let label = info.pages.get(from.page).map(|p| p.label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| (from.page + 1).to_string());
     let text = crate::i18n::fmt(tl!("Back to page {p}"), &[("p", &label)]);
     let t = Tokens::get(ctx);
-    let shown = egui::Area::new(id).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(corner).show(ctx, |ui| {
+    let back = egui::Area::new(id).order(egui::Order::Foreground).pivot(egui::Align2::LEFT_BOTTOM).fixed_pos(corner).show(ctx, |ui| {
         ui.multiply_opacity(opacity);
+        // One line, however narrow the window.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         // Dark with a light edge in either theme: it reads over a white page and over the
         // pasteboard, and the shadow lifts it off a page it sits over.
         let shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: egui::Color32::from_black_alpha(if t.dark() { 120 } else { 50 }) };
@@ -148,19 +153,7 @@ pub(super) fn overlay(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, pointer
             })
             .inner
     });
-    ctx.data_mut(|d| d.insert_temp(id.with("drawn"), shown.response.rect));
-    if shown.inner && enabled {
+    if back.inner && enabled {
         view.return_from_link(info);
     }
-}
-
-/// The way back's area, per view (two panes of split view each have their own).
-fn area_id(view: &DocView) -> egui::Id {
-    egui::Id::unique(("link-return", view.view_key()))
-}
-
-/// Where the way back was drawn this frame, if it was: the page size hint, which shares its
-/// corner, goes above it.
-pub(super) fn drawn(ctx: &egui::Context, view: &DocView) -> Option<Rect> {
-    ctx.data(|d| d.get_temp(area_id(view).with("drawn")))
 }

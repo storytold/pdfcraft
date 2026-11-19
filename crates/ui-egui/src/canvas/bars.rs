@@ -1,8 +1,20 @@
-use super::{Color32, CornerRadius, DocInfo, DocView, PdfCraftApp, Pos2, Rect, Sense, SnapshotKind, Stroke, Tokens, icons, pos2, vec2};
+use super::{Color32, CornerRadius, DocInfo, DocView, PdfCraftApp, Pos2, Rect, Sense, SnapshotKind, Stroke, Tokens, icons, vec2};
 
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
 pub(super) fn in_size_hint_zone(area: Rect, p: Pos2) -> bool {
     p.x >= area.min.x && p.x < area.center().x && p.y > area.center().y && p.y <= area.max.y
+}
+
+/// The page size hint's distance from the bottom-left corner of the document area.
+const SIZE_HINT_INSET: f32 = 14.0;
+
+/// The top of the page size hint's place in `area`, shown or not, from its last size (or the
+/// height of a line of its text before it has shown): the way back from a link goes above it.
+pub(super) fn size_hint_top(ui: &egui::Ui, area: Rect) -> f32 {
+    let height = egui::AreaState::load(ui.ctx(), egui::Id::unique("page-size-hint"))
+        .and_then(|a| a.size)
+        .map_or_else(|| ui.text_style_height(&egui::TextStyle::Body) + 10.0, |s| s.y);
+    area.bottom() - SIZE_HINT_INSET - height
 }
 
 /// The current page's size, floating at the bottom-left of the document area while the pointer is
@@ -26,8 +38,7 @@ pub(super) fn page_size_hint(
         .order(egui::Order::Foreground)
         .interactable(false)
         .pivot(egui::Align2::LEFT_BOTTOM)
-        // Above the way back from a link, which shares the corner while it shows.
-        .fixed_pos(pos2(area.left() + 14.0, super::link_return::drawn(ui.ctx(), view).map_or(area.bottom() - 14.0, |r| r.top() - 8.0)))
+        .fixed_pos(area.left_bottom() + vec2(SIZE_HINT_INSET, -SIZE_HINT_INSET))
         .show(ui.ctx(), |ui| {
             egui::Frame::NONE
                 .fill(t.card)
