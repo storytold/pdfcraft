@@ -968,7 +968,13 @@ fn pressed_by(phase: &PressPhase, button: PointerButton) -> bool {
 fn route_press(ui: &egui::Ui, session: &mut PageSession, press: &PagePress, cx: &PageBodyCx<'_>, body: &PageBody<'_>, out: &mut BodyOut) {
     let geo = cx.geometry(body);
     if pressed_by(&press.phase, PointerButton::Secondary) {
-        // The page's menu reads what the secondary press went to.
+        // The page's menu reads what the secondary press went to; a comment is selected for its menu, as a comment's
+        // menu acts on the selection.
+        if let Owner::Comment { index } = press.owner
+            && !session.comments.is_selected((press.page, index))
+        {
+            session.comments.select(Some((press.page, index)));
+        }
         session.menu_for = Some((press.page, press.owner.clone()));
         return;
     }

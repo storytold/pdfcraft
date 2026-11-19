@@ -293,7 +293,21 @@ impl CanvasTool for CommentsTool<'_> {
         if self.paste.is_some() && cx.pointer.is_some_and(|p| self.page_under(p.pos).is_some()) {
             return Cursor::System(CursorIcon::Grabbing);
         }
-        self.annotate.cursor(cx)
+        let own = self.annotate.cursor(cx);
+        if self.annotating() {
+            return own;
+        }
+        // Where no comment takes the press, it goes on to the text (`press`): its cursor shows there. A markup tool's
+        // crosshair is the annotation tool's idle face; the drag selects text, so the text's cursor shows over it.
+        let idle = match own {
+            Cursor::System(CursorIcon::Default) => true,
+            Cursor::System(CursorIcon::Crosshair) => matches!(self.quick, QuickTool::Comment(_)),
+            _ => false,
+        };
+        match self.text.as_ref().map(|text| text.cursor(cx)) {
+            Some(text) if idle && !matches!(text, Cursor::System(CursorIcon::Default)) => text,
+            _ => own,
+        }
     }
 
     fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
