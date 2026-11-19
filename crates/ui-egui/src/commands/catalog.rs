@@ -4,6 +4,8 @@
 
 use std::sync::OnceLock;
 
+use craft::keymap::{Key, Mods};
+use craft::menu::Chord;
 use craft::ui::runtime::commands::{
     AppCatalog, Binding, CommandDef, CommandDefError, CommandGate, CommandInput, CommandKind, CommandRef, CommandState, Scope,
 };
@@ -58,7 +60,7 @@ fn kind_of(id: &str) -> CommandKind {
 pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
     let mut defs: Vec<CommandDef> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut push = |def: CommandDef, shortcut: Option<craft::menu::Chord>| {
+    let mut push = |def: CommandDef, chords: Vec<Chord>| {
         if !seen.insert(def.command.id.clone()) {
             return;
         }
@@ -68,26 +70,39 @@ pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
         } else {
             def
         };
-        defs.push(match shortcut {
-            Some(chord) => def.with_default(Binding::new(chord)),
-            None => def,
-        });
+        defs.push(chords.into_iter().fold(def, |def, chord| def.with_default(Binding::new(chord))));
     };
     for spec in engine::COMMANDS.iter().filter(|s| !FRAMEWORK_EDIT.contains(&s.id)) {
         let mut def = CommandDef::new(CommandRef::new(spec.id), spec.label, Scope::app());
         if !spec.icon.is_empty() {
             def = def.with_icon(spec.icon);
         }
-        push(def, spec.shortcut_for(mac).and_then(menus::chord));
+        let mut chords: Vec<Chord> = spec.shortcut_for(mac).and_then(menus::chord).into_iter().collect();
+        chords.extend(second_chords(spec.id));
+        push(def, chords);
     }
     for (id, label, shortcut) in EXTRA.iter().filter(|(id, ..)| !FRAMEWORK_EDIT.contains(id)) {
-        push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()), shortcut.and_then(menus::chord));
+        push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()), shortcut.and_then(menus::chord).into_iter().collect());
     }
     for (id, label, icon) in CATALOG_ONLY {
-        push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()).with_icon(*icon), None);
+        push(CommandDef::new(CommandRef::new(*id), *label, Scope::app()).with_icon(*icon), Vec::new());
     }
     // The rows are static, so the catalog never changes generation.
     AppCatalog::new(defs, 0)
+}
+
+/// The chords a registry command takes beside its own shortcut: Alt+← / Alt+→ (⌥ on macOS) go back and forward
+/// through the view history, as in Acrobat and browsers (#3632), and ⌘Page Up / ⌘Page Down turn a page as ⌘← / ⌘→ do.
+fn second_chords(id: &str) -> Vec<Chord> {
+    let alt = Mods { alt: true, ..Mods::default() };
+    let cmd = Mods { cmd: true, ..Mods::default() };
+    match id {
+        "view.previous_view" => vec![Chord::new(alt, Key::Left)],
+        "view.next_view" => vec![Chord::new(alt, Key::Right)],
+        "view.previous_page" => vec![Chord::new(cmd, Key::PageUp)],
+        "view.next_page" => vec![Chord::new(cmd, Key::PageDown)],
+        _ => Vec::new(),
+    }
 }
 
 /// The catalog for this platform's chords, built once.

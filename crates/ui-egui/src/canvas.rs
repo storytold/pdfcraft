@@ -1590,6 +1590,11 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     if out.toggle_white_space {
         view.view.hide_white_space = !view.view.hide_white_space;
     }
+    // The reader's own scroll (the wheel, a scroll bar, the view's keys) ends following the search; a flash's go-to is
+    // not theirs.
+    if out.scrolled {
+        view.end_find_following();
+    }
     // Full screen shows the page alone, so its keys are the page's: with nothing else holding the keyboard, the page
     // view takes it, and the presenter's keys reach the running tool.
     if presenting && ui.ctx().memory(|m| m.focused()).is_none() {

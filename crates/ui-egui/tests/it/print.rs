@@ -94,6 +94,14 @@ pub(crate) fn harness_with_settings(settings: Option<String>) -> Rig {
     harness_saving(settings, 1)
 }
 
+/// The app started again on the preferences `saved` left, as the settings store hands them back, with the form open.
+fn harness_restarted(saved: pdfcraft_ui_egui::settings::PdfCraftSettings) -> Rig {
+    rig_on(saves(1), move |app| {
+        app.apply_settings(&saved);
+        app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    })
+}
+
 fn harness_saving(settings: Option<String>, saves_count: usize) -> Rig {
     rig_on(saves(saves_count), move |app| {
         if let Some(json) = &settings {
@@ -234,6 +242,12 @@ impl Rig {
     /// Whether the dialog shows the note row with this key.
     pub(crate) fn has_note(&self, key: &str) -> bool {
         self.listed()["notes"].as_array().is_some_and(|notes| notes.iter().any(|n| n == key))
+    }
+
+    /// Whether the preview shows why the draft can't print a document of `pages` pages, as the draft gives the reason.
+    fn preview_says_why(&self, pages: usize) -> bool {
+        let why = self.state().print_draft.settings(pages, &[]).err().expect("the draft can't print");
+        self.query_by_label_contains(&why).is_some()
     }
 
     /// Adds a custom paper through the custom row, as automation does: its fields, then its Add.
@@ -381,7 +395,7 @@ fn invalid_ranges_are_explained_in_the_preview() {
     h.set("which", json!("range"));
     h.set("range", json!("7"));
     assert!(h.state().print_draft.settings(1, &[]).is_err(), "page 7 of a one-page document is out of range");
-    assert!(h.has_note("note.range"), "the preview says why"); // PLAN: assumed key
+    assert!(h.preview_says_why(1), "the preview says why");
 }
 
 #[test]
@@ -402,12 +416,12 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     h.run_steps(2);
     assert_eq!(h.pager(), (1, 3));
     assert!(h.has_note("note.cut_stack"));
-    h.get_by_label("›").click();
+    h.get_by_role_and_label(Role::Button, "Next").click();
     h.run_steps(2);
     assert_eq!(h.pager(), (2, 3));
     h.set("duplex", json!("long_edge"));
     assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
-    assert!(h.has_note("note.duplex"));
+    assert!(h.preview_says_why(10), "cut and stack needs one-sided sheets");
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().print_now(&ctx_h).is_err());
     h.set("duplex", json!("off"));
@@ -547,8 +561,8 @@ fn print_dialog_shows_the_printer_driver_options() {
         d.show_driver_options = true;
     }
     h.run_steps(2);
-    h.get_by_label("Printer properties");
-    h.get_by_label("Media");
+    assert!(h.query_all_by_label("Printer properties").next().is_some(), "the driver's own section shows");
+    h.get_by_role_and_label(Role::Heading, "Media");
     h.get_by_label("Paper tray");
     // The selected sheet's media is always sent, independently of changed driver properties.
     let media = vec![("media".to_string(), "Letter".to_string())];
@@ -626,7 +640,7 @@ fn custom_page_cannot_silently_match_a_standard_paper() {
 }
 
 /// The key of the note that points a driver without two-sided settings to its Properties.
-const TWO_SIDED_NOTE: &str = "note.two_sided"; // PLAN: assumed key
+const TWO_SIDED_NOTE: &str = "note.duplex";
 
 /// Windows' printer list doesn't say which drivers take two-sided settings: reading a printer
 /// Windows can't reach takes it about 48 s (#2192). The dialog lists every printer at once and
@@ -892,7 +906,7 @@ fn printer_options_are_read_off_the_gui_thread_and_a_dead_read_offers_nothing() 
     let ask = |h: &mut Rig, printer: &str| {
         h.pick(Some(printer));
         h.settle();
-        h.get_by_label("Properties…").click();
+        h.get_by_role_and_label(Role::Button, "Properties…").click();
         h.run_steps(1);
     };
     ask(&mut h, "Office");
@@ -1392,8 +1406,7 @@ fn a_custom_paper_prints_at_its_size_and_its_printer_keeps_it() {
     assert_eq!(h.state().print_draft.setups.first().map(|(p, s)| (p.as_str(), s.paper.as_str())), Some(("Labeller", "Label 4×6")));
 
     // After a restart the list has it, and the printer starts on it.
-    let settings = saved_json(h.state());
-    let mut h = harness_with_settings(Some(settings));
+    let mut h = harness_restarted(h.state().settings_snapshot());
     list_printers(&mut h, &["Labeller"]);
     assert_eq!(h.state().print_draft.paper_count(), pdfcraft_engine::print::PAPERS.len() + 1);
     h.state_mut().print_draft.paper = 0;
@@ -1436,7 +1449,7 @@ fn a_booklet_decides_two_sided_itself() {
     let d = &h.state().print_draft;
     assert_eq!(d.duplex, Some(Duplex::LongEdge), "the Two-sided choice is kept");
     assert_eq!(d.job("x").duplex, Some(Duplex::ShortEdge), "both sides flip on the short edge");
-    assert!(h.query_all_by_label("Creep:").next().is_some(), "a Creep field beside Binding");
+    assert!(h.query_all_by_label("Creep").next().is_some(), "a Creep field beside Binding");
     h.state_mut().print_draft.creep = 1.5;
     let layout = h.state().print_draft.settings(4, &[]).map(|s| s.layout);
     assert!(matches!(layout, Ok(pdfcraft_engine::print::Layout::Booklet { creep, .. }) if creep == 1.5), "the creep reaches the booklet (#6777)");
@@ -1444,14 +1457,12 @@ fn a_booklet_decides_two_sided_itself() {
         h.state_mut().print_draft.booklet_subset = subset;
         assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "{subset:?} is one pass of a manual duplex");
     }
-    let keeps_its_own =
-        "This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…";
-    assert!(h.query_by_label(keeps_its_own).is_none());
+    assert!(!h.has_note(TWO_SIDED_NOTE));
     h.pick(Some("Inkjet"));
     h.state_mut().print_draft.booklet_subset = BookletSubset::BothSides;
     h.run_steps(2);
     assert_eq!(h.state().print_draft.job("x").duplex, None, "the inkjet's own two-sided setting prints both sides");
-    assert!(h.query_by_label(keeps_its_own).is_some(), "the dialog says so");
+    assert!(h.has_note(TWO_SIDED_NOTE), "the dialog says so");
     h.state_mut().print_draft.booklet_subset = BookletSubset::FrontOnly;
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::Off), "one side stays one-sided");
     h.pick(Some("Laser"));
@@ -1698,8 +1709,8 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
 
     // After a restart the label printer, printed to last, is chosen again with its setup, not
     // the system default; choosing the office printer brings back A4, Fit and two-sided.
-    let saved = saved_json(h.state());
-    let mut r = harness_with_settings(Some(saved.clone()));
+    let saved = h.state().settings_snapshot();
+    let mut r = harness_restarted(saved.clone());
     attach(&mut r);
     r.open();
     r.settle();
@@ -1710,7 +1721,7 @@ fn each_printer_keeps_what_it_last_printed_with_across_a_restart() {
 
     // A remembered printer that is gone falls back to the system default, with its own setup.
     *listed.lock().unwrap() = vec!["Office"];
-    let mut gone = harness_with_settings(Some(saved));
+    let mut gone = harness_restarted(saved);
     attach(&mut gone);
     gone.open();
     gone.settle();

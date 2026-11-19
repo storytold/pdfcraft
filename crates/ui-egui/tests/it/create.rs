@@ -170,8 +170,8 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
     h.get_by_role_and_label(Role::Dialog, "PDF Optimizer");
-    h.get_by_label("Color Images");
-    h.get_by_label("Monochrome Images");
+    h.get_by_role_and_label(egui::accesskit::Role::Heading, "Color Images");
+    h.get_by_role_and_label(Role::Heading, "Monochrome Images");
     // Monochrome Images ▸ Downsample to can be turned off.
     h.get_by_label("Downsample to").click();
     h.run_steps(2);
