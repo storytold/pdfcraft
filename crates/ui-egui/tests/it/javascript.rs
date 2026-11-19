@@ -64,7 +64,7 @@ fn console_runs_scripts_against_the_document() {
     let mut h = harness();
     assert!(h.execute("tools.js_console"));
     h.run_steps(2);
-    h.get_by_label("JavaScript Console");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "JavaScript Console");
     h.state_mut().js_console.input = "getField('greeting').value = 'typed'; console.println(numFields); 6 * 7".into();
     h.get_by_label("Run").click();
     h.run_steps(2);
@@ -219,7 +219,7 @@ fn document_scripts_and_preferences() {
     let mut h = harness();
     assert!(h.execute("tools.document_js"));
     h.run_steps(2);
-    h.get_by_label("Document JavaScripts");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Document JavaScripts");
     match h.state_mut().js_dialog.as_mut() {
         Some(JsDialog::DocumentScripts(draft)) => {
             draft.name = "init".into();
@@ -335,7 +335,7 @@ fn native_script_prompts_show_an_app_owned_caption() {
         let id = h.state().active_ids().unwrap().1;
         h.run_button_script(id, "hello", script);
         wait_for(&mut h, body);
-        assert!(h.query_by_label("This document's script is asking").is_some(), "{script}");
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "This document's script is asking").is_some(), "{script}");
         assert_eq!(
             h.query_by_label("This request comes from the document, not PdfCraft. Only enter a password if you trust this document.").is_some(),
             script.contains("bPassword:true"),

@@ -288,7 +288,9 @@ pub(crate) fn page_tool<'a>(
                 _ => {
                     let view = &mut session.comments;
                     let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation);
-                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done);
+                    let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done)
+                        .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
+                        .outcome(&mut session.pending_edit, &mut view.notice);
                     let annotate = if selects_text { annotate.text(select) } else { annotate };
                     Arm::Area(Box::new(annotate))
                 }

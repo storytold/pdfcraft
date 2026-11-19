@@ -777,7 +777,7 @@ fn a_drag_with_the_link_tool_from_a_link_draws_a_new_link() {
     link_tool(&mut h);
     let on_link = at(&h, 150.0, 325.0);
     mouse_drag(&mut h, on_link, egui::vec2(80.0, 120.0));
-    assert!(h.query_by_label("Create Link").is_some(), "Link Properties opens for a new link");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Create Link").is_some(), "Link Properties opens for a new link");
     assert_eq!(confirm_new_link(&mut h), [0, 0], "after OK the page holds its link and the new one");
 }
 
@@ -1066,7 +1066,7 @@ fn a_redaction_box_dragged_off_its_page_is_drawn_on_it() {
 #[test]
 fn a_link_rectangle_dragged_off_its_page_is_drawn_on_it() {
     let mut h = drag_seen_only_past_page_ones_edge(|app| app.quick_tool = QuickTool::Link);
-    assert!(h.query_by_label("Create Link").is_some(), "Link Properties opens for a new link");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Create Link").is_some(), "Link Properties opens for a new link");
     assert_eq!(confirm_new_link(&mut h), [0], "after OK the new link is on page 1");
 }
 
