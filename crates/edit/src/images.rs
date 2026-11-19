@@ -1215,14 +1215,34 @@ fn arrange_paint_flags(ops: &[Op], target: usize, target_unit: &std::ops::Range<
     let mut has_other_paint = false;
     let mut has_paint_before = false;
     let mut has_paint_after = false;
+    // Text rendering mode 3 (invisible) makes a following Form XObject paint nothing visible.
+    // Track it across save/restore scopes so an invisible-only Form does not count as paint.
+    let mut text_rendering_mode = 0.0;
+    let mut text_rendering_stack: Vec<f64> = Vec::new();
     for (i, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"q" => text_rendering_stack.push(text_rendering_mode),
+            b"Q" => {
+                if let Some(previous) = text_rendering_stack.pop() {
+                    text_rendering_mode = previous;
+                }
+            }
+            b"Tr" => {
+                if let Some([mode]) = op.nums::<1>() {
+                    text_rendering_mode = mode;
+                }
+            }
+            _ => {}
+        }
         if i < target_unit.start || i >= target_unit.end || i == target {
             continue;
         }
-        let is_paint = matches!(
-            op.op.as_slice(),
-            b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
-        );
+        let invisible_form = op.is("Do") && (text_rendering_mode - 3.0).abs() < 1e-9;
+        let is_paint = !invisible_form
+            && matches!(
+                op.op.as_slice(),
+                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+            );
         if is_paint {
             has_other_paint = true;
             if i < target {
@@ -2111,5 +2131,19 @@ mod allocation_tests {
         let before = tracker.current_state.clone();
         tracker.step(&op, &states, &doc, Matrix::translate(50.0, 0.0)).unwrap();
         assert!(before.visually_differs(&tracker.current_state), "the same mask established under a different CTM is a different effective mask");
+    }
+
+    #[test]
+    fn arrange_paint_flags_ignores_invisible_only_forms() {
+        let ops = vec![
+            Op::new("Do", vec![Object::name("Target")]),
+            Op::new("Tr", vec![Object::Real(3.0)]),
+            Op::new("Do", vec![Object::name("InvisibleForm")]),
+        ];
+        let (has_other_paint, has_paint_before, has_paint_after) =
+            arrange_paint_flags(&ops, 0, &(0..ops.len()));
+        assert!(!has_other_paint);
+        assert!(!has_paint_before);
+        assert!(!has_paint_after);
     }
 }
