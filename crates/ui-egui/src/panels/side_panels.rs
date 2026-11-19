@@ -6,12 +6,14 @@
 
 use craft::automation::dock as dock_rpc;
 use craft::behavior::dock::{Action, Column, DockEdge, DockPlacement, Group, Layout, Location, Node, Permissions, SplitSize, Target, Workspace};
-use craft::behavior::{Axis, DockSide};
+use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
+use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, BodyCx};
 use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, PanelSpec};
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::DockArea;
+use craft::ui::primitives::IconSpec;
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -306,6 +308,8 @@ impl DockPanels<PanelId> for Panels<'_> {
             PanelId::Tools => {
                 if self.app.left == LeftPanel::CalculationOrder {
                     crate::calc_order_ui::header(ui);
+                } else if self.app.left == LeftPanel::AllTools {
+                    IconButton::command(IconSpec::svg(IconId::new("maximize-2")), CommandRef::new("tools.expand")).show(ui);
                 }
             }
             PanelId::Bookmarks => super::bookmarks::header(self.app, ui),
@@ -637,6 +641,14 @@ fn find(node: &Value, panel: &str, depth: usize) -> Option<Found> {
     None
 }
 
+/// Whether `node`'s splits nest deeper than [`find`] walks.
+fn too_deep(node: &Value, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    node.get("Split").is_some_and(|split| ["first", "second"].into_iter().any(|key| split.get(key).is_some_and(|child| too_deep(child, depth + 1))))
+}
+
 /// The old layout's saved place of a closed panel: whether it was on the right and its width.
 fn hidden_place<'a>(old: &'a Value, panel: &str) -> Option<&'a Value> {
     old.get("hidden")?.as_array()?.iter().find_map(|entry| {
@@ -692,7 +704,12 @@ fn read_side_panels(value: &Value) -> Option<Old> {
 /// old layout always held.
 fn read_docking(saved: &Value) -> Option<Old> {
     let old = saved.get("docking")?;
-    find(old.get("layout")?.get("root")?, "canvas", 0)?;
+    let root = old.get("layout")?.get("root")?;
+    // A tree deeper than the walk reads is cut off whole, not read as one that lacks its panels.
+    if too_deep(root, 0) {
+        return None;
+    }
+    find(root, "canvas", 0)?;
     let (tools_right, tools_open, tools_width) = old_panel(old, "tools");
     let (_, side_open, side_width) = old_panel(old, "inspector");
     Some(Old {
@@ -710,7 +727,9 @@ fn build(old: &Old, right: Option<RightPanel>, widths: bool) -> Option<Workspace
     let mut workspace = default_workspace(old.rail);
     let apply = |workspace: &mut Workspace<PanelId>, action| workspace.apply(action, false, permissions).ok();
     if old.tools_right {
-        apply(&mut workspace, Action::move_column(PanelId::Tools, Target::new_dock(DockEdge::End)))?;
+        let moved = workspace.apply(Action::move_column(PanelId::Tools, Target::new_dock(DockEdge::End)), false, permissions);
+        eprintln!("DIAG an_old_saved_layout_migrates_to_the_dock_workspace: move tools right (widths {widths}): ok {}", moved.is_ok());
+        moved.ok()?;
     }
     let side = right.filter(|_| old.side_open).map(PanelId::from);
     if let Some(side) = side {

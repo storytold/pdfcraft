@@ -52,6 +52,7 @@ impl<'a> SignAreaTool<'a> {
 
 impl CanvasTool for SignAreaTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) -> ToolAction {
+        eprintln!("DIAG ctrl_alt_q_types_an_email_without_quitting: sign press at {:?}, placed {}", pointer.pos, self.placed.len());
         match self.placed_at(pointer.pos) {
             Some(placed) if self.drag.press(placed, pointer.pos) => ToolAction::Claimed,
             _ => ToolAction::Ignored,
@@ -64,6 +65,7 @@ impl CanvasTool for SignAreaTool<'_> {
 
     fn release(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
         self.drag.drag(pointer.pos);
+        eprintln!("DIAG ctrl_alt_q_types_an_email_without_quitting: sign release at {:?}, active {}", pointer.pos, self.drag.is_active());
         // A click with no drag leaves nothing drawn: `release` gives none under the least side.
         let Some((page, rect)) = self.drag.release(LEAST_SIDE) else { return };
         let Some(placed) = self.placed.iter().find(|p| p.page == page) else { return };

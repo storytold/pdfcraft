@@ -137,8 +137,8 @@ fn a_crashed_session_is_offered_and_recovered_unsaved() {
     assert_eq!(leftovers(&dir).len(), 1);
     let (app, rig) = new_app(&dir);
     let mut h = harness_of(app);
-    h.get_by_label("Recover unsaved documents?");
-    h.get_by_label("work.pdf");
+    h.get_by_role_and_label(Role::Dialog, "Recover Unsaved Work");
+    h.get_by_label_contains("work.pdf");
     h.get_by_label("Recover").click();
     settle(&mut h, &rig, "recovered document", |app| app.views.len() == 1);
     let app = h.state();
@@ -317,7 +317,7 @@ fn encrypted_documents_are_autosaved_encrypted_and_recovered_with_the_password()
     assert!(!String::from_utf8_lossy(&saved).contains("Confidential"), "no plaintext on disk");
     let (app, rig) = new_app(&dir);
     let mut h = harness_of(app);
-    h.get_by_label_contains("password-protected");
+    h.get_by_label_contains("Password-protected");
     h.get_by_label("Recover").click();
     settle(&mut h, &rig, "recovery password prompt", |app| app.password_prompt.is_some());
     type_password(&mut h, "pw");
