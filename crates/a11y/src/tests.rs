@@ -1721,6 +1721,38 @@ fn a_heading_nested_past_the_depth_limit_is_reported() {
     assert!(found.iter().all(|h| h.title != "Deep") && cut, "a heading too deep to reach was dropped unreported");
 }
 
+/// A branch too deep to walk is skipped, not the end of the walk: a heading after it is found.
+#[test]
+fn a_heading_after_a_branch_past_the_depth_limit_is_found() {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K [{first} 0 R 12 0 R] >>");
+    objs.extend((1..=300).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".into());
+    let (found, cut) = headings_with_truncation(&pdf(&objs, ""));
+    let titles: Vec<&str> = found.iter().map(|h| h.title.as_str()).collect();
+    assert_eq!((titles, cut), (vec!["Chapter One"], true), "the deep branch stopped the walk");
+}
+
+/// An H1 `sects + 1` elements down whose title is only its marked content.
+fn heading_under_sections(sects: usize) -> (Vec<Heading>, bool) {
+    let mut objs = headings_doc();
+    let first = objs.len() + 1;
+    objs[9] = format!("<< /S /Document /K {first} 0 R >>");
+    objs.extend((1..=sects).map(|i| format!("<< /S /Sect /K {} 0 R >>", first + i)));
+    objs.push("<< /S /H1 /Pg 3 0 R /K 0 >>".into());
+    headings_with_truncation(&pdf(&objs, ""))
+}
+
+/// Marked content past the depth limit is reported too: the H1 whose title it holds is lost.
+#[test]
+fn marked_content_past_the_depth_limit_is_reported() {
+    let (found, cut) = heading_under_sections(254);
+    assert_eq!((found.iter().map(|h| h.title.as_str()).collect::<Vec<_>>(), cut), (vec!["Chapter One"], false));
+    let (found, cut) = heading_under_sections(255);
+    assert!(found.is_empty() && cut, "a heading whose text was too deep was dropped unreported");
+}
+
 #[test]
 fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();

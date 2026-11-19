@@ -97,7 +97,7 @@ pub fn suggest(doc: &Document) -> OutlineSuggestion {
     }
     let (lines, pages_read) = read_lines(doc);
     let (entries, capped) = inferred(lines);
-    OutlineSuggestion { source: OutlineSource::Layout, entries, pages, pages_read, truncated: capped || pages_read < pages }
+    OutlineSuggestion { source: OutlineSource::Layout, entries, pages, pages_read, truncated: cut || capped || pages_read < pages }
 }
 
 /// Lines in one style, one after another down a page.
@@ -315,6 +315,26 @@ mod tests {
         assert_eq!((at_cap.source, at_cap.entries.len(), at_cap.truncated), (OutlineSource::Structure, cap, false));
         let over = tagged(cap + 1);
         assert_eq!((over.entries.len(), over.truncated), (cap, true), "a tagged heading past the cap was dropped unreported");
+    }
+
+    /// A tagged heading too deep for the structure walk, on a page without text: layout finds
+    /// nothing either, and the suggestion still says a heading may be missing. The same page
+    /// untagged is not truncated.
+    #[test]
+    fn a_tagged_heading_past_the_depth_limit_is_reported_from_layout() {
+        let mut objs = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 4 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+            b"<< /Type /StructTreeRoot /K 5 0 R >>".to_vec(),
+        ];
+        objs.extend((5..305).map(|n| format!("<< /S /Sect /K {} 0 R >>", n + 1).into_bytes()));
+        objs.push(b"<< /S /H1 /Pg 3 0 R /ActualText (Deep) >>".to_vec());
+        let s = suggest(&doc_of(&objs));
+        assert_eq!((s.source, s.entries.len(), s.truncated), (OutlineSource::Layout, 0, true), "the structure walk's cut was dropped");
+        objs[0] = b"<< /Type /Catalog /Pages 2 0 R >>".to_vec();
+        let s = suggest(&doc_of(&objs));
+        assert_eq!((s.entries.len(), s.pages_read, s.truncated), (0, 1, false));
     }
 
     #[test]

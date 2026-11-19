@@ -43,6 +43,8 @@ struct Walker<'a> {
     out: Vec<Heading>,
     /// A limit stopped the walk where a heading could have been.
     cut: bool,
+    /// [`MAX_HEADINGS`] were found and one more was met: the walk stops.
+    full: bool,
 }
 
 /// Bytes of `/ActualText`, `/Alt` and `/T` strings the headings of one document decode in all.
@@ -71,6 +73,7 @@ pub fn headings_with_truncation(doc: &Document) -> (Vec<Heading>, bool) {
         title_left: MAX_TITLE_SOURCE_BYTES,
         out: Vec::new(),
         cut: false,
+        full: false,
     };
     if let Some(k) = root.get(b"K") {
         w.walk(k, None, 0, 0);
@@ -79,10 +82,15 @@ pub fn headings_with_truncation(doc: &Document) -> (Vec<Heading>, bool) {
 }
 
 impl Walker<'_> {
-    /// Whether `k` may be visited (bounded depth and size, each object once).
+    /// Whether `k` may be visited (bounded depth and size, each object once). A depth or size
+    /// limit only skips `k`, and is reported in `cut`.
     fn enter(&mut self, k: &Object, depth: usize) -> bool {
         self.visits += 1;
-        !self.cut && depth <= MAX_DEPTH && self.visits <= MAX_VISITS && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
+        if depth > MAX_DEPTH || self.visits > MAX_VISITS {
+            self.cut = true;
+            return false;
+        }
+        !self.full && !matches!(k, Object::Ref(r) if !self.seen.insert(*r))
     }
 
     fn element_of(&self, k: &Object) -> Option<(Option<ObjRef>, Dict)> {
@@ -96,7 +104,6 @@ impl Walker<'_> {
 
     fn walk(&mut self, k: &Object, pg: Option<ObjRef>, sections: u8, depth: usize) {
         if !self.enter(k, depth) {
-            self.cut |= depth > MAX_DEPTH || self.visits > MAX_VISITS;
             return;
         }
         if let Object::Array(a) = k {
@@ -114,6 +121,7 @@ impl Walker<'_> {
         if let Some(level) = level {
             if self.out.len() >= MAX_HEADINGS {
                 self.cut = true;
+                self.full = true;
                 return;
             }
             self.heading(obj, &d, pg, level, depth);
