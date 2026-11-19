@@ -100,6 +100,20 @@ fn click(h: &mut Harness<'static, PdfCraftApp>, x: f32, y: f32) {
     h.run_steps(3);
 }
 
+/// The toolbar's Fill & Sign slot, named by the command of the tool it shows (`command` is that command's label). The
+/// slot's flyout mark carries the same name, inside the slot, so the slot is the first of them.
+fn fill_slot<'h>(h: &'h Harness<'static, PdfCraftApp>, command: &'h str) -> egui_kittest::Node<'h> {
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, command).next().unwrap_or_else(|| panic!("no toolbar slot named {command:?}"))
+}
+
+/// The row of the Fill & Sign slot's flyout that runs `command` (its label).
+fn fill_flyout_row<'h>(h: &'h Harness<'static, PdfCraftApp>, command: &str) -> egui_kittest::Node<'h> {
+    let command = command.to_owned();
+    h.get_by(move |n| {
+        matches!(n.role(), egui::accesskit::Role::MenuItem | egui::accesskit::Role::MenuItemRadio) && n.label().as_deref() == Some(command.as_str())
+    })
+}
+
 fn items(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, Option<String>)> {
     let s = h.state();
     let mut v: Vec<_> = s.session.get(s.views[0].id).unwrap().info.annotations.iter().map(|a| (a.subtype.clone(), a.contents.clone())).collect();
@@ -861,12 +875,8 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     click(&mut h, 40.0, 300.0);
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
 
-    // The quick toolbar exposes replacement without changing the normal placement action.
-    h.get_by_label("Fill & Sign: Place saved signature").click();
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Sign").click();
-    h.run_steps(2);
-    h.get_by_label("Change signature").click();
+    // Replacing the saved signature leaves the placement tool and the placed marks alone.
+    assert!(h.execute("sign.fill.signature.change"));
     h.run_steps(2);
     assert!(pad_open(&h));
     assert!(shows(&h, "Change signature"));
@@ -885,11 +895,7 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     click(&mut h, 40.0, 200.0);
     assert_eq!(items(&h).len(), 2);
 
-    h.get_by_label("Fill & Sign: Place saved signature").click();
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Sign").click();
-    h.run_steps(2);
-    h.get_by_label("Change initials").click();
+    assert!(h.execute("sign.fill.initials.change"));
     h.run_steps(2);
     assert!(shows(&h, "Change initials"));
     assert!(shows(&h, "AL"), "the pad starts from the saved initials");
@@ -2218,17 +2224,8 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     assert_eq!(signed(&h), 0, "locked into the page");
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert!(h.state().flatten_fill_sign_on_save, "remembered as the preference");
-    // The switch is in the panel's Sign yourself section, once; the Sign menu over the page,
-    // where it was easy to miss, no longer has it.
+    // The switch is in the panel's Sign yourself section, once.
     h.state_mut().flatten_fill_sign_on_save = false;
-    // With the signature tool on, the quick tool button opens the Sign menu.
-    h.execute("sign.fill.signature");
-    h.run_steps(2);
-    h.get_by_label("Fill & Sign: Sign").click();
-    h.run_steps(2);
-    h.get_by_label("Use signature");
-    assert!(h.query_by_label("Lock into the page when saving").is_none(), "not in the Sign menu");
-    h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(h.query_by_label("Lock into the page when saving").is_none(), "the panel is closed");
     h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
@@ -2685,7 +2682,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
     };
     // The fill button shows the tool it picks.
     let shows_picked_tool: Row = |h| {
-        h.get_by_label("Fill & Sign: Add signature").click();
+        fill_slot(h, "Fill & Sign: sign").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
         assert!(pad_open(h), "an empty slot opens the pad");
@@ -2695,23 +2692,18 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
         h.state_mut().quick_tool = QuickTool::Select;
         h.run_steps(2);
-        h.get_by_label("Fill & Sign: Place saved signature").click();
+        fill_slot(h, "Fill & Sign: sign").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
         assert!(!pad_open(h), "a saved signature opens no pad");
-        h.get_by_label("Fill & Sign: Sign").click();
-        h.run_steps(2);
-        assert_eq!(
-            h.get_by_label("Use signature").accesskit_node().toggled(),
-            Some(egui::accesskit::Toggled::True),
-            "the active tool's card is marked"
-        );
-        h.key_press(egui::Key::Escape);
-        h.run_steps(2);
+        h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("fill_sign");
+        h.state_mut().left_open = true;
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Use signature").accesskit_node().is_selected(), Some(true), "the active tool's card is marked");
         h.execute("sign.fill.check");
         h.state_mut().quick_tool = QuickTool::Select;
         h.run_steps(2);
-        h.get_by_label("Fill & Sign: Checkmark").click();
+        fill_slot(h, "Fill & Sign: checkmark").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
     };
@@ -2726,18 +2718,18 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         h.state_mut().set_full_screen(false);
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
-        h.get_by_label("Fill & Sign: Date");
+        fill_slot(h, "Fill & Sign: date");
         h.state_mut().quick_tool = QuickTool::Select;
         h.run_steps(2);
-        h.get_by_label("Fill & Sign: Checkmark").click();
+        fill_slot(h, "Fill & Sign: checkmark").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
     };
     // The fill button keeps Date after deselecting and across documents.
     let keeps_date: Row = |h| {
-        h.get_by_label("Fill & Sign: Add signature").click_secondary();
+        fill_slot(h, "Fill & Sign: sign").click_secondary();
         h.run_steps(2);
-        h.get_by_label("Date").click();
+        fill_flyout_row(h, "Fill & Sign: date").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
         h.get_by_label("Select (V)").click();
@@ -2747,7 +2739,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         h.state_mut().open_bytes(&ctx_h, "second.pdf", None, FIXTURE.to_vec()).unwrap();
         h.state_mut().active = Some(1);
         h.run_steps(2);
-        h.get_by_label("Fill & Sign: Date").click();
+        fill_slot(h, "Fill & Sign: date").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
         assert!(!pad_open(h), "the default tool's dialog stays closed");
@@ -2760,7 +2752,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         h.state_mut().open_bytes(&ctx_h, "third.pdf", None, FIXTURE.to_vec()).unwrap();
         h.state_mut().active = Some(0);
         h.run_steps(2);
-        h.get_by_label("Fill & Sign: Date").click();
+        fill_slot(h, "Fill & Sign: date").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "the tool outlives closing every document");
     };
@@ -2810,7 +2802,7 @@ fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
     h.set_option("quick", "select").unwrap();
     h.state_mut().mode = mode;
     h.run_steps(2);
-    h.get_by_label("Fill & Sign: Date");
+    fill_slot(&h, "Fill & Sign: date");
 
     h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
     h.set_option("mode", "read").unwrap();
@@ -2823,7 +2815,7 @@ fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
     h.state_mut().quick_tool = QuickTool::Select;
     h.state_mut().mode = mode;
     h.run_steps(2);
-    h.get_by_label("Fill & Sign: Place saved initials");
+    fill_slot(&h, "Fill & Sign: initials");
 }
 
 fn commit_typed_text(h: &mut Harness<'static, PdfCraftApp>) {

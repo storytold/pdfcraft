@@ -186,10 +186,9 @@ fn cancelling_shared_properties_discards_only_the_draft() {
     select(&mut h, &["alpha", "beta", "consent"]);
     h.get_by_label("Appearance").click();
     h.run_steps(4);
-    // The fill row is the second "No color": border first, then fill.
     click_gate(&mut h, "Fill Color:");
     h.run_steps(4);
-    h.get_all_by_label("No color").nth(1).unwrap().click();
+    h.get_by_role_and_label(Role::Group, "Fill Color:").get_by_label("No fill").click();
     h.run_steps(4);
     assert_eq!(shared(&h)["fill"]["apply"], true);
     assert!(shared(&h)["fill"]["value"].is_null(), "no fill is the draft's value");
@@ -215,7 +214,7 @@ fn locked_field_refuses_the_entire_batch_and_keeps_the_draft_for_correction() {
     assert!(shared_open(&h), "the dialog stays open for the correction");
     assert!(refused_with(&h, "locked"));
     // Unlocking applies the first field's value: alpha is not locked.
-    h.get_by_label("Locked").click();
+    click_gate(&mut h, "Locked");
     h.run_steps(4);
     assert_eq!(shared(&h)["locked"]["value"], false);
     assert_eq!(shared(&h)["tooltip"]["value"], "Shared help", "what was typed is kept");
@@ -333,7 +332,7 @@ fn selecting_several_widgets_of_one_radio_group_does_not_duplicate_field_edits()
     p.also = vec![("group".into(), 1), ("alpha".into(), 0)];
     h.execute("form.field.properties");
     h.run_steps(4);
-    assert_eq!(shared(&h)["names"], serde_json::json!(["group", "alpha"]), "the group is listed once");
+    assert_eq!(shared(&h)["fields"], serde_json::json!(["group", "alpha"]), "the group is listed once");
     h.get_by_role_and_label(Role::Group, "Tooltip:");
     set_tooltip(&mut h, "Shared help");
     h.get_by_label("OK").click();

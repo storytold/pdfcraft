@@ -130,8 +130,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let _ = Text::new(tl!("Join the ArtCraft community").to_string()).show(ui);
                 let _ = Text::new(tl!("Get help, share feedback and follow development on Discord.").to_string()).show(ui);
                 // Closed for this run only: the card is back on the next launch.
-                // PLAN: the Close control is a Button: IconButton's label builder is not in the bundle.
-                if Button::new(tl!("Close").to_string()).id_salt("community-close").show(ui).clicks > 0 {
+                if IconButton::new(IconId::new("x")).id_salt("community-close").label(tl!("Close")).show(ui).clicked() {
                     asked.borrow_mut().push(Asked::CloseCommunityCard);
                 }
             }
