@@ -583,10 +583,14 @@ fn a_watermark_file_from_browse_lands_only_in_the_dialog_that_asked() {
             assert!(h.query_by_label("Browse…").is_none(), "the dialog is closed");
         }
         h.answer(Picked::Paths(vec![file.clone()]));
+        // The picked file is the File box's text.
+        let file_box = |h: &Rig| {
+            h.query_all_by(|n| n.role() == egui::accesskit::Role::TextInput && n.value().is_some_and(|v| v.contains("mark.pdf"))).next().is_some()
+        };
         if keep_open {
-            assert!(h.query_by_label_contains("mark.pdf").is_some(), "the open dialog gets the file");
+            assert!(file_box(&h), "the open dialog gets the file");
         } else {
-            assert!(h.query_by_label_contains("mark.pdf").is_none(), "a closed dialog's pick is dropped");
+            assert!(!file_box(&h), "a closed dialog's pick is dropped");
         }
     }
     let _ = std::fs::remove_dir_all(&dir);

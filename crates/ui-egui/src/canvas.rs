@@ -505,6 +505,12 @@ impl DocView {
         self.middle_scrolling
     }
 
+    /// The tab is off screen: a middle-button gesture its last pass recorded has ended with it, as
+    /// production's scroll did when the active view changed.
+    pub(crate) fn left_screen(&mut self) {
+        self.middle_scrolling = false;
+    }
+
     /// Whether a held middle-button pan is active, outside Linux (tests and automation).
     pub fn middle_panning(&self) -> bool {
         // PLAN: `CanvasOutput` reports one `auto_scrolling` for a latched and a held middle scroll (CV-C6) and no

@@ -420,6 +420,13 @@ pub(crate) fn frame(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     app.drain_reveals();
     app.settle_panes(ctx);
+    // A tab off screen runs no page view this frame, so no pass records its gestures.
+    let shown = app.views_on_screen();
+    for (i, view) in app.views.iter_mut().enumerate() {
+        if !shown.contains(&i) {
+            view.left_screen();
+        }
+    }
 }
 
 /// The page area: the main pane's tab (Home or Combine files while it has none, a comparison's
