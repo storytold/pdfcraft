@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use crate::support::AppHarness as _;
 use craft::host::{ManualJobs, Picked, ScriptedFiles};
 use craft::ui::shell::PINNED_FILES_SHOWN;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::folders_ui::{MAX_PINNED, folder_name, location};
-use crate::support::AppHarness as _;
 
 /// A one-page PDF.
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -72,10 +72,7 @@ fn session(files: ScriptedFiles, setup: impl FnOnce(&mut PdfCraftApp) + 'static)
     let host_jobs = jobs.clone();
     let files = Arc::new(files);
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
-        let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
-        let host = craft::host::Host::builder(info).jobs(host_jobs).files(files).build();
-        // PLAN: assumed `AppServices::detached()` (pdf-hub-w1): services with no clipboard, recovery directory, update source, intake or watch.
-        let mut app = PdfCraftApp::with_host(Arc::new(host), pdfcraft_ui_egui::AppServices::detached());
+        let mut app = crate::support::test_app(crate::support::host_with(host_jobs, files));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
@@ -107,8 +104,7 @@ fn a_pinned_folder_lists_its_newest_pdfs_on_home() {
     let picked = Picked::Paths(vec![PathBuf::from(&folder)]);
     let mut s = session(ScriptedFiles::answering([picked]), |_| {});
     s.h.get_by_label("Pin Folder…");
-    let ctx = s.h.ctx.clone();
-    assert!(s.h.execute(&ctx, "file.pin_folder"));
+    assert!(s.h.execute("file.pin_folder"));
     s.settle();
     assert_eq!(s.h.state().pinned.folders, std::slice::from_ref(&folder));
     assert_eq!(listed(&s, &folder), ["newer.PDF", "older.pdf"], "newest first; no text files, hidden files or folders");
@@ -206,7 +202,7 @@ fn a_pinned_folder_collapses_to_its_heading_and_stays_collapsed_after_a_restart(
 
     // Settings are untrusted: only pinned folders, each once.
     let settings = serde_json::json!({ "pinned_folders": [a, b], "pinned_folders_collapsed": [b, b, "/not/pinned", 5] });
-    restarted.apply_settings(&pdfcraft_ui_egui::import_json(&settings.to_string()).0);
+    restarted.apply_settings(&pdfcraft_ui_egui::settings::import_json(&settings.to_string()).0);
     assert_eq!(restarted.pinned.collapsed, std::slice::from_ref(&b));
     restarted.unpin_folder(&b);
     assert!(restarted.pinned.collapsed.is_empty(), "unpinning forgets the folded state");
@@ -249,7 +245,7 @@ fn pinned_folders_survive_a_restart() {
     b.apply_settings(&a.settings_snapshot());
     assert_eq!(b.pinned.folders, [folder]);
     for hostile in ["{\"pinned_folders\": [5, \"relative/path\"]}", "{not json"] {
-        b.apply_settings(&pdfcraft_ui_egui::import_json(hostile).0);
+        b.apply_settings(&pdfcraft_ui_egui::settings::import_json(hostile).0);
         assert!(b.pinned.folders.is_empty(), "only absolute folder paths are restored: {hostile}");
     }
 }

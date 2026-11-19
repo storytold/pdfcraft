@@ -2,6 +2,7 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::settings::{PdfCraftSettings, import_json};
 
 /// Whether some pixel of the viewport outside every page rectangle differs between the two frames:
 /// the shadow band round the pages.
@@ -66,16 +67,15 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
         .collect();
     h.set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
-    // PLAN: assumed `PdfCraftSettings::show_page_edge_shadows` (pdf-shell-w9's typed settings)
-    assert!(h.state().settings_snapshot().show_page_edge_shadows);
+    assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(true));
     let checkbox = h.get_by_label("Show Page Edge Shadows");
     checkbox.click();
     h.run_steps(2);
-    assert!(!h.state().settings_snapshot().show_page_edge_shadows, "a click turns it off");
+    assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(false), "a click turns it off");
     h.get_by_label("Show Page Edge Shadows").focus();
     h.key_press(egui::Key::Space);
     h.run_steps(2);
-    assert!(h.state().settings_snapshot().show_page_edge_shadows, "Space turns it on");
+    assert_eq!(h.state().settings_snapshot().behavior.show_page_edge_shadows, Some(true), "Space turns it on");
     h.set_option("show_page_edge_shadows", "false").unwrap();
     h.run_steps(2);
     h.set_option("dialog", "none").unwrap();
@@ -149,7 +149,7 @@ fn harness(theme: &str) -> Harness<'static, PdfCraftApp> {
         app.session = app.session.with_clock(|| 1_700_000_000);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.set_option(&egui::Context::default(), "theme", &theme).unwrap();
-        app.open_bytes("pages.pdf", None, pdf()).unwrap();
+        app.open_bytes(&egui::Context::default(), "pages.pdf", None, pdf()).unwrap();
         app.set_option(&egui::Context::default(), "zoom", "100").unwrap();
         app
     });
@@ -190,24 +190,25 @@ fn pdf() -> Vec<u8> {
 #[test]
 fn page_shadow_preference_round_trips_and_ignores_invalid_settings() {
     let mut app = new_app();
-    let enabled = |app: &PdfCraftApp| serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["show_page_edge_shadows"].clone();
-    assert_eq!(enabled(&app), true);
-    app.restore("{}");
-    assert_eq!(enabled(&app), true);
+    let enabled = |app: &PdfCraftApp| app.settings_snapshot().behavior.show_page_edge_shadows;
+    let restore_json = |app: &mut PdfCraftApp, json: &str| app.apply_settings(&import_json(json).0);
+    assert_eq!(enabled(&app), Some(true));
+    app.apply_settings(&PdfCraftSettings::default());
+    assert_eq!(enabled(&app), Some(true));
     for value in [false, true] {
         app.set_option(&egui::Context::default(), "show_page_edge_shadows", if value { "true" } else { "false" }).unwrap();
         let mut restored = new_app();
-        restored.restore(&app.persist());
-        assert_eq!(enabled(&restored), value);
+        restored.apply_settings(&app.settings_snapshot());
+        assert_eq!(enabled(&restored), Some(value));
     }
     for invalid in ["null", "0", "\"false\"", "[]", "{}"] {
-        app.restore(&format!("{{\"show_page_edge_shadows\":{invalid}}}"));
-        assert_eq!(enabled(&app), true);
+        restore_json(&mut app, &format!("{{\"show_page_edge_shadows\":{invalid}}}"));
+        assert_eq!(enabled(&app), Some(true));
     }
-    app.restore("not json");
-    assert_eq!(enabled(&app), true);
+    restore_json(&mut app, "not json");
+    assert_eq!(enabled(&app), Some(true));
     assert!(app.set_option(&egui::Context::default(), "show_page_edge_shadows", "maybe").is_err());
-    assert_eq!(enabled(&app), true);
+    assert_eq!(enabled(&app), Some(true));
 }
 
 /// An app on the default host with test services: no wake-ups, no autosave folder, the GitHub update

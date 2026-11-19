@@ -171,7 +171,7 @@ fn removing_all_links_and_undo() {
     assert_eq!(links(&h).len(), 0);
 
     // Undo restores the link
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(3);
     assert_eq!(links(&h).len(), 1);
 }

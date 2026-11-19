@@ -270,12 +270,13 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
         h.run_steps(3);
     };
     open(&mut h);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::BookmarksFromTextStyles));
+    assert!(crate::support::dialog_open(&h), "the dialog opens");
+    h.get_by_label("New bookmarks from text styles");
     assert_eq!(h.state().text_style_draft.levels, [Some(0), None, None, None], "the largest style is offered for level 1");
     // Cancel: nothing made.
     h.get_by_label("Cancel").click();
     h.run_steps(2);
-    assert_eq!(h.state().dialog, None);
+    assert!(!crate::support::dialog_open(&h));
     assert!(h.state().session.get(id).unwrap().info.outline.is_empty());
     // Level 2 from its list: the sections' style.
     open(&mut h);
@@ -291,7 +292,7 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     assert_eq!(h.state().text_style_draft.levels, [Some(0), Some(1), None, None]);
     h.get_by_label("Create").click();
     h.run_steps(3);
-    assert_eq!(h.state().dialog, None);
+    assert!(!crate::support::dialog_open(&h));
     let outline = h.state().session.get(id).unwrap().info.outline.clone();
     assert_eq!(outline.len(), 1);
     assert_eq!(outline[0].title, "Untitled");
@@ -299,7 +300,7 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     assert_eq!(titles, [("Introduction", Some(0)), ("Results", Some(1))]);
     assert_eq!(outline[0].children[0].children[0].title, "Background");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("New bookmarks from text styles"));
-    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+    assert_eq!(crate::support::right(h.state()), Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
     // A document with no text: nothing to choose from.
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "pages.pdf", None, PAGES.to_vec()).unwrap();
@@ -309,11 +310,11 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     // The dialog's Close, below the message (the panel has a Close of its own).
     h.get_all_by_label("Close").find(|n| n.rect().top() > message.bottom()).expect("the dialog's Close").click();
     h.run_steps(2);
-    assert_eq!(h.state().dialog, None);
+    assert!(!crate::support::dialog_open(&h));
     // The command (Pages menu, command palette) opens it too.
     assert!(h.execute("bookmark.from_text_styles"));
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::BookmarksFromTextStyles));
+    assert!(crate::support::dialog_open(&h), "the dialog opens");
 }
 
 #[test]
@@ -502,7 +503,7 @@ fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
     h.get_by_label("Paste bookmarks").click();
     h.run_steps(3);
     assert_eq!(active_outline(&h), [("Intro".to_string(), Some(0), 0), ("Results".to_string(), None, 1)]);
-    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = crate::support::shown_notice(&h).unwrap_or_default();
     assert!(toast.contains("1 pasted bookmark points past the last page"), "{toast}");
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
@@ -543,7 +544,7 @@ fn cutting_a_subtree_too_deep_to_copy_keeps_it() {
     assert_eq!(before.first().map(|b| b.0.as_str()), Some("Top"));
     menu(&mut h, "Top", "Cut");
     assert_eq!(active_outline(&h), before, "nothing was cut");
-    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let toast = crate::support::shown_notice(&h).unwrap_or_default();
     assert!(toast.contains("so nothing was cut"), "{toast}");
     assert!(h.state().bookmark_clipboard.is_some(), "the copy is still on the bookmark clipboard");
 }

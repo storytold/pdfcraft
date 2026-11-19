@@ -49,7 +49,7 @@ fn harness_controlled() -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = new_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.attach_control(rx, None);
+        app.attach_control(craft::automation::ControlChannel::new(rx), None);
         app.open_bytes(&egui::Context::default(), "doc.pdf", None, fixture(3)).unwrap();
         app
     });
@@ -78,11 +78,15 @@ fn close_requested(h: &Harness<'static, PdfCraftApp>) -> bool {
     h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)))
 }
 
-/// Whether the export dialog a tool opens is on screen.
-// PLAN: assumed `pdfcraft_ui_egui::export_ui::open_kind(&PdfCraftApp) -> Option<_>` is reachable from
-// integration tests (pdf-workflows-w12); `workflows` is a private module at the base.
-fn export_open(app: &PdfCraftApp) -> bool {
-    pdfcraft_ui_egui::export_ui::open_kind(app).is_some()
+/// Whether the export dialog a tool opens is on screen: the only dialog these tests open.
+fn export_open(h: &Harness<'static, PdfCraftApp>) -> bool {
+    support::dialog_open(h)
+}
+
+/// Runs the registry command `id` as the menu does, with the harness's own context.
+fn run_command(h: &mut Harness<'static, PdfCraftApp>, id: &str) {
+    let ctx = h.ctx.clone();
+    h.state_mut().run_command(&ctx, id);
 }
 
 /// Commands that open a native file picker can't run headless.
@@ -140,7 +144,7 @@ fn every_registered_command_is_implemented() {
         // Give undo/redo something to do.
         app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
         if spec.id == "edit.redo" {
-            app.undo();
+            app.undo(&egui::Context::default());
         }
         if spec.id == "prepress.marks.remove" {
             use pdfcraft_engine::{Edit, PrinterMarks};
@@ -282,19 +286,22 @@ fn a_tool_chosen_with_no_document_asks_for_one_and_runs_on_it() {
     let path = dir.join("picked.pdf");
     std::fs::write(&path, fixture(2)).unwrap();
     let mut h = harness_picking(Some(&path), |_| {});
-    h.state_mut().run_command("export.text");
-    support::wait_until(&mut h, "picked document and chosen tool", |app| app.active.is_some() && export_open(app));
+    run_command(&mut h, "export.text");
+    assert!(
+        support::step_until(&mut h, |h| h.state().active.is_some() && export_open(h)),
+        "timed out waiting for the picked document and chosen tool"
+    );
     assert!(h.state().active.is_some(), "the picked file is open");
-    assert!(export_open(h.state()), "and the tool runs on it");
+    assert!(export_open(&h), "and the tool runs on it");
     let (_, id) = h.state().active_ids().unwrap();
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.name, "picked.pdf");
     assert_eq!(doc.bytes.as_slice(), fixture(2).as_slice());
     // Cancelled: nothing opens and nothing runs.
     let mut h = harness_picking(None, |_| {});
-    h.state_mut().run_command("export.text");
+    run_command(&mut h, "export.text");
     h.run_steps(3);
-    assert!(h.state().active.is_none() && !export_open(h.state()));
+    assert!(h.state().active.is_none() && !export_open(&h));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -310,12 +317,12 @@ fn a_tool_chosen_with_an_already_open_file_focuses_its_tab_and_still_runs() {
         app.open_path(&opened);
         app.active = None;
     });
-    h.state_mut().run_command("export.text");
+    run_command(&mut h, "export.text");
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.views.len(), 1, "the existing tab is reused, not duplicated");
     assert_eq!(app.active, Some(0), "the pick focused the tab it already opened");
-    assert!(export_open(app), "the tool still runs on it");
+    assert!(export_open(&h), "the tool still runs on it");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

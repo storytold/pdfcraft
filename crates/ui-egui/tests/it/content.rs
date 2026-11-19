@@ -1,6 +1,7 @@
 //! Edit a PDF ▸ Add content in the real shell (egui_kittest): type text onto a page, move it,
 //! restyle it from the panel, add an image, delete with the keyboard.
 
+use craft::pages::ui::view::GoTo;
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -406,7 +407,7 @@ fn typing_thai_text_keeps_marks_and_commits_to_page() {
     if pdfcraft_fonts::document_thai_font().is_none() {
         return;
     }
-    let fonts = pdfcraft_ui_egui::theme::font_definitions();
+    let fonts = pdfcraft_ui_egui::fonts::ui_fonts(pdfcraft_ui_egui::i18n::Lang::EN).stack().flat_definitions();
     let face = pdfcraft_fonts::document_thai_font().unwrap();
     assert!(fonts.families[&egui::FontFamily::Proportional].contains(&face.name()));
     let mut h = harness();
@@ -816,10 +817,10 @@ fn mode_tab_cursors(
     let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).expect("on screen");
     let y = what(h).center().y - page(h).top();
     let tabs = mode_tab(h, "Convert").center().y;
-    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.state_mut().views[0].view.go_to = Some(GoTo::Top { page: 0, fraction: 0.0 });
     h.run_steps(4);
     let top = page(h).top();
-    h.state_mut().views[0].goto = Some((0, (top - (tabs - y)) / page(h).height()));
+    h.state_mut().views[0].view.go_to = Some(GoTo::Top { page: 0, fraction: ((top - (tabs - y)) / page(h).height()).into() });
     h.run_steps(4);
     let under = what(h);
     ["All tools", "Edit", "Convert", "E-Sign"].map(|label| {
@@ -847,13 +848,13 @@ fn mode_tabs_keep_the_hand_over_added_text_scrolled_under_them() {
     assert!(h.execute("edit.text"));
     h.set_option("left", "closed").unwrap();
     // The page across the window, so text placed at its left edge reaches under the tabs.
-    h.state_mut().views[0].fit() = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Width;
     h.run_steps(4);
     assert_eq!(h.state().quick_tool, QuickTool::AddText);
     // The empty page, ready for text.
     assert_eq!(mode_tab_cursors(&mut h, |h| item_on_screen(h, [10.0, 290.0, 210.0, 305.0])), HAND_ON_EVERY_TAB, "the page under the tabs");
     // Text kept by a click lower down, which starts a second box (#74).
-    h.state_mut().views[0].goto = Some((0, 0.0));
+    h.state_mut().views[0].view.go_to = Some(GoTo::Top { page: 0, fraction: 0.0 });
     h.run_steps(4);
     let p = at(&h, 10.0, 40.0);
     click(&mut h, p);
@@ -1355,7 +1356,7 @@ fn redo_from_the_menu_is_enabled_for_the_added_text_boxs_own_typing() {
     assert_eq!(h.state().views[0].session.content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "Undo takes it back in the box");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_redo(), None, "the document has nothing to redo");
     // A range retained while the unfocused editor still showed its previous text.
-    h.state_mut().views[0].session.content.draft.as_mut().unwrap().selection = Some(0..1);
+    h.state_mut().views[0].session.content.draft.as_mut().unwrap().selection = Some(craft::text::ui::editor::TextSelection::new(0, 1));
     h.event(egui::Event::PointerMoved(egui::pos2(10.0, 10.0)));
     h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("test-menu")));
     assert!(h.execute("edit.redo"), "Redo is enabled for the box's own step");
@@ -1661,7 +1662,7 @@ fn delete_and_escape_under_a_dialog_leave_the_selected_added_text() {
         h.run_steps(3);
         assert_eq!(added(&h).len(), 1, "{key:?} under a dialog deletes nothing");
         assert_eq!(h.state().views[0].session.content.selected, Some((0, 0)), "{key:?}: still selected");
-        assert_eq!(h.state().dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+        assert_eq!(!crate::support::dialog_open(&h), key == egui::Key::Escape, "{key:?}: only Escape closes it");
     }
 }
 
@@ -1704,7 +1705,7 @@ fn escape_closing_a_dialog_over_added_text_being_typed_keeps_the_typing() {
     crate::support::open_shortcuts_from_the_help_menu(&mut h);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    assert!(!crate::support::dialog_open(&h), "Escape closes the dialog");
     let open = h.state().views[0].session.content.draft.as_ref().is_some_and(|d| d.text.contains("Reviewed"));
     let added = added(&h).iter().any(|a| matches!(&a.content, pdfcraft_engine::AddedContent::Text(t) if t.text.contains("Reviewed")));
     assert!(open || added, "the typing stays");

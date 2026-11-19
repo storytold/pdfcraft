@@ -4,18 +4,16 @@
 use std::sync::Arc;
 
 use crate::support::AppHarness as _;
-use craft::host::{InlineJobs, Picked, ScriptedFiles, Wake};
+use craft::host::{InlineJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_engine::ocr::{OcrPage, OcrSettings, PlacedWord};
 use pdfcraft_engine::{AddedText, Edit, Session, export};
-use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 
 /// The app on a host whose jobs run at once and whose pickers answer from `files`.
 fn app_on(files: Arc<ScriptedFiles>) -> PdfCraftApp {
-    // PLAN: assumed `support::host(jobs, files) -> craft::host::Host` (pdf-shell-w13's test support) and `PdfCraftApp::with_host(host, AppServices)`.
-    let host = crate::support::host(Arc::new(InlineJobs), files);
-    PdfCraftApp::with_host(host, AppServices { wake: Wake::none(), ..Default::default() })
+    crate::support::test_app(crate::support::host_with(Arc::new(InlineJobs), files))
 }
 
 /// Sets a field of the open dialog as the user editing that control would.
@@ -30,7 +28,7 @@ fn set_field(h: &mut Harness<'_, PdfCraftApp>, field: &str, value: serde_json::V
 /// Presses OK of the open Recognize Text dialog.
 fn confirm_recognize(h: &mut Harness<'_, PdfCraftApp>) {
     let ctx = h.ctx.clone();
-    assert!(h.state_mut().dialogs.confirm::<craft_ui_patterns::HostedParamDialog>(&ctx), "OK was enabled");
+    assert!(h.state_mut().dialogs.confirm::<craft::ui::patterns::form_dialogs::HostedParamDialog>(&ctx), "OK was enabled");
     h.run_steps(3);
 }
 
@@ -231,7 +229,8 @@ fn editing_a_scanned_page_recognizes_its_text_first_and_only_once() {
     assert!(h.state().ocr_run.is_none(), "finished");
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Recognize text"));
     // Undo takes the text layer away and Edit does not put it back.
-    h.state_mut().undo();
+    let ctx = h.ctx.clone();
+    h.state_mut().undo(&ctx);
     h.run_steps(4);
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), None);
     h.run_steps(4);

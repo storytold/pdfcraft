@@ -108,7 +108,7 @@ fn crashed_session(dir: &Path, bytes: Vec<u8>, password: Option<&str>, path: Opt
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "work.pdf", path.map(str::to_string), bytes).unwrap();
     if let Some(pw) = password {
-        h.state_mut().submit_password(Some(pw.to_string()));
+        h.submit_password(Some(pw.to_string()));
     }
     settle(&mut h, &rig, "the document opening", |app| app.views.len() == 1);
     let ctx_h = h.ctx.clone();
@@ -352,7 +352,7 @@ fn a_cancelled_recovery_password_does_not_attach_to_the_next_unlocked_document()
 
     let app = h.state_mut();
     app.open_bytes(&egui::Context::default(), "B.pdf", Some("/docs/B.pdf".into()), encrypted(fixture(1), "pw-b")).unwrap();
-    app.submit_password(Some("pw-b".into()));
+    app.submit_password(&egui::Context::default(), Some("pw-b".into()));
     settle(&mut h, &rig, "unlocked B", |app| app.views.len() == 1);
     let app = h.state();
     let b = app.session.get(app.views[0].id).unwrap();

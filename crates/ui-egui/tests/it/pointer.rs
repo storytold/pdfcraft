@@ -165,13 +165,12 @@ fn highlighted_checkbox_pdf() -> Vec<u8> {
 /// The services a pointer test gives the app: no wake-ups, a clipboard fed by paste events (a
 /// paste arrives in the pass that reads it, so its pass clock never needs to move) whose copies go
 /// nowhere, a recovery folder of the test process's own, and no update source.
-// PLAN: assumed `AppServices::new(wake, clipboard, recovery_dir, update_source, intake, watch)` (L-207).
 fn services() -> AppServices {
-    let clipboard = EventClipboard::new(|| 0, |_| Ok(0));
+    let clipboard = craft::platform::clipboard::Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0)));
     let recovery = std::env::temp_dir().join(format!("pdfcraft-pointer-{}", std::process::id()));
     let (intake, _sender) = craft::platform::open::FileIntake::new(Wake::none());
     let watch = craft::platform::watch::FileWatch::new(Wake::none()).inline();
-    AppServices::new(Wake::none(), clipboard, recovery, None, intake, watch)
+    AppServices::new(Wake::none(), clipboard, Some(recovery), None, intake, watch)
 }
 
 /// The app with `pdf` open at `zoom` percent and its first frames run. The left panel stays
@@ -1362,7 +1361,7 @@ fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
 /// where they touch, which lies on both.
 fn touching_pages(tool: impl FnOnce(&mut PdfCraftApp)) -> (Harness<'static, PdfCraftApp>, egui::Pos2) {
     let mut h = open(two_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().views[0].view.page_gaps = false;
     tool(h.state_mut());
     h.run_steps(4);
     let (one, two) = {
@@ -1468,7 +1467,7 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
 #[test]
 fn a_shift_click_where_two_pages_touch_keeps_what_it_selected() {
     let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().views[0].view.page_gaps = false;
     assert!(h.execute("edit.edit_text"));
     h.run_steps(4);
     let (one, two) = {
@@ -1565,7 +1564,7 @@ fn with_edit_text_a_right_click_on_a_picture_under_a_link_selects_the_picture() 
 #[test]
 fn a_drag_past_a_pages_edge_under_its_open_paragraph_is_the_next_pages() {
     let mut h = open(bottom_line_pages_pdf(), "100", false);
-    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().views[0].view.page_gaps = false;
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
     let (one, two) = {

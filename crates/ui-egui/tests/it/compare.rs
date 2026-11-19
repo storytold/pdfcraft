@@ -25,8 +25,8 @@ fn compare_two_versions() {
     h.get_by_label("Compare Files");
     h.get_by_label("Compare").click();
     h.run_steps(3);
-    assert_eq!(h.state().right, Some(RightPanel::Compare));
-    assert_eq!(h.state().toast.clone().unwrap().0, "2 differences found");
+    assert_eq!(crate::support::right(h.state()), Some(RightPanel::Compare));
+    assert_eq!(crate::support::shown_notice(&h).as_deref(), Some("2 differences found"));
     h.get_by_label("2 Replaced");
     h.get_by_label("\"five\" → \"three\"").click();
     h.run_steps(2);
@@ -127,7 +127,8 @@ fn compare_filters_hide_text_or_visual_changes() {
     });
     h.run_steps(4);
     h.state_mut().compare_old = h.state().views.first().map(|v| v.id);
-    h.state_mut().run_compare();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_compare(&ctx);
     h.run_steps(3);
     let new_i = h.state().active_ids().unwrap().0;
     let old_i = h.state().views.iter().position(|v| v.id == h.state().compare.as_ref().unwrap().old).unwrap();
@@ -242,13 +243,12 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
 #[test]
 fn export_to_word_html_and_rtf() {
     let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
-    let mut app = crate::control::new_app();
-    app.set_option(&egui::Context::default(), "language", "en").unwrap();
-    app.open_bytes(&egui::Context::default(), "e.pdf", None, doc).unwrap();
     for ext in ["docx", "pptx", "html", "rtf"] {
         // Each save is answered with the suggested name in the suggested folder.
         let files = std::sync::Arc::new(craft::host::ScriptedFiles::new().saving_suggested());
-        app.set_files(files.clone()); // PLAN: assumed `PdfCraftApp::set_files(Arc<dyn Files>)` (pdf-shell-w16)
+        let mut app = crate::control::app_with_files(files.clone());
+        app.set_option(&egui::Context::default(), "language", "en").unwrap();
+        app.open_bytes(&egui::Context::default(), "e.pdf", None, doc.clone()).unwrap();
         assert!(app.execute(&egui::Context::default(), &format!("export.{ext}")));
         let request = files.requests().pop().expect("the export asked where to save");
         let path = request.directory.or(request.default_directory).unwrap_or_default().join(request.file_name.expect("a suggested name"));

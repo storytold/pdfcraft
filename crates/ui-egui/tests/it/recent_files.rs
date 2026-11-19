@@ -15,6 +15,11 @@ fn restore(app: &mut PdfCraftApp, json: &str) {
     app.apply_settings(&import_json(json).0);
 }
 
+/// The recent list the app would write to its settings.
+fn saved_recent(app: &PdfCraftApp) -> Vec<RecentFile> {
+    app.settings_snapshot().recent.recent.as_deref().map(|text| serde_json::from_str(text).expect("the saved list reads back")).unwrap_or_default()
+}
+
 const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
 fn recent_file(name: &str) -> RecentFile {
@@ -67,7 +72,7 @@ fn at_zero_opening_a_file_records_nothing() {
     app.recent_limit = 0;
     open(&mut app, "first.pdf");
     assert!(app.recent.is_empty());
-    assert!(app.settings_snapshot().recent.is_empty(), "and the saved list is empty"); // PLAN: assumed `recent` field of the snapshot (pdf-shell-w9)
+    assert!(saved_recent(&app).is_empty(), "and the saved list is empty");
 }
 
 #[test]
@@ -91,7 +96,7 @@ fn at_zero_the_menu_and_the_palette_have_nothing_to_open() {
     support::open_menu(&mut h, "File");
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "Open Recent is disabled");
     assert!(h.execute("file.open_recent"));
-    assert!(h.state().toast.as_ref().is_some_and(|(m, _)| m.contains("No recent files")));
+    assert!(support::shown_notice(&h).is_some_and(|m| m.contains("No recent files")));
     assert!(h.state().views.is_empty(), "and nothing opened");
 }
 
@@ -133,7 +138,7 @@ fn the_longest_list_scrolls_in_the_smallest_window_down_to_clear() {
 fn settings_saved_while_preferences_is_open_already_leave_the_rest_out() {
     let mut app = app_with(&["first.pdf", "second.pdf"]);
     app.recent_limit = 1;
-    let saved: Vec<String> = app.settings_snapshot().recent.iter().map(|r| r.name.clone()).collect();
+    let saved: Vec<String> = saved_recent(&app).iter().map(|r| r.name.clone()).collect();
     assert_eq!(saved, ["first.pdf"]);
 }
 
@@ -184,9 +189,8 @@ fn restoring_settings_does_not_check_recent_files_and_a_frame_drops_the_gone_one
     assert_eq!(paths, [here.as_str(), gone.as_str()], "restoring keeps every entry without asking whether its file exists");
 
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
+        let mut app = support::inline_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.run_inline = true;
         restore(&mut app, &json);
         app
     });

@@ -1,5 +1,6 @@
 //! A document edit cancels an Organize drag before old page indices can be used.
 
+use crate::support::AppHarness as _;
 use egui::{Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -99,7 +100,7 @@ fn check_undo_cancels_drag(copying: bool) {
     assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 1"]);
     let (to, modifiers) = start_drag(&mut h, copying);
     // The source index now belongs to Page 2. Undo changes it back to Page 1.
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"]);
     h.hover_at(to - egui::vec2(1.0, 0.0));
@@ -109,10 +110,10 @@ fn check_undo_cancels_drag(copying: bool) {
     assert_eq!(page_texts(h.state()), expected, "releasing the old drag must not move or copy a different page");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_redo(), Some("Move page"), "the cancelled gesture leaves Redo available");
     assert_saved_order(&h, &expected);
-    h.state_mut().redo();
+    h.redo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), ["Page 2", "Page 3", "Page 4", "Page 1"], "the preserved Redo still applies the original edit");
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), expected);
 
@@ -121,10 +122,10 @@ fn check_undo_cancels_drag(copying: bool) {
     release(&mut h, to, modifiers);
     let changed = if copying { vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 4"] } else { vec!["Page 2", "Page 3", "Page 1", "Page 4"] };
     assert_eq!(page_texts(h.state()), changed);
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), expected);
-    h.state_mut().redo();
+    h.redo();
     h.run_steps(2);
     assert_eq!(page_texts(h.state()), changed);
     assert_saved_order(&h, &changed);
@@ -145,10 +146,10 @@ fn redo_cancels_an_organize_drag_before_pointer_release() {
     let mut h = organize();
     let ctx_h = h.ctx.clone();
     assert!(h.state_mut().apply_edit(&ctx_h, Edit::MovePages { pages: vec![0], to: 3 }));
-    h.state_mut().undo();
+    h.undo();
     h.run_steps(2);
     let (to, modifiers) = start_drag(&mut h, false);
-    h.state_mut().redo();
+    h.redo();
     h.run_steps(2);
     release(&mut h, to, modifiers);
     let expected = ["Page 2", "Page 3", "Page 4", "Page 1"];

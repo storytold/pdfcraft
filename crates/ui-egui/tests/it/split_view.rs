@@ -24,10 +24,9 @@ fn page_size(s: &PdfCraftApp, i: usize) -> Option<egui::Vec2> {
 /// The label of the unsaved-changes dialog's "don't keep the changes" answer on this OS, as the
 /// framework words it.
 fn dont_save() -> String {
-    // PLAN: assumed paths `craft::ui::dialog::DialogWords` and `craft::i18n::WordSet`; the fields display as their English text.
     use craft::i18n::WordSet as _;
     let words = craft::ui::dialog::DialogWords::english();
-    if cfg!(target_os = "macos") { words.unsaved_dont_save } else { words.unsaved_no }.to_string()
+    if cfg!(target_os = "macos") { words.unsaved_dont_save } else { words.unsaved_no }.as_str().to_owned()
 }
 
 /// `pages` portrait pages (300 × 400) with a line of text each.
@@ -58,8 +57,7 @@ fn fixture(pages: usize) -> Vec<u8> {
 
 fn harness(names: &'static [&'static str]) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = crate::control::new_app();
-        app.run_inline = true;
+        let mut app = crate::support::inline_app();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         for name in names {
             app.open_bytes(&egui::Context::default(), name, None, fixture(3)).unwrap();
@@ -287,7 +285,7 @@ fn the_pane_last_clicked_is_the_one_menus_and_keys_act_on() {
     let at = h.state().views[left].viewport_rect().center();
     click_at(&mut h, at);
     assert_eq!(h.state().active, Some(left));
-    h.state_mut().run_command("page.rotate");
+    crate::support::fire_menu(&mut h, "page.rotate");
     h.run_steps(2);
     assert!(h.state().session.get(lid).unwrap().dirty);
     assert!(!h.state().session.get(rid).unwrap().dirty);
@@ -295,7 +293,7 @@ fn the_pane_last_clicked_is_the_one_menus_and_keys_act_on() {
     let at = h.state().views[right].viewport_rect().center();
     click_at(&mut h, at);
     assert_eq!(h.state().active, Some(right));
-    h.state_mut().run_command("page.rotate");
+    crate::support::fire_menu(&mut h, "page.rotate");
     h.run_steps(2);
     assert!(h.state().session.get(rid).unwrap().dirty);
     // The main strip still marks the tab its pane shows, and the window title names it.

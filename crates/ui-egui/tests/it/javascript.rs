@@ -84,7 +84,7 @@ fn console_runs_scripts_against_the_document() {
 fn button_scripts_run_and_alert() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "getField('greeting').value = 'Hello from JavaScript'; app.alert('Filled in');");
+    h.run_button_script(id, "hello", "getField('greeting').value = 'Hello from JavaScript'; app.alert('Filled in');");
     wait_for(&mut h, "Filled in");
     h.get_by_label("OK").click();
     wait_value(&mut h, "greeting", "Hello from JavaScript");
@@ -235,10 +235,10 @@ fn document_scripts_and_preferences() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert!(!h.state().session.javascript());
-    let saved = h.state().persist();
+    let saved = h.state().settings_snapshot();
     let mut fresh = crate::control::new_app();
     fresh.set_option(&egui::Context::default(), "language", "en").unwrap();
-    fresh.restore(&saved);
+    fresh.apply_settings(&saved);
     assert!(!fresh.session.javascript(), "the preference is remembered");
 }
 
@@ -321,7 +321,7 @@ fn native_script_prompts_show_an_app_owned_caption() {
     ] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
-        h.state_mut().run_button_script(id, "hello", script);
+        h.run_button_script(id, "hello", script);
         wait_for(&mut h, body);
         assert!(h.query_by_label("This document's script is asking").is_some(), "{script}");
         assert_eq!(
@@ -353,7 +353,7 @@ fn native_script_prompt_uses_the_german_catalog_when_available() {
     let mut h = harness();
     h.set_option("language", "de").unwrap();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
+    h.run_button_script(id, "hello", "app.response({cQuestion:'Test',bPassword:true});");
     wait_for(&mut h, heading);
     assert!(h.query_by_label("Dokument: form.pdf").is_some());
     // The warning in the catalog's words, which translators may reword, and never the English.
@@ -368,7 +368,7 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
     for typed in [false, true] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
-        h.state_mut().run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
+        h.run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
         wait_for(&mut h, "Morning");
         h.get_by_label("Morning").click();
         wait_for(&mut h, "Suffix");
@@ -395,11 +395,11 @@ fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() 
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
     let script = "var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Choose',cReturn:'yes'});getField('greeting').value=String(choice)+'/'+calls;";
-    h.state_mut().run_button_script(id, "hello", script);
+    h.run_button_script(id, "hello", script);
     wait_for(&mut h, "Choose");
     h.get_by_label("Cancel").click();
     wait_value(&mut h, "greeting", "null/1");
-    h.state_mut().run_button_script(id, "hello", script);
+    h.run_button_script(id, "hello", script);
     wait_for(&mut h, "Choose");
     h.get_by_label("Cancel").click();
     wait_value(&mut h, "greeting", "null/2");
@@ -413,7 +413,7 @@ fn native_popup_submenu_keeps_disabled_items_unselectable() {
     let script = "var calls=typeof calls==='number'?calls:0; calls++; \
                   var choice=app.popUpMenuEx({cName:'Group',oSubMenu:[{cName:'Disabled',bEnabled:false}, \
                   {cName:'Enabled',cReturn:'chosen'}]}); getField('greeting').value=choice+'/'+calls;";
-    h.state_mut().run_button_script(id, "hello", script);
+    h.run_button_script(id, "hello", script);
     wait_for(&mut h, "Group");
     h.get_by_label("Group").click();
     wait_for(&mut h, "Enabled");
@@ -429,7 +429,7 @@ fn native_popup_submenu_keeps_disabled_items_unselectable() {
 fn native_popup_completion_is_discarded_after_the_document_is_edited() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});getField('greeting').value='stale';");
+    h.run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});getField('greeting').value='stale';");
     wait_for(&mut h, "Wait");
     h.state_mut()
         .session
@@ -457,7 +457,7 @@ fn native_button_events_match_headless_will_commit() {
     let id = h.state().active_ids().unwrap().1;
     let headless = h.state_mut().session.run_javascript(id, "String(event.willCommit);", Some("hello")).unwrap();
     assert_eq!(headless.result.as_deref(), Some("false"));
-    h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(event.willCommit);");
+    h.run_button_script(id, "hello", "getField('greeting').value=String(event.willCommit);");
     wait_value(&mut h, "greeting", "false");
 }
 

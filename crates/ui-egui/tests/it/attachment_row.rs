@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use craft::host::{AppInfo, Host, Picked, ScriptedFiles};
+use craft::host::{Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -56,14 +56,11 @@ fn harness_with_pdf(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
 }
 
 /// [`harness_with_pdf`] whose file picks `files` answers.
-// PLAN: assumed `crate::support::test_app(Arc<Host>) -> PdfCraftApp`, the shared harness that builds the app over a host
-// with its test services (pdf-chrome-w9, w9-1).
 fn harness_answering(pdf: Vec<u8>, files: Arc<ScriptedFiles>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let host = Arc::new(Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).files(files).build());
-        let mut app = crate::support::test_app(host);
+        let mut app = crate::support::test_app(crate::support::host_with_files(files));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, pdf).unwrap();
+        app.open_bytes(&egui::Context::default(), "doc.pdf", None, pdf).unwrap();
         app.set_option(&egui::Context::default(), "panel", "attachments").unwrap();
         app
     });
@@ -134,7 +131,7 @@ fn right_click(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
 fn attachment_rows_turn_their_events_into_attachment_actions() {
     let saved = Path::new("out/saved notes.txt");
     let from_menu = Path::new("out/from menu.pdf");
-    let files = Arc::new(ScriptedFiles::answering([Picked::file(saved), Picked::file(from_menu)]));
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![saved.to_path_buf()]), Picked::Paths(vec![from_menu.to_path_buf()])]));
     let mut h = harness_answering(attachments_pdf(), files.clone());
     assert_eq!(h.state().views.len(), 1);
     double_click(&mut h, "notes.txt");
