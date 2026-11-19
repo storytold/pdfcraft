@@ -258,23 +258,21 @@ fn main() -> eframe::Result {
     // Absolute for this instance too: links relative to a document resolve against its folder,
     // never the working directory.
     let files = single_instance::absolute(&files);
-    // PLAN: assumed single_instance::claim(&[String], bool, bool, portable: bool) (pdf-shell-w6): a portable copy claims its own instance.
-    let instance = match single_instance::claim(&files, may_hand_off, combine, portable()) {
+    let instance = match single_instance::claim(&files, may_hand_off, combine) {
         single_instance::Claim::HandedOff => return Ok(()),
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
     };
-    let settings = pdfcraft_ui_egui::settings::open();
     // Who draws the window frame: the platform and Preferences ▸ Use system title bar decide,
-    // unless `PDFCRAFT_TITLEBAR` overrides them.
-    let frame = craft::window::policy::decide_for(
-        craft::window::Prefix::new("PDFCRAFT"),
-        craft::window::policy::Backend::from_env(),
-        settings.get().title_bar_choice,
-    );
+    // unless `PDFCRAFT_TITLEBAR` overrides them. The store is read here and opened again by the
+    // app (each window attempt opens its own: the OpenGL retry runs the creator again).
+    let title_bar = pdfcraft_ui_egui::settings::open().get().layout.system_title_bar.map_or(Default::default(), |on| {
+        if on { craft::window::policy::TitleBarPref::System } else { craft::window::policy::TitleBarPref::Integrated }
+    });
+    let frame = craft::window::policy::decide_for(craft::window::Prefix::new("PDFCRAFT"), craft::window::policy::Backend::from_env(), title_bar);
     let integrated = !matches!(frame.frame, craft::window::policy::Frame::Native);
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control, create_images, combine, integrated, two_paged, settings };
+    let launch = Launch { files, options, control, create_images, combine, integrated, two_paged };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -438,8 +436,6 @@ struct Launch {
     /// The app's bar is the title bar.
     integrated: bool,
     two_paged: bool,
-    /// The settings store the preferences come from.
-    settings: pdfcraft_ui_egui::settings::Store,
 }
 
 /// Decode `png` as a [`winit::window::Icon`] for the Windows taskbar and Alt+Tab (`ICON_BIG`).
@@ -490,7 +486,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control, create_images, combine, two_paged, settings, .. } = launch;
+    let Launch { files, options, control, create_images, combine, two_paged, .. } = launch;
     Box::new(move |cc| {
         started.set(true);
         let ctx = cc.egui_ctx.clone();
@@ -509,6 +505,7 @@ fn app_creator<'a>(
         app.units = pdfcraft_ui_egui::units::Unit::system();
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.
         app.reopen_last_session = reopen::system_default();
+        let settings = pdfcraft_ui_egui::settings::open();
         app.apply_settings(&settings.get());
         app.attach_settings(settings);
         #[cfg(target_os = "windows")]
@@ -532,7 +529,7 @@ fn app_creator<'a>(
             let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
             let (requests, listening) =
                 craft::automation::server::listen(*port, token.clone(), host).map_err(|e| format!("--control {port}: {e}"))?;
-            app.attach_control(requests, Some(listening));
+            app.attach_control(craft::automation::ControlChannel::new(requests), Some(listening));
         }
         // The OCR Verify screen stores its per-language dictionary in the data folder.
         app.ocr_verify.dictionary_dir = pdfcraft_ui_egui::settings::dictionary_dir();
@@ -555,12 +552,12 @@ fn app_creator<'a>(
         }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
         if create_images {
-            if let Err(e) = app.begin_image_import_paths(&files) {
+            if let Err(e) = app.begin_image_import_paths(&cc.egui_ctx, &files) {
                 app.notify(e);
             }
         } else if combine {
             app.reopen_last_files(&[]);
-            app.combine_paths(&ctx, &files);
+            app.combine_paths(&cc.egui_ctx, &files);
         } else {
             // With the preference on, last session's files come back first; files named on
             // the command line open after them, in front (#442).
@@ -568,7 +565,7 @@ fn app_creator<'a>(
             startup::open_files(&mut app, &files, two_paged);
         }
         for (k, v) in options {
-            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&k, &v) };
+            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&cc.egui_ctx, &k, &v) };
             if let Err(e) = result {
                 log::warn!("--{k} {v}: {e}");
             }

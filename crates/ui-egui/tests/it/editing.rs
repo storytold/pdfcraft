@@ -2177,7 +2177,12 @@ fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
     // The 200 × 300 fixture fits by height; keep its aspect ratio instead of stretching
     // it to the full cell width. Request enough pixels for that actual preview width.
     let drawn = 194.0 * 3.0 * (200.0 / 300.0) * h.ctx.pixels_per_point();
-    let sharp = |h: &Harness<'static, PdfCraftApp>, page| h.state().views[0].grid_page_pixels(page);
+    // The one page's grid texture is width × 1.5 width × 4 bytes (RGBA, the fixture's 2:3), the only
+    // texture in Organize: its width is read back from the view's texture statistics.
+    let sharp = |h: &Harness<'static, PdfCraftApp>, _page: usize| {
+        let bytes = h.state().views[0].textures.bytes;
+        (bytes > 0).then(|| ((bytes as f64) / 6.0).sqrt() as u32)
+    };
     for _ in 0..200 {
         if sharp(&h, 0).is_some_and(|w| w as f32 >= drawn * 0.9) {
             break;

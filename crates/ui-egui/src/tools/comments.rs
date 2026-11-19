@@ -34,9 +34,11 @@ mod tool;
 
 #[cfg(test)]
 use bridge::hover_tip;
+/// The comment thread of the annotation at `(page, index)`: the key the Comments panel files it under.
+pub use bridge::thread_id;
 pub(crate) use bridge::{
     PageMap, annotations, delete_selected, edit, edit_anchor, id_of, key_of, kind_of, markers, parts, pdf_date_seconds, rgb8, screen_to_user_rect,
-    thread_id, thread_key, tips, tips_shown,
+    thread_key, tips, tips_shown,
 };
 pub(crate) use colours::{RecentColours, border_choice, fill_choice, palette, to_rgb};
 pub(crate) use composer::composer;
