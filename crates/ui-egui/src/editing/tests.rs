@@ -24,10 +24,11 @@ fn staging_dir(test: &str) -> PathBuf {
 
 /// The app on a host whose picks wait until the test answers them, in a window: the save flow
 /// takes a pick's answer on a pass, as it does for the user.
-fn shown_with_picks() -> (Harness<'static, crate::PdfCraftApp>, Arc<ScriptedFiles>) {
+fn shown_with_picks() -> (Harness<'static, crate::PdfCraftApp>, Arc<ScriptedFiles>, Arc<ManualJobs>) {
     let files = Arc::new(ScriptedFiles::held());
+    let jobs = Arc::new(ManualJobs::new());
     let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
-    let host = Host::builder(info).jobs(Arc::new(ManualJobs::new())).files(files.clone()).build();
+    let host = Host::builder(info).jobs(jobs.clone()).files(files.clone()).build();
     let (intake, _) = craft::platform::open::FileIntake::new(Wake::none());
     let clipboard = craft::platform::clipboard::Clipboard::new(craft::platform::clipboard::EventClipboard::new(|| 0, |_| Ok(0)));
     let watch = craft::platform::watch::FileWatch::new(Wake::none()).inline();
@@ -41,13 +42,17 @@ fn shown_with_picks() -> (Harness<'static, crate::PdfCraftApp>, Arc<ScriptedFile
         }
     });
     h.run_steps(2);
-    (h, files)
+    (h, files, jobs)
 }
 
-/// Answers the open Save picker with `path`, and lets the app take the answer on later passes.
-fn answer_save(h: &mut Harness<'static, crate::PdfCraftApp>, files: &ScriptedFiles, path: &Path) {
+/// Answers the open Save picker with `path`, and lets the app take the answer on later passes and run the
+/// jobs it starts for the write.
+fn answer_save(h: &mut Harness<'static, crate::PdfCraftApp>, files: &ScriptedFiles, jobs: &ManualJobs, path: &Path) {
     assert!(files.answer(Picked::Paths(vec![path.to_path_buf()])).is_some(), "a Save picker was open");
-    h.run_steps(3);
+    for _ in 0..6 {
+        jobs.run_all();
+        h.run_steps(1);
+    }
 }
 
 /// A one-page document with a proper xref table.
@@ -105,7 +110,7 @@ fn a_refused_text_box_is_put_back_whole() {
 fn save_commits_the_open_text_box() {
     let dir = staging_dir("open-text-box");
     let dest = dir.join("out.pdf");
-    let (mut h, files) = shown_with_picks();
+    let (mut h, files, jobs) = shown_with_picks();
     let app = h.state_mut();
     app.open_bytes(&egui::Context::default(), "a.pdf", None, one_page_pdf()).unwrap();
     let style = crate::content_ui::default_style();
@@ -118,7 +123,7 @@ fn save_commits_the_open_text_box() {
     let added = app.session.get(id).unwrap().added();
     assert_eq!(added.len(), 1, "the open text box was committed before the save");
     assert!(app.views[0].session.content.draft.is_none());
-    answer_save(&mut h, &files, &dest);
+    answer_save(&mut h, &files, &jobs, &dest);
     assert!(std::fs::read(&dest).unwrap().starts_with(b"%PDF"), "the document with its text went where the user chose");
     assert!(!h.state().session.get(id).unwrap().dirty);
     let _ = std::fs::remove_dir_all(&dir);
@@ -185,13 +190,13 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     std::fs::write(&attachment, &original).unwrap();
     let kept = dir.join("Quote.pdf");
 
-    let (mut h, files) = shown_with_picks();
+    let (mut h, files, jobs) = shown_with_picks();
     let app = h.state_mut();
     app.open_bytes(&egui::Context::default(), "Quote.pdf", Some(attachment.to_string_lossy().into_owned()), original.clone()).unwrap();
     assert!(app.apply_edit(&egui::Context::default(), pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
 
     assert!(!app.save_active(&egui::Context::default(), SaveTarget::InPlace), "Save asks instead of writing the temporary copy");
-    answer_save(&mut h, &files, &kept);
+    answer_save(&mut h, &files, &jobs, &kept);
     assert_eq!(std::fs::read(&attachment).unwrap(), original, "the attachment's copy is untouched");
     assert!(std::fs::read(&kept).unwrap().starts_with(b"%PDF"), "the document went where the user chose");
 

@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::support::AppHarness as _;
 use craft::ui::primitives::textures::{TextureState, ThumbRequest};
 use craft::ui::tile_grid::TileZoom;
+use egui::accesskit::Role;
 use egui::{Key, Modifiers, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -331,7 +332,7 @@ fn combine_follows_the_order_shown_in_the_grid() {
     let (three, one) = (card(&h, "three.pdf"), card(&h, "one.pdf"));
     drag(&mut h, three.center(), one.center() - vec2(one.width() * 0.3, 0.0));
     assert_eq!(names(&h), ["three.pdf", "one.pdf", "two.pdf"]);
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.views.len(), 1, "the result opens");
@@ -718,7 +719,7 @@ fn combining_with_files_expanded_gives_the_same_document() {
     h.get_by_label("Expand all").click();
     h.run_steps(2);
     assert_eq!(h.state().combine_expanded(), [0, 1]);
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.views.len(), 1, "the result opens");
@@ -783,7 +784,7 @@ fn a_split_file_counts_once_and_combines_with_one_bookmark() {
     assert!(h.query_by_label_contains("Added more than once").is_none());
     h.hover_at(egui::pos2(5.0, 890.0));
     h.run_steps(2);
-    h.get_by_label("Combine").click();
+    h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     let app = h.state();
     assert_eq!(app.views.len(), 1, "the result opens");
@@ -861,7 +862,7 @@ fn a_files_parts_join_when_what_was_between_them_goes_and_one_file_cannot_be_com
     remove_hovered(&mut h);
     assert_eq!(parts(&h), ["one.pdf:[0, 1]"]);
     // One file is nothing to combine, however it is split.
-    assert!(h.get_by_label("Combine").accesskit_node().is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Combine").accesskit_node().is_disabled());
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(2);
     assert_eq!(parts(&h), ["one.pdf:[0]", "two.pdf:[0]", "one.pdf:[1]"]);

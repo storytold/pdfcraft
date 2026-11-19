@@ -933,8 +933,8 @@ fn print_restricted_documents_say_so_before_the_dialog() {
     });
     h.ctx.set_os(egui::os::OperatingSystem::Windows);
     h.run_steps(4);
-    assert!(h.get_by_label("Print (Ctrl+P)").accesskit_node().is_disabled());
-    h.get_by_label("Print (Ctrl+P)").hover();
+    assert!(h.get_by_label("Print…").accesskit_node().is_disabled());
+    h.get_by_label("Print…").hover();
     h.run_steps(30);
     h.get_by_label_contains("don't allow printing");
     assert!(!h.execute("print.dialog"));
@@ -950,8 +950,8 @@ fn print_without_a_document_does_not_blame_security() {
     let mut h = rig_on(ScriptedFiles::new(), |_| {});
     h.ctx.set_os(egui::os::OperatingSystem::Windows);
     h.run_steps(4);
-    assert!(h.get_by_label("Print (Ctrl+P)").accesskit_node().is_disabled());
-    h.get_by_label("Print (Ctrl+P)").hover();
+    assert!(h.get_by_label("Print…").accesskit_node().is_disabled());
+    h.get_by_label("Print…").hover();
     h.run_steps(30);
     assert!(h.query_by_label_contains("don't allow printing").is_none());
     assert!(!h.is_open());
