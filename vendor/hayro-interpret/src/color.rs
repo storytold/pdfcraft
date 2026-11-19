@@ -450,6 +450,29 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceCmyk)
     }
 
+    /// PdfCraft patch (107): whether this is a `/Separation` or `/DeviceN` space, whose
+    /// components go through a tint transform.
+    pub(crate) fn is_tinted(&self) -> bool {
+        matches!(self.0.as_ref(), ColorSpaceType::Separation(_) | ColorSpaceType::DeviceN(_))
+    }
+
+    // PdfCraft patch (107).
+    /// The decoded components of an image in this space, in the units `convert_f32` takes, and
+    /// the range of each of those units. For an ICC `/Lab` profile the two differ: its
+    /// `/Decode` array maps the samples to `[0, 1]` (the profile's own encoding), while
+    /// `ICCProfile::convert_f32` takes physical L\*a\*b\* and scales that back itself.
+    pub(crate) fn to_converter_units(&self, data: &mut [f32], bits_per_component: f32) -> SmallVec<[(f32, f32); 4]> {
+        if matches!(self.0.as_ref(), ColorSpaceType::ICCBased(icc) if icc.is_lab()) {
+            for lab in data.chunks_exact_mut(3) {
+                lab[0] *= 100.0;
+                lab[1] = lab[1] * 255.0 - 128.0;
+                lab[2] = lab[2] * 255.0 - 128.0;
+            }
+            return smallvec![(0.0, 100.0), (-128.0, 127.0), (-128.0, 127.0)];
+        }
+        self.default_decode_arr(bits_per_component)
+    }
+
     /// Get the number of components of the color space.
     pub(crate) fn num_components(&self) -> u8 {
         match self.0.as_ref() {

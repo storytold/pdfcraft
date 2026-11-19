@@ -22,6 +22,7 @@ use hayro_syntax::page::Resources;
 use kurbo::{Affine, Rect, Shape};
 use smallvec::{SmallVec, smallvec};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::iter;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -1231,6 +1232,15 @@ fn decode_raster(
                 &ctx.decode_arr,
             )?;
 
+            // PdfCraft patch (107): the components in the units their conversion takes, and each
+            // one's range there: an ICC `/Lab` profile's `/Decode` array gives them in the
+            // profile's own encoding, not L\*a\*b\*.
+            let ranges = if matte_in_source {
+                ctx.color_space.to_converter_units(&mut f32_data, ctx.bits_per_component as f32)
+            } else {
+                ctx.color_space.default_decode_arr(ctx.bits_per_component as f32)
+            };
+
             fix_image_length(&mut f32_data, ctx.width, &mut height, 0.0, &ctx.color_space)?;
 
             // PdfCraft patch (107): the matte removed from the decoded components.
@@ -1239,21 +1249,32 @@ fn decode_raster(
                 && alpha.width == ctx.width
                 && alpha.height == height
             {
-                let ranges = ctx
-                    .color_space
-                    .default_decode_arr(ctx.bits_per_component as f32);
                 unpremultiply_components(&mut f32_data, &alpha.data, &matte, &ranges);
                 matte_alpha = Some(alpha);
             }
 
-            get_rgb_data(
-                &f32_data,
-                ctx.width,
-                height,
-                ctx.scale_factors,
-                &ctx.color_space,
-                obj.interpolate,
-            )
+            // PdfCraft patch (107): a tint transform that gives the wrong number of components
+            // shifts no other pixel, and a colour is converted once however many pixels have
+            // it (patch 28), as the lookup table did before the matte took the image off it.
+            if matte_in_source && ctx.color_space.is_tinted() {
+                get_rgb_data_converted_once(
+                    &f32_data,
+                    ctx.width,
+                    height,
+                    ctx.scale_factors,
+                    &ctx.color_space,
+                    obj.interpolate,
+                )
+            } else {
+                get_rgb_data(
+                    &f32_data,
+                    ctx.width,
+                    height,
+                    ctx.scale_factors,
+                    &ctx.color_space,
+                    obj.interpolate,
+                )
+            }
         };
 
         if let Some(transfer_function) = &obj.transfer_function
@@ -1555,6 +1576,55 @@ fn get_rgb_data(
 
     let mut output = vec![0; width as usize * height as usize * 3];
     cs.convert_f32(decoded, &mut output, false);
+
+    Some(RgbData {
+        data: output,
+        width,
+        height,
+        interpolate,
+        scale_factors,
+    })
+}
+
+/// PdfCraft patch (107): `decoded` converted to RGB with each pixel on its own, so a tint
+/// transform that gives the wrong number of components shifts no other pixel (patch 28's table
+/// converts each entry on its own), and each colour converted once however many pixels have it,
+/// as that table did before the matte took the image off it.
+fn get_rgb_data_converted_once(
+    decoded: &[f32],
+    width: u32,
+    height: u32,
+    scale_factors: (f32, f32),
+    cs: &ColorSpace,
+    interpolate: bool,
+) -> Option<RgbData> {
+    // To prevent a panic when calling the `chunks` method.
+    let n = usize::from(cs.num_components());
+    if n == 0 {
+        return None;
+    }
+
+    let mut output = vec![0; width as usize * height as usize * 3];
+    // At most this many colours are kept, so the memory stays bounded: an image with more is
+    // one whose pixels are nearly all different, which the table would convert one by one too.
+    const MAX_KEPT: usize = 4096;
+    let mut converted: HashMap<Vec<u32>, [u8; 3]> = HashMap::new();
+    let mut key = Vec::with_capacity(n);
+    for (pixel, rgb) in decoded.chunks_exact(n).zip(output.chunks_exact_mut(3)) {
+        key.clear();
+        key.extend(pixel.iter().map(|component| component.to_bits()));
+        if let Some(colour) = converted.get(key.as_slice()) {
+            rgb.copy_from_slice(colour);
+            continue;
+        }
+        // A failed conversion leaves black, as in `get_rgb_data`.
+        let mut colour = [0_u8; 3];
+        let _ = cs.convert_f32(pixel, &mut colour, false);
+        if converted.len() < MAX_KEPT {
+            converted.insert(key.clone(), colour);
+        }
+        rgb.copy_from_slice(&colour);
+    }
 
     Some(RgbData {
         data: output,
