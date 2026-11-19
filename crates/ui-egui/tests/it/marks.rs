@@ -2,17 +2,15 @@
 
 use crate::support;
 use crate::support::AppHarness as _;
-use craft::host::{AppInfo, ManualJobs, Wake};
+use craft::host::ManualJobs;
 use craft::pages::ui::PageRangeOptions;
 use craft::pages::{PageRange, PageScope, Subset};
-use craft::platform::open::FileIntake;
-use craft::platform::watch::FileWatch;
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::MarkKind;
-use pdfcraft_ui_egui::{AppServices, PdfCraftApp};
+use pdfcraft_ui_egui::PdfCraftApp;
 use serde_json::json;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -83,13 +81,9 @@ impl Rig {
     }
 }
 
-// PLAN: shared support helper (pdf-chrome-w9): the app on a host built over `ManualJobs`.
+/// The app on a host built over `ManualJobs`.
 fn app_on(jobs: Arc<ManualJobs>) -> PdfCraftApp {
-    let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: env!("CARGO_PKG_VERSION") };
-    let host = craft::host::Host::builder(info).jobs(jobs).build();
-    let services =
-        AppServices::new(Wake::none(), Box::new(support::RecordingClipboard::default()), None, None, FileIntake::for_tests(), FileWatch::inline());
-    PdfCraftApp::with_host(Arc::new(host), services)
+    support::held_app(jobs)
 }
 
 fn harness() -> Rig {
@@ -412,8 +406,7 @@ trailer << /Root 1 0 R >>
 }
 
 /// The preview pager's position, read from its caption's accessible value: the shown page and the count.
-fn is_pager<'t>(n: &impl NodeT<'t>) -> bool {
-    let ak = n.accesskit_node();
+fn is_pager(ak: &egui_kittest::kittest::AccessKitNode<'_>) -> bool {
     ak.role() != egui::accesskit::Role::SpinButton && ak.numeric_value().is_some() && ak.min_numeric_value() == Some(1.0)
 }
 

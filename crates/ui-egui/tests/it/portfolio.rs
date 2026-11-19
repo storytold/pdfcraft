@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::support::AppHarness as _;
-use craft::host::{AppInfo, Host, ManualJobs, ScriptedFiles};
+use craft::host::{ManualJobs, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -78,10 +78,7 @@ fn harness_with(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> (Harness<'sta
     let parts = Mutex::new(Some((jobs.clone(), setup)));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let (jobs, setup) = parts.lock().unwrap().take().unwrap();
-        // PLAN: `AppInfo` fields assumed (pdf-hub-w1, L-71).
-        let host =
-            Host::builder(AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" }).jobs(jobs).files(Arc::new(ScriptedFiles::held())).build();
-        let mut app = PdfCraftApp::with_host(Arc::new(host));
+        let mut app = crate::support::test_app(crate::support::host_with(jobs, Arc::new(ScriptedFiles::held())));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app

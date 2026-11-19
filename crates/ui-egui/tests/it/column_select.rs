@@ -35,10 +35,9 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
 /// `harness` on the injected `clipboard`, whose recorded writes a test reads.
 fn harness_on(clipboard: crate::support::RecordingClipboard, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        // PLAN: assumed support::app_with_clipboard(RecordingClipboard) -> PdfCraftApp (pdf-chrome-w9: `PdfCraftApp::with_host` over `AppServices` holding the clipboard)
         let mut app = crate::support::app_with_clipboard(clipboard);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
-        app.open_bytes("table.pdf", None, table()).expect("opens");
+        app.open_bytes(&egui::Context::default(), "table.pdf", None, table()).expect("opens");
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
         app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
         setup(&mut app);
@@ -165,7 +164,6 @@ fn a_column_selection_copies_plain_text_only() {
     drag(&mut h, from, to, Modifiers::ALT);
     assert!(h.execute("edit.copy"));
     h.step();
-    // PLAN: assumed RecordingClipboard::writes() -> Vec<Vec<Flavor>> (each write's flavours, `mime` and `data`).
     let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime.to_string() == "text/html");
     assert!(!html, "no HTML for a column selection");
     let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Name\tQty\nApple\t12"));

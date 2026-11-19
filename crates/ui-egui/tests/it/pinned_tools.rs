@@ -7,11 +7,7 @@ use pdfcraft_ui_egui::{LeftPanel, PdfCraftApp};
 
 fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |_cc| {
-        let info = craft::host::AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
-        let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
-        let host = craft::host::Host::builder(info).jobs(jobs).build();
-        // PLAN: assumed `AppServices::detached()` (pdf-hub-w1): services with no clipboard, recovery directory, update source, intake or watch.
-        let mut app = PdfCraftApp::with_host(std::sync::Arc::new(host), pdfcraft_ui_egui::AppServices::detached());
+        let mut app = crate::support::held_app(std::sync::Arc::new(craft::host::ManualJobs::new()));
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         setup(&mut app);
         app
@@ -79,7 +75,7 @@ fn persistence_round_trip_and_sanitization() {
         "pinned_tools": ["redact", "nonexistent_junk", "redact", "edit", "another_unknown", "protect"]
     })
     .to_string();
-    restored.apply_settings(&pdfcraft_ui_egui::import_json(&malicious_or_corrupt).0);
+    restored.apply_settings(&pdfcraft_ui_egui::settings::import_json(&malicious_or_corrupt).0);
     assert_eq!(restored.pinned_tools, vec!["redact", "edit", "protect"]);
 }
 

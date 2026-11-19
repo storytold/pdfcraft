@@ -6,6 +6,7 @@ use egui::{Key, Modifiers, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::settings::import_json;
 
 const PDF: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -17,6 +18,11 @@ trailer << /Root 1 0 R >>
 /// Some widget shows `text`, as its label or its value (a combo box shows its choice as a value).
 fn shows(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
     h.query_all_by(|n| n.label().is_some_and(|l| l.contains(text)) || n.value().is_some_and(|v| v.contains(text))).next().is_some()
+}
+
+/// What the Pattern box holds, valid or not.
+fn pattern(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
+    h.get_by_role_and_label(Role::TextInput, "Pattern").value()
 }
 
 fn retype(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
@@ -50,7 +56,7 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
     retype(&mut h, "dd/mm HH");
     h.get_by_label_contains("is a time letter (H h M s t)");
     assert_eq!(h.state().session.date_format(), "d \\de mmmm yyyy");
-    assert_eq!(h.state().date_format_draft.as_deref(), Some("dd/mm HH"));
+    assert_eq!(pattern(&h).as_deref(), Some("dd/mm HH"));
     // Typed a key at a time, spaces stay where they are typed (the box isn't trimmed under the cursor).
     h.get_by_role_and_label(Role::TextInput, "Pattern").click();
     h.run_steps(1);
@@ -59,7 +65,7 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
         h.get_by_role_and_label(Role::TextInput, "Pattern").type_text(&c.to_string());
         h.run_steps(1);
     }
-    assert_eq!(h.state().date_format_draft.as_deref(), Some("yyyy mm dd"));
+    assert_eq!(pattern(&h).as_deref(), Some("yyyy mm dd"));
     assert_eq!(h.state().session.date_format(), "yyyy mm dd");
     // A letter group that isn't a date code is refused, not silently shortened.
     retype(&mut h, "yyyyyyyy");
@@ -89,11 +95,11 @@ fn fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered() 
 
     // It survives a restart; an unusable saved pattern keeps the default; the control channel checks it too.
     let mut restored = crate::control::new_app();
-    restored.restore(&h.state().persist());
+    restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.session.date_format(), "yyyy.mm.dd.");
     let mut fresh = crate::control::new_app();
-    fresh.restore(&format!(r#"{{"date_format": "{}"}}"#, "d".repeat(10_000)));
-    fresh.restore(r#"{"date_format": "HH:MM"}"#);
+    fresh.apply_settings(&import_json(&format!(r#"{{"date_format": "{}"}}"#, "d".repeat(10_000))).0);
+    fresh.apply_settings(&import_json(r#"{"date_format": "HH:MM"}"#).0);
     assert_eq!(fresh.session.date_format(), "m/d/yyyy");
     assert!(fresh.set_option(&egui::Context::default(), "date-format", "Year").is_err());
     fresh.set_option(&egui::Context::default(), "date-format", "dd/mm/yyyy").unwrap();
@@ -125,10 +131,10 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
 
     // Remembered; an unknown saved language is ignored; auto follows the interface again.
     let mut restored = crate::control::new_app();
-    restored.restore(&h.state().persist());
+    restored.apply_settings(&h.state().settings_snapshot());
     assert_eq!(restored.session.date_language(), Some("es"));
     let mut fresh = crate::control::new_app();
-    fresh.restore(r#"{"date_language": "klingon"}"#);
+    fresh.apply_settings(&import_json(r#"{"date_language": "klingon"}"#).0);
     assert_eq!(fresh.session.date_language(), None);
     assert!(fresh.set_option(&egui::Context::default(), "date-language", "klingon").is_err());
     h.set_option("date-language", "auto").unwrap();
@@ -174,7 +180,6 @@ fn a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first() {
         let s = h.state();
         assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "nothing placed");
     }
-    // PLAN: assumed shown_notice(&mut Harness) -> String (pdf-chrome-w9)
-    let notice = crate::support::shown_notice(&mut h);
+    let notice = crate::support::shown_notice(&h).unwrap_or_default();
     assert!(notice.contains("can't be written into the PDF yet"), "{notice}");
 }

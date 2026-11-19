@@ -2,14 +2,21 @@
 //! the other pane, even when that click changes the document too.
 
 use egui::{Key, Modifiers, Pos2};
+use std::sync::Arc;
+
+use craft::host::{Host, InlineJobs, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::panes::Place;
 
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
-        let mut app = crate::control::new_app();
-        app.run_inline = true;
+    harness_over(crate::support::host_with(Arc::new(InlineJobs), Arc::new(ScriptedFiles::new())))
+}
+
+/// [`harness`] on `host`: its jobs run at once, and its file service answers the pickers.
+fn harness_over(host: Arc<Host>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = crate::support::test_app(host);
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
         app.set_option(&egui::Context::default(), "left", "closed").unwrap();
@@ -91,8 +98,8 @@ fn save_in_the_second_pane_keeps_its_typing() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-split-save-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("out.pdf");
-    let mut h = harness();
-    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    let files = ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]);
+    let mut h = harness_over(crate::support::host_with(Arc::new(InlineJobs), Arc::new(files)));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
     h.run_steps(4);
     let second = 1;

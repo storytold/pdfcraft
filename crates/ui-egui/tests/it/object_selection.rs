@@ -248,7 +248,7 @@ fn refusing_one_object_keeps_the_whole_group_and_its_selection() {
     drag(&mut h, a, b);
     assert_eq!(objects(&h), before);
     h.get_by_label("3 objects selected");
-    assert!(h.state().toast.as_ref().unwrap().0.contains("Text used as a clipping path cannot be moved with this selection."));
+    assert!(crate::support::shown_notice(&h).unwrap().contains("Text used as a clipping path cannot be moved with this selection."));
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
@@ -297,7 +297,7 @@ fn group_drag_respects_document_rotation_and_view_rotation() {
         let mut h = harness();
         let ctx_h = h.ctx.clone();
         assert!(h.state_mut().apply_edit(&ctx_h, Edit::RotatePages { pages: vec![0], degrees: document_rotation }));
-        h.state_mut().views[0].rotate_view(true);
+        crate::support::fire_menu(&mut h, "view.rotate.cw");
         h.run_steps(4);
         let before = objects(&h);
         let targets: Vec<_> = before.iter().filter(|o| o.text.as_deref() != Some("Keep here")).map(|o| o.target).collect();
@@ -360,7 +360,7 @@ fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
                 h.state_mut().open_bytes(&ctx_h, "other.pdf", None, fixture(false)).unwrap();
             }
             2 => h.state_mut().active = None,
-            3 => h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About),
+            3 => h.set_option("dialog", "about").unwrap(),
             _ => h.state_mut().request_document_url("https://example.invalid/", pdfcraft_ui_egui::LinkOrigin::Link),
         }
         h.run_steps(2);
@@ -368,7 +368,7 @@ fn group_drags_cancel_on_focus_loss_tab_switch_home_and_modal_dialogs() {
         h.run_steps(2);
         h.input_mut().focused = true;
         h.state_mut().active = Some(0);
-        h.state_mut().dialog = None;
+        h.set_option("dialog", "none").unwrap();
         h.state_mut().pending_link = None;
         h.run_steps(4);
         assert_eq!(objects(&h), before, "cancelled gesture case {case}");
@@ -417,7 +417,7 @@ fn a_shift_click_with_a_changed_paragraph_open_shows_the_notice_and_moves_nothin
     );
     h.run_steps(2);
     let notice = "Finish or discard the text being edited before selecting several objects.";
-    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains(notice)), "the notice says why");
+    assert!(crate::support::shown_notice(&h).is_some_and(|t| t.contains(notice)), "the notice says why");
     for k in 1..=3 {
         h.hover_at(a + (b - a) * (k as f32 / 3.0));
         h.run_steps(2);
@@ -653,9 +653,7 @@ fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page(
     h.run_steps(2);
     assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is open");
     let before = can_undo(&h, 0);
-    let ctx = h.ctx.clone();
-    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
-    h.step();
+    crate::support::fire_menu(&mut h, "edit.paste");
     assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
     assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
     h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
