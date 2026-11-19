@@ -181,7 +181,7 @@ impl RecoveryStore {
         } else if cfg!(windows) {
             env("LOCALAPPDATA").map(|d| d.join("PdfCraft").join("Recovery"))
         } else {
-            env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share"))).map(|d| d.join("pdfcraft/recovery"))
+            xdg_data_dir(env("XDG_DATA_HOME"), env("HOME"), "recovery")
         }
     }
 
@@ -204,8 +204,17 @@ pub fn default_dictionary_dir() -> Option<PathBuf> {
     } else if cfg!(windows) {
         env("LOCALAPPDATA").map(|d| d.join("PdfCraft").join("Dictionary"))
     } else {
-        env("XDG_DATA_HOME").or_else(|| env("HOME").map(|h| h.join(".local/share"))).map(|d| d.join("pdfcraft/dictionary"))
+        xdg_data_dir(env("XDG_DATA_HOME"), env("HOME"), "dictionary")
     }
+}
+
+/// XDG requires absolute base paths: a relative override must not put recovery or dictionaries
+/// in the launch directory. Ignore it and fall back to an absolute home's `.local/share`.
+fn xdg_data_dir(data_home: Option<PathBuf>, home: Option<PathBuf>, child: &str) -> Option<PathBuf> {
+    data_home
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.filter(|path| path.is_absolute()).map(|path| path.join(".local/share")))
+        .map(|dir| dir.join("pdfcraft").join(child))
 }
 
 impl RecoveryStore {
@@ -495,6 +504,48 @@ impl PdfCraftApp {
                 store.remove(key);
             }
             self.recovery_keys.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::xdg_data_dir;
+    use std::path::PathBuf;
+
+    fn absolute_path(name: &str) -> PathBuf {
+        PathBuf::from(if cfg!(windows) { r"C:\data-dir-test" } else { "/data-dir-test" }).join(name)
+    }
+
+    #[test]
+    fn absolute_xdg_data_home_takes_precedence() {
+        let data_home = absolute_path("data");
+        let home = absolute_path("home");
+        for child in ["recovery", "dictionary"] {
+            let expected = Some(data_home.join("pdfcraft").join(child));
+            assert_eq!(xdg_data_dir(Some(data_home.clone()), Some(home.clone()), child), expected);
+            assert_eq!(xdg_data_dir(Some(data_home.clone()), None, child), expected);
+        }
+    }
+
+    #[test]
+    fn relative_and_empty_xdg_data_home_use_the_home_default() {
+        let home = absolute_path("home");
+        for data_home in [None, Some(PathBuf::new()), Some("relative".into()), Some("../outside".into())] {
+            for child in ["recovery", "dictionary"] {
+                assert_eq!(xdg_data_dir(data_home.clone(), Some(home.clone()), child), Some(home.join(".local/share/pdfcraft").join(child)));
+            }
+        }
+    }
+
+    #[test]
+    fn no_data_dir_without_an_absolute_base() {
+        for data_home in [None, Some(PathBuf::new()), Some("relative".into())] {
+            for home in [None, Some(PathBuf::new()), Some("relative-home".into())] {
+                for child in ["recovery", "dictionary"] {
+                    assert_eq!(xdg_data_dir(data_home.clone(), home.clone(), child), None);
+                }
+            }
         }
     }
 }
