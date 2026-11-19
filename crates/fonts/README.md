@@ -33,10 +33,13 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   titles), in manifest order.
 - `ui_telugu_fonts`: the `Telu` faces for Telugu interface text (the Telugu catalog, file names,
   document titles), in manifest order.
-- `ui_hebrew_fonts` / `document_hebrew_font(bold)`: the `Hebr` faces (Noto Sans Hebrew) for
-  Hebrew interface text, and the face whose outlines become the Type 3 fallback for Hebrew text
-  written by Edit text (Bold when asked for and present, else Regular). `None` without a
-  craft-fonts input that has one; the editor then reports a clear error.
+- `ui_hebrew_fonts` / `document_hebrew_font(bold)`: the `Noto Sans Hebrew` (`Hebr`) face(s) for
+  Hebrew interface text (or the first `Hebr` face if Noto Sans Hebrew is absent), and the face
+  whose outlines become the Type 3 fallback for Hebrew text written by Edit text (Bold when asked
+  for and present, else Regular). Native builds also embed optional document Hebrew faces from
+  `fonts/hebrew-manifest.txt` when present in `CRAFT_FONTS_DIR` without adding them to the UI
+  fallback stack. `None` without a craft-fonts input that has one; the editor then reports a clear
+  error.
 - `shape_hebrew` / `hebrew_has`: the Regular `Hebr` face shaped with harfrust for Hebrew Add
   Text content, one cluster per letter with its points and cantillation marks (positioned by the
   face), drawn by the same Type 3 writer as Arabic and Thai. `GlyphError::NoFont` without the face.

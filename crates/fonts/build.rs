@@ -3,8 +3,10 @@
 //! the local checkout (no network). On wasm32 it embeds only the UI faces (BIZ UDPGothic Regular
 //! and any `Arab`, `Telu`, `Hebr`, `Thai` or `Deva` face), to keep the web build within hosting
 //! limits (Cloudflare Pages: 25 MiB per file). Native builds also read the optional
-//! `fonts/simplified-chinese-manifest.txt` (LXGW WenKai Lite); it is never embedded on wasm.
-//! `CRAFT_FONTS_REQUIRED` makes both the checkout and that native manifest required.
+//! `fonts/simplified-chinese-manifest.txt` (LXGW WenKai Lite) and the optional
+//! `fonts/hebrew-manifest.txt` (document Hebrew faces); neither is embedded on wasm.
+//! `CRAFT_FONTS_REQUIRED` makes both the checkout and the Chinese native manifest required
+//! (`fonts/hebrew-manifest.txt` remains optional and logs a warning if missing or malformed).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
