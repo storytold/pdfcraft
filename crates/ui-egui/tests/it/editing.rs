@@ -192,6 +192,17 @@ fn knob_point(h: &Harness<'static, PdfCraftApp>) -> egui::Pos2 {
     h.get_by_role_and_label(Role::Button, "Rotate").rect().center()
 }
 
+/// The value of the number field in a dialog's row named `label`: the row is a group under that name, with its
+/// caption, and the field inside it.
+fn row_number(h: &Harness<'static, PdfCraftApp>, label: &str) -> Option<String> {
+    h.get_by_role_and_label(Role::Group, label).query_all_by(|n| n.role() == Role::SpinButton).next().and_then(|n| n.value())
+}
+
+/// The page grid's own Close, in its Organize pages bar: the window's title bar has a Close too.
+fn close_grid(h: &mut Harness<'static, PdfCraftApp>) {
+    h.get_by_label("Organize pages").get_by_role_and_label(Role::Button, "Close").click();
+}
+
 fn organize(pages: usize) -> Harness<'static, PdfCraftApp> {
     harness(pages, |app| app.set_option(&egui::Context::default(), "organize", "on").unwrap())
 }
@@ -296,7 +307,7 @@ fn organize_opens_on_the_current_page() {
     h.get_by_label("Page 32").click();
     h.run_steps(2);
     assert_eq!(h.state().views[0].target_pages(), [31]);
-    h.get_by_label("Close").click();
+    close_grid(&mut h);
     h.run_steps(2);
     assert!(!h.state().views[0].organize);
     h.state_mut().views[0].go_to_page(45);
@@ -307,7 +318,7 @@ fn organize_opens_on_the_current_page() {
     assert!(in_view(&h, 45));
     assert!(!in_view(&h, 1));
     // From the last page.
-    h.get_by_label("Close").click();
+    close_grid(&mut h);
     h.run_steps(2);
     h.state_mut().views[0].go_to_page(59);
     h.run_steps(2);
@@ -413,7 +424,8 @@ fn shift_click_selects_a_range_and_moves_it() {
     assert_eq!(page_texts(h.state()), ["Page 3", "Page 1", "Page 2", "Page 4"]);
     // The moved pages stay selected at their new position, so repeated clicks keep moving them.
     assert_eq!(h.state().views[0].selected.items.iter().copied().collect::<Vec<_>>(), [1, 2]);
-    h.get_by_label("Move later").click();
+    // The pointer still rests on the button, whose tooltip carries its name too.
+    h.get_by_role_and_label(Role::Button, "Move later").click();
     h.run_steps(3);
     assert_eq!(page_texts(h.state()), ["Page 3", "Page 4", "Page 1", "Page 2"]);
 }
@@ -488,7 +500,7 @@ fn save_writes_an_incremental_update_and_clears_dirty() {
     let saved = saved_file(&out);
     assert_eq!(&saved[..original.len()], &original[..], "original bytes untouched");
     assert!(!dirty(&h));
-    h.get_by_label("saved.pdf"); // the tab takes the new name, no edited marker
+    let _ = h.get_all_by_label("saved.pdf"); // the tab takes the new name, no edited marker
     // What was written is what the app now shows.
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes.as_slice(), saved.as_slice());
     let reopened = pdfcraft_render::inspect(std::sync::Arc::new(saved), None).unwrap();
@@ -1583,12 +1595,13 @@ fn column_headings_sort_the_list_and_flip_on_the_second_click() {
 #[test]
 fn ctrl_and_shift_clicks_select_several_files_that_move_and_go_together() {
     let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1), ("c.pdf", 1), ("d.pdf", 1), ("e.pdf", 1)]);
-    h.get_by_label("b.pdf").click();
+    // The rows, not their name cells.
+    h.get_by_role_and_label(Role::ListItem, "b.pdf").click();
     h.run_steps(1);
-    h.get_by_label("d.pdf").click_modifiers(Modifiers::SHIFT);
+    h.get_by_role_and_label(Role::ListItem, "d.pdf").click_modifiers(Modifiers::SHIFT);
     h.run_steps(1);
     assert_eq!(h.state().combine_selection(), [1, 2, 3]);
-    h.get_by_label("c.pdf").click_modifiers(Modifiers::COMMAND);
+    h.get_by_role_and_label(Role::ListItem, "c.pdf").click_modifiers(Modifiers::COMMAND);
     h.run_steps(1);
     assert_eq!(h.state().combine_selection(), [1, 3], "Ctrl/⌘ toggles one file");
     h.get_by_label("2 selected");
@@ -1788,12 +1801,12 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     // Combine asks first, naming the files left out; Cancel leaves everything as it was.
     h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
-    h.get_by_label("Leave out files that can't be read?");
+    h.get_by_role_and_label(Role::Dialog, "Leave out files that can't be read?");
     h.get_by_label("• broken.jpg");
     h.get_by_label("• archive.zip");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert!(h.query_by_label("Leave out files that can't be read?").is_none());
+    assert!(h.query_all_by_label("Leave out files that can't be read?").next().is_none());
     assert_eq!(h.state().views.len(), 1, "nothing combined");
     assert_eq!(combine_names(&h).len(), 4);
     // Asked again: Combine the rest.
@@ -1883,7 +1896,8 @@ fn a_file_that_opens_but_forbids_combining_takes_the_permissions_password() {
     assert!(h.state_mut().combine_unlock_rows(&[1], "pw"));
     h.run_steps(2);
     assert_eq!(h.state().combine_draft[1].lock, Some(pdfcraft_ui_egui::CombineLock::Permissions));
-    h.get_by_label_contains("Enter the permissions password");
+    // The row's message, which the list's table also shows as the row's cell.
+    let _ = h.get_all_by_label_contains("Enter the permissions password");
     h.get_all_by_label("Unlock…").last().unwrap().click();
     h.run_steps(3);
     h.get_by_label("Enter the permissions password to allow combining");
@@ -1960,9 +1974,9 @@ fn replace_button_replaces_selected_pages_in_organize() {
     queue_pick(&[other.as_path()]);
     h.get_by_label("Replace").click();
     h.run_steps(3);
-    egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
-    assert_eq!(h.get_by_label("Original: replace pages").value().as_deref(), Some("2"));
-    assert_eq!(h.get_by_label("to").value().as_deref(), Some("3"));
+    h.get_by_role_and_label(Role::Dialog, "Replace Pages");
+    assert_eq!(row_number(&h, "Original: replace pages").as_deref(), Some("2"));
+    assert_eq!(row_number(&h, "to").as_deref(), Some("3"));
     egui_kittest::kittest::Queryable::get_by_label(&h, "OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -1985,9 +1999,9 @@ fn replace_pages_from_thumbnail_context_menu() {
     h.run_steps(2);
     h.get_all_by_label("Replace pages…").last().unwrap().click();
     h.run_steps(3);
-    egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
-    assert_eq!(h.get_by_label("Original: replace pages").value().as_deref(), Some("2"));
-    assert_eq!(h.get_by_label("to").value().as_deref(), Some("2"));
+    h.get_by_role_and_label(Role::Dialog, "Replace Pages");
+    assert_eq!(row_number(&h, "Original: replace pages").as_deref(), Some("2"));
+    assert_eq!(row_number(&h, "to").as_deref(), Some("2"));
     egui_kittest::kittest::Queryable::get_by_label(&h, "OK").click();
     h.run_steps(3);
     let s = h.state();
@@ -2329,7 +2343,7 @@ fn split_from_pages_panel_context_menu_on_page_one_falls_back_to_pages() {
     h.run_steps(2);
     h.get_all_by_label("Split document…").last().unwrap().click();
     h.run_steps(3);
-    h.get_by_label("Split document");
+    h.get_by_role_and_label(Role::Dialog, "Split document");
     h.get_by_label_contains("Creates 4 files from 4 pages"); // by number of pages: the cut is not before page 1
 }
 
@@ -2344,7 +2358,7 @@ fn split_from_pages_panel_context_menu_with_multi_selection() {
     h.run_steps(2);
     h.get_all_by_label("Split document…").last().unwrap().click();
     h.run_steps(3);
-    h.get_by_label("Split document");
+    h.get_by_role_and_label(Role::Dialog, "Split document");
     h.get_by_label_contains("Creates 3 files from 4 pages"); // before each selected page
 }
 
@@ -2992,7 +3006,7 @@ fn replace_pages_dialog_swaps_page_content() {
         app
     });
     h.run_steps(3);
-    egui_kittest::kittest::Queryable::get_by_label(&h, "Replace Pages");
+    h.get_by_role_and_label(Role::Dialog, "Replace Pages");
     type_spin(&mut h, "Replacement: pages of other.pdf", "5");
     egui_kittest::kittest::Queryable::get_by_label(&h, "OK").click();
     h.run_steps(3);
@@ -3059,8 +3073,8 @@ fn replace_split_selection_keeps_the_unchecked_page() {
         doc.info.pages.iter().map(|p| (p.width.round() as i32, p.height.round() as i32)).collect::<Vec<_>>()
     };
     let mut split = open(&[0, 2]);
-    assert_eq!(split.get_by_label("Original: replace pages").value().as_deref(), Some("1"));
-    assert_eq!(split.get_by_label("to").value().as_deref(), Some("3"));
+    assert_eq!(row_number(&split, "Original: replace pages").as_deref(), Some("1"));
+    assert_eq!(row_number(&split, "to").as_deref(), Some("3"));
     egui_kittest::kittest::Queryable::get_by_label(&split, "OK").click();
     split.run_steps(3);
     assert_eq!(texts_of(split.state(), 0), ["Replacement 1", "Original 2", "Replacement 2"]);
@@ -4741,9 +4755,9 @@ fn default_page_context_menu_when_not_in_edit_mode() {
 
     for item in ["Add bookmark", "Take a snapshot", "Edit this PDF", "Delete page", "Export this PDF", "Find text or tools", "Document properties…"]
     {
-        h.get_by_label_contains(item);
+        assert!(menu_row(&h, item), "the page menu offers {item}");
     }
-    h.get_by_label("Rotate view clockwise");
+    assert!(menu_row(&h, "Rotate view clockwise"));
     assert!(h.query_all_by_label("Add comment").next().is_some());
     assert!(h.query_all_by_label("Add text").next().is_some());
     assert!(h.query_all_by_label("Add image").next().is_some());
@@ -8134,7 +8148,7 @@ fn a_right_click_on_a_crop_grip_past_the_page_edge_keeps_crop_mode() {
     crop_secondary_click(&mut h, r.right_bottom() + egui::vec2(4.0, 4.0));
     assert!(h.state().views[0].session.image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "crop mode stays");
     for label in ["Flip horizontal", "Rotate view clockwise"] {
-        assert!(h.query_all_by_label(label).next().is_none(), "no menu: {label}");
+        assert!(!menu_row(&h, label), "no menu: {label}");
     }
 }
 
@@ -8571,7 +8585,7 @@ fn image_copy_cut_paste_keyboard_and_context_menu() {
     h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
     h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
-    h.get_by_label_contains("Paste").click();
+    h.get_by_role_and_label(Role::MenuItem, "Paste").click();
     h.step();
     h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([60, 40], egui::Color32::from_rgb(180, 50, 50)))));
     h.run_steps(3);
@@ -8767,7 +8781,7 @@ fn paste_at_context_menu_point_centers_on_cursor() {
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
     }
     h.run_steps(2);
-    h.get_by_label_contains("Paste").click();
+    h.get_by_role_and_label(Role::MenuItem, "Paste").click();
     h.step();
     h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([60, 40], egui::Color32::from_rgb(50, 150, 250)))));
     h.run_steps(3);
@@ -8901,7 +8915,7 @@ fn test_image_context_menu_precedence() {
     // Assert that the image widget consumes the click and the canvas background menu does not trigger
     h.get_by_label("Rotate Clockwise");
     h.get_by_label("Flip horizontal");
-    assert!(h.query_all_by_label("Rotate view clockwise").next().is_none(), "canvas background menu must not trigger");
+    assert!(!menu_row(&h, "Rotate view clockwise"), "canvas background menu must not trigger");
     assert!(h.query_all_by_label("Add bookmark").next().is_none(), "canvas background menu must not trigger");
     assert!(h.query_all_by_label("Take a snapshot").next().is_none(), "canvas background menu must not trigger");
 }
@@ -8968,7 +8982,7 @@ fn test_image_context_menu_in_crop_mode_and_when_moved() {
     // In crop mode and when moved, do not open right click window when clicked on the image (#5835)
     assert!(h.query_all_by_label("Rotate Clockwise").next().is_none(), "image context menu must not trigger in crop mode");
     assert!(h.query_all_by_label("Flip horizontal").next().is_none(), "image context menu must not trigger in crop mode");
-    assert!(h.query_all_by_label("Rotate view clockwise").next().is_none(), "canvas background menu must not trigger in crop mode");
+    assert!(!menu_row(&h, "Rotate view clockwise"), "canvas background menu must not trigger in crop mode");
     assert!(h.query_all_by_label("Add bookmark").next().is_none(), "canvas background menu must not trigger in crop mode");
     assert!(h.query_all_by_label("Take a snapshot").next().is_none(), "canvas background menu must not trigger in crop mode");
     assert!(
@@ -8988,7 +9002,7 @@ fn test_image_context_menu_in_crop_mode_and_when_moved() {
     h.run_steps(2);
 
     assert!(h.state().views[0].session.image_selection.is_none(), "clicking outside clears image selection");
-    assert!(h.query_all_by_label("Rotate view clockwise").next().is_some(), "canvas background menu triggers outside image");
+    assert!(menu_row(&h, "Rotate view clockwise"), "canvas background menu triggers outside image");
 }
 
 fn crop_secondary_click(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
@@ -9001,12 +9015,18 @@ fn crop_secondary_click(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
     h.run_steps(2);
 }
 
+/// Whether an open menu has a row whose label contains `label`: the page display bar's buttons and the
+/// toolbar share some of the menus' labels, so a menu is told by its rows' role.
+fn menu_row(h: &Harness<'static, PdfCraftApp>, label: &str) -> bool {
+    h.query_all_by(|n| n.role() == Role::MenuItem && n.label().is_some_and(|l| l.contains(label))).next().is_some()
+}
+
 fn assert_crop_context_preserved(h: &Harness<'static, PdfCraftApp>) {
     let selection = h.state().views[0].session.image_selection.as_ref().expect("crop remains selected");
     assert_eq!(selection.index, 0, "an overlapping image must not steal the crop");
     assert!(selection.crop.is_some(), "crop mode remains active");
     for label in ["Flip horizontal", "Rotate view clockwise", "Take a snapshot"] {
-        assert!(h.query_all_by_label(label).next().is_none(), "unexpected menu: {label}");
+        assert!(!menu_row(h, label), "unexpected menu: {label}");
     }
     assert!(h.query_by_label("Done").is_some());
     assert!(h.query_by_label("Cancel").is_some());
@@ -9049,7 +9069,7 @@ fn test_image_context_menu_crop_overlapping_image_and_handle() {
         assert_crop_context_preserved(&h);
         crop_secondary_click(&mut h, image_rect.left_center() - egui::vec2(20.0, 0.0));
         assert!(h.state().views[0].session.image_selection.is_none());
-        assert!(h.query_by_label("Rotate view clockwise").is_some());
+        assert!(menu_row(&h, "Rotate view clockwise"));
     }
 }
 
@@ -9145,7 +9165,7 @@ fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selectio
     // Right-clicking at the corner must clear the crop selection and show the canvas context menu (#5900 review)
     crop_secondary_click(&mut h, corner);
     assert!(h.state().views[0].session.image_selection.is_none(), "clicking in outer bounding box of rotated image clears crop selection");
-    assert!(h.query_by_label("Rotate view clockwise").is_some());
+    assert!(menu_row(&h, "Rotate view clockwise"));
 }
 
 /// A turned picture is its shape, not its bounds: a click in a corner of its bounds, off the

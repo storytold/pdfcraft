@@ -1,7 +1,7 @@
 use craft::behavior::{DisplayOrder, IconId, ItemSource, Selection};
 use craft::ui::buttons::Button;
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _};
+use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Entry, Props as _, SelectMode, Show as _, ShowCollection as _, Sizing};
 use craft::ui::list::{HueTarget, List, ListRow, RowEvent, RowInk, TrailingFace, TrailingPart};
 use craft::ui::primitives::IconSpec;
 use craft::ui::style::DataColor;
@@ -44,10 +44,12 @@ pub(super) fn data_hue(g: &ToolGroup) -> DataColor {
     DataColor::new(Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]))
 }
 
-/// One line of text in the body: a section heading, or a quiet note.
+/// One line of text in the body: a section heading, or a quiet note. It takes its line's height, so the controls
+/// and the list after it keep the panel's room.
 pub(super) fn caption_row(ui: &mut egui::Ui, text: &str, heading: bool) {
     let label = text.to_owned();
-    List::<usize>::new(label.clone()).selection(Bind::given(Selection::default())).show_items(ui, &Rows(1), &mut |_, _| {
+    let list = List::<usize>::new(label.clone()).sizing(Sizing::Content).natural_height(true);
+    list.selection(Bind::given(Selection::default())).show_items(ui, &Rows(1), &mut |_, _| {
         let row = ListRow::new(label.clone());
         if heading { row.heading().ink(RowInk::Dimmed) } else { row.ink(RowInk::Muted) }
     });

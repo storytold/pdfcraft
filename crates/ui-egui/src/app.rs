@@ -518,6 +518,10 @@ impl PdfCraftApp {
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
         !self.dialogs.is_empty()
+            || self.password_prompt.is_some()
+            || self.unlock_prompt.is_some()
+            || self.pending_link.is_some()
+            || self.pending_remote_link.is_some()
             || self.preferences.is_some()
             || self.shortcuts.is_some()
             || self.redact_props.is_some()
