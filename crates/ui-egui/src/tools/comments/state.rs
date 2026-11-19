@@ -410,11 +410,12 @@ impl CommentView {
     }
 
     /// A comment was just added. The editor open on another one must not keep the keyboard, or
-    /// the tool keys pressed next are typed into it (#2669): an empty editor closes, and so does
-    /// one holding only what its comment already says (`saved`, such as the text a highlight
-    /// copied, #2605); one holding typed text stays open with it, without the keyboard.
+    /// the tool keys pressed next are typed into it (#2669): an editor holding only what its
+    /// comment already says closes (`saved`: an empty one on an empty comment, or the text a
+    /// highlight copied, #2605); one with an unsaved change, even a cleared note, stays open
+    /// with it, without the keyboard.
     pub(crate) fn comment_added(&mut self, saved: bool) {
-        if !saved && self.editing.as_ref().is_some_and(|(_, _, text)| !text.is_empty()) {
+        if !saved && self.editing.is_some() {
             self.editor_focus = Some(EditorFocus::Release);
         } else {
             self.editing = None;

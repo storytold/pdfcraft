@@ -108,6 +108,19 @@ fn comments(h: &Harness<'static, PdfCraftApp>) -> Vec<Annotation> {
     s.session.get(s.views[0].id).unwrap().info.annotations.clone()
 }
 
+/// Run frames until the document has `n` comments, giving the page's text pass time under load,
+/// then two more for the note to open.
+fn wait_for_comments(h: &mut Harness<'static, PdfCraftApp>, n: usize) {
+    for _ in 0..400 {
+        h.run_steps(1);
+        if comments(h).len() >= n {
+            h.run_steps(2);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// #3418: choosing a sidebar comment must reveal the annotation, not just its page's top.
 #[test]
 fn sidebar_comment_centres_the_annotation_at_high_zoom() {
@@ -3183,11 +3196,33 @@ fn copied_text_left_in_a_note_does_not_block_the_next_highlights_note() {
     h.state_mut().views[0].select_text(0, 10, 15);
     assert!(h.state_mut().execute("comment.highlight"));
     // With the tool already picked, the marks wait for the page's next pass.
-    h.run_steps(6);
+    wait_for_comments(&mut h, 2);
     let c = comments(&h);
     assert_eq!(c.len(), 2);
     assert_eq!(c[1].contents.as_deref(), Some("brown"));
     assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "brown".to_string())), "the new highlight's note opens");
+}
+
+#[test]
+fn a_cleared_note_stays_open_when_the_next_highlight_is_added() {
+    // Clearing a note is an unsaved change like typing: the next highlight must not drop it (#2605).
+    let mut h = harness(|app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "quick".to_string())));
+    h.state_mut().views[0].comments.editing = Some((0, 0, String::new()));
+
+    h.state_mut().views[0].select_text(0, 10, 15);
+    assert!(h.state_mut().execute("comment.highlight"));
+    // With the tool already picked, the marks wait for the page's next pass.
+    wait_for_comments(&mut h, 2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[0].contents.as_deref(), Some("quick"), "the cleared note is not saved yet");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())), "the cleared note stays open");
 }
 
 #[test]
