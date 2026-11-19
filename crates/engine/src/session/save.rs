@@ -15,6 +15,11 @@ impl Session {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
+        if let Some(purview) = doc.purview.as_ref()
+            && !editor.cos.is_modified()
+        {
+            return Ok(purview.original.clone());
+        }
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
             return Ok(editor.saved.clone());
         }
@@ -25,8 +30,10 @@ impl Session {
         // a reconstructed file) still writes the current graph on its own.
         let rewrite = editor.cos.full_save_required() || editor.cos.encryption_changed() || editor.cos.revisions().is_empty();
         let cos = writable(&editor.cos)?;
-        guard(|| {
-            if on_saved || rewrite {
+        let working = guard(|| {
+            if doc.purview.is_some() {
+                write_incremental(&cos, &opts)
+            } else if on_saved || rewrite {
                 write_incremental(&cos, &opts)
             } else {
                 let mut base = pdfcraft_cos::Document::open_with_password(editor.saved.clone(), editor.saved_keys.reopen.as_deref())?;
@@ -36,7 +43,12 @@ impl Session {
         })
         .map_err(EditError::Write)?
         .map(Arc::new)
-        .map_err(|e| EditError::Write(e.to_string()))
+        .map_err(|e| EditError::Write(e.to_string()))?;
+        if let Some(purview) = doc.purview.as_ref() {
+            purview.provider.republish(purview.handle, &purview.original, &working).map_err(|error| EditError::Protection(error.to_string()))
+        } else {
+            Ok(working)
+        }
     }
 
     /// A compact, garbage-collected rewrite (Save As ▸ "Optimized" / Reduce File Size groundwork).
@@ -48,7 +60,12 @@ impl Session {
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
         let cos = writable(&editor.cos)?;
-        guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
+        let working = guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))?;
+        if let Some(purview) = doc.purview.as_ref() {
+            purview.provider.republish(purview.handle, &purview.original, &working).map_err(|error| EditError::Protection(error.to_string()))
+        } else {
+            Ok(working)
+        }
     }
 
     /// Check that `bytes`, from [`Self::save_bytes`] or [`Self::save_full_bytes`], reopen as this
@@ -57,6 +74,9 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
+        if doc.purview.is_some() {
+            return Ok(());
+        }
         pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
         pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))
     }
@@ -67,29 +87,38 @@ impl Session {
         let doc = self.doc_mut(id)?;
         let mut renumbered = false;
         if let Some(editor) = doc.editor.as_mut() {
-            // An encrypted file needs the password it is protected with now (the owner
-            // password when known, so saving never downgrades this session's rights).
-            let keys = editor.keys.clone();
-            // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
-            let typed = pdfcraft_forms::password_values(&editor.cos);
-            // An incremental save keeps the old byte prefix and its object identities. A
-            // rewrite can reuse the same numbers for unrelated fields and icons.
-            let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
-            let reopened =
-                pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
-            if !preserves_objects {
-                renumbered = true;
-                crate::js::replace_runtime(&mut doc.js_runtime);
+            if let Some(purview) = doc.purview.as_ref() {
+                editor.saved = bytes.clone();
+                editor.saved_keys = editor.keys.clone();
+                editor.unsaved_file = false;
+                doc.bytes = editor.cos.bytes().clone();
+                renumbered = false;
+                let _ = purview;
+            } else {
+                // An encrypted file needs the password it is protected with now (the owner
+                // password when known, so saving never downgrades this session's rights).
+                let keys = editor.keys.clone();
+                // The saved file carries no Password-field values (#3943, #3944); the open document keeps them.
+                let typed = pdfcraft_forms::password_values(&editor.cos);
+                // An incremental save keeps the old byte prefix and its object identities. A
+                // rewrite can reuse the same numbers for unrelated fields and icons.
+                let preserves_objects = bytes.starts_with(editor.saved.as_slice()) || bytes.starts_with(editor.cos.bytes().as_slice());
+                let reopened = pdfcraft_cos::Document::open_with_password(bytes.clone(), keys.reopen.as_deref())
+                    .map_err(|e| EditError::Reopen(e.to_string()))?;
+                if !preserves_objects {
+                    renumbered = true;
+                    crate::js::replace_runtime(&mut doc.js_runtime);
+                }
+                editor.cos = reopened;
+                pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
+                if !typed.is_empty() && doc.info.xfa.is_some() {
+                    let mut datasets = None;
+                    let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
+                }
+                editor.saved = bytes;
+                editor.saved_keys = keys;
+                editor.unsaved_file = false;
             }
-            editor.cos = reopened;
-            pdfcraft_forms::restore_password_values(&mut editor.cos, &typed).map_err(|e| EditError::Reopen(e.to_string()))?;
-            if !typed.is_empty() && doc.info.xfa.is_some() {
-                let mut datasets = None;
-                let _ = xfa_sync_datasets(&mut editor.cos, doc.xfa_template.as_deref(), &mut datasets);
-            }
-            editor.saved = bytes;
-            editor.saved_keys = keys;
-            editor.unsaved_file = false;
         }
         if let Some(p) = path {
             doc.name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());

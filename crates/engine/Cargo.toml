@@ -8,6 +8,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+mip-sdk = ["pdfcraft-purview/mip-sdk"]
+
 [dependencies]
 craft-docpath = { workspace = true }
 craft-image-codecs = { workspace = true }
@@ -37,6 +40,7 @@ pdfcraft-fonts = { workspace = true }
 pdfcraft-create = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-geom = { workspace = true }
+pdfcraft-purview = { workspace = true }
 thiserror = { workspace = true }
 # Already in the graph (url and idna through webbrowser, icu_properties through boa): they show
 # the host of a document's link the way the browser reads it (links::display_host).

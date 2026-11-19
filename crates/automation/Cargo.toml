@@ -14,6 +14,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }
 pdfcraft-platform = { workspace = true }
+pdfcraft-purview = { workspace = true }
 craft-prc = { workspace = true }
 pdfcraft-prc-render = { workspace = true }
 serde_json = { workspace = true }
@@ -26,6 +27,7 @@ base64 = { version = "0.23", optional = true }
 default = ["mcp"]
 # The MCP server module. Opt-in at run time either way; disable to leave it out of the build.
 mcp = ["dep:base64"]
+mip-sdk = ["pdfcraft-purview/mip-sdk", "pdfcraft-engine/mip-sdk"]
 
 [dev-dependencies]
 # Synthetic printer profiles for the app-managed print colour tests.

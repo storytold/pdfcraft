@@ -101,6 +101,8 @@ pub(crate) type GridFile = (String, Result<Vec<u8>, std::path::PathBuf>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
+    /// Microsoft Purview label selection and policy application.
+    Purview,
     WordCount,
     CreateImages,
     Properties(PropsTab),

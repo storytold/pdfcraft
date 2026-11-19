@@ -1,0 +1,22 @@
+[package]
+name = "pdfcraft-purview"
+description = "Microsoft Purview Information Protection integration for PdfCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+mip-sdk = []
+
+[dependencies]
+dirs = { workspace = true }
+oauth2 = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+thiserror = { workspace = true }
+webbrowser = { workspace = true }
+url = "2"
+uuid = { version = "1", features = ["std"] }

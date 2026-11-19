@@ -714,6 +714,7 @@ fn tool_table_is_well_formed() {
         for r in t.input_schema["required"].as_array().unwrap() {
             assert!(props.contains_key(r.as_str().unwrap()), "{}: required {r} is not a property", t.name);
         }
+
         assert!(!(t.read_only && t.destructive), "{} is both read-only and destructive", t.name);
         for k in ["oneOf", "anyOf", "allOf"] {
             assert!(t.input_schema.get(k).is_none(), "{}: top-level {k} in input_schema is rejected by MCP clients such as Claude", t.name);
@@ -721,6 +722,25 @@ fn tool_table_is_well_formed() {
         if let Some(c) = t.command {
             assert!(pdfcraft_engine::commands::command(c).is_some(), "{} names unregistered command {c}", t.name);
         }
+    }
+}
+
+#[test]
+fn purview_status_and_tools_are_exposed() {
+    let mut a = Automation::new();
+    let status = a.call("purview_status", &json!({})).unwrap();
+    assert!(matches!(&status[..], [Content::Json(value)] if value.get("status").is_some()), "purview_status has no status result");
+    let names: Vec<&str> = tools().into_iter().map(|tool| tool.name).collect();
+    for name in [
+        "purview_status",
+        "purview_sign_in",
+        "purview_sign_out",
+        "purview_labels",
+        "purview_apply_label",
+        "purview_remove_label",
+        "purview_remove_protection",
+    ] {
+        assert!(names.contains(&name), "missing Purview tool {name}");
     }
 }
 

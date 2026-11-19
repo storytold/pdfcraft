@@ -229,6 +229,48 @@ impl PdfCraftApp {
                     self.notify_tr("Security will be removed when you save");
                 }
             }
+            "purview.sign_in" => match self.session.purview_sign_in(None) {
+                Ok(()) => self.notify_tr("Signed in to Microsoft Purview"),
+                Err(error) => self.notify_fmt("Microsoft Purview sign-in failed: {e}", &[("e", &error.to_string())]),
+            },
+            "purview.status" => {
+                let status = format!("{:?}", self.session.purview_status());
+                if let Some((_, id)) = self.active_ids()
+                    && let Some(document) = self.session.get(id)
+                {
+                    if let Some(purview) = document.purview() {
+                        let label = purview.label.as_ref().map(|label| format!("; label: {}", label.name)).unwrap_or_default();
+                        self.notify_fmt("Microsoft Purview: {status}{label}", &[("status", &status), ("label", &label)]);
+                    } else {
+                        self.notify_fmt("Microsoft Purview: {status}; no label or protection detected", &[("status", &status)]);
+                    }
+                } else {
+                    self.notify_fmt("Microsoft Purview: {status}", &[("status", &status)]);
+                }
+            }
+            "purview.apply_label" => match self.session.purview_labels() {
+                Ok(labels) => {
+                    self.purview_labels = labels;
+                    self.purview_label_id = self.purview_labels.first().map(|label| label.id.clone()).unwrap_or_default();
+                    self.purview_justification.clear();
+                    self.dialog = Some(Dialog::Purview);
+                }
+                Err(error) => self.notify_fmt("Couldn't load Microsoft Purview labels: {e}", &[("e", &error.to_string())]),
+            },
+            "purview.remove_label" => match self.active_ids().map(|(_, id)| id) {
+                Some(id) => match self.session.purview_remove_label(id) {
+                    Ok(()) => self.notify_tr("Microsoft Purview label removed"),
+                    Err(error) => self.notify_fmt("Couldn't remove the Microsoft Purview label: {e}", &[("e", &error.to_string())]),
+                },
+                None => self.notify_tr("Open a PDF first"),
+            },
+            "purview.remove_protection" => match self.active_ids().map(|(_, id)| id) {
+                Some(id) => match self.session.purview_remove_protection(id) {
+                    Ok(()) => self.notify_tr("Microsoft Purview protection removed"),
+                    Err(error) => self.notify_fmt("Couldn't remove Microsoft Purview protection: {e}", &[("e", &error.to_string())]),
+                },
+                None => self.notify_tr("Open a PDF first"),
+            },
             link if pdfcraft_engine::links::for_command(link).is_some() => {
                 if let Some(l) = pdfcraft_engine::links::for_command(link) {
                     self.open_url(l.url);

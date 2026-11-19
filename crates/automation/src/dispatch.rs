@@ -53,6 +53,13 @@ impl Automation {
         tools::check_args(def, args)?;
         let a = Args(args);
         let out = match name {
+            "purview_status" => self.purview_status()?,
+            "purview_sign_in" => self.purview_sign_in(&a)?,
+            "purview_sign_out" => self.purview_sign_out()?,
+            "purview_labels" => json!({"labels": self.purview_labels()?}),
+            "purview_apply_label" => self.purview_apply_label(&a)?,
+            "purview_remove_label" => self.purview_remove_label(&a)?,
+            "purview_remove_protection" => self.purview_remove_protection(&a)?,
             "doc_bates_multi" => self.doc_bates_multi(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,

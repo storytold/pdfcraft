@@ -6,6 +6,7 @@ use super::state::{
 #[cfg(not(target_arch = "wasm32"))]
 use super::state::{OpenOutcome, OpenRequest, PendingRemoteLink};
 use super::*;
+use std::sync::Arc;
 
 mod clipboard;
 mod commands;
@@ -66,9 +67,11 @@ impl PdfCraftApp {
 
     /// Construct default session, panels, theme and control state with no active property-edit session.
     pub fn new() -> Self {
+        let mut session = Session::new();
+        session.set_purview_provider(Arc::new(pdfcraft_purview::NativePurviewProvider::new(None)));
         Self {
             panes: Default::default(),
-            session: Session::new(),
+            session,
             status_captions_lang: None,
             views: Vec::new(),
             closed_tabs: Vec::new(),
@@ -331,6 +334,9 @@ impl PdfCraftApp {
             pending_window: None,
             pending_remote_link: None,
             protect_draft: Default::default(),
+            purview_labels: Vec::new(),
+            purview_label_id: String::new(),
+            purview_justification: String::new(),
             text_style_draft: Default::default(),
             boxes_draft: Default::default(),
             marks_draft: Default::default(),

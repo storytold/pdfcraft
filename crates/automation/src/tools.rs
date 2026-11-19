@@ -135,6 +135,31 @@ pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
+        t("purview_status", "Microsoft Purview status", "Report Microsoft Purview/MIP SDK readiness and authentication status.")
+            .ro()
+            .with(schema(json!({}), &[])),
+        t("purview_sign_in", "Sign in to Microsoft Purview", "Sign in to Microsoft 365 for Microsoft Purview Information Protection operations.")
+            .with(schema(json!({
+                "username": {"type":"string","minLength":1,"description":"Optional Microsoft 365 username or login hint."}
+            }), &[])),
+        t("purview_sign_out", "Sign out of Microsoft Purview", "Clear the in-process Microsoft Purview/MIP authentication state.")
+            .with(schema(json!({}), &[])),
+        t("purview_labels", "List Microsoft Purview labels", "List the sensitivity labels available to the signed-in Microsoft 365 user.")
+            .ro()
+            .with(schema(json!({}), &[])),
+        t("purview_apply_label", "Apply a Microsoft Purview label", "Apply an available Microsoft Purview sensitivity label to an open PDF.")
+            .destructive()
+            .with(schema(json!({
+                "doc": doc(),
+                "label_id": {"type":"string","minLength":1,"description":"Sensitivity label ID from purview_labels."},
+                "justification": {"type":"string","maxLength":4096,"description":"Required downgrade/override justification when the tenant policy requires it."}
+            }), &["doc","label_id"])),
+        t("purview_remove_label", "Remove a Microsoft Purview label", "Remove the sensitivity label from an open PDF when the user's rights allow it.")
+            .destructive()
+            .with(schema(json!({"doc":doc()}), &["doc"])),
+        t("purview_remove_protection", "Remove Microsoft Purview protection", "Remove MIP/IRM protection from an open PDF when the user has Export or Owner rights.")
+            .destructive()
+            .with(schema(json!({"doc":doc()}), &["doc"])),
         t("doc_bates_multi", "Add Bates numbering across files", "Apply one consecutive Bates sequence to an ordered list of PDFs. Each file entry has input and output paths and an optional open or permissions password. The operation first validates every input/output and computes inclusive numeric intervals; dry_run returns that allocation without writing. Existing output files are never replaced. On application, files that cannot be edited or saved are reported individually and later files continue.")
             .destructive()
             .with(schema(json!({

@@ -20,6 +20,7 @@ pub(super) mod preferences;
 pub(super) mod printer_marks_ui;
 mod prompts;
 pub(super) mod protect;
+pub(super) mod purview;
 pub(super) mod standards_ui;
 pub(super) mod word_count_ui;
 
@@ -483,6 +484,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             let (go, cancel) = crate::protect::body(ui, app, &t);
             req.apply = go;
             req.protect_now = req.apply;
+            req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::Purview => {
+            let (go, cancel) = purview::body(ui, app, &t);
+            req.apply = go;
             req.close = req.apply || cancel;
             return false;
         }

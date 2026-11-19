@@ -809,6 +809,10 @@ pub struct PdfCraftApp {
     pub hairlines_draft: hairlines_ui::HairlinesDraft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
+    /// Microsoft Purview label selection and downgrade justification.
+    pub purview_labels: Vec<pdfcraft_purview::PurviewLabel>,
+    pub purview_label_id: String,
+    pub purview_justification: String,
     /// New bookmarks from text styles dialog state (#1693).
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
