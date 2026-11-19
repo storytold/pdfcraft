@@ -2140,8 +2140,7 @@ mod allocation_tests {
             Op::new("Tr", vec![Object::Real(3.0)]),
             Op::new("Do", vec![Object::name("InvisibleForm")]),
         ];
-        let (has_other_paint, has_paint_before, has_paint_after) =
-            arrange_paint_flags(&ops, 0, &(0..ops.len()));
+        let (has_other_paint, has_paint_before, has_paint_after) = arrange_paint_flags(&ops, 0, &(0..ops.len()));
         assert!(!has_other_paint);
         assert!(!has_paint_before);
         assert!(!has_paint_after);
