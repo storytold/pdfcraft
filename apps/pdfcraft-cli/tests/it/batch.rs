@@ -106,3 +106,31 @@ fn cli_batch_writes_the_log_file_only_when_asked_review_regression_1() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn cli_batch_writes_the_log_file_only_when_asked_review_regression_2() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-cli-batch-log-regression2-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("input")).unwrap();
+    std::fs::write(dir.join("input/good.txt"), "Hello world").unwrap();
+    std::fs::create_dir_all(dir.join("out")).unwrap();
+
+    let base = ["batch", "input", "--steps", "convert", "--out-dir", "out", "--dry-run"];
+
+    let planned_log = dir.join("out").join("good.pdf");
+    let output = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&planned_log).output().unwrap();
+    assert!(!output.status.success(), "a log destination matching a planned dry-run output should be rejected: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(!planned_log.exists(), "a rejected log destination must not be created: {}", planned_log.display());
+
+    let aliased_log = dir.join("out").join("..").join("out").join("good.pdf");
+    let output = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&aliased_log).output().unwrap();
+    assert!(!output.status.success(), "an aliased log destination matching a planned dry-run output should be rejected: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(!planned_log.exists(), "an aliased rejected log destination must not be created: {}", planned_log.display());
+
+    let unrelated_log = dir.join("dryrun.log");
+    let output = Command::new(BIN).current_dir(&dir).args(base).arg("--log").arg(&unrelated_log).output().unwrap();
+    assert!(output.status.success(), "an unrelated log destination should remain valid: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(unrelated_log.exists(), "an unrelated log should be written");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
