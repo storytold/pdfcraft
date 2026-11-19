@@ -103,7 +103,10 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
                 let runs = &owned_runs[run_idx];
                 run_idx += 1;
                 blocks.push(HtmlBlock::Para {
-                    runs: runs.iter().map(|r| HtmlRun { text: &r.text, bold: r.block.bold, italic: r.block.italic, color: rgb8(r.block.color) }).collect(),
+                    runs: runs
+                        .iter()
+                        .map(|r| HtmlRun { text: &r.text, bold: r.block.bold, italic: r.block.italic, color: rgb8(r.block.color) })
+                        .collect(),
                     level: *lvl,
                 });
             }
@@ -114,7 +117,11 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&s
                     rows: t
                         .rows
                         .iter()
-                        .map(|row| row.iter().map(|c| HtmlCell { text: &c.text, bold: c.bold, italic: c.italic, color: rgb8(c.color), span: c.span }).collect())
+                        .map(|row| {
+                            row.iter()
+                                .map(|c| HtmlCell { text: &c.text, bold: c.bold, italic: c.italic, color: rgb8(c.color), span: c.span })
+                                .collect()
+                        })
                         .collect(),
                 }));
             }

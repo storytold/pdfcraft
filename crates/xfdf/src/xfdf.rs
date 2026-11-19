@@ -785,12 +785,7 @@ fn annot_from_xml(node: &craft_xml::El, ns: &[(String, String)], subtype: &str, 
     if let Some(v) = node.attr("icon") {
         d.set(b"Name".to_vec(), Object::name(v));
     }
-    let flags: i64 = node
-        .attr("flags")
-        .unwrap_or("print")
-        .split(',')
-        .filter_map(|f| FLAGS.iter().find(|(_, s)| s.eq_ignore_ascii_case(f.trim())).map(|x| x.0))
-        .fold(0, |bits, flag| bits | flag);
+    let flags = parse_flags(node.attr("flags"));
     d.set(b"F".to_vec(), Object::Int(flags));
     if let Some(c) = node.attr("color").and_then(parse_hex) {
         d.set(b"C".to_vec(), arr(&c));
@@ -898,33 +893,6 @@ fn read_rich_text(rich: &craft_xml::El, ns: &[(String, String)], has_contents: b
     if !has_contents {
         d.set(b"Contents".to_vec(), PdfString::text(&rich_plain(rich)));
     }
-}
-
-/// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML
-/// document of its own: the namespaces it inherits from the XFDF around it are declared on it,
-/// the default one (XHTML declared on `<contents-richtext>`, say; not XFDF's own, which a
-/// standalone document has no use for) and the prefixes it uses. Unchanged when nothing is
-/// inherited, or when the declarations would not make it parse.
-fn standalone(el: &craft_xml::El, ns: &[(String, String)]) -> String {
-    let mut clone = (*el).clone();
-    let markup = clone.to_xml();
-    if let Some((_, uri)) = ns.iter().rfind(|(p, _)| p.is_empty())
-        && !uri.is_empty()
-        && uri != XFDF_NS
-        && !clone.has_attr("xmlns")
-    {
-        clone.set_attr("xmlns", uri);
-    }
-    for (prefix, uri) in ns {
-        if prefix.is_empty() || prefix == "xml" {
-            continue;
-        }
-        let attr_name = format!("xmlns:{prefix}");
-        if markup.contains(&format!("{prefix}:")) && !clone.has_attr(&attr_name) {
-            clone.set_attr(&attr_name, uri);
-        }
-    }
-    clone.to_xml()
 }
 
 /// XFDF's own namespace (ISO 19444-1).
