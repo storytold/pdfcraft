@@ -14,7 +14,7 @@ use craft::pages::ui::ColumnBar;
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
 use craft::ui::contract::{
-    Access, Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Scroll, Show as _, ShowContainer as _, clicked,
+    Access, Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Scroll, Show as _, ShowContainer as _, SideLabel, clicked,
 };
 use craft::ui::dialog::{DialogHost, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft::ui::display::Text;
@@ -345,7 +345,8 @@ fn names(ui: &mut Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[FormFiel
             let width = layout.cells.as_ref().ok().and_then(|cells| cells.get(c)).map(|cell| cell.rect[2] - cell.rect[0]);
             let share = if total > 0.0 && total.is_finite() { column.width / total } else { 0.0 };
             let size = width.map_or_else(|| "—".to_owned(), |w| format!("{w:.1} pt · {:.0}%", share * 100.0));
-            Field::new(format!("{} ({size})", column_label(c))).id_salt(("field table column", c)).show(ui, |ui, _| {
+            // The column names the box; its width is the label's detail.
+            Field::new(column_label(c)).side(SideLabel::new().detail(size)).id_salt(("field table column", c)).show(ui, |ui, _| {
                 TextField::new(column_label(c), Bind::bound(&mut column.pattern)).show(ui);
             });
         }

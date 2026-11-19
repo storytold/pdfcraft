@@ -1252,6 +1252,9 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             .highlight_fields(session.highlight_fields)
             .show_at(ui, body.rect);
     }
+    if cx.preparing {
+        crate::prepare::tool::show_overlays(ui, body.rect, session, cx.form, cx.info, body.pages, cx.rotation);
+    }
     if cx.editing_content {
         let geo = cx.geometry(body);
         let added_hovered = match parts_out.hovered {

@@ -279,8 +279,8 @@ impl PdfCraftApp {
         }
 
         let count = Arc::new(JobCount::default());
-        let job_count = count.clone();
-        let host = self.host.clone(); // PLAN: assumed `PdfCraftApp::host: Arc<Host>` (pdf-hub-w1)
+        let (job_count, wake) = (count.clone(), self.wake.clone());
+        let host = self.host.clone();
 
         // The summary is written on a worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
@@ -292,8 +292,8 @@ impl PdfCraftApp {
 
             let (mut ok, mut failed) = (0, Vec::new());
             for (i, (name, bytes)) in files.into_iter().enumerate() {
-                // PLAN: framework gap: `Host` has no waker for a job's progress, so the card moves on the frames the queue's own wake and input give
                 job_count.set(i, total);
+                wake.wake();
                 let r = pdfcraft_engine::actions::run_on(&action, &name, Arc::new(bytes), javascript, |_, _| {})
                     .and_then(|r| write_result(host.files(), &dir, &name, &r.bytes));
                 match r {

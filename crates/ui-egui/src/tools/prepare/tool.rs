@@ -177,6 +177,22 @@ impl<'a> PrepareTool<'a> {
         self.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
     }
 
+    /// An arrow moves the selected field a point the way it points on screen, Shift and an arrow ten points, whatever
+    /// the zoom; one press is one edit. Whether there was a field to move.
+    fn nudge(&mut self, direction: Vec2, shift: bool) -> bool {
+        let Some(key) = self.session.prepare.selected.clone() else { return false };
+        let Some((page, rect)) = widget_rect(self.xforms, self.info, self.form, &key) else { return false };
+        let Some(xf) = transform_of(self.xforms, page) else { return false };
+        // Screen points per page point: the page's width on screen over its width as turned.
+        let across = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
+        let zoom = xf.rect.width() / across.max(1.0);
+        let step = if shift { 10.0 } else { 1.0 };
+        let user = user_rect(&xf, self.info, page, rect.translate(direction * step * zoom));
+        let (name, wi) = key;
+        self.session.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, user)), ..Default::default() }) });
+        true
+    }
+
     fn finish_marquee(&mut self, marquee: MarqueeSelect<(String, usize)>) {
         let hits = self.all_widgets().into_iter().filter(|(_, r)| r.intersects(marquee.rect())).collect::<Vec<_>>();
         let mut items = marquee.selection(hits).into_iter();
@@ -260,6 +276,7 @@ impl CanvasTool for PrepareTool<'_> {
                 self.session.pending_edit = delete_selected(self.session);
                 true
             }
+            ToolKey::Nudge { direction, mods, .. } => self.nudge(vec2(direction.x as f32, direction.y as f32), mods.shift),
             ToolKey::Cancel if self.session.prepare.selected.is_some() => {
                 self.session.prepare.selected = None;
                 self.session.prepare.also.clear();
@@ -331,6 +348,27 @@ pub(crate) fn selection_box(ui: &mut Ui, session: &mut PageSession, form: &[Form
     } else if shown.discard {
         session.prepare.selected = None;
         session.prepare.also.clear();
+    }
+}
+
+/// While preparing: the fields' look on each of the placed `pages` and the selected field's resize box, over the
+/// page body at `body`.
+pub(crate) fn show_overlays(
+    ui: &mut Ui,
+    body: Rect,
+    session: &mut PageSession,
+    form: &[FormField],
+    info: &DocInfo,
+    pages: &[PlacedPage],
+    rotation: u16,
+) {
+    let xforms = transforms(pages, info, rotation);
+    let tab_order = if session.prepare.show_tab_numbers { crate::forms_ui::tab_order(form, info) } else { Vec::new() };
+    for &(page, _) in &xforms {
+        if let Some(overlay) = PrepareOverlay::new(form, &tab_order, session, info, &xforms, page) {
+            overlay.show_at(ui, body);
+        }
+        selection_box(ui, session, form, info, &xforms, page);
     }
 }
 

@@ -133,15 +133,23 @@ fn undo_label(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
     h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned)
 }
 
-/// The text of every notice card the main window shows, oldest first.
+/// What every notice card the main window shows says first, oldest first: a posted notice's text is
+/// its card's title.
 fn notices(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
-    toast::cards(&h.ctx, &WindowKey::main()).iter().map(|card| card.toast.message.as_str().to_owned()).collect()
+    toast::cards(&h.ctx, &WindowKey::main()).iter().map(|card| card.toast.title.as_ref().unwrap_or(&card.toast.message).as_str().to_owned()).collect()
 }
 
-/// The row of the calculation order page for the field `name`, whatever its position and value.
+/// The row of the calculation order page for the field `name`, whatever its position and value: the row says the
+/// field's name and value, its number is the row's lead.
 fn order_row<'h>(h: &'h Harness<'static, PdfCraftApp>, name: &str) -> egui_kittest::Node<'h> {
-    let pattern = format!(". {name}:");
-    h.get_by(move |node| node.label().is_some_and(|label| label.contains(&pattern)))
+    let pattern = format!("{name}: ");
+    h.get_by(move |node| node.label().is_some_and(|label| label.starts_with(&pattern)))
+}
+
+/// Whether a card of the calculation order page says `text`, as its heading or one of its lines: a card
+/// with lines is named by its heading and lines together.
+fn card_says(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
+    h.query_by_label_contains(text).is_some()
 }
 
 fn text_center_near(h: &Harness<'static, PdfCraftApp>, label: &str, expected: Pos2) -> Option<Pos2> {
@@ -594,7 +602,13 @@ fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
     assert_eq!(after.last().map(String::as_str), Some("1 calculation now uses the new name."));
     rename(&mut h, "city", "town");
     assert!(names(&h).contains(&"town".to_string()));
-    assert_eq!(notices(&h), after, "no formula reads the calculated field itself, so no new card");
+    // Cards shown earlier may have timed out since; none is new.
+    let now = notices(&h);
+    let count = |cards: &[String], card: &String| cards.iter().filter(|c| *c == card).count();
+    assert!(
+        now.iter().all(|card| count(&now, card) <= count(&after, card)),
+        "no formula reads the calculated field itself, so no new card: {after:?} → {now:?}"
+    );
     h.execute("edit.undo");
     h.execute("edit.undo");
     h.run_steps(2);
@@ -1155,7 +1169,7 @@ fn actions_tab_adds_and_removes_actions() {
     h.get_by_label("Select Trigger:");
     h.get_by_label("No actions");
     add_action(&mut h, "On Blur", "Open a web link", "https://example.org");
-    h.get_by_label("Open a web link: https://example.org");
+    h.get_by_label("On Blur: Open a web link: https://example.org");
     add_action(&mut h, "Mouse Up", "Run a JavaScript", "app.alert('x')");
     h.get_by_label("OK").click();
     h.run_steps(3);
@@ -1322,7 +1336,7 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
         tab(h, "Actions");
     };
     open(&mut h);
-    h.get_by_label("Run a JavaScript, then 1 more action");
+    h.get_by_label("Mouse Up: Run a JavaScript, then 1 more action");
     // The menu bar's Edit menu and the Edit tab come first; the rows' follow (Mouse Up, On Blur).
     assert_eq!(h.get_all_by_label("Edit").count(), 4);
     h.get_all_by_label("Edit").nth(2).unwrap().click();
@@ -1338,7 +1352,7 @@ fn actions_tab_shows_a_chain_and_keeps_it_when_the_first_action_is_replaced() {
     h.get_by_label("OK").click();
     h.run_steps(3);
     open(&mut h);
-    h.get_by_label("Open a web link: https://example.com, then 1 more action");
+    h.get_by_label("Mouse Up: Open a web link: https://example.com, then 1 more action");
 }
 
 /// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
@@ -1634,9 +1648,9 @@ fn the_calculation_order_is_moved_dragged_and_fixed() {
     assert_eq!(order(&h), ["total", "sub", "other"]);
     // The card says what is wrong, and each row shows its value as the field does: total
     // calculated before sub, so it still has sub's old value.
-    assert!(h.query_by_label("1 field shows an old value").is_some());
-    assert!(h.query_by_label("total calculates before sub, which it reads.").is_some());
-    for row in ["1. total: 0", "2. sub: 6", "3. other: $4.00"] {
+    assert!(card_says(&h, "1 field shows an old value"));
+    assert!(card_says(&h, "total calculates before sub, which it reads."));
+    for row in ["total: 0", "sub: 6", "other: $4.00"] {
         assert!(h.query_by_label(row).is_some(), "{row}");
     }
     // The selected field's arrows move it.
@@ -1710,7 +1724,7 @@ fn a_loop_has_its_own_card_that_opens_the_formula() {
     h.run_steps(3);
     h.get_by_label("Calculation order").click();
     h.run_steps(3);
-    assert!(h.query_by_label("a and b read each other").is_some());
+    assert!(card_says(&h, "a and b read each other"));
     assert!(h.query_by_label("Every field outside a loop calculates after the fields it reads.").is_some());
     assert!(h.query_by_label("Fix order").is_none(), "no order fixes a loop");
     h.get_by_label("Edit a's formula").click();
@@ -1923,8 +1937,8 @@ fn a_formula_reading_a_missing_field_has_its_own_card() {
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(&ctx_h, Edit::DeleteField { name: "discount".into() });
     h.run_steps(3);
-    assert!(h.query_by_label("1 formula reads a field the form doesn't have").is_some());
-    assert!(h.query_by_label("sub reads discount, which the form doesn't have.").is_some());
+    assert!(card_says(&h, "1 formula reads a field the form doesn't have"));
+    assert!(card_says(&h, "sub reads discount, which the form doesn't have."));
     assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "no all-clear while a formula is broken");
     // Reordered, the order can be undone from the missing-field card; the all-clear still stays away.
     let ctx_h = h.ctx.clone();
