@@ -272,3 +272,23 @@ fn found_destination(found: Option<(usize, pdfcraft_render::DestView)>, name: St
         None => pdfcraft_render::RemoteDestination::Named(name),
     }
 }
+
+#[cfg(test)]
+mod form_email_tests {
+    use crate::PdfCraftApp;
+
+    /// A web save after Apply redactions delivers `form_Redacted.pdf` while the document keeps
+    /// its name: the notice names the file delivered, so the unredacted original isn't the one
+    /// the user is told to attach.
+    #[test]
+    fn the_attach_notice_names_the_file_written_not_the_document() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+        let id = app.views[0].id;
+        app.form_email_opened(id, Some("form_Redacted.pdf"));
+        let said = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(said.contains("Attach form_Redacted.pdf to the new email"), "{said}");
+        assert_eq!(app.session.get(id).unwrap().name, "form.pdf", "the document keeps its name");
+    }
+}
