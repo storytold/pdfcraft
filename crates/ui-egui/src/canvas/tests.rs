@@ -3068,6 +3068,59 @@ fn a_display_time_on_the_last_spread_does_not_redraw_every_frame() {
     assert!(!again, "and asks for no frame after frame");
 }
 
+/// "Loop after last page" (*Adobe Acrobat Help*, 2019, "Full Screen preferences", p. 69): in full
+/// screen, next page on the last page or spread goes to the first. Previous page on the first
+/// stays, a document of one page or one spread stays, and outside full screen nothing loops.
+#[test]
+fn full_screen_loops_from_the_last_page_or_spread_to_the_first_only_when_asked() {
+    let step = |pages: usize, layout: PageLayout, cover: bool, from: usize, forward: bool, looping: bool, presenting: bool| {
+        let mut v = view(pages, layout, false);
+        v.cover = cover;
+        v.full_screen_loop = looping;
+        if presenting {
+            v.enter_presentation();
+        }
+        v.current = from;
+        v.step_page(forward);
+        v.current
+    };
+    assert_eq!(step(3, PageLayout::Single, false, 2, true, true, true), 0, "the last page goes on to the first");
+    assert_eq!(step(3, PageLayout::Single, false, 2, true, false, true), 2, "not without the preference");
+    assert_eq!(step(3, PageLayout::Single, false, 2, true, true, false), 2, "not outside full screen");
+    assert_eq!(step(3, PageLayout::Single, false, 1, true, true, true), 2, "other pages turn as before");
+    assert_eq!(step(3, PageLayout::Single, false, 0, false, true, true), 0, "back from the first page stays");
+    assert_eq!(step(1, PageLayout::Single, false, 0, true, true, true), 0, "one page stays");
+    assert_eq!(step(3, PageLayout::TwoUp, false, 2, true, true, true), 0, "the last spread [2] goes on to [0, 1]");
+    assert_eq!(step(4, PageLayout::TwoUp, true, 3, true, true, true), 0, "with a cover page, [3] goes on to [0]");
+    assert_eq!(step(2, PageLayout::TwoUp, false, 1, true, true, true), 1, "one spread stays");
+}
+
+/// With "Loop after last page", a display time on the last page goes on to the first, as a kiosk
+/// display runs; on a document of one page there is nowhere to go, and the presenter then asks for
+/// no frame after frame.
+#[test]
+fn a_display_time_on_the_last_page_loops_to_the_first_when_asked() {
+    let ctx = egui::Context::default();
+    for (looping, expected) in [(false, 2), (true, 0)] {
+        let (mut v, info) = presenting_view(3, vec![trans(2, None, 1.0, Some(1.0))], &ctx);
+        v.full_screen_loop = looping;
+        turn_to(&ctx, &mut v, 2);
+        presenter_frame(&ctx, &mut v, &info, 0.0);
+        presenter_frame(&ctx, &mut v, &info, 0.5);
+        assert_eq!(v.current, 2, "loop {looping}: its display time is not up");
+        presenter_frame(&ctx, &mut v, &info, 1.5);
+        assert_eq!(v.current, expected, "loop {looping}: its display time is up");
+    }
+    let (mut v, info) = presenting_view(1, vec![trans(0, None, 1.0, Some(1.0))], &ctx);
+    v.full_screen_loop = true;
+    for now in [0.0, 0.5, 0.6] {
+        presenter_frame(&ctx, &mut v, &info, now);
+    }
+    let again = presenter_frame(&ctx, &mut v, &info, 5.0);
+    assert_eq!(v.current, 0, "one page stays");
+    assert!(!again, "and asks for no frame after frame");
+}
+
 /// A page's display time (ISO 32000-2 §12.4.4.1, `/Dur`) counts from when the page is on screen:
 /// a slow render that still shows Rendering… does not use it up.
 #[test]

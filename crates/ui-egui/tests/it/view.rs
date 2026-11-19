@@ -3146,6 +3146,32 @@ fn full_screen_stays_on_esc_when_esc_does_not_leave_it() {
     assert!(!h.state().full_screen, "Ctrl+L / ⌘L leaves it");
 }
 
+/// With the "Loop after last page" preference on, full screen goes on from the last page to the
+/// first (*Adobe Acrobat Help*, 2019, "Full Screen preferences", p. 69); the preference is off by
+/// default, takes effect at once (Preferences can be opened in full screen), survives a restart
+/// and takes only on or off.
+#[test]
+fn full_screen_loops_after_the_last_page_when_the_preference_is_on() {
+    let mut h = harness(&[]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+    h.run_steps(6);
+    h.key_press(Key::End);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "on the last page");
+    h.key_press(Key::Space);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2, "off by default: the last page stays");
+    assert!(h.state_mut().set_option("full-screen-loop", "yes").is_err());
+    h.state_mut().set_option("full-screen-loop", "on").unwrap();
+    h.key_press(Key::Space);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "on: Space on the last page goes to the first");
+
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(restored.view_defaults.full_screen_loop, "survives a restart");
+}
+
 /// From a form field being filled, the first Esc closes the field and the second leaves full
 /// screen: "Esc (press twice)" (*Adobe Acrobat Help*, 2019, "Options for working in forms",
 /// p. 248).

@@ -6,8 +6,9 @@
 //! to the incoming one's once it has rendered; spreads, a rotated view and animations turned off
 //! (the Animation effects preference, which by default follows the system's request for no
 //! animations) change pages at once. A style the spec doesn't name is its default, Replace, a
-//! cut. Display times count from the end of the transition and stop at the last page; the keys
-//! and clicks still turn pages meanwhile (§12.4.4.1, NOTE 1), and leaving full screen stops them.
+//! cut. Display times count from the end of the transition and stop at the last page, unless the
+//! "Loop after last page" preference takes them back to the first; the keys and clicks still turn
+//! pages meanwhile (§12.4.4.1, NOTE 1), and leaving full screen stops them.
 //! The file's numbers are bounded: a transition plays for at most `MAX_TRANSITION` seconds, and a
 //! display time waits at most `MAX_DISPLAY`.
 
@@ -188,10 +189,11 @@ pub(super) fn frame(
         }
     }
 
-    // A page with a display time advances once it is up (not past the last page).
+    // A page with a display time advances once it is up (past the last page only with "Loop after
+    // last page", back to the first).
     if let Some((shown, since)) = view.presenter.shown
         && shown == page
-        && page + 1 < info.pages.len()
+        && (page + 1 < info.pages.len() || view.full_screen_loop)
         && let Some(seconds) = entry(info, page).and_then(|t| t.display).map(f64::from).filter(|d| d.is_finite() && *d >= 0.0)
     {
         let left = since + seconds.min(MAX_DISPLAY) - now;
