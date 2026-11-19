@@ -281,9 +281,11 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
     for (i, page) in pages.iter().enumerate() {
         let page_no = (i + 1) as u32;
         if let Ok(placed) = pdfcraft_edit::page_images(doc, i) {
-            for image in placed {
+            for mut image in placed {
+                // Scale before measuring, as the Form walker does, so rounding cannot
+                // make the same direct placement appear to have two different PPIs.
+                image.matrix = image.matrix.map(|v| v * page.user_unit(doc));
                 if let Some(ppi) = placed_ppi(&image) {
-                    let ppi = ppi / page.user_unit(doc);
                     if let Some(object) = image.object {
                         seen.entry((page_no, object)).and_modify(|known| *known = known.min(ppi)).or_insert(ppi);
                     }
@@ -292,8 +294,8 @@ fn image_reports(doc: &Document, pages: &[pdfcraft_model::Page]) -> (Vec<DrawnIm
                         continue;
                     }
                     let [a, b, c, d, ..] = image.matrix;
-                    let w = a.hypot(b) * page.user_unit(doc);
-                    let h = c.hypot(d) * page.user_unit(doc);
+                    let w = a.hypot(b);
+                    let h = c.hypot(d);
                     out.push(DrawnImage { page: page_no, name: image.name, ppi, pixels: [image.width, image.height], size_mm: [mm(w), mm(h)] });
                 }
             }
@@ -466,6 +468,17 @@ mod tests {
         assert_eq!(report.images.len(), 1);
         assert!((report.images[0].ppi - 100.0).abs() < 1e-9);
         assert!(report.images[0].size_mm.iter().all(|v| (*v - 152.4).abs() < 1e-9));
+    }
+
+    #[test]
+    fn direct_user_unit_seven_does_not_duplicate_the_placement() {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 8, 8);
+        let p = page(&mut doc, "Im", img, "q 720 0 0 720 0 0 cm /Im Do Q");
+        doc.update_dict(p, |d| d.set(b"UserUnit".to_vec(), Object::Int(7))).unwrap();
+        let report = inspect(&doc);
+        assert_eq!(report.images.len(), 1);
+        assert!((report.images[0].ppi - 8.0 / 70.0).abs() < 1e-12);
     }
 
     #[test]
