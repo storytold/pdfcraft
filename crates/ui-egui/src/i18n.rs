@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 36;
+const LANGUAGE_COUNT: usize = 37;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -221,7 +221,7 @@ impl Lang {
     /// Every registered language in the order a picker lists them: English first (the source
     /// language and the fallback), then the rest by their own name with accents folded, so
     /// Čeština sits under C rather than after Z. Names in other scripts follow the Latin ones in
-    /// code point order: Greek, Cyrillic, Arabic, then the CJK languages.
+    /// code point order: Greek, Cyrillic, Hebrew, Arabic, then the CJK languages.
     pub fn for_picker() -> Vec<Lang> {
         Self::for_picker_by(Lang::name)
     }
