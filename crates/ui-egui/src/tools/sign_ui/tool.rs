@@ -15,7 +15,8 @@ const LEAST_SIDE: f32 = 8.0;
 /// Drags a signature rectangle on one page. The rectangle of a finished drag is taken with
 /// [`SignAreaTool::finished`], in user space of its page.
 pub(crate) struct SignAreaTool<'a> {
-    drag: PageBoxDrag,
+    /// The session's drag, kept from the press to the release.
+    drag: &'a mut PageBoxDrag,
     /// Certify (DocMDP) rather than sign: names the command that takes the same numbers.
     certify: bool,
     placed: &'a [PlacedPage],
@@ -27,9 +28,9 @@ pub(crate) struct SignAreaTool<'a> {
 
 impl<'a> SignAreaTool<'a> {
     /// A tool over the placed pages that draws the area for a certification when `certify`, for a
-    /// signature otherwise.
-    pub(crate) fn new(certify: bool, placed: &'a [PlacedPage], rotation: u16, info: &'a DocInfo) -> Self {
-        Self { drag: PageBoxDrag::default(), certify, placed, rotation, info, drawn: None }
+    /// signature otherwise, with its rectangle in `drag`.
+    pub(crate) fn new(certify: bool, drag: &'a mut PageBoxDrag, placed: &'a [PlacedPage], rotation: u16, info: &'a DocInfo) -> Self {
+        Self { drag, certify, placed, rotation, info, drawn: None }
     }
 
     /// The (page, user-space rectangle) a drag finished with since the last call, once.

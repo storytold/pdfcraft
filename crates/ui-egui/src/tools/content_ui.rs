@@ -26,6 +26,7 @@ use craft::ui::layout_components::Row;
 use craft::ui::primitives::textures::{CachedTexture, Revision, TextureStore, TextureStoreOptions};
 use craft::ui::primitives::{ContentPainterCx, Draw};
 use craft::ui::runtime::env::UnitKind;
+use craft::ui::runtime::focus::FocusRequest;
 use craft::ui::sections::Section;
 use craft::ui::text::NumberField;
 use egui::{Color32, CornerRadius, Pos2, Rect};
@@ -1032,10 +1033,8 @@ fn draft_session(
     let mut selection = draft.selection.unwrap_or_else(|| TextSelection::caret_at(draft.text.chars().count()));
     let mut host = AddedTextHost { draft, ctx: ctx.clone(), view: body.view, layout, laid_out: None };
     let paper = Rect::from_min_size(at, egui::vec2(width, host.galley().rect.height() + INSET.y * 2.0));
-    let output = TextEditor::new(tl!("Added text"), &mut host, Bind::bound(&mut selection)).esc_commits(false).id(editor_id).show_at(ui, paper);
-    if fresh {
-        output.response.request_focus();
-    }
+    let editor = TextEditor::new(tl!("Added text"), &mut host, Bind::bound(&mut selection)).esc_commits(false).id(editor_id);
+    let output = if fresh { editor.request_focus(FocusRequest::Take) } else { editor }.show_at(ui, paper);
     let ended = output.ended.filter(|end| !(fresh && *end == EditorEnd::Commit));
     let galley = host.galley();
     let paper = Rect::from_min_size(at, egui::vec2(width, galley.rect.height() + INSET.y * 2.0));

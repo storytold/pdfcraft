@@ -379,6 +379,9 @@ pub struct PageSession {
     /// The caret and selection in the Fill & Sign text being typed.
     pub fill_selection: craft::text::ui::editor::TextSelection,
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
+    /// The rectangle being dragged on a page by Snapshot, Crop or a signature area: the page tools are built each
+    /// pass, so the drag lives here from its press to its release.
+    pub(crate) box_drag: PageBoxDrag,
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
     /// shows its entries when it has a menu and is the one selected, or else the page's own.
     pub(crate) menu_for: Option<(usize, Owner)>,
@@ -433,6 +436,7 @@ impl PageSession {
             fill_text: None,
             fill_selection: Default::default(),
             signature_drag: Default::default(),
+            box_drag: PageBoxDrag::default(),
             menu_for: None,
         }
     }
