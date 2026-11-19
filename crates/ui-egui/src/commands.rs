@@ -294,6 +294,18 @@ impl PdfCraftApp {
             self.paste_from_clipboard(ctx, i);
             return true;
         }
+        // Edit ▸ Delete, and its key wherever the page's tool does not claim it, deletes the fields Prepare a form
+        // has selected.
+        if id == crate::menus::DELETE {
+            let Some(i) = self.active.filter(|&i| i < self.views.len()) else { return false };
+            let allowed = self.session.get(self.views[i].id).is_some_and(|d| d.allows_modification());
+            if !self.is_preparing() || !allowed {
+                return false;
+            }
+            let session = &mut self.views[i].session;
+            session.pending_edit = crate::prepare::delete_selected(session);
+            return session.pending_edit.is_some();
+        }
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
             let why = self.disabled_reason(spec);

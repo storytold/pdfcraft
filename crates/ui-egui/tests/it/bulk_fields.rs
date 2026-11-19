@@ -188,7 +188,7 @@ fn cancelling_shared_properties_discards_only_the_draft() {
     h.run_steps(4);
     click_gate(&mut h, "Fill Color:");
     h.run_steps(4);
-    h.get_by_role_and_label(Role::Group, "Fill Color:").get_by_label("No fill").click();
+    h.get_by_role_and_label(Role::Group, "Fill Color:").get_by_label("No color").click();
     h.run_steps(4);
     assert_eq!(shared(&h)["fill"]["apply"], true);
     assert!(shared(&h)["fill"]["value"].is_null(), "no fill is the draft's value");

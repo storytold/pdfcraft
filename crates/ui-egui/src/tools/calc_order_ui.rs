@@ -580,11 +580,13 @@ fn order_row<'a>(k: usize, count: usize, f: &CalculatedField, row: &Row, editabl
     // Rows without a script keep the badge's room, so the arrows stay in line.
     r = if row.script { r.trailing_field(Badge::new(tl!("Script")), |_| {}) } else { r.trailing_space(Badge::new(tl!("Script"))) };
     if editable {
+        // Each arrow names the field it moves.
+        let named = |tip: &str| format!("{}: {}", tl!(tip), f.name);
         if k > 0 {
-            r = r.trailing_part_revealed(UP, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-up"))), tl!("Earlier in calculation order"));
+            r = r.trailing_part_revealed(UP, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-up"))), named("Earlier in calculation order"));
         }
         if k + 1 < count {
-            r = r.trailing_part_revealed(DOWN, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-down"))), tl!("Later in calculation order"));
+            r = r.trailing_part_revealed(DOWN, TrailingFace::Icon(IconSpec::svg(IconId::new("chevron-down"))), named("Later in calculation order"));
         }
     }
     r

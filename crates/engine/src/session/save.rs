@@ -212,10 +212,12 @@ impl Session {
         // The working bytes hold typed Password-field values (#3926, #3944): a recovery file
         // is written from a copy without them, and none is written if that copy fails.
         let bytes = match d.editor.as_ref().filter(|e| pdfcraft_forms::has_password_values(&e.cos) || pdfcraft_xfa::has_password_values(&e.cos)) {
-            Some(e) => match writable(&e.cos).and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))) {
-                Ok(b) => Arc::new(b),
-                Err(_) => return None,
-            },
+            Some(e) => {
+                match writable(&e.cos).and_then(|c| write_incremental(&c, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))) {
+                    Ok(b) => Arc::new(b),
+                    Err(_) => return None,
+                }
+            }
             None => d.bytes.clone(),
         };
         Some(RecoverySnapshot {
