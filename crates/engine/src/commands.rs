@@ -414,7 +414,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("purview.sign_in", "Sign in with Microsoft…", None, None, Document, "shield-check"),
     c("purview.sign_out", "Sign out of Microsoft", None, None, Document, "lock-open"),
     c("purview.status", "Microsoft Purview status", None, None, Document, "shield-check"),
-    c("purview.apply_label", "Apply Microsoft Purview label…", None, None, Document, "tag"),
+    c("purview.apply_label", "Apply sensitivity label / Microsoft Purview…", None, None, Document, "tag"),
     c("purview.remove_label", "Remove Microsoft Purview label", None, None, Document, "tag"),
     c("purview.remove_protection", "Remove Microsoft Purview protection", None, None, Document, "lock-open"),
     c("page.organize", "Organize pages", PAGES, None, Document, "layout-grid"),
