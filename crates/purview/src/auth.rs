@@ -54,26 +54,42 @@ fn normalize_authority(value: &str, username: &str) -> Result<(String, String), 
         return Ok((format!("{base}/oauth2/v2.0/authorize"), format!("{base}/oauth2/v2.0/token")));
     }
     let lower = authority.to_ascii_lowercase();
-    let tenant = if lower.ends_with("/common") || lower.ends_with("/organizations") {
-        username.rsplit_once('@').map(|(_, domain)| domain).unwrap_or("common")
+    let tenant = if lower == "common"
+        || lower == "organizations"
+        || lower.ends_with("/common")
+        || lower.ends_with("/organizations")
+    {
+        username
+            .rsplit_once('@')
+            .map(|(_, domain)| domain.to_ascii_lowercase())
+            .unwrap_or_else(|| "common".to_owned())
     } else {
-        authority.rsplit('/').next().unwrap_or("common")
+        authority.rsplit('/').next().unwrap_or("common").to_ascii_lowercase()
     };
     let base = format!("https://login.microsoftonline.com/{tenant}");
     Ok((format!("{base}/oauth2/v2.0/authorize"), format!("{base}/oauth2/v2.0/token")))
 }
 
-fn scope(resource: &str, scope: &str) -> String {
-    if !scope.trim().is_empty() && (scope.contains('.') || scope.contains('/')) {
-        return scope.trim().to_owned();
+fn scopes(resource: &str, challenge_scope: &str) -> Vec<String> {
+    let challenge_scope = challenge_scope.trim();
+    if !challenge_scope.is_empty() {
+        let parsed: Vec<String> = challenge_scope
+            .split(|ch: char| ch.is_whitespace() || ch == ',')
+            .filter(|value| !value.trim().is_empty())
+            .map(str::trim)
+            .map(ToOwned::to_owned)
+            .collect();
+        if !parsed.is_empty() {
+            return parsed;
+        }
     }
     let resource = resource.trim().trim_end_matches('/');
     if resource.is_empty() {
-        "https://api.aadrm.com/.default".into()
+        vec!["https://api.aadrm.com/.default".into()]
     } else if resource.ends_with("/.default") {
-        resource.to_owned()
+        vec![resource.to_owned()]
     } else {
-        format!("{resource}/.default")
+        vec![format!("{resource}/.default")]
     }
 }
 
@@ -132,10 +148,10 @@ pub fn acquire_token(
 ) -> Result<String, PurviewAuthError> {
     let app_id = validate_app_id(app_id_value)?;
     let (authorize_url, token_url) = normalize_authority(authority, username)?;
-    let scope = scope(resource, challenge_scope);
+    let scopes = scopes(resource, challenge_scope);
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| PurviewAuthError::Callback(e.to_string()))?;
     let port = listener.local_addr().map_err(|e| PurviewAuthError::Callback(e.to_string()))?.port();
-    let redirect = format!("http://127.0.0.1:{port}/auth/callback");
+    let redirect = format!("http://localhost:{port}/auth/callback");
 
     let client = BasicClient::new(ClientId::new(app_id))
         .set_auth_uri(AuthUrl::new(authorize_url).map_err(|e| PurviewAuthError::InvalidAuthority(e.to_string()))?)
@@ -143,7 +159,10 @@ pub fn acquire_token(
         .set_redirect_uri(RedirectUrl::new(redirect).map_err(|e| PurviewAuthError::Callback(e.to_string()))?);
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
-    let mut request = client.authorize_url(CsrfToken::new_random).add_scope(Scope::new(scope)).set_pkce_challenge(pkce_challenge);
+    let mut request = client.authorize_url(CsrfToken::new_random).set_pkce_challenge(pkce_challenge);
+    for scope in scopes {
+        request = request.add_scope(Scope::new(scope));
+    }
     if !claims.trim().is_empty() {
         request = request.add_extra_param("claims", claims);
     }
@@ -162,4 +181,55 @@ pub fn acquire_token(
     let token =
         client.exchange_code(code).set_pkce_verifier(pkce_verifier).request(&http_client).map_err(|e| PurviewAuthError::Token(e.to_string()))?;
     Ok(token.access_token().secret().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_id_must_be_a_non_nil_uuid() {
+        assert!(validate_app_id("").is_err());
+        assert!(validate_app_id("not-a-guid").is_err());
+        assert!(validate_app_id("00000000-0000-0000-0000-000000000000").is_err());
+        assert!(validate_app_id("e16b2bcd-0a3c-414a-8255-0bcc5f6a7246").is_ok());
+    }
+
+    #[test]
+    fn challenge_scopes_are_space_or_comma_separated() {
+        assert_eq!(
+            scopes("https://api.aadrm.com", "https://api.aadrm.com/user_impersonation"),
+            vec!["https://api.aadrm.com/user_impersonation"]
+        );
+        assert_eq!(
+            scopes("https://api.aadrm.com", "https://api.aadrm.com/.default https://psor.api.microsoft.com/.default"),
+            vec![
+                "https://api.aadrm.com/.default",
+                "https://psor.api.microsoft.com/.default"
+            ]
+        );
+    }
+
+    #[test]
+    fn resource_scopes_fall_back_to_default_scope() {
+        assert_eq!(scopes("", ""), vec!["https://api.aadrm.com/.default"]);
+        assert_eq!(scopes("https://api.aadrm.com", ""), vec!["https://api.aadrm.com/.default"]);
+        assert_eq!(
+            scopes("https://psor.api.microsoft.com", ""),
+            vec!["https://psor.api.microsoft.com/.default"]
+        );
+    }
+
+    #[test]
+    fn authority_uses_username_domain_for_organizations() {
+        let (authorize, token) =
+            normalize_authority("organizations", "person@example.com").expect("organizations authority should resolve");
+        assert_eq!(authorize, "https://login.microsoftonline.com/example.com/oauth2/v2.0/authorize");
+        assert_eq!(token, "https://login.microsoftonline.com/example.com/oauth2/v2.0/token");
+
+        let (authorize, token) =
+            normalize_authority("common", "person@MacCyberDoc.onmicrosoft.com").expect("common authority should resolve");
+        assert_eq!(authorize, "https://login.microsoftonline.com/maccyberdoc.onmicrosoft.com/oauth2/v2.0/authorize");
+        assert_eq!(token, "https://login.microsoftonline.com/maccyberdoc.onmicrosoft.com/oauth2/v2.0/token");
+    }
 }

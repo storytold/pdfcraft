@@ -90,14 +90,14 @@ static std::vector<std::string> split_tsv(const std::string& line) {
 
 class FixedTokenAuth final : public mip::AuthDelegate {
 public:
-    explicit FixedTokenAuth(std::string token) : token_(std::move(token)) {}
+    FixedTokenAuth(std::string rms_token, std::string sync_token)
+        : rms_token_(std::move(rms_token)), sync_token_(std::move(sync_token)) {}
 
     bool AcquireOAuth2Token(
         const mip::Identity&,
         const OAuth2Challenge&,
         OAuth2Token& token) override {
-        token.SetAccessToken(token_);
-        return !token_.empty();
+        return AcquireOAuth2TokenImpl("", token);
     }
 
     bool AcquireOAuth2Token(
@@ -105,11 +105,28 @@ public:
         const OAuth2Challenge& challenge,
         const std::shared_ptr<void>& context,
         OAuth2Token& token) override {
-        return AcquireOAuth2Token(identity, challenge, token);
+        (void)identity;
+        (void)context;
+        const std::string resource = challenge.GetResource();
+        const std::string scope = challenge.GetScope();
+        const bool sync_challenge =
+            resource.find("psor") != std::string::npos ||
+            scope.find("UnifiedPolicy") != std::string::npos ||
+            scope.find("psor") != std::string::npos;
+        const std::string& selected = sync_challenge ? sync_token_ : rms_token_;
+        token.SetAccessToken(selected);
+        return !selected.empty();
     }
 
 private:
-    std::string token_;
+    bool AcquireOAuth2TokenImpl(const std::string& unused, OAuth2Token& token) {
+        (void)unused;
+        token.SetAccessToken(rms_token_);
+        return !rms_token_.empty();
+    }
+
+    std::string rms_token_;
+    std::string sync_token_;
 };
 
 class AlwaysConsent final : public mip::ConsentDelegate {
@@ -172,7 +189,8 @@ struct NativeMip {
 static NativeMip create_native_mip(
     const std::string& app_id,
     const std::string& username,
-    const std::string& token,
+    const std::string& rms_token,
+    const std::string& sync_token,
     const std::string& cache_dir) {
     mip::ApplicationInfo app_info{app_id, "PdfCraft", "0.21.1"};
     std::filesystem::create_directories(cache_dir);
@@ -193,7 +211,7 @@ static NativeMip create_native_mip(
     mip::FileProfile::LoadAsync(profile_settings, profile_promise);
     auto profile = profile_future.get();
 
-    auto auth = std::make_shared<FixedTokenAuth>(token);
+    auto auth = std::make_shared<FixedTokenAuth>(rms_token, sync_token);
     mip::FileEngine::Settings engine_settings(
         mip::Identity(username),
         auth,
@@ -242,10 +260,13 @@ static std::string rights_line(const std::shared_ptr<mip::ProtectionHandler>& pr
     auto check = [&](const std::string& right) -> std::string {
         return protection->AccessCheck(right) ? "1" : "0";
     };
+    const bool save_right =
+        protection->AccessCheck(mip::rights::Edit()) ||
+        protection->AccessCheck(mip::rights::DocumentEdit());
     return check(mip::rights::Owner()) + "\t" +
         check(mip::rights::View()) + "\t" +
         check(mip::rights::Edit()) + "\t" +
-        check(mip::rights::Edit()) + "\t" +
+        (save_right ? "1" : "0") + "\t" +
         check(mip::rights::Comment()) + "\t" +
         check(mip::rights::Extract()) + "\t" +
         check(mip::rights::Export()) + "\t" +
@@ -283,16 +304,17 @@ static void copy_file(const std::string& input, const std::string& output) {
 }
 
 static void handle_open(const std::vector<std::string>& fields) {
-    if (fields.size() < 7) {
+    if (fields.size() < 8) {
         std::cout << "DENIED\tinvalid open request\n";
         return;
     }
     std::string app_id = unescape_tsv(fields[1]);
     std::string username = unescape_tsv(fields[2]);
-    std::string token = unescape_tsv(fields[3]);
-    std::string input = unescape_tsv(fields[4]);
-    std::string output = unescape_tsv(fields[5]);
-    std::string audit = unescape_tsv(fields[6]);
+    std::string rms_token = unescape_tsv(fields[3]);
+    std::string sync_token = unescape_tsv(fields[4]);
+    std::string input = unescape_tsv(fields[5]);
+    std::string output = unescape_tsv(fields[6]);
+    std::string audit = unescape_tsv(fields[7]);
 
     try {
         mip::ApplicationInfo app_info{app_id, "PdfCraft", "0.21.1"};
@@ -309,12 +331,12 @@ static void handle_open(const std::vector<std::string>& fields) {
             std::cout << "NONE\n";
             return;
         }
-        if (token.empty()) {
+        if (rms_token.empty() || sync_token.empty()) {
             std::cout << "SIGNIN\n";
             return;
         }
 
-        auto native = create_native_mip(app_id, username, token, std::filesystem::temp_directory_path().string());
+        auto native = create_native_mip(app_id, username, rms_token, sync_token, std::filesystem::temp_directory_path().string());
         auto handler = create_handler(native.engine, input, audit);
         auto protection = handler->GetProtection();
         bool protected_file = protection != nullptr;
@@ -364,7 +386,7 @@ static void handle_open(const std::vector<std::string>& fields) {
 }
 
 static void handle_labels(const std::vector<std::string>& fields) {
-    if (fields.size() < 4) {
+    if (fields.size() < 5) {
         std::cout << "END\n";
         return;
     }
@@ -373,6 +395,7 @@ static void handle_labels(const std::vector<std::string>& fields) {
             unescape_tsv(fields[1]),
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
+            unescape_tsv(fields[4]),
             std::filesystem::temp_directory_path().string());
         auto labels = native.engine->ListSensitivityLabels();
         for (const auto& label : labels) {
@@ -419,7 +442,7 @@ static std::string open_and_print_result(
 }
 
 static void handle_apply_label(const std::vector<std::string>& fields) {
-    if (fields.size() < 8) {
+    if (fields.size() < 9) {
         std::cout << "DENIED\tinvalid apply-label request\n";
         return;
     }
@@ -428,11 +451,12 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
             unescape_tsv(fields[1]),
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
+            unescape_tsv(fields[4]),
             std::filesystem::temp_directory_path().string());
-        std::string input = unescape_tsv(fields[4]);
-        std::string output = unescape_tsv(fields[5]);
-        std::string label_id = unescape_tsv(fields[6]);
-        std::string justification = unescape_tsv(fields[7]);
+        std::string input = unescape_tsv(fields[5]);
+        std::string output = unescape_tsv(fields[6]);
+        std::string label_id = unescape_tsv(fields[7]);
+        std::string justification = unescape_tsv(fields[8]);
         auto handler = create_handler(native.engine, input, input + ".audit");
         mip::LabelingOptions options(mip::AssignmentMethod::PRIVILEGED);
         if (!justification.empty()) {
@@ -487,7 +511,7 @@ static void handle_apply_label(const std::vector<std::string>& fields) {
 }
 
 static void handle_remove_label(const std::vector<std::string>& fields) {
-    if (fields.size() < 6) {
+    if (fields.size() < 7) {
         std::cout << "DENIED\tinvalid remove-label request\n";
         return;
     }
@@ -496,9 +520,10 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
             unescape_tsv(fields[1]),
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
+            unescape_tsv(fields[4]),
             std::filesystem::temp_directory_path().string());
-        std::string input = unescape_tsv(fields[4]);
-        std::string output = unescape_tsv(fields[5]);
+        std::string input = unescape_tsv(fields[5]);
+        std::string output = unescape_tsv(fields[6]);
         auto handler = create_handler(native.engine, input, input + ".audit");
         mip::LabelingOptions options(mip::AssignmentMethod::PRIVILEGED);
         handler->DeleteLabel(options);
@@ -516,7 +541,7 @@ static void handle_remove_label(const std::vector<std::string>& fields) {
 }
 
 static void handle_remove_protection(const std::vector<std::string>& fields) {
-    if (fields.size() < 6) {
+    if (fields.size() < 7) {
         std::cout << "DENIED\tinvalid remove-protection request\n";
         return;
     }
@@ -525,9 +550,10 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
             unescape_tsv(fields[1]),
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
+            unescape_tsv(fields[4]),
             std::filesystem::temp_directory_path().string());
-        std::string input = unescape_tsv(fields[4]);
-        std::string output = unescape_tsv(fields[5]);
+        std::string input = unescape_tsv(fields[5]);
+        std::string output = unescape_tsv(fields[6]);
         auto handler = create_handler(native.engine, input, input + ".audit");
         auto protection = handler->GetProtection();
         if (!protection || (!protection->AccessCheck(mip::rights::Export()) &&
@@ -550,7 +576,7 @@ static void handle_remove_protection(const std::vector<std::string>& fields) {
 }
 
 static void handle_republish(const std::vector<std::string>& fields) {
-    if (fields.size() < 7) {
+    if (fields.size() < 8) {
         std::cout << "DENIED\tinvalid republish request\n";
         return;
     }
@@ -559,10 +585,11 @@ static void handle_republish(const std::vector<std::string>& fields) {
             unescape_tsv(fields[1]),
             unescape_tsv(fields[2]),
             unescape_tsv(fields[3]),
+            unescape_tsv(fields[4]),
             std::filesystem::temp_directory_path().string());
-        std::string original = unescape_tsv(fields[4]);
-        std::string working = unescape_tsv(fields[5]);
-        std::string output = unescape_tsv(fields[6]);
+        std::string original = unescape_tsv(fields[5]);
+        std::string working = unescape_tsv(fields[6]);
+        std::string output = unescape_tsv(fields[7]);
         auto original_handler = create_handler(native.engine, original, original + ".audit");
         auto original_protection = original_handler->GetProtection();
         if (!original_protection) {

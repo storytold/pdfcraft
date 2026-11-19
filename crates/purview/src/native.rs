@@ -73,7 +73,8 @@ fn helper_path() -> Option<std::path::PathBuf> {
 pub struct NativePurviewProvider {
     app_id: String,
     username_hint: Mutex<Option<String>>,
-    access_token: Mutex<Option<String>>,
+    rms_access_token: Mutex<Option<String>>,
+    sync_access_token: Mutex<Option<String>>,
 }
 
 impl NativePurviewProvider {
@@ -84,7 +85,12 @@ impl NativePurviewProvider {
             .map(str::to_owned)
             .or_else(|| std::env::var("PDFCRAFT_PURVIEW_APP_ID").ok())
             .unwrap_or_default();
-        Self { app_id, username_hint: Mutex::new(None), access_token: Mutex::new(None) }
+        Self {
+            app_id,
+            username_hint: Mutex::new(None),
+            rms_access_token: Mutex::new(None),
+            sync_access_token: Mutex::new(None),
+        }
     }
 
     fn helper(&self) -> Result<std::path::PathBuf, PurviewError> {
@@ -95,8 +101,16 @@ impl NativePurviewProvider {
         option_env!("PDFCRAFT_PURVIEW_SDK_READY").unwrap_or("0") == "1"
     }
 
-    fn token(&self) -> Option<String> {
-        self.access_token.lock().ok().and_then(|token| token.clone())
+    fn rms_token(&self) -> Option<String> {
+        self.rms_access_token.lock().ok().and_then(|token| token.clone())
+    }
+
+    fn sync_token(&self) -> Option<String> {
+        self.sync_access_token.lock().ok().and_then(|token| token.clone())
+    }
+
+    fn has_tokens(&self) -> bool {
+        self.rms_token().is_some() && self.sync_token().is_some()
     }
 
     fn username(&self) -> String {
@@ -210,7 +224,7 @@ impl PurviewProvider for NativePurviewProvider {
             PurviewStatus::NotConfigured
         } else if !self.sdk_ready() || helper_path().is_none() {
             PurviewStatus::SdkUnavailable
-        } else if self.token().is_some() {
+        } else if self.has_tokens() {
             PurviewStatus::Ready
         } else {
             PurviewStatus::SignedOut
@@ -228,23 +242,38 @@ impl PurviewProvider for NativePurviewProvider {
             *username = username_hint.map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned);
         }
         let username = self.username();
-        let token = auth::acquire_token(
+        let rms_token = auth::acquire_token(
             &self.app_id,
             &username,
             "https://login.microsoftonline.com/common",
-            "",
-            "https://api.aadrm.com/.default https://psor.api.microsoft.com/.default",
+            "https://api.aadrm.com",
+            "https://api.aadrm.com/.default",
             "",
         )
         .map_err(|error| PurviewError::Native(error.to_string()))?;
-        if let Ok(mut cached) = self.access_token.lock() {
-            *cached = Some(token);
+        let sync_token = auth::acquire_token(
+            &self.app_id,
+            &username,
+            "https://login.microsoftonline.com/common",
+            "https://psor.api.microsoft.com",
+            "https://psor.api.microsoft.com/.default",
+            "",
+        )
+        .map_err(|error| PurviewError::Native(error.to_string()))?;
+        if let Ok(mut cached) = self.rms_access_token.lock() {
+            *cached = Some(rms_token);
+        }
+        if let Ok(mut cached) = self.sync_access_token.lock() {
+            *cached = Some(sync_token);
         }
         Ok(())
     }
 
     fn sign_out(&self) -> Result<(), PurviewError> {
-        if let Ok(mut token) = self.access_token.lock() {
+        if let Ok(mut token) = self.rms_access_token.lock() {
+            *token = None;
+        }
+        if let Ok(mut token) = self.sync_access_token.lock() {
             *token = None;
         }
         Ok(())
@@ -264,13 +293,15 @@ impl PurviewProvider for NativePurviewProvider {
         let input = write_temp(bytes, extension)?;
         let output = temp_path(extension);
         let audit = temp_path("audit");
-        let token = self.token().unwrap_or_default();
+        let rms_token = self.rms_token().unwrap_or_default();
+        let sync_token = self.sync_token().unwrap_or_default();
         let username = self.username();
         let request = format!(
-            "open\t{}\t{}\t{}\t{}\t{}\t{}",
+            "open\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
-            escape_tsv(&token),
+            escape_tsv(&rms_token),
+            escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
             escape_tsv(&audit.to_string_lossy())
@@ -293,9 +324,16 @@ impl PurviewProvider for NativePurviewProvider {
         if !self.sdk_ready() {
             return Err(PurviewError::SdkUnavailable);
         }
-        let token = self.token().ok_or(PurviewError::SignInRequired)?;
+        let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
+        let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
-        let request = format!("labels\t{}\t{}\t{}", self.app_id, escape_tsv(&username), escape_tsv(&token));
+        let request = format!(
+            "labels\t{}\t{}\t{}\t{}",
+            self.app_id,
+            escape_tsv(&username),
+            escape_tsv(&rms_token),
+            escape_tsv(&sync_token)
+        );
         let line = self.run_helper(&request)?;
         if line == "SIGNIN" {
             return Err(PurviewError::SignInRequired);
@@ -334,15 +372,17 @@ impl PurviewProvider for NativePurviewProvider {
         justification: Option<&str>,
     ) -> Result<PurviewOpen, PurviewError> {
         let _ = (handle, original);
-        let token = self.token().ok_or(PurviewError::SignInRequired)?;
+        let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
+        let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
         let input = write_temp(working_bytes, "pdf")?;
         let output = temp_path("pdf");
         let request = format!(
-            "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "apply-label\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
-            escape_tsv(&token),
+            escape_tsv(&rms_token),
+            escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy()),
             escape_tsv(label_id),
@@ -366,15 +406,17 @@ impl PurviewProvider for NativePurviewProvider {
 
     fn remove_label(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError> {
         let _ = (handle, original);
-        let token = self.token().ok_or(PurviewError::SignInRequired)?;
+        let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
+        let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
         let input = write_temp(working_bytes, "pdf")?;
         let output = temp_path("pdf");
         let request = format!(
-            "remove-label\t{}\t{}\t{}\t{}\t{}",
+            "remove-label\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
-            escape_tsv(&token),
+            escape_tsv(&rms_token),
+            escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy())
         );
@@ -392,15 +434,17 @@ impl PurviewProvider for NativePurviewProvider {
 
     fn remove_protection(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<PurviewOpen, PurviewError> {
         let _ = (handle, original);
-        let token = self.token().ok_or(PurviewError::SignInRequired)?;
+        let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
+        let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
         let input = write_temp(working_bytes, "pdf")?;
         let output = temp_path("pdf");
         let request = format!(
-            "remove-protection\t{}\t{}\t{}\t{}\t{}",
+            "remove-protection\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
-            escape_tsv(&token),
+            escape_tsv(&rms_token),
+            escape_tsv(&sync_token),
             escape_tsv(&input.to_string_lossy()),
             escape_tsv(&output.to_string_lossy())
         );
@@ -421,16 +465,18 @@ impl PurviewProvider for NativePurviewProvider {
 
     fn republish(&self, handle: u64, original: &Arc<Vec<u8>>, working_bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, PurviewError> {
         let _ = handle;
-        let token = self.token().ok_or(PurviewError::SignInRequired)?;
+        let rms_token = self.rms_token().ok_or(PurviewError::SignInRequired)?;
+        let sync_token = self.sync_token().ok_or(PurviewError::SignInRequired)?;
         let username = self.username();
         let original_path = write_temp(original, "pdf")?;
         let working_path = write_temp(working_bytes, "pdf")?;
         let output = temp_path("pdf");
         let request = format!(
-            "republish\t{}\t{}\t{}\t{}\t{}\t{}",
+            "republish\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.app_id,
             escape_tsv(&username),
-            escape_tsv(&token),
+            escape_tsv(&rms_token),
+            escape_tsv(&sync_token),
             escape_tsv(&original_path.to_string_lossy()),
             escape_tsv(&working_path.to_string_lossy()),
             escape_tsv(&output.to_string_lossy())
