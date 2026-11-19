@@ -495,7 +495,13 @@ impl PdfCraftApp {
         let mut root =
             RootEnv::new().mode(self.theme_preference).direction(direction).scale(Scale::new(crate::ui_scale::zoom(self.ui_scale, system, native)));
         root.motion = self.animation_effects;
-        root
+        // Today is the session's day, the one its date formats and Fill & Sign's Date tool use: the calendars ring it
+        // and pick it.
+        let (year, month, day) = self.session.today();
+        match craft_i18n::CalendarDate::new(year, u8::try_from(month).unwrap_or(0), u8::try_from(day).unwrap_or(0)) {
+            Some(today) => root.today(today),
+            None => root,
+        }
     }
 
     /// Read mode and full screen hide the hotbar (the quick tools), and its tools window with it.

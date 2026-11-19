@@ -168,6 +168,12 @@ impl Rig {
         crate::export_ui::open_kind(self.h.state()).is_some()
     }
 
+    /// Whether a notice on screen says `text`.
+    fn notice_says(&self, text: &str) -> bool {
+        use egui_kittest::kittest::NodeT as _;
+        self.h.query_all_by_label_contains(text).any(|node| node.accesskit_node().role() == egui::accesskit::Role::Status)
+    }
+
     fn password_dialog(&self) -> bool {
         self.h.query_all_by_label("Password").next().is_some()
     }
@@ -323,7 +329,7 @@ fn a_chosen_tool_does_not_run_when_native_preparation_rejects_the_file() {
     assert_eq!(rig.tabs(), 0);
     assert!(!rig.export_open() && !rig.password_dialog());
     // The notice's wording is the app's; only that an open failure is shown is asserted.
-    assert!(rig.h.query_by_label_contains("Couldn't open").is_some(), "the open failure is reported");
+    assert!(rig.notice_says("Couldn't open"), "the open failure is reported");
 }
 
 #[test]
@@ -671,7 +677,7 @@ fn file_open_converts_an_office_document_on_the_worker() {
         assert_eq!(doc.name, format!("pdfcraft-open-tool-{}-office.pdf", std::process::id()));
         assert!(doc.path.is_none(), "the converted PDF is new and unsaved, not the .docx on disk");
     } else {
-        assert!(rig.h.query_by_label_contains("LibreOffice, which isn't installed").is_some(), "the failure names the missing dependency");
+        assert!(rig.notice_says("LibreOffice, which isn't installed"), "the failure names the missing dependency");
     }
 }
 

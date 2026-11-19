@@ -65,7 +65,12 @@ fn card_count(h: &Harness<'static, PdfCraftApp>) -> usize {
 
 /// Whether the "Save changes?" prompt is on screen.
 fn asks_to_save(h: &Harness<'static, PdfCraftApp>) -> bool {
-    h.query_by_label("Don't save").is_some()
+    h.query_by_role_and_label(egui::accesskit::Role::Dialog, "Unsaved changes").is_some()
+}
+
+/// The unsaved-changes question's Save answer in the platform's words (the framework dialog asks Yes and No off macOS).
+fn save_answer() -> &'static str {
+    if cfg!(target_os = "macos") { "Save" } else { "Yes" }
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
@@ -1033,7 +1038,7 @@ fn close_all_saves_text_typed_in_a_tab_that_is_no_longer_active() {
     h.state_mut().close_all(&ctx_h);
     h.run_steps(2);
     assert!(asks_to_save(&h), "the first document has an unsaved change");
-    h.get_all_by_label("Save").last().expect("the prompt's Save button").click();
+    h.get_all_by_label(save_answer()).last().expect("the prompt's Save button").click();
     wait_for_file(&mut h, &files, &out);
     assert_eq!(saved_value(&files, &out, "name"), ["Typed in tab one"]);
     let _ = std::fs::remove_dir_all(&dir);

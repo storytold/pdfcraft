@@ -668,7 +668,9 @@ impl PdfCraftApp {
         if let Some(error) = error {
             dialog = dialog.error(craft::ui::runtime::env::Label::from(error));
         }
-        let output = dialog.show(ui);
+        // Open while a prompt waits: a wrong password sets the prompt again, which opens the dialog again.
+        let mut open = true;
+        let output = dialog.opened(craft::ui::contract::Bind::bound(&mut open)).show(ui);
         let password = match (output.answer, output.closed) {
             (Some(answer), _) => Some(answer.secret.expose().to_string()),
             (None, Some(_)) => None,

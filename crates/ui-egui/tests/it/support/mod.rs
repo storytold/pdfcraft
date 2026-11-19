@@ -168,7 +168,6 @@ struct Recorded {
     writes: Vec<Vec<Flavor>>,
     held: Option<String>,
     refused: Option<&'static str>,
-    refuse_all: bool,
 }
 
 impl RecordingClipboard {
@@ -176,13 +175,6 @@ impl RecordingClipboard {
     pub fn refusing(mime: &'static str) -> Self {
         let clipboard = Self::default();
         clipboard.lock().refused = Some(mime);
-        clipboard
-    }
-
-    /// A clipboard with no system behind it: every write is refused (and recorded).
-    pub fn refusing_all() -> Self {
-        let clipboard = Self::default();
-        clipboard.lock().refuse_all = true;
         clipboard
     }
 
@@ -205,9 +197,6 @@ impl ClipboardBackend for RecordingClipboard {
     fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
         let mut state = self.lock();
         state.writes.push(flavors.to_vec());
-        if state.refuse_all {
-            return Err(ClipboardError::Unavailable);
-        }
         if let Some(mime) = state.refused
             && flavors.iter().any(|f| f.mime == mime)
         {
