@@ -995,6 +995,7 @@ fn lithuanian_is_registered_and_persists() {
 
 #[test]
 fn georgian_is_registered_and_persists() {
+    needs_catalogs!();
     let ka = Lang::from_code("ka").expect("ka registered");
     assert_eq!(ka.name(), "ქართული");
     assert_eq!(normalize_pref("KA"), Some("ka"));
@@ -1011,6 +1012,7 @@ fn georgian_is_registered_and_persists() {
 
 #[test]
 fn georgian_titles_stay_uncapitalised() {
+    needs_catalogs!();
     set_current(Lang::from_code("ka").expect("ka registered"));
     assert_eq!(upper_label("Advanced"), "დამატებითი");
     // Section titles arrive already translated (`section_title(ui, tl!(…))`).
