@@ -11,7 +11,7 @@ use pdfcraft_fonts::pdf::Metrics;
 use crate::alt::page_content;
 
 /// How deep `q` nests before the text state stops being saved (a hostile stream can nest millions).
-const MAX_SAVED: usize = 256;
+pub(crate) const MAX_SAVED: usize = 256;
 
 /// One glyph shown on the page.
 pub(crate) struct Glyph<'a> {
@@ -24,16 +24,11 @@ pub(crate) struct Glyph<'a> {
     pub size: f64,
     /// Horizontal scaling (`Tz` / 100).
     pub scale: f64,
-    /// How far the next glyph starts, in text space before `Tz`: width, `Tc` and `Tw`.
-    pub advance: f64,
+    /// Where the next glyph starts, in user space.
+    pub end: (f64, f64),
 }
 
 impl Glyph<'_> {
-    /// Where the next glyph starts, in user space.
-    pub fn end(&self) -> (f64, f64) {
-        self.trm.apply(self.advance * self.scale, 0.0)
-    }
-
     /// The glyph's box (its advance width by the font's ascent and descent), in user space.
     pub fn bbox(&self) -> [f64; 4] {
         let m = self.metrics;
@@ -235,9 +230,10 @@ impl Walk<'_> {
             };
             for (code, len) in m.codes(&s.bytes) {
                 let advance = m.width(code) * gs.size + gs.char_spacing + if m.is_space(code, len) { gs.word_spacing } else { 0.0 };
-                let glyph = Glyph { id, trm: self.tm.then(&gs.ctm), metrics: &m, code, size: gs.size, scale: gs.scale, advance };
-                f(&glyph);
-                self.tm = Matrix::translate(advance * gs.scale, 0.0).then(&self.tm);
+                let next = Matrix::translate(advance * gs.scale, 0.0).then(&self.tm);
+                let end = next.then(&gs.ctm).apply(0.0, 0.0);
+                f(&Glyph { id, trm: self.tm.then(&gs.ctm), metrics: &m, code, size: gs.size, scale: gs.scale, end });
+                self.tm = next;
             }
         }
     }

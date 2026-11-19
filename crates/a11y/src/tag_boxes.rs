@@ -6,14 +6,13 @@ use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::alt::{self, union};
+use crate::glyphs::MAX_SAVED;
 use crate::tags::TagError;
 
 /// How deep the tag's subtree may nest, counting arrays and references.
 const MAX_DEPTH: usize = 512;
 /// How many `/K` entries the walk visits before giving up.
 const MAX_ITEMS: usize = 65_536;
-/// How deep `q` nests before a placement walk stops saving the CTM.
-const MAX_SAVED: usize = 256;
 
 /// One box a tag's content is drawn in.
 #[derive(Clone, Debug, PartialEq)]
@@ -188,7 +187,8 @@ fn mark_bounds(doc: &Document, page: &Dict, ids: &HashSet<i64>) -> HashMap<i64, 
 fn annotation_rect(doc: &Document, object: ObjRef) -> Option<[f64; 4]> {
     let target = doc.get(object);
     let d = target.as_dict()?;
-    let r: Vec<f64> = d.get(b"Rect").map(|r| doc.resolve(r)).and_then(|r| r.as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))?;
+    // Every entry must be a number: skipping one would shift the others into the wrong corners.
+    let r: Vec<f64> = d.get(b"Rect").map(|r| doc.resolve(r)).and_then(|r| r.as_array().and_then(|a| a.iter().map(Object::as_f64).collect()))?;
     match r[..] {
         [a, b, c, e] => Some([a.min(c), b.min(e), a.max(c), b.max(e)]),
         _ => None,

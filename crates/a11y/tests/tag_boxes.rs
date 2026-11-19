@@ -145,3 +145,32 @@ fn a_cycle_in_the_tree_ends_and_deep_nesting_is_refused() {
     let chain = (20..620).map(|n| (n, format!("[{} 0 R]", n + 1))).collect();
     assert_eq!(tag_boxes(&tree("20 0 R", chain), ObjRef::new(10, 0)), Err(TagError::ContentLimit));
 }
+
+#[test]
+fn an_annotation_rectangle_with_a_non_number_is_not_outlined() {
+    let doc = build_pdf(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 9 0 R >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [11 0 R] >>".into()),
+        (9, "<< /Type /StructTreeRoot /K 10 0 R >>".into()),
+        (10, "<< /S /Link /Pg 3 0 R /K << /Type /OBJR /Obj 11 0 R >> >>".into()),
+        // Skipping the null would read the box as [1 3 4 5].
+        (11, "<< /Type /Annot /Subtype /Link /P 3 0 R /Rect [1 null 3 4 5] >>".into()),
+    ]);
+    assert_eq!(boxes(&doc, 10), []);
+}
+
+#[test]
+fn an_annotation_without_a_page_in_the_tree_is_outlined_on_its_own_page() {
+    let doc = build_pdf(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 9 0 R >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+        (4, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [11 0 R] >>".into()),
+        (9, "<< /Type /StructTreeRoot /K 10 0 R >>".into()),
+        // Neither the tag nor the object reference names a page: the annotation's /P does.
+        (10, "<< /S /Link /K << /Type /OBJR /Obj 11 0 R >> >>".into()),
+        (11, "<< /Type /Annot /Subtype /Link /P 4 0 R /Rect [10 20 30 40] >>".into()),
+    ]);
+    assert_eq!(boxes(&doc, 10), [TagBox { page: 1, rect: [10.0, 20.0, 30.0, 40.0] }]);
+}

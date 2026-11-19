@@ -215,7 +215,7 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
             }
             text.push_str(&glyph);
         }
-        ends.insert(id, g.end());
+        ends.insert(id, g.end);
     });
     out
 }
