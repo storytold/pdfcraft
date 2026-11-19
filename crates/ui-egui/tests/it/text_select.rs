@@ -174,27 +174,28 @@ fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
 }
 
 // Issue #1225: page-text Copy belongs in both menus and observes PDF permissions.
-fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
-    h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == want))
+/// Whether the clipboard the app writes through holds `want`, as the last copy put it there.
+fn copied(clipboard: &RecordingClipboard, want: &str) -> bool {
+    clipboard.copied().as_deref() == Some(want)
 }
 
 /// Check that both the Edit menu and the context menu copy the selected page text.
 #[test]
 fn selected_text_copy_edit_and_context_menus() {
     use egui_kittest::kittest::Queryable;
-    let (mut h, at) = harness(|_| {});
+    let clipboard = RecordingClipboard::default();
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
     click(&mut h, at);
     click(&mut h, at);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2); // Hide floating Copy so this test can only reach menu entries.
     crate::support::open_menu(&mut h, "Edit");
     crate::support::menu_row(&h, "Copy").click();
-    let mut did_copy = false;
     for _ in 0..4 {
         h.step();
-        did_copy |= copied(&h, "quick");
     }
-    assert!(did_copy, "Edit Copy emits the selected text");
+    assert!(copied(&clipboard, "quick"), "Edit Copy emits the selected text");
+    let writes = clipboard.writes().len();
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2); // Hide the floating bar: the remaining Copy must be in the context menu.
     h.event(Event::PointerMoved(at));
@@ -204,24 +205,23 @@ fn selected_text_copy_edit_and_context_menus() {
     }
     h.run_steps(2);
     h.get_by_label_contains("Copy").click();
-    let mut did_copy = false;
     for _ in 0..4 {
         h.step();
-        did_copy |= copied(&h, "quick");
     }
-    assert!(did_copy, "context Copy emits the selected text");
+    assert!(clipboard.writes().len() > writes && copied(&clipboard, "quick"), "context Copy emits the selected text");
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
 }
 
 #[test]
 fn selected_text_copy_command_requires_selection() {
-    let (mut h, at) = harness(|_| {});
+    let clipboard = RecordingClipboard::default();
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
     assert!(!h.execute("edit.copy"));
     click(&mut h, at);
     click(&mut h, at);
     assert!(h.execute("edit.copy"));
     h.step();
-    assert!(copied(&h, "quick"));
+    assert!(copied(&clipboard, "quick"));
     let mut app = crate::control::new_app();
     assert!(!app.execute(&egui::Context::default(), "edit.copy"));
 }
@@ -241,10 +241,12 @@ fn selected_text_copy_floating_button_honours_permissions() {
         })
         .unwrap();
         let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let clipboard = RecordingClipboard::default();
+        let app_clipboard = clipboard.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
             crate::support::install_runtime(&cc.egui_ctx);
             {
-                let mut app = app_on(RecordingClipboard::default());
+                let mut app = app_on(app_clipboard);
                 app.set_option(&egui::Context::default(), "language", "en").unwrap();
                 app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, bytes).unwrap();
                 app.submit_password(&egui::Context::default(), Some(password.into()));
@@ -264,11 +266,10 @@ fn selected_text_copy_floating_button_honours_permissions() {
         assert!(loaded);
         h.run_steps(2);
         h.get_by_label("Copy").click();
-        let mut did_copy = false;
         for _ in 0..4 {
             h.step();
-            did_copy |= copied(&h, "The quick brown fox\njumps over the dog");
         }
+        let did_copy = copied(&clipboard, "The quick brown fox\njumps over the dog");
         assert_eq!(did_copy, password == "owner", "floating Copy with {password} password");
         assert_eq!(h.execute("edit.copy"), password == "owner");
     }
@@ -316,7 +317,7 @@ fn selected_text_copy_falls_back_to_plain_text_when_html_is_refused() {
     assert!(h.execute("edit.copy"));
     h.step();
     assert_eq!(html_sets(&clipboard).len(), 1, "the HTML was offered");
-    assert!(copied(&h, "quick"), "the plain text goes out the usual way");
+    assert!(copied(&clipboard, "quick"), "the plain text goes out the usual way");
 }
 
 /// With a clipboard that takes no write, no HTML is built and the plain text goes out as before.
@@ -330,7 +331,7 @@ fn selected_text_copy_without_system_clipboard_builds_no_html() {
     assert!(h.execute("edit.copy"));
     h.step();
     assert!(html_sets(&clipboard).is_empty());
-    assert!(copied(&h, "quick"));
+    assert!(copied(&clipboard, "quick"));
 }
 
 /// A document that withholds copying gives neither the text nor its HTML.
@@ -360,10 +361,12 @@ fn selected_text_copy_with_formatting_honours_permissions() {
 
 #[test]
 fn selected_text_copy_preserves_unicode_and_page_clipboard() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
+    let clipboard = RecordingClipboard::default();
+    let app_clipboard = clipboard.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
-            let mut app = app_on(RecordingClipboard::default());
+            let mut app = app_on(app_clipboard);
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
             app.open_bytes(&egui::Context::default(), "unicode.pdf", None, text_pdf(r"BT /F1 14 Tf 20 150 Td (caf\351) Tj ET")).unwrap();
             app
@@ -382,7 +385,7 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
     assert_eq!(h.state().views[0].selected_text().as_deref(), Some("café"));
     assert!(h.execute("edit.copy"));
     h.step();
-    assert!(copied(&h, "café"));
+    assert!(copied(&clipboard, "café"));
     assert!(h.state().page_clipboard.is_none());
     assert!(h.execute("page.organize"));
     h.run_steps(2);
@@ -394,7 +397,8 @@ fn selected_text_copy_preserves_unicode_and_page_clipboard() {
 /// Check that a focused search input owns Copy and the selected page text does not also consume it.
 #[test]
 fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
-    let (mut h, at) = harness(|_| {});
+    let clipboard = RecordingClipboard::default();
+    let (mut h, at) = harness_clip(two_lines(), clipboard.clone(), |_| {});
     click(&mut h, at);
     click(&mut h, at);
     h.state_mut().views[0].open_find();
@@ -402,19 +406,20 @@ fn selected_text_copy_keeps_focused_input_clipboard_ownership() {
     h.run_steps(3);
     {
         use egui_kittest::kittest::Queryable;
-        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Find").click();
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Find text").click();
     }
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
     h.event(Event::Copy);
+    // The text input copies through egui, as every framework text input does; the page's text through the app's
+    // clipboard.
     let mut widget_copy = false;
-    let mut page_copy = false;
     for _ in 0..4 {
         h.step();
-        widget_copy |= copied(&h, "widget café");
-        page_copy |= copied(&h, "quick");
+        widget_copy |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "widget café"));
     }
+    let page_copy = !clipboard.writes().is_empty();
     assert!(widget_copy, "the focused text input copies its selected text");
     assert!(!page_copy, "page text must not also consume the Copy event");
 }
@@ -514,13 +519,6 @@ fn three_pages() -> Harness<'static, PdfCraftApp> {
         app.set_option(&egui::Context::default(), "zoom", "75").unwrap();
     });
     crate::support::wait_until(&mut h, "every page's text layer", |app| {
-        eprintln!(
-            "DIAG a_flick_off_the_page_still_selects_from_the_press: glyph {:?} rect {:?} text {:?} pending {}",
-            (0..3).map(|p| app.views[0].glyph_screen_pos(p, 10).is_some()).collect::<Vec<_>>(),
-            (0..3).map(|p| app.views[0].page_screen_rect(p).is_some()).collect::<Vec<_>>(),
-            (0..3).map(|p| app.views[0].has_page_text(p)).collect::<Vec<_>>(),
-            app.render_pending()
-        );
         (0..3).all(|p| app.views[0].glyph_screen_pos(p, 10).is_some()) && !app.render_pending()
     });
     let viewport = h.state().views[0].viewport_rect();

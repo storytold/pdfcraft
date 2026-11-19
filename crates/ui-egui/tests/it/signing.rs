@@ -133,7 +133,8 @@ fn create_signing_id(h: &mut Harness<'static, PdfCraftApp>) {
         field(h, label).type_text(text);
         h.run_steps(1);
     }
-    h.get_by_label("Save").click();
+    // The toolbar has a Save too: the dialog's is the one.
+    h.get_all_by_role(egui::accesskit::Role::Dialog).last().expect("the dialog").get_by_label("Save").click();
     h.run_steps(3);
     assert_eq!(h.state().digital_ids.len(), 1);
     assert!(std::path::Path::new(&h.state().digital_ids[0].path).exists(), "saved as a .p12");
@@ -320,7 +321,7 @@ fn certifying_without_a_visible_signature() {
     h.run_steps(2);
     h.get_by_label("Continue").click();
     h.run_steps(2);
-    h.get_by_label("Certify as \"Test Signer EC\"");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Certify as \"Test Signer EC\"");
     h.get_by_label("Permitted actions after certifying");
     h.state_mut().sign_draft.as_mut().unwrap().password = "test".into();
     support::outside_menus(&h, "Sign").click();
@@ -330,7 +331,7 @@ fn certifying_without_a_visible_signature() {
     let doc = s.session.get(s.views[0].id).unwrap();
     let sig = doc.signatures.iter().find(|x| x.signed).unwrap();
     assert_eq!((sig.certify, sig.visible), (Some(2), false));
-    h.get_by_label_contains("Certified by Test Signer EC");
+    h.get_all_by_label_contains("Certified by Test Signer EC").next().expect("the certification is shown");
 }
 
 #[test]
@@ -864,7 +865,8 @@ fn an_imported_digital_id_can_be_removed() {
 
     h.get_by_label("Remove").click();
     h.run_steps(4);
-    h.get_by_label("Remove").click();
+    // The question's Remove comes before the dialog's own, as its Cancel does.
+    h.get_all_by_label("Remove").next().unwrap().click();
     h.run_steps(3);
     assert!(h.state().digital_ids.is_empty());
     assert!(p12.exists(), "the file itself is not deleted");
