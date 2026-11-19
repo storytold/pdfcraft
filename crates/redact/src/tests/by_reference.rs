@@ -19,13 +19,21 @@ fn page(content: &[u8], resources: &str, extra: Vec<Vec<u8>>) -> Document {
     pdf(objs)
 }
 
-/// Whether a full save of `doc` holds `needle` in any stream's decoded data.
+/// Whether a full save of `doc` holds `needle` in any string, inside a dictionary or an array
+/// included, or in any stream's decoded data.
 fn saved_holds(doc: &Document, needle: &[u8]) -> bool {
+    fn holds(object: &Object, needle: &[u8]) -> bool {
+        let has = |bytes: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        match object {
+            Object::String(s) => has(&s.bytes),
+            Object::Array(a) => a.iter().any(|o| holds(o, needle)),
+            Object::Dict(d) => d.iter().any(|(_, o)| holds(o, needle)),
+            Object::Stream(s) => s.dict.iter().any(|(_, o)| holds(o, needle)) || has(&s.decoded().unwrap_or_default()),
+            _ => false,
+        }
+    }
     let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
-    saved.object_numbers().into_iter().any(|n| match &*saved.try_get(n).unwrap() {
-        Object::Stream(s) => s.decoded().unwrap_or_default().windows(needle.len()).any(|w| w == needle),
-        _ => false,
-    })
+    saved.object_numbers().into_iter().any(|n| holds(&saved.try_get(n).unwrap(), needle))
 }
 
 /// A form, and an image, under the mark, each with its `/Subtype` given by reference, or reached
@@ -399,6 +407,7 @@ fn a_tagged_form_given_by_reference_loses_its_actual_text() {
             format!("<< /Type /StructElem /S /P /P 8 0 R /Pg 3 0 R /K {kids} /ActualText (ACTUALSECRET) >>").into_bytes(),
             owned.as_bytes().to_vec(),
         ]);
+        assert!(saved_holds(&doc, b"FORMSECRET") && saved_holds(&doc, b"ACTUALSECRET"), "before, {kids}");
         mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
         assert_eq!(apply(&mut doc, None).map(|r| r.tags), Ok(1), "{kids}");
         let element = doc.get(ObjRef::new(9, 0)).as_dict().cloned().unwrap();
@@ -519,6 +528,7 @@ fn annotations_written_in_place_are_removed_as_ones_held_by_reference() {
             b"/Popup".to_vec(),
             b"/Widget".to_vec(),
         ]);
+        assert!(saved_holds(&doc, b"COMMENTSECRET") && saved_holds(&doc, b"ACTIONSECRET"), "before, {popup}");
         remove_hidden(&mut doc, &[Hidden::Comments, Hidden::LinksActionsScripts]).unwrap();
         assert!(!saved_holds(&doc, b"COMMENTSECRET"), "{popup}");
         assert!(!saved_holds(&doc, b"ACTIONSECRET"), "{widget}");
