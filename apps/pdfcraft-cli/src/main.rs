@@ -55,6 +55,7 @@ macro_rules! mcp_usage {
 
 mod check;
 mod commands;
+mod geometry;
 mod options;
 mod run;
 mod ui;
@@ -74,6 +75,11 @@ pdfcraft-cli info   <file.pdf> [--password PW]            document summary as JS
                                                           (includes any declared PDF/A or PDF/UA level)
 pdfcraft-cli render <file.pdf> --page N [--dpi 96] --out x.png   (.png, .jpg, .tif or .pam)
 pdfcraft-cli text   <file.pdf> [--page N]                  extracted text (pages separated by form feeds)
+pdfcraft-cli geometry <file.pdf> [--pages 1,3-5] [--coords page|display] [--password PW]
+                      [--max-segments N] [--max-targets N] [--max-bytes N] [--max-total-segments N]
+                      line segments as snapping reads them, as one line of JSON (the page_geometry tool);
+                      when the pages' total passes --max-total-segments (default --max-segments), the
+                      answer stops before that page and gives next_page and pages_left to continue from
 pdfcraft-cli edit   <in.pdf> --out out.pdf [--rotate 1,3:90] [--delete 2,4] [--move 5:1]
                       [--insert-blank 1] [--title T] [--author A] [--full]
                       (options run in order; page numbers refer to the document after the earlier options)
@@ -134,6 +140,7 @@ fn main() -> ExitCode {
         Some("info") => info(&args[1..]),
         Some("render") => render(&args[1..]),
         Some("text") => text(&args[1..]),
+        Some("geometry") => geometry::geometry(&args[1..]),
         Some("edit") => edit(&args[1..]),
         Some("combine") => combine(&args[1..]),
         Some("extract") => extract(&args[1..]),
