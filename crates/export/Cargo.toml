@@ -11,4 +11,16 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+craft-markdown.workspace = true
+craft-mime.workspace = true
+craft-rtf = { workspace = true, features = ["doc"] }
+craft-wordmodel.workspace = true
+craft-docx.workspace = true
+craft-html = { git = "https://github.com/storytold/craft-libs", rev = "1546550b0d4b79b8156a1fefaac8b3b317a4aee0", version = "0.1.0", features = ["standalone"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+craft-pptx.workspace = true
+craft-xml.workspace = true
+craft-zip.workspace = true
+
+[dev-dependencies]
 flate2.workspace = true

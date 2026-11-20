@@ -1,6 +1,6 @@
 //! The "reading colours" view setting (Acrobat's Replace Document Colors): solid text and
 //! line-art paints are remapped for readability while rendering. Display only — the document
-//! itself never changes. The setting flows into [`hayro::RenderSettings`] through
+//! itself never changes. The setting flows into [`craft_pdf::raster::Options`] through
 //! `RenderConfig`.
 
 /// The reading-colours setting for one document. `params: None` means off.
@@ -111,9 +111,9 @@ impl ReadingColors {
     }
 }
 
-impl From<ReadingParams> for hayro::ColorReplacement {
+impl From<ReadingParams> for craft_pdf::raster::ColorReplacement {
     fn from(p: ReadingParams) -> Self {
-        hayro::ColorReplacement { text: p.text, background: p.background, only_black: p.only_black, line_art: p.line_art }
+        craft_pdf::raster::ColorReplacement { text: p.text, background: p.background, only_black: p.only_black, line_art: p.line_art }
     }
 }
 
