@@ -4,6 +4,7 @@ use pdfcraft_annot::{Markup, Meta, NewAnnotation, Shape, Style, TextReplacement,
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_forms::{NewField, add_field, fields, set_value};
 
+use super::common::walk_xfdf;
 use super::xfdf::PDFCRAFT_NS;
 use super::*;
 
@@ -2267,6 +2268,100 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     assert_eq!(popups, 0);
 }
 
+/// Tab-delimited export guards a formula-like cell as CSV does, and the import takes the guard
+/// off, so a spreadsheet never runs form data and the value survives the round trip.
+#[test]
+fn tab_delimited_export_guards_formula_cells_and_round_trips() {
+    let mut doc = blank();
+    set_value(&mut doc, "Name", &FieldValue::Text("=SUM(A1:A9)".into())).unwrap();
+    let text = export_data(&doc, Format::Txt);
+    let row = text.lines().nth(1).unwrap();
+    assert!(row.starts_with("'=SUM(A1:A9)"), "{row:?}");
+    let mut again = blank();
+    import(&mut again, text.as_bytes()).unwrap();
+    assert_eq!(values(&again).iter().find(|(k, _)| k == "Name").map(|(_, v)| v.clone()), Some(vec!["=SUM(A1:A9)".to_string()]));
+}
+
+/// Merging many files with many distinct names stays linear: every column once, in first-seen
+/// order, and a row looks its names up rather than scanning them.
+#[test]
+fn merge_csv_lists_each_column_once_in_order() {
+    let files: Vec<Vec<(String, Vec<String>)>> =
+        (0..3).map(|f| (0..4).map(|i| (format!("c{}", (i + f) % 5), vec![format!("{f}-{i}")])).collect()).collect();
+    let csv = merge_csv(&files);
+    let mut lines = csv.lines();
+    assert_eq!(lines.next(), Some("c0,c1,c2,c3,c4"));
+    assert_eq!(lines.next(), Some("0-0,0-1,0-2,0-3,"));
+    assert_eq!(lines.next(), Some(",1-0,1-1,1-2,1-3"));
+    assert_eq!(lines.next(), Some("2-3,,2-0,2-1,2-2"));
+}
+
+/// A long parent name is written into every descendant's full name: past the import's text
+/// bound the file is refused rather than expanded.
+#[test]
+fn xfdf_field_names_past_the_text_bound_are_refused() {
+    let parent = "p".repeat(1 << 20);
+    let kids: String = (0..100).map(|i| format!("<field name=\"k{i}\"><value>v</value></field>")).collect();
+    let xfdf =
+        format!("<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"{parent}\">{kids}</field></fields></xfdf>");
+    let mut doc = blank();
+    match import(&mut doc, xfdf.as_bytes()) {
+        Err(DataError::Malformed(m)) => assert!(m.contains("64 MiB"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A same-name import never replaces a widget whose field type is inherited, or whose subtype is
+/// written as a reference: the field keeps its dictionary and the import goes beside it.
+#[test]
+fn same_name_import_keeps_a_widget_with_an_inherited_field_type() {
+    let mut doc = blank();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    // A field with one widget kid: /FT on the field, the widget names it as /Parent.
+    let mut field = Dict::new();
+    field.set(b"FT".to_vec(), Object::name("Tx"));
+    field.set(b"T".to_vec(), Object::String(PdfString::text("inherited")));
+    let field = doc.add(field);
+    let subtype = doc.add(Object::name("Widget"));
+    let mut widget = Dict::new();
+    widget.set(b"Type".to_vec(), Object::name("Annot"));
+    widget.set(b"Subtype".to_vec(), Object::Ref(subtype));
+    widget.set(b"Rect".to_vec(), arr(&[10.0, 10.0, 60.0, 30.0]));
+    widget.set(b"NM".to_vec(), Object::String(PdfString::text("w1")));
+    widget.set(b"Parent".to_vec(), Object::Ref(field));
+    let widget = doc.add(widget);
+    doc.update_dict(field, |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let mut note = Dict::new();
+    note.set(b"Type".to_vec(), Object::name("Annot"));
+    note.set(b"Subtype".to_vec(), Object::name("Text"));
+    note.set(b"Rect".to_vec(), arr(&[10.0, 10.0, 30.0, 30.0]));
+    note.set(b"NM".to_vec(), Object::String(PdfString::text("w1")));
+    let added = xfdf::place(&mut doc, page, note).unwrap();
+    assert_ne!(added, widget);
+    assert_eq!(doc.get(widget).as_dict().unwrap().name(b"Type"), Some(b"Annot".as_slice()));
+    assert!(doc.get(widget).as_dict().unwrap().reference(b"Parent").is_some(), "the widget was replaced");
+    let annots = doc.get(page).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(annots, 2);
+}
+
+#[test]
+fn a_field_type_up_to_64_parents_away_protects_the_annotation() {
+    // the forms crate follows /Parent 64 levels: so does the import's protection check
+    let mut doc = blank();
+    let mut top = Dict::new();
+    top.set(b"FT".to_vec(), Object::name("Tx"));
+    let mut parent = doc.add(Object::Dict(top));
+    for _ in 0..40 {
+        let mut d = Dict::new();
+        d.set(b"Parent".to_vec(), Object::Ref(parent));
+        parent = doc.add(Object::Dict(d));
+    }
+    let mut annot = Dict::new();
+    annot.set(b"Parent".to_vec(), Object::Ref(parent));
+    assert!(crate::xfdf::is_field(&doc, &annot));
+}
+
 /// A check box field whose two kids have the on states `A` and `B`.
 fn check_box_kids() -> Document {
     let objs = [
@@ -2640,4 +2735,101 @@ fn copies_keep_their_intent_cloud_and_pdfcraft_keys() {
     assert_eq!(got[0].get(b"PCAngle").and_then(Object::as_f64), Some(45.0));
     assert_eq!(got[0].name(b"Subtype"), Some(b"Square".as_slice()), "not taken from the attribute");
     assert!(got[0].get(b"PCRef").is_none() && got[1].get(b"PCAngle").is_none(), "{got:?}");
+}
+
+#[test]
+fn xfdf_charges_non_emitted_parent_names_before_recursing() {
+    let fields = common::parse_form_xml("<fields><field name='parent'><value-richtext/></field></fields>").unwrap();
+    let mut out = Vec::new();
+    let mut bytes = common::MAX_XFDF_TEXT - 5;
+    assert!(walk_xfdf(&fields, "", &mut out, 0, &mut bytes).is_err());
+    assert!(out.is_empty());
+    let mut bytes = common::MAX_XFDF_TEXT - 6;
+    walk_xfdf(&fields, "", &mut out, 0, &mut bytes).unwrap();
+    assert_eq!(bytes, common::MAX_XFDF_TEXT);
+}
+
+#[test]
+fn xfdf_charges_split_text_before_copying_values() {
+    let fields = common::parse_form_xml("<fields><field name='x'><value>a<!--split-->bc</value></field></fields>").unwrap();
+    let mut out = Vec::new();
+    let mut bytes = common::MAX_XFDF_TEXT - 3;
+    assert!(walk_xfdf(&fields, "", &mut out, 0, &mut bytes).is_err());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn merge_csv_keeps_first_repeated_value() {
+    let rows = vec![("Name".into(), vec!["first".into()]), ("Name".into(), vec!["second".into()])];
+    assert_eq!(merge_csv(&[rows]), "Name\nfirst\n");
+}
+
+#[test]
+fn shared_xfdf_fields_match_retained_reader() -> Result<(), Box<dyn std::error::Error>> {
+    // Independent retained app walker remains used by annotation imports.
+    for xml in [
+        "<xfdf/>",
+        "<xfdf><fields><field name='parent'><field name='child'><value>a<!--split-->b</value><value>c</value></field></field><field name='empty'/><field name='rich'><value-richtext>skip</value-richtext></field><field name='parent.child'><value>last</value></field></fields></xfdf>",
+        "<x:xfdf xmlns:x='urn:xfdf'><x:fields><x:field name='n'><x:value>v</x:value></x:field></x:fields></x:xfdf>",
+    ] {
+        let root = parse_form_xml(xml)?;
+        let mut expected = Vec::new();
+        if let Some(fields) = root.child(craft_xml::Local("fields")) {
+            walk_xfdf(fields, "", &mut expected, 0, &mut 0)?;
+        }
+        assert_eq!(data_values(xml.as_bytes())?, expected);
+    }
+    assert!(matches!(data_values(b"<other/>"), Err(DataError::UnknownFormat)));
+    assert!(matches!(data_values(b"<xfdf a='1' a='2'/>"), Err(DataError::UnknownFormat)));
+    let deep = format!("<xfdf><fields>{}{}</fields></xfdf>", "<field name='n'>".repeat(65), "</field>".repeat(65));
+    assert!(matches!(data_values(deep.as_bytes()), Err(DataError::Malformed(_))));
+    assert_eq!(
+        data_values(b"\xef\xbb\xbf <xfdf><fields><field name='n'><value>\xff</value></field></fields></xfdf>")?,
+        vec![("n".into(), vec!["\u{fffd}".into()])]
+    );
+    Ok(())
+}
+
+#[test]
+fn xfdf_annotation_formatting_round_trips_via_shared_grammar() {
+    let mut src = blank();
+    let shape = Shape::Rectangle { rect: [24.0, 48.0, 144.0, 108.0] };
+    add_annotation(
+        &mut src,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "Dashed box".into(), author: "Ada".into() },
+        &Meta { id: "fmt-rt-1".into(), date: Some("D:20261119120000Z".into()) },
+    )
+    .unwrap();
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let annot_ref =
+        src.get(page).as_dict().unwrap().get(b"Annots").map(|a| src.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let mut bs = Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(2.5));
+    bs.set(b"S".to_vec(), Object::name("D"));
+    bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(2.0)]));
+    src.update_dict(annot_ref, |d| {
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        d.set(b"F".to_vec(), Object::Int(4 | 128));
+    })
+    .unwrap();
+
+    let xfdf = export_xfdf(&src, true, false, "fmt.pdf");
+    assert!(is_xfdf_comments(&xfdf), "{xfdf}");
+    assert!(xfdf.contains("style=\"dash\""), "{xfdf}");
+    assert!(xfdf.contains("dashes=\"4,2\""), "{xfdf}");
+    assert!(xfdf.contains("flags=\"print,locked\""), "{xfdf}");
+
+    let mut dst = blank();
+    let report = import_comments(&mut dst, &xfdf, None, None, None).unwrap();
+    assert_eq!(report.comments, 1, "{report:?}");
+    let dst_page = pdfcraft_model::pages(&dst)[0].obj;
+    let dst_ref =
+        dst.get(dst_page).as_dict().unwrap().get(b"Annots").map(|a| dst.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
+    let dst_obj = dst.get(dst_ref);
+    let dst_dict = dst_obj.as_dict().unwrap();
+    assert_eq!(dst_dict.get(b"F").and_then(|f| dst.resolve(f).as_int()), Some(4 | 128));
+    let dst_bs = dst_dict.get(b"BS").map(|o| dst.resolve(o)).unwrap();
+    let dst_bs = dst_bs.as_dict().unwrap();
+    assert_eq!(dst_bs.name(b"S"), Some(b"D".as_slice()));
+    assert_eq!(dst_bs.get(b"W").and_then(|w| dst.resolve(w).as_f64()), Some(2.5));
 }
