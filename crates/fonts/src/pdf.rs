@@ -560,6 +560,9 @@ fn text_y_extent(r: [f64; 4], b: f64, d: f64, f: f64) -> Option<(f64, f64)> {
 struct Unicode {
     /// Simple fonts: the encoding table and `/Differences`, which ToUnicode overrides.
     encoding: HashMap<u32, String>,
+    /// Codes in `encoding` that are only read, never chosen to write their text: WinAnsi's unused
+    /// codes, which draw the bullet but are not the code the table gives it.
+    read_only: Vec<u32>,
     /// `bfchar` and array-form entries: the text of each code, with the declaration order of its last one.
     explicit: HashMap<u32, (u32, String)>,
     /// Sequential `bfrange` records, in declaration order.
@@ -952,7 +955,9 @@ impl Metrics {
         }
         m.past_allowance = reads.refused;
         let mut reverse = HashMap::new();
-        for (&code, text) in m.unicode.explicit.iter().map(|(c, (_, t))| (c, t)).chain(m.unicode.encoding.iter()) {
+        // Read-only encoding codes are skipped, so a typed bullet keeps WinAnsi's 0x95 (#7679).
+        let encoding = m.unicode.encoding.iter().filter(|(code, _)| !m.unicode.read_only.contains(code));
+        for (&code, text) in m.unicode.explicit.iter().map(|(c, (_, t))| (c, t)).chain(encoding) {
             if let Some(ch) = only_char(text)
                 && m.shows(code, ch)
             {
@@ -1673,6 +1678,10 @@ fn post_name<'a>(post: &skrifa::raw::tables::post::Post<'a>, custom: &[&'a str],
     }
 }
 
+/// The codes above 040 (octal) WinAnsiEncoding leaves unused (ISO 32000-1 Annex D.2), which
+/// draw the bullet.
+const WIN_ANSI_UNUSED: [u32; 6] = [0x7F, 0x81, 0x8D, 0x8F, 0x90, 0x9D];
+
 /// Code → Unicode for a font: its ToUnicode CMap (for a composite font, also the name
 /// `/Identity-H` or `/Identity-V`, read as code = Unicode), else (simple fonts) its encoding.
 fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'_>) -> Unicode {
@@ -1715,6 +1724,17 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
                 out.encoding.insert(code as u32, c.to_string());
             }
         }
+        // ISO 32000-1 Annex D.2, note 6: in WinAnsiEncoding every unused code above 040 (octal)
+        // draws the bullet, as the standard fonts and the renderer draw it. ReportLab writes its
+        // bullets at 0x7F, so read them as bullets too, or they vanish from the editor's text
+        // and its exports (#7679). Only read: `win_ansi_byte` and `Metrics::encode` keep writing a
+        // bullet as 0x95, the code the table gives it. `/Differences`, applied below, still say otherwise.
+        if base_name.as_deref() == Some(b"WinAnsiEncoding") {
+            for code in WIN_ANSI_UNUSED {
+                out.encoding.insert(code, "\u{2022}".to_owned());
+            }
+            out.read_only.extend(WIN_ANSI_UNUSED);
+        }
         // A font named as Symbol or ZapfDingbats keeps reporting nothing: its names may be as
         // un-Latin as its codes (WordPerfect's WPTypographicSymbols calls its apostrophe `equal`).
         // A font whose `post` table names its glyphs reads by those names; one that names none
@@ -1738,6 +1758,8 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool, reads: &mut Reads<'
                             Some(t) => out.encoding.insert(code, t),
                             None => out.encoding.remove(&code),
                         };
+                        // A code `/Differences` name is the font's own, to write as well as read.
+                        out.read_only.retain(|c| *c != code);
                         code = code.saturating_add(1);
                     }
                     _ => {}
