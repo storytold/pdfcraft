@@ -602,7 +602,7 @@ impl Automation {
 }
 
 /// `out` with `warnings` added to its `warnings` list (made when it has none).
-fn with_warnings(mut out: Value, warnings: Vec<String>) -> Value {
+pub(crate) fn with_warnings(mut out: Value, warnings: Vec<String>) -> Value {
     if warnings.is_empty() {
         return out;
     }
