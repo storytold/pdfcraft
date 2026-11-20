@@ -40,13 +40,17 @@ fn harness_bytes_with_step_dt(bytes: Vec<u8>, step_dt: f32) -> Harness<'static, 
 /// [`harness`] whose jobs, the page renders among them, wait until the test runs them; the pages are rendered once
 /// before it returns.
 fn held_harness() -> (Harness<'static, PdfCraftApp>, std::sync::Arc<craft::host::ManualJobs>) {
+    held_harness_bytes(include_bytes!("../data/form.pdf").to_vec())
+}
+
+fn held_harness_bytes(bytes: Vec<u8>) -> (Harness<'static, PdfCraftApp>, std::sync::Arc<craft::host::ManualJobs>) {
     let (app, jobs) = crate::control::app_with_manual_jobs();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.25).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
             let mut app = app;
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
-            app.open_bytes(&egui::Context::default(), "form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+            app.open_bytes(&egui::Context::default(), "form.pdf", None, bytes.clone()).unwrap();
             app.set_option(&egui::Context::default(), "zoom", "150").unwrap();
             app
         }
@@ -588,7 +592,7 @@ fn ink_at(h: &mut Harness<'static, PdfCraftApp>, from: egui::Rect, to: egui::Rec
 
 /// Types text, finishes it, and drags it up without releasing, until the drag preview shows.
 /// Returns the text's box, its screen rectangles before and after, and the pointer.
-fn drag_added_text(h: &mut Harness<'static, PdfCraftApp>) -> ([f64; 4], egui::Rect, egui::Rect, Pos2) {
+fn drag_added_text(h: &mut Harness<'static, PdfCraftApp>, jobs: Option<&craft::host::ManualJobs>) -> ([f64; 4], egui::Rect, egui::Rect, Pos2) {
     assert!(h.execute("edit.text"));
     h.run_steps(2);
     let p = at(h, 40.0, 300.0);
@@ -597,17 +601,25 @@ fn drag_added_text(h: &mut Harness<'static, PdfCraftApp>) -> ([f64; 4], egui::Re
     h.run_steps(2);
     h.get_by_label("Done adding text").click();
     h.run_steps(3);
+    if let Some(jobs) = jobs {
+        crate::support::settle_held(h, jobs);
+    }
     let rect = added(h)[0].content.rect();
     let from = item_on_screen(h, rect);
-    let mut shown = 0;
-    for _ in 0..100 {
-        h.run_steps(2);
-        shown = ink(&h.render().unwrap(), probe(from));
-        if shown > 20 {
-            break;
+    let shown = if jobs.is_some() {
+        ink(&h.render().unwrap(), probe(from))
+    } else {
+        let mut shown = 0;
+        for _ in 0..100 {
+            h.run_steps(2);
+            shown = ink(&h.render().unwrap(), probe(from));
+            if shown > 20 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+        shown
+    };
     assert!(shown > 20, "the added text is on the page ({shown} dark pixels)");
     let grab = pos2(from.right() - 12.0, from.center().y);
     let shift = egui::vec2(0.0, -150.0);
@@ -617,13 +629,18 @@ fn drag_added_text(h: &mut Harness<'static, PdfCraftApp>) -> ([f64; 4], egui::Re
     h.run_steps(1);
     h.hover_at(grab + shift);
     let to = from.translate(shift);
-    for _ in 0..100 {
-        h.run_steps(2);
-        let (old, new) = ink_at(h, from, to);
-        if old == 0 && new > 20 {
-            break;
+    if let Some(jobs) = jobs {
+        crate::support::settle_held(h, jobs);
+    }
+    if jobs.is_none() {
+        for _ in 0..100 {
+            h.run_steps(2);
+            let (old, new) = ink_at(h, from, to);
+            if old == 0 && new > 20 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     (rect, from, to, grab + shift)
 }
@@ -634,7 +651,7 @@ fn drag_added_text(h: &mut Harness<'static, PdfCraftApp>) -> ([f64; 4], egui::Re
 fn dragged_text_follows_the_pointer_before_release() {
     let _gpu = gpu();
     let mut h = harness();
-    let (rect, from, to, end) = drag_added_text(&mut h);
+    let (rect, from, to, end) = drag_added_text(&mut h, None);
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
         h.render().unwrap().save(format!("{dir}/added-text-drag.png")).unwrap();
     }
@@ -658,7 +675,7 @@ fn dragged_text_leaves_what_it_covered_behind() {
         content.len()
     );
     let mut h = harness_bytes(pdf.into_bytes());
-    let (rect, from, to, end) = drag_added_text(&mut h);
+    let (rect, from, to, end) = drag_added_text(&mut h, None);
     assert!(rect[0] > 20.0 && rect[2] < 260.0 && rect[1] > 60.0 && rect[3] < 130.0, "the text starts on the red square: {rect:?}");
     if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
         h.render().unwrap().save(format!("{dir}/added-text-drag-over-red.png")).unwrap();
@@ -685,32 +702,26 @@ fn dragged_text_leaves_what_it_covered_behind() {
 #[test]
 fn released_text_does_not_jump_back_before_the_page_is_redrawn() {
     let _gpu = gpu();
-    // A page slow enough to render that the frames before its new raster can be looked at: many
-    // pale squares, too light to count as ink.
-    let mut content = String::from("0.9 g\n");
-    for i in 0..60_000 {
-        content.push_str(&format!("{} {} 1 1 re f\n", i % 290, (i / 290) % 390));
-    }
+    let content = "";
     let pdf = format!(
         "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
         content.len()
     );
-    let mut h = harness_bytes(pdf.into_bytes());
-    let (rect, from, to, end) = drag_added_text(&mut h);
+    let (mut h, jobs) = held_harness_bytes(pdf.into_bytes());
+    let (rect, from, to, end) = drag_added_text(&mut h, Some(&jobs));
     h.drop_at(end);
-    // Frame by frame until the page has been re-rendered. The one frame that swaps in the new
-    // raster reads back blank here (kittest renders it after its old texture is freed).
-    let mut shown = Vec::new();
-    while h.state().render_pending() || shown.is_empty() {
-        h.run_steps(1);
-        assert!(shown.len() < 500, "the page is re-rendered");
+    // Keep the replacement raster queued while checking the released preview.
+    h.step();
+    assert!(h.state().render_pending(), "the replacement page is waiting to render");
+    assert!(jobs.waiting() > 0, "the replacement render is held");
+    for frame in 0..3 {
         let (old, new) = ink_at(&mut h, from, to);
-        assert_eq!(old, 0, "frame {} after release: the text is back where it was", shown.len() + 1);
-        shown.push(new);
+        assert_eq!(old, 0, "frame {frame} after release: the text is back where it was");
+        assert!(new > 20, "frame {frame} after release: the text is missing at its new place ({new} dark pixels)");
+        h.step();
     }
-    assert!(shown.len() > 2, "frames before the new raster: {shown:?}");
-    assert!(shown.iter().filter(|n| **n <= 20).count() <= 1, "the text stays where it was released: {shown:?}");
     assert_ne!(added(&h)[0].content.rect(), rect, "the move is applied");
+    crate::support::settle_held(&mut h, &jobs);
     h.run_steps(2);
     let (old, new) = ink_at(&mut h, from, to);
     assert!(new > 20 && old == 0, "the redrawn page has the text in its new place ({old} old, {new} new)");
