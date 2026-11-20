@@ -11,7 +11,8 @@
 //!
 //! A verification pass then re-reads every redacted page; if any glyph or inline image is still
 //! under a region the whole operation fails (callers keep the previous document: fail-closed).
-//! Finally, document metadata (`/Info` entries, XMP) that repeats the removed text is removed.
+//! Finally, document metadata (`/Info` entries, XMP) that repeats the removed text is removed, and
+//! so is the catalog's and pages' XMP that carries a thumbnail of a page as it was.
 //! Places it leaves as they are (bookmark titles, attachments, remaining comments, other XMP)
 //! are only counted when they still hold that text ([`Report::still_holding`]). Last, a shared
 //! JBIG2 symbol dictionary (`/JBIG2Globals`) that anything gone by then used leaves the file too:
@@ -224,7 +225,9 @@ pub struct Report {
     /// only streams a check for text left under the marks may skip: an input stream labelled
     /// like an overlay (`/PCMark /Redaction`) is checked like any other.
     pub overlays: Vec<ObjRef>,
-    /// Document information entries and XMP streams removed because they held redacted text.
+    /// Document information entries and XMP streams removed because they held redacted text,
+    /// and the catalog's and pages' XMP streams removed because they carried a thumbnail, a
+    /// picture of a page as it was (#7921).
     pub metadata: usize,
     /// What became of the PDF/A and PDF/UA identification when the catalog's XMP packet was
     /// removed: written back in a packet of its own, or lost (see [`Identification`]).
