@@ -15659,3 +15659,25 @@ fn thai_paragraphs_break_the_row_on_unicode_row_breaks() {
         assert_eq!(rows(&doc), ["กข", "ค"], "matching U+{:04X}", u32::from(separator));
     }
 }
+
+/// (#7862) An image's `/Width` and `/Height` given by reference (ISO 32000-2 §7.3.10) are its
+/// size in the page's image list and in the reading-order list, as if written directly.
+#[test]
+fn image_sizes_given_by_reference_are_listed() {
+    const BY_REFERENCE: [&[&[u8]]; 3] = [&[b"Width"], &[b"Height"], &[b"Width", b"Height"]];
+    for keys in BY_REFERENCE {
+        let mut doc = image_page();
+        let image = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+        let Object::Stream(mut s) = (*doc.get(image)).clone() else { panic!("{image:?} is the image") };
+        for key in keys {
+            let held = doc.add(s.dict.get(key).cloned().unwrap());
+            s.dict.set(key.to_vec(), Object::Ref(held));
+        }
+        doc.set(image, Object::Stream(s));
+        let doc = reopen(&doc);
+        let named: Vec<_> = keys.iter().map(|k| String::from_utf8_lossy(k)).collect();
+        let sizes = |list: Vec<images::PageImage>| list.iter().map(|i| (i.width, i.height)).collect::<Vec<_>>();
+        assert_eq!(sizes(images::page_images(&doc, 0).unwrap()), [(4, 2)], "page_images, {named:?} by reference");
+        assert_eq!(sizes(images::reading_images(&doc, 0).unwrap()), [(4, 2)], "reading_images, {named:?} by reference");
+    }
+}
