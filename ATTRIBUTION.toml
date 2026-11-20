@@ -2079,3 +2079,27 @@ licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icons.rs"
 sha256 = "864ab2f19254e6ac7240bc6a98323197332e8f714d4d3f94831f41309e5ef2f7"
+
+[[asset]]
+path = "assets/icons/panel-left.svg"
+title = "Lucide icon \"panel-left\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/panel-left.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "bafd841b89deadd12a571ba9e7d15473751dc51f46e857f7c2ab09a32bd01a79"
+
+
+[[asset]]
+path = "assets/icons/panel-right.svg"
+title = "Lucide icon \"panel-right\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/panel-right.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "327d197328f9feb1f88c36c9db04e9b00fe717d877459f92fcd892f5e4c349fa"
+
