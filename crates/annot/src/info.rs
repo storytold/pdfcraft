@@ -3,7 +3,7 @@ use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{callout_line, callout_text_box, fillable, touch, unlocked};
 use super::text_style;
-use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
+use super::types::{BorderShape, FLAG_LOCKED, FillMark, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -305,6 +305,8 @@ pub struct Props {
     pub width: Option<f64>,
     /// Notes only.
     pub icon: Option<NoteIcon>,
+    /// Fill & Sign checks, crosses, dots and lines only: which mark it is (the stamp's `/Name`).
+    pub mark: Option<FillMark>,
     /// `/M`, as written.
     pub modified: Option<String>,
     /// The appearance can be redrawn (so colour, opacity and width can change).
@@ -363,6 +365,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         opacity: appearance::part_opacity(d).line,
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
+        mark: (subtype == "Stamp").then(|| d.name(b"Name").and_then(FillMark::from_name)).flatten(),
         modified: text_value(doc, d, b"M"),
         restylable: crate::draw::can_draw(doc, raw),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,

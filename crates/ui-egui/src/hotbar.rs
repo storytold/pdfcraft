@@ -371,6 +371,15 @@ fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
         .then_some((page, annotation))
 }
 
+/// The Fill & Sign check, cross, dot or line selected in the active document, when it can change.
+fn selected_fill_mark(app: &PdfCraftApp) -> Option<(usize, usize)> {
+    let (index, id) = app.active_ids()?;
+    let (page, annotation) = app.views.get(index)?.comments.selected?;
+    let doc = app.session.get(id).filter(|doc| doc.allows_annotation())?;
+    let props = doc.comment_props(page, annotation)?;
+    (props.mark.is_some() && !props.locked).then_some((page, annotation))
+}
+
 /// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected
 /// text (`picked`), or for new text when none is selected. The label shows in a vertical bar, as the
 /// font size's does.
@@ -505,6 +514,17 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
         }
         // After the text's own controls, so they keep their place in a bar that scrolls.
         fill_text_border_controls(ui, app, selected_fill_text(app), vertical);
+    }
+    // #2313: checks, crosses, dots and lines take their own colour, as text does: for new marks,
+    // and for the selected one.
+    if current_fill.and_then(crate::fill_sign::FillTool::mark).is_some() {
+        controls_divider(ui, t, vertical);
+        if let Some(color) = comments::quick_bar_colour(ui, app.fill_mark_color) {
+            app.fill_mark_color = color;
+            if let Some((page, index)) = selected_fill_mark(app) {
+                app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
+            }
+        }
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
