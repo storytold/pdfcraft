@@ -543,7 +543,7 @@ impl PdfCraftApp {
             if !self.still_pick_target(target) {
                 continue;
             }
-            // Last-resort guard (AGENTS.md §4), as for desktop picks and commands.
+            // Last-resort guard (app-agents.md rule 13), as for desktop picks and commands.
             let used = pdfcraft_engine::guard(|| {
                 if dropped {
                     self.add_dropped_to_combine(files.into_iter().map(|(name, bytes)| crate::combine_ui::Incoming::new(name, bytes)).collect());

@@ -1,4 +1,4 @@
-# ATTRIBUTION.toml: one entry per asset (AGENTS.md §1). The source of truth for provenance and licences.
+# ATTRIBUTION.toml: one entry per asset (clean-room.md and licences.md). The source of truth for provenance and licences.
 # ATTRIBUTION.md is generated from this file: `cargo xtask assets --write`. Checked by `cargo xtask assets` (part of `xtask ci`).
 #
 # [[asset]]    a file in this repository (committed or vendored); `sha256` must match the file.
@@ -7,8 +7,8 @@
 # [[build_input]] an optional build input outside this repository (craft-fonts via CRAFT_FONTS_DIR, craft-i18n via CRAFT_I18N_DIR);
 #              never committed or downloaded here, its own repository attributes each file.
 #
-# licence: SPDX expression from the allowlist in AGENTS.md §1.2. adobe_data = true marks the closed list of
-# Adobe-authored non-visual technical data allowed by AGENTS.md §1.1.
+# licence: SPDX expression from the allowlist in licences.md. adobe_data = true marks the closed list of
+# Adobe-authored non-visual technical data allowed by clean-room.md.
 
 [[asset]]
 path = "docs/images/pdfcraft-ocr-verify.png"
