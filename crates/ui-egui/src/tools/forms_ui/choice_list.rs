@@ -2,7 +2,7 @@
 
 use craft::behavior::{DisplayOrder, ItemSource};
 // PLAN: assumed `craft::ui::contract::CollectionEvent` re-export of the collection event enum.
-use craft::ui::contract::{Bind, CollectionEvent, Show as _, ShowCollection as _, ShowContainer as _, overlay::Anchor};
+use craft::ui::contract::{Bind, CollectionEvent, LeadOnOpen, Show as _, ShowCollection as _, ShowContainer as _, overlay::Anchor};
 use craft::ui::fonts::FontRef;
 use craft::ui::list::{DocumentRows, List, ListRow};
 use craft::ui::popover::PopupList;
@@ -59,6 +59,7 @@ pub(super) fn choice_list(ui: &mut egui::Ui, field: &FormField, rect: Rect, zoom
         })
         .show(ui, |ui, _| {
             List::<usize>::options(tl!("Options"))
+                .lead_on_open(LeadOnOpen::Selected)
                 .document_rows(DocumentRows::new(FontRef::proportional(), size, align))
                 .show_items(ui, &source, &mut |key, _| ListRow::new(names.get(*key).copied().unwrap_or_default().to_owned()).option())
                 .events
