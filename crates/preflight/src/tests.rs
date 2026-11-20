@@ -2367,3 +2367,123 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// What `verify` says under ISO 19005-2 6.1.12.
+fn permissions_said(doc: &Document) -> Vec<String> {
+    verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.12").map(|i| i.message).collect()
+}
+
+/// A one-page document whose catalog holds `perms` and a signature field (object 4) whose value is
+/// `signature`, followed by `extra` objects from object 6 on.
+fn signed(perms: &str, signature: &str, extra: &[&str]) -> Document {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /SigFlags 3 >> {perms} >>");
+    let mut objs = vec![
+        catalog.as_str(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /FT /Sig /T (Signature1) /V 5 0 R >>",
+        signature,
+    ];
+    objs.extend_from_slice(extra);
+    build(&objs, "")
+}
+
+#[test]
+fn permissions_hold_ur3_and_docmdp_and_docmdp_forbids_digests_clause_6_1_12() {
+    let sig = |reference: &str| format!("<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 0 0 0] /Contents <00> {reference} >>");
+    let docmdp_ref = |extra: &str| format!("/Reference [<< /Type /SigRef /TransformMethod /DocMDP {extra} >>]");
+    // PDFBOX-5076: DocMDP permissions and a DigestMethod in the certifying signature's reference.
+    let doc = signed("/Perms << /DocMDP 5 0 R >>", &sig(&docmdp_ref("/DigestMethod /SHA1")), &[]);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestMethod"]);
+    let doc = signed("/Perms << /DocMDP 5 0 R >>", &sig(&docmdp_ref("/DigestLocation [0 1] /DigestValue (x)")), &[]);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestLocation, DigestValue"]);
+    // A reference held by reference, on a signature that only the field holds.
+    let doc = signed(
+        "/Perms << /DocMDP 6 0 R >>",
+        &sig("/Reference [7 0 R]"),
+        &[&sig(""), "<< /Type /SigRef /TransformMethod /FieldMDP /DigestValue (x) >>"],
+    );
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestValue"]);
+    // A signature without `/Type` (it is optional, Table 255), found as a signature field's value.
+    let untyped = "<< /Filter /Adobe.PPKLite /Reference [<< /TransformMethod /FieldMDP /DigestMethod /SHA256 >>] >>";
+    let doc = signed("/Perms << /DocMDP 6 0 R >>", untyped, &[&sig("")]);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestMethod"]);
+    // Without DocMDP, digests are allowed; without them, DocMDP is.
+    assert!(permissions_said(&signed("/Perms << /UR3 5 0 R >>", &sig(&docmdp_ref("/DigestMethod /SHA1")), &[])).is_empty());
+    assert!(permissions_said(&signed("", &sig(&docmdp_ref("/DigestMethod /SHA1")), &[])).is_empty());
+    assert!(permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &sig(&docmdp_ref("")), &[])).is_empty());
+    // Other keys in the permissions dictionary.
+    let doc = signed("/Perms << /UR 5 0 R /DocMDP 5 0 R /Other 1 >>", &sig(""), &[]);
+    assert_eq!(permissions_said(&doc), ["The permissions dictionary holds UR, Other: only UR3 and DocMDP are allowed"]);
+}
+
+#[test]
+fn a_null_docmdp_or_other_permission_is_no_entry_clause_6_1_12() {
+    // ISO 32000-2 7.3.7: a dictionary entry whose value is null is the same as no entry, given
+    // directly or by reference.
+    let sig = "<< /Type /Sig /Reference [<< /TransformMethod /FieldMDP /DigestMethod /SHA1 >>] >>";
+    assert!(permissions_said(&signed("/Perms << /DocMDP null >>", sig, &[])).is_empty());
+    assert!(permissions_said(&signed("/Perms << /DocMDP 6 0 R >>", sig, &["null"])).is_empty());
+    assert!(permissions_said(&signed("/Perms << /UR3 5 0 R /Other null >>", sig, &[])).is_empty());
+    assert!(permissions_said(&signed("/Perms << /UR3 5 0 R /Other 6 0 R >>", sig, &["null"])).is_empty());
+    // So is a null digest entry in a signature reference dictionary.
+    let digests = |entries: &str| format!("<< /Type /Sig /Reference [<< /TransformMethod /DocMDP {entries} >>] >>");
+    assert!(permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &digests("/DigestMethod null"), &[])).is_empty());
+    let by_reference = digests("/DigestMethod 6 0 R /DigestValue 7 0 R");
+    assert!(permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &by_reference, &["null"])).is_empty());
+    assert_eq!(
+        permissions_said(&signed("/Perms << /DocMDP 5 0 R >>", &digests("/DigestMethod null /DigestValue (x)"), &[])),
+        ["With DocMDP permissions, a signature reference dictionary holds DigestValue"]
+    );
+}
+
+#[test]
+fn a_signature_field_inheriting_its_type_is_read_clause_6_1_12() {
+    // `/FT` is inheritable (ISO 32000-2 12.7.4.1, Table 226): the parent says `/Sig`, the child holds
+    // `/V`, an untyped signature that nothing else leads to.
+    let untyped = "<< /Filter /Adobe.PPKLite /Reference [<< /TransformMethod /FieldMDP /DigestMethod /SHA256 >>] >>";
+    let doc = doc_with_parent_type("/FT /Sig", untyped);
+    assert_eq!(permissions_said(&doc), ["With DocMDP permissions, a signature reference dictionary holds DigestMethod"]);
+    // A parent of another type, and a cycle of parents, lead to no signature.
+    let text = doc_with_parent_type("/FT /Tx", untyped);
+    assert!(permissions_said(&text).is_empty());
+    let cycle = doc_with_parent_type("/Parent 6 0 R", untyped);
+    assert!(permissions_said(&cycle).is_empty());
+}
+
+/// [`a_signature_field_inheriting_its_type_is_read_clause_6_1_12`]'s document with the parent
+/// field's `/FT` entry replaced by `parent`.
+fn doc_with_parent_type(parent: &str, signature: &str) -> Document {
+    let field = format!("<< {parent} /T (Signatures) /Kids [6 0 R] >>");
+    build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /SigFlags 3 >> /Perms << /DocMDP 5 0 R >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            &field,
+            "<< /Type /Sig /Filter /Adobe.PPKLite >>",
+            "<< /Parent 4 0 R /T (One) /V 7 0 R >>",
+            signature,
+        ],
+        "",
+    )
+}
+
+#[test]
+fn a_signature_many_fields_hold_is_read_once_clause_6_1_12() {
+    // Fifty fields hold the one signature, also the permissions' DocMDP and a `Sig` object: its
+    // three reference dictionaries are read once each, not once for each holder.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Perms << /DocMDP 4 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Sig /Reference 5 0 R >>".into(),
+        "[6 0 R 7 0 R 8 0 R]".into(),
+    ];
+    objs.extend((0..3).map(|_| "<< /TransformMethod /DocMDP >>".to_string()));
+    objs.extend((0..50).map(|i| format!("<< /FT /Sig /T (S{i}) /V 4 0 R >>")));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    SIGNATURE_REFERENCES_READ.with(|n| n.set(0));
+    assert!(permissions_said(&build(&objs, "")).is_empty());
+    assert_eq!(SIGNATURE_REFERENCES_READ.with(std::cell::Cell::get), 3);
+}
