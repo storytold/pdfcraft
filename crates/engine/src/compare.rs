@@ -190,8 +190,17 @@ impl Session {
     /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
     pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
         let c = self.compare_pages(old, new, pages)?;
-        let b = self.get(new).ok_or(EditError::NoDocument)?;
-        let new_words = b.words_on_pages(pages);
+        let old_words = {
+            let a = self.get(old).ok_or(EditError::NoDocument)?;
+            a.words_on_pages(pages)
+        };
+        let new_words = {
+            let b = self.get(new).ok_or(EditError::NoDocument)?;
+            b.words_on_pages(pages)
+        };
+        let new_page_crops: Vec<Option<[f64; 4]>> =
+            self.get(new).map(|d| d.info.pages.iter().map(|info| Some(info.crop.map(f64::from))).collect()).unwrap_or_default();
+        let new_pages = new_page_crops.len();
         // `compare` groups consecutive edits into one `Change`, and a change's new-side
         // words are a contiguous run of `new_words` with unchanged words between changes.
         // Track where the next run may start instead of counting only changed words, so
@@ -240,6 +249,51 @@ impl Session {
                 &new_words[start..start + new_word_count]
             };
 
+            if ch.kind == Kind::Deleted {
+                let old_word_count = ch.old.text.split_whitespace().count();
+                let old_slice = if old_word_count == 0 || old_word_count > old_words.len() {
+                    None
+                } else {
+                    let mut start = None;
+                    for candidate in 0..=old_words.len() - old_word_count {
+                        if old_words[candidate..candidate + old_word_count]
+                            .iter()
+                            .zip(ch.old.text.split_whitespace())
+                            .all(|(word, text)| word.text == text)
+                        {
+                            start = Some(candidate);
+                            break;
+                        }
+                    }
+                    start.map(|s| &old_words[s..s + old_word_count])
+                };
+                if let Some(slice) = old_slice {
+                    let mut pages_in_order: Vec<usize> = Vec::new();
+                    for w in slice {
+                        if !pages_in_order.contains(&w.page) {
+                            pages_in_order.push(w.page);
+                        }
+                    }
+                    for page in pages_in_order {
+                        let first_rect = slice.iter().filter(|w| w.page == page).map(|w| w.rect).next();
+                        let target_page = if page < new_pages { page } else { new_pages.saturating_sub(1) };
+                        let near = if page == target_page { first_rect } else { None };
+                        let near = near.or_else(|| new_page_crops.get(target_page).copied().flatten());
+                        let Some(r) = near else { continue };
+                        let shape = Shape::Note { at: [r[0], r[3]], icon: NoteIcon::Note };
+                        let mut style = crate::Style::default_for(&shape);
+                        style.color = color;
+                        edits.push(Edit::AddAnnotation(NewAnnotation {
+                            page: target_page,
+                            shape,
+                            style,
+                            contents: contents.clone(),
+                            author: "Compare".into(),
+                        }));
+                    }
+                    continue;
+                }
+            }
             if ch.new.rects.is_empty() {
                 let Some(r) = ch.new.near else { continue };
                 let shape = Shape::Note { at: [r[0], r[3]], icon: NoteIcon::Note };
