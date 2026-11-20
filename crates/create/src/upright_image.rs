@@ -4,6 +4,8 @@
 
 use std::borrow::Cow;
 
+use craft_image_codecs::jpeg_probe::{JpegVisit, jfif_dpi, walk_jpeg_segments};
+
 /// Quality of a re-encoded JPEG (the camera's own is rarely higher).
 const QUALITY: u8 = 92;
 /// Larger photos are embedded as they are: turning them would take hundreds of MB.
@@ -18,7 +20,7 @@ thread_local! {
 /// Reads the EXIF Orientation tag (1..=8) from APP1 Exif metadata in a JPEG, defaulting to 1.
 pub fn jpeg_exif_orientation(bytes: &[u8]) -> u16 {
     let mut orientation = 1;
-    let _ = crate::image_probe::walk_jpeg_segments(bytes, |marker, _span, seg| {
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
         if marker == 0xE1
             && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
         {
@@ -34,9 +36,9 @@ pub fn jpeg_exif_orientation(bytes: &[u8]) -> u16 {
             {
                 orientation = o;
             }
-            return Ok(crate::image_probe::JpegVisit::Stop);
+            return Ok(JpegVisit::Stop);
         }
-        Ok(crate::image_probe::JpegVisit::Continue)
+        Ok(JpegVisit::Continue)
     });
     orientation
 }
@@ -113,46 +115,24 @@ pub(crate) fn without_extended_xmp(bytes: &[u8]) -> Vec<u8> {
 /// Calls `f` with the byte range of each Extended XMP chunk (APP1 segment) before the image data.
 fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
     const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
-    let mut i = 2usize;
-    while let Some(&byte) = bytes.get(i) {
-        // Stray bytes between segments, which the decoder skips too.
-        if byte != 0xFF {
-            i += 1;
-            continue;
+    let _ = walk_jpeg_segments(bytes, |marker, span, seg| {
+        if marker == 0xE1 && seg.starts_with(PREFIX) {
+            f(span);
         }
-        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
-        match marker {
-            // Fill bytes before a marker.
-            0xFF => i += 1,
-            // Markers without a segment.
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            // The image data starts (or ends): no headers after it.
-            0xDA | 0xD9 => break,
-            _ => {
-                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
-                let len = usize::from(u16::from_be_bytes([hi, lo]));
-                let end = i.saturating_add(2).saturating_add(len.max(2));
-                // The prefix must start the APP1 segment's own payload: a zero-length header
-                // followed by prefix bytes is not a chunk.
-                if marker == 0xE1 && bytes.get(i.saturating_add(4)..end.min(bytes.len())).is_some_and(|seg| seg.starts_with(PREFIX)) {
-                    f(i..end.min(bytes.len()));
-                }
-                i = end;
-            }
-        }
-    }
+        Ok(JpegVisit::Continue)
+    });
 }
 
 fn jfif_density_dpi(bytes: &[u8]) -> Option<(f32, f32)> {
     let mut dpi = None;
-    let _ = crate::image_probe::walk_jpeg_segments(bytes, |marker, _span, seg| {
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
         if marker == 0xE0
-            && let Some((x, y)) = crate::image_probe::jfif_dpi(seg)
+            && let Some((x, y)) = jfif_dpi(seg)
         {
             dpi = Some((x as f32, y as f32));
-            return Ok(crate::image_probe::JpegVisit::Stop);
+            return Ok(JpegVisit::Stop);
         }
-        Ok(crate::image_probe::JpegVisit::Continue)
+        Ok(JpegVisit::Continue)
     });
     dpi
 }
