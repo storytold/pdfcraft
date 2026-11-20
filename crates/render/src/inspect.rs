@@ -37,8 +37,10 @@ pub use core::{check_pages, inspect, pretty_date};
 use core::{inspect_structure, spend};
 pub use model::{
     Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
-    OutlineItem, PageInfo, PageTransition, RemoteDestination, ReviewStates, TransitionStyle, Xfa, link_replies, thread_tops,
+    MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
+    fill_group_text, group_primaries, link_replies, thread_tops,
 };
+pub use navigation::named_destination;
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
 #[cfg(test)]
@@ -85,6 +87,8 @@ pub struct DocInfo {
     pub layer_order: Vec<LayerRow>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
+    /// The document is a PDF portfolio (`/Collection`): its documents are `attachments`.
+    pub portfolio: Option<Portfolio>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
     /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
@@ -94,5 +98,7 @@ pub struct DocInfo {
     pub warnings: Vec<String>,
 }
 
+#[cfg(test)]
+mod portfolio_tests;
 #[cfg(test)]
 mod tests;

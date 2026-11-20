@@ -70,6 +70,7 @@ mod snapshot;
 mod sweep;
 mod util;
 
+pub(crate) use extract::{bbox_of, matrix_of};
 pub use snapshot::Snapshot;
 /// What the proof established for one region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

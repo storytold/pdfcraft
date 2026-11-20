@@ -144,6 +144,43 @@ pub fn static_shell(data: &str) -> Vec<u8> {
     assemble(objs)
 }
 
+/// A static XFA form with one exclusion group `form1[0].page1[0].lang[0]` (items `1` English,
+/// `2` French) bound to the data by name, laid out as an AcroForm radio group whose `/Opt` holds
+/// the items and whose on states are the buttons' positions `/0` and `/1` (ISO 32000-2 Table 230),
+/// as public static forms write it. Its datasets hold `data` (the children of `xfa:data`).
+pub fn static_radio_shell(data: &str) -> Vec<u8> {
+    radio_shell(data, None)
+}
+
+/// [`static_radio_shell`] whose buttons also carry `/PCOn`, the item PdfCraft writes to the data
+/// for the selected button ahead of its `/Opt` entry.
+pub fn static_radio_shell_with_pcon(data: &str, pcon: [&str; 2]) -> Vec<u8> {
+    radio_shell(data, Some(pcon))
+}
+
+fn radio_shell(data: &str, pcon: Option<[&str; 2]>) -> Vec<u8> {
+    let pc = |i: usize| pcon.and_then(|p| p.get(i).map(|v| format!(" /PCOn ({v})"))).unwrap_or_default();
+    let xdp = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"><subform name=\"page1\"><exclGroup name=\"lang\"><field name=\"en\"><ui><checkButton shape=\"round\"/></ui><items><integer>1</integer></items></field><field name=\"fr\"><ui><checkButton shape=\"round\"/></ui><items><integer>2</integer></items></field></exclGroup></subform></subform></template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets></xdp:xdp>"
+    );
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /XFA 5 0 R /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [9 0 R 10 0 R] >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        b"<< /T (form1[0]) /Kids [7 0 R] >>".to_vec(),
+        b"<< /T (page1[0]) /Parent 6 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /FT /Btn /Ff 49152 /T (lang[0]) /Parent 7 0 R /Opt [(1) (2)] /V /Off /Kids [9 0 R 10 0 R] >>".to_vec(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [72 700 84 712] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >>{} /AP << /N << /0 11 0 R /Off 11 0 R >> >> >>", pc(0))
+            .into_bytes(),
+        format!("<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [144 700 156 712] /P 3 0 R /AS /Off /MK << /BC [0 0 0] >>{} /AP << /N << /1 11 0 R /Off 11 0 R >> >> >>", pc(1))
+            .into_bytes(),
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>\nstream\n\nendstream".to_vec(),
+    ];
+    assemble(objs)
+}
+
 /// A static XFA form of `n` text fields `form1[0].page1[0].f<i>[0]` on one page, whose values
 /// (`v<i>`) are only in its datasets, as when another viewer filled it in. The first field is
 /// read-only.
@@ -201,6 +238,30 @@ fn assemble(objs: Vec<Vec<u8>>) -> Vec<u8> {
     out
 }
 
+/// A form with `layout:ready` scripts: the root subform reads the page count and turns field
+/// highlighting on (as forms do with `app.runtimeHighlight`), `stamp` takes a value, `seen` records the highlight its script
+/// reads after the root's, and `pageNo` numbers its page (left to the layout). `note` has a
+/// `form:ready` script, a different event.
+pub fn layout_ready_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <event activity="ready" ref="$layout"><script contentType="application/x-javascript">var pages = xfa.layout.pageCount(); if (!app.runtimeHighlight) { app.runtimeHighlight = true; }</script></event>
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="stamp" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = "laid out";</script></event></field>
+  <field name="seen" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = String(app.runtimeHighlight);</script></event></field>
+  <field name="pageNo" w="1in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.page(this);</script></event></field>
+  <field name="note" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = "form ready";</script></event></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A hidden subform `details` a script may show, holding a named field and three unnamed
 /// objects: a caption, an old caption the form keeps hidden, and a hidden subform. Unnamed
 /// objects have no SOM name of their own, so showing `details` must leave the hidden ones hidden.
@@ -217,6 +278,99 @@ pub fn unnamed_hidden_template() -> String {
    <subform layout="tb" presence="hidden"><draw w="4in" h="0.3in"><value><text>Old section</text></value></draw></subform>
    <field name="note" w="4in" h="0.3in"><ui><textEdit/></ui></field>
   </subform>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// The Tab-order probe: fields placed out of document order (A), `next` links (B), a subform
+/// whose `first` link goes to a draw that links on (C), hidden, invisible, read-only and
+/// protected fields (D), and a protected `log` at the top. Another viewer tabs it `start A2 A3
+/// A4 A1 B1 B3 B2 B4 C3 D1 D4 D6 finish C1 C2`, then back to `start`.
+pub fn traversal_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="8in" h="10in">
+  <field name="log" x="0in" y="0in" w="8in" h="1.1in" access="protected"><ui><textEdit multiLine="1"/></ui></field>
+  <field name="start" x="0in" y="1.3in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="1.85in" w="7.5in" h="0.3in"><value><text>Section A: no links (written A1 A2 A3 A4, placed A2 A3 / A4 A1)</text></value></draw>
+  <field name="A1" x="3in" y="2.65in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A2" x="0in" y="2.2in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A3" x="3in" y="2.2in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="A4" x="0in" y="2.65in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="3.2in" w="7.5in" h="0.3in"><value><text>Section B: next links B1 to B3, B3 to B2, B2 to B4</text></value></draw>
+  <field name="B1" x="0in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B3[0]"/></traversal></field>
+  <field name="B2" x="2in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B4[0]"/></traversal></field>
+  <field name="B3" x="4in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="B2[0]"/></traversal></field>
+  <field name="B4" x="6in" y="3.55in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="4.1in" w="7.5in" h="0.3in"><value><text>Section C: the subform's first link goes to a label, which links to C3</text></value></draw>
+  <subform name="C" x="0in" y="4.45in" w="8in" h="0.4in" layout="position"><traversal><traverse operation="first" ref="Clabel[0]"/></traversal>
+   <draw name="Clabel" x="0in" y="0in" w="0.6in" h="0.35in"><value><text>C:</text></value><traversal><traverse ref="C3[0]"/></traversal></draw>
+   <field name="C1" x="0.7in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+   <field name="C2" x="2.9in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+   <field name="C3" x="5.1in" y="0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  </subform>
+  <draw x="0in" y="5.0in" w="7.5in" h="0.3in"><value><text>Section D: D2 hidden, D3 invisible, D4 read-only, D5 protected</text></value></draw>
+  <field name="D1" x="0in" y="5.35in" w="1.2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="D2" x="1.35in" y="5.35in" w="1.2in" h="0.35in" presence="hidden"><ui><textEdit/></ui></field>
+  <field name="D3" x="2.7in" y="5.35in" w="1.2in" h="0.35in" presence="invisible"><ui><textEdit/></ui></field>
+  <field name="D4" x="4.05in" y="5.35in" w="1.2in" h="0.35in" access="readOnly"><ui><textEdit/></ui></field>
+  <field name="D5" x="5.4in" y="5.35in" w="1.2in" h="0.35in" access="protected"><ui><textEdit/></ui></field>
+  <field name="D6" x="6.75in" y="5.35in" w="1.2in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="finish" x="0in" y="6.0in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
+/// The second Tab-order probe: in each row, the first field links to an object between the
+/// second and third that links on to the fourth: a hidden subform (E), a hidden field (F), an
+/// invisible field (G) and a protected field (H). Another viewer tabs it `start E1 E2 E3 E4 F1
+/// F4 G1 G4 H1 H4 finish F2 F3 G2 G3 H2 H3`, then back to `start`.
+pub fn traversal_targets_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.25in" y="0.25in" w="8in" h="10.5in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="position" w="8in" h="10in">
+  <field name="start" x="0in" y="1.3in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="1.85in" w="7.5in" h="0.3in"><value><text>Section E: E1 links to ET, a hidden subform between E2 and E3, which links to E4</text></value></draw>
+  <field name="E1" x="0in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="ET[0]"/></traversal></field>
+  <field name="E2" x="1.6in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <subform name="ET" x="3.0in" y="2.2in" w="1.3in" h="0.35in" layout="position" presence="hidden"><traversal><traverse ref="E4[0]"/></traversal>
+   <field name="ETin" x="0in" y="0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  </subform>
+  <field name="E3" x="4.4in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="E4" x="6.0in" y="2.2in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="2.75in" w="7.5in" h="0.3in"><value><text>Section F: F1 links to FT, a hidden field between F2 and F3, which links to F4</text></value></draw>
+  <field name="F1" x="0in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="FT[0]"/></traversal></field>
+  <field name="F2" x="1.6in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="FT" x="3.0in" y="3.1in" w="1.3in" h="0.35in" presence="hidden"><ui><textEdit/></ui><traversal><traverse ref="F4[0]"/></traversal></field>
+  <field name="F3" x="4.4in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="F4" x="6.0in" y="3.1in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="3.65in" w="7.5in" h="0.3in"><value><text>Section G: G1 links to GT, an invisible field between G2 and G3, which links to G4</text></value></draw>
+  <field name="G1" x="0in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="GT[0]"/></traversal></field>
+  <field name="G2" x="1.6in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="GT" x="3.0in" y="4.0in" w="1.3in" h="0.35in" presence="invisible"><ui><textEdit/></ui><traversal><traverse ref="G4[0]"/></traversal></field>
+  <field name="G3" x="4.4in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="G4" x="6.0in" y="4.0in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <draw x="0in" y="4.55in" w="7.5in" h="0.3in"><value><text>Section H: H1 links to HT, a protected field between H2 and H3, which links to H4</text></value></draw>
+  <field name="H1" x="0in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui><traversal><traverse ref="HT[0]"/></traversal></field>
+  <field name="H2" x="1.6in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="HT" x="3.0in" y="4.9in" w="1.3in" h="0.35in" access="protected"><ui><textEdit/></ui><traversal><traverse ref="H4[0]"/></traversal></field>
+  <field name="H3" x="4.4in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="H4" x="6.0in" y="4.9in" w="1.3in" h="0.35in"><ui><textEdit/></ui></field>
+  <field name="finish" x="0in" y="5.5in" w="1.5in" h="0.35in"><ui><textEdit/></ui></field>
  </subform>
 </subform>
 </template>
@@ -584,6 +738,30 @@ pub fn date_pictures_template() -> String {
     .to_string()
 }
 
+/// Two signature boxes: `sign`, whose preSign script shows a notice, fills `when` and locks it, and
+/// whose postSign script fills `after`; and `plain`, with no signing scripts.
+pub fn signing_events_template() -> String {
+    r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb" w="7.5in">
+  <field name="when" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="sign" w="3in" h="1in"><ui><signature/></ui>
+   <event activity="preSign"><script contentType="application/x-javascript">xfa.host.messageBox("Signing notice"); when.rawValue = "signed"; when.access = "readOnly";</script></event>
+   <event activity="postSign"><script contentType="application/x-javascript">after.rawValue = "done";</script></event>
+  </field>
+  <field name="plain" w="3in" h="1in"><ui><signature/></ui></field>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    .to_string()
+}
+
 /// A form of `sections` sections of `rows` rows, each row with a calculated total (half in
 /// JavaScript, half in FormCalc) and a section sum over its rows: 2 × sections × rows + sections
 /// calculate scripts, every one reading values the earlier ones settled.
@@ -757,4 +935,88 @@ if (this.rawValue == "1") {
 </xdp:xdp>
 "##
     .to_string()
+}
+
+/// A form whose text field `probe` counts its enters in `enters` and its exits in `exits`, whose
+/// text field `quiet` only shows a message when it is left, and whose radio button `size.large`
+/// counts its enters in `picks` and its exits in `drops` (each button of a radio group is a field
+/// with scripts of its own), whose text field `hint` clears its "Type here" when it gains focus, and
+/// whose text field `relay` puts that "Type here" back in `hint` when it loses focus.
+pub fn focus_template() -> String {
+    let js = "application/x-javascript";
+    let count = |name: &str| format!(r#"<script contentType="{js}">{name}.rawValue = Number({name}.rawValue) + 1;</script>"#);
+    let counter = |name: &str| {
+        format!(r#"<field name="{name}" w="2in" h="0.3in" access="protected"><ui><textEdit/></ui><value><integer>0</integer></value></field>"#)
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <field name="probe" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ <field name="quiet" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">xfa.host.messageBox("left quiet");</script></event></field>
+ <exclGroup name="size" layout="lr-tb">
+  <field name="small" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>S</text></items></field>
+  <field name="large" w="0.5in" h="0.25in"><ui><checkButton/></ui><items><text>L</text></items><event activity="enter">{}</event><event activity="exit">{}</event></field>
+ </exclGroup>
+ {}{}{}{}
+ <field name="hint" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>Type here</text></value><event activity="enter"><script contentType="{js}">if (this.rawValue == "Type here") this.rawValue = "";</script></event></field>
+ <field name="relay" w="2in" h="0.3in"><ui><textEdit/></ui><event activity="exit"><script contentType="{js}">hint.rawValue = "Type here";</script></event></field>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+        count("enters"),
+        count("exits"),
+        count("picks"),
+        count("drops"),
+        counter("exits"),
+        counter("enters"),
+        counter("picks"),
+        counter("drops")
+    )
+}
+
+/// A form whose two draws link their pictures instead of embedding them: `.\logo.png`, which the
+/// PDF keeps in its `XFAImages` name tree (a [`tiny_png`], under a `Kids` node, as producers
+/// split the tree), and `.\missing.png`, which it doesn't (XFA 3.3 pp. 257–258).
+pub fn linked_image_shell() -> Vec<u8> {
+    linked_image_shell_with(b"<< /Kids [7 0 R] >>", br"<< /Limits [(.\\logo.png) (.\\logo.png)] /Names [(.\\logo.png) 8 0 R] >>")
+}
+
+/// [`linked_image_shell`] with its own name tree: `root` is object 6 (the tree the catalog names),
+/// `kid` object 7, and object 8 the PNG.
+pub fn linked_image_shell_with(root: &[u8], kid: &[u8]) -> Vec<u8> {
+    linked_image_shell_holding(root, kid, TINY_PNG)
+}
+
+/// [`linked_image_shell_with`], object 8 a stream holding `picture` (a [`tiny_png`] there).
+pub fn linked_image_shell_holding(root: &[u8], kid: &[u8], picture: &[u8]) -> Vec<u8> {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <draw name="logo" w="1in" h="1in"><value><image contentType="image/png" href=".\logo.png"/></value></draw>
+  <draw name="gone" w="1in" h="1in"><value><image contentType="image/png" href=".\missing.png"/></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut png = format!("<< /Length {} >>\nstream\n", picture.len()).into_bytes();
+    png.extend_from_slice(picture);
+    png.extend_from_slice(b"\nendstream");
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Names << /XFAImages 6 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        root.to_vec(),
+        kid.to_vec(),
+        png,
+    ];
+    assemble(objs)
 }
