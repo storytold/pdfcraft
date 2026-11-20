@@ -80,8 +80,8 @@ synchronous field callback behind an unanswered dialog.
 
 The native prompt UI is not implemented for the web build. The existing headless/unsupported
 host path cancels unanswered popups and response dialogs; no web-interaction parity is claimed.
-This work does not add timer execution, PDF annotations/layers to the JS object model, or the
-remaining document action triggers.
+PDF annotations are not exposed through the JS object model, and document action triggers beyond
+Open, Will Save and Will Print are not implemented.
 
 ## Link actions
 
@@ -172,8 +172,8 @@ The prompt channel and default menu renderer support interactive form scripts. #
 supply an anchored renderer through the UI menu callback when it adds link actions. Once
 the shared parser lands upstream, this integration can use it directly.
 
-`ScriptSession::run_host_task` gives future timer and page actions (#4751) access to the
-retained realm on its own worker.
+Timer and page actions use `ScriptSession::run`. Native jobs execute in the retained realm
+on its worker; the wasm32 implementation executes jobs inline in its own realm.
 
 Document actions and widget triggers (ported from #344 by @DWAA1660) run through the same
 realm. On opening, the document scripts run, then the catalog `/OpenAction`'s JavaScript
