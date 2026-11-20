@@ -76,7 +76,7 @@ impl CanvasTool for EditTextTool<'_> {
         {
             return ToolAction::Done;
         }
-        object_ui::begin_marquee(self.session, page, pointer.mods);
+        object_ui::begin_marquee(self.session, pointer.mods);
         ToolAction::Claimed
     }
 

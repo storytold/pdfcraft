@@ -117,7 +117,7 @@ impl CanvasTool for PageSelectTool<'_> {
         let capped = if self.cap_clicks && pointer.clicks > 2 { pointer.clicks(1) } else { *pointer };
         let action = self.text.press(&capped, cx);
         self.pick(&capped);
-        action
+        if action == ToolAction::Done && self.picks.pending.is_some() { ToolAction::Claimed } else { action }
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {

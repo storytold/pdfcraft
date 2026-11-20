@@ -1749,8 +1749,9 @@ fn paste_from_a_right_click_where_two_pages_touch_keeps_to_the_first_page() {
     right_click(&mut h, seam);
     assert_eq!(h.state().views[0].session.comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
     assert!(h.state().views[0].session.image_selection.is_none(), "page 2's picture is not selected for its menu");
-    h.event(picture());
     h.get_by_label("Paste").click();
+    h.run_steps(1);
+    h.event(picture());
     h.run_steps(3);
     let images = |page| {
         let s = h.state();
