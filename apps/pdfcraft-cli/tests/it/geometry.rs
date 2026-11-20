@@ -129,3 +129,15 @@ fn geometry_max_total_segments_reaches_the_tool() {
     assert_eq!((first["next_page"].clone(), first["pages_left"].clone()), (json!(2), json!(1)));
     refused(&[&path, "--max-total-segments", "lots"], "--max-total-segments");
 }
+
+/// A password that looks like an option is the password, not that option: one walk reads the
+/// options, so `--password --coords --max-total-segments 1` sets only the password and the budget.
+#[test]
+fn geometry_reads_a_password_that_looks_like_an_option_as_the_password() {
+    let path = file("password-like-option.pdf");
+    std::fs::write(&path, fixture()).unwrap();
+    let answer = geometry(&[&path, "--password", "--coords", "--max-total-segments", "1"]);
+    assert_eq!(answer["coords"], json!("page"));
+    assert_eq!(answer["pages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(answer["next_page"], json!(2));
+}
