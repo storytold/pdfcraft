@@ -371,6 +371,71 @@ fn a_drag_in_the_gutter_beside_a_ragged_column_takes_no_rows_across_it() {
     assert_eq!(text(&h), Some(RAGGED_LEFT[1..3].join("\n")));
 }
 
+/// Two columns of running text 20 pt apart, eight lines each. The right column's second to
+/// fourth lines are a list set in from its edge, the last of them short: beside them no line
+/// starts right after the gutter, and the two columns look like the cells of a table's rows.
+fn columns_beside_short_lines() -> Vec<u8> {
+    let column = |x: u32, lines: &[&str]| {
+        let lines: String = lines.iter().map(|line| format!("({line}) Tj T* ")).collect();
+        format!("BT /F1 10 Tf 12 TL {x} 250 Td {lines}ET ")
+    };
+    let content = format!("{}{}", column(20, &BESIDE_LEFT), column(190, &BESIDE_RIGHT));
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+const BESIDE_LEFT: [&str; 8] = [
+    "The left column of a page",
+    "set in two columns whose",
+    "lines sit level with each",
+    "other and whose gutter is",
+    "twenty points wide, as in",
+    "many journals, runs on to",
+    "eight lines of text, each",
+    "as wide as its column is.",
+];
+const BESIDE_RIGHT: [&str; 8] = [
+    "while the right column of",
+    "   a list in it is set in",
+    "   from the edge, on three",
+    "   lines.",
+    "The page goes on with its",
+    "running text after those,",
+    "all of it as wide as that",
+    "of the left column and as",
+];
+
+/// A drag down the left column that ends in the gutter, where the end of its own line is the
+/// nearest text, is beside its column still: it takes no rows across the gutter, though the
+/// list level with it in the right column looks like a table's cells.
+#[test]
+fn a_drag_ending_in_the_gutter_takes_no_rows_from_the_next_column() {
+    let mut h = opened("beside.pdf", columns_beside_short_lines());
+    let rect = |h: &Harness<'static, PdfCraftApp>, g: usize| h.state().views[0].glyph_screen_rect(0, g).expect("glyph on screen");
+    let mut starts = Vec::new();
+    let mut glyphs = 0;
+    for line in BESIDE_LEFT.iter().chain(&BESIDE_RIGHT) {
+        starts.push(glyphs);
+        glyphs += line.len();
+    }
+    // The gutter, from the end of the left column's first line to the start of the right one's.
+    let (g0, g1) = (rect(&h, starts[1] - 1).right(), rect(&h, starts[8]).left());
+    let from = glyph(&h, 0) - vec2(4.0, 0.0);
+    // Level with the fourth line, nearer the left column than the right one.
+    let level = rect(&h, starts[3]).center().y;
+    drag(&mut h, from, egui::pos2(g0 + (g1 - g0) * 0.35, level), Modifiers::NONE);
+    assert_eq!(text(&h), Some(BESIDE_LEFT[..4].join("\n")));
+}
+
 /// Two article columns, the right one a line shorter: its last glyph, the end of reading order,
 /// sits above the left column's last line.
 fn uneven_columns() -> Vec<u8> {

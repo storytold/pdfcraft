@@ -830,17 +830,21 @@ fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextG
         && let Some(mut selection) =
             view.selection.filter(|selection| selection.page == gesture.page || (selecting && matches!(selection.span, Span::Run { .. })))
     {
-        // On the page the drag started on it stays in its column until the pointer has crossed the gutter beside it.
+        // On the page the drag started on it stays in its column until the pointer has crossed the gutter beside it:
+        // held back from the nearest text, or beside its own line still, in the white after it or in that gutter.
         let (hit, kept) = match selection.span {
             Span::Run { anchor, .. } if selection.page == gesture.page => {
                 let hit = text.nearest_from(anchor, gesture.vx, gesture.vy);
-                (hit, hit != text.nearest(gesture.vx, gesture.vy))
+                let beside = hit.is_some_and(|hit| text.beside_column(hit, gesture.vx, gesture.vy));
+                (hit, beside || hit != text.nearest(gesture.vx, gesture.vy))
             }
             _ => (text.nearest(gesture.vx, gesture.vy), false),
         };
-        // Held in its column, the drag ends at its head: the pointer, still in the gutter, would take
-        // the rows on across it.
-        let head_x = Some(gesture.vx).filter(|x| x.is_finite() && !kept);
+        // Held in its column, the drag ends at its head, not where the pointer is: still in the gutter, the
+        // pointer would take the rows on across it. The rows down to the head are still the column's own,
+        // where reading order strays from them (a formula's number is read after the paragraph below it).
+        let at_head = hit.and_then(|hit| text.glyphs.get(hit)).map(|g| (g.rect[0] + g.rect[2]) / 2.0);
+        let head_x = if kept { at_head } else { Some(gesture.vx) }.filter(|x| x.is_finite());
         match selection.span {
             Span::Run { .. } if clicks >= 2 => {
                 if let Some(hit) = hit {

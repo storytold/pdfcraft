@@ -435,6 +435,9 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let mut level_parted: HashMap<(usize, usize), bool> = HashMap::new();
     // Whether a block has any visible glyph.
     let inked: Vec<bool> = blocks.iter().map(|(members, _)| members.iter().any(|&s| segs.get(s).is_some_and(|s| s.ink.is_finite()))).collect();
+    let ink_of_block = block_inks(&blocks, &segs);
+    // The columns the gutters found so far part, worked out again when another gutter is found.
+    let mut columns: Bands = (usize::MAX, Vec::new());
     while let Some(&top) = remaining.iter().min_by(|a, b| blocks[**a].1[1].total_cmp(&blocks[**b].1[1])) {
         // A column goes on past a paragraph gap (#3658): the nearest block below the one just read that overlaps it
         // horizontally comes next, if the gap above it is at most two and a half heights of the last line read (a
@@ -520,6 +523,9 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
                 .unwrap_or(top)
         });
+        // A column is read to its end before the next one (#3682).
+        let pick =
+            column_first((&blocks, &segs), (&ink_of_block, &inked), &remaining, (&mut columns, &mut gutters), block_order.last().copied(), pick);
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
     }
@@ -796,6 +802,178 @@ fn seg_of(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, run: Run) -> Opt
         }
     }
     seg
+}
+
+/// A block: its segments, and the box around them.
+type Block = (Vec<usize>, [f32; 4]);
+
+/// [`column_bands`], with how many gutters they were worked out from.
+type Bands = (usize, Vec<[f32; 3]>);
+
+/// Each block's visible text, from its left edge to its right: the blanks that end a line reach into the gutter.
+/// A block of blanks spans its box.
+fn block_inks(blocks: &[Block], segs: &[Seg]) -> Vec<(f32, f32)> {
+    blocks
+        .iter()
+        .map(|(members, bb)| {
+            let ink = members.iter().filter_map(|&s| segs.get(s)).filter(|s| s.ink.is_finite());
+            let (x0, x1) = ink.fold((f32::INFINITY, f32::NEG_INFINITY), |(x0, x1), s| (x0.min(s.ink_start), x1.max(s.ink)));
+            if x0 <= x1 { (x0, x1) } else { (bb[0], bb[2]) }
+        })
+        .collect()
+}
+
+/// [`column_bands`] of the gutters `found`, kept in `columns` with how many gutters they were worked out from:
+/// worked out again when another gutter has been found.
+fn column_bands_again(columns: &mut Bands, segs: &[Seg], found: &[[f32; 4]]) {
+    if columns.0 != found.len() {
+        *columns = (found.len(), column_bands(segs, found));
+    }
+}
+
+/// The block to read next where `pick` is the block order's choice after block `last`: `pick`, or the block that
+/// [`before_next_column`] puts before it. A block level with the first line of the one just read is the next
+/// cell of its row, and stays `pick`, when no gutter is found between the two, or when the one just read is at
+/// most [`COLUMN_LINES`] lines (an entry of a list set in two columns, each beside its counterpart): a column's
+/// paragraph before a formula is longer.
+fn column_first(
+    (blocks, segs): (&[Block], &[Seg]),
+    inks: (&[(f32, f32)], &[bool]),
+    remaining: &[usize],
+    (columns, gutters): (&mut Bands, &mut Gutters),
+    last: Option<usize>,
+    pick: usize,
+) -> usize {
+    let first_seg = |b: usize| blocks.get(b).and_then(|(members, _)| members.first()).and_then(|&s| segs.get(s));
+    if let Some((a, b)) = last.and_then(first_seg).zip(first_seg(pick)) {
+        let shared = a.bbox[3].min(b.bbox[3]) - a.bbox[1].max(b.bbox[1]);
+        let short = last.and_then(|l| blocks.get(l)).is_some_and(|(members, _)| members.len() <= COLUMN_LINES);
+        if shared > 0.3 * (a.bbox[3] - a.bbox[1]).max(b.bbox[3] - b.bbox[1]) && (short || !parted_by_gutter(segs, a, b, gutters)) {
+            return pick;
+        }
+    }
+    column_bands_again(columns, segs, gutters.found());
+    before_next_column(blocks, inks, remaining, &columns.1, pick)
+}
+
+/// The block to read before block `pick`, or `pick` itself: a block of the column right of the gutter between two
+/// columns of running text (`bands`, as [`column_bands`] gives them) waits for the unread blocks left of that
+/// gutter, top-most first. Each formula set between a column's paragraphs otherwise ends its block there, and the
+/// page reads in bands, a stretch of the left column and then of the right one. `inks` are each block's visible
+/// text from its left edge to its right, and whether it has any.
+fn before_next_column(blocks: &[Block], (inks, inked): (&[(f32, f32)], &[bool]), remaining: &[usize], bands: &[[f32; 3]], pick: usize) -> usize {
+    let level = |b: usize, y0: f32, y1: f32| blocks.get(b).is_some_and(|(_, bb)| (y0..=y1).contains(&((bb[1] + bb[3]) / 2.0)));
+    let has_ink = |b: usize| inked.get(b).copied().unwrap_or(false);
+    let top_left = |b: usize| blocks.get(b).map_or((f32::INFINITY, f32::INFINITY), |(_, bb)| (bb[1], bb[0]));
+    bands
+        .iter()
+        .filter(|&&[mid, y0, y1]| inks.get(pick).is_some_and(|ink| ink.0 >= mid) && level(pick, y0, y1))
+        .find_map(|&[mid, y0, y1]| {
+            // A block stacked across the gutter beside the columns (a heading over both and the lines set with it,
+            // or text the blocks could not tell apart by column) leaves no column to finish: the order stays.
+            let stacked_across = blocks
+                .iter()
+                .enumerate()
+                .any(|(r, (_, rb))| has_ink(r) && inks.get(r).is_some_and(|ink| ink.0 < mid && ink.1 > mid) && rb[1] < y1 && rb[3] > y0);
+            if stacked_across {
+                return None;
+            }
+            let left = |r: &usize| *r != pick && has_ink(*r) && inks.get(*r).is_some_and(|ink| ink.1 <= mid) && level(*r, y0, y1);
+            remaining.iter().copied().filter(left).min_by(|a, b| {
+                let ((ay, ax), (by, bx)) = (top_left(*a), top_left(*b));
+                ay.total_cmp(&by).then(ax.total_cmp(&bx))
+            })
+        })
+        .unwrap_or(pick)
+}
+
+/// Where each gutter of `found` (its edges and its stretch of the page, as [`Gutters::found`] gives them) parts
+/// two columns of running text: its middle, and the top and bottom of the stretch where the columns stand side
+/// by side. From the leftmost gutter to the rightmost.
+///
+/// The columns' lines are those at least [`COLUMN_EMS`] heights wide that lie wholly on one side of the gutter
+/// within its stretch, [`COLUMN_LINES`] or more a side, as long as the next line of either column follows within
+/// [`COLUMN_ROWS`] heights, but for a line that stands apart at either end ([`without_stray_ends`]). They stand
+/// side by side from where the second of the two columns starts, down to the last line of either. A header above
+/// the columns and a footer below them are outside that stretch; so are the text beside a figure at the top of
+/// one column, a panel above the columns, and a table of narrow cells below them.
+fn column_bands(segs: &[Seg], found: &[[f32; 4]]) -> Vec<[f32; 3]> {
+    let mut bands: Vec<[f32; 3]> = Vec::new();
+    for &[lo, hi, top, bottom] in found {
+        let mid = (lo + hi) / 2.0;
+        // The columns' lines as (top, bottom, height, whether left of the gutter), top to bottom.
+        let mut lines: Vec<(f32, f32, f32, bool)> = segs
+            .iter()
+            .filter(|s| !s.barcode && s.ink.is_finite() && s.ink - s.ink_start >= s.h * COLUMN_EMS && top < s.cy() && s.cy() < bottom)
+            // Beside the gutter: it lies closer to the line's end (or start) than half the line is wide. Text
+            // further off, under or over another column of a page set in panels, is not this column's.
+            .filter(|s| {
+                let half = (s.ink - s.ink_start) / 2.0;
+                (s.ink <= mid && lo - s.ink <= half) || (s.ink_start >= mid && s.ink_start - hi <= half)
+            })
+            .map(|s| (s.bbox[1], s.bbox[3], s.h, s.ink <= mid))
+            .collect();
+        lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Each run of lines with no gap of more than `COLUMN_ROWS` heights in it.
+        let mut start = 0;
+        while start < lines.len() {
+            let mut end = start + 1;
+            let mut reach = lines[start].1;
+            while let Some(&(y0, y1, _, _)) = lines.get(end) {
+                let h = lines.get(end - 1).map_or(0.0, |l| l.2);
+                if y0 - reach > h * COLUMN_ROWS {
+                    break;
+                }
+                reach = reach.max(y1);
+                end += 1;
+            }
+            let run = without_stray_ends(lines.get(start..end).unwrap_or_default());
+            let first = |left: bool| run.iter().find(|l| l.3 == left).map(|l| l.0);
+            let count = |left: bool| run.iter().filter(|l| l.3 == left).count();
+            if let (Some(a), Some(b)) = (first(true), first(false))
+                && count(true) >= COLUMN_LINES
+                && count(false) >= COLUMN_LINES
+            {
+                bands.push([mid, a.max(b), run.iter().fold(f32::NEG_INFINITY, |y, l| y.max(l.1))]);
+            }
+            start = end;
+        }
+    }
+    bands.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    bands
+}
+
+/// A line that stands this many of its heights clear of the columns' other lines, above them or below, is not
+/// one of theirs: a running head over one column, a footer under one.
+const STRAY_LINE_GAP: f32 = 2.0;
+
+/// `lines` (each a line's top, bottom, height and whether it is left of the gutter, top to bottom) without the
+/// lines at its start and end that stand apart: a first line more than [`STRAY_LINE_GAP`] heights above the next
+/// line of its own column, with no line of the other column that high, and a last line as far below. A running
+/// head at the top of the right column would otherwise be read between the two columns, and so would a footer at
+/// the bottom of the left one.
+fn without_stray_ends(mut lines: &[(f32, f32, f32, bool)]) -> &[(f32, f32, f32, bool)] {
+    while let Some((&(_, y1, h, left), rest)) = lines.split_first() {
+        let clear = y1 + h * STRAY_LINE_GAP;
+        let own = rest.iter().filter(|l| l.3 == left).map(|l| l.0).fold(f32::INFINITY, f32::min);
+        let other = rest.iter().filter(|l| l.3 != left).map(|l| l.0).fold(f32::INFINITY, f32::min);
+        if own > clear && other > clear && !rest.is_empty() {
+            lines = rest;
+        } else {
+            break;
+        }
+    }
+    while let Some((&(y0, _, h, left), rest)) = lines.split_last() {
+        let clear = y0 - h * STRAY_LINE_GAP;
+        let own = rest.iter().filter(|l| l.3 == left).map(|l| l.1).fold(f32::NEG_INFINITY, f32::max);
+        let other = rest.iter().filter(|l| l.3 != left).map(|l| l.1).fold(f32::NEG_INFINITY, f32::max);
+        if own < clear && other < clear && !rest.is_empty() {
+            lines = rest;
+        } else {
+            break;
+        }
+    }
+    lines
 }
 
 /// The gutter between a column, from `x0` to `x1`, and the column beside it, where that one has at least

@@ -326,6 +326,36 @@ impl PageText {
         Some(self.kept_in_column(anchor, hit, x, y).unwrap_or(hit))
     }
 
+    /// Whether a drag's pointer at a view-space point, beside the line of its head glyph `hit`, is
+    /// beside that line's column still: in the white after the line, or in the gutter between
+    /// its column and the next column of running text ([`gutter_in`]), which it has not crossed.
+    /// There the drag ends at its head. Between the columns of a table, whose cells show no such
+    /// gutter, the pointer has gone on into the rows ([`Self::visual_between`]), and beside text
+    /// with nothing beyond it there is no column to go into.
+    pub fn beside_column(&self, hit: usize, x: f32, y: f32) -> bool {
+        let Some((h, (h0, h1))) = self.glyphs.get(hit).zip(self.line_span(hit)) else { return false };
+        if (h0..=h1).contains(&x) {
+            return false;
+        }
+        let Some(height) = self.text_height_near(y, (h.rect[3] - h.rect[1]) * GUTTER_ROWS) else { return false };
+        let lines = self.line_boxes(h);
+        let barcodes = self.barcode_lines();
+        let pieces = lines.iter().filter(|(l, _)| !barcodes.contains(l)).map(|(_, r)| Piece { x0: r[0], ink: r[2], cy: (r[1] + r[3]) / 2.0 });
+        // Where the text beyond the pointer begins, on the lines around it: the next column's edge.
+        let near = pieces.clone().filter(|p| (p.cy - y).abs() <= height * COLUMN_ROWS);
+        let after = x > h1;
+        let beyond = if after {
+            near.filter(|p| p.x0 >= x).map(|p| p.x0).min_by(f32::total_cmp)
+        } else {
+            near.filter(|p| p.ink <= x).map(|p| p.ink).max_by(f32::total_cmp)
+        };
+        let Some(beyond) = beyond else { return false };
+        // The line's own start is where its column's lines reach to; before the line, any column ends there.
+        let (start, gap) = if after { (h0, (h1, beyond)) } else { (f32::NEG_INFINITY, (beyond, h0)) };
+        let mut work = usize::MAX;
+        gutter_in(pieces, start, gap, y, height, &mut work).is_some_and(|(g0, g1)| if after { x <= g1 } else { x >= g0 })
+    }
+
     /// Whether glyph `hit` is on a line set up the side of the lines that run glyph `a`'s way: it
     /// runs across them, level with [`COLUMN_LINES`] of them or more, as a stamp up the gutter or
     /// margin is. The turned headings over a table's columns are level with a line or two.
@@ -379,6 +409,7 @@ impl PageText {
         let spans: HashMap<u32, (f32, f32)> = lines.iter().map(|&(l, r)| (l, (r[0], r[2]))).collect();
         let in_column = |i: usize, g: &TextGlyph| {
             ((g.rect[0] + g.rect[2]) / 2.0 < middle) == leftward
+                && !runs_across(a, g)
                 && self.line_of.get(i).and_then(|l| spans.get(l)).is_none_or(|&(l0, l1)| if leftward { l1 > a0 } else { l0 < a1 })
         };
         let (on_row, any) = self.closest(if leftward { x.min(g0) } else { x.max(g1) }, y, in_column);
@@ -551,8 +582,11 @@ impl PageText {
         {
             return None;
         }
+        // Rows are of the text that runs the anchor's way: a stamp set up the gutter beside them is none of theirs.
         let picked = if one_row {
-            self.glyphs_in([a.rect[0].min(h.rect[0]), top, a.rect[2].max(h.rect[2]), bottom])
+            let mut row = self.glyphs_in([a.rect[0].min(h.rect[0]), top, a.rect[2].max(h.rect[2]), bottom]);
+            row.retain(|&i| self.glyphs.get(i).is_some_and(|g| !runs_across(a, g)));
+            row
         } else {
             // Rows run left to right from the upper end; other writing keeps reading order.
             let ltr = |g: &TextGlyph| g.direction[0] > 0.0 && g.direction[1].abs() <= WORD_GAP && !g.text.chars().any(is_rtl);
@@ -594,7 +628,11 @@ impl PageText {
                 let (cx, cy) = ((g.rect[0] + g.rect[2]) / 2.0, centre(g));
                 let on_top_row = cy <= upper.rect[3];
                 let on_bottom_row = cy >= lower.rect[1];
-                (top..=bottom).contains(&cy) && (!on_top_row || cx >= upper.rect[0]) && (!on_bottom_row || cx <= lower.rect[2]) && in_column(l)
+                (top..=bottom).contains(&cy)
+                    && (!on_top_row || cx >= upper.rect[0])
+                    && (!on_bottom_row || cx <= lower.rect[2])
+                    && in_column(l)
+                    && !runs_across(a, g)
             };
             self.glyphs.iter().zip(&self.line_of).enumerate().filter(|(_, gl)| wanted(*gl)).map(|(i, _)| i).collect()
         };
@@ -671,8 +709,11 @@ impl PageText {
     /// that end a line, which reach into the gutter. At least two lines of text stand on each
     /// side of it between `x0` and `x1`, or beyond either when the strip reaches it (columns'
     /// baselines need not line up). The gap a justified line leaves between two words has only
-    /// that line beyond it. The rows are those of the text that runs glyph `of`'s way: a stamp
-    /// set up the gutter, across them, is not text of theirs in it.
+    /// that line beyond it, and a strip narrower than `width` has fewer lines with words on both
+    /// sides of it than lines ending before it or starting after it: two lines of a justified
+    /// paragraph may leave such a gap in the same place. The rows
+    /// are those of the text that runs glyph `of`'s way: a stamp set up the gutter, across them,
+    /// is not text of theirs in it.
     fn gutter_between(&self, of: &TextGlyph, x0: f32, x1: f32, top: f32, bottom: f32, width: f32) -> bool {
         self.gutter_strip(of, x0, x1, top, bottom, width).is_some()
     }
@@ -689,6 +730,8 @@ impl PageText {
         // The rows' glyphs as (centre, left, right), top to bottom, without the spaces that start or end a line:
         // the space between two words is part of its line, the one after its last word reaches into the gutter.
         let mut rows: Vec<(f32, f32, f32)> = Vec::new();
+        // Each line's ink in those rows, from its left end to its right.
+        let mut inks: Vec<(f32, f32)> = Vec::new();
         let mut i = 0;
         while let Some(&line) = self.line_of.get(i) {
             let end = i + self.line_of.get(i..).map_or(1, |rest| rest.iter().take_while(|l| **l == line).count()).max(1);
@@ -696,7 +739,11 @@ impl PageText {
             let visible = |g: &TextGlyph| !g.text.trim().is_empty() && !runs_across(of, g);
             if let (Some(first), Some(last)) = (glyphs.iter().position(visible), glyphs.iter().rposition(visible)) {
                 let inner = glyphs.get(first..=last).unwrap_or_default();
+                let before = rows.len();
                 rows.extend(inner.iter().filter(|g| (top..=bottom).contains(&centre(g))).map(|g| (centre(g), g.rect[0], g.rect[2])));
+                if let Some(ink) = rows.get(before..).filter(|added| !added.is_empty()) {
+                    inks.push(ink.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(l, r), &(_, a, b)| (l.min(a), r.max(b))));
+                }
             }
             i = end;
         }
@@ -723,14 +770,23 @@ impl PageText {
         };
         let mut spans: Vec<(f32, f32)> = rows.iter().filter(|&&(_, a, b)| b > lo && a < hi).map(|&(_, a, b)| (a, b)).collect();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // A strip narrower than a line is high is a gutter between lines: the layout joins no line across
+        // the gutter of two columns. With as many lines' words on both sides of it as lines end before it
+        // or start after it, it is a word gap, which two lines of a justified paragraph may leave in the
+        // same place.
+        let wide_enough = |g0: f32, g1: f32| {
+            let count = |side: &dyn Fn(f32, f32) -> bool| inks.iter().filter(|&&(l, r)| side(l, r)).count();
+            let (across, before, after) = (count(&|l, r| l < g0 && r > g1), count(&|_, r| r <= g0), count(&|l, _| l >= g1));
+            g1 - g0 >= width || (g1 - g0 >= narrowest && across < before.min(after))
+        };
         let mut covered = lo;
         for (s0, s1) in spans {
-            if s0 - covered >= narrowest && parted(covered, s0) {
+            if wide_enough(covered, s0) && parted(covered, s0) {
                 return Some((covered, s0));
             }
             covered = covered.max(s1);
         }
-        (hi - covered >= narrowest && parted(covered, hi)).then_some((covered, hi))
+        (wide_enough(covered, hi) && parted(covered, hi)).then_some((covered, hi))
     }
 
     /// Whether the lines between `top` and `bottom` on each side of the gutter `g0..g1` are
@@ -930,7 +986,7 @@ pub use layout::layout;
 #[cfg(test)]
 use layout::{from_upright, to_upright};
 use layout::{is_rtl, union};
-use order::{COLUMN_LINES, GUTTER_MIN, Piece, barcode_rows, gutter_in};
+use order::{COLUMN_LINES, COLUMN_ROWS, GUTTER_MIN, Piece, barcode_rows, gutter_in};
 #[cfg(test)]
 use order::{Run, Scratch, Seg, collide, restarts_run};
 

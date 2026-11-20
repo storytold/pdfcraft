@@ -1019,6 +1019,11 @@ impl Gutters {
         Gutters { work: GUTTER_WORK, found: Vec::new() }
     }
 
+    /// The gutters found so far: each one's left and right edges, and the top and bottom of its stretch.
+    pub(super) fn found(&self) -> &[[f32; 4]] {
+        &self.found
+    }
+
     /// Whether the page's budget is spent: no more gaps are looked at.
     pub(super) fn spent(&self) -> bool {
         self.work == 0
