@@ -50,7 +50,7 @@ The output folder cannot equal or contain a selected input folder.
 
 The Action Wizard (`action_run`) and folder OCR (`ocr_recognize_files`) do not give this guarantee yet.
 
-The report contains `completed`, `failed`, `skipped`, `stopped` and `files`.
+The report contains `dry_run`, `completed`, `failed`, `skipped`, `stopped` and `files`.
 Each file records its status, output and step results, or the error/skip reason.
 The `batch` command exits nonzero on any file failure while still printing the
 report. Redirect stdout to retain it; keep the report outside the input folders.
@@ -75,6 +75,10 @@ In `pdfcraft-cli run --script`, put this object in the `args` of a `doc_batch`
 step. MCP marks a report with failed files as `isError: true` and retains the
 structured report. Tool names and OCR settings match the existing automation API
 (`skip_text_pages: false` corresponds to `--ocr-all-pages`).
+
+Set `"dry_run": true` in a `doc_batch` call to preview output paths and steps. Planned
+entries have `status: "planned"`, and `completed` remains zero. This does not convert the
+files, create the output folder or reserve the planned names.
 
 ## Boundaries
 
