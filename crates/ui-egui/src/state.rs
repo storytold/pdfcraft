@@ -146,6 +146,8 @@ pub enum Dialog {
     RedactApply,
     /// File ▸ Print.
     Print,
+    /// File ▸ Batch Print.
+    BatchPrint,
     /// File ▸ Revert confirmation.
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
