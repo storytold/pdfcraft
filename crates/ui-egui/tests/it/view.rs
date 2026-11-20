@@ -2545,10 +2545,12 @@ fn full_screen_plays_a_page_transition_and_honours_the_display_time() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(wipe_strip(&h), "the Wipe paints part of page 2 ({steps} frames)");
-    // Counted from the first painted strip, when page 2's raster is in and the Wipe is under way:
-    // the frames spent waiting for the raster don't count toward its second.
-    let frames = frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
-    assert!(frames >= 8, "the Wipe takes its second ({frames} frames of 0.1 s after the first strip)");
+    // From the first painted strip, when page 2's raster is in: time waiting for the raster does
+    // not count. A harness step can process multiple queued events and advance more than one frame.
+    let first_strip = h.ctx.input(|i| i.time);
+    frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
+    let elapsed = h.ctx.input(|i| i.time) - first_strip;
+    assert!(elapsed >= 0.8, "the Wipe takes its second ({elapsed} s after the first strip)");
     assert_eq!(h.state().views[0].current(), 1, "still page 2 when the transition ends");
     h.run_steps(5);
     assert_eq!(h.state().views[0].current(), 1, "half of its display time");
