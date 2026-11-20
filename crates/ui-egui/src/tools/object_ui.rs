@@ -451,7 +451,14 @@ pub(crate) fn page_parts(
     for placed in pages {
         let page = placed.page;
         let xf = geo.xform_of(placed);
-        if let Some(block) = open_block(session, page)
+        // A frame press selects the paragraph on Down. Keep the same parts available until its
+        // release so the press machine can deliver the rest of the drag to its original owner.
+        let selected_block = (session.objects.page == Some(page) && session.objects.selected.len() == 1)
+            .then(|| session.objects.selected.first())
+            .flatten()
+            .filter(|object| object.target.kind == ObjectKind::Text)
+            .map(|object| object.target.index);
+        if let Some(block) = open_block(session, page).or(selected_block)
             && let Ok(objects) = session.objects.inventory(doc, page)
             && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
         {
