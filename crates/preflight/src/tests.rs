@@ -2367,3 +2367,149 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A file of `objs` with a cross-reference stream, whose object 4 sits in the object stream 3:
+/// `member` is its text.
+fn build_with_object_stream(member: &str) -> Document {
+    let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let header = "4 0 ";
+    let stm =
+        format!("<< /Type /ObjStm /N 1 /First {} /Length {} >>\nstream\n{header}{member}\nendstream", header.len(), header.len() + member.len() + 1);
+    let objs = ["<< /Type /Catalog /Pages 2 0 R /X 4 0 R >>".to_string(), "<< /Type /Pages /Kids [] /Count 0 >>".to_string(), stm];
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    let mut rows = vec![0u8, 0, 0, 0, 0, 0xFF, 0xFF];
+    for o in &offsets {
+        rows.push(1);
+        rows.extend_from_slice(&u32::try_from(*o).unwrap().to_be_bytes());
+        rows.extend_from_slice(&[0, 0]);
+    }
+    rows.extend_from_slice(&[2, 0, 0, 0, 3, 0, 0]);
+    rows.push(1);
+    rows.extend_from_slice(&u32::try_from(xref).unwrap().to_be_bytes());
+    rows.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(format!("5 0 obj\n<< /Type /XRef /Size 6 /W [1 4 2] /Root 1 0 R /Length {} >>\nstream\n", rows.len()).as_bytes());
+    out.extend_from_slice(&rows);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Document::open(std::sync::Arc::new(out)).unwrap()
+}
+
+/// PDF/A-2 6.1.6: a hexadecimal string has an even number of digits and nothing but digits and
+/// white space, in the file and in content streams.
+#[test]
+fn hexadecimal_strings_are_read_as_written_clause_6_1_6() {
+    let found = |doc: &Document| -> Vec<(String, bool)> {
+        verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.6").map(|i| (i.message, i.fixable)).collect()
+    };
+    let with_content = |content: &str, extra: &str| {
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {extra} >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>",
+                &format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            ],
+            "",
+        )
+    };
+    let odd_content = ("A hexadecimal string in a content stream has an odd number of digits".to_string(), false);
+    let bad_content = ("A hexadecimal string in a content stream holds a character other than a hexadecimal digit or white space".to_string(), false);
+    let odd_file = ("A hexadecimal string in the file has an odd number of digits".to_string(), true);
+    let bad_file = ("A hexadecimal string in the file holds a character other than a hexadecimal digit or white space".to_string(), false);
+    // Strings that are fine, and bytes that look like one but aren't: in a literal string, in a
+    // comment, in a dictionary's brackets and in an inline image's data.
+    for fine in [
+        "BT <48 65\n6C6c> Tj <> Tj ET",
+        "BT (<123> \\) <1>) Tj ET % <1>\n",
+        "/P << /MCID 0 >> BDC EMC",
+        "BI /W 1 /H 1 /BPC 8 /CS /G ID <\nEI BT <4142> Tj ET",
+    ] {
+        assert!(found(&with_content(fine, "")).is_empty(), "{fine:?}");
+    }
+    assert_eq!(found(&with_content("BT <48656C6C6> Tj ET", "")), vec![odd_content.clone()]);
+    assert_eq!(found(&with_content("BT <4G> Tj ET", "")), vec![bad_content.clone()]);
+    // A name is never a keyword, whatever it spells: `/BI` isn't an inline image, and `/endobj`
+    // and `/stream` don't end an object.
+    assert_eq!(found(&with_content("/BI Do BT <414> Tj ET", "")), vec![odd_content.clone()]);
+    // After an inline image, and in its dictionary, before its data.
+    assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS /G ID <\nEI BT <414> Tj ET", "")), vec![odd_content.clone()]);
+    assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS [/I /RGB 0 <00000>] ID \0\nEI", "")), vec![odd_content]);
+    // A dictionary the content parser reads no image from is read all the same.
+    assert_eq!(found(&with_content("BI /W 1 /H 1 /BPC 8 /CS [/I /RGB 0 <0G>] ID \0\nEI", "")), vec![bad_content.clone()]);
+    // In the file: an object and the trailer.
+    assert_eq!(found(&with_content("", "/X <ABC>")), vec![odd_file.clone()]);
+    assert_eq!(found(&with_content("", "/X /endobj /Y /stream /Z <ABC>")), vec![odd_file.clone()]);
+    assert_eq!(found(&with_content("", "/X (<ABC>) /Y <0A0b 0C>")), Vec::<(String, bool)>::new());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"], "/ID [<ABC> <ABCD>]");
+    assert_eq!(found(&doc), vec![odd_file.clone()]);
+    // A member of an object stream, read from its offset.
+    assert_eq!(found(&build_with_object_stream("<ABC>")), vec![odd_file.clone()]);
+    assert_eq!(found(&build_with_object_stream("<AB>")), Vec::<(String, bool)>::new());
+    // A digit that isn't one leaves its object unreadable: reported, not fixable.
+    assert_eq!(found(&build_with_object_stream("<AZ>")), vec![bad_file]);
+    // A page's /Contents parts are read as one stream: a literal string begun in one goes on in
+    // the next.
+    let split = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources << >> >>",
+            "<< /Length 5 >>\nstream\nBT (a\nendstream",
+            "<< /Length 12 >>\nstream\n<1>) Tj ET\nendstream",
+        ],
+        "",
+    );
+    assert_eq!(found(&split), Vec::<(String, bool)>::new());
+    // Save as PDF/A writes the file afresh, with even strings; content stays as it is.
+    let mut doc = with_content("BT <414> Tj ET", "/X <ABC>");
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Rewrote the hexadecimal strings with an odd number of digits"), "{:?}", report.fixed);
+    let left: Vec<String> = report.remaining.iter().filter(|i| i.clause == "6.1.6").map(|i| i.message.clone()).collect();
+    assert_eq!(left, [odd_content_message()]);
+    let saved = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(found(&Document::open(std::sync::Arc::new(saved)).unwrap()).iter().all(|(m, _)| !m.contains("in the file")));
+}
+
+fn odd_content_message() -> String {
+    "A hexadecimal string in a content stream has an odd number of digits".to_string()
+}
+
+/// PDF/A-2 6.1.3: nothing but one end-of-line marker follows the last `%%EOF`.
+#[test]
+fn nothing_follows_the_end_of_file_marker_clause_6_1_3() {
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    let with_tail = |tail: &[u8]| {
+        let doc = build(&objs, "");
+        let mut bytes = doc.bytes().to_vec();
+        // `build` ends the file with `%%EOF` and LF.
+        bytes.pop();
+        bytes.extend_from_slice(tail);
+        Document::open(std::sync::Arc::new(bytes)).unwrap()
+    };
+    let found = |doc: &Document| -> Vec<String> {
+        verify(doc, Level::A3b)
+            .into_iter()
+            .filter(|i| i.message.contains("end-of-file"))
+            .map(|i| format!("{} {} {}", i.clause, i.message, i.fixable))
+            .collect()
+    };
+    for fine in [&b""[..], b"\n", b"\r", b"\r\n"] {
+        assert_eq!(found(&with_tail(fine)), Vec::<String>::new(), "{fine:?}");
+    }
+    let want = vec!["6.1.3 Data follows the last end-of-file marker (%%EOF) true".to_string()];
+    // `%%EOF` inside the data after the marker isn't one: the marker is a line of its own.
+    for wrong in [&b"\n\n"[..], b"\r\n\r\n", b" ", b"\n%PaperPortPDFversion", b"\0", b"\njunk%%EOF\n"] {
+        assert_eq!(found(&with_tail(wrong)), want, "{wrong:?}");
+    }
+    // Save as PDF/A writes the file afresh, ending at its marker.
+    let mut doc = with_tail(b"\r%Producer trailer");
+    let report = convert(&mut doc, Level::A3b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Removed the data after the end-of-file marker"), "{:?}", report.fixed);
+    assert!(found(&doc).is_empty());
+    let saved = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(found(&Document::open(std::sync::Arc::new(saved)).unwrap()).is_empty());
+}
