@@ -521,8 +521,9 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
         d.set(b"PCFillSign".to_vec(), Object::Bool(true));
     }
     // A redaction's overlay text becomes page content when it is applied, where `?` would be there
-    // for good: refused before anything is added. A comment's own text is stored as typed and
-    // drawn with `?` for what the standard fonts can't draw (marked, see `draw_appearance`).
+    // for good: refused before anything is added. Thai and Japanese in a text box are drawn, or
+    // refused when the face can't draw them, rather than saved as `?` (#6382). Other text the
+    // standard fonts can't draw is stored as typed and marked (see `draw_appearance`).
     if d.name(b"Subtype") == Some(b"Redact")
         && let Some((what, c)) = appearance::undrawable_text(&d)
     {
@@ -613,7 +614,7 @@ pub const CUSTOM_LINE_TEXT: f64 = 0.62;
 pub fn custom_stamp_size(picture: (f64, f64), line: Option<&str>) -> (f64, f64) {
     let Some(line) = line else { return picture };
     let h = picture.1 / (1.0 - CUSTOM_LINE_BAND);
-    let text = appearance::text_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
+    let text = appearance::by_line_width(line, h * CUSTOM_LINE_BAND * CUSTOM_LINE_TEXT) + 8.0;
     (picture.0.max(text), h)
 }
 

@@ -2,14 +2,14 @@
 //! text it stands for) becomes one glyph of a Type 3 font drawn from the craft-fonts face's
 //! outlines, with a `/ToUnicode` map so copy and search get each character once. No font file is
 //! embedded. Add text writes Arabic, Hebrew and Thai with it; text boxes, Fill & Sign text, form
-//! fields, headers, footers and watermarks write Thai with it, beside the standard font that
-//! draws the rest ([`thai_pieces`]).
+//! fields, headers, footers and watermarks write Thai and Japanese with it, beside the standard
+//! font that draws the rest ([`markup_pieces`]).
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
-use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, latin_has, literal, shape_latin, shape_thai, shaped_glyph};
+use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, latin_has, literal, shape_japanese, shape_latin, shape_thai, shaped_glyph};
 
 /// Most glyphs in one Type 3 font: its codes are single bytes, 1–240. Text gets one such font per
 /// 240 distinct clusters it needs.
@@ -18,6 +18,39 @@ pub const GLYPHS_PER_FONT: usize = 240;
 /// The Thai block (U+0E00–U+0E7F): letters, vowels, tone marks, digits and signs.
 pub fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
+}
+
+/// Hiragana, katakana, CJK ideographs and full-width forms a text box draws from the Japanese face.
+///
+/// Hangul syllables (U+AC00–U+D7A3) and halfwidth Hangul (U+FFA0–U+FFDC) stay out of this set.
+/// The Japanese document face has no Korean, and a text box that sent them through
+/// [`shape_japanese`] was refused with a Japanese font error. They stay with the standard font
+/// and are stored and marked, like any other script these faces cannot draw.
+pub fn is_cjk_markup(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x2E80..=0x2FDF
+            | 0x3000..=0x303F
+            | 0x3040..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFF00..=0xFF9F
+            | 0xFFE0..=0xFFEF
+            | 0x20000..=0x3FFFD
+    )
+}
+
+/// Why Japanese text can't be drawn, for a message an agent or user can act on.
+pub fn japanese_message(e: GlyphError, text: &str) -> String {
+    match e {
+        GlyphError::NoFont => "Japanese text needs a Japanese font, and this build has none; rebuild with CRAFT_FONTS_DIR pointing to a \
+                               craft-fonts checkout with a Japanese face"
+            .into(),
+        GlyphError::Missing => format!("the Japanese font can't show \"{text}\""),
+        GlyphError::TooComplex => "the Japanese glyphs are too complex; use shorter text".into(),
+    }
 }
 
 /// Thai vowel signs and tone marks drawn on the consonant before them, and Sara Am, which the
@@ -156,6 +189,61 @@ pub fn thai_width(text: &str, size: f64, latin: impl Fn(&str, f64) -> f64) -> f6
         Ok(pieces) => pieces_width(&pieces, size, 0.0, latin),
         Err(_) => latin(text, size),
     }
+}
+
+/// The width of `text` as a text box draws it: Thai and Japanese shaped, the rest by `latin`.
+pub fn markup_width(text: &str, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+    if !text.chars().any(|c| is_thai(c) || is_cjk_markup(c)) {
+        return latin(text, size);
+    }
+    match markup_pieces(text) {
+        Ok(pieces) => pieces_width(&pieces, size, 0.0, &latin),
+        Err(_) => latin(text, size),
+    }
+}
+
+/// `line` split into Thai runs, Japanese runs, and the text between them. Thai is shaped with
+/// the Thai face and Japanese one glyph per character from the Japanese face. [`GlyphError::NoFont`]
+/// when a run needs a face this build does not have.
+pub fn markup_pieces(line: &str) -> Result<Vec<Piece>, GlyphError> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Kind {
+        Latin,
+        Thai,
+        Cjk,
+    }
+    let kind = |c: char| {
+        if is_thai(c) {
+            Kind::Thai
+        } else if is_cjk_markup(c) {
+            Kind::Cjk
+        } else {
+            Kind::Latin
+        }
+    };
+    let mut runs: Vec<(Kind, String)> = Vec::new();
+    for c in line.chars() {
+        let k = kind(c);
+        match runs.last_mut() {
+            Some((prev, s)) if *prev == k => s.push(c),
+            _ => runs.push((k, c.to_string())),
+        }
+    }
+    runs.into_iter()
+        .map(|(k, s)| match k {
+            Kind::Latin => Ok(Piece::Latin(s)),
+            Kind::Thai => shape_thai(&s).map(Piece::Shaped),
+            Kind::Cjk => shape_japanese(&s).map(Piece::Shaped),
+        })
+        .collect()
+}
+
+/// Why the Japanese in `text` can't be drawn. `None` when it has none, or the face can draw it.
+pub fn cjk_refusal(text: &str) -> Option<String> {
+    text.split(['\n', '\r']).filter(|l| l.chars().any(is_cjk_markup)).find_map(|l| {
+        let cjk: String = l.chars().filter(|c| is_cjk_markup(*c)).collect();
+        shape_japanese(&cjk).err().map(|e| japanese_message(e, &cjk))
+    })
 }
 
 /// The width of `pieces` at `size`, with `spacing` after each shaped cluster (as `Tc` moves the
@@ -325,12 +413,20 @@ impl ShapedFonts {
 }
 
 /// `lines` as a generated appearance not yet in a document draws them: each line's pieces, its
-/// Thai shaped, and the Type 3 fonts for that Thai built into `fonts` (the form's font resources)
-/// as direct objects, whose streams [`store_streams`] moves into the document with the
-/// appearance. Thai the face can't draw, and every line when a glyph can't be read, is left to the
-/// standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
+/// Thai and Japanese shaped, and the Type 3 fonts for those glyphs built into `fonts` (the form's
+/// font resources) as direct objects, whose streams [`store_streams`] moves into the document with
+/// the appearance. A run the face can't draw, and every line when a glyph can't be read, is left
+/// to the standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
 pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    fallback_appearance_lines(lines, true, false, fonts)
+    let plain = |l: &String| vec![Piece::Latin(l.clone())];
+    let pieces: Vec<Vec<Piece>> = lines
+        .iter()
+        .map(|l| if l.chars().any(|c| is_thai(c) || is_cjk_markup(c)) { markup_pieces(l).unwrap_or_else(|_| plain(l)) } else { plain(l) })
+        .collect();
+    match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, "PCTh", &mut |o| o).map_err(|(e, _)| e) {
+        Ok(shaped) => (pieces, shaped),
+        Err(_) => (lines.iter().map(plain).collect(), ShapedFonts::default()),
+    }
 }
 
 /// [`appearance_lines`] with the pieces [`fallback_pieces`] splits each line into: its Thai with
@@ -371,8 +467,9 @@ pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
 }
 
 /// The first character of `s` a generated appearance would draw as `?`: one the standard fonts
-/// (WinAnsiEncoding) can't draw and that isn't Thai, or Thai on a line the Thai face can't draw
-/// (this build has none, or it lacks a character). Line breaks don't count.
+/// (WinAnsiEncoding) can't draw and that isn't Thai or Japanese the craft-fonts faces can draw,
+/// or Thai or Japanese on a line the face can't draw (this build has none, or it lacks a
+/// character). Line breaks don't count.
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.split(['\n', '\r']).find_map(first_undrawable_in_line)
 }
@@ -380,7 +477,16 @@ pub fn first_undrawable(s: &str) -> Option<char> {
 /// [`first_undrawable`] for one line drawn as it is: a line break in it counts.
 pub fn first_undrawable_in_line(line: &str) -> Option<char> {
     let thai_fails = line.chars().any(is_thai) && thai_pieces(line).is_err();
-    line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
+    let cjk_fails = line.chars().any(is_cjk_markup) && cjk_refusal(line).is_some();
+    line.chars().find(|c| {
+        if is_thai(*c) {
+            thai_fails
+        } else if is_cjk_markup(*c) {
+            cjk_fails
+        } else {
+            !crate::win_ansi_encodable(*c)
+        }
+    })
 }
 
 /// Why the Thai in `text` can't be drawn ([`thai_message`]): this build has no Thai face, or the
@@ -460,6 +566,7 @@ fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
                 ShapedScript::Latin => "Inter",
+                ShapedScript::Japanese => "Japanese",
             },
             |f| f.family,
         ),
@@ -648,5 +755,20 @@ mod tests {
         let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
         assert_eq!(text, "ชื่อบุญฤทธิ์");
         assert!(thai_width("น้ำ", 10.0, |_, _| 0.0) > 0.0);
+    }
+
+    /// A text box stores Hangul and marks the first syllable. The Japanese face has no Korean,
+    /// so these characters stay with the standard font, like any other script it cannot draw.
+    #[test]
+    fn hangul_is_stored_rather_than_refused_as_japanese() {
+        assert!(!is_cjk_markup('한') && !is_cjk_markup('\u{AC00}') && !is_cjk_markup('\u{D7A3}'));
+        assert!(!is_cjk_markup('\u{FFA0}') && !is_cjk_markup('\u{FFA1}') && !is_cjk_markup('\u{FFDC}'));
+        assert!(is_cjk_markup('こ') && is_cjk_markup('漢') && is_cjk_markup('Ａ') && is_cjk_markup('｡') && is_cjk_markup('￥'));
+        assert!(cjk_refusal("한글").is_none());
+        assert!(cjk_refusal("ﾡ").is_none());
+        assert!(matches!(markup_pieces("안녕").as_deref(), Ok([Piece::Latin(s)]) if s == "안녕"));
+        assert_eq!(first_undrawable("안녕 Ada"), Some('안'));
+        // Japanese beside Hangul is still the Japanese face's job. A refusal does not blame the Hangul.
+        assert!(cjk_refusal("안녕 こんにちは").is_none_or(|m| !m.contains("안녕")));
     }
 }
