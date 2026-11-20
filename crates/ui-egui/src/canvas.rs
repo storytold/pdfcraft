@@ -50,7 +50,6 @@ mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
-pub(crate) use area::SignTab;
 pub(crate) use area::signature_badges;
 pub(crate) use area::signature_states_changed;
 use area::{run_button, set_layers};
@@ -904,8 +903,6 @@ impl PageBodyCx<'_> {
 struct BodyOut {
     /// The canvas view the page view showed this pass.
     shown: Option<CanvasView>,
-    /// The view a tool or the canvas set this pass, for [`PageViewOutput::adopt`].
-    view: Option<CanvasView>,
     /// The Crop tool's double-click: open Set Page Boxes on that page.
     open_boxes: bool,
     /// Fill & Sign asked for a signature (`false`) or initials (`true`) before it can place one.
@@ -942,29 +939,13 @@ struct BodyOut {
 /// Select and Link), comments and fields (only under Select), sign tabs (painted over their fields), then prepare fields,
 /// selected objects and the frame band. A later part outranks an earlier one of the same layer, so this order is the
 /// stacking order hit testing ranks on.
-fn page_parts_of(
-    ui: &mut egui::Ui,
-    body: &PageBody<'_>,
-    session: &mut PageSession,
-    cx: &PageBodyCx<'_>,
-) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
+fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, cx: &PageBodyCx<'_>) -> Vec<PagePart> {
     let geo = cx.geometry(body);
     let mut parts = Vec::new();
     // Copied comments hanging on the pointer take the next click anywhere on a page, even over an
     // existing comment, link or field, so no page part may steal it from the paste tool.
     if session.comments.paste.is_some() {
-        let shown = cx.tool == QuickTool::Select && !cx.preparing;
-        let tabs = body
-            .pages
-            .iter()
-            .map(|placed| {
-                let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
-                let xf = PageXform::of(placed, cx.rotation, size);
-                let overlay = overlay_parts(ui, &xf, cx.doc, placed.page, cx.can_modify, shown, false);
-                (placed.page, xf, overlay.tabs)
-            })
-            .collect();
-        return (parts, tabs);
+        return parts;
     }
     if cx.editing_content {
         if cx.tool == QuickTool::EditText && cx.can_modify {
@@ -1017,13 +998,11 @@ fn page_parts_of(
     // The sign tabs of each page, after the fields: a tab is painted over its field.
     // PLAN: `can_fill` is `can_modify` (pdf-canvas-w15 does not say which right a click that signs needs).
     let shown = cx.tool == QuickTool::Select && !cx.preparing;
-    let mut tabs = Vec::new();
     for placed in body.pages {
         let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
         let xf = PageXform::of(placed, cx.rotation, size);
         let overlay = overlay_parts(ui, &xf, cx.doc, placed.page, cx.can_modify, shown, badge_tips);
         parts.extend(overlay.parts);
-        tabs.push((placed.page, xf, overlay.tabs));
     }
     if cx.preparing {
         let field_tool = matches!(cx.tool, QuickTool::Field(_));
@@ -1032,7 +1011,7 @@ fn page_parts_of(
     if cx.tool == QuickTool::EditText && cx.can_modify {
         crate::object_ui::page_parts(&mut parts, session, cx.doc, cx.info, body.pages, geo);
     }
-    (parts, tabs)
+    parts
 }
 
 /// The links of the pages: followed under Select, edited under the Link tool.
@@ -1232,14 +1211,24 @@ fn background_context(ui: &egui::Ui, session: &mut PageSession, cx: &PageBodyCx<
 /// The page body, run by the page view on every run of its canvas body. Its order is the paint order, and with it
 /// the stacking order hit testing ranks on: the placed pages recorded, the parts registered, the tool host, then the
 /// overlays.
-fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, momentary: &mut Momentary, cx: &PageBodyCx<'_>, out: &mut BodyOut) {
-    *out = BodyOut { shown: Some(body.view), ..BodyOut::default() };
+struct PageCallbacks<'a, 'b> {
+    session: &'a mut PageSession,
+    momentary: &'a mut Momentary,
+    cx: &'a PageBodyCx<'b>,
+    out: &'a mut BodyOut,
+    parts: Option<page_parts::PagePartsOutput>,
+    field_arrived: bool,
+}
+
+fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbacks<'_, '_>) -> Option<CanvasView> {
+    let PageCallbacks { session, momentary, cx, out, parts: saved_parts, field_arrived: saved_arrived } = callbacks;
+    **out = BodyOut::default();
     // 1. This pass's placement, before anything that maps through it.
     session.placed.clear();
     session.placed.extend_from_slice(body.pages);
 
     // 2-3. Every part on the pages, in one control: hit priority ranks parts inside one control only.
-    let (parts, tabs) = page_parts_of(ui, body, &mut *session, cx);
+    let parts = page_parts_of(ui, body, session, cx);
     let focus = crate::forms_ui::focus_owner(&session.forms, cx.form);
     // A focused field whose page has scrolled out of view lets go, unless Tab is scrolling to it.
     if !session.forms.refocus
@@ -1295,6 +1284,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     }
 
     // 4. The tool host, in the real run only: a measuring run has no tool pass.
+    let mut tool_view = None;
     if let Some(pass) = body.pass {
         if let PressPhase::Down { start, .. } = &pass.press.phase {
             // A press nobody's part took, on the page or the gap between pages, ends Select All of the document.
@@ -1321,7 +1311,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         if let Some(why) = finish.refused.take() {
             session.objects.notice = Some(why.into());
         }
-        out.view = reply.view;
+        tool_view = reply.view;
         // The Menu key's request hangs the menu at the view's centre and leaves the comments alone.
         let secondary = egui::PointerButton::Secondary;
         let by_pointer = ui.input(|i| i.pointer.button_pressed(secondary) || i.pointer.button_released(secondary));
@@ -1346,6 +1336,28 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         out.prepare = Some(outcome);
     }
 
+    *saved_parts = Some(parts_out);
+    *saved_arrived = field_arrived;
+    tool_view
+}
+
+fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbacks<'_, '_>) {
+    let PageCallbacks { session, cx, out, parts, field_arrived, .. } = callbacks;
+    session.placed.clear();
+    session.placed.extend_from_slice(body.pages);
+    out.shown = Some(body.view);
+    let Some(parts_out) = parts.as_ref() else { return };
+    let shown = cx.tool == QuickTool::Select && !cx.preparing;
+    let tabs: Vec<_> = body
+        .pages
+        .iter()
+        .map(|placed| {
+            let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
+            let xf = PageXform::of(placed, cx.rotation, size);
+            let overlay = overlay_parts(ui, &xf, cx.doc, placed.page, cx.can_modify, shown, false);
+            (placed.page, xf, overlay.tabs)
+        })
+        .collect();
     // 5. The overlays.
     page_overlays::PageBackdrop::new(body.pages, cx.sizes, cx.rotation, cx.info, session).show_at(ui, body.rect);
     for (page, xf, page_tabs) in &tabs {
@@ -1381,7 +1393,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
     }
     // The focused field's editor, and the Fill & Sign text being typed, over their pages.
     if let Some(editor) = crate::forms_ui::editor::show(ui, body, session, cx.doc, cx.form, cx.info, cx.today, cx.geometry(body))
-        && field_arrived
+        && *field_arrived
     {
         // The keys of a field that takes typing are its editor's: it takes the focus over from the field's part.
         focus::request(ui.ctx(), FocusTarget::Id(editor));
@@ -1731,18 +1743,18 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
     // Scope each tab's PageView by its view key so per-canvas gestures (like middle-button autoscroll) stay tab-local.
+    let mut callbacks = PageCallbacks { session, momentary, cx: &cx, out: &mut body_out, parts: None, field_arrived: false };
     let out = ui
         .push_id(view_key, |ui| {
-            PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
+            PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at_with(
                 ui,
                 rect,
-                |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
+                &mut callbacks,
+                page_before,
+                page_body,
             )
         })
         .inner;
-    if let Some(canvas) = &body_out.view {
-        out.adopt(&mut view.view, canvas);
-    }
     if view.view.continuous
         && let Some(page) = body_out.pressed_page
     {
@@ -1800,7 +1812,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     view.textures = out.textures;
     view.spacing = Some(out.spacing);
     view.viewport = rect;
-    view.canvas = body_out.view.or(body_out.shown);
+    view.canvas = body_out.shown;
     view.middle_scrolling = out.canvas.auto_scrolling;
     // Addresses written as plain text are found once per text layer that has arrived; the link parts read them.
     if app.text_links {
