@@ -73,11 +73,13 @@ impl GpuHealth {
 
     /// Lowers quality one step after the device couldn't allocate; true when the step is new.
     /// The step check is all the arbitration there is: two errors at once is one step, so
-    /// the same failure repeating every frame doesn't spam the message.
+    /// the same failure repeating every frame doesn't spam the message. The exchange is
+    /// strong because a spurious weak failure would silently drop this error's step until
+    /// another out-of-memory error came.
     fn raise_after_oom(&self) -> bool {
         let old = self.level.load(Ordering::Relaxed);
         let new = old.saturating_add(1).min(MAX_LEVEL);
-        new != old && self.level.compare_exchange_weak(old, new, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+        new != old && self.level.compare_exchange(old, new, Ordering::Relaxed, Ordering::Relaxed).is_ok()
     }
 }
 

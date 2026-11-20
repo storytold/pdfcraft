@@ -380,6 +380,23 @@ fn gpu_quality_lowers_the_raster_scale_the_view_asks_for() {
     assert_eq!(v.render_scale(2.0), 4.0 * super::PT * 2.0 * 0.5);
     v.set_gpu_quality(1.0);
     assert_eq!(v.render_scale(2.0), 4.0 * super::PT * 2.0);
+    // A file reload (#431) rebuilds the view through `Self::new`; the lowered quality is
+    // the drawing device's, not the document's, so it survives the rebuild.
+    v.set_gpu_quality(0.5);
+    v.document_replaced(&thumbnail_info(3));
+    assert_eq!(v.render_scale(2.0), 4.0 * super::PT * 2.0 * 0.5);
+}
+
+#[test]
+fn degraded_quality_paints_the_page_at_its_full_size() {
+    // #606: `texel_aligned` sizes the paint rectangle from the raster's pixels, so the
+    // paint calls pass `ppp` multiplied by the quality factor: a half-quality raster
+    // paints the same rectangle, blurred, and only at quality 1.0 does each texel cover
+    // one screen pixel (#260).
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    assert_eq!(xf.texel_aligned([600, 800], 2.0).rect.size(), xf.rect.size(), "quality 1.0: the device scale, texel for texel (#260)");
+    assert_eq!(xf.texel_aligned([300, 400], 2.0 * 0.5).rect.size(), xf.rect.size(), "half quality: the same rectangle, not half");
+    assert_eq!(xf.texel_aligned([300, 400], 2.0).rect.size(), vec2(150.0, 200.0), "the shrink this avoids: a degraded raster read at the full `ppp`");
 }
 
 fn view(pages: usize, layout: PageLayout, continuous: bool) -> DocView {

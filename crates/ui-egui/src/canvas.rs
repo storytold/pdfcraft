@@ -1301,6 +1301,9 @@ impl DocView {
         fresh.find = self.find.take();
         fresh.pages = std::mem::take(&mut self.pages);
         fresh.thumbs = std::mem::take(&mut self.thumbs);
+        // #606: the lowered raster quality belongs to the session's drawing device, not to
+        // this document's version, so a rebuild does not silently ask for full-size rasters.
+        fresh.gpu_quality = self.gpu_quality;
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
@@ -1661,7 +1664,21 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
         match view.pages.get(&i) {
             Some(p) => {
                 if !tiled && p.tag == want_tag {
-                    paint_image_suppressed(&xf.texel_aligned(p.tex.size(), ppp), painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
+                    // `ppp` at the raster's own scale (#606): the quality factor scales the
+                    // pixels and this divisor together, so a degraded raster paints the
+                    // page's full displayed size, blurred, not a smaller rectangle; at 1.0
+                    // this is exactly the device scale, texel for texel (#260).
+                    paint_image_suppressed(
+                        &xf.texel_aligned(p.tex.size(), ppp * view.gpu_quality),
+                        painter,
+                        p.tex.id(),
+                        0.0,
+                        0.0,
+                        1.0,
+                        1.0,
+                        active_drag_suppress,
+                        true,
+                    );
                 } else {
                     // A backdrop, or a raster at an older scale until the new one arrives.
                     paint_image_suppressed(&xf, painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
@@ -1743,8 +1760,9 @@ fn paint_page_tiles(
         frame.wanted.push((i, scale, tag, Some(Tile { x, y, w, h })));
         if let Some(tex) = view.tiles.get(&(i, tag, x, y)) {
             let (fw, fh) = (dw as f32, dh as f32);
+            // `ppp` at the tiles' own scale (#606), as for whole-page rasters above.
             paint_image_suppressed(
-                &xf.texel_aligned([dw as usize, dh as usize], ppp),
+                &xf.texel_aligned([dw as usize, dh as usize], ppp * view.gpu_quality),
                 painter,
                 tex.id(),
                 x as f32 / fw,

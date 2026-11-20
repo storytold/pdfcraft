@@ -604,14 +604,12 @@ impl PdfCraftApp {
         self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
         // The device's handler may have found it short of memory or faulted (#606): say so
-        // once, and ask every view for smaller rasters from now on, which is what the app
-        // can still do when the device couldn't allocate.
+        // once, which is all the app can do inside wgpu's call stack. The quality factor the
+        // handler recorded goes onto every view at the end of this frame, after anything the
+        // frame can open or replace, so even a document that arrives now asks for its
+        // rasters at the lowered scale.
         if let Some(notice) = self.gpu_health.take_notice() {
             self.notify_tr(notice.message());
-        }
-        let gpu_quality = self.gpu_health.quality();
-        for view in &mut self.views {
-            view.set_gpu_quality(gpu_quality);
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
@@ -831,6 +829,14 @@ impl PdfCraftApp {
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);
         self.sync_titles(ctx);
+        // The #606 quality factor, last: after everything this frame can open, reload or
+        // follow, so even a view created here asks for its rasters at the lowered scale
+        // before any is collected in `ui`. Healthy sessions keep 1.0 and this changes
+        // nothing.
+        let gpu_quality = self.gpu_health.quality();
+        for view in &mut self.views {
+            view.set_gpu_quality(gpu_quality);
+        }
     }
 
     fn ui_unguarded(&mut self, ui: &mut egui::Ui) {
