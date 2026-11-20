@@ -101,6 +101,8 @@ impl Session {
             Self::draw_captions(&mut document, self.captions.clone());
         }
         self.docs.push(document);
+        // Document-level scripts that ran as the document was prepared ran in the realm it keeps,
+        // which doesn't run them again: what runs now is the rest of opening (its open actions).
         self.run_open_scripts(id);
         id
     }
@@ -261,6 +263,8 @@ impl Session {
             },
             (_, cos) => (bytes, info, cos),
         };
+        let mut document_realm = None;
+        let (bytes, info, cos) = document_scripts_on_open(context, &name, (&mut script_output, &mut document_realm), &rebase, (bytes, info, cos));
         // The catalog leads to no page, but the reader found pages by scanning: gather the page
         // objects into a page tree as one more revision, or page edits address none of them
         // (#1656). Kept only when the reader then shows the same pages, and never on a signed
@@ -295,6 +299,9 @@ impl Session {
             document.js_output.errors.push(XFA_SCRIPTS_OFF.into());
         }
         note_warnings(&mut document.xfa_warnings, &xfa_warnings);
+        if let Some(realm) = document_realm {
+            document.js_runtime = realm;
+        }
         Ok(PreparedDocument { document })
     }
 
@@ -393,6 +400,65 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+        }
+    }
+}
+
+/// What opening a document makes of it so far: its parsed objects, or why they couldn't be.
+type Opened = std::thread::Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>>;
+
+/// A document written as one more revision and opened again, or why it couldn't be.
+type Rebased = Result<(Arc<Vec<u8>>, DocInfo, pdfcraft_cos::Document), String>;
+
+/// The document-level scripts run as the document opens (ISO 32000-2 §12.6.4.17), in the realm
+/// the document then keeps (`runtime`, set when they ran), so they run once. What they change in
+/// the form (a field they hide, say) is one more revision, as for XFA: still nothing to save. Not
+/// on a signed document, whose signatures would then cover a revision fewer than the file has.
+fn document_scripts_on_open(
+    context: &OpenContext,
+    name: &str,
+    (script_output, runtime): (&mut js::JsOutput, &mut Option<js::Runtime>),
+    rebase: &dyn Fn(&pdfcraft_cos::Document) -> Rebased,
+    (bytes, info, cos): (Arc<Vec<u8>>, DocInfo, Opened),
+) -> (Arc<Vec<u8>>, DocInfo, Opened) {
+    let cos = match cos {
+        Ok(Ok(cos)) if !context.js_off => cos,
+        cos => return (bytes, info, cos),
+    };
+    let mut work = cos.clone();
+    let mut realm = js::Runtime::default();
+    let ran = guard(|| js::on_open(&mut work, name, context.highlight, &mut realm, script_output));
+    // A realm a panic left behind may be half set up: the document starts with a fresh one.
+    *runtime = Some(if ran.is_err() { js::Runtime::default() } else { realm });
+    let ran = ran.unwrap_or_else(|m| Err(format!("they failed unexpectedly ({m})")));
+    match ran {
+        Ok(names) if !names.is_empty() && work.is_modified() && !pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed) => {
+            match rebase(&work) {
+                Ok((b, mut i, c)) => {
+                    // `rebase` inspected the file afresh: keep what earlier steps of opening said (a
+                    // layout that failed, values taken from XFA data).
+                    let earlier: Vec<String> = info.warnings.into_iter().filter(|w| !i.warnings.contains(w)).collect();
+                    i.warnings.splice(0..0, earlier);
+                    let shown: Vec<&str> = names.iter().take(5).map(String::as_str).collect();
+                    let more = if names.len() > shown.len() { format!(" and {} more", names.len() - shown.len()) } else { String::new() };
+                    i.warnings.push(format!(
+                        "This document's scripts changed {} form field{} on opening ({}{more}); saving keeps those changes",
+                        names.len(),
+                        if names.len() == 1 { "" } else { "s" },
+                        shown.join(", ")
+                    ));
+                    (b, i, Ok(Ok(c)))
+                }
+                Err(e) => {
+                    script_output.errors.push(format!("The document's scripts could not be applied: {e}"));
+                    (bytes, info, Ok(Ok(cos)))
+                }
+            }
+        }
+        Ok(_) => (bytes, info, Ok(Ok(cos))),
+        Err(e) => {
+            script_output.errors.push(format!("The document's scripts could not run: {e}"));
+            (bytes, info, Ok(Ok(cos)))
         }
     }
 }
