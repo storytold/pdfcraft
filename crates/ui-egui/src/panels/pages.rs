@@ -83,7 +83,8 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
                 result.edit = Some(pdfcraft_engine::Edit::MovePages { pages, to });
             }
             ThumbnailEvent::Delete(_) => {
-                if editable {
+                // The menu bar owns keys while its menu is open, even over the thumbnails.
+                if editable && !craft::ui::menu::bar::is_open(ui.ctx()) {
                     result.edit = delete_pages(view, count);
                 }
             }
