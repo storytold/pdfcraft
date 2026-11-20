@@ -1383,6 +1383,20 @@ fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_las
     assert_eq!(stale.text_on(1, &t), "abcde");
 }
 
+/// #5577 with a selection across pages (#5017): a bookmark made with it is named after every
+/// page's words, on one line, and only once each page is read.
+#[test]
+fn a_selection_across_pages_names_the_bookmark_with_every_pages_words() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 0, head_page: 2, head_x: None } });
+    assert_eq!(v.bookmark_title(), None, "page 2 is not read yet");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.bookmark_title().as_deref(), Some("bc def g"));
+}
+
 #[test]
 fn a_selection_across_pages_copies_each_page_on_its_own_line_once_all_are_read() {
     let info = thumbnail_info(4);

@@ -807,6 +807,8 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
         {
             view.selection = Some(Selection::run(gesture.page, first, last));
+            // Words selected by hand are no Select All, even all of a page's (CodeRabbit on #5615).
+            view.page_select_all = None;
         }
     }
     if gesture.ptr.drag_started && press_here && gesture.text_drag {
@@ -919,6 +921,7 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
+        view.page_select_all = None;
     } else if gesture.resp.clicked() && view.clicks < 2 && gesture.text_drag {
         // ⇧-click extends a reading-order selection to the click, on its page or another,
         // keeping its anchor (#527). Otherwise (no shift, no selection, or a column selection,
