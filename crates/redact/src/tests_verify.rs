@@ -1010,6 +1010,164 @@ fn an_image_a_type3_glyph_draws_after_a_surplus_operand_is_found() {
     assert_eq!(proof.entries[0].status, Status::Unverifiable, "{}", proof.to_text());
 }
 
+/// The same, the Type 3 font's `/Subtype`, or the image's, given by reference: the proof still
+/// searches the glyph, and still finds the image it draws.
+#[test]
+fn an_image_a_type3_glyph_draws_is_found_with_subtypes_given_by_reference() {
+    for (font_subtype, image_subtype) in [("10 0 R", "/Image"), ("/Type3", "11 0 R")] {
+        let spec = Spec {
+            resources: "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>",
+            extra: vec![
+                format!(
+                    "<< /Type /Font /Subtype {font_subtype} /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+                     /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >>"
+                )
+                .into_bytes(),
+                stream("", b"10 0 d0 /Im0 Do"),
+                stream(&format!("/Type /XObject /Subtype {image_subtype} /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8"), b"o"),
+                b"/Type3".to_vec(),
+                b"/Image".to_vec(),
+            ],
+            ..Spec::default()
+        };
+        let mut doc = open(build_with(b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET BT /T3 12 Tf 150 20 Td (a) Tj ET", spec));
+        mark(&mut doc, &[REGION]);
+        let (_, proof) = run(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "{font_subtype} {image_subtype}: {}", proof.to_text());
+    }
+}
+
+/// The same, the Type 3 font with `/Resources` of its own: the image named only there, where its
+/// glyph looks it up (ISO 32000-2 §9.6.4), or only in the page's, where the renderer falls back to
+/// for a name the font's lack or give no stream for (null, a missing object, a dictionary). The
+/// proof finds it either way.
+#[test]
+fn an_image_a_type3_glyph_draws_through_its_fonts_resources_is_found() {
+    for (font_resources, page_resources) in [
+        ("<< /XObject << /Im0 9 0 R >> >>", "/Font << /F1 5 0 R /T3 7 0 R >>"),
+        ("<< /ProcSet [/PDF /ImageC] >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< /XObject << /Im0 null >> >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< /XObject << /Im0 99 0 R >> >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+        ("<< /XObject << /Im0 7 0 R >> >>", "/Font << /F1 5 0 R /T3 7 0 R >> /XObject << /Im0 9 0 R >>"),
+    ] {
+        let spec = Spec {
+            resources: page_resources,
+            extra: vec![
+                format!(
+                    "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 8 0 R >> \
+                     /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] /Resources {font_resources} >>"
+                )
+                .into_bytes(),
+                stream("", b"10 0 d0 /Im0 Do"),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+            ],
+            ..Spec::default()
+        };
+        let mut doc = open(build_with(b"BT /F1 10 Tf 10 100 Td (SECRETVALUE) Tj ET BT /T3 12 Tf 150 20 Td (a) Tj ET", spec));
+        mark(&mut doc, &[REGION]);
+        let (_, proof) = run(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "{font_resources}: {}", proof.to_text());
+    }
+}
+
+/// A glyph program two Type 3 fonts share looks its names up in each font's resources, with the
+/// page's under them, so the proof searches it in each: the image it draws through one font is
+/// found whichever font comes first. The other font gives the name to an empty form, or the
+/// glyph draws a form without resources of its own, which looks the image's name up where it is
+/// drawn.
+#[test]
+fn an_image_a_glyph_program_two_type3_fonts_share_draws_through_either_is_found() {
+    // 7, 8: the fonts; 9: the image; 10: the glyph program; 11: an empty form; 12: a form without
+    // resources of its own that draws /Im0.
+    let rows = [
+        // The page's image, which the font without resources sees and the other gives an empty form's name.
+        ("/Im0 Do", "/XObject << /Im0 9 0 R >>", "", "/Resources << /XObject << /Im0 11 0 R >> >>"),
+        // An image only one font has.
+        ("/Im0 Do", "", "/Resources << /XObject << /Im0 9 0 R >> >>", "/Resources << /XObject << /Im0 11 0 R >> >>"),
+        // Through a form both fonts give the glyph, drawing what each gives /Im0.
+        ("/Fm Do", "", "/Resources << /XObject << /Fm 12 0 R /Im0 9 0 R >> >>", "/Resources << /XObject << /Fm 12 0 R /Im0 11 0 R >> >>"),
+        // The same two objects in both fonts, under each other's names.
+        ("/Im0 Do", "", "/Resources << /XObject << /Im0 9 0 R /X 11 0 R >> >>", "/Resources << /XObject << /X 9 0 R /Im0 11 0 R >> >>"),
+    ];
+    let font = |resources: &str| {
+        format!(
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [0.1 0 0 0.1 0 0] /CharProcs << /a 10 0 R >> \
+             /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] {resources} >>"
+        )
+        .into_bytes()
+    };
+    for (glyph, page_xobjects, finds, misses) in rows {
+        for (first, second) in [(misses, finds), (finds, misses)] {
+            let resources = format!("/Font << /F1 5 0 R /TA 7 0 R /TB 8 0 R >> {page_xobjects}");
+            let spec = Spec {
+                resources: &resources,
+                extra: vec![
+                    font(first),
+                    font(second),
+                    stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+                    stream("", format!("10 0 d0 {glyph}").as_bytes()),
+                    stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""),
+                    stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"/Im0 Do"),
+                ],
+                ..Spec::default()
+            };
+            let content = b"BT /F1 10 Tf 10 200 Td (Public) Tj ET BT /TA 12 Tf 150 20 Td (a) Tj ET BT /TB 12 Tf 150 40 Td (a) Tj ET";
+            let mut doc = marked_content(content, spec);
+            let proof = prove_unapplied(&mut doc);
+            assert_eq!(proof.entries[0].status, Status::Unverifiable, "{glyph}, first {first:?}, then {second:?}: {}", proof.to_text());
+        }
+    }
+}
+
+/// A form without resources of its own that two patterns draw looks its names up in each
+/// pattern's resources, so the proof searches it from each: the image one gives it is found
+/// whichever pattern comes first.
+#[test]
+fn an_image_a_form_without_resources_draws_from_either_of_two_patterns_is_found() {
+    // 7, 8: the patterns; 9: the image; 10: the form, which draws /Im0; 11: an empty form.
+    let tile = |resources: &str| {
+        stream(&format!("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources {resources}"), b"/Fm Do")
+    };
+    let (finds, misses) = ("<< /XObject << /Fm 10 0 R /Im0 9 0 R >> >>", "<< /XObject << /Fm 10 0 R /Im0 11 0 R >> >>");
+    for (first, second) in [(misses, finds), (finds, misses)] {
+        let spec = Spec {
+            resources: "/Pattern << /P1 7 0 R /P2 8 0 R >>",
+            extra: vec![
+                tile(first),
+                tile(second),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"/Im0 Do"),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b""),
+            ],
+            ..Spec::default()
+        };
+        let mut doc = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", spec);
+        let proof = prove_unapplied(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::Unverifiable, "first {first}, then {second}: {}", proof.to_text());
+    }
+}
+
+/// A form that draws itself, drawn from a pattern, is searched once where it is drawn, not again
+/// at each nesting until the limit, which would leave the page unverifiable: with resources of
+/// its own or without.
+#[test]
+fn a_form_that_draws_itself_from_a_pattern_is_searched_once() {
+    for (pattern, form) in [("", ""), ("/Resources << /XObject << /Fm 8 0 R >> >>", "/Resources << /XObject << /Fm 8 0 R >> >>")] {
+        let spec = Spec {
+            resources: "/Pattern << /P1 7 0 R >> /XObject << /Fm 8 0 R >>",
+            extra: vec![
+                stream(&format!("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 {pattern}"), b"/Fm Do"),
+                stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 1 1] {form}"), b"/Fm Do"),
+            ],
+            ..Spec::default()
+        };
+        let mut doc = marked_content(b"BT /F1 10 Tf 10 200 Td (Public) Tj ET", spec);
+        let proof = prove_unapplied(&mut doc);
+        assert_eq!(proof.entries[0].status, Status::VerifiedNoTextInRegion, "{form:?}: {}", proof.to_text());
+    }
+}
+
 #[test]
 fn an_ambiguous_needle_is_still_swept_outside_page_content() {
     // The word also stays on the page legitimately (so page text, the raw file and decoded

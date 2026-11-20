@@ -106,7 +106,7 @@ fn resolve_font_in_res(doc: &Document, res: &Dict, font_name: &[u8]) -> Option<(
     // A direct Type 3 font is refused during discovery, so none reaches the scan.
     let font_ref = font_obj.as_ref()?;
     let dict = doc.resolve(font_obj).as_dict()?.clone();
-    (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
+    (crate::subtype(doc, &dict).as_deref() == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
 }
 
 fn resolve_extgstate_font(doc: &Document, res: &Dict, gs_name: &[u8]) -> Option<(FontKey, Dict)> {
@@ -116,7 +116,7 @@ fn resolve_extgstate_font(doc: &Document, res: &Dict, gs_name: &[u8]) -> Option<
     let font_obj = font_entry.first()?;
     let font_ref = font_obj.as_ref()?;
     let dict = doc.resolve(font_obj).as_dict()?.clone();
-    (dict.name(b"Subtype") == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
+    (crate::subtype(doc, &dict).as_deref() == Some(b"Type3")).then_some((FontKey::Ref(font_ref), dict))
 }
 
 #[derive(Default)]
@@ -212,15 +212,18 @@ fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
 fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError> {
     let mut pending: Vec<(ObjRef, usize)> = res_dict(doc, font_res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, 0)).collect();
     let mut seen = HashSet::new();
-    while let Some((form_ref, depth)) = pending.pop() {
+    while let Some((entry, depth)) = pending.pop() {
+        // The form itself, through any references to it, as the renderer follows them: its
+        // resources are written back to its own object.
+        let Some((form_ref, object, _)) = crate::stream_behind(doc, &Object::Ref(entry)) else { continue };
         if !seen.insert(form_ref) {
             continue;
         }
         if depth > MAX_DEPTH || seen.len() > MAX_HOLDERS {
             return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: forms nest too deep".into() });
         }
-        let Object::Stream(form) = &*doc.get(form_ref) else { continue };
-        if form.dict.name(b"Subtype") != Some(b"Form") {
+        let Object::Stream(form) = &*object else { continue };
+        if crate::subtype(doc, &form.dict).as_deref() != Some(b"Form") {
             continue;
         }
         // A Form without resources of its own (no key, or `null`) draws through its caller's,
@@ -407,8 +410,8 @@ fn scan_xobject(
     depth: usize,
 ) -> Result<(), CosError> {
     let xo = res_dict(ctx.doc, res, b"XObject");
-    let Some(r) = xo.get(name).and_then(Object::as_ref) else { return Ok(()) };
-    if !matches!(&*ctx.doc.get(r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")) {
+    let Some((r, object, _)) = xo.get(name).and_then(|e| crate::stream_behind(ctx.doc, e)) else { return Ok(()) };
+    if !matches!(&*object, Object::Stream(s) if crate::subtype(ctx.doc, &s.dict).as_deref() == Some(b"Form")) {
         return Ok(());
     }
     scan_stream_object(ctx, res, holder_ref, r, current_font, depth)
@@ -419,7 +422,7 @@ fn scan_xobject(
 /// draws no text.
 fn scan_pattern(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, name: &[u8], depth: usize) -> Result<(), CosError> {
     let patterns = res_dict(ctx.doc, res, b"Pattern");
-    let Some(r) = patterns.get(name).and_then(Object::as_ref) else { return Ok(()) };
+    let Some((r, _, _)) = patterns.get(name).and_then(|p| crate::stream_behind(ctx.doc, p)) else { return Ok(()) };
     scan_stream_object(ctx, res, holder_ref, r, None, depth)
 }
 
@@ -429,7 +432,7 @@ fn scan_soft_mask(ctx: &mut ScanContext<'_>, res: &Dict, holder_ref: ObjRef, nam
     let states = res_dict(ctx.doc, res, b"ExtGState");
     let Some(state) = states.get(name).and_then(|s| ctx.doc.resolve(s).as_dict().cloned()) else { return Ok(()) };
     let Some(mask) = state.get(b"SMask").and_then(|m| ctx.doc.resolve(m).as_dict().cloned()) else { return Ok(()) };
-    let Some(group) = mask.get(b"G").and_then(Object::as_ref) else { return Ok(()) };
+    let Some((group, _, _)) = mask.get(b"G").and_then(|g| crate::stream_behind(ctx.doc, g)) else { return Ok(()) };
     scan_stream_object(ctx, res, holder_ref, group, None, depth)
 }
 
@@ -447,7 +450,8 @@ fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, pa
 
 /// The streams an annotation can show: its normal, rollover and down appearances (ISO 32000-2
 /// §12.5.5), each one stream or a dictionary of streams by appearance state. Readers draw no
-/// other `/AP` entry, so one can't keep a glyph the page no longer shows.
+/// other `/AP` entry, so one can't keep a glyph the page no longer shows. Each is the stream's own
+/// reference, however many references lead to it.
 fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     let Some(ap) = doc.resolve(annot).as_dict().and_then(|a| a.get(b"AP").cloned()) else { return Vec::new() };
     let Some(ap) = doc.resolve(&ap).as_dict().cloned() else { return Vec::new() };
@@ -455,8 +459,8 @@ fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     for key in [b"N", b"R", b"D"] {
         let Some(entry) = ap.get(key) else { continue };
         match &*doc.resolve(entry) {
-            Object::Dict(states) => streams.extend(states.iter().filter_map(|(_, s)| s.as_ref())),
-            _ => streams.extend(entry.as_ref()),
+            Object::Dict(states) => streams.extend(states.iter().filter_map(|(_, s)| crate::stream_behind(doc, s)).map(|(r, _, _)| r)),
+            _ => streams.extend(crate::stream_behind(doc, entry).map(|(r, _, _)| r)),
         }
     }
     streams
@@ -499,12 +503,14 @@ fn add_soft_mask_ops(doc: &Document, res: &Dict, ops: &mut Vec<pdfcraft_content:
                 .last_name()
                 .and_then(|n| states.get(n))
                 .and_then(|s| doc.resolve(s).as_dict().and_then(|s| s.get(b"SMask").cloned()))
-                .and_then(|m| doc.resolve(&m).as_dict().and_then(|m| m.get(b"G").and_then(Object::as_ref))),
+                .and_then(|m| doc.resolve(&m).as_dict().and_then(|m| m.get(b"G").and_then(|g| crate::stream_behind(doc, g))))
+                .map(|(r, _, _)| r),
             b"Do" if cursor >= known => op
                 .last_name()
                 .and_then(|n| xobjects.get(n))
-                .and_then(Object::as_ref)
-                .filter(|r| matches!(&*doc.get(*r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))),
+                .and_then(|e| crate::stream_behind(doc, e))
+                .filter(|(_, o, _)| matches!(&**o, Object::Stream(s) if crate::subtype(doc, &s.dict).as_deref() == Some(b"Form")))
+                .map(|(r, _, _)| r),
             _ => None,
         };
         cursor += 1;
@@ -559,11 +565,11 @@ fn gs_font_object(doc: &Document, state_obj: &Object) -> Option<Object> {
 }
 
 /// Whether font `f` (a reference, or a font dictionary) is a Type 3 font, the only kind the font
-/// cleanup prunes: its `/Subtype` is read directly, as the cleanup's other readers read it, so one
-/// given by reference isn't recognised by any of them. Which allowance the cleanup's read is charged
-/// to, and what it prunes, both go by this.
+/// cleanup prunes: its `/Subtype` is read through a reference, as the cleanup's other readers, the
+/// walk and the renderer read it. Which allowance the cleanup's read is charged to, and what it
+/// prunes, both go by this.
 fn is_type3(doc: &Document, f: &Object) -> bool {
-    doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))
+    doc.resolve(f).as_dict().is_some_and(|d| crate::subtype(doc, d).as_deref() == Some(b"Type3"))
 }
 
 /// Prune Type 3 fonts from a rewritten page or form's `/Resources` dictionary if the rewritten
@@ -770,16 +776,15 @@ fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> 
     let mut seen_forms = HashSet::new();
     while let Some(res) = pending_res.pop() {
         for (_, value) in res_dict(doc, &res, b"XObject").iter() {
-            let Some(reference) = value.as_ref() else { continue };
+            let Some((reference, object, _)) = crate::stream_behind(doc, value) else { continue };
             if !seen_forms.insert(reference) {
                 continue;
             }
             if seen_forms.len() > MAX_HOLDERS {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction exceeded max depth inspecting form resources".into() });
             }
-            let object = doc.get(reference);
             let Object::Stream(form) = &*object else { continue };
-            if form.dict.name(b"Subtype") != Some(b"Form") {
+            if crate::subtype(doc, &form.dict).as_deref() != Some(b"Form") {
                 continue;
             }
             if let Some(r) = form.dict.get(b"Resources").and_then(|ro| doc.resolve(ro).as_dict().cloned()) {
@@ -801,7 +806,7 @@ fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKe
     };
     let mut consider = |font_obj: &Object| -> Result<(), CosError> {
         if let Some(dict) = doc.resolve(font_obj).as_dict().cloned()
-            && dict.name(b"Subtype") == Some(b"Type3")
+            && crate::subtype(doc, &dict).as_deref() == Some(b"Type3")
         {
             let font_ref = font_obj.as_ref().ok_or_else(direct)?;
             t3_fonts.entry(FontKey::Ref(font_ref)).or_insert(dict);

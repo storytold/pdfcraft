@@ -257,11 +257,36 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
     page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
-/// An annotation's `/Subtype`, resolved: it may be an indirect reference (ISO 32000-2 §7.3.10),
-/// and the audit reads it that way, so a mark it reports must not be one [`apply`] passes over.
+/// An object's `/Subtype` (an annotation's, a font's, an XObject's), resolved: it may be an
+/// indirect reference (ISO 32000-2 §7.3.10), and the renderer and the audit read it that way, so a
+/// mark the audit reports must not be one [`apply`] passes over, nor a form or image the renderer
+/// draws one the walk leaves alone.
 pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
 }
+
+/// The stream an XObject or other entry leads to, through references as the renderer follows
+/// them, up to [`MAX_REFERENCE_HOPS`] as `Document::resolve` does: its own reference, the stream,
+/// and the references on the way to it, which stand for it and go with it. `None` where the entry
+/// isn't a reference or doesn't lead to a stream.
+pub(crate) fn stream_behind(doc: &Document, entry: &Object) -> Option<(ObjRef, std::sync::Arc<Object>, Vec<ObjRef>)> {
+    let mut r = entry.as_ref()?;
+    let mut on_the_way = Vec::new();
+    loop {
+        let object = doc.get(r);
+        match &*object {
+            Object::Ref(next) if on_the_way.len() < MAX_REFERENCE_HOPS => {
+                on_the_way.push(r);
+                r = *next;
+            }
+            Object::Stream(_) => return Some((r, object, on_the_way)),
+            _ => return None,
+        }
+    }
+}
+
+/// The references `Document::resolve` follows from one to the next.
+const MAX_REFERENCE_HOPS: usize = 32;
 
 /// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
 /// (a mark on another page, say) is left alone.
@@ -944,7 +969,7 @@ fn redact_page_content(
     }
 
     for (old, new, changed, empty) in out.tag_changes {
-        report.tags += tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
+        report.tags += tags::clean(doc, page.obj, Some((&old, new)), &changed, &empty)?;
     }
     Ok(())
 }

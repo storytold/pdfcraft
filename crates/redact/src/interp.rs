@@ -112,6 +112,10 @@ struct Gs {
     type3_inherits: bool,
 }
 
+/// A form replaced by a cleaned copy: the references that stood for it, the copy's, and the
+/// marked content the rewrite changed and emptied ([`crate::tags::clean`]).
+pub(crate) type TagChange = (Vec<ObjRef>, ObjRef, HashSet<i64>, HashSet<i64>);
+
 /// What processing a scope produced.
 #[derive(Default)]
 pub(crate) struct Output {
@@ -157,7 +161,7 @@ pub(crate) struct Output {
     /// `TJ` array, say), which other readers may still draw, is neither found nor removed, and a
     /// rewrite would drop the bytes but keep the strings. A redaction must not trust it.
     pub unparsed: bool,
-    pub tag_changes: Vec<(ObjRef, ObjRef, HashSet<i64>, HashSet<i64>)>,
+    pub tag_changes: Vec<TagChange>,
     pub error: Option<CosError>,
 }
 
@@ -342,9 +346,7 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 /// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
 /// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
-    // `/Subtype` may be written by reference (#6750).
-    let subtype = font.get(b"Subtype").map(|s| doc.resolve(s));
-    if subtype.as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
+    if crate::subtype(doc, font).as_deref() != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
@@ -1119,13 +1121,14 @@ fn xobject(
     out: &mut Output,
 ) -> Option<Option<Op>> {
     let name = op.last_name()?.to_vec();
-    let r = xobjects.get(&name)?.as_ref()?;
-    let obj = doc.get(r);
+    // The entry may lead to the stream through a reference to a reference, which the renderer
+    // follows: the stream's own reference is walked, and where it goes, the references on the way
+    // go with it, so that none of them keeps it in the file.
+    let (r, obj, on_the_way) = crate::stream_behind(doc, xobjects.get(&name)?)?;
     let Object::Stream(s) = &*obj else { return None };
-    // `/Subtype` may be written by reference, and the renderer follows it: an image named that way
-    // is still drawn, so it must still be redacted (#6750).
-    let subtype = s.dict.get(b"Subtype").map(|t| doc.resolve(t));
-    match subtype.as_deref().and_then(Object::as_name) {
+    // What a removal or a cleaned copy makes go: the stream, and the references on the way to it.
+    let gone: Vec<ObjRef> = on_the_way.into_iter().chain([r]).collect();
+    match crate::subtype(doc, &s.dict).as_deref() {
         _ if s.dict.get(b"OC").is_some_and(|oc| scope.xobject_layer_hidden(doc, r, oc)) => {
             // Verify mode must count hidden XObjects too: scan uses that count to decide
             // whether the HiddenLayers pass is necessary.
@@ -1134,7 +1137,7 @@ fn xobject(
                 return None;
             }
             out.replaced.push(name);
-            out.doomed.push(r);
+            out.doomed.extend_from_slice(&gone);
             Some(None)
         }
         Some(b"Image") => {
@@ -1145,7 +1148,7 @@ fn xobject(
             if scope.covered(b) {
                 scope.report.images_removed += 1;
                 out.replaced.push(name);
-                out.doomed.push(r);
+                out.doomed.extend_from_slice(&gone);
                 return Some(None);
             }
             match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
@@ -1156,14 +1159,14 @@ fn xobject(
                     xobjects.set(n.clone(), Object::Ref(nr));
                     out.xobjects.push((n.clone(), nr));
                     out.replaced.push(name);
-                    out.doomed.push(r);
+                    out.doomed.extend_from_slice(&gone);
                     scope.report.images_cleared += 1;
                     Some(Some(Op::new("Do", vec![Object::Name(n)])))
                 }
                 Err(()) => {
                     scope.report.images_removed += 1;
                     out.replaced.push(name);
-                    out.doomed.push(r);
+                    out.doomed.extend_from_slice(&gone);
                     Some(None)
                 }
             }
@@ -1222,7 +1225,7 @@ fn xobject(
                 // Its text was never read, so the metadata check can't know what went with it.
                 scope.removed_cut = true;
                 out.replaced.push(name);
-                out.doomed.push(r);
+                out.doomed.extend_from_slice(&gone);
                 return Some(None);
             }
             // Strict, like page content: a Form read only in part counts as undecodable. With its
@@ -1251,7 +1254,7 @@ fn xobject(
                     scope.report.forms_removed += 1;
                     scope.removed_cut = true;
                     out.replaced.push(name);
-                    out.doomed.push(r);
+                    out.doomed.extend_from_slice(&gone);
                     return Some(None);
                 }
                 Err(_) => {
@@ -1345,12 +1348,13 @@ fn xobject(
                 None => Stream { dict, raw: s.raw.clone() },
             };
             let nr = doc.add(Object::Stream(stream));
-            out.tag_changes.push((r, nr, changed, empty));
+            // A structure tree may name the stream by any reference that stands for it.
+            out.tag_changes.push((gone.clone(), nr, changed, empty));
             let n = fresh_name(scope, xobjects);
             xobjects.set(n.clone(), Object::Ref(nr));
             out.xobjects.push((n.clone(), nr));
             out.replaced.push(name);
-            out.doomed.push(r);
+            out.doomed.extend_from_slice(&gone);
             scope.report.forms_rewritten += 1;
             Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
@@ -1396,5 +1400,5 @@ fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> 
 /// A Type 3 font whose glyph descriptions use the resources of whatever shows them: no
 /// `/Resources`, or `/Resources null`, which is the same thing.
 fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
-    font.name(b"Subtype") == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
+    crate::subtype(doc, font).as_deref() == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
 }

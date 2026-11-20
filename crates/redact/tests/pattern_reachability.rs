@@ -213,6 +213,14 @@ fn a_type3_font_with_null_resources_keeps_the_page_pattern() {
     doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |d| d.set(b"Resources".to_vec(), Object::Null)).unwrap();
     assert_glyph_kept(doc);
 }
+/// The Type 3 font without `/Resources` has its `/Subtype` given by reference: still a Type 3 font
+/// whose glyph paints through the page's names, so the page keeps the pattern.
+#[test]
+fn a_type3_font_given_its_subtype_by_reference_keeps_the_page_pattern() {
+    let mut doc = type3_page("", b"BT /T3 1 Tf 300 230 Td (a) Tj ET\n/Pattern cs /P0 scn 35 110 170 35 re f\n", vec![b"/Type3".to_vec()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |d| d.set(b"Subtype".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(9, 0)))).unwrap();
+    assert_glyph_kept(doc);
+}
 /// Known limit (fidelity only, never a leak: a missed use can only prune more). Kept annotation
 /// appearances are not interpreted for pattern use, so a Type 3 font without resources shown in
 /// one does not keep the page's patterns. ISO 32000 resolves the glyph's names in the

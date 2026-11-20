@@ -147,23 +147,29 @@ pub(crate) fn touched(doc: &Document, resources: &Dict, before: &[u8], after: &[
     (changed, empty)
 }
 
-fn mcid_of(doc: &Document, o: &Object, page: Option<ObjRef>, target: ObjRef, stream: Option<(ObjRef, ObjRef)>) -> Option<i64> {
+fn mcid_of(doc: &Document, o: &Object, page: Option<ObjRef>, target: ObjRef, stream: Option<(&[ObjRef], ObjRef)>) -> Option<i64> {
     match &*doc.resolve(o) {
         Object::Int(n) if page == Some(target) && stream.is_none() => Some(*n),
         Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
             let pg = m.get(b"Pg").and_then(Object::as_ref).or(page);
             let stm = m.get(b"Stm").and_then(Object::as_ref);
-            (pg == Some(target) && stm == stream.map(|s| s.0)).then(|| m.get(b"MCID").and_then(|id| doc.resolve(id).as_int())).flatten()
+            let in_stream = match stream {
+                Some((originals, _)) => stm.is_some_and(|s| originals.contains(&s)),
+                None => stm.is_none(),
+            };
+            (pg == Some(target) && in_stream).then(|| m.get(b"MCID").and_then(|id| doc.resolve(id).as_int())).flatten()
         }
         _ => None,
     }
 }
 
-/// Clean the elements owning `changed` marked content on `page`; returns how many changed.
+/// Clean the elements owning `changed` marked content on `page`; returns how many changed. With
+/// `stream`, the marked content of a form XObject replaced by a cleaned copy: the references that
+/// stood for the form (its own, and any on the way to it), and the copy's.
 pub(crate) fn clean(
     doc: &mut Document,
     page: ObjRef,
-    stream: Option<(ObjRef, ObjRef)>,
+    stream: Option<(&[ObjRef], ObjRef)>,
     changed: &HashSet<i64>,
     empty: &HashSet<i64>,
 ) -> Result<usize, RedactError> {
@@ -178,7 +184,7 @@ pub(crate) fn clean(
 pub(crate) fn clean_within(
     doc: &mut Document,
     page: ObjRef,
-    stream: Option<(ObjRef, ObjRef)>,
+    stream: Option<(&[ObjRef], ObjRef)>,
     changed: &HashSet<i64>,
     empty: &HashSet<i64>,
     limit: usize,
@@ -276,17 +282,17 @@ pub(crate) fn clean_within(
             if mcid.is_some_and(|m| empty.contains(&m)) {
                 continue;
             }
-            if let Some((original, replacement)) = stream.filter(|_| mcid.is_some()) {
+            if let Some((originals, replacement)) = stream.filter(|_| mcid.is_some()) {
                 if let Some(reference) = kid.as_ref() {
                     doc.update_dict(reference, |m| {
                         m.set(b"Stm".to_vec(), Object::Ref(replacement));
-                        if m.get(b"StmOwn").and_then(Object::as_ref) == Some(original) {
+                        if m.get(b"StmOwn").and_then(Object::as_ref).is_some_and(|o| originals.contains(&o)) {
                             m.set(b"StmOwn".to_vec(), Object::Ref(replacement));
                         }
                     })?;
                 } else if let Object::Dict(m) = &mut kid {
                     m.set(b"Stm".to_vec(), Object::Ref(replacement));
-                    if m.get(b"StmOwn").and_then(Object::as_ref) == Some(original) {
+                    if m.get(b"StmOwn").and_then(Object::as_ref).is_some_and(|o| originals.contains(&o)) {
                         m.set(b"StmOwn".to_vec(), Object::Ref(replacement));
                     }
                 }

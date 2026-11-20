@@ -734,7 +734,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             pages = pdfcraft_model::pages(doc);
         }
         for (old, new, changed, empty) in out.tag_changes {
-            crate::tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
+            crate::tags::clean(doc, page.obj, Some((&old, new)), &changed, &empty)?;
         }
     }
     // What a page no longer draws must not stay reachable through an inherited or shared
@@ -764,7 +764,7 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
             pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| doc.resolve(&a).as_dict().cloned()).collect()
         })
     };
-    let count_sub = |s: &[u8]| annots().iter().filter(|a| a.name(b"Subtype") == Some(s)).count();
+    let count_sub = |s: &[u8]| annots().iter().filter(|a| crate::subtype(doc, a).as_deref() == Some(s)).count();
     let names_read = std::cell::OnceCell::<Dict>::new();
     let names = || names_read.get_or_init(|| sub(doc, &cat, b"Names").unwrap_or_default());
     let held = std::cell::OnceCell::<Vec<usize>>::new();
@@ -794,7 +794,7 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                         + count_sub(b"FileAttachment")
                         + owned(Hidden::Attachments)
                 }
-                Hidden::Comments => annots().iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
+                Hidden::Comments => annots().iter().filter(|a| is_comment(&crate::subtype(doc, a).unwrap_or_default())).count(),
                 Hidden::FormFields => {
                     let n = pdfcraft_forms::fields(doc).len();
                     if n > 0 {
@@ -815,7 +815,10 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                     count_sub(b"Link")
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
                         + owned(Hidden::LinksActionsScripts)
-                        + annots().iter().filter(|a| !a.contains(b"AA") && a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A")).count()
+                        + annots()
+                            .iter()
+                            .filter(|a| !a.contains(b"AA") && crate::subtype(doc, a).as_deref() == Some(b"Widget") && a.contains(b"A"))
+                            .count()
                         + sub(doc, names(), b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                         + outline_action_count(doc, &cat)
                 }
@@ -887,9 +890,9 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
 fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> Result<(), RedactError> {
     // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
     // ones, and ones with nothing to draw), which still hold their field's value and parent.
-    let drop_annot = |a: &Dict| -> bool {
-        let s = a.name(b"Subtype").unwrap_or(b"");
-        (which.contains(&Hidden::Comments) && is_comment(s))
+    let drop_annot = |doc: &Document, a: &Dict| -> bool {
+        let s = crate::subtype(doc, a).unwrap_or_default();
+        (which.contains(&Hidden::Comments) && is_comment(&s))
             || (fields && s == b"Widget")
             || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
             || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
@@ -901,24 +904,40 @@ fn drop_page_annotations(doc: &mut Document, which: &[Hidden], fields: bool) -> 
         .iter()
         .flat_map(|p| annots_of(doc, &p.dict))
         .filter_map(|a| a.as_ref())
-        .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
+        .filter(|&r| doc.get(r).as_dict().is_some_and(|a| drop_annot(doc, a)))
         .collect();
     for p in pages {
         let list = annots_of(doc, &p.dict);
         let mut kept = Vec::new();
         for a in list {
+            // An annotation written in place (`/Annots` should hold references, ISO 32000-2
+            // Table 31) is judged as one held by reference: a pop-up goes with its parent, and a
+            // widget's action with the links and actions.
             let Some(r) = a.as_ref() else {
-                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
+                let Object::Dict(mut d) = (*doc.resolve(&a)).clone() else {
                     kept.push(a);
+                    continue;
+                };
+                let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
+                let subtype = crate::subtype(doc, &d);
+                if drop_annot(doc, &d) || (subtype.as_deref() == Some(b"Popup") && parent_gone) {
+                    continue;
                 }
+                if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (subtype.as_deref() == Some(b"Widget") && d.contains(b"A")))
+                {
+                    d.remove(b"AA");
+                    d.remove(b"A");
+                }
+                kept.push(Object::Dict(d));
                 continue;
             };
             let d = doc.get(r).as_dict().cloned().unwrap_or_default();
             let parent_gone = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed.contains(&x));
-            if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
+            let subtype = crate::subtype(doc, &d);
+            if removed.contains(&r) || (subtype.as_deref() == Some(b"Popup") && parent_gone) {
                 continue;
             }
-            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
+            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (subtype.as_deref() == Some(b"Widget") && d.contains(b"A"))) {
                 doc.update_dict(r, |d| {
                     d.remove(b"AA");
                     d.remove(b"A");

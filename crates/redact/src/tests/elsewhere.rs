@@ -59,6 +59,20 @@ fn held(doc: &Document) -> Vec<Object> {
     HELD.iter().map(|&n| (*doc.get(ObjRef::new(n, 0))).clone()).collect()
 }
 
+/// The attachment annotation and the pop-up given their `/Subtype` by reference: the attachment
+/// is still counted, and the pop-up still isn't.
+#[test]
+fn places_given_their_subtype_by_reference_are_counted_alike() {
+    let mut doc = page_with_places(FONT);
+    for (n, subtype) in [(20, "FileAttachment"), (21, "Popup")] {
+        let held = doc.add(Object::name(subtype));
+        doc.update_dict(ObjRef::new(n, 0), |d| d.set(b"Subtype".to_vec(), Object::Ref(held))).unwrap();
+    }
+    mark(&mut doc, 0, &[[55.0, 95.0, 90.0, 110.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.still_holding, Elsewhere { bookmarks: 2, attachments: 3, comments: 3, xmp: 1, unsearched: false }, "{r:?}");
+}
+
 #[test]
 fn places_apply_leaves_that_still_hold_the_removed_text_are_counted_and_kept() {
     let mut doc = page_with_places(FONT);

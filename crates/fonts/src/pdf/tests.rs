@@ -846,6 +846,10 @@ fn type3_descriptor_names_the_font_without_changing_its_metrics() {
     assert_eq!(after.base_font, "ExampleMincho-Regular");
     assert_eq!((after.ascent, after.descent, after.scale), (before.ascent, before.descent, before.scale));
     assert!(!after.bold && !after.italic && !after.subset);
+    // Its `/Subtype` given by reference, it is still a Type 3 font named by its descriptor.
+    let mut by_reference = f.clone();
+    by_reference.set(b"Subtype".to_vec(), Object::Ref(doc.add(Object::name("Type3"))));
+    assert_eq!(base_font_name(&doc, &by_reference), "ExampleMincho-Regular");
     f.set(b"BaseFont".to_vec(), Object::name("ExplicitName"));
     assert_eq!(Metrics::from_dict(&doc, &f).base_font, "ExplicitName", "an explicit BaseFont takes precedence");
 }
@@ -895,6 +899,37 @@ fn a_type3_font_is_as_high_as_its_d1_glyph_boxes() {
     let f = type3(&mut doc, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0], [0, -300, 1000, 900], &["600 0 d0"]);
     let m = Metrics::from_dict(&doc, &f);
     assert!((m.ascent - 0.9).abs() < 1e-12 && (m.descent + 0.3).abs() < 1e-12, "{} {}", m.ascent, m.descent);
+}
+
+/// A Type 3 font whose `/Subtype` is given by reference (ISO 32000-2 §7.3.10) is measured as the
+/// Type 3 font it is: its height from its glyph boxes, scaled by its matrix, not a Type 1 font's.
+#[test]
+fn a_type3_font_given_its_subtype_by_reference_is_measured_as_one() {
+    let mut doc = Document::new_empty();
+    let unit = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let direct = type3(&mut doc, unit, [0, 0, 0, 0], &["100 0 0 -10 100 90 d1"]);
+    let subtype = doc.add(Object::name("Type3"));
+    let mut indirect = direct.clone();
+    indirect.set(b"Subtype".to_vec(), Object::Ref(subtype));
+    let (m, n) = (Metrics::from_dict(&doc, &direct), Metrics::from_dict(&doc, &indirect));
+    assert_eq!((n.ascent, n.descent), (90.0, -10.0));
+    assert_eq!((m.ascent, m.descent), (n.ascent, n.descent));
+}
+
+/// A standard 14 font named by reference (`/BaseFont 7 0 R`) is the face it names: measured, named
+/// and, for Symbol, read without a Latin encoding, as named directly.
+#[test]
+fn a_standard_font_named_by_reference_is_the_face_it_names() {
+    let mut doc = Document::new_empty();
+    for face in ["Courier", "Symbol"] {
+        let direct = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name(face))]);
+        let mut indirect = direct.clone();
+        indirect.set(b"BaseFont".to_vec(), Object::Ref(doc.add(Object::name(face))));
+        assert_eq!(base_font_name(&doc, &indirect), face);
+        let (m, n) = (Metrics::from_dict(&doc, &direct), Metrics::from_dict(&doc, &indirect));
+        assert_eq!(n.std14, m.std14, "{face}");
+        assert_eq!(n.unicode.encoding, m.unicode.encoding, "{face}");
+    }
 }
 
 /// Small glyphs keep their small box: there is no 0.5 em / 0.1 em minimum for `d1` boxes, which

@@ -54,7 +54,7 @@ impl Decoder {
 
     /// `Err` when the font's own data can't be read in full (a damaged or oversized CMap).
     fn new(doc: &Document, font: &Dict, ctx: &Ctx) -> Result<Self, ()> {
-        let composite = font.name(b"Subtype") == Some(b"Type0");
+        let composite = crate::subtype(doc, font).as_deref() == Some(b"Type0");
         let mut d = Decoder { map: HashMap::new(), width: if composite { 2 } else { 1 }, opaque: false };
         let tu = font.get(b"ToUnicode").map(|t| doc.resolve(t));
         if let Some(Object::Stream(s)) = tu.as_deref() {
@@ -146,7 +146,7 @@ impl Font {
         let dec = Decoder::new(doc, font, ctx)?;
         let mut f = Font { dec, widths: HashMap::new(), default_width: FLAT_WIDTH, vertical: false };
         let num = |o: &Object| doc.resolve(o).as_f64();
-        if font.name(b"Subtype") == Some(b"Type0") {
+        if crate::subtype(doc, font).as_deref() == Some(b"Type0") {
             f.vertical = font.get(b"Encoding").map(|e| doc.resolve(e)).and_then(|e| e.as_name().map(|n| n.ends_with(b"-V"))).unwrap_or(false);
             let desc = font.get(b"DescendantFonts").map(|d| doc.resolve(d)).and_then(|d| d.as_array().and_then(|a| a.first().cloned()));
             let desc = desc.and_then(|d| doc.resolve(&d).as_dict().cloned());
@@ -207,7 +207,7 @@ impl Font {
             }
         } else {
             // Glyph space units per em: 1000, or what a Type3 font's matrix says.
-            let scale = if font.name(b"Subtype") == Some(b"Type3") {
+            let scale = if crate::subtype(doc, font).as_deref() == Some(b"Type3") {
                 font.get(b"FontMatrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().and_then(|a| a.first().and_then(num))).unwrap_or(0.001)
             } else {
                 0.001
@@ -228,9 +228,15 @@ impl Font {
                     }
                 }
                 f.default_width = missing.unwrap_or(0.0);
-            } else if let Some(std) = pdfcraft_fonts::Std14::from_base_font(&String::from_utf8_lossy(font.name(b"BaseFont").unwrap_or(b""))) {
-                // No /Widths: a standard font has exact published widths, by WinAnsi code (Symbol,
-                // ZapfDingbats and other encodings are refused before the proof is reached).
+            } else if let Some(std) = font
+                .get(b"BaseFont")
+                .map(|b| doc.resolve(b))
+                .and_then(|b| b.as_name().and_then(|n| pdfcraft_fonts::Std14::from_base_font(&String::from_utf8_lossy(n))))
+            {
+                // No /Widths: a standard font has exact published widths, here by the code shown
+                // (WinAnsi for the Latin faces, their own encodings for Symbol and ZapfDingbats;
+                // unlike the walk, a code an `/Encoding` remaps is measured as itself). Its name
+                // may be given by reference, as the walk reads it.
                 for code in 0..=255u8 {
                     f.widths.insert(u32::from(code), std.width(code) / 1000.0);
                 }
@@ -731,7 +737,7 @@ impl Extractor<'_> {
                     let Some(name) = op.last_name() else { continue };
                     let Some(entry) = xobjects.get(name) else { continue };
                     if let Object::Stream(s) = &*doc.resolve(entry)
-                        && s.dict.name(b"Subtype") == Some(b"Form")
+                        && crate::subtype(doc, &s.dict).as_deref() == Some(b"Form")
                     {
                         let m = matrix_of(doc, &s.dict)?;
                         bbox_of(doc, &s.dict)?;

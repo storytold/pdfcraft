@@ -296,6 +296,13 @@ pub(crate) mod tests_support {
         parse_cmap(data).is_some()
     }
 
+    /// The glyphs the proof's text reader places in each of `regions` on page `index`.
+    pub(crate) fn shown_in(doc: &Document, index: usize, regions: &[[f64; 4]]) -> Option<Vec<usize>> {
+        let page = pdfcraft_model::pages(doc).into_iter().nth(index)?;
+        let ctx = super::util::Ctx::new(Default::default());
+        super::extract::extract_page(doc, &page.dict, &ctx, regions).ok().map(|e| e.shown_in)
+    }
+
     /// Is an object nested `depth` levels deep walked in full?
     pub fn walks_in_full(depth: usize) -> bool {
         let mut o = Object::Null;

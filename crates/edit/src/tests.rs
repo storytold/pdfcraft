@@ -1026,6 +1026,87 @@ fn flattening_reads_an_unknown_or_malformed_rt_as_a_reply_and_a_widget_with_irt_
     assert_eq!(drawn, [9, 11], "the comment's and the field's appearances, not the replies'");
 }
 
+/// An annotation's `/Subtype` may be given by reference (ISO 32000-2 §7.3.10), as the renderer
+/// reads it: a comment, its reply and pop-ups (one referenced, one inline) and a form field with a
+/// stray `/IRT`, each given so, are flattened or go with their comment as when given directly.
+#[test]
+fn flattening_reads_a_subtype_given_by_reference() {
+    let page = stream("", " ");
+    let form = |rgb: &str| stream("/Type /XObject /Subtype /Form /BBox [0 0 20 18]", &format!("{rgb} rg 0 0 20 18 re f"));
+    let (blue, red, green) = (form("0 0 1"), form("1 0 0"), form("0 1 0"));
+    for (text, widget, popup) in [("/Text", "/Widget", "/Popup"), ("12 0 R", "13 0 R", "14 0 R")] {
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R \
+                 << /Type /Annot /Subtype {popup} /Rect [300 400 400 500] /Parent 5 0 R >>] >>"
+            ),
+            &page,
+            &format!("<< /Type /Annot /Subtype {text} /F 28 /Rect [100 500 120 518] /Contents (Comment) /Popup 8 0 R /AP << /N 9 0 R >> >>"),
+            &format!("<< /Type /Annot /Subtype {text} /F 28 /Rect [105 495 125 513] /Contents (Reply) /IRT 5 0 R /AP << /N 10 0 R >> >>"),
+            &format!("<< /Type /Annot /Subtype {widget} /F 4 /Rect [200 500 220 518] /IRT 5 0 R /AP << /N 11 0 R >> >>"),
+            &format!("<< /Type /Annot /Subtype {popup} /Rect [200 400 300 500] /Parent 5 0 R >>"),
+            &blue,
+            &red,
+            &green,
+            "/Text",
+            "/Widget",
+            "/Popup",
+        ]);
+        assert_eq!(flatten(&mut doc, &[0], true, true).unwrap(), 2, "the comment and the field are drawn, {text}");
+        let doc = reopen(&doc);
+        let p = &pdfcraft_model::pages(&doc)[0];
+        assert!(!p.dict.contains(b"Annots"), "the reply and pop-ups went with the comment, and the field was flattened, {text}");
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").unwrap());
+        let mut drawn: Vec<u32> = xo.as_dict().unwrap().iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num).collect();
+        drawn.sort_unstable();
+        assert_eq!(drawn, [9, 11], "the comment's and the field's appearances, {text}");
+    }
+}
+
+/// A form field's widget given its `/Subtype` by reference is a widget to flattening: drawn and
+/// taken out of the form, or, with nothing to draw and no value, removed. One whose appearance
+/// shows `?` is refused as a form field.
+#[test]
+fn flattening_reads_a_widgets_subtype_given_by_reference() {
+    let page = stream("", " ");
+    let empty = "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream";
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype 8 0 R /FT /Tx /T (no_value) /Rect [10 10 150 40] /F 4 >>",
+        "<< /Type /Annot /Subtype 8 0 R /FT /Tx /T (drawn) /Rect [10 90 150 120] /F 4 /AP << /N 7 0 R >> >>",
+        empty,
+        "/Widget",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only the field with an appearance is drawn");
+    let doc = reopen(&doc);
+    assert!(!pdfcraft_model::pages(&doc)[0].dict.contains(b"Annots"), "both widgets left the page");
+    let root = doc.root().unwrap();
+    let fields: Vec<Object> = doc
+        .get(root)
+        .as_dict()
+        .and_then(|c| c.get(b"AcroForm"))
+        .and_then(|af| doc.resolve(af).as_dict().and_then(|af| af.get(b"Fields")).map(|f| doc.resolve(f).as_array().cloned().unwrap_or_default()))
+        .unwrap_or_default();
+    assert!(fields.is_empty(), "and the form: {fields:?}");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype 7 0 R /FT /Tx /T (name) /V <FEFF6B228FCE> /Rect [10 10 150 40] /F 4 /AP << /N 6 0 R >> /PCUndrawn <FEFF6B22> >>",
+        empty,
+        "/Widget",
+    ]);
+    let err = flatten(&mut doc, &[0], false, true).unwrap_err().to_string();
+    assert!(err.contains("a form field") && err.contains("\"欢\" (U+6B22)"), "{err}");
+}
+
 /// Flattening never makes a `?` permanent: it refuses, changing nothing, a text box without an
 /// appearance whose text Helvetica can't draw (another program's), and a comment or form field
 /// whose appearance PdfCraft drew with `?` (marked `PCUndrawn`). A comment another program drew

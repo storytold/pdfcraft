@@ -957,3 +957,277 @@ fn many_names_of_a_redacted_image_are_unlinked_reading_inherited_forms_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
     assert!(!full_save_holds(&doc, b"IMAGESECRET"), "an alias kept the removed image reachable");
 }
+
+/// The Type 3 font cleanup with what it reads given by reference (ISO 32000-2 §7.3.10): the font's
+/// or a form's `/Subtype`, or a form, soft mask group, appearance or tiling pattern it reaches
+/// through a reference to a reference. Each as its test above.
+mod by_reference {
+    use super::*;
+
+    const T3: &str = "/Type /Font /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >>";
+
+    /// Glyph B draws `/Fm` through a reference to a reference, its `/Subtype` given directly or by
+    /// reference, and `/Fm`'s own resources also name A's image, which `/Fm` never draws: A's image
+    /// leaves the file, B's stays.
+    #[test]
+    fn a_glyphs_form_reached_through_a_reference_loses_the_redacted_glyphs_image() {
+        for subtype in ["/Form", "13 0 R"] {
+            let mut doc = pdf(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+                stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+                b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+                format!("<< {T3} /Subtype /Type3 /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /ImA 9 0 R /Fm 12 0 R >> >> >>")
+                    .into_bytes(),
+                stream("", b"/ImA Do"),
+                stream("", b"/Fm Do"),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"CONFIDENTIAL_IMAGE_A"),
+                stream(
+                    &format!("/Type /XObject /Subtype {subtype} /BBox [0 0 1000 1000] /Resources << /XObject << /ImA 9 0 R /ImB 11 0 R >> >>"),
+                    b"/ImB Do",
+                ),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBLIC_IMAGE_B"),
+                b"10 0 R".to_vec(),
+                b"/Form".to_vec(),
+            ]);
+            mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+            assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1, "{subtype}");
+            assert!(!full_save_holds(&doc, b"CONFIDENTIAL_IMAGE_A"), "{subtype}");
+            assert!(full_save_holds(&doc, b"PUBLIC_IMAGE_B"), "{subtype}");
+        }
+    }
+
+    /// A Type 3 font given its `/Subtype` by reference, set through a graphics state's `/Font`: its
+    /// redacted glyph's program leaves the file.
+    #[test]
+    fn a_type3_font_given_its_subtype_by_reference_set_by_a_graphics_state_loses_the_redacted_glyph() {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"/GS1 gs BT 10 100 Td (AB) Tj ET"),
+            b"<< /Font << /T3 6 0 R >> /ExtGState << /GS1 9 0 R >> >>".to_vec(),
+            format!("<< {T3} /Subtype 10 0 R /CharProcs << /A 7 0 R /B 8 0 R >> >>").into_bytes(),
+            stream("", b"% SECRET_EXTGSTATE_GLYPH_PAYLOAD"),
+            stream("", b"% KEPT_EXTGSTATE_GLYPH_PAYLOAD"),
+            b"<< /Type /ExtGState /Font [6 0 R 10] >>".to_vec(),
+            b"/Type3".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+        assert!(!full_save_holds(&doc, b"SECRET_EXTGSTATE_GLYPH_PAYLOAD"));
+        assert!(full_save_holds(&doc, b"KEPT_EXTGSTATE_GLYPH_PAYLOAD"));
+    }
+
+    /// A Type 3 font given its `/Subtype` by reference whose every glyph shown is redacted leaves
+    /// the page's resources.
+    #[test]
+    fn a_type3_font_given_its_subtype_by_reference_whose_glyphs_are_all_redacted_goes() {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+            stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET"),
+            b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+            format!("<< {T3} /Subtype 9 0 R /CharProcs << /A 7 0 R /B 8 0 R >> >>").into_bytes(),
+            stream("", b"% SECRET_GLYPH_ONLY_PAYLOAD"),
+            stream("", b"% UNUSED_GLYPH_PAYLOAD"),
+            b"/Type3".to_vec(),
+        ]);
+        mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+        assert!(!saved_first_page_lists_font(&doc, b"T3"));
+        assert!(!full_save_holds(&doc, b"SECRET_GLYPH_ONLY_PAYLOAD"));
+    }
+
+    /// The group of a soft mask, given through a reference to a reference, shows glyph B of a
+    /// second Type 3 font the page's content never selects: the page still lists that font, and
+    /// B's program stays, as with the group given directly.
+    #[test]
+    fn a_type3_font_only_a_soft_mask_reached_through_a_reference_selects_stays() {
+        for g in ["8 0 R", "15 0 R"] {
+            let mut doc = pdf(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+                stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET /GS1 gs 150 150 100 100 re f"),
+                format!("<< /Font << /T3 6 0 R /T4 7 0 R >> /ExtGState << /GS1 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G {g} >> >> >> >>")
+                    .into_bytes(),
+                type3_abc(9),
+                type3_abc(12),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>", b"1 g BT /T4 40 Tf 160 180 Td (B) Tj ET"),
+                stream("", b"% REDACTED_GLYPH_A"),
+                stream("", b"% UNUSED_GLYPH_B"),
+                stream("", b"% PAGE_GLYPH_C"),
+                stream("", b"% UNUSED_T4_GLYPH_A"),
+                stream("", b"% MASK_GLYPH_B"),
+                stream("", b"% UNUSED_T4_GLYPH_C"),
+                b"8 0 R".to_vec(),
+            ]);
+            mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+            assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1, "{g}");
+            assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "{g}");
+            assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "{g}");
+            assert!(saved_first_page_lists_font(&doc, b"T4"), "{g}");
+        }
+    }
+
+    /// An annotation's normal appearance, given through a reference to a reference, alone or as
+    /// the state it is in, shows glyph B of the page's Type 3 font, with resources of its own or
+    /// through the page's: B's program stays, and the page still lists the font, as with the
+    /// appearance given directly.
+    #[test]
+    fn a_type3_glyph_an_appearance_reached_through_a_reference_shows_is_kept() {
+        for own in [true, false] {
+            for n in ["8 0 R", "12 0 R"] {
+                for ap in [n.to_string(), format!("<< /On {n} >> /AS /On")] {
+                    let resources = if own { "/Resources << /Font << /T3 6 0 R >> >>" } else { "" };
+                    let mut doc = pdf(vec![
+                        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R /Annots [7 0 R] >>".to_vec(),
+                        stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET"),
+                        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+                        type3_abc(9),
+                        format!("<< /Type /Annot /Subtype /FreeText /Rect [150 200 250 220] /P 3 0 R /DA (/T3 10 Tf 0 g) /AP << /N {ap} >> >>")
+                            .into_bytes(),
+                        stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 100 20] {resources}"), b"BT /T3 10 Tf 2 5 Td (B) Tj ET"),
+                        stream("", b"% REDACTED_GLYPH_A"),
+                        stream("", b"% APPEARANCE_GLYPH_B"),
+                        stream("", b"% PAGE_GLYPH_C"),
+                        b"8 0 R".to_vec(),
+                    ]);
+                    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+                    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1, "{ap}, own resources {own}");
+                    assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "{ap}, own resources {own}");
+                    assert!(full_save_holds(&doc, b"APPEARANCE_GLYPH_B"), "{ap}, own resources {own}");
+                    assert!(saved_first_page_lists_font(&doc, b"T3"), "{ap}, own resources {own}");
+                }
+            }
+        }
+    }
+
+    /// Remove Hidden Information's cleanup of Type 3 fonts reads every page: a tiling pattern the
+    /// page fills with, given through a reference to a reference, shows glyph B, so B's program
+    /// stays, as with the pattern given directly. (Apply Redactions refuses a pattern that shows
+    /// text before its cleanup runs.)
+    #[test]
+    fn a_type3_glyph_a_pattern_reached_through_a_reference_shows_is_kept() {
+        use crate::sanitize::{Hidden, remove_hidden};
+        for p in ["8 0 R", "12 0 R"] {
+            let mut doc = pdf(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+                stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /Pattern cs /P1 scn 150 150 100 100 re f BT 3 Tr /F1 10 Tf 10 200 Td (Hidden) Tj ET"),
+                format!("<< /Font << /T3 6 0 R /F1 7 0 R >> /Pattern << /P1 {p} >> >>").into_bytes(),
+                type3_abc(9),
+                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+                stream(
+                    "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << /Font << /T3 6 0 R >> >>",
+                    b"BT /T3 10 Tf 2 5 Td (B) Tj ET",
+                ),
+                stream("", b"% PAGE_GLYPH_A"),
+                stream("", b"% PATTERN_GLYPH_B"),
+                stream("", b"% UNUSED_GLYPH_C"),
+                b"8 0 R".to_vec(),
+            ]);
+            assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]), Ok(vec![(Hidden::HiddenText, 6)]), "{p}");
+            assert!(full_save_holds(&doc, b"PAGE_GLYPH_A"), "{p}");
+            assert!(full_save_holds(&doc, b"PATTERN_GLYPH_B"), "{p}");
+        }
+    }
+
+    /// A form the page lists, through a reference to a reference, but doesn't draw shows glyph B,
+    /// its `/Subtype` given directly or by reference: the font's cleanup reads every surviving
+    /// form, this one too, and keeps B.
+    #[test]
+    fn a_type3_glyph_an_undrawn_form_reached_through_a_reference_shows_is_kept() {
+        for subtype in ["/Form", "11 0 R"] {
+            let mut doc = pdf(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+                stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET"),
+                b"<< /Font << /T3 6 0 R >> /XObject << /Fm 10 0 R >> >>".to_vec(),
+                TYPE3.as_bytes().to_vec(),
+                stream("", b"% SECRET_TYPE3_GLYPH_A"),
+                stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+                stream(
+                    &format!("/Type /XObject /Subtype {subtype} /BBox [0 0 300 50] /Resources << /Font << /T3 6 0 R >> >>"),
+                    b"BT /T3 10 Tf 10 20 Td (B) Tj ET",
+                ),
+                b"9 0 R".to_vec(),
+                b"/Form".to_vec(),
+            ]);
+            mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+            assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1, "{subtype}");
+            assert!(!full_save_holds(&doc, b"SECRET_TYPE3_GLYPH_A"), "{subtype}");
+            assert!(full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"), "{subtype}");
+        }
+    }
+
+    /// The first page lists a Type 3 font, its `/Subtype` given by reference, but never selects
+    /// it; the second shows its glyph B. Rewritten for its mark, the first page no longer lists
+    /// the font, which the second keeps with B, as with the `/Subtype` given directly.
+    #[test]
+    fn a_type3_font_given_its_subtype_by_reference_a_page_never_selects_leaves_it() {
+        for subtype in ["/Type3", "11 0 R"] {
+            let mut doc = pdf(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 6 0 R /F1 5 0 R >> >> >>".to_vec(),
+                stream("", b"BT /F1 12 Tf 20 250 Td (SECRET) Tj ET"),
+                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+                format!("<< {T3} /Subtype {subtype} /CharProcs << /A 7 0 R /B 8 0 R >> >>").into_bytes(),
+                stream("", b"% UNUSED_GLYPH_A"),
+                stream("", b"% SECOND_PAGE_GLYPH_B"),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 10 0 R /Resources << /Font << /T3 6 0 R >> >> >>".to_vec(),
+                stream("", b"BT /T3 10 Tf 10 100 Td (B) Tj ET"),
+                b"/Type3".to_vec(),
+            ]);
+            mark(&mut doc, 0, &[[0.0, 230.0, 300.0, 280.0]], "");
+            assert_eq!(apply(&mut doc, None).unwrap().glyphs, 6, "{subtype}");
+            assert!(!saved_first_page_lists_font(&doc, b"T3"), "{subtype}");
+            assert!(full_save_holds(&doc, b"SECOND_PAGE_GLYPH_B"), "{subtype}");
+        }
+    }
+
+    /// The group of a soft mask without resources draws, through a reference to a reference, a
+    /// form, its `/Subtype` given directly or by reference, that shows glyph B of a second Type 3
+    /// font the page's content never selects: the page still lists that font, and B's program
+    /// stays.
+    #[test]
+    fn a_type3_font_only_a_soft_masks_form_reached_through_a_reference_selects_stays() {
+        for subtype in ["/Form", "19 0 R"] {
+            let mut doc = pdf(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+                stream("", b"BT /T3 10 Tf 10 100 Td (AC) Tj ET /GS1 gs 150 150 100 100 re f"),
+                b"<< /Font << /T3 6 0 R /T4 7 0 R >> /XObject << /Fm 18 0 R >> /ExtGState << /GS1 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 8 0 R >> >> >> >>"
+                    .to_vec(),
+                type3_abc(9),
+                type3_abc(12),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Group << /S /Transparency /CS /DeviceGray >>", b"/Fm Do"),
+                stream("", b"% REDACTED_GLYPH_A"),
+                stream("", b"% UNUSED_GLYPH_B"),
+                stream("", b"% PAGE_GLYPH_C"),
+                stream("", b"% UNUSED_T4_GLYPH_A"),
+                stream("", b"% MASK_GLYPH_B"),
+                stream("", b"% UNUSED_T4_GLYPH_C"),
+                stream(&format!("/Type /XObject /Subtype {subtype} /BBox [0 0 300 300]"), b"1 g BT /T4 40 Tf 160 180 Td (B) Tj ET"),
+                b"null".to_vec(),
+                b"null".to_vec(),
+                b"15 0 R".to_vec(),
+                b"/Form".to_vec(),
+            ]);
+            mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+            assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1, "{subtype}");
+            assert!(!full_save_holds(&doc, b"REDACTED_GLYPH_A"), "{subtype}");
+            assert!(full_save_holds(&doc, b"MASK_GLYPH_B"), "{subtype}");
+            assert!(saved_first_page_lists_font(&doc, b"T4"), "{subtype}");
+        }
+    }
+}
