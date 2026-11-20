@@ -5142,6 +5142,7 @@ dependencies = [
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "unicode-segmentation",
  "url",
