@@ -335,7 +335,7 @@ fn the_background_preview_follows_the_replace_checkbox() {
     assert!(h.execute("edit.background"));
     h.steps(3);
     h.get_by_label(REPLACE);
-    let [red, green, blue] = pdfcraft_engine::Background::default().color.map(|c| (c * 255.0).round() as u8);
+    let [red, green, blue] = fields(&h, MarkKind::Background).color("marks.bg.colour").unwrap().map(|c| (f64::from(c) * 255.0).round() as u8);
     let colour = egui::Color32::from_rgb(red, green, blue);
     let tint = |h: &mut Rig, page: usize| {
         show_page(h, page);
@@ -404,13 +404,13 @@ trailer << /Root 1 0 R >>
 
 /// The preview pager's position, read from its caption's accessible value: the shown page and the count.
 fn is_pager(ak: &egui_kittest::kittest::AccessKitNode<'_>) -> bool {
-    ak.role() != egui::accesskit::Role::SpinButton && ak.numeric_value().is_some() && ak.min_numeric_value() == Some(1.0)
+    ak.role() == egui::accesskit::Role::Label && ak.numeric_value().is_some() && ak.label().is_some_and(|label| label.starts_with("Page "))
 }
 
 fn pager(h: &Rig) -> (usize, usize) {
     let node = h.query_by(is_pager).expect("the preview has a pager");
     let ak = node.accesskit_node();
-    (ak.numeric_value().unwrap_or_default() as usize, ak.max_numeric_value().unwrap_or_default() as usize)
+    (ak.numeric_value().unwrap_or_default() as usize, ak.label().unwrap().split_whitespace().last().unwrap().parse().unwrap())
 }
 
 /// Presses the pager's step button: the dialog's own, not the page navigation's of the same name.
@@ -428,7 +428,7 @@ fn show_page(h: &mut Rig, page: usize) {
         if shown == page + 1 {
             return;
         }
-        press_step(h, if shown < page + 1 { "Next page" } else { "Previous page" });
+        press_step(h, if shown < page + 1 { "Next" } else { "Previous" });
     }
     panic!("the pager never reached page {}", page + 1);
 }
@@ -461,7 +461,28 @@ fn preview_picture(h: &Rig) -> Option<Picture> {
             if !over {
                 return None;
             }
-            Some(Picture { at, rect, tint: m.vertices.first()?.color, image: uploads.get(&m.texture_id).cloned()? })
+            // The pane clips the mesh at its frame. Its UVs identify the full picture's bounds.
+            let uv = egui::Rect::from_min_max(
+                egui::pos2(
+                    m.vertices.iter().map(|v| v.uv.x).fold(f32::INFINITY, f32::min),
+                    m.vertices.iter().map(|v| v.uv.y).fold(f32::INFINITY, f32::min),
+                ),
+                egui::pos2(
+                    m.vertices.iter().map(|v| v.uv.x).fold(f32::NEG_INFINITY, f32::max),
+                    m.vertices.iter().map(|v| v.uv.y).fold(f32::NEG_INFINITY, f32::max),
+                ),
+            );
+            if uv.width() <= 0.0 || uv.height() <= 0.0 {
+                return None;
+            }
+            let size = egui::vec2(rect.width() / uv.width(), rect.height() / uv.height());
+            let min = rect.min - egui::vec2(uv.min.x * size.x, uv.min.y * size.y);
+            Some(Picture {
+                at,
+                rect: egui::Rect::from_min_size(min, size),
+                tint: m.vertices.first()?.color,
+                image: uploads.get(&m.texture_id).cloned()?,
+            })
         })
         .max_by(|a, b| (a.rect.area()).total_cmp(&b.rect.area()))
 }
@@ -546,7 +567,7 @@ fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     h.steps(2);
     show_page(&mut h, 1);
     let tint = wait_for_preview(&mut h, "page 2 under the background", |_| true).tint;
-    let [red, green, blue] = pdfcraft_engine::Background::default().color.map(|c| (c * 255.0).round() as u8);
+    let [red, green, blue] = fields(&h, MarkKind::Background).color("marks.bg.colour").unwrap().map(|c| (f64::from(c) * 255.0).round() as u8);
     assert_eq!(tint, egui::Color32::from_rgb(red, green, blue), "the default background colour, opaque");
 }
 
@@ -558,14 +579,14 @@ fn the_preview_steps_through_the_pages_and_starts_at_the_current_one() {
     assert!(h.execute("edit.watermark"));
     h.steps(2);
     assert_eq!(pager(&h), (2, 3));
-    press_step(&mut h, "Next page");
+    press_step(&mut h, "Next");
     assert_eq!(pager(&h), (3, 3));
-    press_step(&mut h, "Next page");
+    press_step(&mut h, "Next");
     assert_eq!(pager(&h), (3, 3), "Next does nothing at the last page");
-    press_step(&mut h, "Previous page");
-    press_step(&mut h, "Previous page");
+    press_step(&mut h, "Previous");
+    press_step(&mut h, "Previous");
     assert_eq!(pager(&h), (1, 3));
-    press_step(&mut h, "Previous page");
+    press_step(&mut h, "Previous");
     assert_eq!(pager(&h), (1, 3), "Back does nothing at the first page");
     // Opened again, the preview is back at the current page.
     h.get_by_label("Cancel").click();
@@ -613,7 +634,7 @@ fn update_previews_the_page_without_the_marks_it_replaces() {
         &mut h,
         "edit.watermark",
         MarkKind::Watermark,
-        &[("wm.text", json!("OLD")), ("marks.wm.colour", json!([1.0, 0.0, 0.0])), ("wm.opacity", json!(1.0)), ("wm.rotation", json!(0.0))],
+        &[("wm.text", json!("OLD")), ("marks.wm.colour", json!([1.0, 0.0, 0.0])), ("wm.opacity", json!(100.0)), ("wm.rotation", json!(0.0))],
     );
     apply(
         &mut h,
