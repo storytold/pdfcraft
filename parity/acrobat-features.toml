@@ -7474,8 +7474,8 @@ milestone = "M2"
 status = "shipped"
 commands = []
 tools = ["text_extract"]
-evidence = ["crates/render/src/text/tests.rs::rtl_runs_come_out_in_logical_order_and_cjk_has_no_spaces", "crates/render/src/text/tests.rs::lines_words_and_search", "crates/automation/tests/it/automation.rs::parallel_text_extraction_keeps_page_order_and_follows_edits"]
-notes = ""
+evidence = ["crates/render/src/text/tests.rs::rtl_runs_come_out_in_logical_order_and_cjk_has_no_spaces", "crates/render/src/text/tests.rs::lines_words_and_search", "crates/automation/tests/it/automation.rs::parallel_text_extraction_keeps_page_order_and_follows_edits", "crates/automation/tests/it/automation.rs::text_extract_reads_displayed_form_text"]
+notes = "text_extract reads the displayed copy, including generated field appearances, generated appearances for comments without one, and signature status layers with their captions when shown (#7867). Text Find and edit tools still read stored glyphs, and rich text styling still comes from the working document."
 
 [[feature]]
 id = "create.translate"

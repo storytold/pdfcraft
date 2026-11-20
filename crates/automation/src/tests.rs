@@ -1,3 +1,4 @@
+use super::text_cache::TextSource;
 use super::*;
 use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
@@ -76,7 +77,7 @@ fn search_cache_stays_bounded_reextracts_and_follows_edits_and_close() {
         assert_eq!(found["count"], 200, "eviction inside a batch must not discard its matches");
         eprintln!("200 pages searched: {} resident pages, {} estimated bytes (budget 16384)", a.texts.len(), a.texts.bytes());
     }
-    assert!(a.texts.get(first, 0).is_none());
+    assert!(a.texts.get(first, 0, TextSource::Stored).is_none());
     let text = a.page_texts(first, &[0]).unwrap().remove(0);
     assert_eq!(text.plain_text(), "Page 1");
     let again = a.page_texts(first, &[0]).unwrap().remove(0);
@@ -97,8 +98,8 @@ fn strict_text_collection_refuses_partial_results_but_keeps_successful_pages() {
     let id = search_document(&mut a, 3);
     let error = a.page_texts(id, &[0, 3, 1]).unwrap_err();
     assert!(error.to_string().contains("page 4: page is out of range"));
-    assert!(a.texts.get(id, 0).is_some());
-    assert!(a.texts.get(id, 1).is_some(), "successful extraction after the failed entry is retained");
+    assert!(a.texts.get(id, 0, TextSource::Stored).is_some());
+    assert!(a.texts.get(id, 1, TextSource::Stored).is_some(), "successful extraction after the failed entry is retained");
     let results = a.page_text_results(id, &[2], &mut |_, _, _| vec![]).unwrap();
     assert!(results[0].1.is_err(), "a missing worker result must not become an empty page");
 }
@@ -121,7 +122,7 @@ fn search_keeps_matches_around_failed_pages_and_continuations() {
     assert_eq!(all["warnings"][1]["page"], 7);
     assert!(all.get("next").is_none());
     assert_eq!(all["matches"][13]["page"], 16);
-    assert!(a.texts.get(id, 7).is_some(), "success after a failure in the same batch is cached");
+    assert!(a.texts.get(id, 7, TextSource::Stored).is_some(), "success after a failure in the same batch is cached");
     let mut args = json!({ "doc": id.0, "query": "Page", "limit": 4 });
     let mut matches = Vec::new();
     let mut warned = Vec::new();

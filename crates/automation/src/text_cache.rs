@@ -9,7 +9,13 @@ use pdfcraft_render::{PageText, TextGlyph};
 const BYTE_BUDGET: usize = 64 * 1024 * 1024;
 // Also bound bookkeeping for documents with thousands of empty pages.
 const PAGE_BUDGET: usize = 4096;
-type Key = (DocId, usize);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum TextSource {
+    Stored,
+    Displayed,
+}
+
+type Key = (DocId, usize, TextSource);
 
 struct Cached {
     version: Weak<Vec<u8>>,
@@ -37,11 +43,12 @@ impl TextCache {
         Self { pages: HashMap::new(), order: BTreeMap::new(), clock: 0, bytes: 0, budget }
     }
 
-    pub(super) fn prepare(&mut self, id: DocId, bytes: &Arc<Vec<u8>>) {
+    pub(super) fn prepare(&mut self, id: DocId, source: TextSource, bytes: &Arc<Vec<u8>>) {
         let version = Arc::downgrade(bytes);
         // At most PAGE_BUDGET entries, independent of the document's page count. Weak pointers
         // distinguish revisions without keeping an obsolete PDF byte buffer alive.
-        let stale: Vec<_> = self.pages.iter().filter(|(key, page)| key.0 == id && !page.version.ptr_eq(&version)).map(|(key, _)| *key).collect();
+        let stale: Vec<_> =
+            self.pages.iter().filter(|(key, page)| key.0 == id && key.2 == source && !page.version.ptr_eq(&version)).map(|(key, _)| *key).collect();
         for key in stale {
             self.remove_page(key);
         }
@@ -72,18 +79,18 @@ impl TextCache {
         self.clock
     }
 
-    pub(super) fn get(&mut self, id: DocId, page: usize) -> Option<Arc<PageText>> {
+    pub(super) fn get(&mut self, id: DocId, page: usize, source: TextSource) -> Option<Arc<PageText>> {
         let stamp = self.stamp();
-        let entry = self.pages.get_mut(&(id, page))?;
+        let entry = self.pages.get_mut(&(id, page, source))?;
         self.order.remove(&entry.stamp);
         entry.stamp = stamp;
-        self.order.insert(stamp, (id, page));
+        self.order.insert(stamp, (id, page, source));
         Some(entry.text.clone())
     }
 
-    pub(super) fn insert(&mut self, id: DocId, page: usize, version: &Arc<Vec<u8>>, text: Arc<PageText>) {
+    pub(super) fn insert(&mut self, id: DocId, page: usize, source: TextSource, version: &Arc<Vec<u8>>, text: Arc<PageText>) {
         let bytes = retained_bytes(&text);
-        self.remove_page((id, page));
+        self.remove_page((id, page, source));
         // An oversized page is usable by this call, but never retained by the cache.
         if bytes > self.budget {
             return;
@@ -93,8 +100,8 @@ impl TextCache {
             self.remove_page(*key);
         }
         let stamp = self.stamp();
-        self.pages.insert((id, page), Cached { version: Arc::downgrade(version), text, bytes, stamp });
-        self.order.insert(stamp, (id, page));
+        self.pages.insert((id, page, source), Cached { version: Arc::downgrade(version), text, bytes, stamp });
+        self.order.insert(stamp, (id, page, source));
         self.bytes += bytes;
     }
 
@@ -137,17 +144,17 @@ mod tests {
         let text = Arc::new(text);
         let version = Arc::new(vec![1]);
         let mut cache = TextCache::new(cost * 2);
-        cache.insert(DocId(1), 0, &version, text.clone());
-        cache.insert(DocId(2), 0, &version, text.clone());
-        assert!(Arc::ptr_eq(&cache.get(DocId(1), 0).unwrap(), &text));
-        cache.insert(DocId(3), 0, &version, text.clone());
-        assert!(cache.get(DocId(2), 0).is_none(), "least recently used page in another document is evicted");
+        cache.insert(DocId(1), 0, TextSource::Stored, &version, text.clone());
+        cache.insert(DocId(2), 0, TextSource::Stored, &version, text.clone());
+        assert!(Arc::ptr_eq(&cache.get(DocId(1), 0, TextSource::Stored).unwrap(), &text));
+        cache.insert(DocId(3), 0, TextSource::Stored, &version, text.clone());
+        assert!(cache.get(DocId(2), 0, TextSource::Stored).is_none(), "least recently used page in another document is evicted");
         assert_eq!(cache.bytes, 2 * cost);
-        cache.insert(DocId(1), 0, &version, text.clone());
+        cache.insert(DocId(1), 0, TextSource::Stored, &version, text.clone());
         assert_eq!(cache.bytes, 2 * cost, "replacement does not double-count");
         let next_version = Arc::new(vec![1]);
-        cache.prepare(DocId(1), &next_version);
-        assert!(cache.get(DocId(1), 0).is_none(), "equal bytes in a new Arc are a new version");
+        cache.prepare(DocId(1), TextSource::Stored, &next_version);
+        assert!(cache.get(DocId(1), 0, TextSource::Stored).is_none(), "equal bytes in a new Arc are a new version");
         assert_eq!(cache.bytes, cost);
         cache.remove(&DocId(3));
         assert_eq!((cache.bytes, cache.len(), cache.order.len()), (0, 0, 0));
@@ -160,18 +167,18 @@ mod tests {
         let version = Arc::new(vec![]);
         let cost = retained_bytes(&text);
         let mut tiny = TextCache::new(cost - 1);
-        tiny.insert(DocId(1), 0, &version, text.clone());
+        tiny.insert(DocId(1), 0, TextSource::Stored, &version, text.clone());
         assert_eq!((tiny.bytes, tiny.len()), (0, 0));
         let mut cache = TextCache::default();
         for page in 0..PAGE_BUDGET + 50 {
-            cache.insert(DocId(1), page, &version, text.clone());
+            cache.insert(DocId(1), page, TextSource::Stored, &version, text.clone());
         }
         assert_eq!(cache.len(), PAGE_BUDGET);
-        assert!(cache.get(DocId(1), 0).is_none());
-        assert!(cache.get(DocId(1), PAGE_BUDGET + 49).is_some());
+        assert!(cache.get(DocId(1), 0, TextSource::Stored).is_none());
+        assert!(cache.get(DocId(1), PAGE_BUDGET + 49, TextSource::Stored).is_some());
         assert_eq!(cache.bytes, PAGE_BUDGET * cost);
         cache.clock = u64::MAX;
-        cache.insert(DocId(2), 0, &version, text);
+        cache.insert(DocId(2), 0, TextSource::Stored, &version, text);
         assert_eq!((cache.bytes, cache.len()), (cost, 1), "recency counter rollover safely clears old state");
     }
 }
