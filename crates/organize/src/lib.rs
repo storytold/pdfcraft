@@ -66,6 +66,24 @@ pub enum OrganizeError {
 
 const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
 
+/// Whether `d`'s own entry for the inheritable `k` is what the page shows, rather than what it
+/// inherits: one it doesn't have, or a `/Rotate` the renderer can't read, gives way to the
+/// inherited one when a page is moved out from under its ancestors.
+fn own_counts(doc: &Document, d: &Dict, k: &[u8]) -> bool {
+    d.get(k).is_some_and(|v| pdfcraft_model::overrides_inherited(doc, k, v))
+}
+
+/// The entries of `inherited` that `page` has to be given to show as it did once out from
+/// under its ancestors: those it doesn't set itself ([`own_counts`]).
+fn pushed_down(doc: &Document, page: ObjRef, inherited: &Dict) -> Vec<(&'static [u8], Object)> {
+    let page = doc.get(page);
+    INHERITABLE
+        .into_iter()
+        .filter(|k| !page.as_dict().is_some_and(|d| own_counts(doc, d, k)))
+        .filter_map(|k| Some((k, inherited.get(k)?.clone())))
+        .collect()
+}
+
 /// A leaf page in document order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageRef {
@@ -127,7 +145,7 @@ impl Iterator for PageWalk<'_> {
             let Some(d) = obj.as_dict() else { continue };
             let mut owners = inherited.clone();
             for (k, owner) in INHERITABLE.iter().zip(&mut owners) {
-                if d.contains(k) {
+                if own_counts(self.doc, d, k) {
                     *owner = Some(obj.clone());
                 }
             }
@@ -155,38 +173,32 @@ pub fn pages(doc: &Document) -> Result<Vec<PageRef>, OrganizeError> {
     Ok(walk(doc)?.into_iter().map(|(obj, _)| PageRef { obj }).collect())
 }
 
-/// Effective inherited page rotation, clockwise in degrees.
+/// Effective inherited page rotation, clockwise in degrees: 0, 90, 180 or 270, as the page is
+/// shown ([`pdfcraft_model::shown_rotation`]).
 pub fn page_rotation(doc: &Document, index: usize) -> Result<i64, OrganizeError> {
     let pages = walk(doc)?;
     let (_, attrs) = pages.get(index).ok_or(OrganizeError::NoSuchPage(index))?;
-    Ok(resolved_rotation(doc, attrs).rem_euclid(360))
+    Ok(pdfcraft_model::shown_rotation(doc, attrs))
 }
 
 /// Effective inherited rotation of every leaf page, clockwise in degrees, from one walk of the
 /// page tree (what [`page_rotation`] gives per page).
 pub fn page_rotations(doc: &Document) -> Result<Vec<i64>, OrganizeError> {
-    Ok(walk(doc)?.iter().map(|(_, attrs)| resolved_rotation(doc, attrs).rem_euclid(360)).collect())
+    Ok(walk(doc)?.iter().map(|(_, attrs)| pdfcraft_model::shown_rotation(doc, attrs)).collect())
 }
 
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
     Ok(walk(doc)?.len())
 }
 
-fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
-    attrs.get(b"Rotate").and_then(|value| doc.resolve(value).as_int()).unwrap_or(0)
-}
-
 /// Rebuild the page tree as one flat node with `order` as its kids (attributes pushed down).
 fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
     let root = pages_root(doc)?;
     for (page, inherited) in order {
+        let pushed = pushed_down(doc, *page, inherited);
         doc.update_dict(*page, |d| {
-            for k in INHERITABLE {
-                if !d.contains(k)
-                    && let Some(v) = inherited.get(k)
-                {
-                    d.set(k.to_vec(), v.clone());
-                }
+            for (k, v) in pushed {
+                d.set(k.to_vec(), v);
             }
             d.set(b"Parent".to_vec(), Object::Ref(root));
         })?;
@@ -257,11 +269,12 @@ pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Resu
     let delta = degrees.rem_euclid(360);
     for &i in indices {
         let (page, inherited) = &all[i];
-        // Repeated indices must see earlier edits instead of the page walk's snapshot.
+        // Repeated indices must see earlier edits instead of the page walk's snapshot. The turn
+        // is added to the one the page shows.
         let current_page = doc.get(*page);
-        let current_attrs = current_page.as_dict().filter(|attrs| attrs.get(b"Rotate").is_some()).unwrap_or(inherited);
-        let current = resolved_rotation(doc, current_attrs);
-        let new = (current.rem_euclid(360) + delta).rem_euclid(360);
+        let current_attrs = current_page.as_dict().filter(|attrs| own_counts(doc, attrs, b"Rotate")).unwrap_or(inherited);
+        let current = pdfcraft_model::shown_rotation(doc, current_attrs);
+        let new = (current + delta).rem_euclid(360);
         doc.update_dict(*page, |d| d.set(b"Rotate".to_vec(), Object::Int(new)))?;
     }
     Ok(())
@@ -589,11 +602,15 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
         // The imported page with its inherited attributes resolved.
         let (_, inherited) = all.iter().find(|(r, _)| r == new).cloned().unwrap_or((*new, Dict::new()));
         let src_dict = doc.get(*new).as_dict().cloned().unwrap_or_default();
+        let shown: Vec<Option<Object>> = SHOWN
+            .iter()
+            .map(|k| src_dict.get(k).filter(|v| pdfcraft_model::overrides_inherited(doc, k, v)).or_else(|| inherited.get(k)).cloned())
+            .collect();
         let target = all[*t].0;
         doc.update_dict(target, |d| {
-            for k in SHOWN {
-                match src_dict.get(k).or_else(|| inherited.get(k)) {
-                    Some(v) => d.set(k.to_vec(), v.clone()),
+            for (k, v) in SHOWN.iter().zip(shown) {
+                match v {
+                    Some(v) => d.set(k.to_vec(), v),
                     None => {
                         d.remove(k);
                     }
