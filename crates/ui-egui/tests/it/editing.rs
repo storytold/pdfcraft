@@ -3863,6 +3863,7 @@ fn two_boxes_animated() -> (Harness<'static, PdfCraftApp>, [egui::Rect; 2]) {
         {
             let mut app = crate::control::new_app();
             app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.set_option(&egui::Context::default(), "theme", "light").unwrap();
             app.open_bytes(&egui::Context::default(), "boxes.pdf", None, bytes).expect("opens");
             app
         }
@@ -3888,11 +3889,11 @@ fn two_boxes_animated() -> (Harness<'static, PdfCraftApp>, [egui::Rect; 2]) {
 }
 
 /// The colour of the editor's frame (the accent stroke around `r`) this frame, if it is painted.
-fn editor_frame_color(h: &Harness<'static, PdfCraftApp>, r: egui::Rect) -> Option<egui::Color32> {
+fn editor_frame_color(h: &Harness<'static, PdfCraftApp>, r: egui::Rect, line: egui::Color32) -> Option<egui::Color32> {
     h.output().shapes.iter().find_map(|shape| match &shape.shape {
         egui::Shape::Rect(rect) if rect.stroke.width == 1.5 && rect.rect.contains(r.center()) => Some(rect.stroke.color),
         egui::Shape::Path(path) if path.closed && egui::Rect::from_points(&path.points).contains(r.center()) => match &path.stroke.color {
-            egui::epaint::ColorMode::Solid(color) if color.r() == 0x14 && color.g() == 0x73 && color.b() == 0xE6 => Some(*color),
+            egui::epaint::ColorMode::Solid(color) if (color.r(), color.g(), color.b()) == (line.r(), line.g(), line.b()) => Some(*color),
             _ => None,
         },
         _ => None,
@@ -3909,11 +3910,21 @@ fn a_paragraph_editor_opens_at_full_opacity() {
     h.drag_at(top.center());
     h.run_steps(1);
     h.drop_at(top.center());
-    let accent = egui::Color32::from_rgb(0x14, 0x73, 0xE6);
+    let theme = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+    let appearance = craft::theme::Appearance {
+        mode: craft::theme::Mode::Light,
+        contrast: craft::theme::Contrast::Standard,
+        size: Default::default(),
+        text_size: Default::default(),
+        reduced_motion: false,
+    };
+    let [r, g, b, a] = craft::theme::resolve(theme, appearance, None).tokens.color.overlay.line.0;
+    assert_eq!(a, 255, "the theme's outline is opaque");
+    let accent = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
     for frame in 0..8 {
         h.step();
         // The click's own frame opens it: the editor's frame is there from then on, at full colour.
-        assert_eq!(editor_frame_color(&h, top), Some(accent), "frame {frame} after the click");
+        assert_eq!(editor_frame_color(&h, top, accent), Some(accent), "frame {frame} after the click");
     }
 }
 
