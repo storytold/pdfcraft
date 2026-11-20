@@ -1505,6 +1505,10 @@ fn overlay_clears_after_fresh_tiles_zoom_then_edit_and_rejected_edit() {
     // 3. Zoom then edit: zoom to another scale, let tiles settle, then edit.
     h.state_mut().views[0].view.zoom_step(true);
     crate::support::settle(&mut h);
+    // The larger page can put the field above the viewport; scroll back to the page top.
+    h.state_mut().views[0].view.go_to(0);
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].viewport_rect().contains(field_rect(&h, "name").center()));
     click_field(&mut h, "name", 0);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("ZoomedVal".into()));
