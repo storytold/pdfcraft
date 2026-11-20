@@ -75,6 +75,7 @@ use pdfcraft_engine::{DocId, Session};
 pub use canvas::{DocView, RasterMemory};
 #[doc(hidden)]
 pub use editing::download_mime_type;
+pub use gpu_health::{GpuHealth, GpuNotice};
 
 /// Smallest window the shell is laid out for, in egui points (logical pixels, so the OS scale
 /// factor is already applied: 480 points are 600 px at 125 % and 720 px at 150 %). 480 is half of a
@@ -89,6 +90,7 @@ pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
 mod frame_guard;
+mod gpu_health;
 mod hooks;
 mod persist;
 mod platform;
@@ -645,6 +647,10 @@ pub struct PdfCraftApp {
     /// (`frame_guard`, #3914).
     panicking_frames: u32,
     frame_panicked: bool,
+    /// What the drawing device has reported after start-up: lowers page quality and says
+    /// one message when it couldn't allocate (#606). The wgpu error handler writes it,
+    /// `logic` and the page painter read it.
+    gpu_health: std::sync::Arc<gpu_health::GpuHealth>,
     /// The last `logic` ran without a `ui` after it yet (eframe skips `ui` while the window is
     /// hidden).
     logic_without_ui: bool,

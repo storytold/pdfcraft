@@ -242,6 +242,7 @@ impl PdfCraftApp {
             run_inline: false,
             panicking_frames: 0,
             frame_panicked: false,
+            gpu_health: std::sync::Arc::new(gpu_health::GpuHealth::default()),
             logic_without_ui: false,
             #[cfg(test)]
             panic_next: None,
@@ -574,7 +575,15 @@ impl eframe::App for PdfCraftApp {
     ///
     /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
     /// every open tab, keeps running; see `frame_guard`.
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Issue #606: wgpu sends every error after start-up to the device's uncaptured-error
+        // handler, and the default panics inside the driver, where Rust can't unwind it, so
+        // the process aborts. `catch_errors` (#519) covers only the window and the renderer
+        // being made; `GpuHealth` is the handler for the rest of the app's life, put on the
+        // device the first frame it exists, before that frame uploads any page.
+        if let Some(state) = frame.wgpu_render_state.as_ref() {
+            self.gpu_health.observe(&state.device);
+        }
         self.begin_logic();
         self.guarded_frame(|app| app.logic_unguarded(ctx));
         if self.frame_panicked {
@@ -594,6 +603,16 @@ impl PdfCraftApp {
         #[cfg(test)]
         self.injected_panic(crate::frame_guard::FramePart::Logic);
         self.ctx = Some(ctx.clone());
+        // The device's handler may have found it short of memory or faulted (#606): say so
+        // once, and ask every view for smaller rasters from now on, which is what the app
+        // can still do when the device couldn't allocate.
+        if let Some(notice) = self.gpu_health.take_notice() {
+            self.notify_tr(notice.message());
+        }
+        let gpu_quality = self.gpu_health.quality();
+        for view in &mut self.views {
+            view.set_gpu_quality(gpu_quality);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_script_dialog(ctx);
         #[cfg(not(target_arch = "wasm32"))]

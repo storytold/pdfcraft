@@ -367,6 +367,21 @@ fn grid_zoom_is_clamped_and_sharp_renders_tolerate_a_pinch() {
     assert_eq!(v.grid_zoom(), 0.5);
 }
 
+#[test]
+fn gpu_quality_lowers_the_raster_scale_the_view_asks_for() {
+    // Issue #606: when the drawing device couldn't allocate, `GpuHealth` lowers quality and
+    // every view asks for smaller rasters from then on. The lower scale travels the same
+    // request path as a zoom-out, so the held rasters are replaced and the memory the
+    // device wouldn't give is handed back.
+    let mut v = view(3, PageLayout::Single, true);
+    v.zoom = 4.0;
+    assert_eq!(v.render_scale(2.0), 4.0 * super::PT * 2.0, "1.0 is exactly the device scale (#260)");
+    v.set_gpu_quality(0.5);
+    assert_eq!(v.render_scale(2.0), 4.0 * super::PT * 2.0 * 0.5);
+    v.set_gpu_quality(1.0);
+    assert_eq!(v.render_scale(2.0), 4.0 * super::PT * 2.0);
+}
+
 fn view(pages: usize, layout: PageLayout, continuous: bool) -> DocView {
     let info = pdfcraft_render::DocInfo {
         pages: (0..pages)

@@ -571,6 +571,10 @@ pub struct DocView {
     /// Full screen's transitions, display times and pointer (see [`presenter`]).
     pub(crate) presenter: presenter::Presenter,
     pages: HashMap<usize, PageTex>,
+    /// Page-raster quality after a drawing out of memory ([`crate::GpuHealth`], #606): 1.0
+    /// asks for the device scale, less asks for smaller rasters, which replace the held ones
+    /// the way a zoom-out does. Never below 1/8, so a page stays a recognizable picture.
+    gpu_quality: f32,
     /// Pages the renderer could not draw, with the reason (never re-requested).
     errors: HashMap<usize, String>,
     /// Pages whose content was cut at the renderer's limits (#623): drawn and searched in part.
@@ -1096,6 +1100,7 @@ impl DocView {
             full_screen_fill: defaults.full_screen_fill,
             presenter: Default::default(),
             pages: HashMap::new(),
+            gpu_quality: 1.0,
             errors: HashMap::new(),
             cut_pages: Default::default(),
             cut_notice_dismissed: Default::default(),
