@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-20 | **Last updated:** 2026-11-20 | **Change:** patch (M10 #4653: Word export marks right-to-left paragraphs, headings, cells and text boxes on the shared word model, with complex-script size, bold and italic; estimates unchanged)
+
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
@@ -375,6 +377,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-20 | patch | M10 #4653: Word export marks right-to-left paragraphs, headings, cells and text boxes on the shared word model, with complex-script size, bold and italic; HTML direction waits on the shared HTML writer; estimates unchanged. |
 | 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
 | 2026-10-29 | minor | M10 #5029: existing Text appearances keep their implicit NoRotate orientation in vector printing even when the flag is clear. Print eligibility and source/AP objects remain unchanged; native viewing without the flag remains a separate gap. Estimates unchanged. |
 | 2026-10-27 | minor | M10 #5029: vector printing preserves existing NoRotate appearance orientation and anchors; estimates unchanged. Missing appearances and NoZoom print behavior remain unchanged. |

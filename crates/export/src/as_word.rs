@@ -8,20 +8,26 @@ mod pictures;
 
 use super::as_docx::{rgb8, room_for};
 use super::as_html::{allowed, language_tag};
-use super::layout::{Image, Item, Page, Table, body_size, items, reading_order};
+use super::layout::{Image, Item, Page, Table, body_size, is_rtl, items, paragraph_rtl, reading_order};
 use craft_wordmodel::para::{Anchor, Float, ShapeKind, Wrap};
 use craft_wordmodel::props::{Border, BorderStyle, Borders, CellProps, LineSpacing, TableProps};
 use craft_wordmodel::{Block, CharProps, Document, InlineObject, ParaProps, Paragraph, PartKind, Rgb, SectionProps, Style, StyleSheet, TextColor};
 
-/// A run's formatting: its size, bold, italic and colour (none for black, the default).
+/// A run's formatting: its size, bold, italic and colour (none for black, the default). The size,
+/// bold and italic are also the complex-script ones (`szCs`, `bCs`, `iCs`), which Word draws
+/// right-to-left text with, and Arabic-script digits and punctuation even where they are not
+/// right to left; Latin text ignores them (#4653).
 fn chr(size: f64, bold: bool, italic: bool, color: [f64; 3]) -> CharProps {
     let [r, g, b] = rgb8(color);
     // Half points, as Word and RTF store sizes; one that is not finite gets the 12 pt default.
     let half_points = if size.is_finite() { (size * 2.0).round().clamp(2.0, 3276.0) } else { 24.0 };
     CharProps {
         size: Some(half_points as f32 / 2.0),
+        size_cs: Some(half_points as f32 / 2.0),
         bold: bold.then_some(true),
+        bold_cs: bold.then_some(true),
         italic: italic.then_some(true),
+        italic_cs: italic.then_some(true),
         color: (r | g | b != 0).then_some(TextColor::Rgb(Rgb(r, g, b))),
         ..CharProps::default()
     }
@@ -69,6 +75,7 @@ pub(crate) fn table(t: &Table) -> craft_wordmodel::Table {
                 let span = c.span.max(1);
                 let w: f32 = widths.iter().skip(column).take(span).sum();
                 let mut p = Paragraph::new();
+                p.props.bidi = is_rtl(&c.text).then_some(true);
                 push_text(&mut p, &c.text, chr(c.size, c.bold, c.italic, c.color));
                 cells.push(craft_wordmodel::Cell {
                     props: CellProps { width: Some(w), span: span as u32, ..CellProps::default() },
@@ -230,6 +237,9 @@ impl<'a> Builder<'a> {
                 if matches!(lvl, 1 | 2) {
                     p.props.style = Some(format!("Heading{lvl}"));
                 }
+                // A paragraph that reads right to left says so: Word aligns and orders it so, and
+                // the writer marks its right-to-left pieces `w:rtl` by the Unicode bidi algorithm.
+                p.props.bidi = paragraph_rtl(&runs).then_some(true);
                 for r in &runs {
                     push_text(&mut p, &r.text, chr(r.block.size, r.block.bold, r.block.italic, r.block.color));
                 }
@@ -395,7 +405,7 @@ fn positioned_page<'a>(b: &mut Builder<'a>, page: &'a Page) {
         let w = layout_number(w).max(1.0);
         let (x, y) = (layout_number(bl.rect[0] + (bw - w) / 2.0), layout_number(page.height - bl.rect[3] + (bh - h) / 2.0));
         let mut p = Paragraph::new();
-        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..ParaProps::default() };
+        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), bidi: is_rtl(&bl.text).then_some(true), ..ParaProps::default() };
         push_text(&mut p, &bl.text, chr(bl.size, bl.bold, bl.italic, bl.color));
         let story = b.doc.add_part(PartKind::TextBox, vec![craft_wordmodel::para_block(p)]);
         if let Some(part) = b.doc.parts.get_mut(&story) {

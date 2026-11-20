@@ -1741,3 +1741,132 @@ fn checked_rtf_reports_omitted_pictures_once_per_page_without_dropping_text() {
     assert!(output.contains("Surviving last-page text"));
     assert_eq!(output, crate::rtf_with_title(&pages, "Partial"));
 }
+
+/// An Arabic body paragraph, an English one, a mixed one that starts in English, and an Arabic
+/// heading, as separate paragraphs of one page (body 11 pt).
+fn bidi_page() -> Page {
+    let b = |t: &str, y: f64, size: f64, bold: bool| Block {
+        text: t.into(),
+        rect: [72.0, y, 500.0, y + size],
+        size,
+        bold,
+        italic: false,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+    };
+    Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![
+            b(
+                "\u{0645}\u{0646}\u{0630} \u{0627}\u{0644}\u{0642}\u{0631}\u{0646} \u{0627}\u{0644}\u{062a}\u{0627}\u{0633}\u{0639} \u{0639}\u{0634}\u{0631} 1850 \u{0643}\u{0627}\u{0646} \u{0647}\u{0630}\u{0627} \u{0627}\u{0644}\u{0646}\u{0635} \u{0645}\u{0643}\u{062a}\u{0648}\u{0628}\u{0627}",
+                600.0,
+                11.0,
+                false,
+            ),
+            b("This paragraph is written in English and is long enough to be the body text size here.", 560.0, 11.0, false),
+            b(
+                "Chapter 2 \u{0627}\u{0644}\u{0641}\u{0635}\u{0644} \u{0627}\u{0644}\u{062b}\u{0627}\u{0646}\u{064a} is a mixed paragraph that begins in English and is long enough.",
+                520.0,
+                11.0,
+                false,
+            ),
+            b("\u{0627}\u{0644}\u{0639}\u{0646}\u{0648}\u{0627}\u{0646}", 700.0, 24.0, true),
+        ],
+        images: Vec::new(),
+        rules: Vec::new(),
+        background: None,
+    }
+}
+
+/// Each paragraph of a Word document as its XML, table cells and text boxes included.
+fn paragraph_xml(xml: &str) -> Vec<String> {
+    xml.split("<w:p>").skip(1).map(|p| p.split_once("</w:p>").map_or(p, |(inside, _)| inside).to_string()).collect()
+}
+
+/// #4653: which text reads right to left: the first strong character by its Unicode bidi class
+/// decides, as the HTML `dir="auto"` rule has it; digits, punctuation and spaces are not strong,
+/// an LRM mark is strong left to right, and the Hebrew maqaf, though punctuation, is strong right
+/// to left.
+#[test]
+fn text_reads_right_to_left_by_its_first_strong_character() {
+    for rtl in [
+        "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{05e9}\u{05dc}\u{05d5}\u{05dd}",
+        "123 \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "(\u{05e9})",
+        "\u{200f}abc",
+        "\u{061c}abc",
+        "\u{05be}abc",
+        "\u{0661}\u{0662} \u{0645}",
+        "\u{0710}\u{0712}",
+        "\u{0780}\u{0781}",
+    ] {
+        assert!(is_rtl(rtl), "{rtl:?}");
+    }
+    for ltr in [
+        "",
+        "   ",
+        "123 456",
+        "Hello \u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{200e}\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}",
+        "\u{0661}\u{0662}\u{0663}",
+        "\u{0661}\u{0662} abc",
+        "()",
+        "\u{0e01}\u{0e02}",
+        "\u{4e2d}\u{6587}",
+    ] {
+        assert!(!is_rtl(ltr), "{ltr:?}");
+    }
+    // Across a paragraph's runs: the first strong character, in whichever run it is.
+    let runs = |texts: &[&str]| -> Vec<Run<'static>> {
+        let b: &'static Block = Box::leak(Box::new(block("x", 0.0, 0.0, 1.0, 1.0)));
+        texts.iter().map(|t| Run { block: b, text: (*t).into() }).collect()
+    };
+    assert!(!paragraph_rtl(&runs(&["\u{200e}", "\u{0645}\u{0631}"])), "LRM in the first run");
+    assert!(paragraph_rtl(&runs(&["12 ", ", ", "\u{05be}x"])), "weak runs, then the maqaf");
+    assert!(!paragraph_rtl(&runs(&["12", "\u{0661}"])));
+    assert!(!paragraph_rtl(&runs(&[])));
+}
+
+/// #4653: a paragraph, heading, table cell or text box that reads right to left is a
+/// right-to-left Word paragraph (`w:bidi`), its Arabic is marked `w:rtl` and a number inside it
+/// is not, and its formatting is also the complex-script one; English and mixed text that starts
+/// in English are left as they were.
+#[test]
+fn word_marks_right_to_left_paragraphs_cells_and_text_boxes() {
+    let xml = part(&docx(&[bidi_page()], "Arabic"), "word/document.xml");
+    let paragraphs = paragraph_xml(&xml);
+    let find = |needle: &str| paragraphs.iter().find(|p| p.contains(needle)).unwrap_or_else(|| panic!("no paragraph with {needle}: {xml}")).clone();
+    let arabic = find("\u{0645}\u{0646}\u{0630}");
+    assert!(arabic.contains("<w:bidi/>"), "{arabic}");
+    assert!(arabic.contains("<w:rtl/>") && arabic.contains("<w:szCs w:val=\"22\"/>"), "{arabic}");
+    let number = arabic.split("<w:r>").find(|r| r.contains("1850")).unwrap_or_default();
+    assert!(!number.contains("<w:rtl/>"), "the number keeps its own order: {arabic}");
+    let english = find("written in English");
+    assert!(!english.contains("<w:bidi/>") && !english.contains("<w:rtl/>"), "{english}");
+    let mixed = find("mixed paragraph");
+    assert!(!mixed.contains("<w:bidi/>"), "{mixed}");
+    let heading = find("\u{0627}\u{0644}\u{0639}\u{0646}\u{0648}\u{0627}\u{0646}");
+    assert!(heading.contains("Heading1") && heading.contains("<w:bidi/>") && heading.contains("<w:bCs/>"), "{heading}");
+
+    // A table with one Arabic cell: only that cell's paragraph is right to left.
+    let mut t = table_page();
+    for b in &mut t.blocks {
+        if b.text == "Unit" {
+            b.text = "\u{0627}\u{0644}\u{0648}\u{062d}\u{062f}\u{0629}".into();
+        }
+    }
+    let xml = part(&docx(&[t], "Table"), "word/document.xml");
+    assert_eq!(xml.matches("<w:bidi/>").count(), 1, "one Arabic cell: {xml}");
+
+    // A page kept as positioned text boxes (rotated text): the Arabic box only.
+    let mut q = bidi_page();
+    q.blocks[1].rotation = 30.0;
+    let xml = part(&docx(&[q], "Boxes"), "word/document.xml");
+    let boxes: Vec<&str> = xml.split("<w:txbxContent>").skip(1).collect();
+    let in_box = |needle: &str| *boxes.iter().find(|b| b.contains(needle)).unwrap_or_else(|| panic!("no box with {needle}: {xml}"));
+    assert!(in_box("\u{0645}\u{0646}\u{0630}").split("</w:p>").next().unwrap_or_default().contains("<w:bidi/>"), "{xml}");
+    assert!(!in_box("written in English").split("</w:p>").next().unwrap_or_default().contains("<w:bidi/>"), "{xml}");
+}

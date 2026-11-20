@@ -1,5 +1,25 @@
 use std::collections::HashMap;
 
+use unicode_bidi::{BidiClass, bidi_class};
+
+/// The strong direction of `c` by its Unicode bidi class: `Some(true)` for right to left (R, AL:
+/// Hebrew, Arabic, the RLM and ALM marks, Hebrew punctuation such as the maqaf…), `Some(false)`
+/// for left to right (L: letters of the left-to-right scripts, the LRM mark…), `None` for the weak
+/// and neutral characters (digits, punctuation, spaces).
+fn strong_direction(c: char) -> Option<bool> {
+    match bidi_class(c) {
+        BidiClass::R | BidiClass::AL => Some(true),
+        BidiClass::L => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether `text` reads right to left: its first strong character is a right-to-left one, as the
+/// HTML `dir="auto"` rule has it (#4653).
+pub(crate) fn is_rtl(text: &str) -> bool {
+    text.chars().find_map(strong_direction).unwrap_or(false)
+}
+
 /// A paragraph of a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
@@ -210,6 +230,11 @@ const WORD_GAP: f64 = 0.12;
 pub(crate) struct Run<'a> {
     pub(crate) block: &'a Block,
     pub(crate) text: String,
+}
+
+/// Whether a paragraph's runs read right to left: its first strong character, across the runs.
+pub(crate) fn paragraph_rtl(runs: &[Run]) -> bool {
+    runs.iter().flat_map(|r| r.text.chars()).find_map(strong_direction).unwrap_or(false)
 }
 
 /// A page's paragraphs, each a list of runs from left to right along its line. A block that

@@ -42,7 +42,7 @@ use craft_html::standalone::{allowed, base64};
 use flow::list_item;
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
-use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
+use layout::{LOOKUP_STEPS, MAX_COLS, body_size, is_rtl, paragraph_rtl};
 pub(crate) use layout::{Run, flowing_paragraphs, reading_order, tables};
 
 #[cfg(test)]
