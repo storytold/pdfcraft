@@ -145,7 +145,7 @@ impl State {
         }
         let summary = match &self.outcome {
             None => return Vec::new(),
-            Some(Err(error)) => return vec![error.clone()],
+            Some(Err(error)) => return vec![search_error(error)],
             Some(Ok(summary)) => summary,
         };
         let mut lines = vec![fmt(
@@ -168,6 +168,31 @@ impl State {
             lines.push(tl!("This folder is too large or too deep to search all of it.").to_string());
         }
         lines
+    }
+}
+
+fn search_error(error: &str) -> String {
+    // The engine and the automation tool retain stable English diagnostics. Translate the
+    // well-known cases only at the dialog boundary, leaving system errors visible as details.
+    if let Some(path) = error.strip_suffix(" is a link, which is not followed") {
+        return fmt(tl!("{path} is a link, which is not followed"), &[("path", path)]);
+    }
+    if let Some(path) = error.strip_suffix(" is not a folder") {
+        return fmt(tl!("{path} is not a folder"), &[("path", path)]);
+    }
+    if let Some(reason) = error.strip_prefix("could not start folder listing: ") {
+        return fmt(tl!("Could not start folder listing: {reason}"), &[("reason", reason)]);
+    }
+    if error.starts_with("the search text is longer than ") {
+        return tl!("Search text is too long.").to_string();
+    }
+    match error {
+        "the search text is empty" => tl!("Search text is empty.").to_string(),
+        "folder listing stopped unexpectedly" => tl!("Folder listing stopped unexpectedly.").to_string(),
+        "files from earlier searches are still being read; wait for them to finish, or restart PdfCraft" => {
+            tl!("Other searches are still reading files. Wait for them to finish or restart PdfCraft.").to_string()
+        }
+        _ => fmt(tl!("Couldn't be read: {reason}"), &[("reason", error)]),
     }
 }
 
@@ -422,8 +447,21 @@ mod tests {
             finished(Summary { folder_cut_short: true, ..summary }).status(),
             [line, "This folder is too large or too deep to search all of it."]
         );
-        assert_eq!(State { outcome: Some(Err("no such folder".into())), ..State::default() }.status(), ["no such folder"]);
+        assert_eq!(State { outcome: Some(Err("no such folder".into())), ..State::default() }.status(), ["Couldn't be read: no such folder"]);
         assert!(State::default().status().is_empty(), "nothing to say before a search");
+    }
+
+    #[test]
+    fn folder_search_engine_diagnostics_have_localizable_ui_text() {
+        for (error, expected) in [
+            ("the search text is empty", "Search text is empty."),
+            ("the search text is longer than 1000 characters", "Search text is too long."),
+            ("folder listing stopped unexpectedly", "Folder listing stopped unexpectedly."),
+            ("/tmp/folder is not a folder", "/tmp/folder is not a folder"),
+            ("/tmp/link is a link, which is not followed", "/tmp/link is a link, which is not followed"),
+        ] {
+            assert_eq!(search_error(error), expected);
+        }
     }
 
     #[test]
