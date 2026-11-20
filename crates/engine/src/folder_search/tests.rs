@@ -266,6 +266,21 @@ fn the_whole_file_time_limit_expires_while_waiting_for_a_slow_page() {
 }
 
 #[test]
+fn the_whole_search_deadline_expires_while_waiting_for_a_page() {
+    // A small first page is found, then a deliberately slow second page outlasts the overall
+    // deadline. The per-page and per-file limits are long enough not to cause this outcome.
+    let bytes = Arc::new(slow_pdf("needle"));
+    let left = none_left();
+    let mut options = Options::new("unused", "needle");
+    options.page_limit = Duration::from_secs(60);
+    options.file_limit = Duration::from_secs(60);
+    let search_deadline = std::time::Instant::now().checked_add(Duration::from_millis(700));
+    let read = super::read_pages(bytes, 2, "needle", &options, 10, &AtomicBool::new(false), &left, search_deadline);
+    assert_eq!(read.skip, Some(Skip::TooSlow), "the overall deadline must interrupt a slow page");
+    assert!(!read.matches.is_empty(), "matches found before the deadline must be retained");
+}
+
+#[test]
 fn a_damaged_file_is_named_and_the_rest_are_still_searched() {
     let folder = Folder::new();
     let bad = folder.write("a-bad.pdf", b"this is not a PDF");
