@@ -206,6 +206,7 @@ impl Session {
         // Track where the next run may start instead of counting only changed words, so
         // unchanged words before a change are not mistaken for its words.
         let mut new_search_from = 0usize;
+        let mut old_search_from = 0usize;
         let mut edits = Vec::new();
         for ch in &c.changes {
             let color = colour(ch.kind);
@@ -249,13 +250,21 @@ impl Session {
                 &new_words[start..start + new_word_count]
             };
 
-            if ch.kind == Kind::Deleted {
-                let old_word_count = ch.old.text.split_whitespace().count();
-                let old_slice = if old_word_count == 0 || old_word_count > old_words.len() {
-                    None
-                } else {
-                    let mut start = None;
-                    for candidate in 0..=old_words.len() - old_word_count {
+            let old_word_count = ch.old.text.split_whitespace().count();
+            let old_slice = if ch.kind == Kind::Deleted && old_word_count > 0 && old_word_count <= old_words.len() {
+                let mut start = None;
+                for candidate in old_search_from..=old_words.len().saturating_sub(old_word_count) {
+                    if old_words[candidate..candidate + old_word_count]
+                        .iter()
+                        .zip(ch.old.text.split_whitespace())
+                        .all(|(word, text)| word.text == text)
+                    {
+                        start = Some(candidate);
+                        break;
+                    }
+                }
+                if start.is_none() {
+                    for candidate in 0..=old_words.len().saturating_sub(old_word_count) {
                         if old_words[candidate..candidate + old_word_count]
                             .iter()
                             .zip(ch.old.text.split_whitespace())
@@ -265,8 +274,47 @@ impl Session {
                             break;
                         }
                     }
-                    start.map(|s| &old_words[s..s + old_word_count])
-                };
+                }
+                if let Some(s) = start {
+                    old_search_from = s + old_word_count;
+                    Some(&old_words[s..s + old_word_count])
+                } else {
+                    let s = old_search_from.min(old_words.len().saturating_sub(old_word_count));
+                    old_search_from = (s + old_word_count).min(old_words.len());
+                    None
+                }
+            } else {
+                if old_word_count > 0 && old_word_count <= old_words.len() {
+                    let mut start = None;
+                    for candidate in old_search_from..=old_words.len().saturating_sub(old_word_count) {
+                        if old_words[candidate..candidate + old_word_count]
+                            .iter()
+                            .zip(ch.old.text.split_whitespace())
+                            .all(|(word, text)| word.text == text)
+                        {
+                            start = Some(candidate);
+                            break;
+                        }
+                    }
+                    if start.is_none() {
+                        for candidate in 0..=old_words.len().saturating_sub(old_word_count) {
+                            if old_words[candidate..candidate + old_word_count]
+                                .iter()
+                                .zip(ch.old.text.split_whitespace())
+                                .all(|(word, text)| word.text == text)
+                            {
+                                start = Some(candidate);
+                                break;
+                            }
+                        }
+                    }
+                    let start = start.unwrap_or_else(|| old_search_from.min(old_words.len().saturating_sub(old_word_count)));
+                    old_search_from = (start + old_word_count).min(old_words.len());
+                }
+                None
+            };
+
+            if ch.kind == Kind::Deleted {
                 if let Some(slice) = old_slice {
                     let mut pages_in_order: Vec<usize> = Vec::new();
                     for w in slice {
@@ -293,6 +341,32 @@ impl Session {
                     }
                     continue;
                 }
+
+                let mut pages_in_order: Vec<usize> =
+                    if ch.old.page <= ch.old.last_page { (ch.old.page..=ch.old.last_page).collect() } else { vec![ch.old.page] };
+                pages_in_order.retain(|p| pages.is_empty() || pages.contains(p));
+                pages_in_order.sort();
+                pages_in_order.dedup();
+                if pages_in_order.is_empty() {
+                    pages_in_order.push(ch.old.page);
+                }
+                for page in pages_in_order {
+                    let target_page = if page < new_pages { page } else { new_pages.saturating_sub(1) };
+                    let first_rect = if page == target_page { new_words.iter().find(|w| w.page == target_page).map(|w| w.rect) } else { None };
+                    let near = first_rect.or_else(|| new_page_crops.get(target_page).copied().flatten());
+                    let Some(r) = near else { continue };
+                    let shape = Shape::Note { at: [r[0], r[3]], icon: NoteIcon::Note };
+                    let mut style = crate::Style::default_for(&shape);
+                    style.color = color;
+                    edits.push(Edit::AddAnnotation(NewAnnotation {
+                        page: target_page,
+                        shape,
+                        style,
+                        contents: contents.clone(),
+                        author: "Compare".into(),
+                    }));
+                }
+                continue;
             }
             if ch.new.rects.is_empty() {
                 let Some(r) = ch.new.near else { continue };
