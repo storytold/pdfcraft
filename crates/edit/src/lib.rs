@@ -104,3 +104,5 @@ mod paragraph_spacing_break_tests;
 mod paragraph_spacing_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_colour_tests;
