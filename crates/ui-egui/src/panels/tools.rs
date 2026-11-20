@@ -197,15 +197,19 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, g: &'static ToolGroup) 
             lines.push(Line::Item(item));
         }
     }
-    let out = List::<usize>::new(tl!(g.label).to_owned())
-        .select(SelectMode::Single)
-        .activate(ActivateOn::Click)
-        .selection(Bind::given(Selection::default()))
-        .show_items(ui, &Rows(lines.len()), &mut |at, _| match lines.get(*at) {
+    let mut list = List::<usize>::new(tl!(g.label).to_owned());
+    if g.id == "fill_sign" {
+        list = list.sizing(Sizing::Content).natural_height(true);
+    }
+    let out = list.select(SelectMode::Single).activate(ActivateOn::Click).selection(Bind::given(Selection::default())).show_items(
+        ui,
+        &Rows(lines.len()),
+        &mut |at, _| match lines.get(*at) {
             Some(Line::Heading(title)) => ListRow::new(tl!(title).to_owned()).heading().ink(RowInk::Dimmed),
             Some(Line::Item(item)) => item_row(g, item),
             None => ListRow::spacer(),
-        });
+        },
+    );
     let opener = out.response.clone();
     let mut menu = None;
     for event in out.events {
