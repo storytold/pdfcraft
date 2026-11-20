@@ -420,13 +420,27 @@ impl Interp<'_> {
                 Val::Num(flows.iter().enumerate().map(|(i, v)| self.to_num(v) / (1.0 + r).powi(i as i32 + 1)).sum())
             }
             "ipmt" | "ppmt" => {
-                let (pv, r, pmt, first, count) = (
+                let (pv, annual, pmt, first, count) = (
                     self.arg_num(args, 0)?,
                     self.arg_num(args, 1)?,
                     self.arg_num(args, 2)?,
                     self.arg_num(args, 3)?.max(1.0),
                     self.arg_num(args, 4)?.max(1.0),
                 );
+                // The rate is annual and the payments monthly (FormCalc specification, IPmt and PPmt).
+                let r = annual / 12.0;
+                // A payment below the first month's interest repays nothing, and both answer 0.
+                // The margin covers rounding only: the three inputs, `annual / 12.0` and `pv * r`
+                // each round by at most half an epsilon, so four epsilons of the interest absorb
+                // them. `IPmt(35, 0.12, 0.35, 1, 12)` has `pv * r` = 0.35000000000000003, and its
+                // payment still covers the interest. The epsilons multiply first, so an interest
+                // near `f64::MAX` keeps a finite margin. An infinite or NaN product keeps a zero
+                // margin, so it compares as before.
+                let first_interest = pv * r;
+                let margin = if first_interest.is_finite() { first_interest.abs() * (4.0 * f64::EPSILON) } else { 0.0 };
+                if pmt < first_interest - margin {
+                    return Ok(Some(Val::Num(0.0)));
+                }
                 let (mut balance, mut interest, mut principal) = (pv, 0.0, 0.0);
                 for period in 1..=((first + count - 1.0).min(10_000.0) as u32) {
                     self.step()?;
