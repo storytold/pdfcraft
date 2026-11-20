@@ -168,6 +168,7 @@ pub(crate) struct PageTool<'a> {
     presenter_keys: Vec<(ToolKey, bool)>,
     /// Select with added content selected (Edit a PDF panel open): Delete removes it.
     content_delete: bool,
+    button_held: bool,
     delete_content: bool,
 }
 
@@ -419,6 +420,7 @@ pub(crate) fn page_tool<'a>(
         presenting: cx.presenting,
         presenter_keys: Vec::new(),
         content_delete,
+        button_held: cx.button_held,
         delete_content: false,
     }
 }
@@ -668,7 +670,8 @@ impl CanvasTool for PageTool<'_> {
             return true;
         }
         if self.content_delete && matches!(key, ToolKey::Delete { .. }) {
-            self.delete_content = true;
+            // Deleting during a press could make its release act on a different item.
+            self.delete_content = !self.button_held;
             return true;
         }
         false
