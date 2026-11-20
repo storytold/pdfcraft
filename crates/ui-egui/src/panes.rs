@@ -492,7 +492,15 @@ pub(crate) fn page_area(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         app.move_tab_to(index, place);
                     }
                 }
-                TabDropTarget::SplitEnd => app.split_tab(ui.ctx(), index, false),
+                TabDropTarget::SplitEnd => {
+                    // The strip selects a tab as its drag starts. With other tabs in the pane,
+                    // dropping it on a new split moves it rather than making a second view of it.
+                    if app.place_of(index) == Some(Place::Main) && app.tabs_in(Place::Main).len() > 1 {
+                        app.move_tab_to(index, Place::Second);
+                    } else {
+                        app.split_tab(ui.ctx(), index, false);
+                    }
+                }
                 _ => {}
             }
         }
