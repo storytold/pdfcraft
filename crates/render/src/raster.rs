@@ -365,14 +365,7 @@ pub fn effective_scale(width_pt: f32, height_pt: f32, scale: f32) -> f32 {
     // The caps always win: a floor here once let a 934-million-point-wide page (a fuzzed file)
     // render 9 million pixels wide. Only guard against a zero or non-finite scale.
     let capped = scale.min(by_side).min(by_area);
-    let capped = if capped.is_finite() && capped > 0.0 { capped } else { by_side.min(by_area).max(f32::MIN_POSITIVE) };
-    let (pw, ph) = (device_pixels(w, capped).min(MAX_SIDE as u32), device_pixels(h, capped).min(MAX_SIDE as u32));
-    if u64::from(pw) * u64::from(ph) > MAX_PIXELS as u64 {
-        // Rounding up for edge coverage must still respect the shared pixel budget.
-        capped.min(pw.saturating_sub(1) as f32 / w).min(ph.saturating_sub(1) as f32 / h)
-    } else {
-        capped
-    }
+    if capped.is_finite() && capped > 0.0 { capped } else { by_side.min(by_area).max(f32::MIN_POSITIVE) }
 }
 
 /// Device pixels that cover `pt` points at `scale`: rounded up, as poppler's `pdftoppm` does, so
