@@ -83,6 +83,11 @@ impl<'a> Tlv<'a> {
         self.0.bits().map_err(app_error)
     }
     pub fn time(&self) -> Result<Time, SignError> {
+        // The shared parser accepts signs in digit fields; only digits (then `Z`) are valid here.
+        let digits = self.0.value.strip_suffix(b"Z").unwrap_or(self.0.value);
+        if !digits.iter().all(u8::is_ascii_digit) {
+            return Err(SignError::Malformed("time".into()));
+        }
         self.0.time().map_err(app_error)
     }
 }
@@ -133,6 +138,13 @@ mod tests {
             assert!(try_oid(bad).is_err(), "accepted {bad}");
         }
         assert_eq!(try_oid("1.2.840.113549").unwrap(), oid("1.2.840.113549"));
+    }
+
+    #[test]
+    fn time_rejects_signs_in_digit_fields() {
+        let mut v = vec![tag::UTC_TIME, 13];
+        v.extend_from_slice(b"2501011200+0Z");
+        assert!(Tlv::parse_all(&v).unwrap().time().is_err());
     }
 
     #[test]
