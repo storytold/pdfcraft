@@ -142,7 +142,7 @@ fn attachment_rows_turn_their_events_into_attachment_actions() {
     assert_eq!(h.state().views.len(), 1, "nothing opens");
     double_click(&mut h, "inner.pdf");
     assert_eq!(h.state().views.len(), 2, "the attached PDF opens in a tab of its own");
-    h.get_all_by_label("doc.pdf").next().expect("the first tab").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "doc.pdf").click();
     h.run_steps(3);
     // The menu of a text file has no Open; the PDF's has.
     right_click(&mut h, "notes.txt");
@@ -158,7 +158,7 @@ fn attachment_rows_turn_their_events_into_attachment_actions() {
     h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Open in a new tab").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 3, "Open from the menu");
-    h.get_all_by_label("doc.pdf").next().expect("the first tab").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "doc.pdf").click();
     h.run_steps(3);
     // Delete from inner.pdf's menu leaves notes.txt.
     right_click(&mut h, "inner.pdf");
@@ -226,5 +226,9 @@ fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draf
 /// a tab of the same name once the attachment is open. The row's accessible name is its name
 /// followed by its details.
 fn row_name(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Pos2 {
-    h.query_all_by_label_contains(label).map(|n| n.rect()).max_by(|a, b| a.top().total_cmp(&b.top())).expect("the attachment is listed").center()
+    let row = h.get_by(|node| {
+        node.role() == egui::accesskit::Role::ListItem && node.label().is_some_and(|text| text.starts_with(label)) && !node.is_hidden()
+    });
+    let rect = row.rect();
+    egui::pos2(rect.left() + rect.width() * 0.25, rect.center().y)
 }
