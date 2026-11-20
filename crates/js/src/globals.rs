@@ -1,4 +1,7 @@
-use super::document::{get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
+use super::document::{
+    get_field, get_nth_field_name, get_template, noop, num_fields, page_num_get, page_num_set, print, reset_form, spawn_page_from_template,
+    submit_form, template_object,
+};
 use super::format::{printd, printf, printx, scand};
 use super::host::{arg, error, function, host, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
@@ -138,6 +141,49 @@ fn launch_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     let u = message(&arg(args, 0), "cURL", ctx)?;
     host(ctx)?.borrow_mut().request(Request::LaunchUrl(u));
     Ok(JsValue::undefined())
+}
+
+/// `app.openDoc(cPath, oDoc)` or `app.openDoc({cPath, oDoc, cFS})`: queues a request to open
+/// the local file `cPath`, relative to this document. Only this document may be the base and
+/// only the local file system is supported; other options are refused. The viewer asks the
+/// user first, so no document object can be returned: the call answers null (#2081).
+fn open_doc(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let unset = |v: &JsValue| v.is_undefined() || v.is_null();
+    // Only this context's own document object (not a lookalike, proxy or inherited object).
+    let this_document = |v: &JsValue, ctx: &Context| unset(v) || v.as_object().is_some_and(|o| JsObject::equals(&o, &ctx.global_object()));
+    let first = arg(args, 0);
+    let path = match first.as_object().filter(|o| !o.is_array() && !o.is_callable()) {
+        Some(o) => {
+            if !args.iter().skip(1).all(unset) {
+                return Err(error("unsupported openDoc options"));
+            }
+            let fs = o.get(js_string!("cFS"), ctx)?;
+            let base = o.get(js_string!("oDoc"), ctx)?;
+            if (!fs.is_undefined() && !text(&fs, ctx)?.is_empty()) || !this_document(&base, ctx) {
+                return Err(error("openDoc supports only the current document's local file system"));
+            }
+            text(&o.get(js_string!("cPath"), ctx)?, ctx)?
+        }
+        None => {
+            if !this_document(&arg(args, 1), ctx) || !args.iter().skip(2).all(unset) {
+                return Err(error("unsupported openDoc options"));
+            }
+            text(&first, ctx)?
+        }
+    };
+    if path.is_empty() || path.len() > 4096 {
+        return Err(error("invalid openDoc path"));
+    }
+    let shared = host(ctx)?;
+    let mut h = shared.borrow_mut();
+    // A field's calculation runs unasked, here through `calculateNow`: as when it runs on its
+    // own (`JsOutput::absorb`), it may not open another document.
+    if h.calculate_depth > 0 {
+        h.print(format!("A field script asked to open the document {path}; only a button, a link or the console may open another document"));
+    } else {
+        h.request(Request::OpenDoc(path));
+    }
+    Ok(JsValue::null())
 }
 
 /// The attached file `exportDataObject` names, and whether to open it: from an object
@@ -416,11 +462,6 @@ fn js_number(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
-fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    // Timers never fire in the sandbox; scripts get an object they can pass to clear*.
-    Ok(ObjectInitializer::new(ctx).build().into())
-}
-
 /// The `color` object: each named color (`transparent`, `black`, `red`, `cyan`, `gray`, …) as
 /// an array of its color space (`T`, `G`, `RGB` or `CMYK`) followed by its components.
 fn color_object(ctx: &mut Context) -> JsObject {
@@ -489,7 +530,7 @@ fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<
 
 /// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 12] = [
+    let globals: [(&str, usize, NativeFunction); 15] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
@@ -501,7 +542,10 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
+        ("getTemplate", 1, NativeFunction::from_fn_ptr(get_template)),
+        ("spawnPageFromTemplate", 5, NativeFunction::from_fn_ptr(spawn_page_from_template)),
         ("exportDataObject", 4, NativeFunction::from_fn_ptr(export_data_object)),
+        ("getOCGs", 1, NativeFunction::from_fn_ptr(crate::ocg::get_ocgs)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
@@ -539,6 +583,11 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         let getter = function(ctx, NativeFunction::from_fn_ptr(getter));
         global.define_property_or_throw(JsString::from(name), PropertyDescriptor::builder().get(getter).configurable(true), ctx)?;
     }
+    // `this.templates`: every page template, as Template objects (#1429).
+    let names: Vec<String> = host(ctx)?.borrow().doc.templates.iter().map(|(n, _)| n.clone()).collect();
+    let templates: Vec<JsValue> = names.iter().map(|n| template_object(ctx, n).into()).collect();
+    let templates = JsArray::from_iter(templates, ctx);
+    ctx.register_global_property(js_string!("templates"), templates, rw)?;
     // XFA forms check both before they run: every document sees the XFA version, and only an
     // XFA form sees `xfa_installed`.
     ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;
@@ -555,11 +604,12 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(crate::interaction::response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
+        .function(NativeFunction::from_fn_ptr(open_doc), js_string!("openDoc"), 1)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
-        .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearTimeOut"), 1)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("clearInterval"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::timers::set_time_out), js_string!("setTimeOut"), 2)
+        .function(NativeFunction::from_fn_ptr(crate::timers::set_interval), js_string!("setInterval"), 2)
+        .function(NativeFunction::from_fn_ptr(crate::timers::clear), js_string!("clearTimeOut"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::timers::clear), js_string!("clearInterval"), 1)
         .property(js_string!("viewerType"), s("Exchange-Pro"), Attribute::READONLY)
         .property(js_string!("viewerVariation"), s("Full"), Attribute::READONLY)
         .property(js_string!("viewerVersion"), JsValue::from(24.0), Attribute::READONLY)
@@ -623,13 +673,16 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, 
         .build();
     let value_get = function(ctx, NativeFunction::from_copy_closure_with_captures(get, store.clone()));
     let value_set = function(ctx, NativeFunction::from_copy_closure_with_captures(set, store.clone()));
-    let target = e.target.as_ref().map_or(JsValue::null(), |t| {
-        if e.target_id.is_some() {
-            crate::document::field_object_by_id(ctx, t, e.target_id).into()
-        } else {
-            crate::document::field_object(ctx, t).into()
-        }
-    });
+    // A link action's target is the document (#2081); other events without a field have none.
+    let link_document = e.target.is_none() && e.kind == "Link";
+    let target = match e.target.as_ref() {
+        Some(t) if e.target_id.is_some() => crate::document::field_object_by_id(ctx, t, e.target_id).into(),
+        Some(t) => crate::document::field_object(ctx, t).into(),
+        None if link_document => ctx.global_object().into(),
+        None => JsValue::null(),
+    };
+    // Not enumerable there, so `JSON.stringify(event)` doesn't walk back into the document.
+    let target_attributes = if link_document { Attribute::WRITABLE | Attribute::CONFIGURABLE } else { Attribute::all() };
     let event = ObjectInitializer::new(ctx)
         .property(js_string!("name"), s(&e.name), Attribute::all())
         .property(js_string!("type"), s(&e.kind), Attribute::all())
@@ -638,7 +691,7 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsResult<(JsObject, 
         .property(js_string!("changeEx"), s(&e.change), Attribute::all())
         .property(js_string!("willCommit"), e.will_commit, Attribute::all())
         .property(js_string!("rc"), true, Attribute::all())
-        .property(js_string!("target"), target, Attribute::all())
+        .property(js_string!("target"), target, target_attributes)
         .property(js_string!("targetName"), s(e.target.as_deref().unwrap_or("")), Attribute::all())
         .property(js_string!("selStart"), 0, Attribute::all())
         .property(js_string!("selEnd"), 0, Attribute::all())
