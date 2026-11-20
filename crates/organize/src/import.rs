@@ -51,7 +51,7 @@ pub enum FieldConflicts {
     #[default]
     Rename,
     /// The older behaviour: a field that arrives with a taken name becomes one field with the
-    /// one already there. Duplicate, Replace, Extract and Split always use it.
+    /// one already there. Duplicate, Extract and Split always use it.
     Merge,
 }
 
@@ -76,8 +76,29 @@ pub fn import_pages_with(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
+    import_pages_registering(dst, src, src_pages, at, Some(conflicts))
+}
+
+/// Copy pages `src_pages` of `src` into `dst` at `at` only for what they show, as Replace Pages
+/// does before it deletes the copies: none of the fields copied with them joins `dst`'s
+/// `/AcroForm`. They come from another file, and a copied field that no copied widget leads back
+/// to (one with a widget on no page, or reached only through some other page key) would stay
+/// behind in the form after the copies go (#7920). Returns the new page references in order.
+pub(crate) fn import_pages_for_content(dst: &mut Document, src: &Document, src_pages: &[usize], at: usize) -> Result<Vec<ObjRef>, OrganizeError> {
+    import_pages_registering(dst, src, src_pages, at, None).map(|o| o.pages)
+}
+
+/// [`import_pages_with`], registering the copied fields with their names resolved per `fields`,
+/// or not registering them at all when it is `None`.
+fn import_pages_registering(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    fields: Option<FieldConflicts>,
+) -> Result<ImportOutcome, OrganizeError> {
     let before: HashSet<u32> = dst.object_numbers().into_iter().collect();
-    let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
+    let imported = match import_pages_copied(dst, src, src_pages, at, fields) {
         Ok(imported) => imported,
         Err(e) => {
             // A refusal while copying (a source too deep to follow) has only added objects:
@@ -152,10 +173,11 @@ fn insert_file_bookmark(doc: &mut Document, mark: &Mark, after: usize) -> Result
 /// Copy pages `src_pages` (0-based, in the given order) of `src` into `dst`, inserting them at
 /// position `at`. Returns the new page references in order.
 ///
-/// Fields keep their names ([`FieldConflicts::Merge`]): this is what Duplicate and Replace
-/// Pages use, where the incoming fields are copies of the document's own and renaming them
-/// would silently change what the form exports. Combine and Insert from File, which bring in
-/// another document's fields, use [`import_pages_with`] and [`FieldConflicts::Rename`].
+/// Fields keep their names ([`FieldConflicts::Merge`]): this is what Duplicate Pages uses, where
+/// the incoming fields are copies of the document's own and renaming them would silently change
+/// what the form exports. Combine and Insert from File, which bring in another document's
+/// fields, use [`import_pages_with`] and [`FieldConflicts::Rename`]. Replace Pages, which only
+/// borrows what pages show, registers none of their fields (`import_pages_for_content`).
 ///
 /// Resources identical to ones already in `dst` (the same fonts, images, colour profiles) are
 /// shared rather than stored twice (see `dedupe`).
@@ -203,6 +225,17 @@ fn import_pages_mapped(
     src_pages: &[usize],
     at: usize,
     conflicts: FieldConflicts,
+) -> Result<Imported, OrganizeError> {
+    import_pages_copied(dst, src, src_pages, at, Some(conflicts))
+}
+
+/// [`import_pages_mapped`], leaving the copied fields out of `dst`'s form when `fields` is `None`.
+fn import_pages_copied(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    fields: Option<FieldConflicts>,
 ) -> Result<Imported, OrganizeError> {
     let source = walk(src)?;
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
@@ -341,11 +374,13 @@ fn import_pages_mapped(
         new_pages.push(new);
     }
     copier.fix_annotations(dst, &annot_pages)?;
-    let renamed_fields = match conflicts {
-        FieldConflicts::Rename => resolve_field_conflicts(dst, &copier.fields)?,
-        FieldConflicts::Merge => Vec::new(),
+    let renamed_fields = match fields {
+        Some(FieldConflicts::Rename) => resolve_field_conflicts(dst, &copier.fields)?,
+        Some(FieldConflicts::Merge) | None => Vec::new(),
     };
-    register_fields(dst, &copier.fields)?;
+    if fields.is_some() {
+        register_fields(dst, &copier.fields)?;
+    }
     register_layers(dst, src, &copier.ocgs)?;
     let at = at.min(existing.len());
     let inserted: Vec<(ObjRef, Dict)> = new_pages.iter().map(|r| (*r, Dict::new())).collect();

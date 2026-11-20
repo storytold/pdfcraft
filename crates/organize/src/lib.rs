@@ -575,14 +575,15 @@ pub fn duplicate_pages(doc: &mut Document, indices: &[usize], at: Option<usize>)
 
 /// Replace Pages: the content of `targets` (in order) is replaced by that of `src_pages` of
 /// `src`. As in Acrobat, only what the page shows changes (contents, resources and page boxes);
-/// the original pages' links, comments, form widgets and the bookmarks pointing at them stay.
+/// the original pages' links, comments, form widgets and the bookmarks pointing at them stay, and
+/// no field, value or script of `src`'s form joins the document's.
 pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_pages: &[usize]) -> Result<(), OrganizeError> {
     let n = page_count(doc)?;
     check(targets, n)?;
     if targets.len() != src_pages.len() || targets.is_empty() {
         return Err(OrganizeError::Invalid(format!("{} pages can't replace {}", src_pages.len(), targets.len())));
     }
-    let imported = import_pages(doc, src, src_pages, n)?;
+    let imported = import::import_pages_for_content(doc, src, src_pages, n)?;
     let all = walk(doc)?;
     const SHOWN: [&[u8]; 8] = [b"Contents", b"Resources", b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox", b"Rotate"];
     for (t, new) in targets.iter().zip(&imported) {

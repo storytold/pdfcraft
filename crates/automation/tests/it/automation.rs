@@ -5635,6 +5635,50 @@ fn replacing_pages_through_tools() {
     );
 }
 
+/// Replacing a page of a form with a page from another file whose hidden fields reuse the form's
+/// names (one with a widget on no page, one with no widget at all) leaves the form as it was,
+/// in the document, after saving and in exported data (#7920).
+#[test]
+fn replacing_pages_adds_no_field_from_the_replacement_file_through_tools() {
+    let dir = workdir("replace-fields");
+    let form = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Total) /V (42) /Rect [10 10 90 30] /P 3 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Payee) /V (user-value) /Rect [10 40 90 60] /P 3 0 R >>",
+    ]);
+    let replacement = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] /Zzz 7 0 R >>",
+        "<< /FT /Tx /T (Payee) /V (replacement-value) /Kids [5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [10 40 90 60] /P 3 0 R >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [0 0 0 0] >>",
+        "<< /FT /Tx /T (Total) /V (999) >>",
+    ]);
+    std::fs::write(dir.join("form.pdf"), form).unwrap();
+    std::fs::write(dir.join("replacement.pdf"), replacement).unwrap();
+    let mut a = auto(&dir);
+    let fields = |a: &mut Automation, doc: u64| -> Vec<(String, Value, Value)> {
+        let list = ok(a, "form_fields", json!({ "doc": doc }));
+        list["fields"].as_array().unwrap().iter().map(|f| (f["name"].as_str().unwrap().to_owned(), f["value"].clone(), f["page"].clone())).collect()
+    };
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let before = fields(&mut a, doc);
+    assert_eq!(before.len(), 2, "{before:?}");
+    ok(&mut a, "page_replace", json!({ "doc": doc, "pages": [2], "path": "replacement.pdf" }));
+    assert_eq!(fields(&mut a, doc), before, "the form has the same fields, with the same values");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    let saved = ok(&mut a, "doc_open", json!({ "path": "out.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(fields(&mut a, saved), before, "and so does the saved file");
+    ok(&mut a, "doc_export_data", json!({ "doc": saved, "path": "data.txt", "what": "fields" }));
+    let data = std::fs::read_to_string(dir.join("data.txt")).unwrap();
+    assert!(data.contains("42") && data.contains("user-value"), "{data}");
+    assert!(!data.contains("999") && !data.contains("replacement-value"), "{data}");
+}
+
 #[test]
 fn preparing_a_form_through_tools() {
     let dir = workdir("prepare");
