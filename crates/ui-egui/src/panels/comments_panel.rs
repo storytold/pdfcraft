@@ -160,7 +160,7 @@ fn reviewer_statuses(states: &ReviewStates<'_>, a: &Annotation) -> Vec<ReviewerS
         .collect()
 }
 
-fn message(doc: &pdfcraft_engine::Document, a: &Annotation) -> craft::review::CommentMessage {
+fn message(a: &Annotation, deletable: bool) -> craft::review::CommentMessage {
     craft::review::CommentMessage {
         author: a.author.clone().unwrap_or_default(),
         created: a.modified.as_deref().and_then(pdf_date_seconds).unwrap_or(0),
@@ -168,7 +168,7 @@ fn message(doc: &pdfcraft_engine::Document, a: &Annotation) -> craft::review::Co
         text: a.contents.clone().unwrap_or_default(),
         reactions: Vec::new(),
         read: true,
-        deletable: doc.annotation_deletable(a.page, a.index),
+        deletable,
     }
 }
 
@@ -199,10 +199,12 @@ fn threads(doc: &pdfcraft_engine::Document, prefs: &CommentPrefs) -> (Vec<Commen
         let key = (a.page, a.index);
         let id = thread_id(key.0, key.1);
         let replies = replies.get(&key).map(Vec::as_slice).unwrap_or(&[]);
-        let mut messages = vec![message(doc, a)];
+        // The framework uses the thread's lock for the root menu; only replies consult the
+        // per-message deletion flag. Avoid a document-wide dependency scan for every root.
+        let mut messages = vec![message(a, false)];
         let mut members = vec![key];
         for r in replies {
-            messages.push(message(doc, r));
+            messages.push(message(r, doc.annotation_deletable(r.page, r.index)));
             members.push((r.page, r.index));
         }
         list.push(CommentThread {
