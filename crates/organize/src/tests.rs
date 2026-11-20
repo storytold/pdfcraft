@@ -798,8 +798,11 @@ fn a_title_change_keeps_what_the_packet_holds() {
     set_info(&mut doc, "Title", "New").unwrap();
     let titles = xmp_text(&save_and_reopen(&doc)).map(|x| (x.matches("<dc:title").count(), xmp_values(&x, "dc:title")));
     assert_eq!(titles, Some((1, vec!["New".to_string()])), "the packet stays, with one new title");
-    // The title under purl:, the author under dc: and only there.
-    let both = LIBREOFFICE_XMP.replace("dc:title", "purl:title").replace(" xmlns:dc=", " xmlns:purl=\"http://purl.org/dc/elements/1.1/\" xmlns:dc=");
+    // The title under purl:, the author under dc: and only there, the subject's end tag with a space.
+    let both = LIBREOFFICE_XMP
+        .replace("dc:title", "purl:title")
+        .replace(" xmlns:dc=", " xmlns:purl=\"http://purl.org/dc/elements/1.1/\" xmlns:dc=")
+        .replace("</dc:description>", "</dc:description >");
     let mut doc = doc_with_xmp(both.as_bytes());
     let r = doc.trailer().get(b"Info").and_then(Object::as_ref).unwrap();
     let producer = doc.add(Object::String(PdfString::text("Writer 1.0")));
