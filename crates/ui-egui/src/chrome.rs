@@ -97,7 +97,6 @@ fn title_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 app.combine_tab.focused = false;
             }
             doc_tabs::strip(app, ui, Place::Main);
-            Button::command("file.open").icon(IconId::new("plus")).show(ui);
         },
         |ui, _| {
             IconButton::command(IconId::new("messages-square"), "help.discord").show(ui);
