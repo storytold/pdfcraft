@@ -249,6 +249,13 @@ if ($pdfCheckbox[2] -notmatch '&Edit' -or $pdfCheckbox[2] -notmatch 'Combine fil
 $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
+# Print verb (#1695): Explorer's Print, while PdfCraft is the default, prints without a window.
+# Part of the PDF handler's ProgID, so it is there whenever "Open" is, and uninstall removes it.
+$printCommand = Read-Row 'SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''Software\Classes\PdfCraft.Document\shell\print\command'' AND `Name` IS NULL' 3
+Assert-Equal $printCommand[0] '"[#PdfcraftExe]" --print "%1"' 'PDF print verb command'
+Assert-Equal $printCommand[1] 'PdfcraftApp' 'PDF print verb component'
+Assert-Equal $printCommand[2] '-1' 'PDF print verb context-sensitive root'
+
 # "Combine files in PdfCraft" (#585): in the PDF menu's component, so the one switch covers both
 # verbs. Each selected file starts `pdfcraft --combine "<file>"` (Document), and the running
 # PdfCraft collects them into its Combine files tab.
