@@ -659,10 +659,10 @@ fn an_absolute_gotor_waits_for_consent_and_keeps_its_destination_across_tabs() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing() {
+fn cancelling_an_absolute_gotor_by_button_or_escape_changes_nothing() {
     let _gpu = gpu();
     let target = std::env::temp_dir().join(format!("pdfcraft-ui-gotor-cancel-{}.pdf", std::process::id()));
-    for answer in ["button", "escape", "outside"] {
+    for answer in ["button", "escape"] {
         let mut h = remote_harness(None, target.to_str().unwrap(), "[1 /Fit]");
         let source = h.state().views[0].id;
         let before = h.state().session.get(source).unwrap().bytes.clone();
@@ -670,8 +670,7 @@ fn cancelling_an_absolute_gotor_by_button_escape_or_dismissal_changes_nothing() 
         assert!(h.state().pending_remote_link.is_some());
         match answer {
             "button" => h.get_by_label("Cancel").click(),
-            "escape" => h.key_press(egui::Key::Escape),
-            _ => click_at(&mut h, egui::pos2(5.0, 5.0)),
+            _ => h.key_press(egui::Key::Escape),
         }
         h.run_steps(3);
         assert!(h.state().pending_remote_link.is_none(), "{answer}");

@@ -169,8 +169,7 @@ fn a_column_selection_copies_plain_text_only() {
     h.step();
     let html = clipboard.writes().iter().flatten().any(|flavor| flavor.mime.to_string() == "text/html");
     assert!(!html, "no HTML for a column selection");
-    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Name\tQty\nApple\t12"));
-    assert!(copied, "the plain text goes out the usual way");
+    assert_eq!(clipboard.copied().as_deref(), Some("Name\tQty\nApple\t12"), "the plain text goes out the usual way");
 }
 
 /// A plain drag along one row of a table that reads column by column selects that row, as
