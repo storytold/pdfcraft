@@ -1150,7 +1150,12 @@ fn xobject(
             }
             match image::clear(doc, s, &gs.ctm, scope.rects, &mut *scope.images) {
                 Ok(None) => None,
-                Ok(Some(new)) => {
+                Ok(Some(image::Cleared { image: mut new, masks })) => {
+                    // The masks' copies first, so the image's copy names them, not the originals.
+                    for (key, mask) in masks {
+                        let mr = doc.add(Object::Stream(mask));
+                        new.dict.set(key.to_vec(), Object::Ref(mr));
+                    }
                     let nr = doc.add(Object::Stream(new));
                     let n = fresh_name(scope, xobjects);
                     xobjects.set(n.clone(), Object::Ref(nr));

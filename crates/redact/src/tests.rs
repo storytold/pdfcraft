@@ -6207,7 +6207,7 @@ fn a_cleared_copy_keeps_parameters_for_data_in_another_file_only_with_one() {
         let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the image") };
         let left = [[0.0, 0.0, 0.4, 1.0]];
         let copy = crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
-        let Ok(Some(copy)) = copy else { panic!("{f}: cleared in a copy") };
+        let Ok(Some(crate::image::Cleared { image: copy, .. })) = copy else { panic!("{f}: cleared in a copy") };
         assert_eq!((copy.dict.contains(b"FFilter"), copy.dict.contains(b"FDecodeParms")), (kept, kept), "{f}");
     }
 }
@@ -6244,7 +6244,119 @@ fn image_alternatives_and_masks_cannot_keep_redacted_pixels() {
         mark(&mut doc, 0, &[[10.0, 15.0, 18.0, 20.0]], "");
         let report = apply(&mut doc, None).unwrap();
         assert_no_secret(&doc, b"LEAK_");
-        assert_eq!((report.images_cleared, report.images_removed), if extra.starts_with("/Alternates") { (1, 0) } else { (0, 1) });
+        // The masks are cleared with the image (each of the mask's one row is under the mark), and
+        // a colour key holds no samples.
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{extra}");
+    }
+}
+
+/// The cleared copy's `/SMask` or `/Mask` on page 1, decoded.
+fn cleared_mask(doc: &Document, key: &[u8]) -> Option<Vec<u8>> {
+    let image = named_stream(doc, 0, b"PCRedacted1")?;
+    match &*doc.resolve(image.dict.get(key)?) {
+        Object::Stream(m) => decoded_image(doc, m).ok(),
+        _ => None,
+    }
+}
+
+/// A picture with transparency (a PNG with an alpha channel is stored as an image and a soft mask)
+/// keeps what a mark over part of it doesn't cover: the image and its mask are each cleared under
+/// the mark, at their own resolutions, instead of the whole picture being removed.
+#[test]
+fn a_partly_covered_image_with_a_soft_mask_keeps_its_uncovered_part() {
+    // A mask of the image's resolution, and one of twice it.
+    for (mask, cleared) in [("/Width 2 /Height 1", vec![0, 201]), ("/Width 4 /Height 1", vec![0, 202, 203, 204])] {
+        let data = if mask.contains("/Width 2") { vec![200, 201] } else { vec![200, 202, 203, 204] };
+        let mut doc = one_page(
+            b"q 200 0 0 100 0 0 cm /Im Do Q",
+            "/XObject << /Im 7 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 8 0 R", [123, 234]),
+                stream(&format!("/Type /XObject /Subtype /Image {mask} /ColorSpace /DeviceGray /BitsPerComponent 8"), &data),
+            ],
+        );
+        mark(&mut doc, 0, &[[10.0, 10.0, 20.0, 90.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{mask}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert_eq!(named_image(&saved, 0, b"Im"), None, "{mask}");
+        assert_eq!(named_image(&saved, 0, b"PCRedacted1"), Some(vec![0, 234]), "{mask}");
+        assert_eq!(cleared_mask(&saved, b"SMask"), Some(cleared), "{mask}");
+        // Nothing of the original mask's covered sample is left in the file.
+        assert!(!saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if decoded_image(&saved, s).is_ok_and(|d| d == data))), "{mask}");
+    }
+}
+
+/// A stencil `/Mask` is cleared so its covered samples paint nothing (bit 1, or 0 under `/Decode
+/// [1 0]`), and a colour-key `/Mask` array stays as it was.
+#[test]
+fn a_partly_covered_image_with_an_explicit_mask_keeps_its_uncovered_part() {
+    for (decode, cleared) in [("", 0b1111_0000), ("/Decode [1 0]", 0b0000_1111)] {
+        let kept = if decode.is_empty() { 0b0000_0000 } else { 0b1111_1111 };
+        let mut doc = one_page(
+            b"q 200 0 0 100 0 0 cm /Im Do Q",
+            "/XObject << /Im 7 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Mask 8 0 R", [123, 234]),
+                stream(&format!("/Type /XObject /Subtype /Image /Width 8 /Height 1 /ImageMask true {decode}"), [kept]),
+            ],
+        );
+        mark(&mut doc, 0, &[[10.0, 10.0, 90.0, 90.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{decode}");
+        let saved = reopen(&doc);
+        assert_eq!(named_image(&saved, 0, b"PCRedacted1"), Some(vec![0, 234]), "{decode}");
+        assert_eq!(cleared_mask(&saved, b"Mask"), Some(vec![cleared]), "{decode}");
+    }
+    let mut doc = one_page(
+        b"q 200 0 0 100 0 0 cm /Im Do Q",
+        "/XObject << /Im 7 0 R >>",
+        vec![stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Mask [0 10]", [123, 234])],
+    );
+    mark(&mut doc, 0, &[[10.0, 10.0, 20.0, 90.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_cleared, 1);
+    let saved = reopen(&doc);
+    let image = named_stream(&saved, 0, b"PCRedacted1").unwrap();
+    assert_eq!(image.dict.get(b"Mask"), Some(&Object::Array(vec![Object::Int(0), Object::Int(10)])));
+}
+
+/// A mask whose own `/SMask` or `/Mask` is null, directly or through a reference to an object
+/// that is null or doesn't exist, has none (ISO 32000-2 §7.3.7): it is cleared with the image.
+#[test]
+fn a_masks_null_mask_entry_counts_as_absent() {
+    let gray = "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    for entry in ["/SMask null", "/Mask null", "/SMask 9 0 R", "/Mask 99 0 R"] {
+        let mut doc = one_page(
+            b"q 200 0 0 100 0 0 cm /Im Do Q",
+            "/XObject << /Im 7 0 R >>",
+            vec![stream(&format!("{gray} /SMask 8 0 R"), [123, 234]), stream(&format!("{gray} {entry}"), [200, 201]), b"null".to_vec()],
+        );
+        mark(&mut doc, 0, &[[10.0, 10.0, 20.0, 90.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (1, 0), "{entry}");
+        let saved = reopen(&doc);
+        assert_eq!(cleared_mask(&saved, b"SMask"), Some(vec![0, 201]), "{entry}");
+    }
+}
+
+/// A mask that can't be cleared still removes the whole image: one whose codec isn't decoded
+/// here, one with a mask of its own, and one that isn't an image.
+#[test]
+fn an_image_whose_mask_cant_be_cleared_is_removed_whole() {
+    let gray = "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    for mask in
+        [stream(&format!("{gray} /Filter /JPXDecode"), b"LEAK_JPX"), stream(&format!("{gray} /SMask 9 0 R"), b"LEAK_MM"), b"(LEAK_STR)".to_vec()]
+    {
+        let mut doc = one_page(
+            b"q 200 0 0 100 0 0 cm /Im Do Q",
+            "/XObject << /Im 7 0 R >>",
+            vec![stream(&format!("{gray} /SMask 8 0 R"), [123, 234]), mask, stream(gray, [1, 2])],
+        );
+        mark(&mut doc, 0, &[[10.0, 10.0, 20.0, 90.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_cleared, report.images_removed), (0, 1));
+        assert!(!content(&doc, 0).contains("Do"));
+        assert_no_secret(&doc, b"LEAK_");
     }
 }
 
