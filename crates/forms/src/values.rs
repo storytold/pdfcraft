@@ -823,9 +823,47 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
     false
 }
 
-/// Whether any text field with the Password flag holds a value in `doc`.
+/// Edited dictionaries that are text fields with the Password flag (inherited or their own), or
+/// widgets of one, and hold a `/V` of their own, but that [`fields`] no longer reaches (#7891):
+/// a field flattened into its page or deleted leaves the form, yet the edit that filled it stays,
+/// and an incremental save writes every edited object, reachable or not. Only edits are looked
+/// at: what the opened file already holds is in it already. Nothing reads such a value any more,
+/// so it goes whole, `/DV` or not.
+fn unlinked_password_values(doc: &Document) -> Vec<ObjRef> {
+    let is_password_text = |r: ObjRef| {
+        let chain = field_chain(doc, r);
+        let nearest = |key: &[u8]| chain.iter().find_map(|c| doc.get(*c).as_dict().and_then(|d| d.get(key).map(|o| doc.resolve(o))));
+        let text = nearest(b"FT").is_some_and(|ft| ft.as_name() == Some(b"Tx".as_slice()));
+        let password = chain
+            .iter()
+            .find_map(|c| doc.get(*c).as_dict().and_then(|d| d.get(b"Ff").is_some().then(|| field_flags(doc, d).unwrap_or(0))))
+            .is_some_and(|ff| ff & flags::PASSWORD != 0);
+        text && password
+    };
+    let mut found: Vec<ObjRef> = doc
+        .modified_objects()
+        .into_iter()
+        .map(|num| ObjRef::new(num, doc.generation(num)))
+        .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.get(b"V").is_some()) && is_password_text(*r))
+        .collect();
+    if found.is_empty() {
+        return found;
+    }
+    // The fields still in the form, their ancestors and their widgets: `password_fields` and
+    // `clear_password_values` decide for those (a value at its default stays, a shared one too).
+    let mut linked = std::collections::HashSet::new();
+    for f in fields(doc) {
+        linked.extend(field_chain(doc, f.obj));
+        linked.extend(f.widgets.iter().map(|w| w.obj));
+    }
+    found.retain(|r| !linked.contains(r));
+    found
+}
+
+/// Whether any text field with the Password flag holds a value in `doc`, including one an edit
+/// left outside the form (#7891).
 pub fn has_password_values(doc: &Document) -> bool {
-    !password_fields(doc).is_empty()
+    !password_fields(doc).is_empty() || !unlinked_password_values(doc).is_empty()
 }
 
 /// The typed values of the text fields with the Password flag, as (name, text) pairs, for
@@ -878,12 +916,19 @@ fn field_chain(doc: &Document, r: ObjRef) -> Vec<ObjRef> {
 /// A value can sit on the field, on one of its widgets, or on an ancestor it inherits from
 /// (`/V` is inheritable). Each is removed; an ancestor's only when every field inheriting from it
 /// is such a password field. Where an ancestor's value is shared with other fields and stays, the
-/// password field gets an empty value of its own so it no longer inherits it. Returns how many
-/// fields were cleared.
+/// password field gets an empty value of its own so it no longer inherits it. An edited password
+/// field or widget the form no longer reaches (flattened or deleted, #7891) loses its `/V`.
+/// Returns how many fields and such dictionaries were cleared.
 pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
+    let unlinked = unlinked_password_values(doc);
+    for r in &unlinked {
+        doc.update_dict(*r, |d| {
+            d.remove(b"V");
+        })?;
+    }
     let targets = password_fields(doc);
     if targets.is_empty() {
-        return Ok(0);
+        return Ok(unlinked.len());
     }
     let is_password = |f: &Field| f.kind == FieldKind::Text && f.has(flags::PASSWORD);
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
@@ -923,7 +968,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
         }
         redraw(doc, f, &restored, &mut NoScripts)?;
     }
-    Ok(targets.len())
+    Ok(targets.len().saturating_add(unlinked.len()))
 }
 
 /// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) is a stream with data, which

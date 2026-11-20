@@ -3250,6 +3250,35 @@ fn a_typed_password_value_survives_save_and_mark_saved() {
     assert!(!appears_in_pdf(&s.save_bytes(id).unwrap(), "hunter2"), "the next save still omits it");
 }
 
+/// #7891: a filled Password field that Flatten or Delete Field takes out of the form is still an
+/// edited object, which an incremental save writes whether or not the form reaches it. Its value
+/// goes in no file all the same: Save, a full rewrite or a recovery snapshot.
+#[test]
+fn a_password_value_is_not_saved_after_its_field_leaves_the_form() {
+    const SECRET: &str = "SECRET-MARKER-1";
+    let fixture = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pw) /Ff 8192 /Rect [20 20 180 50] /P 3 0 R /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ]);
+    for (what, unlink) in [("Flatten", Edit::Flatten { comments: false, fields: true }), ("Delete Field", Edit::DeleteField { name: "pw".into() })] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("form.pdf", None, Arc::new(fixture.clone()), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: "pw".into(), value: FieldValue::Text(SECRET.into()) }).unwrap();
+        s.apply(id, unlink).unwrap();
+        assert!(s.get(id).unwrap().form.iter().all(|f| f.name != "pw"), "{what}: the field has left the form");
+        let saved = s.save_bytes(id).unwrap();
+        assert!(saved.starts_with(&fixture), "{what}: an incremental save");
+        assert!(!appears_in_pdf(&saved, SECRET), "{what}: Save");
+        assert!(!appears_in_pdf(&s.save_full_bytes(id).unwrap(), SECRET), "{what}: a full rewrite");
+        for snap in s.autosave_snapshots() {
+            assert!(!appears_in_pdf(&snap.bytes, SECRET), "{what}: the recovery snapshot");
+        }
+    }
+}
+
 /// #3926 / #3943 review: signing writes the signed file from the same copy a save does, so a
 /// typed Password-field value is not signed into the file either.
 #[test]
