@@ -81,6 +81,7 @@ pub struct SignOptions {
     /// The signing time as a PDF date (`/M`), from the caller's clock.
     pub date: String,
     /// Certify with these DocMDP permissions (1 no changes, 2 form fill and signing, 3 also comments).
+    /// Refused when the document already holds a signature (see [`has_signatures`]).
     pub certify: Option<u8>,
     pub appearance: Appearance,
     /// The words of the labels the visible signature shows.
@@ -115,6 +116,9 @@ fn check_signing_permissions(doc: &Document, opts: &SignOptions) -> Result<(), S
     }
     Ok(())
 }
+
+/// Why a document that already holds a signature can't be certified.
+const CERTIFY_SIGNED: &str = "this document is already signed, so it can't be certified: a certification has to be the document's first signature (sign it without certifying instead)";
 
 /// Placeholder `/ByteRange` values: fixed width, patched after writing.
 const BR_MARK: [i64; 3] = [1_111_111_111, 2_222_222_222, 3_333_333_333];
@@ -182,8 +186,14 @@ fn sign_inner(
         return Err(SignError::Pdf("save the document's new security settings before signing it".into()));
     }
     check_signing_permissions(doc, opts)?;
+    let earlier_signatures = has_signatures(doc);
+    // A document holds at most one certification, and approval signatures follow it (ISO 32000-2
+    // §12.8.1; §12.8.2.2.1: one signature field with a DocMDP transform). So only a document that
+    // holds no signature yet, a certification or a document timestamp included, can be certified.
+    if opts.certify.is_some() && earlier_signatures {
+        return Err(SignError::Pdf(CERTIFY_SIGNED.into()));
+    }
     let mut doc = doc.clone();
-    let earlier_signatures = has_signatures(&doc);
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
