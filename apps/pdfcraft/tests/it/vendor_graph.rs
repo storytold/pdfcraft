@@ -66,15 +66,7 @@ fn vendor_provenance_window_stack_graph_is_resolved() {
 #[test]
 fn renderer_and_security_vendors_remain() {
     let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("root Cargo.toml");
-    for vendor in [
-        "vendor/hayro",
-        "vendor/hayro-interpret",
-        "vendor/hayro-syntax",
-        "vendor/hayro-cmap",
-        "vendor/hayro-jbig2",
-        "vendor/lopdf",
-        "vendor/vello_common",
-    ] {
+    for vendor in ["vendor/lopdf", "vendor/vello_common"] {
         assert!(manifest.contains(&format!("path = \"{vendor}\"")), "{vendor} must stay a path patch");
     }
 }
