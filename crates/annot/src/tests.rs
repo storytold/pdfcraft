@@ -4807,7 +4807,7 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
 }
 
 /// A drawing whose /InkList lists one stroke array over and over is refused once its points
-/// pass the cap, counted as each stroke is resolved, before they are collected or scaled.
+/// pass the cap, counted as each stroke is resolved, before they are collected, scaled or moved.
 #[test]
 fn ink_points_are_counted_as_strokes_resolve() {
     let numbers: String = (0..2000).map(|k| format!(" {}", k % 100)).collect();
@@ -4833,6 +4833,12 @@ fn ink_points_are_counted_as_strokes_resolve() {
         other => panic!("refused: {other:?}"),
     }
     match erase_ink(&mut doc, 0, 0, &[[1.0, 1.0]], 1.0, &meta("")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("more than 1000000 points"), "{m}"),
+        other => panic!("refused: {other:?}"),
+    }
+    // Moving copies every stroke into the comment's own `/InkList`, so the same cap bounds it:
+    // the move is refused before the translated strokes are built.
+    match move_annotation(&mut doc, 0, 0, 1.0, 1.0, &meta("")) {
         Err(AnnotError::Invalid(m)) => assert!(m.contains("more than 1000000 points"), "{m}"),
         other => panic!("refused: {other:?}"),
     }
@@ -5694,4 +5700,83 @@ endstream",
     assert!(page.contains(b"AAPL:PPK") && page.contains(b"AAPL:PPKHash"));
     assert!(list(&doc, 0)[0].contains(b"AAPL:AKExtras"));
     assert!(doc.repair_log().is_empty(), "{:?}", doc.repair_log());
+}
+
+/// Geometry stored as indirect objects (`/Rect 5 0 R`) is valid. Moving the comment moves it,
+/// writes direct arrays, and leaves the shared source object as it was.
+#[test]
+fn moving_a_comment_with_indirect_geometry_moves_it() {
+    let mut doc = fixture();
+    let (_, annot) = annot_ref(&mut doc, 1, 0).unwrap();
+    let rect = doc.add(num_array(&[100.0, 100.0, 200.0, 150.0]));
+    let quads = doc.add(num_array(&[100.0, 150.0, 200.0, 150.0, 100.0, 100.0, 200.0, 100.0]));
+    doc.update_dict(annot, |d| {
+        d.set(b"Rect".to_vec(), Object::Ref(rect));
+        d.set(b"QuadPoints".to_vec(), Object::Ref(quads));
+    })
+    .unwrap();
+    let mut doc = reopen(&doc);
+
+    move_annotation(&mut doc, 1, 0, 10.0, -20.0, &meta("m")).unwrap();
+    let moved = list(&doc, 1)[0].clone();
+    let numbers = |key: &[u8]| -> Vec<f64> { doc.resolve(moved.get(key).unwrap()).as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
+    assert_eq!(numbers(b"Rect"), [110.0, 80.0, 210.0, 130.0]);
+    assert_eq!(numbers(b"QuadPoints"), [110.0, 130.0, 210.0, 130.0, 110.0, 80.0, 210.0, 80.0]);
+    let source: Vec<f64> = doc.get(rect).as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(source, [100.0, 100.0, 200.0, 150.0], "the source object is unchanged");
+}
+
+/// Geometry that is there but cannot be read as numbers refuses the move before anything is
+/// written: no number shifts and no `/M` is stamped, so the caller never reports a move that did
+/// not happen. A null entry is absent (ISO 32000-2 §7.3.9), so it is skipped like a missing one.
+#[test]
+fn moving_a_comment_with_unreadable_geometry_is_refused() {
+    let cases = [
+        ("a value that is not an array", Object::String(PdfString::literal(b"nope".to_vec()))),
+        ("a non-number element", Object::Array(vec![Object::Real(10.0), Object::Null, Object::Real(50.0), Object::Real(50.0)])),
+        ("a reference to no object", Object::Ref(ObjRef::new(9999, 0))),
+    ];
+    for (label, bad) in cases {
+        let mut doc = fixture();
+        let (_, annot) = annot_ref(&mut doc, 1, 0).unwrap();
+        doc.update_dict(annot, |d| d.set(b"Rect".to_vec(), bad.clone())).unwrap();
+        match move_annotation(&mut doc, 1, 0, 10.0, -20.0, &meta("m")) {
+            Err(AnnotError::Invalid(m)) => assert!(m.contains("/Rect"), "{label}: {m}"),
+            other => panic!("{label}: expected Invalid, got {other:?}"),
+        }
+        let d = &list(&doc, 1)[0];
+        assert!(d.get(b"M").is_none(), "{label}: no modification date was written");
+        assert_eq!(d.get(b"Rect"), Some(&bad), "{label}: /Rect is as it was");
+    }
+
+    // The pop-up's `/Rect` is read before either dictionary is written, so a broken one refuses
+    // the whole move.
+    let mut doc = fixture();
+    let (_, annot) = annot_ref(&mut doc, 1, 0).unwrap();
+    let mut popup = Dict::new();
+    popup.set(b"Rect".to_vec(), Object::String(PdfString::literal(b"nope".to_vec())));
+    let popup = doc.add(Object::Dict(popup));
+    doc.update_dict(annot, |d| d.set(b"Popup".to_vec(), Object::Ref(popup))).unwrap();
+    match move_annotation(&mut doc, 1, 0, 10.0, -20.0, &meta("m")) {
+        Err(AnnotError::Invalid(m)) => assert!(m.contains("/Rect"), "{m}"),
+        other => panic!("a broken pop-up: expected Invalid, got {other:?}"),
+    }
+    assert!(list(&doc, 1)[0].get(b"M").is_none(), "the comment was not touched");
+    let kept = doc.get(popup);
+    assert_eq!(kept.as_dict().unwrap().get(b"Rect"), Some(&Object::String(PdfString::literal(b"nope".to_vec()))));
+
+    // A null `/Rect` is absent, not broken: the comment has no rectangle to move, and the rest of
+    // its geometry still moves.
+    let mut doc = fixture();
+    let (_, annot) = annot_ref(&mut doc, 1, 0).unwrap();
+    let quads = doc.add(num_array(&[100.0, 150.0, 200.0, 150.0, 100.0, 100.0, 200.0, 100.0]));
+    doc.update_dict(annot, |d| {
+        d.set(b"Rect".to_vec(), Object::Null);
+        d.set(b"QuadPoints".to_vec(), Object::Ref(quads));
+    })
+    .unwrap();
+    move_annotation(&mut doc, 1, 0, 10.0, -20.0, &meta("m")).unwrap();
+    let moved = list(&doc, 1)[0].clone();
+    let numbers: Vec<f64> = doc.resolve(moved.get(b"QuadPoints").unwrap()).as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(numbers, [110.0, 130.0, 210.0, 130.0, 110.0, 80.0, 210.0, 80.0]);
 }
