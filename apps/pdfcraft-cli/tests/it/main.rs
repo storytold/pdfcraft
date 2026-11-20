@@ -12,6 +12,7 @@ mod help;
 mod info_repairs;
 mod info_standards;
 mod mcp_compact;
+mod option_operands;
 mod options;
 mod owner_password;
 mod render;
