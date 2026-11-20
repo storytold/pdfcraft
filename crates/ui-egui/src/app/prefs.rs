@@ -100,7 +100,7 @@ impl PdfCraftApp {
             // Kept only while the preference is on.
             "last_session": self.reopen_last_session.then(|| self.session_to_save()),
             "reload_changed_files": self.reload_changed_files,
-            "system_title_bar": self.system_title_bar,
+            "title_bar": if self.system_title_bar { "system" } else { "app" },
             "pinned_folders": self.pinned.folders,
             "pinned_folders_collapsed": self.pinned.collapsed,
             "theme": self.theme_preference,
@@ -261,7 +261,7 @@ impl PdfCraftApp {
         }
         self.restore_last_views(&v["last_views"]);
         self.last_session = last_session::LastSession::from_json(&v["last_session"]);
-        if let Some(on) = v["system_title_bar"].as_bool() {
+        if let Some(on) = window_controls::saved_system_title_bar(v) {
             self.system_title_bar = on;
         }
         if let Some(on) = v["reload_changed_files"].as_bool() {
