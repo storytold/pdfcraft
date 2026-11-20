@@ -279,7 +279,10 @@ fn dragging_a_card_moves_it_and_undo_puts_it_back() {
     // The list shows the same order.
     h.get_by_label("List view").click();
     h.run_steps(2);
-    let rows: Vec<f32> = ["b.pdf", "c.pdf", "a.pdf", "d.pdf"].iter().map(|n| h.get_by_label(n).rect().top()).collect();
+    let rows: Vec<f32> = ["b.pdf", "c.pdf", "a.pdf", "d.pdf"]
+        .iter()
+        .map(|name| h.get_by(|n| n.role() == Role::ListItem && n.label().as_deref() == Some(*name)).rect().top())
+        .collect();
     assert!(rows.windows(2).all(|w| w[0] < w[1]), "the table lists them in the same order: {rows:?}");
     h.get_by_label("Grid view").click();
     h.run_steps(2);

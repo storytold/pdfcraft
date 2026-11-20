@@ -317,6 +317,9 @@ impl CanvasTool for CommentsTool<'_> {
             if matches!(self.quick, QuickTool::Fill(_)) {
                 return self.beneath.as_mut().is_some_and(|beneath| beneath.key(key, cx));
             }
+            if matches!(self.quick, QuickTool::Select) {
+                return self.beneath.as_mut().is_some_and(|beneath| beneath.key(key, cx));
+            }
             if matches!(self.quick, QuickTool::Comment(_)) {
                 *self.done = true;
                 return true;

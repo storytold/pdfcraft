@@ -231,10 +231,11 @@ fn document_scripts_and_preferences() {
     h.run_steps(2);
     let id = h.state().active_ids().unwrap().1;
     assert_eq!(h.state().session.get(id).unwrap().document_scripts()[0].0, "init");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
     h.state_mut().open_preferences();
     h.run_steps(2);
-    // Below the fold in a 900-point window: the preferences scroll to it.
-    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
+    h.get_by_role_and_label(egui::accesskit::Role::ListItem, "JavaScript").click();
     h.run_steps(4);
     h.get_by_label("Enable Acrobat JavaScript").click();
     h.run_steps(2);
@@ -254,8 +255,8 @@ fn merge_data_files_into_a_spreadsheet() {
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("report.csv");
     // PLAN: assumed `crate::support::host_with_files(ScriptedFiles) -> Arc<Host>` (pdf-chrome-w9) and `PdfCraftApp::with_host`
-    let files = craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out.clone()])]);
-    let host = crate::support::host_with_files(files);
+    let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Paths(vec![out.clone()])]));
+    let host = crate::support::host_with_files(files.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
@@ -267,7 +268,7 @@ fn merge_data_files_into_a_spreadsheet() {
     h.run_steps(2);
     h.state_mut().merge_data_files(vec![("form.pdf".into(), form())]);
     h.run_steps(4);
-    assert_eq!(std::fs::read_to_string(&out).unwrap(), "greeting\n\n");
+    assert_eq!(files.file(&out).unwrap(), b"greeting\n\n");
     assert!(texts(&h).iter().any(|t| t.starts_with("Merged 1 file")), "{:?}", texts(&h));
     dismiss_all(&mut h);
     h.state_mut().merge_data_files(vec![("x.fdf".into(), b"junk".to_vec())]);

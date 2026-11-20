@@ -101,15 +101,14 @@ fn refused_with(h: &Harness<'static, PdfCraftApp>, words: &str) -> bool {
     h.query_all_by_label_contains(words).any(|n| n.accesskit_node().label().is_some_and(|l| !l.starts_with("To change locked fields")))
 }
 
-/// Types `text` into the number field that follows the control that has focus, as a person tabs to
-/// it, and confirms it.
-fn type_in_next_field(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
-    h.key_press(egui::Key::Tab);
+/// Types and confirms a value in the line thickness field.
+fn type_in_thickness(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.get_by_role_and_label(Role::Group, "Line Thickness:").get_by_role(Role::SpinButton).focus();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(text.into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    h.key_press(egui::Key::Tab);
     h.run_steps(4);
 }
 
@@ -151,7 +150,7 @@ fn shared_properties_preserve_mixed_values_and_undo_the_whole_change() {
     click_gate(&mut h, "Line Thickness:");
     h.run_steps(4);
     assert_eq!(shared(&h)["width"]["apply"], true, "thickness click enables the property");
-    type_in_next_field(&mut h, "4");
+    type_in_thickness(&mut h, "4");
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert!(!shared_open(&h));
@@ -348,9 +347,11 @@ fn shared_properties_preserve_unchecked_changes_made_after_the_dialog_opened() {
     select(&mut h, &["alpha", "beta"]);
     h.get_by_label("Appearance").click();
     h.run_steps(4);
+    h.get_by_role_and_label(Role::Group, "Line Thickness:").scroll_to_me();
+    h.run_steps(4);
     click_gate(&mut h, "Line Thickness:");
     h.run_steps(4);
-    type_in_next_field(&mut h, "2");
+    type_in_thickness(&mut h, "2");
     assert_eq!(shared(&h)["width"]["value"], 2.0);
     let ctx_h = h.ctx.clone();
     h.state_mut().apply_edit(
