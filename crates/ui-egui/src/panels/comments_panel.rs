@@ -541,7 +541,9 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 }
                 above = me;
             }
-            if primary && allowed {
+            // Finish the comment's editor before offering a reply, especially for a new
+            // highlight whose initial comment has not been saved yet.
+            if primary && allowed && !editing {
                 ui.add_space(8.0);
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 0, bottom: 0 }).show(ui, |ui| {
                     // The field fills its line and Post sits right-aligned under it: a field sized

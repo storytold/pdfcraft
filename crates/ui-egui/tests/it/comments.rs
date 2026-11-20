@@ -430,6 +430,36 @@ fn drawing_another_comment_takes_the_keyboard_from_a_highlight_note() {
 }
 
 #[test]
+fn a_comment_must_be_saved_before_replying_in_the_panel() {
+    let mut h = harness(|app| {
+        app.set_option("quick", "highlight").unwrap();
+        app.set_option("panel", "comments").unwrap();
+    });
+    highlight_text(&mut h, 4, 14);
+    assert_eq!(h.query_all_by(|n| n.placeholder() == Some("Add a reply")).count(), 0, "no reply while composing the initial comment");
+    note_editor(&h).type_text("Initial comment");
+    h.run_steps(2);
+    assert_eq!(h.query_all_by(|n| n.placeholder() == Some("Add a reply")).count(), 0, "typing alone does not publish the comment");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/comment-before-reply.png")).unwrap();
+    }
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(comments(&h)[0].contents.as_deref(), Some("Initial comment"));
+    field(&h, "Add a reply").click();
+    h.run_steps(2);
+    field(&h, "Add a reply").type_text("Reply after saving");
+    h.run_steps(2);
+    h.get_by_label("Post").click();
+    h.run_steps(3);
+    let annotations = comments(&h);
+    assert_eq!(annotations.len(), 2);
+    assert_eq!(annotations[1].contents.as_deref(), Some("Reply after saving"));
+    assert_eq!(annotations[1].parent, Some((0, 0)));
+}
+
+#[test]
 fn ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line() {
     let mut h = harness(|app| {
         app.set_option("quick", "highlight").unwrap();
