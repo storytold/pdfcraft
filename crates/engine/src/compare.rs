@@ -34,25 +34,22 @@ fn rects_for_words(words: &[pdfcraft_compare::Word]) -> (Vec<[f64; 4]>, Vec<usiz
     let mut pages: Vec<usize> = Vec::new();
     for w in words {
         let r = w.rect;
-        let merge = if let Some(last) = out.last() {
+        if let Some(last) = out.last_mut() {
             let last_page = pages.last().copied().unwrap_or(w.page);
-            last_page == w.page
+            if last_page == w.page
                 && (last[1] - r[1]).abs() < (r[3] - r[1]).max(1.0) * 0.5
                 && r[0] - last[2] < (r[3] - r[1]).max(4.0) * 2.0
                 && r[0] >= last[0] - 1.0
-        } else {
-            false
-        };
-        if merge {
-            let last = out.last_mut().unwrap();
-            last[0] = last[0].min(r[0]);
-            last[1] = last[1].min(r[1]);
-            last[2] = last[2].max(r[2]);
-            last[3] = last[3].max(r[3]);
-        } else {
-            out.push(r);
-            pages.push(w.page);
+            {
+                last[0] = last[0].min(r[0]);
+                last[1] = last[1].min(r[1]);
+                last[2] = last[2].max(r[2]);
+                last[3] = last[3].max(r[3]);
+                continue;
+            }
         }
+        out.push(r);
+        pages.push(w.page);
     }
     (out, pages)
 }
