@@ -76,14 +76,7 @@ pub(crate) fn show(
         if let Some(edit) = &in_flight {
             overlay = overlay.live(edit);
         }
-        if session.comments.tool.selected.iter().any(|id| {
-            let (page, index) = bridge::key_of(*id);
-            session.signature_drag.contains(page, index)
-        }) {
-            overlay.show_at(ui, body.rect);
-        } else {
-            overlay.show(ui);
-        }
+        overlay.show_at(ui, body.rect);
         let Some(at) = hover.pointer.filter(|p| idle && page.rect.contains(*p)) else { continue };
         let at = body.view.to_doc(at);
         let (tolerance, icon_side) = hover.pick;

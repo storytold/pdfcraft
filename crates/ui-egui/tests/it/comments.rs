@@ -239,7 +239,7 @@ fn dragging_over_text_with_the_highlighter_highlights_it() {
     assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "the new comment is selected");
     assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Highlight), "the highlighter stays on");
     // The Comments panel opened with the tool and lists it.
-    h.get_by_label_contains("Comments");
+    h.get_by_role_and_label(Role::Button, "Comments");
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add highlight"));
 }
 

@@ -1441,13 +1441,15 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         if session.pending_edit.is_none() {
             for placed in body.pages.iter().filter(|p| !loading(p.page)) {
                 drag.page_received(placed.page);
-                session.comments.page_rendered(placed.page);
             }
         }
         for placed in body.pages.iter().filter(|p| matches!(p.picture, TextureState::Ready(_))) {
             session.forms.unbaked.retain(|(_, p)| *p != placed.page);
             let (document, page) = cx.revisions.of(placed.page);
             if placed.picture_revision == Some(craft::pages::ui::PageRevision { document, page }) {
+                if session.pending_edit.is_none() {
+                    session.comments.page_rendered(placed.page);
+                }
                 session.move_background.page_received(placed.page);
                 session.text_background.page_received(placed.page);
             }
