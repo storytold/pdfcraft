@@ -65,6 +65,8 @@ struct Inbox {
     /// it, and that Open comes to the front instead of opening behind the Combine files tab.
     events: Vec<OsEvent>,
     wake: Option<Box<dyn Fn() + Send>>,
+    /// No window will open delivered files any more ([`Server::close`]).
+    closed: bool,
 }
 
 /// The first PdfCraft's end of the socket. A background thread accepts launches until the
@@ -79,13 +81,17 @@ impl Server {
         Self { inbox: Arc::default() }
     }
 
-    /// Queue files from another launch (to open, or to combine) and wake the UI.
+    /// Queue files from another launch (to open, or to combine) and wake the UI. `false`,
+    /// queueing nothing, once the server is closed: the launch must then open its own window.
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn deliver(&self, paths: Vec<String>, combine: bool) {
-        if paths.is_empty() {
-            return;
-        }
+    fn deliver(&self, paths: Vec<String>, combine: bool) -> bool {
         let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
+        if inbox.closed {
+            return false;
+        }
+        if paths.is_empty() {
+            return true;
+        }
         // A run of requests of one kind (File Explorer starts one launch per selected file) stays
         // one event; a request of the other kind starts a new one after it.
         match (inbox.events.last_mut(), combine) {
@@ -95,6 +101,19 @@ impl Server {
         }
         if let Some(wake) = &inbox.wake {
             wake();
+        }
+        true
+    }
+
+    /// Stop taking files: the window failed for good and the process only waits on the error
+    /// dialog (`start_failure`) before it exits. Later launches get no `ok`, so they fall back to
+    /// a window of their own as for any failed hand-off. Without this, a file double-clicked while
+    /// the dialog is up was confirmed and then never opened.
+    pub fn close(&self) {
+        let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
+        inbox.closed = true;
+        if !inbox.events.is_empty() {
+            log::warn!("single instance: handed-over files were never opened: {:?}", inbox.events);
         }
     }
 
@@ -380,7 +399,10 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
         return Ok(());
     }
     let (paths, combine) = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths, combine);
+    if !server.deliver(paths, combine) {
+        // Closed: hang up without `ok`, so the launch opens its own window.
+        return Ok(());
+    }
     let mut writer = stream;
     writer.write_all(b"ok\n")
 }
@@ -541,6 +563,21 @@ mod tests {
         // A launch with options keeps its own window and doesn't take over the socket.
         assert!(matches!(claim_at(&path, &["C:\\b.pdf".into()], false, false), Claim::Alone));
         assert!(poll().is_empty());
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn once_closed_a_launch_opens_its_own_window_and_its_files_are_not_taken() {
+        // The window failed and the error dialog is up: a file double-clicked now must not be
+        // confirmed and then lost.
+        let path = socket("closed");
+        let Claim::Primary(first) = claim_at(&path, &[], true, false) else { panic!("the first launch listens") };
+        let mut poll = first.connect(&egui::Context::default(), false);
+        first.close();
+        assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true, false), Claim::Alone));
+        // A --combine launch (#585) is refused the same way.
+        assert!(matches!(claim_at(&path, &["C:\\c.pdf".into()], true, true), Claim::Alone));
+        assert!(poll().is_empty(), "nothing queued for a window that won't open it");
     }
 
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
