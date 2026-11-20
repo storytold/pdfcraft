@@ -107,6 +107,11 @@ pub struct ContentView {
     pub selected: Option<(usize, usize)>,
     pub draft: Option<TextDraft>,
     /// Select the item an add creates (the page's item count before it).
+    /// An item released over another page: (its page, its index, the page it lands on, its box on
+    /// that page). [`Self::take_page_move`] turns it into an edit.
+    page_move: Option<(usize, usize, usize, [f64; 4])>,
+    /// Why a move was refused, for the app to show (the page code can't reach its toast).
+    pub(crate) notice: Option<String>,
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
     /// Where the press nobody holds began, on which page: Add text's click starts its new box there.
@@ -127,6 +132,33 @@ impl ContentView {
     /// An added item is being moved or resized on `page`.
     pub(crate) fn moving_on(&self, page: usize) -> bool {
         self.grab.is_some_and(|(p, ..)| p == page)
+    }
+
+    /// The page of the item being moved, resized or let go.
+    pub(crate) fn grab_page(&self) -> Option<usize> {
+        self.grab.map(|(page, ..)| page)
+    }
+
+    /// An item is being moved by its body: the pages it can land on matter.
+    pub(crate) fn moving(&self) -> bool {
+        self.grab.is_some_and(|(_, grab, _)| grab == Grab::Move)
+    }
+
+    /// The edit for an item released over another page: it is added there and removed from its own
+    /// page, as one undo step, and the copy is selected once it exists.
+    pub(crate) fn take_page_move(&mut self, doc: &pdfcraft_engine::Document, added: &[Added]) -> Option<Edit> {
+        let (page, index, to, rect) = self.page_move.take()?;
+        match doc.move_content_to_page(page, index, to, rect) {
+            Ok(edit) => {
+                self.select_added = Some((to, on_page(added, to).len()));
+                Some(edit)
+            }
+            Err(why) => {
+                // The engine refused it: the item stays where it was, and the app says why.
+                self.notice = Some(why);
+                None
+            }
+        }
     }
 
     pub(crate) fn finish_draft(&mut self, added: &[Added]) -> Option<Edit> {
@@ -168,6 +200,9 @@ pub(crate) struct MoveBackground {
     /// The applied move's box. The page raster on screen still has the item where it was until
     /// its replacement arrives, so the preview stays up until then.
     settling: Option<[f64; 4]>,
+    /// Where the item's own page was drawn when it last was. Pages paint in order, so a page
+    /// above it paints before it does: that page's frame is the one to use.
+    source: std::cell::Cell<Option<PageXform>>,
 }
 
 impl MoveBackground {
@@ -267,12 +302,27 @@ impl MoveBackground {
         }
     }
 
+    /// Where the page the moving item started on was last drawn.
+    pub(crate) fn source_xform(&self) -> Option<PageXform> {
+        self.source.get()
+    }
+
     /// The page without the moving item, then the item's own pixels (from its raster alone, so
     /// nothing it covered comes along) at the dragged (to the pages' `pointer`) or applied
-    /// position.
+    /// position. A move over another page draws the item there too.
     pub fn paint(&self, painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, cv: &ContentView, pointer: Option<Pos2>) {
+        if self.key.is_some_and(|(_, p, _)| p == page) {
+            self.source.set(Some(*xf));
+        }
         let (Some((_, kp, _)), Some(background), Some(item), Some(from)) = (self.key, &self.texture, &self.item, self.from) else { return };
         if kp != page {
+            // Over another page: only the item, where the pointer carries it.
+            if let (Some(src), Some((_, Grab::Move, start)), Some(p)) = (self.source.get(), cv.grab, pointer)
+                && xf.rect.contains(p)
+            {
+                let r = screen_rect(&src, info, kp, from);
+                paint_item(&painter.with_clip_rect(painter.clip_rect().intersect(xf.rect)), &src, item, r, r.translate(p - start));
+            }
             return;
         }
         let r = screen_rect(xf, info, page, from);
@@ -288,23 +338,28 @@ impl MoveBackground {
         };
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
         xf.paint_image(&painter, background.id(), 0.0, 0.0, 1.0, 1.0);
-        // A pixel around the box, so its edges come along. Clip the source to the page raster so
-        // an item extending past the page border never samples clamped edge texels (#3938, #4477).
-        let (r, to) = (r.expand(1.0), to.expand(1.0));
-        let clipped = r.intersect(xf.rect);
-        if !clipped.is_positive() || r.width() <= 0.0 || r.height() <= 0.0 {
-            return;
-        }
-        let map = |p: Pos2| Pos2::new(to.min.x + (p.x - r.min.x) / r.width() * to.width(), to.min.y + (p.y - r.min.y) / r.height() * to.height());
-        let mut mesh = egui::Mesh::with_texture(item.id());
-        for a in [clipped.left_top(), clipped.right_top(), clipped.right_bottom(), clipped.left_bottom()] {
-            let (u, v) = xf.screen_to_norm(a);
-            mesh.vertices.push(egui::epaint::Vertex { pos: map(a), uv: Pos2::new(u, v), color: Color32::WHITE });
-        }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        painter.add(egui::Shape::mesh(mesh));
+        paint_item(&painter, xf, item, r, to);
     }
+}
+
+/// The item's pixels, cut from the page it started on (`xf`) at `r`, drawn at `to`.
+fn paint_item(painter: &egui::Painter, xf: &PageXform, item: &egui::TextureHandle, r: Rect, to: Rect) {
+    // A pixel around the box, so its edges come along. Clip the source to the page raster so
+    // an item extending past the page border never samples clamped edge texels (#3938, #4477).
+    let (r, to) = (r.expand(1.0), to.expand(1.0));
+    let clipped = r.intersect(xf.rect);
+    if !clipped.is_positive() || r.width() <= 0.0 || r.height() <= 0.0 {
+        return;
+    }
+    let map = |p: Pos2| Pos2::new(to.min.x + (p.x - r.min.x) / r.width() * to.width(), to.min.y + (p.y - r.min.y) / r.height() * to.height());
+    let mut mesh = egui::Mesh::with_texture(item.id());
+    for a in [clipped.left_top(), clipped.right_top(), clipped.right_bottom(), clipped.left_bottom()] {
+        let (u, v) = xf.screen_to_norm(a);
+        mesh.vertices.push(egui::epaint::Vertex { pos: map(a), uv: Pos2::new(u, v), color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// Text style for new text (the panel's Format controls set it).
@@ -389,6 +444,79 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     Some(Hit::new(Owner::Added { index: *index, corner: None }, Layer::Placed, egui::CursorIcon::Move))
 }
 
+/// The held grab of an item on `page` ends where the pointer is: a move or resize is queued as an
+/// edit, and an item let go over another of `pages` is queued to move there.
+#[allow(clippy::too_many_arguments)]
+fn release_grab(
+    view: &mut DocView,
+    xf: &PageXform,
+    info: &DocInfo,
+    added: &[Added],
+    (page, grab, start): (usize, Grab, Pos2),
+    pointer: Option<Pos2>,
+    pages: &[(usize, PageXform)],
+) {
+    // Another page under the pointer while an item is moved: where it lands when released.
+    let elsewhere = pointer.filter(|p| !xf.rect.contains(*p)).and_then(|p| pages.iter().find(|(i, x)| *i != page && x.rect.contains(p)));
+    let cv = &mut view.content;
+    cv.grab = None;
+    let end = pointer.unwrap_or(start);
+    if let Some(&(to, to_xf)) = elsewhere.filter(|_| grab == Grab::Move)
+        && let Some((sp, si)) = cv.selected
+        && sp == page
+        && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
+    {
+        let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
+        // All four corners: a turned view puts the box's bottom left past its top right.
+        let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|c| to_display(&to_xf, info, to, c));
+        let (x0, x1) = corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c[0]), hi.max(c[0])));
+        let (y0, y1) = corners.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| (lo.min(c[1]), hi.max(c[1])));
+        let mut rect = [x0, y0, x1, y1];
+        if let AddedContent::Text(t) = &a.content {
+            // Text height follows its lines: keep the top edge's offset only.
+            rect = [rect[0], rect[3] - (t.rect[3] - t.rect[1]), rect[2], rect[3]];
+        }
+        cv.page_move = Some((page, si, to, rect));
+        return;
+    }
+    if let Some((sp, si)) = cv.selected
+        && sp == page
+        && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
+        && (end - start).length() >= 1.0
+    {
+        let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
+        let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
+        let mut rect = [p0[0], p0[1], p1[0], p1[1]];
+        if let AddedContent::Text(t) = &a.content
+            && grab == Grab::Move
+        {
+            // Text height follows its lines: keep the top edge's offset only.
+            rect = [rect[0], rect[3] - (t.rect[3] - t.rect[1]), rect[2], rect[3]];
+        }
+        view.pending_edit = Some(Edit::UpdateContent { page, index: si, content: a.content.with_rect(rect) });
+    }
+}
+
+/// The grab held on `page`, which the page loop no longer draws (scrolled far off the screen while
+/// the button was held), ends when the button is let go, wherever that is: an item let go over
+/// another page still moves there. Without this the release would never reach the page's input.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn release_offscreen_grab(
+    view: &mut DocView,
+    xf: &PageXform,
+    info: &DocInfo,
+    added: &[Added],
+    doc: &pdfcraft_engine::Document,
+    pointer: Option<Pos2>,
+    pages: &[(usize, PageXform)],
+) {
+    let Some((page, grab, start)) = view.content.grab else { return };
+    release_grab(view, xf, info, added, (page, grab, start), pointer, pages);
+    if let Some(edit) = view.content.take_page_move(doc, added) {
+        view.pending_edit = Some(edit);
+    }
+}
+
 /// What added content is told on one page.
 #[derive(Clone, Copy)]
 pub(crate) struct ContentCx<'a> {
@@ -406,13 +534,16 @@ pub(crate) struct ContentCx<'a> {
     pub edit_on_click: bool,
     /// The style of new text.
     pub style: &'a AddedText,
+    /// Where every page on screen is drawn, while an item is moved: where it lands when let go
+    /// over another.
+    pub pages: &'a [(usize, PageXform)],
 }
 
 /// Pointer input on one page in Edit mode, on the presses that are added content's ([`hit`]) and,
 /// with Add text, the clicks nobody holds. `true` when it used the input.
 pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut DocView) -> bool {
-    let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
-    let ContentCx { added, press, gate, picks_up, adding_text, edit_on_click, style } = ccx;
+    let PageToolContext { resp, xf, ptr, page, info, doc, .. } = cx;
+    let ContentCx { added, press, gate, picks_up, adding_text, edit_on_click, style, pages } = ccx;
     view.content.held = ptr.any_down;
     if !gate {
         return false;
@@ -425,23 +556,9 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut
     {
         consumed = true;
         if resp.drag_stopped() || !ptr.primary_down {
-            cv.grab = None;
-            let end = pointer.unwrap_or(start);
-            if let Some((sp, si)) = cv.selected
-                && sp == page
-                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
-                && (end - start).length() >= 1.0
-            {
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
-                let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
-                let mut rect = [p0[0], p0[1], p1[0], p1[1]];
-                if let AddedContent::Text(t) = &a.content
-                    && grab == Grab::Move
-                {
-                    // Text height follows its lines: keep the top edge's offset only.
-                    rect = [rect[0], rect[3] - (t.rect[3] - t.rect[1]), rect[2], rect[3]];
-                }
-                view.pending_edit = Some(Edit::UpdateContent { page, index: si, content: a.content.with_rect(rect) });
+            release_grab(view, xf, info, added, (page, grab, start), pointer, pages);
+            if let Some(edit) = view.content.take_page_move(doc, added) {
+                view.pending_edit = Some(edit);
             }
         }
         return consumed;
@@ -569,6 +686,18 @@ pub(crate) fn paint_page(
     pointer: Option<Pos2>,
 ) {
     let cv = &view.content;
+    // An item moved over this page from another: its frame goes where the pointer carries it.
+    if let (Some((gp, Grab::Move, start)), Some((sp, si)), Some(p)) = (cv.grab, cv.selected, pointer)
+        && gp == sp
+        && gp != page
+        && xf.rect.contains(p)
+        && let Some(src) = view.move_background.source_xform()
+        && let Some((_, a)) = on_page(added, gp).into_iter().find(|(i, _)| *i == si)
+    {
+        let r = screen_rect(&src, info, gp, a.content.rect()).translate(p - start);
+        let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
+        painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.5, SELECT_BLUE), egui::StrokeKind::Outside);
+    }
     for (i, a) in on_page(added, page) {
         if matches!(a.content, AddedContent::Image(_)) {
             continue;
