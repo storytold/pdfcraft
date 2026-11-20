@@ -451,6 +451,8 @@ impl LineEditor {
             style.ranges.push(pdfcraft_engine::RangeStyle {
                 range: range.clone(),
                 family: style.family.take(),
+                bold: None,
+                italic: None,
                 resource: style.resource.take(),
                 size: style.size.take(),
                 color: style.color.take(),
