@@ -606,6 +606,24 @@ fn last_state_reply(doc: &Document, p: ObjRef, target: ObjRef, author: &str, mod
     mine.iter().rev().copied().find(|r| !answered.contains(r))
 }
 
+/// The points of `value` moved by `(dx, dy)`, following an indirect array and indirect numbers.
+/// `None` when it is not an array. The result is a new direct array, so an object another
+/// comment still uses is left as it was (#7253). `every` moves each number; otherwise only the
+/// four of a rectangle or a line.
+fn shifted_geometry(doc: &Document, value: &Object, every: bool, dx: f64, dy: f64) -> Option<Object> {
+    let items = doc.resolve(value).as_array().cloned()?;
+    Some(Object::Array(
+        items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| match doc.resolve(v).as_f64() {
+                Some(x) if every || i < 4 => Object::Real(x + if i % 2 == 0 { dx } else { dy }),
+                _ => v.clone(),
+            })
+            .collect(),
+    ))
+}
+
 /// Move a comment (and its pop-up) by `(dx, dy)` points. The appearance moves with `/Rect`.
 pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, dy: f64, meta: &Meta) -> Result<(), AnnotError> {
     if !finite(&[dx, dy]) {
@@ -613,39 +631,40 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     }
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
-    let shift = |o: &Object, every: bool| -> Option<Object> {
-        let a = o.as_array()?;
-        Some(Object::Array(
-            a.iter()
-                .enumerate()
-                .map(|(i, v)| match v.as_f64() {
-                    Some(x) if every || i < 4 => Object::Real(x + if i % 2 == 0 { dx } else { dy }),
-                    _ => v.clone(),
-                })
-                .collect(),
-        ))
-    };
-    let popup = annot_dict(doc, r).reference(b"Popup");
-    doc.update_dict(r, |d| {
-        for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true)] {
-            if let Some(v) = d.get(k).and_then(|o| shift(o, every)) {
-                d.set(k.to_vec(), v);
-            }
+    let dict = annot_dict(doc, r);
+    // A rectangle that is present but not an array was previously skipped, and the call still
+    // reported success (#7253). Refuse it before anything is written.
+    if let Some(rect) = dict.get(b"Rect")
+        && shifted_geometry(doc, rect, false, dx, dy).is_none()
+    {
+        return Err(AnnotError::Invalid("the comment's rectangle can't be read".into()));
+    }
+    let mut moved = Vec::new();
+    for (k, every) in [(&b"Rect"[..], false), (b"QuadPoints", true), (b"L", false), (b"CL", true), (b"Vertices", true)] {
+        if let Some(v) = dict.get(k)
+            && let Some(shifted) = shifted_geometry(doc, v, every, dx, dy)
+        {
+            moved.push((k.to_vec(), shifted));
         }
-        if let Some(Object::Array(list)) = d.get(b"InkList").cloned() {
-            let moved = list.iter().map(|s| shift(s, true).unwrap_or_else(|| s.clone())).collect();
-            d.set(b"InkList".to_vec(), Object::Array(moved));
+    }
+    if let Some(v) = dict.get(b"InkList")
+        && let Some(list) = doc.resolve(v).as_array().cloned()
+    {
+        let strokes = list.iter().map(|s| shifted_geometry(doc, s, true, dx, dy).unwrap_or_else(|| s.clone())).collect();
+        moved.push((b"InkList".to_vec(), Object::Array(strokes)));
+    }
+    let popup = dict.reference(b"Popup");
+    let popup_rect = popup
+        .filter(|p| doc.get(*p).as_dict().is_some())
+        .and_then(|p| annot_dict(doc, p).get(b"Rect").and_then(|rect| shifted_geometry(doc, rect, false, dx, dy)).map(|rect| (p, rect)));
+    doc.update_dict(r, |d| {
+        for (k, v) in &moved {
+            d.set(k.clone(), v.clone());
         }
         touch(d, meta);
     })?;
-    if let Some(p) = popup
-        && doc.get(p).as_dict().is_some()
-    {
-        doc.update_dict(p, |d| {
-            if let Some(v) = d.get(b"Rect").and_then(|o| shift(o, false)) {
-                d.set(b"Rect".to_vec(), v);
-            }
-        })?;
+    if let Some((p, rect)) = popup_rect {
+        doc.update_dict(p, |d| d.set(b"Rect".to_vec(), rect))?;
     }
     Ok(())
 }
