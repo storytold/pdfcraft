@@ -158,7 +158,10 @@ impl PageXform {
 
     /// This transform resized to a raster of `px` device pixels (width, height before the view
     /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
-    /// already be on a whole pixel ([`snap_to_pixels`]).
+    /// already be on a whole pixel ([`snap_to_pixels`]). `ppp` must be the device pixels per
+    /// point the raster was drawn at, the #606 quality factor included: at quality 1.0 that is
+    /// the screen's own scale; lower quality paints its smaller raster into the page's full
+    /// displayed rectangle, upscaled and blurred by the sampler on purpose.
     pub(super) fn texel_aligned(&self, px: [usize; 2], ppp: f32) -> PageXform {
         let (w, h) = (px[0] as f32 / ppp, px[1] as f32 / ppp);
         let size = if self.rot % 180 == 90 { vec2(h, w) } else { vec2(w, h) };
