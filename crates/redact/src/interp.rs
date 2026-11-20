@@ -103,9 +103,14 @@ struct Gs {
     /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
     /// everything else. A pattern's cell is a content stream of its own and this pass does not
     /// enter it, so a pattern whose only painting was removed has to leave the page's resources
-    /// or its drawing stays in the file (#3647).
-    fill_pattern: Option<Vec<u8>>,
-    stroke_pattern: Option<Vec<u8>>,
+    /// or its drawing stays in the file (#3647). Shared, so that `q` and each form drawn copy a
+    /// reference, not the name.
+    fill_pattern: Option<Rc<[u8]>>,
+    stroke_pattern: Option<Rc<[u8]>>,
+    /// The `scn` and `SCN` that selected them ([`Scope::selections`]), so a paint records a
+    /// pattern once for each selection, not once for each paint.
+    fill_selection: u64,
+    stroke_selection: u64,
     /// The current font is a Type 3 font without `/Resources`: its glyph descriptions look their
     /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
     /// any of this scope's patterns.
@@ -132,7 +137,16 @@ pub(crate) struct Output {
     /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
     /// saved file (#3647).
     pub patterns_seen: Vec<Vec<u8>>,
-    pub patterns_painted: Vec<Vec<u8>>,
+    /// The names painted with, each once: those this scope, or a form it passed them up from,
+    /// selected ([`Output::paints_with`]).
+    pub patterns_painted: HashSet<Vec<u8>>,
+    /// The selections this scope has painted with, each recorded once.
+    painted: HashSet<u64>,
+    /// The first selection this scope makes. Those before it are its caller's, a form's fill and
+    /// stroke as it begins, which the caller records as it draws the form
+    /// ([`Walk::draw_xobject`]): a form drawn again and again neither records nor looks up its
+    /// caller's names again.
+    first_selection: u64,
     /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
     /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
     /// not tracked, so the page keeps them all.
@@ -210,6 +224,8 @@ pub(crate) struct Scope<'a> {
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
     budget: DecodeBudget,
+    /// How many `scn` and `SCN` the page's walk has met, each numbering the selection it makes.
+    selections: u64,
 }
 
 impl<'a> Scope<'a> {
@@ -239,6 +255,7 @@ impl<'a> Scope<'a> {
             used_names: Vec::new(),
             depth: 0,
             budget,
+            selections: 0,
         }
     }
 
@@ -385,11 +402,33 @@ struct Glyph {
 /// still draws with would lose paint from the page instead.
 fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
     if fills && let Some(n) = &gs.fill_pattern {
-        out.patterns_painted.push(n.clone());
+        out.paints_with(gs.fill_selection, n);
     }
     if strokes && let Some(n) = &gs.stroke_pattern {
-        out.patterns_painted.push(n.clone());
+        out.paints_with(gs.stroke_selection, n);
     }
+}
+
+impl Output {
+    /// Record a paint with the pattern `name`, which `selection` selected: once for each
+    /// selection, and a name this scope's selections give again is kept once. One its caller made
+    /// is the caller's to record ([`Output::first_selection`]).
+    fn paints_with(&mut self, selection: u64, name: &[u8]) {
+        if selection < self.first_selection || !self.painted.insert(selection) {
+            return;
+        }
+        #[cfg(test)]
+        PAINTED_NAME_BYTES.with(|c| c.set(c.get() + name.len()));
+        if !self.patterns_painted.contains(name) {
+            self.patterns_painted.insert(name.to_vec());
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes of pattern names the walk has recorded as painted, each looked up or kept.
+    pub(crate) static PAINTED_NAME_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Process a scope's content streams (state flows from one stream to the next).
@@ -411,6 +450,8 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         line_cap: 0,
         fill_pattern: None,
         stroke_pattern: None,
+        fill_selection: 0,
+        stroke_selection: 0,
         type3_inherits: false,
     };
     process_from(doc, scope, streams, resources, gs)
@@ -421,6 +462,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
 /// with the caller's font, size and spacing, as the renderer places it.
 fn process_from(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, gs: Gs) -> Output {
     let mut walk = Walk::new(doc, resources, gs);
+    walk.out.first_selection = scope.selections;
     // The streams are one content stream in pieces, which may be split between any two tokens
     // (ISO 32000-2 §7.8.2): an operator's operands can end one piece and the operator start the
     // next. Parse them joined, then give each operator back to the piece its keyword is in.
@@ -514,8 +556,6 @@ struct Walk {
     fonts_res: Dict,
     ext_gstates: Dict,
     xobjects: Dict,
-    /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
-    patterns: Vec<Vec<u8>>,
     fallback: Rc<Metrics>,
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
@@ -541,7 +581,6 @@ impl Walk {
             fonts_res: res_dict(doc, resources, b"Font"),
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
-            patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
@@ -592,14 +631,18 @@ impl Walk {
             // and clear it. `cs` with a space other than /Pattern clears it too.
             b"scn" | b"SCN" => {
                 let fill = o == b"scn";
-                let picked = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                let picked = op.operands.last().and_then(Object::as_name).map(Rc::<[u8]>::from);
                 if let Some(name) = &picked {
-                    self.out.patterns_seen.push(name.clone());
+                    self.out.patterns_seen.push(name.to_vec());
                 }
+                let selection = scope.selections;
+                scope.selections = selection.saturating_add(1);
                 if fill {
                     self.gs.fill_pattern = picked;
+                    self.gs.fill_selection = selection;
                 } else {
                     self.gs.stroke_pattern = picked;
+                    self.gs.stroke_selection = selection;
                 }
                 Some(op)
             }
@@ -814,10 +857,10 @@ impl Walk {
         // modes. Mode 3 paints nothing and mode 7 only clips.
         let mode = self.gs.render_mode;
         uses_patterns(&mut self.out, &self.gs, matches!(mode, 0 | 2 | 4 | 6), matches!(mode, 1 | 2 | 5 | 6));
-        // A Type 3 glyph without resources of its own paints through this scope's: keep every
-        // pattern it could select, as with a form that has no /Resources.
+        // A Type 3 glyph without resources of its own paints through this scope's resources, as a
+        // form without /Resources does, and which patterns it uses isn't tracked: the page keeps
+        // them all.
         if self.gs.type3_inherits {
-            self.out.patterns_painted.extend(self.patterns.iter().cloned());
             self.out.keeps_all_patterns = true;
         }
         let o = op.op.as_slice();
@@ -1287,6 +1330,8 @@ fn xobject(
             // still paints keeps the caller's entry. Only the painted side is passed up: a name
             // the form selected but no longer paints with is left for the caller to keep.
             if own.is_none() {
+                #[cfg(test)]
+                PAINTED_NAME_BYTES.with(|c| c.set(c.get() + inner.patterns_painted.iter().map(Vec::len).sum::<usize>()));
                 out.patterns_painted.extend(inner.patterns_painted);
             }
             if scope.mode == Mode::Verify {

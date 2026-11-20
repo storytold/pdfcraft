@@ -1,6 +1,7 @@
 //! A minimal text extractor, independent of the interpreter's font metrics and hit test.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
@@ -555,7 +556,8 @@ pub(super) struct TextGs {
     pub(super) tl: f64,
     pub(super) rise: f64,
     pub(super) size: f64,
-    pub(super) font: Vec<u8>,
+    /// Shared, so that `q` copies a reference, not the name.
+    pub(super) font: Rc<[u8]>,
 }
 
 pub(super) struct Extractor<'a> {
@@ -652,7 +654,7 @@ impl Extractor<'_> {
         let fonts = res_dict(doc, res, b"Font");
         let xobjects = res_dict(doc, res, b"XObject");
         let mut cache: HashMap<Vec<u8>, Font> = HashMap::new();
-        let mut gs = TextGs { ctm, tc: 0.0, tw: 0.0, th: 1.0, tl: 0.0, rise: 0.0, size: 0.0, font: Vec::new() };
+        let mut gs = TextGs { ctm, tc: 0.0, tw: 0.0, th: 1.0, tl: 0.0, rise: 0.0, size: 0.0, font: Rc::from(&b""[..]) };
         let mut saved: Vec<TextGs> = Vec::new();
         let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
         for op in parse(data).ops {
@@ -685,7 +687,7 @@ impl Extractor<'_> {
                 b"TL" => gs.tl = op.num_back(0).unwrap_or(0.0),
                 b"Ts" => gs.rise = op.num_back(0).unwrap_or(0.0),
                 b"Tf" => {
-                    gs.font = op.name_back(1).map(<[u8]>::to_vec).unwrap_or_default();
+                    gs.font = op.name_back(1).map_or_else(|| Rc::from(&b""[..]), Rc::from);
                     gs.size = op.num_back(0).unwrap_or(0.0);
                 }
                 b"Td" | b"TD" => {
@@ -717,14 +719,14 @@ impl Extractor<'_> {
                     {
                         (gs.tw, gs.tc) = (aw, ac);
                     }
-                    if !cache.contains_key(&gs.font) {
+                    if !cache.contains_key(&*gs.font) {
                         let f = match fonts.get(&gs.font).map(|f| doc.resolve(f)) {
                             Some(f) => f.as_dict().map_or_else(|| Ok(Font::flat()), |d| Font::new(doc, d, self.ctx))?,
                             None => Font::flat(),
                         };
-                        cache.insert(gs.font.clone(), f);
+                        cache.insert(gs.font.to_vec(), f);
                     }
-                    let Some(font) = cache.get(&gs.font) else { continue };
+                    let Some(font) = cache.get(&*gs.font) else { continue };
                     self.show_text(font, &op, &gs, &mut tm, placed);
                 }
                 b"Do" => {
