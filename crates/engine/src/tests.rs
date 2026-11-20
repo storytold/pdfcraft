@@ -9875,7 +9875,7 @@ fn dynamic_xfa_forms_run_formcalc_scripts() {
     // Editing recalculates and validates.
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("7".into()) }).unwrap();
     assert_eq!(value(&s, "total"), vec!["35".to_string()]);
-    assert_eq!(value(&s, "words"), vec!["Thirty-Five".to_string()]);
+    assert_eq!(value(&s, "words"), vec!["Thirty-five".to_string()]);
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("500".into()) }).unwrap();
     let out = s.take_js_output(id);
     assert!(out.alerts.iter().any(|a| a.text == "Quantity must be 100 or less"), "{out:?}");

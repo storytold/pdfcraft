@@ -37,7 +37,7 @@ use value::Val;
 #[cfg(test)]
 use value::{fixed, num_text, parse_num};
 #[cfg(test)]
-use words::word_num;
+use words::{WordStyle, word_num};
 
 /// Deepest nesting the parser follows.
 const MAX_PARSE_DEPTH: usize = 64;
@@ -238,8 +238,8 @@ mod tests {
         assert_eq!(parse_date("Feb 3, 2001", "MMM D, YYYY"), Some((2001, 2, 3)));
         assert_eq!(parse_date("2/3/01", "M/D/YY"), Some((2001, 2, 3)));
         assert_eq!(format_date(2001, 2, 3, "MMMM D, YYYY"), "February 3, 2001");
-        assert_eq!(word_num(1234.5, true), "One Thousand Two Hundred Thirty-Four Dollars And 50 Cents");
-        assert_eq!(word_num(999_999_999_999.999, true), "");
+        assert_eq!(word_num(1234.5, WordStyle::DollarsAndCents), "One Thousand Two Hundred Thirty-four Dollars And Fifty Cents");
+        assert_eq!(word_num(999_999_999_999.999, WordStyle::DollarsAndCents), "");
         assert_eq!(num_text(3.0), "3");
         assert_eq!(num_text(2.5), "2.5");
         assert_eq!(num_text(0.1 + 0.2), "0.3");
