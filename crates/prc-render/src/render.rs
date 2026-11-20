@@ -253,7 +253,7 @@ pub enum RenderError {
     #[error("the placed model has more triangles than the assembly ceiling")]
     TooManyTriangles,
     /// The placed model has more than [`crate::MAX_ASSEMBLED_VERTICES`] positions, normals and
-    /// texture coordinates.
+    /// texture coordinates, or its meshes and wires hold more than that before they are placed.
     #[error("the placed model has more vertices than the assembly ceiling")]
     TooManyVertices,
     /// Drawing would test more than [`MAX_RENDER_WORK`] pixel centres.

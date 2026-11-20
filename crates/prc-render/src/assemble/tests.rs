@@ -125,3 +125,16 @@ fn decoding_stops_at_the_structure_that_passes_the_ceiling() {
     assert_eq!(decode(structures, nearly_full).err(), Some(RenderError::TooManyTriangles));
     assert_eq!(pulled.get(), 2, "the third structure is never decoded");
 }
+
+#[test]
+fn the_points_of_a_wire_count_towards_the_vertex_ceiling() {
+    let pulled = std::cell::Cell::new(0);
+    let structures = std::iter::repeat_with(|| {
+        pulled.set(pulled.get() + 1);
+        Ok(vec![Tessellation::Wire(vec![vec![[0.0; 3]; 2], vec![[0.0; 3]; 1]]), Tessellation::Markup])
+    })
+    .take(3);
+    let nearly_full = Budget { triangles: 0, vertices: MAX_ASSEMBLED_VERTICES - 4 };
+    assert_eq!(decode(structures, nearly_full).err(), Some(RenderError::TooManyVertices));
+    assert_eq!(pulled.get(), 2, "the third structure is never decoded");
+}
