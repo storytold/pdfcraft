@@ -1,6 +1,6 @@
 use super::dates::{data_date_pattern, data_to_iso, iso_to_data, iso_to_pattern, pattern_to_iso};
-use super::path::{data_path, parse_datasets, som_to_path};
-use super::{DataPath, Dict, Document, ObjRef, Object, Template};
+use super::path::{bound_data_path, data_path, parse_datasets, som_to_path};
+use super::{DataNode, DataPath, Dict, Document, ObjRef, Object, Template};
 
 /// What a field holds, for writing the datasets.
 #[derive(Clone, Debug, PartialEq)]
@@ -174,13 +174,22 @@ pub(super) fn path_of(tpl: Option<&Template>, som: &str) -> DataPath {
     }
 }
 
+/// [`bound_data_path`] when the template is known, else [`som_to_path`].
+fn bound_path_of(tpl: Option<&Template>, data: Option<&DataNode>, som: &str) -> DataPath {
+    match tpl {
+        Some(t) => bound_data_path(t, data, som),
+        None => som_to_path(som),
+    }
+}
+
 /// The values the datasets should hold for `fields`, by data path: dates in each field's data
 /// picture (or ISO), check and radio states, choice values as saved.
 pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<Want> {
+    let data = crate::read_packets(doc).ok().flatten().and_then(|p| parse_datasets(&p.xdp));
     let mut out = Vec::new();
     for f in fields {
         let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+        let path = bound_path_of(tpl, data.as_ref(), &som);
         if path.is_empty() {
             continue;
         }
@@ -225,7 +234,7 @@ fn values_at(doc: &Document, tpl: Option<&Template>, fields: &[FieldDatum]) -> V
     let mut out = Vec::new();
     for f in fields {
         let som = som_of(doc, f);
-        let path = path_of(tpl, &som);
+        let path = bound_path_of(tpl, Some(&data), &som);
         let Some(text) = data.value_at(&path) else { continue };
         let text = text.as_str();
         let value = match &f.data {
