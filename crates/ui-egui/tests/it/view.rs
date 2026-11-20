@@ -1735,6 +1735,7 @@ fn the_hand_tool_moves_the_page_with_the_pointer() {
 fn required_fields_get_a_red_border_when_highlighting() {
     let _gpu = gpu();
     let mut h = form_harness();
+    h.state_mut().set_theme_preference(craft::theme::ModeChoice::Light);
     h.set_option("panel", "none").unwrap();
     h.set_option("fields", "on").unwrap();
     let props = pdfcraft_engine::FieldProps { required: Some(true), ..Default::default() };
@@ -1747,7 +1748,16 @@ fn required_fields_get_a_red_border_when_highlighting() {
     let at = egui::pos2(r.min.x + r.width() * (50.0 / 300.0) + 0.75, r.min.y + r.height() * (1.0 - 315.0 / 400.0));
     let img = h.render().expect("renders");
     let px = *img.get_pixel((at.x * ppp) as u32, (at.y * ppp) as u32);
-    assert!(px[0] > 180 && px[1] < 100 && px[2] < 100, "a red border: {px:?}");
+    let theme = craft::theme::builtins().iter().find(|theme| theme.id.as_str() == craft::theme::SUITE_DEFAULT).unwrap();
+    let appearance = craft::theme::Appearance {
+        mode: craft::theme::Mode::Light,
+        contrast: craft::theme::Contrast::Standard,
+        size: Default::default(),
+        text_size: Default::default(),
+        reduced_motion: false,
+    };
+    let expected = craft::theme::resolve(theme, appearance, None).tokens.color.status.bad.solid.0;
+    assert_eq!(px.0, expected, "the required field uses the status-bad border");
 }
 
 /// The page raster is shown texel for texel. At a zoom whose device scale isn't on the old 1/64
