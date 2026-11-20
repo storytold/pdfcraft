@@ -3967,6 +3967,127 @@ fn an_export_value_wins_over_an_earlier_options_display_text() {
     }
 }
 
+/// Picking a combo box option runs its Validate script with the option's export value, as typing
+/// in a text field does, whether the pick names the option or gives its position; a refusal keeps
+/// the value it had (#7383).
+#[test]
+fn picking_a_combo_option_runs_its_validate_script() {
+    struct Seen(Vec<(FieldEvent, String)>);
+    impl Scripts for Seen {
+        fn run(&mut self, event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            self.0.push((event, value.into()));
+            let rc = value != "no";
+            ScriptResult { rc, value: value.into(), value_set: false, changes: Vec::new(), message: (!rc).then(|| "refused".into()) }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into(), "no".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let opt = Object::Array(vec![pair("ca", "Canada"), pair("fr", "France"), pair("no", "Nowhere")]);
+    doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), opt)).unwrap();
+    set_field_script(&mut doc, "country", "validate", Some("check(event.value);")).unwrap();
+    let mut seen = Seen(Vec::new());
+    set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["fr".into()]), &mut seen).unwrap();
+    set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["France".into()]), &mut seen).unwrap();
+    set_value_with(&mut doc, "country", &FieldValue::ChoiceIndices(vec![0]), &mut seen).unwrap();
+    let validated = |v: &str| (FieldEvent::Validate, v.to_string());
+    assert_eq!(seen.0, [validated("fr"), validated("fr"), validated("ca")], "the script sees the export value, however the option is named");
+    assert_eq!(field(&fields(&doc), "country").value, ["ca"]);
+    assert_eq!(set_value_with(&mut doc, "country", &FieldValue::Choice(vec!["no".into()]), &mut seen), Err(FormError::Invalid("refused".into())));
+    assert_eq!(field(&fields(&doc), "country").value, ["ca"], "a refused pick keeps the value it had");
+}
+
+/// A Validate script that replaces the picked field's own items: the pick is matched against the
+/// new items, so `/I` names the picked option's place in them, not its place in the old ones.
+#[test]
+fn a_pick_whose_validate_script_replaces_the_fields_items_selects_in_the_new_items() {
+    struct Reorder;
+    impl Scripts for Reorder {
+        fn run(&mut self, _event: FieldEvent, _script: &str, target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            let options = vec![("fr".to_string(), "fr".to_string()), ("zz".to_string(), "zz".to_string())];
+            let changes = vec![FieldChange { name: target.name.clone(), options: Some(options), ..Default::default() }];
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes, message: None }
+        }
+    }
+    let mut doc = one_page();
+    let kind = NewField::Combo { options: vec!["ca".into(), "fr".into()], editable: false };
+    add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("country")).unwrap();
+    set_field_script(&mut doc, "country", "validate", Some("this.setItems(['fr', 'zz']);")).unwrap();
+    set_value_with(&mut doc, "country", &FieldValue::ChoiceIndices(vec![1]), &mut Reorder).unwrap();
+    let f = field(&fields(&doc), "country").clone();
+    assert_eq!(f.options.iter().map(|(e, _)| e.as_str()).collect::<Vec<_>>(), ["fr", "zz"]);
+    assert_eq!(f.value, ["fr"]);
+    assert_eq!(doc.get(f.obj).as_dict().and_then(|d| d.get(b"I").cloned()), Some(Object::Array(vec![Object::Int(0)])));
+}
+
+/// A Validate script that changes the picked field but keeps its value keeps the option picked:
+/// the second of two options that share an export value when only a colour changes, and an option
+/// whose export value is empty when the items are reordered (not a cleared field).
+#[test]
+fn a_pick_keeps_its_option_when_its_validate_script_changes_the_field() {
+    struct Change(FieldChange);
+    impl Scripts for Change {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes: vec![self.0.clone()], message: None }
+        }
+    }
+    let pair = |e: &str, d: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(d))]);
+    let picked = |doc: &Document, obj| doc.get(obj).as_dict().and_then(|d| d.get(b"I").cloned());
+    let colour = FieldChange { name: "pick".into(), text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]), ..Default::default() };
+    let none_first = vec![(String::new(), "None".to_string()), ("fr".to_string(), "France".to_string())];
+    let reorder = FieldChange { name: "pick".into(), options: Some(none_first), ..Default::default() };
+    let second = FieldValue::ChoiceIndices(vec![1]);
+    // Empty text clears the field, though an option exports nothing and the script moves it.
+    let cleared = FieldValue::Text(String::new());
+    for (items, change, pick, after) in [
+        (vec![pair("x", "First"), pair("x", "Second")], colour, &second, Some(1)),
+        (vec![pair("fr", "France"), pair("", "None")], reorder.clone(), &second, Some(0)),
+        (vec![pair("fr", "France"), pair("", "None")], reorder, &cleared, None),
+    ] {
+        let mut doc = one_page();
+        let kind = NewField::Combo { options: vec!["a".into(), "b".into()], editable: false };
+        add_field(&mut doc, 0, [10.0, 10.0, 100.0, 30.0], &kind, Some("pick")).unwrap();
+        let obj = field(&fields(&doc), "pick").obj;
+        doc.update_dict(obj, |d| d.set(b"Opt".to_vec(), Object::Array(items))).unwrap();
+        set_field_script(&mut doc, "pick", "validate", Some("change();")).unwrap();
+        set_value_with(&mut doc, "pick", pick, &mut Change(change)).unwrap();
+        assert_eq!(picked(&doc, obj), after.map(|i| Object::Array(vec![Object::Int(i)])), "{pick:?}");
+    }
+}
+
+/// A same-name twin of a field whose Validate script reorders its items is given the option
+/// picked: the first field's `/I` is positions in its new items, which is how the twin reads it.
+#[test]
+fn a_twin_gets_the_option_picked_when_the_validate_script_reorders_the_first_fields_items() {
+    struct Reverse;
+    impl Scripts for Reverse {
+        fn run(&mut self, _event: FieldEvent, _script: &str, target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            let options = vec![("b".to_string(), "B".to_string()), ("a".to_string(), "A".to_string())];
+            let changes = vec![FieldChange { name: target.name.clone(), object: Some(target.obj), options: Some(options), ..Default::default() }];
+            ScriptResult { rc: true, value: value.into(), value_set: false, changes, message: None }
+        }
+    }
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>".into(),
+        "<< /Fields [6 0 R 7 0 R] /NeedAppearances true /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(a) (A)] [(b) (B)]] /Rect [50 700 200 746] /P 3 0 R /AA << /V << /S /JavaScript /JS (reverse();) >> >> >>"
+            .into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (dup) /Ff 0 /Opt [[(a) (A)] [(b) (B)]] /Rect [50 600 200 646] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    set_value_with(&mut doc, "dup", &FieldValue::ChoiceIndices(vec![1]), &mut Reverse).unwrap();
+    let picked = |n| doc.get(pdfcraft_cos::ObjRef::new(n, 0)).as_dict().and_then(|d| d.get(b"I").cloned());
+    assert_eq!(picked(6), Some(Object::Array(vec![Object::Int(0)])), "b is first in the first field's new items");
+    assert_eq!(picked(7), Some(Object::Array(vec![Object::Int(1)])), "and still second in the twin's");
+    let all = fields(&doc);
+    assert!(all.iter().filter(|f| f.name == "dup").all(|f| f.value == ["b"]));
+}
+
 #[test]
 fn validation_script_colour_is_used_when_the_field_redraws() {
     struct TestScripts;

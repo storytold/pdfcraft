@@ -115,9 +115,11 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     // the first one took after its scripts, without running them again.
     let twins: Vec<&Field> = named.iter().filter_map(|&i| all.get(i)).filter(|t| t.obj != f.obj && t.kind == f.kind).collect();
     if !twins.is_empty() {
-        let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
+        // Its items too are as its scripts left them: its `/I` is positions in those.
+        let now = fields(doc).into_iter().find(|x| x.obj == f.obj);
+        let (taken, options) = now.as_ref().map_or((&[][..], &f.options[..]), |x| (&x.value[..], &x.options[..]));
         for t in twins {
-            share_value(doc, (f.obj, &f.options), t, &taken, scripts)?;
+            share_value(doc, (f.obj, options), t, taken, scripts)?;
         }
     }
     // A field whose `/Kids` lists radio fields that don't name it as their `/Parent` has their
@@ -423,6 +425,57 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             if count > 1 && !(f.kind == FieldKind::List && f.has(flags::MULTI_SELECT)) {
                 return invalid(format!("{:?} takes a single value", f.name));
             }
+            // Keystroke (on commit) and Validate run on a picked value as on typed text, and may
+            // change or refuse it (#7383). A multiple selection is a list, which those scripts
+            // don't take as one value, and an option number that isn't there is refused below.
+            // The scripts see the export value, however the pick names the option; `picked_at` is
+            // the option picked, if the pick is one.
+            let named = |v: &str| {
+                let at = option_named(f, v);
+                (at.and_then(|i| f.options.get(i)).map_or_else(|| v.to_owned(), |(e, _)| e.clone()), at)
+            };
+            let picked = match value {
+                FieldValue::ChoiceIndices(v) => match v.as_slice() {
+                    [] => Some((String::new(), None)),
+                    [i] => f.options.get(*i).map(|(e, _)| (e.clone(), Some(*i))),
+                    _ => None,
+                },
+                FieldValue::Choice(v) if v.len() <= 1 => Some(v.first().map_or((String::new(), None), |s| named(s))),
+                // Empty text clears the field: it is not a pick of an option exporting nothing.
+                FieldValue::Text(t) if t.is_empty() => Some((String::new(), None)),
+                FieldValue::Text(t) => Some(named(t)),
+                _ => None,
+            };
+            let (accepted, reread);
+            let (f, value) = match picked {
+                Some((current, picked_at)) if !resetting => {
+                    let (v, refresh_field) = scripting::accept(doc, f, &current, scripts)?;
+                    let before = f;
+                    // A script that changed this field is read again, for what it changed.
+                    let f = if refresh_field {
+                        reread = fields(doc).into_iter().find(|now| now.obj == before.obj);
+                        reread.as_ref().unwrap_or(before)
+                    } else {
+                        before
+                    };
+                    if v != current {
+                        accepted = FieldValue::Text(v);
+                        (f, &accepted)
+                    } else if f.options == before.options {
+                        (f, value)
+                    } else {
+                        // It changed the items, and kept the value: the option picked is found
+                        // among the new items (the same option, else one with its export value)
+                        // and picked by its place there, which keeps an empty export value or one
+                        // that two options share picked rather than cleared or the first.
+                        let old = picked_at.and_then(|i| before.options.get(i));
+                        let place = old.and_then(|o| f.options.iter().position(|n| n == o).or_else(|| f.options.iter().position(|(e, _)| *e == o.0)));
+                        accepted = place.map_or(FieldValue::Text(v), |j| FieldValue::ChoiceIndices(vec![j]));
+                        (f, &accepted)
+                    }
+                }
+                _ => (f, value),
+            };
             // Each value as its export value and, when it is one of the options, that option's
             // position: two options can share an export value, and the position (`/I`) says
             // which one is picked (ISO 32000-2 Table 234).
