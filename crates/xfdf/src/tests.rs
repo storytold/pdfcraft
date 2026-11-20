@@ -1933,6 +1933,27 @@ fn a_same_named_comment_import_never_replaces_a_form_widget() {
     assert_eq!(doc.get(widget), before, "the widget was overwritten by an imported comment");
 }
 
+/// An FDF comment's /A and /AA (page-open JavaScript, Launch) are not copied into the document.
+#[test]
+fn fdf_comment_actions_are_not_imported() {
+    let fdf = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Text /NM (t1) /Page 0 /Rect [10 10 30 30] /Contents (hi) /A << /S /Launch /F (calc.exe) >> /AA << /PO << /S /JavaScript /JS (app.alert) >> >> >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let mut doc = blank();
+    let report = import(&mut doc, fdf).unwrap();
+    assert_eq!(report.comments, 1);
+    assert_eq!(report.skipped.len(), 2, "{:?}", report.skipped);
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let note = doc
+        .resolve(page.dict.get(b"Annots").unwrap())
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a.as_ref().and_then(|r| doc.get(r).as_dict().cloned()))
+        .find(|d| d.name(b"Subtype") == Some(b"Text".as_slice()))
+        .unwrap();
+    assert!(note.get(b"A").is_none() && note.get(b"AA").is_none(), "an action was imported: {note:?}");
+    assert!(note.get(b"Contents").is_some());
+}
+
 #[test]
 fn an_imported_rect_only_or_transparent_redaction_mark_is_drawn_for_review() {
     let xfdf = br#"<xfdf><annots><redact page="0" name="r1" rect="60,600,560,620" opacity="0"/></annots></xfdf>"#;
