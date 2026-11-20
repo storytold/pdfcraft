@@ -50,7 +50,7 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1 });
+    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1, figures: 0 });
     let catalog = doc.get(doc.root().unwrap());
     let root = catalog.as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
     let tree = doc.get(root);
@@ -108,7 +108,7 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
     let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
     predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
     doc.set(ObjRef::new(4, 0), predicted);
-    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0, figures: 0 });
     let page = &pdfcraft_model::pages(&doc)[0];
     let written = doc.resolve(page.dict.get(b"Contents").unwrap());
     let Object::Stream(written) = &*written else { panic!("page content") };
@@ -145,14 +145,30 @@ fn autotag_text_says_why_it_cannot_read_a_page() {
     assert!(why.starts_with("content cannot be decoded strictly: FlateDecode: "), "{why}");
 }
 
+/// The operator names of a page's content stream.
+fn page_operators(doc: &Document, page: usize) -> Vec<String> {
+    let page = pdfcraft_model::pages(doc).remove(page);
+    let content = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(content) = &*content else { panic!("page stream") };
+    pdfcraft_content::parse(&content.decoded_strict().unwrap()).ops.iter().map(|op| String::from_utf8_lossy(&op.op).into_owned()).collect()
+}
+
+/// #1366: an image XObject or inline image outside a text object is tagged `Figure` without
+/// alternate text, with its own marked content in content order, so figures-alt-text lists it.
+/// Painted paths stay artifacts, and a page of ruled lines alone is marked as before. Saving,
+/// reopening and describing the figure are covered through the tools
+/// (`autotag_apply_tags_images_as_figures_for_alt_text_review`).
 #[test]
-fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
+fn autotag_text_tags_images_as_figures_and_paths_as_artifacts() {
     let mut doc = pdf(
         &[
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>".into(),
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>".into(),
-            stream("0 0 200 200 m 200 0 l 200 200 l 0 200 l h f 10 10 50 50 re B BT /F1 12 Tf 20 100 Td (Hello) Tj ET q 20 0 0 20 80 80 cm /Im1 Do Q"),
+            stream(
+                "0 0 200 200 m 200 0 l 200 200 l 0 200 l h f 10 10 50 50 re B q 20 0 0 20 80 140 cm /Im1 Do Q \
+                 BT /F1 12 Tf 20 100 Td (Hello) Tj ET q 10 0 0 10 20 20 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \u{0} EI Q",
+            ),
             FONT.into(),
             "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream".into(),
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 8 0 R >>".into(),
@@ -161,15 +177,24 @@ fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
-    let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
-    assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
-    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
-    let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
-    let reopened = Document::open(Arc::new(bytes)).unwrap();
-    let reopened_report = check(&reopened, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
-    assert_eq!(status(&reopened_report, Rule::TaggedPdf), Status::Passed);
-    assert_eq!(status(&reopened_report, Rule::TaggedContent), Status::Passed);
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, figures: 2 });
+    assert_eq!(
+        page_operators(&doc, 0),
+        [
+            "BMC", "m", "l", "l", "l", "h", "f", "EMC", "BMC", "re", "B", "EMC", "q", "cm", "BDC", "Do", "EMC", "Q", "BDC", "BT", "Tf", "Td", "Tj",
+            "ET", "EMC", "q", "cm", "BDC", "BI", "EMC", "Q"
+        ]
+    );
+    assert_eq!(page_operators(&doc, 1), ["BMC", "re", "S", "EMC"], "a page of ruled lines is still marked as an artifact");
+    assert!(!pdfcraft_model::pages(&doc)[1].dict.contains(b"StructParents"), "and gets no tags");
+
+    let report = check(&doc, &Options { rules: [Rule::TaggedContent, Rule::FiguresAltText].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed, "the inline image is marked too");
+    assert_eq!(status(&report, Rule::FiguresAltText), Status::Failed, "the figures still need alternate text");
+    let tags: Vec<(String, Option<i64>)> =
+        tags(&doc).into_iter().skip(1).map(|t| (t.kind, doc.get(t.object).as_dict().and_then(|d| d.get(b"K")?.as_int()))).collect();
+    assert_eq!(tags, [("Figure".into(), Some(0)), ("P".into(), Some(1)), ("Figure".into(), Some(2))], "content order");
+    assert!(figures(&doc).iter().all(|f| f.alt.is_none()), "Apply writes no alternate text");
 }
 
 #[test]

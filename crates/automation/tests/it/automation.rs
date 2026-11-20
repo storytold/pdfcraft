@@ -554,6 +554,64 @@ fn autotag_apply_tags_headings_by_size_across_pages() {
     assert_eq!(nesting["status"], "passed", "{check}");
 }
 
+/// An untagged page of text and the given content, with `/Im1` a 1×1 grey image.
+fn text_and_content_pdf(content: &str) -> Vec<u8> {
+    let content = format!("BT /F1 12 Tf 72 700 Td (A chart of the results) Tj ET {content}");
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>",
+        &format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{80}\nendstream",
+    ])
+}
+
+fn rule_status(a: &mut Automation, doc: u64, rule: &str) -> Value {
+    let check = ok(a, "accessibility_check", json!({ "doc": doc, "rules": [rule] }));
+    check["results"].as_array().unwrap().iter().find(|r| r["rule"] == rule).unwrap()["status"].clone()
+}
+
+/// #1366: Apply tags an image Figure without alternate text instead of hiding it as an artifact,
+/// so figures-alt-text lists it for a person; ruled lines stay artifacts and add no tags.
+#[test]
+fn autotag_apply_tags_images_as_figures_for_alt_text_review() {
+    let dir = workdir("autotag-figures");
+    std::fs::write(dir.join("chart.pdf"), text_and_content_pdf("q 200 0 0 100 72 500 cm /Im1 Do Q")).unwrap();
+    std::fs::write(dir.join("rules.pdf"), text_and_content_pdf("0.5 w 72 690 m 540 690 l S 72 680 468 0.5 re f")).unwrap();
+    let mut a = auto(&dir);
+
+    let doc = ok(&mut a, "doc_open", json!({ "path": "chart.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": doc }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "P", "Figure"]);
+    assert_eq!(applied["figures"], 1);
+    let chart_note = applied["note"].clone();
+    assert_eq!(rule_status(&mut a, doc, "tagged-content"), "passed");
+    assert_eq!(rule_status(&mut a, doc, "figures-alt-text"), "failed");
+    let figures = ok(&mut a, "accessibility_figures", json!({ "doc": doc }));
+    assert_eq!(figures["count"], 1);
+    assert_eq!(figures["figures"][0]["alt"], Value::Null);
+    assert_eq!(figures["figures"][0]["rect"], json!([72.0, 192.0, 272.0, 292.0]), "top-left-origin points");
+
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "chart-tagged.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "chart-tagged.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(rule_status(&mut a, reopened, "tagged-content"), "passed");
+    assert_eq!(rule_status(&mut a, reopened, "figures-alt-text"), "failed");
+    let figure = ok(&mut a, "accessibility_figures", json!({ "doc": reopened }))["figures"][0]["figure"].as_u64().unwrap();
+    ok(&mut a, "accessibility_set_alt", json!({ "doc": reopened, "figure": figure, "alt": "Bar chart of the results" }));
+    assert_eq!(rule_status(&mut a, reopened, "figures-alt-text"), "passed");
+
+    let ruled = ok(&mut a, "doc_open", json!({ "path": "rules.pdf" }))["doc"].as_u64().unwrap();
+    let applied = ok(&mut a, "accessibility_autotag_apply", json!({ "doc": ruled }));
+    let types: Vec<&str> = applied["tags"].as_array().unwrap().iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["Document", "P"], "ruled lines stay artifacts");
+    assert_eq!(applied["figures"], 0);
+    assert_ne!(applied["note"], chart_note, "the note says when images need alternate text");
+    assert_eq!(rule_status(&mut a, ruled, "tagged-content"), "passed");
+    assert_eq!(ok(&mut a, "accessibility_figures", json!({ "doc": ruled }))["count"], 0);
+}
+
 #[test]
 fn autotag_form_fields_writes_reviewable_widget_tags() {
     let dir = workdir("autotag-form-fields");
