@@ -192,7 +192,10 @@ impl Automation {
                 .get(&(c.page, c.index))
                 .into_iter()
                 .flatten()
-                .map(|m| json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype }))
+                .map(|m| {
+                    let rect = crate::view_rect(&doc.info, m.page, m.shown_rect(doc.info.pages.get(m.page).map_or(0, |p| p.rotation)));
+                    json!({ "id": m.name, "page": m.page + 1, "index": m.index + 1, "type": m.subtype, "rect": rect })
+                })
                 .collect();
             let mut v = json!({
                 "id": c.name,
@@ -247,7 +250,7 @@ impl Automation {
         // a reply to a reply keeps its `/IRT` on the direct parent, so following one level would
         // drop it. Parents are found by reference, as `/NM` need not be unique. Status and
         // checkmark replies are read through `review` instead. A group subordinate is in no
-        // thread, and a reply to one is the group's, its primary's.
+        // thread, and a reply to one (status included) is the group's, its primary's.
         let tops = pdfcraft_render::thread_tops(&all);
         let mut threads: HashMap<(usize, usize), Vec<&Annotation>> = HashMap::new();
         for r in all.iter().filter(|r| r.state.is_none() && !r.is_group_member()) {

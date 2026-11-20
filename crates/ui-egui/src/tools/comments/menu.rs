@@ -144,8 +144,9 @@ pub(crate) fn context_menu(
             }
             ui.separator();
             // The engine's own check, for each selected comment: a locked comment, or one with a
-            // locked reply, stays. On a group subordinate, Delete takes just it, as Acrobat's does.
-            let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
+            // locked reply, stays. On a group subordinate selected alone, Delete takes just it, as
+            // Acrobat's does (`delete_selected`).
+            let (dpage, dindex) = if several > 0 { (page, index) } else { view.comments.target().unwrap_or((page, index)) };
             let deletes = deletable(dpage, dindex) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
             if ui.add_enabled(allowed && deletes, egui::Button::new(tl!(if several > 0 { "Delete comments" } else { "Delete" }))).clicked() {
                 action = delete_selected(&mut view.comments, info).map(|e| CanvasAction::Edit(Box::new(e)));

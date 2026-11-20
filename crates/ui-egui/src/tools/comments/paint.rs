@@ -58,48 +58,46 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         }
     }
-    if let Some((page, index)) = cv.selected
-        && page == cx.page
-        && let Some(a) = cx.get(index)
-    {
-        // The rest of the group is selected with its primary.
-        for (m, _) in cx.group_members().into_iter().filter(|(_, p)| p.index == index) {
-            for r in cx.screen_rects(m) {
-                painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
-            }
-        }
-        if is_markup(&a.subtype) && !a.quads.is_empty() {
-            for r in cx.screen_rects(a) {
-                painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
-            }
-            // Selected text markup is linked to its open pop-up too.
-            paint_connectors(painter, cx, view, pointer);
-            return paint_gesture(painter, cx, view);
-        }
-        if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
-        {
-            return paint_gesture(painter, cx, view);
-        }
-        let shift = ui.input(|i| i.modifiers.shift);
-        let points = cx.allowed && reaches_points(cx.tool) && reshapable(a);
-        if points && !is_callout(a) {
-            return paint_points(painter, cx, view, a, pointer, shift);
-        }
-        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
-        painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
-        if cx.allowed && resizable(a) {
-            for h in HANDLES {
-                let c = handle_pos(r, h);
-                painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
-            }
-        }
-        // A callout's arrow point and knee, over its text box's frame.
-        if points {
-            return paint_points(painter, cx, view, a, pointer, shift);
-        }
+    // A selected group frames every member on the page with its own handles, as Acrobat does.
+    let shift = ui.input(|i| i.modifiers.shift);
+    for a in cx.selected_here(cv.selected) {
+        paint_selected(painter, cx, view, a, pointer, shift);
     }
     paint_connectors(painter, cx, view, pointer);
     paint_gesture(painter, cx, view);
+}
+
+/// The frame and handles of the selected `a` on this page, where a move or resize takes it.
+fn paint_selected(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
+    let cv = &view.comments;
+    // Selected text markup is linked to its open pop-up too: the connectors are drawn after this.
+    if is_markup(&a.subtype) && !a.quads.is_empty() {
+        for r in cx.screen_rects(a) {
+            painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+        }
+        return;
+    }
+    if view.signature_drag.contains(cx.page, a.index)
+        && matches!(cv.gesture, Some(Gesture::Move { page, index, .. }) if (page, index) == (cx.page, a.index))
+    {
+        return;
+    }
+    let points = cx.allowed && reaches_points(cx.tool) && reshapable(a);
+    if points && !is_callout(a) {
+        return paint_points(painter, cx, view, a, pointer, shift);
+    }
+    let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
+    painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+    if cx.allowed && resizable(a) {
+        for h in HANDLES {
+            let c = handle_pos(r, h);
+            painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
+        }
+    }
+    // A callout's arrow point and knee, over its text box's frame.
+    if points {
+        paint_points(painter, cx, view, a, pointer, shift);
+    }
 }
 
 /// Whether dragging `a` from `from` moves a callout's text box alone: a press inside the box. Its
@@ -194,7 +192,6 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
     for c in screen {
         painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
     }
-    paint_gesture(painter, cx, view);
 }
 
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
