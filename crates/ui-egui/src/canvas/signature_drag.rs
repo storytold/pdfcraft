@@ -590,7 +590,7 @@ mod tests {
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>",
-            "<< /Type /Annot /Subtype /Sound /Rect [50 50 70 70] /Contents (hush) >>",
+            "<< /Type /Annot /Subtype /Sound /Rect [50 100 70 120] /Contents (hush) >>",
         ];
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
@@ -635,6 +635,7 @@ mod tests {
             let rect = xf.user_rect(&doc.info, 0, a.rect);
             (rect.center(), (doc.edit_generation(), 0, a.index))
         };
+        assert!(h.state().views[0].viewport_rect().contains(centre + vec2(40.0, 30.0)), "the drag is inside the page viewport");
         h.drag_at(centre);
         h.run_steps(2);
         h.hover_at(centre + vec2(30.0, 20.0));
