@@ -1,0 +1,182 @@
+# Kylin V20 / UOS deb packages: the glibc-2.31 baseline build that packaging/linux/package.sh
+# cannot provide (it builds on Ubuntu 22.04 and needs glibc >= 2.35). See
+# packaging/linux/kylin/README.md for what ships and why.
+#
+# Native runners (no cross compilation) inside a Debian bullseye container, following the
+# deepin-screenshot packaging workflow. Pushes to main build automatically (as that repo's
+# master does); a v* tag also attaches the debs to the tag's release; any branch can be built
+# on demand through workflow_dispatch.
+name: Kylin deb
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kylin-deb-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-deb:
+    name: Build kylin-${{ matrix.osarch }} debs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            osarch: amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            osarch: aarch64
+    # Native runners produce native builds. The container sets the glibc baseline: bullseye is
+    # 2.31, exactly Kylin V20's (Ubuntu 20.04 base, glibc 2.31-0kylin), and everything newer
+    # (UOS/deepin, Debian 11+) accepts the binaries too.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    container: debian:bullseye-slim
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Point bullseye-security at the Debian archive
+        run: |
+          set -e
+          # bullseye has left regular security support: deb.debian.org still serves the
+          # bullseye-security package index (apt-get update succeeds), but the .debs in its
+          # pool are gone (installs 404). Keep main on the fast deb.debian.org mirror and
+          # point only the security suite at archive.debian.org — the whole archive mirror
+          # rate-limits cloud runner IPs, which fails in harder-to-diagnose ways.
+          sed -i 's|http://security.debian.org|http://archive.debian.org|g; s|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|g' /etc/apt/sources.list
+          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-valid-until
+          cat /etc/apt/sources.list
+
+      - name: Install build dependencies
+        run: |
+          set -o pipefail
+          {
+            set -e
+            for attempt in 1 2 3 4; do
+              if apt-get update; then
+                break
+              fi
+              echo "apt-get update failed (attempt $attempt), retrying in 20s" >&2
+              if [ "$attempt" = "4" ]; then
+                exit 1
+              fi
+              sleep 20
+            done
+            for attempt in 1 2 3; do
+              if apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
+                build-essential cmake perl pkg-config git curl ca-certificates nasm dpkg-dev; then
+                break
+              fi
+              echo "apt-get install failed (attempt $attempt), retrying in 30s" >&2
+              if [ "$attempt" = "3" ]; then
+                exit 1
+              fi
+              sleep 30
+            done
+          } 2>&1 | tee build-deps.log
+
+      - name: Install Rust
+        # Debian bullseye ships rustc 1.63, far below the workspace rust-version (1.95);
+        # rustup's own binaries run on glibc 2.17.
+        run: |
+          set -e
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trust the checkout directory for git
+        # In the container the workspace is owned by a different uid than the step user, and
+        # env.sh records the build SHA through git.
+        run: git config --global --add safe.directory '*'
+
+      - name: Clone craft-fonts (pinned, same ref as release.yml)
+        run: |
+          set -e
+          git init -q /tmp/craft-fonts
+          git -C /tmp/craft-fonts remote add origin https://github.com/storytold/craft-fonts.git
+          git -C /tmp/craft-fonts fetch -q --depth 1 origin 3d9ab3a132ed0eff457e424226a435a901da30d3
+          git -C /tmp/craft-fonts checkout -q --detach FETCH_HEAD
+          echo "CRAFT_FONTS_DIR=/tmp/craft-fonts" >> "$GITHUB_ENV"
+
+      - name: Build and package
+        run: |
+          set -o pipefail
+          packaging/linux/kylin/package.sh 2>&1 | tee kylin-build.log
+
+      - name: Upload deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfcraft-kylin-${{ matrix.osarch }}
+          path: dist/release/pdfcraft-*-kylin-*.deb
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfcraft-kylin-${{ matrix.osarch }}-logs
+          path: |
+            build-deps.log
+            kylin-build.log
+          if-no-files-found: ignore
+
+  publish-release:
+    name: Attach the debs to the tag's release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build-deb
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          cat > release_notes.md <<'EOF'
+          PdfCraft for Kylin V20 / UOS (glibc 2.31 baseline), amd64 + aarch64.
+
+          - `pdfcraft-<version>-kylin-<arch>.deb` — regular package; a desktop system provides
+            the runtime libraries the app loads at run time (X11/Wayland, xkbcommon, Vulkan/GL).
+          - `pdfcraft-<version>-kylin-<arch>-offline.deb` — for minimal or offline machines:
+            bundles the runtime dependency closure and the OCR models. After `dpkg -i`, the
+            installer runs automatically (10s delay, journalctl -u pdfcraft-deps), or run
+            `sudo /usr/share/pdfcraft/install-deps.sh` once.
+
+          Requires glibc >= 2.31: Kylin V20 / Ubuntu Kylin (Ubuntu 20.04 base), UOS/deepin
+          desktops, Debian 11+. Older systems (UOS 20, glibc 2.28) are not supported — glibc
+          cannot be bundled. The regular distro packages (AppImage, deb, rpm) need a newer
+          glibc and live in the main release.
+          EOF
+          if gh release view "$TAG_NAME" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" --repo "$REPO" --clobber assets/pdfcraft-*-kylin-*.deb
+          else
+            gh release create "$TAG_NAME" --repo "$REPO" \
+              --title "pdfcraft ${TAG_NAME#v} (Kylin)" \
+              --notes-file release_notes.md \
+              assets/pdfcraft-*-kylin-*.deb
+          fi
+          ls -lh assets/
