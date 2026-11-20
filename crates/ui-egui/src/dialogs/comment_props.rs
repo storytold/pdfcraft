@@ -157,14 +157,36 @@ impl PdfCraftApp {
     /// Give the selected comments that `only` picks `color`, as one undo step: those whose look can
     /// change and that aren't locked (a locked one would refuse the whole step).
     pub(crate) fn colour_selection(&mut self, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
+        self.restyle_selection(
+            only,
+            |_| true,
+            |page, index| Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None },
+        );
+    }
+
+    /// Give the selected comments that `only` picks `fill` (`None`: no fill), as one undo step:
+    /// those that have a fill, whose look can change and that aren't locked.
+    pub(crate) fn fill_selection(&mut self, fill: Option<pdfcraft_engine::Rgb>, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
+        self.restyle_selection(only, |c| c.fillable, |page, index| Edit::FillAnnotation { page, index, fill });
+    }
+
+    /// `edit` for each selected comment that `only` picks and whose properties `takes` allows, as
+    /// one undo step. Replies, comments whose look can't change and locked ones are left alone: a
+    /// locked one would refuse the whole step.
+    fn restyle_selection(
+        &mut self,
+        only: impl Fn(&pdfcraft_render::Annotation) -> bool,
+        takes: impl Fn(&CommentProps) -> bool,
+        edit: impl Fn(usize, usize) -> Edit,
+    ) {
         let Some((i, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let keys = self.views.get(i).map(|v| v.comments.selection()).unwrap_or_default();
         let mut edits: Vec<Edit> = keys
             .into_iter()
             .filter(|(p, ix)| doc.info.annotations.iter().any(|a| a.page == *p && a.index == *ix && !a.is_reply() && only(a)))
-            .filter(|(p, ix)| doc.comment_props(*p, *ix).is_some_and(|c| c.restylable && !c.locked))
-            .map(|(page, index)| Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None })
+            .filter(|(p, ix)| doc.comment_props(*p, *ix).is_some_and(|c| c.restylable && !c.locked && takes(&c)))
+            .map(|(page, index)| edit(page, index))
             .collect();
         match edits.len() {
             0 => {}
