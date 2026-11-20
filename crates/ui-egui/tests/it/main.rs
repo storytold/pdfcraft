@@ -42,6 +42,7 @@ mod document_links;
 mod download_mime;
 mod editing;
 mod editor_taps;
+mod embedded_links;
 mod export;
 mod field_triggers;
 mod fill_sign;

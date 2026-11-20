@@ -487,8 +487,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             None => app.views[index].go_to_page(p),
         },
         Some(Nav::Action(target)) => {
-            if let Some((source, file, destination)) = crate::canvas::follow_link(app, index, Some(target)) {
-                app.open_remote_link(source, file, destination);
+            if let Some(open) = crate::canvas::follow_link(app, index, Some(target)) {
+                crate::canvas::open_link(app, open);
             }
         }
         Some(Nav::Flash(p, r)) => {
