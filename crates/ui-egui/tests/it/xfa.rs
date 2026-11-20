@@ -65,9 +65,25 @@ fn a_dynamic_xfa_form_is_laid_out_and_filled() {
 #[test]
 fn a_dynamic_xfa_form_says_when_laying_it_out_took_its_usage_rights_off() {
     let xdp = pdfcraft_xfa::fixtures::template(2);
-    let h = open(pdfcraft_xfa::fixtures::usage_rights_shell(&xdp, "", false));
-    // The note starts its own sentence after the layout's.
+    let mut h = open(pdfcraft_xfa::fixtures::usage_rights_shell(&xdp, "", false));
+    // Opening or filling in the form keeps its usage rights on save, so nothing claims they went.
+    h.get_by_label_contains("laid out from its template: 2 pages, 11 fields.");
+    assert!(h.query_by_label_contains("usage rights were removed").is_none());
+    let id = h.state().views[0].id;
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "familyName".into(), value: pdfcraft_engine::FieldValue::Text("Singh".into()) })
+        .unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("usage rights were removed").is_none());
+    // A non-data edit falls back to saving the laid-out form, where the usage rights go: the note
+    // starts its own sentence after the layout's, and disappears again if undone.
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    h.run_steps(2);
     h.get_by_label_contains("laid out from its template: 2 pages, 11 fields. The form's usage rights were removed");
+    h.state_mut().session.undo(id).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("usage rights were removed").is_none());
 }
 
 #[test]

@@ -593,10 +593,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             let mut by_path: HashMap<pdfcraft_xfa::DataPath, Vec<String>> = HashMap::new();
             for (som, name) in &by_som {
-                by_path.entry(pdfcraft_xfa::data_path(self.tpl, som)).or_default().push(name.clone());
+                let path = pdfcraft_xfa::data_path(self.tpl, som);
+                if !path.is_empty() {
+                    by_path.entry(path).or_default().push(name.clone());
+                }
             }
             for names in by_path.values_mut() {
                 names.sort();
+                names.dedup();
             }
             self.by_path = Some(by_path);
             self.by_som = Some(by_som);
@@ -780,7 +784,27 @@ impl<'a, 'b> Runner<'a, 'b> {
         let by_som = self.by_som().clone();
         let targets = (!names.is_empty()).then(|| ResetTargets::new(names));
         let wanted = |som: &str| targets.as_ref().is_none_or(|t| t.matches(som));
-        let listed: Option<Vec<String>> = targets.as_ref().map(|_| by_som.iter().filter(|(som, _)| wanted(som)).map(|(_, f)| f.clone()).collect());
+        let listed: Option<Vec<String>> = targets.as_ref().map(|_| {
+            let mut set = Vec::new();
+            let mut seen = HashSet::new();
+            let mut paths = HashSet::new();
+            for (som, f) in &by_som {
+                if wanted(som) {
+                    if seen.insert(f.clone()) {
+                        set.push(f.clone());
+                    }
+                    let path = pdfcraft_xfa::data_path(self.tpl, som);
+                    if paths.insert(path.clone()) {
+                        for peer in self.widgets_at(&path) {
+                            if seen.insert(peer.clone()) {
+                                set.push(peer);
+                            }
+                        }
+                    }
+                }
+            }
+            set
+        });
         // Fields and exclusion groups of the live form with no widget yet (a row an opening
         // script added, before the form is laid out again): their data goes back to the
         // template's default too, or the value would stay and be laid out and saved.
