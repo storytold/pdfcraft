@@ -4,6 +4,8 @@
 
 use std::borrow::Cow;
 
+use craft_image_codecs::jpeg_probe::{JpegVisit, jfif_dpi, walk_jpeg_segments};
+
 /// Quality of a re-encoded JPEG (the camera's own is rarely higher).
 const QUALITY: u8 = 92;
 /// Larger photos are embedded as they are: turning them would take hundreds of MB.
@@ -17,46 +19,28 @@ thread_local! {
 
 /// Reads the EXIF Orientation tag (1..=8) from APP1 Exif metadata in a JPEG, defaulting to 1.
 pub fn jpeg_exif_orientation(bytes: &[u8]) -> u16 {
-    let mut i = 2usize;
-    while let Some(&byte) = bytes.get(i) {
-        if byte != 0xFF {
-            i += 1;
-            continue;
-        }
-        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
-        match marker {
-            0xFF => i += 1,
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            0xDA | 0xD9 => break,
-            _ => {
-                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
-                let len = usize::from(u16::from_be_bytes([hi, lo]));
-                if len < 2 {
-                    break;
+    let mut orientation = 1;
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
+        if marker == 0xE1
+            && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
+        {
+            if let Some(hdr_order) = tiff.get(0..2)
+                && let Some(order) = match hdr_order {
+                    b"II" => Some(craft_tiff::ByteOrder::Little),
+                    b"MM" => Some(craft_tiff::ByteOrder::Big),
+                    _ => None,
                 }
-                let Some(seg) = bytes.get(i + 4..i + 2 + len) else { break };
-                if marker == 0xE1
-                    && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
-                {
-                    let Some(hdr_order) = tiff.get(0..2) else { return 1 };
-                    let order = match hdr_order {
-                        b"II" => craft_tiff::ByteOrder::Little,
-                        b"MM" => craft_tiff::ByteOrder::Big,
-                        _ => return 1,
-                    };
-                    let Some(off) = order.read_u32(tiff, 4) else { return 1 };
-                    if let Ok((ifd, _)) = craft_tiff::parse_ifd_at(tiff, u64::from(off), order, 0, false, &craft_tiff::ParseOptions::default())
-                        && let Some(o) = ifd.u16(craft_tiff::tags::ORIENTATION)
-                    {
-                        return o;
-                    }
-                    return 1;
-                }
-                i += 2 + len;
+                && let Some(off) = order.read_u32(tiff, 4)
+                && let Ok((ifd, _)) = craft_tiff::parse_ifd_at(tiff, u64::from(off), order, 0, false, &craft_tiff::ParseOptions::default())
+                && let Some(o) = ifd.u16(craft_tiff::tags::ORIENTATION)
+            {
+                orientation = o;
             }
+            return Ok(JpegVisit::Stop);
         }
-    }
-    1
+        Ok(JpegVisit::Continue)
+    });
+    orientation
 }
 
 /// A JPEG whose EXIF Orientation is not "as stored" has its pixels turned (and re-encoded);
@@ -161,48 +145,18 @@ fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DensityUnit {
-    Inches,
-    Centimeters,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PixelDensity {
-    density: (u16, u16),
-    unit: DensityUnit,
-}
-
-/// The resolution in a JFIF header, if the file has one in inches or centimetres.
-fn jfif_density(bytes: &[u8]) -> Option<PixelDensity> {
-    let mut i = 2usize;
-    while let Some(&[0xFF, marker, hi, lo]) = bytes.get(i..i.saturating_add(4)) {
-        let len = usize::from(u16::from_be_bytes([hi, lo]));
-        let seg = bytes.get(i + 4..i + 2 + len)?;
-        if marker == 0xE0 && seg.starts_with(b"JFIF\0") {
-            let &[unit, x0, x1, y0, y1] = seg.get(7..12)? else { return None };
-            let unit = match unit {
-                1 => DensityUnit::Inches,
-                2 => DensityUnit::Centimeters,
-                _ => return None,
-            };
-            return Some(PixelDensity { density: (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1])), unit });
-        }
-        if marker == 0xDA {
-            return None;
-        }
-        i += 2 + len;
-    }
-    None
-}
-
 fn jfif_density_dpi(bytes: &[u8]) -> Option<(f32, f32)> {
-    let d = jfif_density(bytes)?;
-    let scale = match d.unit {
-        DensityUnit::Inches => 1.0,
-        DensityUnit::Centimeters => 2.54,
-    };
-    Some((f32::from(d.density.0) * scale, f32::from(d.density.1) * scale))
+    let mut dpi = None;
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
+        if marker == 0xE0
+            && let Some((x, y)) = jfif_dpi(seg)
+        {
+            dpi = Some((x as f32, y as f32));
+            return Ok(JpegVisit::Stop);
+        }
+        Ok(JpegVisit::Continue)
+    });
+    dpi
 }
 
 #[cfg(test)]
@@ -217,15 +171,14 @@ pub(crate) mod tests {
         assert!(matches!(turned, Cow::Owned(_)));
         let decoded = craft_image_codecs::decode(&turned).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (20, 60));
-        assert_eq!(jfif_density(&turned), Some(PixelDensity { density: (72, 144), unit: DensityUnit::Inches }));
+        assert_eq!(jfif_density_dpi(&turned), Some((72.0, 144.0)));
         let stored = phone_jpeg(1, 72);
         assert!(matches!(upright(&stored), Cow::Borrowed(_)));
         assert!(matches!(upright(b"\x89PNG\r\n\x1a\n"), Cow::Borrowed(_)));
         assert!(matches!(upright(b"\xff\xd8 not a jpeg"), Cow::Borrowed(_)));
     }
 
-    /// `jpeg` with `n` empty chunks of one never-complete Extended XMP packet after its SOI.
-    pub(crate) fn with_extended_xmp_chunks(jpeg: &[u8], n: usize) -> Vec<u8> {
+    fn extended_xmp_chunk() -> Vec<u8> {
         let mut seg = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
         seg.extend_from_slice(&[b'0'; 32]); // the packet's GUID
         seg.extend_from_slice(&1000u32.to_be_bytes()); // its full length
@@ -233,6 +186,12 @@ pub(crate) mod tests {
         let mut chunk = vec![0xFF, 0xE1];
         chunk.extend_from_slice(&u16::try_from(seg.len() + 2).unwrap().to_be_bytes());
         chunk.extend_from_slice(&seg);
+        chunk
+    }
+
+    /// `jpeg` with `n` empty chunks of one never-complete Extended XMP packet after its SOI.
+    pub(crate) fn with_extended_xmp_chunks(jpeg: &[u8], n: usize) -> Vec<u8> {
+        let chunk = extended_xmp_chunk();
         [&jpeg[..2], b"\0".as_slice(), &chunk.repeat(n), &jpeg[2..]].concat()
     }
 
@@ -246,5 +205,44 @@ pub(crate) mod tests {
         assert!(matches!(upright(&with(4)), Cow::Owned(_)), "a few chunks are an ordinary photo");
         assert!(matches!(upright(&with(5_000)), Cow::Borrowed(_)));
         assert_eq!(DECODES.with(std::cell::Cell::get), 1, "only the ordinary photo reached the decoder");
+    }
+
+    #[test]
+    fn stray_bytes_and_ff00_before_extended_xmp_chunks_are_preflighted_and_stripped() {
+        let photo = phone_jpeg(6, 144);
+        let noise = b"\x00\x12\xFF\xFF\xFF\x00\xFF\x01\xFF\xD0";
+        let chunks = extended_xmp_chunk().repeat(MAX_EXTENDED_XMP_CHUNKS + 1);
+        let flooded = [&photo[..2], noise.as_slice(), &chunks, &photo[2..]].concat();
+
+        assert!(!decodable_metadata(&flooded));
+        DECODES.with(|c| c.set(0));
+        assert!(matches!(upright(&flooded), Cow::Borrowed(_)));
+        assert_eq!(DECODES.with(std::cell::Cell::get), 0);
+        assert_eq!(without_extended_xmp(&flooded), [&photo[..2], noise.as_slice(), &photo[2..]].concat());
+    }
+
+    #[test]
+    fn short_and_truncated_app1_segments_are_handled_safely() {
+        const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+
+        // Zero-length and short APP1 segments followed by PREFIX bytes must not be misread as chunks.
+        let mut short_segments = vec![0xFF, 0xD8];
+        short_segments.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x00]);
+        short_segments.extend_from_slice(PREFIX);
+        short_segments.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x04, 0x00, 0x00]);
+        short_segments.extend_from_slice(PREFIX);
+        assert_eq!(extended_xmp_chunks(&short_segments), 0);
+        assert_eq!(without_extended_xmp(&short_segments), short_segments);
+
+        // A truncated length header stops cleanly without panicking.
+        let truncated_header = [0xFF, 0xD8, 0xFF, 0xE1, 0x00];
+        assert_eq!(extended_xmp_chunks(&truncated_header), 0);
+        assert_eq!(without_extended_xmp(&truncated_header), truncated_header);
+
+        // A truncated Extended-XMP APP1 payload is still counted and stripped up to EOF.
+        let mut truncated_payload = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x01, 0x00];
+        truncated_payload.extend_from_slice(PREFIX);
+        assert_eq!(extended_xmp_chunks(&truncated_payload), 1);
+        assert_eq!(without_extended_xmp(&truncated_payload), &[0xFF, 0xD8]);
     }
 }

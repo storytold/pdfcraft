@@ -6,6 +6,7 @@ mod chain;
 mod cms;
 mod crypto;
 mod encrypted_signing;
+mod field_locks;
 mod pdf;
 
 #[cfg(target_os = "linux")]
