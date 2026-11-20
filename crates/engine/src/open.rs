@@ -298,7 +298,7 @@ impl Session {
         Ok(PreparedDocument { document })
     }
 
-    /// The last step of opening: build the document record and register it.
+    /// Build a document record; `commit_open` later registers the prepared document in the session.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
         let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
