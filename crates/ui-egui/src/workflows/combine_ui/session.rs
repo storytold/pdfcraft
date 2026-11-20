@@ -91,6 +91,8 @@ impl PdfCraftApp {
         let lead = list.selected.last().copied();
         self.combine_draft = list.files;
         self.combine_tab.selection = Selection::new(list.selected, lead, lead);
+        // Page positions can name different pages after restoring a list.
+        self.combine_drop_page_keys(None);
         self.combine_tab.sort = list.sort;
         self.combine_tab.expanded.retain(|id| ids.contains(id));
         self.combine_tab.revision = self.combine_tab.revision.wrapping_add(1);
