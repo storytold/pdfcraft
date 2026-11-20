@@ -389,8 +389,22 @@ impl ScanTabState {
 /// The Scan tab of the signature pad: choose or drop a photo, frame the signature, adjust the ink. Cleaning runs on
 /// the host's jobs, so a pass never waits for a scan. `draft.image` is set only by a full scan of the current frame
 /// and sensitivity, and cleared on any change, so the pad's Apply waits for the result.
-pub(crate) fn tab(host: Arc<Host>, wake: Wake) -> impl FnMut(&mut egui::Ui, &mut SignatureDraft, Option<OsFile>) + Send + 'static {
+pub(crate) fn tab(host: Arc<Host>, wake: Wake) -> impl FnMut(&mut egui::Ui, &mut SignatureDraft, craft::review::ui::ScanEvent) + Send + 'static {
     let queue = JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions::default());
     let mut state = ScanTabState { host, scan: None, preview: None, shown: None, pick: None, queue, request: 0, view: unfitted(), error: None };
-    move |ui, draft, dropped| state.show(ui, draft, dropped)
+    move |ui, draft, event| match event {
+        craft::review::ui::ScanEvent::Show(dropped) => state.show(ui, draft, dropped),
+        craft::review::ui::ScanEvent::Clear => {
+            if let Some(id) = state.pick.take() {
+                state.host.files().forget(id);
+            }
+            state.queue.reprioritize(|_, _| None);
+            state.request = state.request.wrapping_add(1);
+            state.scan = None;
+            state.preview = None;
+            state.shown = None;
+            state.view = unfitted();
+            state.error = None;
+        }
+    }
 }
