@@ -645,13 +645,49 @@ impl PdfCraftApp {
         });
     }
 
-    /// Trust a certificate (Signatures panel ▸ Add to trusted certificates), revalidating.
-    pub fn trust_certificate(&mut self, cert: Certificate) {
-        let mut certs = self.session.trusted_certificates().to_vec();
-        if !certs.iter().any(|c| c.raw == cert.raw) {
-            certs.push(cert);
+    /// Trust a signer (Signatures panel ▸ Add to trusted certificates, or the Certificate
+    /// Viewer's Trust tab), revalidating. Signatures made with exactly this certificate are
+    /// trusted; it vouches for no certificate it issued and is not a timestamp authority, even
+    /// when its own extensions say it may be (#6758).
+    pub fn trust_signer(&mut self, cert: Certificate) {
+        let mut trust = self.session.trust().clone();
+        if !trust.signers.iter().any(|c| c.raw == cert.raw) {
+            trust.signers.push(cert);
         }
-        self.apply_trusted_certificates(certs);
+        self.apply_trust(trust);
+    }
+
+    /// Trust a certificate as a root (Certificate Viewer ▸ Trust ▸ Trust as a root), revalidating:
+    /// it vouches for every certificate it may issue, as an imported CA does.
+    pub fn trust_root(&mut self, cert: Certificate) {
+        let mut trust = self.session.trust().clone();
+        // A root is trusted as a signer and, when issued for time stamping, as a timestamp
+        // authority too, so it needs no second entry.
+        trust.signers.retain(|c| c.raw != cert.raw);
+        trust.tsas.retain(|c| c.raw != cert.raw);
+        if !trust.certs.iter().any(|c| c.raw == cert.raw) {
+            trust.certs.push(cert);
+        }
+        self.apply_trust(trust);
+    }
+
+    /// Trust a certificate as a timestamp authority only (Certificate Viewer ▸ Trust ▸ Trust for
+    /// timestamps), revalidating: the timestamps signed with exactly this certificate are trusted
+    /// time, and it is trusted for nothing else (#6786).
+    pub fn trust_tsa(&mut self, cert: Certificate) {
+        let mut trust = self.session.trust().clone();
+        if !trust.tsas.iter().any(|c| c.raw == cert.raw) {
+            trust.tsas.push(cert);
+        }
+        self.apply_trust(trust);
+    }
+
+    /// Replace the trusted roots, keeping the trusted signers and timestamp authorities; see
+    /// [`PdfCraftApp::apply_trust`].
+    pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
+        let mut trust = self.session.trust().clone();
+        trust.certs = certs;
+        self.apply_trust(trust);
     }
 
     /// Replace the trust store and redraw from the rebuilt display copy. One helper
@@ -659,8 +695,8 @@ impl PdfCraftApp {
     /// verdicts choose what the display copy shows, and the old rasters would
     /// otherwise linger while the badge already follows the new verdict.
     /// Trust alone is not an edit: nothing becomes dirty.
-    pub fn apply_trusted_certificates(&mut self, certs: Vec<Certificate>) {
-        self.session.set_trusted_certificates(certs);
+    pub fn apply_trust(&mut self, trust: pdfcraft_engine::TrustStore) {
+        self.session.set_trust(trust);
         for view in &mut self.views {
             view.invalidate_content();
         }
@@ -810,6 +846,27 @@ mod tests {
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    /// #6788 review: a certificate trusted both as a signer and for timestamps says both in the
+    /// Certificate Viewer's Trust tab, not only that it is a trusted signer.
+    #[test]
+    fn the_trust_tab_says_a_signer_is_also_trusted_for_timestamps() {
+        use egui_kittest::kittest::Queryable;
+        let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/rsa-aes.p12");
+        let cert = sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.trust_signer(cert.clone());
+            app.trust_tsa(cert.clone());
+            app.cert_viewer = Some(CertViewer { chain: vec![cert.clone()], selected: 0, tab: CertTab::Trust });
+            app.dialog = Some(crate::Dialog::CertificateViewer);
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("You trust signatures made with this certificate. It does not vouch for any other certificate.");
+        h.get_by_label("You also trust timestamps made with this certificate.");
     }
 
     #[test]
