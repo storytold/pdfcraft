@@ -61,6 +61,20 @@ Undo/Redo and completed Save As, without reinitializing script globals.
 
 ## Native menus and input
 
+The desktop JavaScript console opens in a separate native window, leaving the document's
+menus, page input and other dialogs available. Opening it again restores and focuses the
+existing console. Its header identifies the active document; input and Run are disabled
+without a document or while a document dialog or script prompt needs an answer. Closing
+the console leaves other dialogs open. Alerts and document dialogs requested by a console
+script restore and focus the document window. The web console keeps its modal presentation;
+native backends without multiple-viewport support embed the console in a movable window.
+
+The opt-in UI control channel opens and closes it with `ui.set` key `js-console`, value
+`open` or `closed`; `ui.state.js_console_open` reports its state independently of `dialog`.
+The existing `dialog=js-console` setting still opens it, while `dialog=none` closes only
+the document's dialog on desktop. Script execution remains available headlessly through
+`js_run`.
+
 `app.popUpMenuEx` supports nested menus, separators, marked/disabled items, explicit return
 values and cancellation. `app.response` supports named and positional parameters, defaults,
 password masking and null cancellation. Alert replies use the documented numeric button ids.

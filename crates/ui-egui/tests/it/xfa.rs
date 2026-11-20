@@ -261,7 +261,7 @@ fn a_form_whose_scripts_were_turned_off_at_open_says_so() {
     // The bar leads to the console, where the script's error is.
     h.get_by_label("JavaScript Console").click();
     h.run_steps(2);
-    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::JsConsole));
+    assert!(h.state().console_open());
     assert!(h.state().js_console.log.iter().any(|l| l.contains("abandoned")), "{:?}", h.state().js_console.log);
 }
 

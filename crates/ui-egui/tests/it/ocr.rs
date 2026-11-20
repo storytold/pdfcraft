@@ -329,7 +329,7 @@ fn edit_recognizes_a_scan_only_outside_read_mode_and_beneath_no_dialog() {
     assert_eq!(undo(&h), None, "not in Read mode");
     // A dialog over the window.
     h.state_mut().set_option("mode", "edit").unwrap();
-    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::JsConsole);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Preferences);
     h.run_steps(5);
     assert_eq!(undo(&h), None, "not beneath a dialog");
     // Both gone: it is read now.

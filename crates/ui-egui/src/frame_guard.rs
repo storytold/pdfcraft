@@ -58,6 +58,7 @@ impl PdfCraftApp {
             std::panic::resume_unwind(Box::new(message.to_string()));
         }
         self.dialog = None;
+        self.close_console();
         self.palette_open = false;
         self.keep_active_valid();
         self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", message)]);
