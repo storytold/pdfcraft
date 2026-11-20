@@ -5,7 +5,7 @@
 //! that is said out loud and pinned as it is: an expected value below is *what PdfCraft does today*,
 //! not a claim that it is right. Each such place carries a `NOTE` comment naming the alternative a
 //! reader could reasonably choose, so a later fix shows up as a changed expectation here rather than a
-//! silent edit. (`AGENTS.md` §4 and `CLAUDE.md` Fidelity: no crash, and never repair silently.)
+//! silent edit. (app-agents.md rule 13 and `CLAUDE.md` Fidelity: no crash, and never repair silently.)
 //!
 //! The shapes come from two directions: bytes written by hand (a file we did not make, including
 //! tokens our typed API cannot even express — a three-number quadrilateral or an unknown keyword), and
@@ -294,15 +294,20 @@ fn reference_loops_terminate_and_a_delete_takes_the_cycle_with_it() {
 // ── wrong types where the reader wants a number or a name ─────────────────────────────────────
 
 /// Values of the wrong type in flag, opacity and colour entries: the reader falls back to its
-/// defaults instead of panicking. NOTE on opacity: reading does **not** clamp, so `/CA 7.5` comes
-/// back as 7.5 and would hand a nonsense value to a 0–1 slider; writing clamps (`add_annotation`
-/// refuses non-finite and clamps the range). The asymmetry is recorded here, not endorsed.
+/// defaults instead of panicking. Opacity is clamped on read to the supported 0-1 range;
+/// the original malformed dictionary remains unchanged.
 #[test]
 fn wrong_typed_flag_opacity_and_colour_entries_fall_back_without_panicking() {
     let doc = one_annot(b"<< /Type /Annot /Subtype /Text /Rect [10 20 30 40] /CA 7.5 /F /NotAnInt /C [1 2] >>");
     read_everything(&doc);
     let p = props(&doc, 0, 0).expect("still a comment");
-    assert_eq!(p.opacity, 7.5, "the out-of-range opacity is passed through as written");
+    assert_eq!(p.opacity, 1.0, "the out-of-range opacity is clamped on read");
+    // Exercise both clamp edges and an unchanged interior value, not just a constant fallback.
+    for (raw, expected) in [("-0.5", 0.0), ("0.4", 0.4), ("1.5", 1.0)] {
+        let bytes = format!("<< /Type /Annot /Subtype /Text /Rect [10 20 30 40] /CA {raw} >>");
+        let probe = one_annot(bytes.as_bytes());
+        assert_eq!(props(&probe, 0, 0).expect("still a comment").opacity, expected, "opacity {raw}");
+    }
     assert!(!p.locked, "a name where /F belongs reads as no flags at all");
     assert_eq!(p.color, None, "/C with two components is not a colour");
     let listed = summaries(&doc);
@@ -382,7 +387,8 @@ fn a_link_area_that_is_too_small_or_broken_is_refused_before_it_is_written() {
     ];
     for (label, rect, want_in_message) in cases {
         let mut doc = blank(2);
-        let e = links::add(&mut doc, 0, rect, &links::LinkAction::Page(1), &links::LinkStyle::default()).err();
+        let e =
+            links::add(&mut doc, 0, rect, &links::LinkAction::Page { page: 1, zoom: links::LinkZoom::FitPage }, &links::LinkStyle::default()).err();
         let msg = match &e {
             Some(AnnotError::Invalid(m)) => m.clone(),
             other => panic!("{label}: expected Invalid, got {other:?}"),
@@ -396,7 +402,7 @@ fn a_link_area_that_is_too_small_or_broken_is_refused_before_it_is_written() {
 // ── hostile numbers handed to the builder ─────────────────────────────────────────────────────
 
 /// Non-finite style and geometry must be refused before anything is written: no partial object, no
-/// `NaN` or exponent token in the file. (`AGENTS.md` §4: guard NaN/inf casts.)
+/// `NaN` or exponent token in the file. (app-agents.md rule 13: guard NaN/inf casts.)
 #[test]
 fn non_finite_builder_input_is_refused_and_leaves_the_document_untouched() {
     let shapes = [
@@ -440,10 +446,10 @@ fn non_finite_builder_input_is_refused_and_leaves_the_document_untouched() {
     }
 
     for (label, style) in [
-        ("nan opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::NAN, width: 1.0, fill: None }),
-        ("infinite opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::INFINITY, width: 1.0, fill: None }),
-        ("nan colour", Style { color: [f64::NAN, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None }),
-        ("nan width", Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: f64::NAN, fill: None }),
+        ("nan opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::NAN, width: 1.0, fill: None, ..Style::default() }),
+        ("infinite opacity", Style { color: [0.0, 0.0, 0.0], opacity: f64::INFINITY, width: 1.0, fill: None, ..Style::default() }),
+        ("nan colour", Style { color: [f64::NAN, 0.0, 0.0], opacity: 1.0, width: 1.0, fill: None, ..Style::default() }),
+        ("nan width", Style { color: [0.0, 0.0, 0.0], opacity: 1.0, width: f64::NAN, fill: None, ..Style::default() }),
     ] {
         let mut doc = blank(1);
         let e = add_annotation(
@@ -557,7 +563,7 @@ fn an_attachment_needs_a_name_and_leaves_nothing_behind_when_it_has_none() {
 /// renderer's behaviour.
 /// Meanwhile our own `repair_log()` stays empty, which contradicts this project's rule that
 /// dropped or repaired data must be recorded (`CLAUDE.md`, Fidelity). None of these probe files
-/// is committed: any sample PDF would need its own `ATTRIBUTION.toml` entry (`AGENTS.md` §1),
+/// is committed: any sample PDF would need its own `ATTRIBUTION.toml` entry (clean-room.md and licences.md),
 /// which this change avoids — regenerate them from the `file` bytes bound below and re-measure.
 ///
 /// How far a caller can actually get there, checked in this workspace rather than assumed: only
@@ -593,7 +599,14 @@ fn unvalidated_stamp_size_and_signature_contours_are_rewritten_silently_in_the_f
         &mut doc,
         &NewAnnotation {
             page: 0,
-            shape: Shape::CustomStamp { rect: [10.0, 20.0, 60.0, 50.0], name: "Sig".into(), picture, image: true, size: (1e300, f64::NAN) },
+            shape: Shape::CustomStamp {
+                rect: [10.0, 20.0, 60.0, 50.0],
+                name: "Sig".into(),
+                picture,
+                image: true,
+                size: (1e300, f64::NAN),
+                line: None,
+            },
             style: Style::default(),
             contents: String::new(),
             author: "A".into(),
@@ -656,7 +669,7 @@ fn a_nan_fill_is_accepted_on_create_and_refused_on_edit() {
         &NewAnnotation {
             page: 0,
             shape: Shape::Rectangle { rect: [10.0, 20.0, 60.0, 40.0] },
-            style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(nan) },
+            style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(nan), ..Style::default() },
             contents: String::new(),
             author: "A".into(),
         },
@@ -842,7 +855,7 @@ fn the_same_huge_fill_is_accepted_on_create_and_refused_on_edit() {
             &NewAnnotation {
                 page: 0,
                 shape: Shape::Rectangle { rect: [10.0, 20.0, 60.0, 40.0] },
-                style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(probe) },
+                style: Style { color: [0.9, 0.1, 0.1], opacity: 1.0, width: 2.0, fill: Some(probe), ..Style::default() },
                 contents: String::new(),
                 author: "A".into(),
             },

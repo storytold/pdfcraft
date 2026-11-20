@@ -315,3 +315,47 @@ fn closing_the_second_panes_tab_from_its_strip_keeps_the_program_running() {
     assert!(h.state().panes.split.is_none());
     assert_eq!(h.state().views.len(), 1);
 }
+
+/// The line marking the active pane sits under the menus (#7010). It was painted on a layer of
+/// its own at the menus' order, and egui draws such a layer after every menu and popup of that
+/// order, so the line crossed an open menu.
+#[test]
+fn the_active_panes_line_is_drawn_under_an_open_menu() {
+    let mut h = harness(&["right.pdf", "left.pdf"]);
+    // With the tools pane closed, the main pane starts under the tabs.
+    h.state_mut().set_option("left", "closed").unwrap();
+    let right = index(&h, "right.pdf");
+    h.state_mut().split_tab(right, false);
+    h.run_steps(4);
+    let left = index(&h, "left.pdf");
+    let at = h.state().views[left].viewport_rect().center();
+    click_at(&mut h, at);
+    assert_eq!(h.state().active, Some(left), "the main pane is the active one");
+    let top = h.state().views[left].viewport_rect();
+    // The menu of the main strip's tab drops down across the main pane's top edge.
+    h.get_by_role_and_label(Role::Tab, "left.pdf").click_secondary();
+    h.run_steps(2);
+    let item = h.get_by_label("Split right").rect();
+    fn flat(shape: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| flat(s, out)),
+            egui::Shape::Rect(r) => out.push(r.clone()),
+            _ => {}
+        }
+    }
+    let mut rects = Vec::new();
+    for clipped in &h.output().shapes {
+        flat(&clipped.shape, &mut rects);
+    }
+    let line = rects
+        .iter()
+        .position(|r| (r.rect.height() - 2.0).abs() < 0.01 && (r.rect.top() - top.top()).abs() < 1.0 && (r.rect.left() - top.left()).abs() < 1.0)
+        .expect("the active pane's line is painted");
+    let line_rect = rects[line].rect;
+    let menu = rects
+        .iter()
+        .rposition(|r| r.fill.a() == 255 && r.rect.contains_rect(item) && r.rect.width() < line_rect.width())
+        .expect("the tab's menu is painted");
+    assert!(rects[menu].rect.intersects(line_rect), "the menu crosses the line: {:?} {line_rect:?}", rects[menu].rect);
+    assert!(line < menu, "the line was painted over the open menu");
+}

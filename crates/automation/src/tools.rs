@@ -210,6 +210,13 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc"],
         )),
+        t(
+            "doc_rename",
+            "Rename a document's file",
+            "Rename the open document's file on disk, in its own folder; the document stays open with its undo history. The extension is kept (added back when left out). Refused, with the reason, when the document has unsaved changes (save first), has no file yet, the name is taken, the file is in use, or the name can't be a file name on Windows, macOS or Linux (no / \\ : * ? \" < > |, no device names such as CON, no trailing dot, at most 255 bytes, a full path within the system limit).",
+        )
+        .destructive()
+        .with(schema(json!({ "doc": doc(), "name": { "type": "string", "description": "The new file name, with or without the extension." } }), &["doc", "name"])),
         t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
@@ -746,7 +753,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_audit_redactions",
             "Audit faux redactions",
-            "Find faux redactions: opaque filled rectangles painted over text that is still extractable, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a rectangle counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged). Each finding reports the 1-based page, the kind (covered-text or unapplied-mark), the rectangle (points from the top-left of the displayed page, like comment_list), and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
+            "Find faux redactions: opaque covers painted over text that is still extractable (filled rectangles, thick marker-style strokes, dark opaque Highlight annotations), text whited out under an opaque white rectangle, and /Redact annotations that were marked but never applied. Paint-order and colour-aware: a cover counts only when painted after the text and dark enough to hide it (page backgrounds and light shading are not flagged); a white rectangle over dark text is reported apart. Each finding reports the 1-based page, the kind (covered-text, hidden-under-white or unapplied-mark), the rectangle, and the hidden text. Fails closed: unreadable content is an error, never a clean bill. A properly applied redaction removes the text and never flags.",
         )
         .ro()
         .with(schema(json!({ "doc": doc() }), &["doc"])),
