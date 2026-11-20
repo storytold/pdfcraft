@@ -21,12 +21,14 @@ use pdfcraft_content::Matrix;
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
 
 pub mod colour;
+pub mod convert;
 mod font_names;
 pub mod range;
 pub mod spool;
 #[cfg(test)]
 mod tests;
 
+pub use convert::{ConvertColorsOptions, ConvertColorsReport, cmyk_to_rgb, convert_colors};
 pub use range::{Subset, position, select_listed, select_pages};
 
 mod error;

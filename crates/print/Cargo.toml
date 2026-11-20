@@ -14,8 +14,11 @@ craft-print = { workspace = true }
 log = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
+pdfcraft-filters = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+zune-jpeg = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 winprint = { version = "0.2.1", git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
