@@ -7,7 +7,7 @@ impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         // Dialogs and prompts are modal: nothing runs underneath them (⌘W closed the file behind
         // Preferences, #870).
-        if self.modal_open() {
+        if self.modal_open() || self.prompts.full_screen.is_some() {
             return;
         }
         // The window's Escape: the one no component took this pass (a dialog, a menu, a field, the
