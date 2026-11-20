@@ -71,10 +71,15 @@ impl Document {
     /// missing comment appearances, and the signature states of named-layer signature
     /// appearances. Exports and Print as Image follow the page as shown; the viewer's badges
     /// are not document content and never enter them. Saving uses the working file.
+    ///
+    /// Invert colours is how the reader sees the page, not part of it, so an export is drawn
+    /// in the document's own colours.
     pub fn export_source(&self) -> ExportSource {
+        let mut config = self.config.clone();
+        config.invert_colors = false;
         ExportSource {
             bytes: self.display.clone(),
-            config: self.config.clone(),
+            config,
             pages: self.info.pages.len(),
             sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
         }

@@ -35,6 +35,14 @@ impl PdfCraftApp {
                 })?;
                 self.language = language.to_string();
             }
+            ("invert-colors" | "invert_colors", _) => {
+                let on = match value {
+                    "true" | "on" | "1" => true,
+                    "false" | "off" | "0" => false,
+                    _ => return Err("invert-colors must be on or off".into()),
+                };
+                self.set_invert_colors(on);
+            }
             ("theme", _) => {
                 let preference = match value {
                     "system" => ThemePreference::System,
