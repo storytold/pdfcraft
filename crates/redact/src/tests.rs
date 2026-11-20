@@ -944,33 +944,37 @@ fn an_xobject_of_unknown_subtype_with_a_bbox_of_the_wrong_length_counts() {
 }
 
 #[test]
-fn vectors_are_removed_or_clipped_and_inline_images_go() {
+fn vectors_are_removed_or_cut_and_inline_images_go() {
     let src = b"0 g 10 10 20 20 re f 0 0 300 300 re f q 10 0 0 10 50 50 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q 1 0 0 RG 150 150 m 160 160 l S";
     let mut doc = one_page(src, "", vec![]);
     mark(&mut doc, 0, &[[5.0, 5.0, 35.0, 35.0], [45.0, 45.0, 65.0, 65.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!((r.paths_removed, r.paths_clipped, r.images_removed), (2, 0, 1), "{r:?}");
+    assert_eq!((r.paths_removed, r.paths_cut, r.paths_clipped, r.images_removed), (1, 1, 0, 1), "{r:?}");
     let c = content(&doc, 0);
     assert!(!c.contains("10 10 20 20 re"), "{c}");
-    assert!(!c.contains("300 300 re"), "the intersecting rect is removed: {c}");
+    assert!(!c.contains("300 300 re"), "the intersecting rect is cut around the marks (#7300): {c}");
+    for m in [[5.0, 5.0, 35.0, 35.0], [45.0, 45.0, 65.0, 65.0]] {
+        assert!(cut_paths::painted_under(&doc, &r.overlays, m).is_empty(), "{c}");
+    }
     assert!(!c.contains("BI"), "{c}");
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
 }
 
 /// A horizontal stroke's construction box has no area, so it overlapped nothing and stayed under
 /// the mark. The painted stroke is as wide as the line: a 12 pt line centred 5 pt above the mark
-/// reaches into it and goes; a 1 pt line there does not and stays.
+/// reaches into it and is cut back from it (#7300); a 1 pt line there does not and stays.
 #[test]
-fn a_stroke_is_removed_by_its_painted_width() {
+fn a_stroke_is_cut_by_its_painted_width() {
     let src = b"12 w 10 60 m 100 60 l S 1 w 10 60 m 100 60 l S 4 w 10 50 m 100 50 l S";
     let mut doc = one_page(src, "", vec![]);
     mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!(r.paths_removed, 2, "{r:?}");
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 2), "{r:?}");
     let c = content(&doc, 0);
-    assert!(!c.contains("12 w\n10 60 m"), "the wide line reaches the mark: {c}");
+    assert!(!c.contains("12 w\n10 60 m\n100 60 l"), "the wide line reaches the mark: {c}");
     assert!(c.contains("1 w\n10 60 m\n100 60 l\nS"), "the thin line beside it stays: {c}");
-    assert!(!c.contains("10 50 m"), "the line through the mark goes: {c}");
+    assert!(!c.contains("10 50 m\n100 50 l"), "the line through the mark is cut: {c}");
+    assert!(cut_paths::painted_under(&doc, &r.overlays, [40.0, 45.0, 60.0, 55.0]).is_empty(), "{c}");
 }
 
 /// A tiling pattern's cell is a content stream of its own and can draw text. Redacting a shape
@@ -6394,6 +6398,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
     }
 }
 
+mod cut_paths;
 mod descriptions;
 mod elsewhere;
 mod form_matrix;
@@ -6817,16 +6822,24 @@ fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
     // Device line from (10, 10) to (50, 10); the mark lies on its painted pixel, above its axis.
     let mut doc = one_page(b"0.01 0 0 0.01 0 0 cm 0 w 1000 1000 m 5000 1000 l S", "", vec![]);
     mark(&mut doc, 0, &[[20.0, 10.2, 30.0, 10.4]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    assert!(cut_paths::painted_under(&doc, &r.overlays, [20.0, 10.2, 30.0, 10.4]).is_empty(), "{}", content(&doc, 0));
 }
 
-/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+/// One `re` has four mitred corners: the path is tested padded by the miter limit like any
+/// joined path. Cut (#7300), each corner is measured by its angle: a right angle's miter reaches
+/// √2 half-widths, short of a mark past half the line width, so nothing of it goes.
 #[test]
 fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
     let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
-    // Past half the line width from the rectangle, inside the miter reach.
+    // Past half the line width from the rectangle, inside the miter limit's reach.
     mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(c.contains("100 100 m\n150 100 l\n150 150 l\n100 150 l\nh\nS"), "every side stays, closed, every corner a join: {c}");
+    assert!(cut_paths::painted_under(&doc, &r.overlays, [155.0, 120.0, 160.0, 130.0]).is_empty(), "{c}");
 }
 
 /// A projecting square cap's outer corner reaches lw/2 x sqrt(2) from the endpoint. Under a shear
@@ -6835,21 +6848,24 @@ fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
 fn a_square_cap_corner_under_a_shear_is_inside_the_pad() {
     let mut doc = one_page(b"1 0 1 1 0 0 cm 2 J 2 w 0 0 m 10 0 l S", "", vec![]);
     mark(&mut doc, 0, &[[11.8, 0.8, 11.9, 0.95]], "");
-    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    assert!(!content(&doc, 0).contains("10 0 l"), "the end the cap reaches from is cut back: {}", content(&doc, 0));
 }
 
 /// A line width set between the path and its `S` still applies to that stroke, so the stroke is
-/// tested at the width it is painted with; the width itself stays, the path goes.
+/// tested and cut at the width it is painted with; the width itself stays, before what is kept.
 #[test]
 fn a_width_set_between_the_path_and_its_stroke_does_not_hide_it_from_the_test() {
     let mut doc = one_page(b"10 60 m 100 60 l 12 w S 5 5 m 9 9 l S", "", vec![]);
     mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!(r.paths_removed, 1, "{r:?}");
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
     let c = content(&doc, 0);
-    assert!(!c.contains("10 60 m") && !c.contains("100 60 l"), "the wide line reaches the mark: {c}");
-    assert!(c.contains("12 w"), "the width stays: {c}");
+    assert!(!c.contains("10 60 m\n100 60 l"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("12 w\n10 60 m"), "the width stays, and applies to what is kept: {c}");
     assert!(c.contains("5 5 m"), "the line elsewhere stays: {c}");
+    assert!(cut_paths::painted_under(&doc, &r.overlays, [40.0, 45.0, 60.0, 55.0]).is_empty(), "{c}");
 }
 
 /// The renderer takes a line-state operator's operand from the end: `1 12 w` strokes 12 points wide,
@@ -6859,8 +6875,9 @@ fn a_surplus_operand_before_the_line_width_does_not_hide_the_stroke() {
     let mut doc = one_page(b"1 12 w 10 60 m 100 60 l S", "", vec![]);
     mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
     let r = apply(&mut doc, None).unwrap();
-    assert_eq!(r.paths_removed, 1, "{r:?}");
-    assert!(!content(&doc, 0).contains("100 60 l"));
+    assert_eq!((r.paths_removed, r.paths_cut), (0, 1), "{r:?}");
+    assert!(!content(&doc, 0).contains("10 60 m\n100 60 l"));
+    assert!(cut_paths::painted_under(&doc, &r.overlays, [40.0, 45.0, 60.0, 55.0]).is_empty(), "{}", content(&doc, 0));
 }
 
 /// One page drawing `SECRET` in the `/OC /L` block, with layer 7 0 R in the default
