@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use craft::behavior::{EditEvent, IconId, ReorderKeys, Selection, keyed};
-use craft::ui::contract::{Bind, CollectionEvent, Entry, ReorderMove, ReorderRule, ShowCollection as _, ShowContainer as _, SpaceAction};
+use craft::ui::contract::{Bind, CollectionEvent, Entry, Props as _, ReorderMove, ReorderRule, ShowCollection as _, ShowContainer as _, SpaceAction};
 use craft::ui::menu::Menu;
 use craft::ui::primitives::textures::{TextureState, ThumbRequest};
 use craft::ui::tile_grid::{GridEvent, GridZoom, Tile, TileActionPlace, TileGrid, TileGroup, TilePartEvent, TileZoom};
@@ -217,6 +217,7 @@ pub(crate) fn grid(app: &mut PdfCraftApp, ui: &mut egui::Ui, checks: &[Result<us
     let tiles = keyed(&rows.tiles, |key: &CombineKey| *key);
 
     let shown = TileGrid::<CombineKey>::new(tl!("Files").to_string())
+        .id(crate::combine_ui::collection_id())
         .card()
         .detail_line()
         .selection(Bind::bound(&mut app.combine_tab.selection))
