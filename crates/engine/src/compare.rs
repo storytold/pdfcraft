@@ -58,12 +58,7 @@ fn rects_overlap(a: [f64; 4], b: [f64; 4]) -> bool {
     a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
 }
 
-fn change_matches_position(
-    word: &pdfcraft_compare::Word,
-    page: usize,
-    rects: &[[f64; 4]],
-    near: Option<[f64; 4]>,
-) -> bool {
+fn change_matches_position(word: &pdfcraft_compare::Word, page: usize, rects: &[[f64; 4]], near: Option<[f64; 4]>) -> bool {
     if word.page != page {
         return false;
     }
@@ -683,8 +678,22 @@ mod tests {
         std::fs::write(&new_path, &new_bytes).unwrap();
 
         let mut session = Session::new();
-        let old = session.open(old_path.file_name().unwrap().to_string_lossy().into_owned(), Some(old_path.to_string_lossy().into_owned()), Arc::new(old_bytes), None).unwrap();
-        let new = session.open(new_path.file_name().unwrap().to_string_lossy().into_owned(), Some(new_path.to_string_lossy().into_owned()), Arc::new(new_bytes), None).unwrap();
+        let old = session
+            .open(
+                old_path.file_name().unwrap().to_string_lossy().into_owned(),
+                Some(old_path.to_string_lossy().into_owned()),
+                Arc::new(old_bytes),
+                None,
+            )
+            .unwrap();
+        let new = session
+            .open(
+                new_path.file_name().unwrap().to_string_lossy().into_owned(),
+                Some(new_path.to_string_lossy().into_owned()),
+                Arc::new(new_bytes),
+                None,
+            )
+            .unwrap();
 
         let marked = session.mark_differences_of(old, new, &[]).unwrap();
         assert_eq!(marked, 1);
