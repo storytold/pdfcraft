@@ -77,8 +77,9 @@ data folder: Linux and FreeBSD `~/.local/share/pdfcraft/logs/` (or
 the Windows portable zip ships) the settings folder is `PdfCraftData\` beside the executable, and
 crash recovery and new digital IDs go there too. A start from a desktop menu, Finder or the Start
 menu has no terminal, so this file is what to attach to a bug report: a failed autosave, a page that
-would not render, a render worker that could not start and the report of an internal error all land
-there.
+would not render, a render worker that could not start, an engine or system error shown in a notice
+(as `shown to the user: …`, since the notice goes after a few seconds, #5642) and the report of an
+internal error all land there.
 Each launch moves the previous log to `pdfcraft.1.log` (and that one to `pdfcraft.2.log`), so the
 log of a run that crashed survives the next start. The file stops growing at 16 MiB. `--version`
 writes no file.
