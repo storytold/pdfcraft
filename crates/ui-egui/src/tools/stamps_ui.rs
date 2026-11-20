@@ -297,7 +297,7 @@ pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
     let (mut choose, mut remove) = (None, None);
     Section::fixed(tl!("Custom")).id_salt("custom-stamps").show(ui, |ui, _| {
-        let out = List::new(tl!("Custom stamps")).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
+        let out = List::new(tl!("Custom stamps")).natural_height(true).select(SelectMode::Single).selection(Bind::bound(&mut selection)).show_items(
             ui,
             &rows,
             &mut |key, item| match key {
@@ -378,7 +378,9 @@ impl PdfCraftApp {
         let fields = DialogFields::from_pairs([(CATEGORY, category), (NAME, name), (LINE, DEFAULT_LINE.to_owned())]);
         let shown_file = file.clone();
         let dialog = HostedParamDialog::new(ctx, DIALOG_KEY, fields, move |fields| {
-            ParamDialog::new(DIALOG_KEY, tl!("Create Custom Stamp"), create_params(&shown_file, &existing)).ok_enabled(fields_ok(fields))
+            ParamDialog::new(DIALOG_KEY, tl!("Create Custom Stamp"), create_params(&shown_file, &existing))
+                .ok_enabled(fields_ok(fields))
+                .values(Bind::bound(fields))
         });
         let id = crate::dialogs::host::open(self, dialog);
         self.stamp_dialog = Some(CreateStampDialog { id, file, data: Arc::new(bytes) });
