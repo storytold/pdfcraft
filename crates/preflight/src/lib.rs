@@ -177,6 +177,7 @@ pub const WORDINGS: &[&str] = &[
     "The file identifier (ID) in the trailer isn't two non-empty strings",
     "The document is encrypted",
     "An integer is outside the 32-bit range",
+    "Content nests graphics states (q) more than 28 deep",
     "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
     "A CMap maps a character code to a CID above 65535",
     "A string is longer than 32767 bytes",
@@ -976,6 +977,9 @@ fn check_limits(
     }
     if over.name {
         issue("6.1.13", "A name is longer than 127 bytes", None, None, false);
+    }
+    if over.q_depth {
+        issue("6.1.13", "Content nests graphics states (q) more than 28 deep", None, None, false);
     }
     for (i, p) in pages.iter().enumerate() {
         if limits::page_box_out_of_range(doc, &p.dict) {
