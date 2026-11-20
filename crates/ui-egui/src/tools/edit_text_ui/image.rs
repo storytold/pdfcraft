@@ -413,8 +413,7 @@ fn crop_controls(
     let kept_screen = xf.user_rect(info, page, keep.map(|v| v as f32));
     let kept = DocRect::from_points(view.to_doc(kept_screen.min), view.to_doc(kept_screen.max));
     let before = CropBox::upright(kept);
-    let mut crop = before;
-    let shown = CropOverlay::new(tl!("Crop"), Bind::bound(&mut crop))
+    let shown = CropOverlay::new(tl!("Crop"), Bind::given(before))
         .outside(CropOutside::Apply)
         .area(frame)
         .bounds(bounds_of(&frame))
@@ -435,7 +434,11 @@ fn crop_controls(
             return None;
         }
     }
-    if crop.is_finite() && crop.rect != before.rect {
+    let committed = shown.edit.events.iter().find_map(|event| match event {
+        EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
+        _ => None,
+    });
+    if let Some(crop) = committed.filter(|crop| crop.is_finite() && crop.rect != before.rect) {
         let to_screen = |p: Point| view.to_screen(p);
         let moved = Rect::from_two_pos(to_screen(Point::new(crop.rect.x0, crop.rect.y0)), to_screen(Point::new(crop.rect.x1, crop.rect.y1)));
         let keep = user_box(xf, info, page, moved);
@@ -447,7 +450,10 @@ fn crop_controls(
     let initial_keep = image.visible_rect.unwrap_or(image.rect);
     let has_crop = image.has_editor_crop() || !same_rect(keep, initial_keep);
     let (mut reset, mut cancel, mut done) = (false, false, false);
-    let anchor = corners_of(crop.rect);
+    let anchor = corners_of(match &shown.edit.shown {
+        Some(craft::behavior::Mixed::Same(shown)) => shown.rect,
+        _ => before.rect,
+    });
     let _ = TaskBar::fixed(tl!("Crop"), &anchor).show(ui, body.rect, |ui, _| {
         if has_crop {
             reset |= Button::new(tl!("Remove Crop")).show(ui).clicks > 0;

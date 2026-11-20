@@ -7716,6 +7716,7 @@ fn crop_modes_cursor_stays_on_its_page() {
 fn escape_during_a_crop_drag_keeps_crop_mode() {
     let mut h = picture_pages(true);
     let before = h.state().views[0].session.image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+    let preview_before = h.get_by_label("Crop corner, bottom right").rect().center();
     let grip = page_at(&h, 0, 160.0, 170.0) + egui::vec2(5.0, 5.0);
     h.hover_at(grip);
     h.run_steps(1);
@@ -7726,10 +7727,16 @@ fn escape_during_a_crop_drag_keeps_crop_mode() {
         h.run_steps(1);
     }
     let keep = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].session.image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep);
-    assert!(keep(&h).is_some_and(|k| k[2] < before[2] - 5.0 && k[1] > before[1] + 5.0), "the grip outside the picture is dragged");
+    let preview = h.get_by_label("Crop corner, bottom right").rect().center();
+    assert!(
+        preview.x < preview_before.x - 5.0 && preview.y < preview_before.y - 5.0,
+        "the grip outside the picture changes both edges of the preview"
+    );
+    assert_eq!(keep(&h), Some(before), "the crop is unchanged until the drag commits");
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert_eq!(keep(&h), Some(before), "Escape cancels the drag, and crop mode stays");
+    assert_eq!(h.get_by_label("Crop corner, bottom right").rect().center(), preview_before, "Escape restores the preview");
     h.drop_at(grip - egui::vec2(40.0, 40.0));
     h.run_steps(2);
     assert_eq!(keep(&h), Some(before), "the cancelled drag's release crops nothing");
