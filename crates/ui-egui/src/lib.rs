@@ -53,6 +53,7 @@ pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
+mod deskew_job;
 mod dialogs;
 pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
@@ -315,6 +316,10 @@ pub struct PdfCraftApp {
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// Pages a batch deskew could not judge: the report the user checks (Dialog::DeskewReport).
+    pub deskew_report: Option<String>,
+    /// The batch deskew in flight, advanced one page per frame (Dialog::DeskewReport).
+    pub deskew_job: Option<deskew_job::Job>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,

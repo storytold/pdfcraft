@@ -366,7 +366,19 @@ fn inverse_quarter_turns(k: QuarterTurns, old_w: u32, old_h: u32) -> InverseTran
 /// where the shear realigns the lines. `None` — leave the page alone — when the image is under
 /// 64 px on a side, blank, the winner is under 0.1°, or the winner does not clearly beat
 /// leaving the page as is (score < 1.02 × the 0° score).
-fn estimate_skew(image: &OcrImage) -> Option<f64> {
+/// The skew found on a page, and whether the peak was clear enough to trust it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Skew {
+    /// Degrees; positive turns the text lines counter-clockwise when applied.
+    pub angle: f64,
+    /// The winning angle beat 0° by the margin the estimator needs: a page whose structure is
+    /// too weak (a photograph, a drawing) comes back `false`, angle and all.
+    pub clear: bool,
+}
+
+/// [`estimate_skew`] without the confidence gate: any skew it can measure, with `clear` saying
+/// whether the measurement is one to act on.
+pub fn estimate_skew_detail(image: &OcrImage) -> Option<Skew> {
     if image.min_side() < 64 {
         return None;
     }
@@ -397,7 +409,8 @@ fn estimate_skew(image: &OcrImage) -> Option<f64> {
         }
         profile.iter().map(|p| (*p as f64).powi(2)).sum()
     };
-    let mut best = (0.0f64, score(0.0));
+    let flat = score(0.0);
+    let mut best = (0.0f64, flat);
     let mut phi = -5.0;
     while phi <= 5.0 + 1e-9 {
         let s = score(phi);
@@ -407,15 +420,20 @@ fn estimate_skew(image: &OcrImage) -> Option<f64> {
         phi += 0.25;
     }
     let (angle, best_score) = best;
-    if angle.abs() < 0.1 || best_score < 1.02 * score(0.0) {
+    Some(Skew { angle, clear: best_score >= 1.02 * flat })
+}
+
+pub fn estimate_skew(image: &OcrImage) -> Option<f64> {
+    let s = estimate_skew_detail(image)?;
+    if s.angle.abs() < 0.1 || !s.clear {
         return None; // straight enough, or no clear winner: no-op
     }
-    Some(angle)
+    Some(s.angle)
 }
 
 /// Rotate the content by `−angle` about the centre (the deskew correction), nearest-neighbour
 /// with white fill; also returns the exact dest→src map (the correction's inverse).
-fn deskew_rotate(image: &OcrImage, angle_deg: f64) -> (OcrImage, InverseTransform) {
+pub fn deskew_rotate(image: &OcrImage, angle_deg: f64) -> (OcrImage, InverseTransform) {
     let phi = angle_deg.to_radians();
     let (cos, sin) = (phi.cos(), phi.sin());
     let (w, h) = (image.width, image.height);

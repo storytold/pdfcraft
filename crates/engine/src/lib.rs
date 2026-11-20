@@ -23,6 +23,7 @@ pub mod catalog;
 pub mod commands;
 mod comments;
 pub mod compare;
+pub mod deskew;
 mod copy_image;
 pub use copy_image::{PagePicture, picture_at};
 pub mod dates;
