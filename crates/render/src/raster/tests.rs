@@ -11923,3 +11923,35 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+/// A soft mask with a `/TR` transfer function builds a 256-entry lookup table once instead of
+/// evaluating the PDF function for every pixel of the canvas.
+#[test]
+fn soft_mask_transfer_function_evaluates_once_per_byte_value() {
+    let mask_content = b"0 g 0 0 50 70 re f 0.5 g 50 0 30 70 re f 1 g 80 0 50 70 re f";
+    let mask_group = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 130 70] /Group << /S /Transparency /CS /DeviceGray >> /Length {} >>",
+        mask_content.len()
+    );
+    let tr_func = b"{ 1 exch sub }";
+    let tr_dict = format!("<< /FunctionType 4 /Domain [0 1] /Range [0 1] /Length {} >>", tr_func.len());
+    let pdf = image_cache_pdf(
+        "/GS0 gs 1 0 0 rg 0 0 130 70 re f",
+        "<< /ExtGState << /GS0 << /Type /ExtGState /SMask << /Type /Mask /S /Luminosity /G 5 0 R /TR 6 0 R >> >> >> >>",
+        &[(&mask_group, mask_content), (&tr_dict, tr_func)],
+    );
+    let before = hayro::hayro_interpret::transfer_function_evals();
+    let out = render_first_page(pdf);
+    let evals = hayro::hayro_interpret::transfer_function_evals() - before;
+    assert_eq!(
+        evals,
+        256,
+        "soft-mask transfer function should run 256 times, not once for each of the {} pixels",
+        out.width as usize * out.height as usize
+    );
+    let w = out.width as usize;
+    assert_eq!(rgb_at(&out.rgba, w, 20, 35), [255, 0, 0], "black mask region inverts to opaque red");
+    let mid = rgb_at(&out.rgba, w, 65, 35);
+    assert!(mid[0] == 255 && (120..=136).contains(&mid[1]) && (120..=136).contains(&mid[2]), "mid-grey mask region: {mid:?}");
+    assert_eq!(rgb_at(&out.rgba, w, 110, 35), [255, 255, 255], "white mask region inverts to transparent");
+}
