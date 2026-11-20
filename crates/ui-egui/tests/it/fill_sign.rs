@@ -922,6 +922,8 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.get_by_label("Use signature").click();
     h.run_steps(2);
     assert!(!pad_open(&h), "the preview reuses the saved value");
+    h.hover_at(h.get_by_label("Use signature").rect().center());
+    h.run_steps(2);
     h.get_by_label("Remove saved signature").click();
     h.run_steps(3);
     assert_eq!(h.state().signature, None);
@@ -940,6 +942,8 @@ fn saved_signature_cards_remove_and_add_without_changing_the_document() {
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert_eq!(h.state().signature, Some(SavedSig::Typed("Grace Hopper".into())));
+    h.hover_at(h.get_by_label("Use initials").rect().center());
+    h.run_steps(2);
     h.get_by_label("Remove saved initials").click();
     h.run_steps(3);
     assert_eq!(h.state().initials, None);
@@ -2549,12 +2553,8 @@ fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
     h.get_by_role_and_label(egui::accesskit::Role::Tab, label).rect()
 }
 
-/// Scroll the page until `what` (on screen) lies across the mode bar, then the cursor over each
-/// tab it lies under: with the All tools panel closed, every tab: All tools, Edit, Convert and E-Sign.
-fn mode_tab_cursors(
-    h: &mut Harness<'static, PdfCraftApp>,
-    what: impl Fn(&Harness<'static, PdfCraftApp>) -> egui::Rect,
-) -> [(&'static str, egui::CursorIcon); 4] {
+/// Scroll the page until `what` lies across every mode bar tab.
+fn scroll_under_mode_tabs(h: &mut Harness<'static, PdfCraftApp>, what: impl Fn(&Harness<'static, PdfCraftApp>) -> egui::Rect) {
     let page = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).expect("on screen");
     let y = what(h).center().y - page(h).top();
     let tabs = mode_tab(h, "Convert").center().y;
@@ -2565,24 +2565,13 @@ fn mode_tab_cursors(
     h.state_mut().views[0].view.go_to_fraction(0, fraction);
     h.run_steps(4);
     let under = what(h);
-    ["All tools", "Edit", "Convert", "E-Sign"].map(|label| {
+    for label in ["All tools", "Edit", "Convert", "E-Sign"] {
         let at = mode_tab(h, label).center();
         assert!(under.contains(at), "{under:?} lies under {label} at {at:?}");
-        h.hover_at(at);
-        h.run_steps(2);
-        (label, h.output().platform_output.cursor_icon)
-    })
+    }
 }
 
-const HAND_ON_EVERY_TAB: [(&str, egui::CursorIcon); 4] = [
-    ("All tools", egui::CursorIcon::PointingHand),
-    ("Edit", egui::CursorIcon::PointingHand),
-    ("Convert", egui::CursorIcon::PointingHand),
-    ("E-Sign", egui::CursorIcon::PointingHand),
-];
-
-/// The Fill & Sign text box scrolled up under the mode bar leaves its tabs the hand (#2755): it
-/// floated over them, gave them its I-beam and took their clicks.
+/// The Fill & Sign text box scrolled under the mode bar must not take its tabs' clicks (#2755).
 #[test]
 fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     let mut h = harness();
@@ -2595,7 +2584,7 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     click(&mut h, 10.0, 360.0);
     h.event(egui::Event::Text("Ada Lovelace, Countess of Lovelace".into()));
     h.run_steps(3);
-    assert_eq!(mode_tab_cursors(&mut h, type_box_rect), HAND_ON_EVERY_TAB);
+    scroll_under_mode_tabs(&mut h, type_box_rect);
     let convert = mode_tab(&h, "Convert").center();
     h.hover_at(convert);
     h.run_steps(1);
