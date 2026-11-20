@@ -334,7 +334,7 @@ fn box_controls(
             _ => {}
         }
     }
-    if let Some(point) = shown.clicked {
+    if let Some((_, point)) = shown.clicked {
         let at = view.to_screen(point);
         let images = doc.page_images(page);
         let hit = images.iter().enumerate().rposition(|(i, image)| {
