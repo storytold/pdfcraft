@@ -70,6 +70,12 @@ pub enum RedactError {
         "{0} redaction mark(s) have no readable area (neither usable QuadPoints nor a usable Rect), so the text under them can't be known; nothing was redacted. Remove those marks or mark the text again, then apply again"
     )]
     UnreadableMark(usize),
+    /// An annotation's position cannot be judged. Keeping it could leave its text or appearance
+    /// in a supposedly redacted file, so the caller must repair or remove it before applying.
+    #[error(
+        "annotation {annotation} on page {page} has no readable Rect of four finite numbers, so its overlap with the redaction marks can't be checked; repair or remove that annotation, then apply again (nothing was changed)"
+    )]
+    UnreadableAnnotation { page: usize, annotation: usize },
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
     /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
@@ -81,6 +87,10 @@ pub enum RedactError {
         "page {0} has vertical-writing text while a redaction mark is pending, and PdfCraft cannot tell whether that text lies under the mark yet, so nothing was changed"
     )]
     VerticalText(usize),
+    #[error(
+        "page {0} shows text in a font whose CMap has codespace ranges PdfCraft could not read, so it cannot tell which text a string holds while a redaction mark is pending; nothing was changed"
+    )]
+    DroppedCodespace(usize),
     #[error(
         "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
     )]
@@ -227,8 +237,11 @@ pub struct Report {
 }
 
 pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
-    let v: Vec<f64> = doc.resolve(o?).as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
-    (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    let obj = doc.resolve(o?);
+    let [x0, y0, x1, y1] = obj.as_array()?.as_slice() else { return None };
+    let [x0, y0, x1, y1] = [x0, y0, x1, y1].map(|x| doc.resolve(x).as_f64());
+    let (x0, y0, x1, y1) = (x0?, y0?, x1?, y1?);
+    [x0, y0, x1, y1].iter().all(|x| x.is_finite()).then(|| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
 }
 
 /// A mark's usable `/QuadPoints` quads ([`pdfcraft_geom::quad_points::usable_quads`]), the set the
@@ -257,6 +270,47 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
 /// and the audit reads it that way, so a mark it reports must not be one [`apply`] passes over.
 pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
     d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
+}
+
+/// The annotation types (ISO 32000-2 Table 171).
+const ANNOTATION_SUBTYPES: [&[u8]; 28] = [
+    b"Text",
+    b"Link",
+    b"FreeText",
+    b"Line",
+    b"Square",
+    b"Circle",
+    b"Polygon",
+    b"PolyLine",
+    b"Highlight",
+    b"Underline",
+    b"Squiggly",
+    b"StrikeOut",
+    b"Caret",
+    b"Stamp",
+    b"Ink",
+    b"Popup",
+    b"FileAttachment",
+    b"Sound",
+    b"Movie",
+    b"Screen",
+    b"Widget",
+    b"PrinterMark",
+    b"TrapNet",
+    b"Watermark",
+    b"3D",
+    b"Redact",
+    b"Projection",
+    b"RichMedia",
+];
+
+/// Whether `d`, an entry of `/Annots` with `/Subtype` `kind`, says it is something other than an
+/// annotation: its `/Type` is a name that isn't `/Annot` (an annotation's, "if present, shall be
+/// Annot": ISO 32000-2 Table 166) and `kind` is no annotation type. A dictionary with an
+/// annotation type is an annotation whatever its `/Type` says, since a viewer may still show it.
+fn names_another_type(doc: &Document, d: &Dict, kind: &[u8]) -> bool {
+    let other = d.get(b"Type").is_some_and(|t| doc.resolve(t).as_name().is_some_and(|n| n != b"Annot".as_slice()));
+    other && !ANNOTATION_SUBTYPES.contains(&kind)
 }
 
 /// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
@@ -571,7 +625,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
-        remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
+        remove_page_annotations(doc, &mut applying, pi, &page, &rects, page_marks)?;
     }
     if applying.images.refused() > 0 {
         return Err(RedactError::ImagesPastAllowance);
@@ -855,6 +909,9 @@ fn redact_page_content(
     if out.vertical {
         return Err(RedactError::VerticalText(pi + 1));
     }
+    if out.dropped_codes {
+        return Err(RedactError::DroppedCodespace(pi + 1));
+    }
     // An inline image the renderer reads no image for (no `EI` it accepts, or parameters it
     // can't read): where the page's operators resume after it is a guess, so neither removal
     // nor the verify pass can be trusted on this page. Likewise bytes the parser can't read in
@@ -946,6 +1003,7 @@ fn redact_page_content(
 fn remove_page_annotations(
     doc: &mut Document,
     applying: &mut Applying,
+    pi: usize,
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
@@ -997,7 +1055,15 @@ fn remove_page_annotations(
         if kind == b"Popup" {
             continue;
         }
-        if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
+        // A graphics state or a font that a writer listed in `/Annots` is not an annotation:
+        // it has no `/Rect` to read and nothing a viewer shows, so it stays and Apply goes on.
+        if names_another_type(doc, d, &kind) {
+            continue;
+        }
+        // Unknown geometry is not evidence that the annotation misses every mark. Refuse rather
+        // than keep potentially sensitive annotation text or appearances after a successful apply.
+        let bounds = rect_of(doc, d.get(b"Rect")).ok_or(RedactError::UnreadableAnnotation { page: pi + 1, annotation: i + 1 })?;
+        if rects.iter().any(|x| pdfcraft_content::overlaps(*x, bounds, 0.0)) {
             match r {
                 Some(r) => removed.push(r),
                 None => inline_gone[i] = true,
