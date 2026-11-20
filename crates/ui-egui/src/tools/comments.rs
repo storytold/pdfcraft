@@ -330,6 +330,8 @@ pub struct CommentPrefs {
     pub group_tool: [CommentTool; 3],
     /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
     pub hide_empty_highlight_hover: bool,
+    /// Copy selected text into new highlight annotations' comment text (#2605).
+    pub copy_selected_into_highlight: bool,
 }
 
 impl Default for CommentPrefs {
@@ -341,7 +343,17 @@ impl Default for CommentPrefs {
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
+            copy_selected_into_highlight: false,
         }
+    }
+}
+
+impl CommentPrefs {
+    /// The comment a new text markup of `kind` starts with: the text it marks (`text`), for a
+    /// highlight when Preferences ▸ Commenting asks for it (#2605) and the document allows
+    /// copying (`can_copy`, as Copy does), and otherwise nothing.
+    pub(crate) fn markup_contents(&self, kind: Markup, can_copy: bool, text: impl FnOnce() -> String) -> String {
+        if self.copy_selected_into_highlight && can_copy && kind == Markup::Highlight { text() } else { String::new() }
     }
 }
 

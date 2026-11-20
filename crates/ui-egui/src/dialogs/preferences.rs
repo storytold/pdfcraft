@@ -878,6 +878,7 @@ fn card_identity(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut
         ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(240.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
     });
     ctx.checkbox(ui, &mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text"), t);
+    ctx.checkbox(ui, &mut app.comment_prefs.copy_selected_into_highlight, tl!("Copy selected text into highlight comments"), t);
 }
 
 /// Content for Card 5: Fill & Sign

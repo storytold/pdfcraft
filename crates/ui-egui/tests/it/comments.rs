@@ -108,6 +108,19 @@ fn comments(h: &Harness<'static, PdfCraftApp>) -> Vec<Annotation> {
     s.session.get(s.views[0].id).unwrap().info.annotations.clone()
 }
 
+/// Run frames until the document has `n` comments, giving the page's text pass time under load,
+/// then two more for the note to open.
+fn wait_for_comments(h: &mut Harness<'static, PdfCraftApp>, n: usize) {
+    for _ in 0..400 {
+        h.run_steps(1);
+        if comments(h).len() >= n {
+            h.run_steps(2);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// #3418: choosing a sidebar comment must reveal the annotation, not just its page's top.
 #[test]
 fn sidebar_comment_centres_the_annotation_at_high_zoom() {
@@ -3122,6 +3135,109 @@ fn hovering_a_comment_shows_its_author_and_text() {
     h.hover_at(p);
     h.run_steps(3);
     assert!(h.query_by_label_contains("Check this figure").is_none(), "a dialog covers the page hover");
+}
+
+#[test]
+fn copy_selected_into_highlight_preference_seeds_highlight_comment() {
+    let mut h = harness(|app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(restored.comment_prefs.copy_selected_into_highlight, "the preference survives a restart");
+
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype.as_str(), "Highlight");
+    assert_eq!(c[0].contents.as_deref(), Some("quick"));
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "quick".to_string())), "its note opens with the copied text");
+}
+
+#[test]
+fn copy_selected_into_highlight_respects_a_no_copy_document() {
+    // Commenting allowed, copying (bit 5) not: the highlight is made, but the text stays out of it.
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let mut h = harness_with_bytes(bytes, |app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "the highlight is still made");
+    assert_eq!(c[0].contents, None, "a document that forbids copying keeps its text out of the comment");
+}
+
+#[test]
+fn copied_text_left_in_a_note_does_not_block_the_next_highlights_note() {
+    let mut h = harness(|app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "quick".to_string())));
+
+    // The first note is left as it opened; the second highlight's note opens in its place.
+    h.state_mut().views[0].select_text(0, 10, 15);
+    assert!(h.state_mut().execute("comment.highlight"));
+    // With the tool already picked, the marks wait for the page's next pass.
+    wait_for_comments(&mut h, 2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[1].contents.as_deref(), Some("brown"));
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 1, "brown".to_string())), "the new highlight's note opens");
+}
+
+#[test]
+fn a_cleared_note_stays_open_when_the_next_highlight_is_added() {
+    // Clearing a note is an unsaved change like typing: the next highlight must not drop it (#2605).
+    let mut h = harness(|app| {
+        app.set_option("copy-selected-into-highlight", "true").unwrap();
+    });
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "quick".to_string())));
+    h.state_mut().views[0].comments.editing = Some((0, 0, String::new()));
+
+    h.state_mut().views[0].select_text(0, 10, 15);
+    assert!(h.state_mut().execute("comment.highlight"));
+    // With the tool already picked, the marks wait for the page's next pass.
+    wait_for_comments(&mut h, 2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[0].contents.as_deref(), Some("quick"), "the cleared note is not saved yet");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())), "the cleared note stays open");
+}
+
+#[test]
+fn copy_selected_into_highlight_disabled_by_default() {
+    let mut h = harness(|_| {});
+    assert!(!h.state().comment_prefs.copy_selected_into_highlight);
+
+    h.state_mut().views[0].select_text(0, 4, 9);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype.as_str(), "Highlight");
+    assert_eq!(c[0].contents, None);
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, String::new())));
 }
 
 #[test]

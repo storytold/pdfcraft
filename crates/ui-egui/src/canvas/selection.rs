@@ -284,6 +284,13 @@ impl DocView {
         edit
     }
 
+    /// The text selected on `page`, trimmed: what a new highlight there copies into its comment
+    /// when the preference asks for it (#2605). Empty when nothing there is selected or read.
+    pub(crate) fn selected_text_on(&self, page: usize) -> String {
+        let (Some(s), Some(t)) = (self.selection, self.texts.get(&page)) else { return String::new() };
+        s.text_on(page, t).trim().to_string()
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
         self.actions_dismissed = None;
@@ -525,13 +532,16 @@ pub(super) fn selection_actions(
         SelectionAction::Markup(tool) => {
             // Every markup button carries a markup tool; anything else adds nothing.
             let Some(kind) = tool.markup() else { return false };
+            // Each page's highlight copies that page's part of the selection, read before it clears.
+            let marks: Vec<_> =
+                marks.into_iter().map(|(page, quads)| (page, quads, prefs.markup_contents(kind, can_copy, || view.selected_text_on(page)))).collect();
             view.clear_selection();
-            let edits = marks.into_iter().map(|(page, quads)| {
+            let edits = marks.into_iter().map(|(page, quads, contents)| {
                 Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
                     page,
                     shape: pdfcraft_engine::Shape::TextMarkup { kind, quads },
                     style: prefs.style(tool),
-                    contents: String::new(),
+                    contents,
                     author: prefs.author.clone(),
                 })
             });

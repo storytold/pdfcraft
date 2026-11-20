@@ -179,6 +179,7 @@ impl PdfCraftApp {
         v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        v["copy_selected_into_highlight"] = serde_json::Value::Bool(self.comment_prefs.copy_selected_into_highlight);
         // The Print dialog's own paper sizes (print.page-setup).
         v["print_custom_papers"] = serde_json::json!(self.print_draft.custom_papers);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
@@ -491,6 +492,9 @@ impl PdfCraftApp {
         }
         if let Some(hide) = v["hide_empty_highlight_hover"].as_bool() {
             self.comment_prefs.hide_empty_highlight_hover = hide;
+        }
+        if let Some(copy) = v["copy_selected_into_highlight"].as_bool() {
+            self.comment_prefs.copy_selected_into_highlight = copy;
         }
         if let Some(pinned) = v["comment_tool_pinned"].as_bool() {
             self.comment_prefs.pinned = pinned;

@@ -389,6 +389,13 @@ impl PdfCraftApp {
                     _ => return Err("hide-empty-highlight-hover must be true or false".into()),
                 };
             }
+            ("copy-selected-into-highlight", _) => {
+                self.comment_prefs.copy_selected_into_highlight = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("copy-selected-into-highlight must be true or false".into()),
+                };
+            }
             ("text-links", _) => {
                 self.text_links = match value {
                     "true" => true,
