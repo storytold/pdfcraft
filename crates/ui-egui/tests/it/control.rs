@@ -642,10 +642,13 @@ fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() 
     let p = h.state().views[0].viewport_rect().center();
     let moved = p + egui::vec2(0.0, 60.0);
     let top = h.state().views[0].page_screen_rect(0).unwrap().top();
-    h.event(egui::Event::PointerMoved(p));
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed: true, modifiers: egui::Modifiers::NONE });
-    h.event(egui::Event::PointerMoved(moved));
-    h.event(egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Middle, pressed: false, modifiers: egui::Modifiers::NONE });
+    // The harness runs each queued `event` in a separate frame; raw input keeps this batch together.
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(p),
+        egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerMoved(moved),
+        egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Middle, pressed: false, modifiers: egui::Modifiers::NONE },
+    ]);
     h.run_steps(8);
     assert!(h.state().views[0].auto_scrolling());
     assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0, "distance is measured from the click, not the last mouse event");
