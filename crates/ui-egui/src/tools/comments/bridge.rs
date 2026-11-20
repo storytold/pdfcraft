@@ -237,6 +237,10 @@ fn bounds(points: &[Point]) -> Option<Rect> {
 /// stamp, typed text, a sound) the nearest that behaves alike.
 // PLAN: `DocInfo` carries no line endings, so an arrow reads as a Line here.
 pub(crate) fn kind_of(all: &[Annotation], a: &Annotation) -> AnnotationKind {
+    // A drawn signature is picked by its box, including the spaces between its strokes.
+    if a.fill_sign && a.subtype == "Ink" {
+        return AnnotationKind::Rectangle;
+    }
     tool_for_default(all, a, None).and_then(CommentTool::kind).unwrap_or(match a.subtype.as_str() {
         "FreeText" => AnnotationKind::TextBox,
         "Stamp" => AnnotationKind::Rectangle,
