@@ -9,7 +9,13 @@
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest};
 use std::sync::Arc;
 
-const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
+fn foxit_fixed() -> Vec<u8> {
+    use craft_pdf::interpret::InterpreterSettings;
+    use craft_pdf::interpret::font::{FontQuery, StandardFont};
+    let (data, _) =
+        (InterpreterSettings::default().font_resolver)(&FontQuery::Standard(StandardFont::Courier)).expect("bundled Courier stand-in font");
+    (*data).as_ref().to_vec()
+}
 
 /// `cff` in the smallest OpenType wrapper: an `OTTO` table directory with one `CFF ` table.
 fn open_type(cff: &[u8]) -> Vec<u8> {
@@ -73,9 +79,10 @@ fn inked(rgba: &[u8]) -> usize {
 
 #[test]
 fn an_open_type_wrapped_cff_program_draws_like_the_bare_program() {
-    let bare = pixels(page(Some((CFF, "Type1C"))));
+    let cff = foxit_fixed();
+    let bare = pixels(page(Some((&cff, "Type1C"))));
     assert!(inked(&bare) > 200, "the bare CFF program drew no text");
-    let wrapped = pixels(page(Some((&open_type(CFF), "OpenType"))));
+    let wrapped = pixels(page(Some((&open_type(&cff), "OpenType"))));
     assert!(wrapped == bare, "the OpenType-wrapped program drew a different face: the font fell back");
 }
 
@@ -83,10 +90,11 @@ fn an_open_type_wrapped_cff_program_draws_like_the_bare_program() {
 /// gets, rather than failing the page or reading the program anyway.
 #[test]
 fn a_wrapper_without_a_cff_table_falls_back() {
-    let mut broken = open_type(CFF);
+    let cff = foxit_fixed();
+    let mut broken = open_type(&cff);
     broken.get_mut(12..16).unwrap().copy_from_slice(b"glyf");
     let rgba = pixels(page(Some((&broken, "OpenType"))));
     assert!(inked(&rgba) > 200, "the stand-in drew no text");
     assert!(rgba == pixels(page(None)), "the broken wrapper drew another face than the stand-in");
-    assert!(rgba != pixels(page(Some((CFF, "Type1C")))), "the broken wrapper drew the embedded program");
+    assert!(rgba != pixels(page(Some((&cff, "Type1C")))), "the broken wrapper drew the embedded program");
 }
