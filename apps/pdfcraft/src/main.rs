@@ -201,6 +201,13 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 }
 
 fn main() -> eframe::Result {
+    // Before anything uses aws-lc: an `OPENSSL_ia32cap` naming a CPU feature this processor lacks
+    // would stop it, so PdfCraft runs again without it (#2916, `crypto_env`).
+    if let Some(code) = pdfcraft_platform::crypto_env::run_without_cpu_override() {
+        std::process::exit(code);
+    }
+    // aws-lc detects the CPU's features here, where it used to before `main` (`init_crypto`).
+    pdfcraft_engine::sign::init_crypto();
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
@@ -208,6 +215,10 @@ fn main() -> eframe::Result {
     }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
+    if let Some(value) = pdfcraft_platform::crypto_env::dropped() {
+        let name = pdfcraft_platform::crypto_env::IA32CAP;
+        log::warn!("{name} was set to {value}; PdfCraft started again without it (aws-lc stops on a CPU feature the processor lacks)");
+    }
     // Last-resort guard (AGENTS.md §4): commands, edits, opens and saves catch panics and report
     // them; this hook logs every panic, caught or not, with a backtrace when RUST_BACKTRACE is set.
     std::panic::set_hook(Box::new(|info| {
@@ -475,6 +486,7 @@ fn app_creator<'a>(
         }
         app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
+        app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]
         {
