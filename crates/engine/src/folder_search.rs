@@ -314,6 +314,9 @@ where
                 if !root.is_dir() {
                     return Err(format!("{} is not a folder", path.display()));
                 }
+                if worker_stop.load(Ordering::Relaxed) {
+                    return Ok(Walk::default());
+                }
                 let mut walk = Walk::default();
                 walk.folder(&path, subfolders, 0, &worker_stop);
                 Ok(walk)
@@ -352,6 +355,9 @@ struct Walk {
 
 impl Walk {
     fn folder(&mut self, folder: &Path, subfolders: bool, depth: usize, cancel: &AtomicBool) {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
         let entries = match std::fs::read_dir(folder) {
             Ok(entries) => entries,
             Err(error) => return self.skip(folder, Skip::Unreadable(error.to_string())),
