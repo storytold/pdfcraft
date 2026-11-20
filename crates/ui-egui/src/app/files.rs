@@ -534,6 +534,8 @@ impl PdfCraftApp {
                     Ok(()) if self.views.len() > before => {
                         if let Some(v) = self.views.last_mut() {
                             v.from_attachment = Some(origin);
+                            let id = v.id;
+                            self.takes_content_from(id, doc);
                         }
                     }
                     Ok(()) => {}
@@ -636,8 +638,11 @@ impl PdfCraftApp {
         if pdfcraft_engine::source_kind(&att.name, &bytes) != Some(pdfcraft_engine::SourceKind::Pdf) {
             return;
         }
+        let before = self.views.len();
         if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
             self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+        } else if let Some(id) = self.views.get(before).map(|v| v.id) {
+            self.takes_content_from(id, doc);
         }
     }
 

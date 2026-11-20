@@ -328,6 +328,9 @@ pub struct CombineFile {
     pub notes: Vec<String>,
     /// Where it came from, shown among the warnings (e.g. an open document's unsaved changes).
     pub(super) origin_note: Option<String>,
+    /// It came from a tab that holds content of a PDF opened or unlocked with a password, read
+    /// when it was added: the combined document is not autosaved.
+    pub(super) protected: bool,
     /// The open document it is, when it came from a tab: Add open documents leaves it out.
     pub(super) open_doc: Option<pdfcraft_engine::DocId>,
     /// The range last checked and the result: the number of pages it takes and the first of
