@@ -1564,6 +1564,12 @@ pub fn glyph_unicode(name: &str) -> Option<char> {
     chars.next().filter(|_| chars.len() == 0)
 }
 
+/// The character of the glyph that StandardEncoding (ISO 32000-2 Annex D.2) names for `code`;
+/// `None` for a code it leaves without a glyph (`0x00`–`0x1F`, `0x7F` and the gaps above it).
+pub fn standard_encoding_char(code: u8) -> Option<char> {
+    crate::encodings::STANDARD.get(usize::from(code)).copied().filter(|&u| u != 0).and_then(char::from_u32)
+}
+
 /// What each code of an embedded TrueType font that isn't flagged non-symbolic and names no base
 /// encoding shows, by the `post` table name of the glyph its `cmap` selects (the way the renderer
 /// selects it: the code, then at 0xF000, 0xF100 and 0xF200). Such a font's codes need not be
