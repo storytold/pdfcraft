@@ -227,6 +227,34 @@ impl Session {
         guard(|| pdfcraft_xfdf::export_xfdf_comments(&cos, which, &doc.name)).map_err(EditError::Write)
     }
 
+    /// Adaptive scan compression: heuristic dual-guard Otsu scan binarization (M11 parity `ocr.adaptive-compression`).
+    /// Converts near-bilevel 8-bit text scans into 1-bit monochrome images compressed via CCITT Group 4 or Flate.
+    pub fn adaptive_compress_scans(
+        &self,
+        id: DocId,
+        options: &pdfcraft_ocr::AdaptiveCompressOptions,
+    ) -> Result<(Arc<Vec<u8>>, pdfcraft_ocr::AdaptiveCompressReport), EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        if doc.is_signed() {
+            return Err(EditError::Signed);
+        }
+        if !doc.allows_modification() {
+            return Err(EditError::NotPermitted("compressing scans"));
+        }
+        let mut cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        let report = guard(|| pdfcraft_ocr::adaptive_compress_scans(&mut cos, *options))
+            .map_err(|e| EditError::Write(e.to_string()))?
+            .map_err(|e| EditError::Write(e.to_string()))?;
+        let out = writable(&cos)?;
+        let bytes = write_full(&out, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
+        Ok((Arc::new(bytes), report))
+    }
+
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;

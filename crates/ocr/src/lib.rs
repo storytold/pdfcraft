@@ -20,6 +20,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod adaptive;
 pub mod confidence;
 pub mod merge;
 mod ocrs;
@@ -29,6 +30,7 @@ pub mod preprocess;
 pub mod tesseract;
 mod tiles;
 
+pub use adaptive::{AdaptiveCompressOptions, AdaptiveCompressReport, adaptive_compress_scans, compute_otsu, try_binarize_scan};
 pub use confidence::{ConfidenceBand, band_for, is_suspect, low_confidence};
 pub use merge::{MergeStrategy, StrategyOutcome, mean_confidence, recognize_with_strategy, rover_merge};
 pub use ocrs::{

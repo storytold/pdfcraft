@@ -1605,6 +1605,17 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),
+        t("ocr_adaptive_compress", "Adaptive scan compression (MRC/Otsu)", "Scan & OCR ▸ Adaptive compression of scans: detect near-bilevel grayscale and RGB scans of text documents, apply heuristic dual-guard (chroma and bimodal histogram) Otsu thresholding with content-loss prevention, and pack samples to 1-bit monochrome bitmaps compressed with CCITT Group 4 or Flate. Preserves photographs, color artwork, and prepress assets with soft masks or ICC profiles.")
+            .destructive()
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "path": { "type": "string", "description": "Where to write the compressed PDF (atomic save; honors root)." },
+                    "binarize_scans": { "type": "boolean", "description": "Enable adaptive Otsu binarization for near-bilevel scans (default: true)." },
+                    "max_pixels": { "type": "integer", "description": "Maximum number of pixels in a single image to process (default: 80,000,000)." },
+                }),
+                &["path"],
+            )),
         t("doc_export_all_images", "Export all images", "Write the images that pages use into a folder (`<name>_Page_<n>_Image_<k>.jpg|png`, n zero-padded to the page count's digits), each once: JPEG images unchanged, others as PNG with their soft mask as alpha. min_size skips images with fewer pixels on their shorter side. Images that can't be decoded yet (JPEG 2000, separations), or past what one export may decode or hold, are listed under skipped, with the reason. Includes unsaved edits.")
             .cmd("export.all_images")
             .with(schema(

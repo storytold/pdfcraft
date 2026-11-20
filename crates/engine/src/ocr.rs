@@ -15,8 +15,9 @@ use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{
-    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
-    StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
+    AdaptiveCompressOptions, AdaptiveCompressReport, ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError,
+    OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer, StrategyOutcome, Word, adaptive_compress_scans, band_for, is_suspect, lines_from_json,
+    low_confidence,
 };
 
 use crate::{DocId, Edit, EditError, Session};
