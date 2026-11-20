@@ -27,11 +27,13 @@ pub struct ExportDraft {
     pub format: ImageFormat,
     /// Export all images ▸ skip images with fewer pixels than this on their shorter side.
     pub min_side: u32,
+    /// Optional filename prefix for Export All Images; `Some("")` omits it.
+    pub image_prefix: Option<String>,
 }
 
 impl Default for ExportDraft {
     fn default() -> Self {
-        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0 }
+        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0, image_prefix: None }
     }
 }
 
@@ -40,6 +42,11 @@ pub type ExportStatus = Arc<Mutex<Option<(usize, usize, Option<String>)>>>;
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: ExportKind) -> (bool, bool) {
     let count = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.info.pages.len()).unwrap_or(0);
+    let stem = app
+        .active_ids()
+        .and_then(|(_, id)| app.session.get(id))
+        .map(|doc| doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string())
+        .unwrap_or_default();
     let d = &mut app.export_draft;
     ui.label(
         egui::RichText::new(match kind {
@@ -88,6 +95,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
                 .color(t.text_faint),
         );
     } else if kind == ExportKind::AllImages {
+        let mut prefix = d.image_prefix.clone().unwrap_or_else(|| stem.clone());
+        ui.horizontal(|ui| {
+            ui.label(tl!("Filename prefix"));
+            if ui.text_edit_singleline(&mut prefix).changed() {
+                d.image_prefix = Some(prefix.clone());
+            }
+        });
         ui.horizontal(|ui| {
             ui.label(tl!("Exclude images smaller than"));
             let label = move |n: u32| {
@@ -131,6 +145,7 @@ struct ExportTask<'a> {
     dpi: f64,
     format: ImageFormat,
     min_side: u32,
+    image_prefix: Option<String>,
     pages: Vec<usize>,
     stem: String,
     status: &'a ExportStatus,
@@ -138,7 +153,7 @@ struct ExportTask<'a> {
 }
 
 fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>) -> String {
-    let ExportTask { src, kind, dpi, format, min_side, pages, stem, status, lang } = task;
+    let ExportTask { src, kind, dpi, format, min_side, image_prefix, pages, stem, status, lang } = task;
     // May run on a worker thread: messages are drawn in the UI's language.
     crate::i18n::set_current(lang);
     let total = pages.len();
@@ -154,7 +169,11 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
             Err(e) => return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
         };
         for (k, img) in out.images.iter().enumerate() {
-            if let Err(e) = sink(&pdfcraft_engine::export::image_file_name(&stem, img, k + 1, src.pages), img.data.clone()) {
+            let name = match pdfcraft_engine::export::image_file_name(&stem, image_prefix.as_deref(), img, k + 1, src.pages) {
+                Ok(name) => name,
+                Err(e) => return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e)]),
+            };
+            if let Err(e) = sink(&name, img.data.clone()) {
                 return crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]);
             }
         }
@@ -240,6 +259,7 @@ impl PdfCraftApp {
         let dpi = self.export_draft.dpi;
         let format = self.export_draft.format;
         let min_side = self.export_draft.min_side;
+        let image_prefix = self.export_draft.image_prefix.clone();
         let status: ExportStatus = Arc::new(Mutex::new(Some((0, pages.len(), None))));
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -249,9 +269,13 @@ impl PdfCraftApp {
                 let lang = crate::i18n::current();
                 let work = move || {
                     let sink = |name: &str, bytes: Vec<u8>| {
-                        crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
+                        let path = dir.join(name);
+                        if path.exists() {
+                            return Err(format!("{name}: file already exists"));
+                        }
+                        crate::editing::write_atomically(&path.to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                     };
-                    let msg = run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink);
+                    let msg = run(ExportTask { src, kind, dpi, format, min_side, image_prefix, pages, stem, status: &st, lang }, sink);
                     if let Ok(mut s) = st.lock() {
                         let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
                         let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
@@ -275,10 +299,10 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let msg =
-                run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &status, lang: crate::i18n::current() }, |name, bytes| {
-                    crate::editing::download(name, &bytes)
-                });
+            let msg = run(
+                ExportTask { src, kind, dpi, format, min_side, image_prefix, pages, stem, status: &status, lang: crate::i18n::current() },
+                |name, bytes| crate::editing::download(name, &bytes),
+            );
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }
