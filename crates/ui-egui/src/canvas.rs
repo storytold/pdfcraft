@@ -26,6 +26,7 @@ pub(super) mod crop;
 mod find;
 pub(super) mod fling;
 pub(super) mod image_pick;
+mod key_order;
 mod navigation;
 mod organize;
 pub(super) mod page_cursor;
@@ -803,6 +804,12 @@ pub struct DocView {
     /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
     /// its release neither clicks nor ends a drag.
     pub(crate) press_cancelled: bool,
+    /// The pages held a press on the last pass, not cancelled: the key pass leaves Escape to
+    /// `cancel_on_escape` while its button stays down, and to nothing in the pass it comes up.
+    held_press: bool,
+    /// When each kind of selection on the pages was made, for the key pass: the newest takes a key
+    /// first.
+    key_ages: key_order::SelectionAges,
     /// A non-edit action requested by the organize toolbar, handled by the app.
     pub pending_action: Option<ViewAction>,
     /// The grid gap the next inserted files go to (set by a "+" between pages); otherwise they
@@ -1222,6 +1229,8 @@ impl DocView {
             router: Default::default(),
             menu_for: None,
             press_cancelled: false,
+            held_press: false,
+            key_ages: Default::default(),
         }
     }
 
@@ -1937,6 +1946,7 @@ fn draw_pages(
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
     let ptr = PagePointer::read(ui, &resp, modal);
     cancel_on_escape(ui.ctx(), view, &ptr);
+    view.held_press = !view.press_cancelled && ptr.origin.is_some() && ptr.primary_down;
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
     // its owner; in the gap between pages it is no page's).
@@ -3246,12 +3256,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         ui.data(|d| d.get_temp(can_paste_key)).unwrap_or(false)
     };
-    // Keyboard scrolling applies to this frame's page view only, never later.
-    let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
-    let key_side = std::mem::take(&mut app.views[index].key_side);
-    if key_scroll != 0.0 || key_side != 0.0 {
-        app.views[index].end_find_following();
-    }
     // The Search panel closed: its search moves to the find bar.
     let search_open = app.right == Some(crate::RightPanel::Search);
     if let Some(f) = app.views[index].find.as_mut()
@@ -3309,6 +3313,35 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // A menu click can open a dialog after the frame's first look.
     app.page_keys = app.page_keys.also(app.covers_pages());
     let keys = app.page_keys;
+    // Edit text's objects catch up with the document before the keys move or delete them: an
+    // arrow's nudge reaches the document after the pages are drawn, and the next press starts from
+    // where it left them.
+    let edit_text = app.quick_tool == QuickTool::EditText && doc.allows_modification();
+    let view = &mut app.views[index];
+    view.objects.prepare(doc, edit_text, view.pending_edit.is_some());
+    // So do the fields' and the added content's selections: a field or an item added last pass is
+    // selected before Delete or an arrow reads the selection (and the selection ages see it).
+    if preparing {
+        crate::prepare::after_refresh(view, &doc.form);
+    } else {
+        view.prepare.selected = None;
+    }
+    if editing_content {
+        crate::content_ui::after_refresh(view, doc.added());
+    } else {
+        view.content.selected = None;
+    }
+    // The pages' keys, for the active view only: Compare and split view draw two.
+    if app.active == Some(index) {
+        let cx = key_order::KeyCx { ctx: ui.ctx(), keys, doc, tool: app.quick_tool, preparing, editing_content, speed: app.scroll_speed };
+        key_order::run(&mut app.views[index], &cx, &mut app.quick_tool);
+    }
+    // Keyboard scrolling applies to this frame's page view only, never later.
+    let key_scroll = std::mem::take(&mut app.views[index].key_scroll);
+    let key_side = std::mem::take(&mut app.views[index].key_side);
+    if key_scroll != 0.0 || key_side != 0.0 {
+        app.views[index].end_find_following();
+    }
     let organize_zoom = app.organize_zoom;
     let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
@@ -3416,20 +3449,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
-    if preparing {
-        crate::prepare::after_refresh(view, &form);
-    } else {
-        view.prepare.selected = None;
-    }
-    view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx(), keys);
     view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };
     let doc_links = if tool == QuickTool::Link { doc.links().to_vec() } else { Vec::new() };
-    if editing_content {
-        crate::content_ui::after_refresh(view, &added);
-    } else {
-        view.content.selected = None;
-    }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
@@ -3578,20 +3600,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // One crop, then back to selecting (as Acrobat does).
     let cropped = view.pending_edit.as_ref().is_some_and(|e| matches!(e, pdfcraft_engine::Edit::SetPageBox { .. }));
     let mut tool = app.quick_tool;
-    comments::keys(ui.ctx(), keys, view, info, &mut tool, allowed);
-    if preparing {
-        crate::prepare::keys(ui.ctx(), keys, view);
-    }
     if tool != QuickTool::EditText {
         view.image_selection = None;
         crate::content_ui::release_image_selection(view, &added);
     }
-    if editing_content {
-        crate::content_ui::keys(ui.ctx(), keys, view, tool == QuickTool::EditText);
-    }
-    if tool == QuickTool::Link {
-        crate::link_ui::keys(ui.ctx(), keys, view);
-    } else {
+    if tool != QuickTool::Link {
         view.links.selected = None;
     }
     if stamp_placed {
