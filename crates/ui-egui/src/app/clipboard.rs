@@ -186,6 +186,9 @@ impl PdfCraftApp {
             }
             return;
         }
+        // An explicit empty paste can fall back to the app's copied comments, after object and
+        // image precedence has been resolved using the actual clipboard contents.
+        let text = pasted.and_then(|c| c.text.as_deref()).filter(|t| t.is_empty()).map(str::to_owned).or(text);
         if let Some(text) = text {
             if !text.is_empty() {
                 self.last_copied_image = None;

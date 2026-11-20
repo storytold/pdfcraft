@@ -5133,7 +5133,7 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
             assert_eq!(h.state().views[0].session.comments.selection(), vec![(0, 0)], "{what}: the click selected the comment");
         }
         right_click_pt(&mut h, point);
-        let disabled = h.get_by_label(label).accesskit_node().is_disabled();
+        let disabled = h.get_by_role_and_label(Role::MenuItem, label).accesskit_node().is_disabled();
         assert_eq!(disabled, matches!(does, Does::Disabled), "{what}: the row is greyed out only where the rights forbid it");
         if disabled {
             h.key_press(egui::Key::Escape);
@@ -5143,7 +5143,7 @@ fn comment_menu_rows_follow_permissions_and_run_their_action() {
             assert_eq!(h.state().session.get(id).unwrap().can_undo(), None, "{what}: no edit was made");
             continue;
         }
-        h.get_by_label(label).click();
+        h.get_by_role_and_label(Role::MenuItem, label).click();
         h.run_steps(4);
         match does {
             Does::Marks => assert!(comments(&h).iter().any(|a| a.state.as_deref() == Some("Marked")), "{what}"),
