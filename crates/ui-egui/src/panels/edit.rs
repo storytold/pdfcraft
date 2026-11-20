@@ -1,8 +1,10 @@
 use craft::behavior::{IconId, Selection};
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
+use craft::ui::contract::{
+    Bind, Entry, Outcome as _, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked,
+};
 use craft::ui::display::{Shade, Text};
-use craft::ui::layout_components::Row;
+use craft::ui::layout_components::{Row, Stack};
 use craft::ui::list::{ListRow, RowInk, ThumbAspect};
 use craft::ui::menu::Menu;
 use craft::ui::primitives::IconSpec;
@@ -174,41 +176,47 @@ impl craft::behavior::ItemSource<usize> for Stamps {}
 /// page to place it.
 pub(super) fn stamp_palette(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use pdfcraft_engine::{StampGroup, StampKind};
-    Text::new(tl!("Choose a stamp, then click on the page to place it.").to_string()).shade(Shade::Faint).show(ui);
-    let titles =
-        [(StampGroup::Dynamic, tl!("Dynamic")), (StampGroup::SignHere, tl!("Sign Here")), (StampGroup::StandardBusiness, tl!("Standard Business"))];
-    // The kinds in group order, and the headers' keys after every tile's.
-    let mut kinds: Vec<(StampGroup, StampKind)> = Vec::new();
-    let mut groups = Vec::new();
-    for (n, (group, title)) in titles.iter().enumerate() {
-        let start = kinds.len();
-        kinds.extend(StampKind::ALL.into_iter().filter(|k| k.group() == *group).map(|k| (*group, k)));
-        groups.push(TileGroup::new(1_000_000 + n, start, kinds.len() - start, title.to_string()));
-    }
-    let mut selection = match app.quick_tool {
-        crate::QuickTool::Stamp(current) => kinds.iter().position(|(_, kind)| *kind == current).map(Selection::single).unwrap_or_default(),
-        _ => Selection::default(),
-    };
-    let before = selection.clone();
-    let _ = TileGrid::<usize>::new(tl!("Stamps").to_string())
-        .caption(CaptionPlace::None)
-        .select(SelectMode::Single)
-        .selection(Bind::bound(&mut selection))
-        .groups(&groups)
-        .show_items(ui, &Stamps(kinds.len()), &mut |key, _| {
-            let Some((group, kind)) = kinds.get(*key).copied() else { return Tile::new(String::new()) };
-            let [r, g, b] = kind.color().map(|v| (v * 255.0) as u8);
-            let color = egui::Color32::from_rgb(r, g, b);
-            let (label, by) = (kind.label().to_string(), tl!("By name at time, date").to_string());
-            Tile::new(label.clone()).thumb(ThumbAspect::new(6, 1), move |cx, rect| paint_chip(cx, rect, group, &label, &by, color))
-        });
-    if selection != before
-        && let Some(&at) = selection.items.first()
-        && let Some((_, kind)) = kinds.get(at)
-    {
-        app.quick_tool = crate::QuickTool::Stamp(*kind);
-    }
-    crate::stamps_ui::palette_section(app, ui);
+    Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
+        Text::new(tl!("Choose a stamp, then click on the page to place it.").to_string()).shade(Shade::Faint).show(ui);
+        let titles = [
+            (StampGroup::Dynamic, tl!("Dynamic")),
+            (StampGroup::SignHere, tl!("Sign Here")),
+            (StampGroup::StandardBusiness, tl!("Standard Business")),
+        ];
+        // The kinds in group order, and the headers' keys after every tile's.
+        let mut kinds: Vec<(StampGroup, StampKind)> = Vec::new();
+        let mut groups = Vec::new();
+        for (n, (group, title)) in titles.iter().enumerate() {
+            let start = kinds.len();
+            kinds.extend(StampKind::ALL.into_iter().filter(|k| k.group() == *group).map(|k| (*group, k)));
+            groups.push(TileGroup::new(1_000_000 + n, start, kinds.len() - start, title.to_string()));
+        }
+        let mut selection = match app.quick_tool {
+            crate::QuickTool::Stamp(current) => kinds.iter().position(|(_, kind)| *kind == current).map(Selection::single).unwrap_or_default(),
+            _ => Selection::default(),
+        };
+        let before = selection.clone();
+        let _ = TileGrid::<usize>::new(tl!("Stamps").to_string())
+            .natural_height(true)
+            .caption(CaptionPlace::None)
+            .select(SelectMode::Single)
+            .selection(Bind::bound(&mut selection))
+            .groups(&groups)
+            .show_items(ui, &Stamps(kinds.len()), &mut |key, _| {
+                let Some((group, kind)) = kinds.get(*key).copied() else { return Tile::new(String::new()) };
+                let [r, g, b] = kind.color().map(|v| (v * 255.0) as u8);
+                let color = egui::Color32::from_rgb(r, g, b);
+                let (label, by) = (kind.label().to_string(), tl!("By name at time, date").to_string());
+                Tile::new(label.clone()).thumb(ThumbAspect::new(6, 1), move |cx, rect| paint_chip(cx, rect, group, &label, &by, color))
+            });
+        if selection != before
+            && let Some(&at) = selection.items.first()
+            && let Some((_, kind)) = kinds.get(at)
+        {
+            app.quick_tool = crate::QuickTool::Stamp(*kind);
+        }
+        crate::stamps_ui::palette_section(app, ui);
+    });
 }
 
 /// A stamp's chip: its colour as a tinted frame (Sign Here as a pentagon pointing left, with the label
