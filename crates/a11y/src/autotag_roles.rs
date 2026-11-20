@@ -37,6 +37,13 @@ pub(crate) struct Evidence {
     /// Characters shown, whitespace excluded.
     pub chars: usize,
     pub letters: bool,
+    /// `[x0, y0, x1, y1]` in user space: the left and right ends of the text's advance and the
+    /// lowest and highest baseline. `None` unless all of it runs left to right along the x axis
+    /// in glyphs whose widths the font declares ([`Metrics::width_declared`]) and that have a
+    /// Unicode mapping, in a font that writes horizontally.
+    pub place: Option<[f64; 4]>,
+    /// Some of it is in glyphs without a Unicode mapping: it paints, but what it says is not known.
+    pub unmapped: bool,
 }
 
 /// The structure type for each text object, in document order: `H1`–`H6` or `P`.
@@ -94,10 +101,14 @@ struct State {
     tlm: Matrix,
     size: f64,
     leading: f64,
+    /// `Tc`, `Tw` and `Tz` / 100.
+    spacing: [f64; 3],
     /// Text render mode 3 or 7: shown text that paints nothing, such as an OCR layer or a
     /// clip-only object.
     invisible: bool,
     metrics: Option<Rc<Metrics>>,
+    /// The font writes vertically, which the places do not measure.
+    vertical: bool,
 }
 
 /// Font metrics for a whole document, measured once per font object and capped at
@@ -136,11 +147,24 @@ struct Shown {
     shown: bool,
     moved: bool,
     letters: bool,
+    place: Option<[f64; 4]>,
+    /// Text shown other than left to right along the x axis, in glyphs without a declared width
+    /// or a Unicode mapping, or in a vertical font.
+    unplaced: bool,
+    unmapped: bool,
 }
 
 impl Shown {
     fn show(&mut self, state: &State, bytes: &[u8]) {
-        let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else { return };
+        let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else {
+            self.unplaced |= state.metrics.is_none();
+            return;
+        };
+        // Codes without a Unicode mapping still paint glyphs, and a vertical font's glyphs
+        // advance down the page: either way the text's place is not known.
+        let unmapped = metrics.codes(bytes).iter().any(|&(code, _)| metrics.text_of(code).is_none());
+        self.unplaced |= state.vertical || unmapped;
+        self.unmapped |= unmapped;
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
         if chars == 0 {
@@ -153,10 +177,20 @@ impl Shown {
             self.lines = self.lines.saturating_add(1);
         }
         self.moved = false;
-        let [_, _, c, d, _, _] = state.tm.then(&state.ctm).0;
+        let [a, b, c, d, e, f] = state.tm.then(&state.ctm).0;
         let size = (state.size * c.hypot(d)).abs();
         if !size.is_finite() || size <= 0.0 || size > 1e6 {
             return;
+        }
+        let (run, declared) = advance(state, metrics, bytes);
+        let end = e + run * a;
+        // A negative `Tz` mirrors the glyphs and runs the text right to left.
+        let level = a > 0.0 && d > 0.0 && b.abs() <= a * 1e-3 && c.abs() <= d * 1e-3 && state.spacing[2] > 0.0;
+        if level && declared && end.is_finite() && f.is_finite() {
+            let [x0, y0, x1, y1] = self.place.unwrap_or([e, f, e, f]);
+            self.place = Some([x0.min(e).min(end), y0.min(f), x1.max(e).max(end), y1.max(f)]);
+        } else {
+            self.unplaced = true;
         }
         let entry = self.by_size.entry(half_points(size)).or_default();
         entry.0 = entry.0.saturating_add(chars);
@@ -173,18 +207,137 @@ impl Shown {
     fn finish(self) -> Evidence {
         let chars = self.by_size.values().fold(0usize, |n, v| n.saturating_add(v.0));
         let Some((size, (count, bold))) = self.by_size.into_iter().max_by_key(|&(s, (n, _))| (n, s)) else {
-            return Evidence::default();
+            return Evidence { unmapped: self.unmapped, ..Evidence::default() };
         };
-        Evidence { size: size as f64 / 2.0, bold: bold.saturating_mul(2) > count, lines: self.lines, chars, letters: self.letters }
+        let place = self.place.filter(|_| !self.unplaced);
+        let (lines, letters, unmapped) = (self.lines, self.letters, self.unmapped);
+        Evidence { size: size as f64 / 2.0, bold: bold.saturating_mul(2) > count, lines, chars, letters, place, unmapped }
+    }
+}
+
+/// The text width `bytes` advances by, in unscaled text space (§9.4.4), and whether the font
+/// declares every glyph's width.
+fn advance(state: &State, metrics: &Metrics, bytes: &[u8]) -> (f64, bool) {
+    let [char_spacing, word_spacing, scale] = state.spacing;
+    let (width, declared) = metrics.codes(bytes).into_iter().fold((0.0, true), |(sum, declared), (code, len)| {
+        let word = if metrics.is_space(code, len) { word_spacing } else { 0.0 };
+        (sum + metrics.width(code) * state.size + char_spacing + word, declared && metrics.width_declared(code))
+    });
+    (width * scale, declared)
+}
+
+/// Shows `bytes` in `object`, if any, then moves the text matrix past them.
+fn show(state: &mut State, object: Option<&mut Shown>, bytes: &[u8]) {
+    if let Some(o) = object {
+        o.show(state, bytes);
+    }
+    let moved = state.metrics.as_ref().map_or(0.0, |m| advance(state, m, bytes).0);
+    state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
+}
+
+/// The text state and text-showing operators other than `Tf`.
+fn text_op(state: &mut State, object: Option<&mut Shown>, op: &Op) {
+    match op.op.as_slice() {
+        b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
+        b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
+        b"Tc" => state.spacing[0] = op.num(0).unwrap_or(state.spacing[0]),
+        b"Tw" => state.spacing[1] = op.num(0).unwrap_or(state.spacing[1]),
+        b"Tz" => state.spacing[2] = op.num(0).map_or(state.spacing[2], |z| z / 100.0),
+        b"Td" | b"TD" => {
+            if let Some([x, y]) = op.nums::<2>() {
+                if op.op == b"TD" {
+                    state.leading = -y;
+                }
+                state.tlm = Matrix::translate(x, y).then(&state.tlm);
+                state.tm = state.tlm;
+                if y != 0.0
+                    && let Some(o) = object
+                {
+                    o.new_line();
+                }
+            }
+        }
+        b"Tm" => {
+            if let Some(m) = op.nums::<6>() {
+                let moved = m[5] != state.tlm.0[5];
+                (state.tm, state.tlm) = (Matrix(m), Matrix(m));
+                if moved && let Some(o) = object {
+                    o.new_line();
+                }
+            }
+        }
+        b"T*" | b"'" | b"\"" => {
+            if op.op == b"\""
+                && let (Some(word), Some(char)) = (op.num(0), op.num(1))
+            {
+                state.spacing = [char, word, state.spacing[2]];
+            }
+            state.tlm = Matrix::translate(0.0, -state.leading).then(&state.tlm);
+            state.tm = state.tlm;
+            let mut object = object;
+            if let Some(o) = object.as_deref_mut() {
+                o.new_line();
+            }
+            if op.op != b"T*"
+                && let Some(Object::String(s)) = op.operands.last()
+            {
+                show(state, object, &s.bytes);
+            }
+        }
+        b"Tj" => {
+            if let Some(Object::String(s)) = op.operands.first() {
+                show(state, object, &s.bytes);
+            }
+        }
+        b"TJ" => {
+            if let Some(Object::Array(items)) = op.operands.first() {
+                let mut object = object;
+                for item in items {
+                    match item {
+                        Object::String(s) => show(state, object.as_deref_mut(), &s.bytes),
+                        other => {
+                            let n = other.as_f64().unwrap_or(0.0);
+                            let moved = -n / 1000.0 * state.size * state.spacing[2];
+                            state.tm = Matrix::translate(moved, 0.0).then(&state.tm);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `font` writes vertically: a Type 0 font whose `/Encoding` is a predefined CMap name
+/// ending in `-V`, or an embedded CMap whose `/WMode` is 1 (§9.7.5).
+fn vertical(doc: &Document, font: &Object) -> bool {
+    let font = doc.resolve(font);
+    let Some(font) = font.as_dict() else { return false };
+    if font.get(b"Subtype").map(|s| doc.resolve(s)).as_deref().and_then(Object::as_name) != Some(b"Type0".as_slice()) {
+        return false;
+    }
+    match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
+        Some(Object::Name(n)) => n.ends_with(b"-V"),
+        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
+        _ => false,
     }
 }
 
 /// The evidence for each `(BT, ET)` operator span of a page, in order. `resources` is the page's
 /// `/Font` resource dictionary; `fonts` is shared by the document's pages.
 pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops: &[Op], spans: &[(usize, usize)]) -> Vec<Evidence> {
-    let mut by_name: HashMap<Vec<u8>, Option<Rc<Metrics>>> = HashMap::new();
-    let mut state =
-        State { ctm: Matrix::IDENTITY, tm: Matrix::IDENTITY, tlm: Matrix::IDENTITY, size: 0.0, leading: 0.0, invisible: false, metrics: None };
+    let mut by_name: HashMap<Vec<u8>, (Option<Rc<Metrics>>, bool)> = HashMap::new();
+    let mut state = State {
+        ctm: Matrix::IDENTITY,
+        tm: Matrix::IDENTITY,
+        tlm: Matrix::IDENTITY,
+        size: 0.0,
+        leading: 0.0,
+        spacing: [0.0, 0.0, 1.0],
+        invisible: false,
+        metrics: None,
+        vertical: false,
+    };
     let (mut saved, mut unsaved) = (Vec::new(), 0usize);
     let mut out = Vec::with_capacity(spans.len());
     let mut spans = spans.iter().peekable();
@@ -211,62 +364,15 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
             b"BT" => (state.tm, state.tlm) = (Matrix::IDENTITY, Matrix::IDENTITY),
             b"Tf" => {
                 state.size = op.num(1).unwrap_or(state.size);
-                state.metrics = op
-                    .name(0)
-                    .and_then(|name| by_name.entry(name.to_vec()).or_insert_with(|| resources.get(name).and_then(|f| fonts.get(doc, f))).clone());
+                (state.metrics, state.vertical) = op.name(0).map_or((None, false), |name| {
+                    let font = || resources.get(name);
+                    by_name
+                        .entry(name.to_vec())
+                        .or_insert_with(|| (font().and_then(|f| fonts.get(doc, f)), font().is_some_and(|f| vertical(doc, f))))
+                        .clone()
+                });
             }
-            b"TL" => state.leading = op.num(0).unwrap_or(state.leading),
-            b"Tr" => state.invisible = matches!(op.num(0), Some(m) if m == 3.0 || m == 7.0),
-            b"Td" | b"TD" => {
-                if let Some([x, y]) = op.nums::<2>() {
-                    if op.op == b"TD" {
-                        state.leading = -y;
-                    }
-                    state.tlm = Matrix::translate(x, y).then(&state.tlm);
-                    state.tm = state.tlm;
-                    if y != 0.0
-                        && let Some(o) = object
-                    {
-                        o.new_line();
-                    }
-                }
-            }
-            b"Tm" => {
-                if let Some(m) = op.nums::<6>() {
-                    let moved = m[5] != state.tlm.0[5];
-                    (state.tm, state.tlm) = (Matrix(m), Matrix(m));
-                    if moved && let Some(o) = object {
-                        o.new_line();
-                    }
-                }
-            }
-            b"T*" | b"'" | b"\"" => {
-                state.tlm = Matrix::translate(0.0, -state.leading).then(&state.tlm);
-                state.tm = state.tlm;
-                if let Some(o) = object {
-                    o.new_line();
-                    if op.op != b"T*"
-                        && let Some(Object::String(s)) = op.operands.last()
-                    {
-                        o.show(&state, &s.bytes);
-                    }
-                }
-            }
-            b"Tj" => {
-                if let (Some(o), Some(Object::String(s))) = (object, op.operands.first()) {
-                    o.show(&state, &s.bytes);
-                }
-            }
-            b"TJ" => {
-                if let (Some(o), Some(Object::Array(items))) = (object, op.operands.first()) {
-                    for item in items {
-                        if let Object::String(s) = item {
-                            o.show(&state, &s.bytes);
-                        }
-                    }
-                }
-            }
-            _ => {}
+            _ => text_op(&mut state, object, op),
         }
         if current.as_ref().is_some_and(|c| c.0 == at)
             && let Some((_, o)) = current.take()
@@ -283,7 +389,7 @@ mod tests {
     use super::*;
 
     fn text(size: f64, chars: usize) -> Evidence {
-        Evidence { size, bold: false, lines: 1, chars, letters: true }
+        Evidence { size, bold: false, lines: 1, chars, letters: true, place: None, unmapped: false }
     }
 
     fn bold(e: Evidence) -> Evidence {
@@ -343,15 +449,23 @@ mod tests {
         assert!(roles(&[]).is_empty());
     }
 
-    /// The evidence for each `BT`..`ET` of `content`, drawn in Helvetica-Bold as `/F1`.
+    /// The evidence for each `BT`..`ET` of `content`, drawn in Helvetica-Bold as `/F1`, a font
+    /// with no widths whose name is no standard face as `/F2`, and one whose `/Widths` covers
+    /// only `a` as `/F3`.
     fn walk(content: &[u8]) -> Vec<Evidence> {
         let doc = Document::new_empty();
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name("Helvetica-Bold"));
         let mut resources = Dict::new();
-        resources.set(b"F1".to_vec(), Object::Dict(font));
+        for (name, base, widths) in [("F1", "Helvetica-Bold", None), ("F2", "HouseFont", None), ("F3", "HouseFont", Some(500))] {
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type1"));
+            font.set(b"BaseFont".to_vec(), Object::name(base));
+            if let Some(w) = widths {
+                font.set(b"FirstChar".to_vec(), Object::Int(97));
+                font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(w)]));
+            }
+            resources.set(name.as_bytes().to_vec(), Object::Dict(font));
+        }
         let ops = pdfcraft_content::parse(content).ops;
         let at = |name: &[u8]| -> Vec<usize> { ops.iter().enumerate().filter(|(_, o)| o.op == name).map(|(i, _)| i).collect() };
         let spans: Vec<(usize, usize)> = at(b"BT").into_iter().zip(at(b"ET")).collect();
@@ -363,10 +477,51 @@ mod tests {
         let found = walk(
             b"q 2 0 0 2 0 0 cm BT /F1 1 Tf 9 0 0 9 10 10 Tm (Title) Tj ET Q BT /F1 12 Tf 10 50 Td (one) Tj T* (two) ' 0 -14 Td (three) Tj ET BT ET",
         );
-        assert_eq!(found[0], Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true });
-        assert_eq!(found[1], Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true });
+        assert_eq!(
+            Evidence { place: None, ..found[0] },
+            Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true, place: None, unmapped: false }
+        );
+        assert_eq!(
+            Evidence { place: None, ..found[1] },
+            Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true, place: None, unmapped: false }
+        );
+        // "Title" is 2.056 em wide in Helvetica-Bold, at 18 units from x 20.
+        assert_eq!(rounded(found[0].place), Some([20.0, 20.0, 57.008, 20.0]));
+        // The longest line is "three", 2.445 em at 12 from x 10; the baselines run from 50 to 36.
+        assert_eq!(rounded(found[1].place), Some([10.0, 36.0, 39.34, 50.0]));
         assert_eq!(found[2], Evidence::default());
         assert_eq!(found.len(), 3);
+    }
+
+    fn rounded(place: Option<[f64; 4]>) -> Option<[f64; 4]> {
+        place.map(|p| p.map(|v| (v * 1000.0).round() / 1000.0))
+    }
+
+    #[test]
+    fn the_place_spans_the_advance_with_character_word_and_horizontal_spacing() {
+        let found = walk(b"q BT /F1 10 Tf 2 Tc 3 Tw 50 Tz 0 0 Td (a b) Tj ET Q BT /F1 10 Tf [(a) -1000 (b)] TJ ET BT /F1 10 Tf 5 0 (a b) \" ET");
+        // a, space and b are 0.556, 0.278 and 0.611 em: 14.45 at size 10, plus 2 after each of
+        // the three glyphs and 3 after the space, at half width. Q restores the spacing.
+        assert_eq!(rounded(found[0].place), Some([0.0, 0.0, 11.725, 0.0]));
+        assert_eq!(rounded(found[1].place), Some([0.0, 0.0, 21.67, 0.0]), "a TJ number moves the next glyph");
+        assert_eq!(rounded(found[2].place), Some([0.0, 0.0, 19.45, 0.0]), "\" sets the word spacing first");
+    }
+
+    #[test]
+    fn text_that_is_turned_or_in_an_unknown_font_has_no_place() {
+        let found = walk(b"BT /F1 10 Tf 0 1 -1 0 50 50 Tm (a) Tj ET BT /F1 10 Tf (a) Tj /F9 10 Tf (b) Tj ET BT /F1 10 Tf -1 0 0 1 50 0 Tm (a) Tj ET");
+        assert_eq!(found[0].place, None, "vertical");
+        assert_eq!(found[1].place, None, "part of it has no widths");
+        assert_eq!(found[2].place, None, "right to left");
+    }
+
+    #[test]
+    fn text_mirrored_by_tz_or_in_widths_the_font_does_not_declare_has_no_place() {
+        let found = walk(b"q BT /F1 10 Tf -100 Tz 50 0 Td (a) Tj ET Q BT /F2 10 Tf (a) Tj ET BT /F3 10 Tf (ab) Tj ET BT /F3 10 Tf (a) Tj ET");
+        assert_eq!(found[0].place, None, "a negative Tz runs right to left");
+        assert_eq!(found[1].place, None, "no /Widths, and Helvetica only a guess");
+        assert_eq!(found[2].place, None, "b is past /Widths");
+        assert_eq!(rounded(found[3].place), Some([0.0, 0.0, 5.0, 0.0]), "a is in /Widths");
     }
 
     #[test]
@@ -378,5 +533,50 @@ mod tests {
         assert_eq!(found[1].lines, 4, "\" and TD each start a line, and T* uses TD's leading");
         assert_eq!(found[2].chars, 5, "render mode 3 and 7 text is not counted");
         assert_eq!(found[3], Evidence::default(), "a size past 1e6 is dropped");
+    }
+
+    /// The evidence for each `BT`..`ET` of `content` in two-byte Type 0 fonts declaring every
+    /// width as 1000: `/H` and `/V` map their codes to Unicode and write horizontally and
+    /// vertically, and `/U` has no Unicode mapping; with `/F1` as in [`walk`].
+    fn walk_type0(content: &[u8]) -> Vec<Evidence> {
+        let cmap = "begincmap 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0020> <007E> <0020> endbfrange endcmap";
+        let type0 = |encoding: &str, unicode: &str| {
+            format!("<< /Type /Font /Subtype /Type0 /BaseFont /House /Encoding /{encoding} /DescendantFonts [2 0 R] {unicode} >>")
+        };
+        let doc = crate::tests::pdf(
+            &[
+                "<< /Type /Catalog >>".into(),
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /House /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>".into(),
+                crate::tests::stream(cmap),
+                type0("Identity-H", "/ToUnicode 3 0 R"),
+                type0("Identity-V", "/ToUnicode 3 0 R"),
+                type0("Identity-H", ""),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>".into(),
+            ],
+            "",
+        );
+        let mut resources = Dict::new();
+        for (name, n) in [("H", 4), ("V", 5), ("U", 6), ("F1", 7)] {
+            resources.set(name.as_bytes().to_vec(), Object::Ref(ObjRef::new(n, 0)));
+        }
+        let ops = pdfcraft_content::parse(content).ops;
+        let at = |name: &[u8]| -> Vec<usize> { ops.iter().enumerate().filter(|(_, o)| o.op == name).map(|(i, _)| i).collect() };
+        let spans: Vec<(usize, usize)> = at(b"BT").into_iter().zip(at(b"ET")).collect();
+        evidence(&doc, &mut Fonts::default(), &resources, &ops, &spans)
+    }
+
+    #[test]
+    fn text_in_glyphs_without_a_unicode_mapping_has_no_place() {
+        let found = walk_type0(b"BT /F1 12 Tf 72 760 Td (Cell) Tj /U 12 Tf 0 -360 Td <00410042> Tj ET BT /U 12 Tf <00410042> Tj ET BT /H 12 Tf 72 760 Td <00410042> Tj ET");
+        assert_eq!((found[0].chars, found[0].place, found[0].unmapped), (4, None, true));
+        assert_eq!(found[1], Evidence { unmapped: true, ..Evidence::default() }, "nothing mapped, but it paints");
+        assert_eq!((rounded(found[2].place), found[2].unmapped), (Some([72.0, 760.0, 96.0, 760.0]), false));
+    }
+
+    #[test]
+    fn text_in_a_vertical_font_has_no_place() {
+        let found = walk_type0(b"BT /V 12 Tf 72 760 Td <00410042> Tj ET BT /H 12 Tf 72 760 Td <00410042> Tj ET");
+        assert_eq!((found[0].chars, found[0].place), (2, None));
+        assert_eq!(rounded(found[1].place), Some([72.0, 760.0, 96.0, 760.0]));
     }
 }

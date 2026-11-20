@@ -206,18 +206,50 @@ fn review_html(record: &Value) -> Result<String> {
     Ok(html)
 }
 
+/// Table candidates listed by `accessibility_autotag_apply`, at most.
+const MAX_TABLES_LISTED: usize = 200;
+
 /// Tags in one page of `accessibility_tags`, by default and at most.
 const TAG_PAGE: usize = 200;
 const MAX_TAG_PAGE: usize = 1000;
 
 impl Automation {
     pub(crate) fn accessibility_autotag_apply(&mut self, a: &Args) -> Result<Value> {
-        let id = self.doc(a)?.id;
+        let doc = self.doc(a)?;
+        let id = doc.id;
+        // Read before applying: once tagged, the document is refused. A refusal here is Apply's too.
+        let candidates = doc.autotag_tables().unwrap_or_default();
         let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::AutoTagText)?;
         let tags = self.accessibility_tags(a)?;
+        let (tables, review): (Vec<_>, Vec<_>) = candidates.iter().partition(|c| c.not_a_table.is_none());
+        let listed = |list: &[&pdfcraft_engine::a11y::TableCandidate]| -> Vec<Value> {
+            list.iter()
+                .take(MAX_TABLES_LISTED)
+                .map(|c| {
+                    json!({
+                        "page": c.page + 1, "bbox_user_space": c.rect, "rows": c.rows, "columns": c.columns,
+                        "header_row": c.header, "reason": c.not_a_table,
+                    })
+                })
+                .collect()
+        };
+        let note = format!(
+            "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. {} {} {}",
+            format_args!(
+                "{} blocks of rows lining up in columns were tagged as tables (Table, TR, TH or TD; listed in tables{}), the first row as column headers when it is bold or set apart.",
+                tables.len(),
+                if tables.len() > MAX_TABLES_LISTED { format!(", first {MAX_TABLES_LISTED}") } else { String::new() },
+            ),
+            format_args!(
+                "{} more were left as paragraphs (listed in tables_to_review with the reason{}).",
+                review.len(),
+                if review.len() > MAX_TABLES_LISTED { format!(", first {MAX_TABLES_LISTED}") } else { String::new() },
+            ),
+            "Review heading roles, table cells and headers, reading order and remaining accessibility findings manually.",
+        );
         let out = json!({
             "tags": tags["tags"], "count": tags["count"],
-            "note": "Text objects were tagged as headings (H1-H6, by size and weight against the body text) or paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
+            "tables": listed(&tables), "tables_to_review": listed(&review), "note": note,
         });
         Ok(with_warnings(out, warnings))
     }
