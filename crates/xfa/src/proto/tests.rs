@@ -82,7 +82,10 @@ fn fields_and_draws_take_size_border_fill_caption_and_font_from_a_style_sheet() 
     // caption. The style sheet itself lays nothing out.
     let laid = layout_xml(&xml).unwrap();
     let items = &laid.pages.first().expect("a page").items;
-    assert!(items.iter().any(|i| matches!(i, Item::Fill { rect, color } if *color == [0.6; 3] && (rect.w - 190.5 * MM).abs() < 0.01)), "{items:?}");
+    assert!(
+        items.iter().any(|i| matches!(i, Item::Fill { rect, color, .. } if *color == [0.6; 3] && (rect.w - 190.5 * MM).abs() < 0.01)),
+        "{items:?}"
+    );
     let widgets: Vec<_> = items.iter().filter_map(|i| if let Item::Widget(w) = i { Some(w) } else { None }).collect();
     assert_eq!(widgets.len(), 2, "{widgets:?}");
     let count = widgets.iter().find(|w| w.name.contains("Count")).expect("Count");
