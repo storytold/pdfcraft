@@ -1876,6 +1876,39 @@ fn tracked_text_keeps_words_in_paragraphs_and_objects() {
     }
 }
 
+/// A table value drawn on its cell's character grid, in pieces a little apart (TCPDF invoices),
+/// keeps the room between its glyphs once edited: the edited value is as wide as the one it
+/// replaces, where it was drawn narrower at its font's own widths.
+#[test]
+fn an_edited_grid_value_keeps_its_pitch() {
+    // At 10 pt and 54 Tz, Helvetica's " 52" and "44." are 7.506 wide (556 a digit, 278 the
+    // space and the point): each piece starts 0.6 after the one before ends.
+    let pieces = "BT /F1 10 Tf ET BT 54 Tz ET BT 100 700 Td ( 52) Tj ET BT 108.106 700 Td (44.) Tj ET BT 116.212 700 Td (72) Tj ET";
+    let mut doc = text_page(pieces);
+    let span = |doc: &Document, value: &str| {
+        let lines = text::text_lines(doc, 0).unwrap();
+        let line = lines.iter().find(|l| l.text.trim() == value).unwrap_or_else(|| panic!("{value} in {lines:?}"));
+        let left = line.ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min);
+        let right = line.ink.iter().map(|i| i[2]).fold(f64::NEG_INFINITY, f64::max);
+        (left, right)
+    };
+    let before = span(&doc, "5244.72");
+    // The editor's text, as the inline editor has it: with the space that right-aligns the value.
+    let draft = text::text_blocks(&doc, 0).unwrap()[0].editor_text.replacen("72", "73", 1);
+    assert_eq!(draft, " 5244.73");
+    text::replace_block(&mut doc, 0, 0, &draft).unwrap();
+    let after = span(&doc, "5244.73");
+    assert!((after.0 - before.0).abs() < 0.3, "the value starts where it did: {after:?} vs {before:?}");
+    assert!((after.1 - before.1).abs() < 0.3, "and ends where it did: {after:?} vs {before:?}");
+    // Words a gap apart are not a grid value: the gap is a space, not room between glyphs.
+    let mut doc = text_page("BT /F1 10 Tf 100 700 Td [(Two) -500 (words)] TJ ET");
+    text::replace_block(&mut doc, 0, 0, "Two worlds").unwrap();
+    let content = streams(&doc, 0).concat();
+    let tokens: Vec<&str> = content.split_whitespace().collect();
+    let spacing: Vec<f64> = tokens.windows(2).filter(|w| w[1] == "Tc").filter_map(|w| w[0].parse().ok()).collect();
+    assert!(spacing.iter().all(|tc| *tc == 0.0), "no character spacing is added: {spacing:?} in {content}");
+}
+
 #[test]
 fn single_glyph_words_and_cells_are_not_tracking() {
     for (content, expected) in [
