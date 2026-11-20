@@ -393,6 +393,17 @@ pub struct Common {
     /// scripts to read (see [`Props`]). Shared: the live form's instances of the object and
     /// copies of the template point at the same tree.
     pub props: std::sync::Arc<Props>,
+    /// `<bind match="dataRef" ref="…"/>`: the SOM expression naming the data node the object
+    /// binds to, in place of binding by name (XFA 3.3, "Explicit Data References", p. 199).
+    pub data_ref: Option<String>,
+    /// For a `data_ref` with `[*]`: how many objects before this one, in the form's order and in
+    /// the same data scope, have the same reference. A `[*]` binds "one more instance" (p. 199),
+    /// so this object's first instance takes the instance after theirs. Set once the template
+    /// is parsed (`data::number_star_refs`).
+    pub star_ordinal: usize,
+    /// Whether it binds by `data_ref`: it has one this binding follows (one it doesn't binds by
+    /// name). Set once the template is parsed (`data::mark_bindings`).
+    pub follows_ref: bool,
 }
 
 /// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
@@ -541,6 +552,21 @@ pub struct Subform {
     pub column_widths: Vec<f64>,
     /// `<overflow leader="…">`: the named child (a header row) is repeated after a page break.
     pub overflow_leader: Option<String>,
+    /// `<bind match="none"/>`: the subform "will not bind to any node in the XFA Data DOM"
+    /// (XFA 3.3 p. 176). Data binding treats it as a nameless subform, so what it holds binds
+    /// in the enclosing data scope, while scripts still reach it by name (p. 194).
+    pub unbound: bool,
+    /// For an `unbound` subform: how many objects of each name it hands to the enclosing data
+    /// scope, once for one instance of it (see `data::mark_bindings`). Empty otherwise.
+    pub adopted: std::collections::HashMap<String, usize>,
+}
+
+impl Subform {
+    /// The name its instances take in the data: `None` for a nameless subform and for one that
+    /// binds to no data node ([`Subform::unbound`]), which have no data group of their own.
+    pub fn data_name(&self) -> Option<&str> {
+        if self.unbound { None } else { self.common.name.as_deref() }
+    }
 }
 
 /// A positioned group without a box of its own.
@@ -873,6 +899,11 @@ pub struct Template {
     /// The data paths of those fields, by name alone (any instance of a repeating subform), as
     /// a script writes them: a write there changes text shown elsewhere.
     pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
+    /// Some object binds other than by name and position: a subform with `<bind match="none"/>`,
+    /// or an object with a reference this binding follows. Data paths then don't follow the
+    /// form's names, which a walk along them relies on. Set once the template is parsed
+    /// (`data::mark_bindings`).
+    pub explicit_binds: bool,
     /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
     pub cache: TemplateCache,
 }

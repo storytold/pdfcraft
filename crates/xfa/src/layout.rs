@@ -218,10 +218,7 @@ pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
 /// How many instances of `sf` the layout makes under the container at `parent_som`: its `occur`
 /// and the instances `data` holds ([`instance_count`]). The traversal counts them the same way.
 pub(crate) fn subform_instances(tpl: &Template, data: Option<&DataNode>, sf: &Subform, parent_som: &str) -> usize {
-    let from_data = match (&sf.common.name, data) {
-        (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(tpl, parent_som), name),
-        _ => 0,
-    };
+    let from_data = data.map_or(0, |d| crate::data::data_instances(tpl, d, sf, parent_som));
     instance_count(&sf.occur, from_data)
 }
 

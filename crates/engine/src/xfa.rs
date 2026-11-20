@@ -313,17 +313,23 @@ fn has_node(n: &FormNode, som: &str, depth: usize) -> bool {
     depth <= 64 && (n.som == som || n.children.iter().any(|c| has_node(c, som, depth + 1)))
 }
 
-fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
+fn count_instances(tpl: &Template, root: &FormNode, parent_som: &str, name: &str) -> usize {
     let parent = if parent_som.is_empty() { Some(root) } else { find_container(root, parent_som, 0) };
-    parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name).count())
+    // A same-named sibling with no data group named after it isn't one of the instances.
+    parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name && !pdfcraft_xfa::binds_elsewhere(tpl, &c.som)).count())
 }
 
 /// An instance SOM (`…table[0].row[2]`) split into its parent's data path (areas left out,
-/// see [`pdfcraft_xfa::data_path`]) and SOM, its name and its index.
+/// see [`pdfcraft_xfa::data_path`]) and SOM, its name and its index. `None` when the instance
+/// has no data group of its own (a nameless subform, or one with `<bind match="none"/>`): its
+/// data path is then its parent's, whose last segment is not the instance.
 fn split_instance(tpl: &Template, som: &str) -> Option<(pdfcraft_xfa::DataPath, String, String, usize)> {
     let mut path = pdfcraft_xfa::data_path(tpl, som);
-    let (name, index) = path.pop()?;
     let parent_som = som.rsplit_once('.').map(|(p, _)| p).unwrap_or("").to_string();
+    if pdfcraft_xfa::binds_elsewhere(tpl, som) || path.len() != pdfcraft_xfa::data_path(tpl, &parent_som).len().saturating_add(1) {
+        return None;
+    }
+    let (name, index) = path.pop()?;
     Some((path, parent_som, name, index))
 }
 
@@ -834,9 +840,31 @@ impl<'a, 'b> Runner<'a, 'b> {
             if by_som.contains_key(&som) || !wanted(&som) {
                 continue;
             }
-            // Every row that holds it, not only the first.
-            let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
-            let paths = self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default();
+            // Every instance of it, in every row that holds it, at the node that instance binds
+            // to: one per row by name or by a reference relative to its row, the one node an
+            // absolute reference names, the one row a subform around it is bound to. Only its own
+            // instances: a same-named field in another copy of a subform is another object.
+            let plain = plain_som(&som);
+            let instances: Vec<String> = {
+                // A copy of the shared reference: `live()` borrows `self` mutably.
+                let tpl = self.tpl;
+                let live = self.live();
+                let mut out = Vec::new();
+                let mut stack: Vec<&pdfcraft_xfa::FormNode> = vec![&live.root];
+                while let Some(n) = stack.pop() {
+                    if plain_som(&n.som) == plain && pdfcraft_xfa::same_template_object(tpl, &n.som, &som) {
+                        out.push(n.som.clone());
+                    }
+                    stack.extend(n.children.iter());
+                }
+                out
+            };
+            let mut paths: Vec<pdfcraft_xfa::DataPath> = instances.iter().map(|s| pdfcraft_xfa::data_path(self.tpl, s)).collect();
+            if paths.is_empty() {
+                paths.push(pdfcraft_xfa::data_path(self.tpl, &som));
+            }
+            paths.sort();
+            paths.dedup();
             for path in paths {
                 if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
                     self.embedded_changed = true;
@@ -872,7 +900,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 if let XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } = e
                     && let Some((_, parent_som, name, _)) = split_instance(tpl, som)
                 {
-                    let have = count_instances(&live.root, &parent_som, &name);
+                    let have = count_instances(tpl, &live.root, &parent_som, &name);
                     counts.entry((parent_som, name)).or_insert(have);
                 }
             }
@@ -912,7 +940,11 @@ impl<'a, 'b> Runner<'a, 'b> {
                     }
                 }
                 XfaEffect::AddInstance { som } | XfaEffect::RemoveInstance { som } => {
-                    let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else { continue };
+                    let Some((parent, parent_som, name, index)) = split_instance(self.tpl, som) else {
+                        // Its count lives in no data group named after it, and nowhere else yet.
+                        self.console([format!("{som}: this subform has no data group of its own name (it binds to none, or by a reference), so its instances can't be added or removed yet; ignored")]);
+                        continue;
+                    };
                     let key = (parent_som, name.clone());
                     let have = counts.get(&key).copied().unwrap_or(0);
                     if matches!(e, XfaEffect::AddInstance { .. }) {
@@ -1511,6 +1543,54 @@ mod tests {
             assert_eq!(target.as_deref(), after);
         }
         assert!(indexed_som_tail("form[0].row[bad]").is_none());
+    }
+
+    /// A same-named sibling with no data group of its own (`match="none"`) is not one of a
+    /// repeating subform's instances: counting it would make adding a row ask the data for
+    /// one row too many.
+    #[test]
+    fn instances_are_counted_without_same_named_siblings_bound_to_nothing() {
+        let (tpl, _) = pdfcraft_xfa::parse(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+                <subform name="form">
+                    <subform name="row"><bind match="none"/><field name="note"/></subform>
+                    <subform name="row"><occur min="1" max="4" initial="2"/><field name="qty"/></subform>
+                </subform>
+            </template>"#,
+        )
+        .unwrap();
+        let live = pdfcraft_xfa::form_tree(&tpl, None, &Default::default());
+        assert_eq!(count_instances(&tpl, &live.root, "form[0]", "row"), 2);
+    }
+
+    /// An instance of a repeating subform with `<bind match="none"/>`, or of a nameless one, has
+    /// no data group of its own: its data path is its parent's. Splitting it must not take the
+    /// parent's last segment for the instance, or adding or removing a row would copy or remove
+    /// the parent's data group.
+    #[test]
+    fn an_instance_without_a_data_group_of_its_own_is_not_split() {
+        let (tpl, _) = pdfcraft_xfa::parse(
+            r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+                <subform name="form"><subform name="table">
+                    <subform name="row"><bind match="none"/><occur min="1" max="4"/></subform>
+                    <subform><occur min="1" max="4"/></subform>
+                    <subform name="line"><occur min="1" max="4"/></subform>
+                    <subform name="byref"><bind match="dataRef" ref="$.person"/><occur min="1" max="4"/></subform>
+                    <subform name="bystar"><bind match="dataRef" ref="$.items.item[*]"/><occur min="1" max="4"/></subform>
+                </subform></subform>
+            </template>"#,
+        )
+        .unwrap();
+        assert_eq!(split_instance(&tpl, "form[0].table[0].row[2]"), None);
+        assert_eq!(split_instance(&tpl, "form[0].table[0].#subform[2]"), None);
+        // Bound by a reference: its data node is not a group named after it, so the bookkeeping
+        // by name would remove or copy the wrong node (the shared `person`, here).
+        assert_eq!(split_instance(&tpl, "form[0].table[0].byref[2]"), None);
+        assert_eq!(split_instance(&tpl, "form[0].table[0].bystar[2]"), None);
+        assert_eq!(
+            split_instance(&tpl, "form[0].table[0].line[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
+            Some((2, "form[0].table[0]".into(), "line".into(), 2))
+        );
     }
 
     #[test]

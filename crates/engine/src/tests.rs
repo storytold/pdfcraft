@@ -8489,6 +8489,46 @@ fn dynamic_xfa_forms_are_laid_out_on_open_filled_and_saved_incrementally() {
     assert_eq!(d2.form.iter().find(|f| f.name == "answer").unwrap().value, vec!["N".to_string()]);
 }
 
+/// Explicit data bindings hold through the engine: a field in a `match="none"` section and a
+/// field bound by `dataRef` open with the values their data nodes hold, and filling them in
+/// writes the values back to those nodes (not to groups named after the subforms), so Adobe's
+/// viewers read them where the form says they are.
+#[test]
+fn explicit_bindings_are_read_and_written_through_the_engine() {
+    let xdp = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="section" layout="tb"><bind match="none"/>
+  <field name="color" w="2in" h="0.3in"><ui><textEdit/></ui></field>
+  <field name="value" w="2in" h="0.3in"><ui><textEdit/></ui><bind match="dataRef" ref="$.person.surname"/></field>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><color>Teal</color><person><surname>Smith</surname></person></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#;
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("bound.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let value =
+        |s: &Session, id, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no {n}"));
+    assert_eq!(value(&s, id, "color"), ["Teal"]);
+    assert_eq!(value(&s, id, "value"), ["Smith"]);
+    s.apply(id, Edit::SetFieldValue { name: "color".into(), value: FieldValue::Text("Crimson".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "value".into(), value: FieldValue::Text("Jones".into()) }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+    let text = |p: &str| data.text_at(&pdfcraft_xfa::som_to_path(p)).map(str::to_string);
+    assert_eq!(text("form[0].color[0]").as_deref(), Some("Crimson"));
+    assert_eq!(text("form[0].person[0].surname[0]").as_deref(), Some("Jones"));
+    assert_eq!(text("form[0].section[0].color[0]"), None, "no group named after the section");
+    assert_eq!(text("form[0].section[0].value[0]"), None);
+    let id2 = s.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(value(&s, id2, "color"), ["Crimson"]);
+    assert_eq!(value(&s, id2, "value"), ["Jones"]);
+}
+
 /// A signature box's XFA preSign script runs as one undoable step, showing its notice and
 /// changing the form; its postSign script runs too; a box without them runs nothing and changes
 /// nothing.
@@ -12747,6 +12787,189 @@ fn a_reset_clears_a_floating_field_in_every_row() {
 ",
     );
     assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
+}
+
+/// A floating field bound by a reference to one row's node is reset there alone: only a field
+/// the template repeats goes back to its default in every row.
+#[test]
+fn a_reset_of_a_floating_field_bound_to_one_row_leaves_the_other_rows() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <field name="amount" id="second" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value><bind match="dataRef" ref="$.row[1].amount"/></field>
+ <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Second: <span xfa:embed="#second"/></p></body></exData></value></draw>
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    assert!(page_texts(&s, id).join("\n").contains("Second: 20"));
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert!(page_texts(&s, id).join("\n").contains("Second: none"));
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].row[0].amount[0]")), Some("10"), "the other row keeps its value");
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].row[1].amount[0]")), Some("none"));
+}
+
+/// A reset takes a floating field back to its default at the node each of its instances binds
+/// to: in every row for a reference relative to its row, and only in the row a subform around
+/// it is bound to by a reference.
+#[test]
+fn a_reset_of_a_floating_field_follows_each_instance_binding() {
+    let form = |body: &str| {
+        format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {body}
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##
+        )
+    };
+    let floating = |bind: &str| {
+        format!(
+            r##"<field name="shown" id="amt" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value>{bind}</field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#amt"/></p></body></exData></value></draw>"##
+        )
+    };
+    let amounts = |xdp: String| {
+        let mut s = Session::new();
+        let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+        let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+        assert_eq!(o.error, None, "{o:?}");
+        let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+        ["form[0].row[0].amount[0]", "form[0].row[1].amount[0]"].map(|p| data.text_at(&pdfcraft_xfa::som_to_path(p)).map(str::to_string))
+    };
+    // Relative to its row, in a repeating row: every row.
+    let relative =
+        format!(r#"<subform name="row" layout="tb"><occur min="1" max="-1"/>{}</subform>"#, floating(r#"<bind match="dataRef" ref="$.amount"/>"#));
+    assert_eq!(amounts(form(&relative)), [Some("none".to_string()), Some("none".to_string())]);
+    // By name, under a subform bound to the second row: that row alone.
+    let bound = format!(
+        r#"<subform name="second" layout="tb"><bind match="dataRef" ref="$.row[1]"/>{}</subform>"#,
+        floating("").replace(r#"name="shown""#, r#"name="amount""#)
+    );
+    assert_eq!(amounts(form(&bound)), [Some("10".to_string()), Some("none".to_string())]);
+}
+
+/// Two copies of a subform share its name but are different objects of the template: a reset
+/// gives each copy's floating field its own default at its own node, not the other copy's.
+#[test]
+fn a_reset_gives_each_copy_of_a_floating_field_its_own_default() {
+    let part = |row: usize, id: &str, default: &str| {
+        format!(
+            r##"<subform name="part" layout="tb"><bind match="dataRef" ref="$.row[{row}]"/>
+  <field name="amount" id="{id}" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>{default}</text></value></field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#{id}"/></p></body></exData></value></draw>
+ </subform>"##
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##,
+        part(0, "first", "a0"),
+        part(1, "second", "b1")
+    );
+    let mut s = Session::new();
+    let id = s.open("parts.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xdp)), None).expect("opens");
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).expect("a datasets packet");
+    let at = |p: &str| data.text_at(&pdfcraft_xfa::som_to_path(p)).map(str::to_string);
+    assert_eq!(at("form[0].row[0].amount[0]").as_deref(), Some("a0"));
+    assert_eq!(at("form[0].row[1].amount[0]").as_deref(), Some("b1"));
+}
+
+/// A floating field on a master page has an instance on each page made from it, each with its
+/// own data: a reset takes every page's back to its default, not only the first page's.
+#[test]
+fn a_reset_clears_a_master_page_floating_field_on_every_page() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><occur max="-1"/><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+  <field name="Stamp" id="floatStamp" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  <draw x="0.5in" y="0.2in" w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Stamp: <span xfa:embed="#floatStamp"/></p></body></exData></value></draw>
+ </pageArea></pageSet>
+ <subform name="one" w="7in" h="8in">
+  <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+ </subform>
+ <subform name="two" w="7in" h="8in"><breakBefore targetType="pageArea"/></subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><front><Stamp>Paid</Stamp></front><front><Stamp>Paid</Stamp></front><form/></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("pages.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = |s: &Session| page_texts(s, id).join("\n");
+    assert_eq!(s.get(id).unwrap().info.pages.len(), 2);
+    assert_eq!(text(&s).matches("Stamp: Paid").count(), 2, "{}", text(&s));
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    assert_eq!(text(&s).matches("Paid").count(), 0, "every page's stamp is reset: {}", text(&s));
+}
+
+/// A calculation that sets a field bound through a `match="none"` section, or by a reference,
+/// changes the live form scripts read at once: a later calculation using it sees the new value
+/// on opening, not the empty one the data held (the totals row of a table in a `match="none"`
+/// page, where one total subtracts two others).
+#[test]
+fn calculations_see_values_set_through_explicit_bindings() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb"><bind match="none"/>
+  <field name="b" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">2</script></calculate></field>
+  <field name="d" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">b.rawValue * 3</script></calculate></field>
+  <field name="c" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><bind match="dataRef" ref="$.other.c"/><calculate><script contentType="application/x-javascript">5</script></calculate></field>
+  <field name="e" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><calculate><script contentType="application/x-javascript">c.rawValue + 1</script></calculate></field>
+ </subform>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><b/><d/><other><c/></other><e/></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("calc.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let value = |n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_else(|| panic!("no {n}"));
+    assert_eq!(value("b"), ["2"]);
+    assert_eq!(value("d"), ["6"], "d read the b its calculation had just set");
+    assert_eq!(value("c"), ["5"]);
+    assert_eq!(value("e"), ["6"], "e read the c bound by a reference");
 }
 
 /// An XFA button's click script may show the attachments panel; a text field's exit script

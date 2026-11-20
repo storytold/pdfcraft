@@ -1,8 +1,7 @@
 use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
 use super::items::Item;
 use super::{
-    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path,
-    subform_instances,
+    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, subform_instances,
 };
 
 impl Layouter<'_> {
@@ -483,10 +482,7 @@ impl Layouter<'_> {
     /// parser reads `initial` and `max` up to [`MAX_INSTANCES`].)
     pub(super) fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
         let Node::Subform(sf) = node else { return };
-        let from_data = match (&sf.common.name, self.data) {
-            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
-            _ => 0,
-        };
+        let from_data = self.data.map_or(0, |d| crate::data::data_instances(self.tpl, d, sf, parent_som));
         if from_data <= laid_out {
             return;
         }

@@ -266,6 +266,13 @@ fn parse_common(n: XmlNode, warnings: &mut Vec<String>) -> Common {
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
         traversal: parse_traversal(child(n, "traversal")),
+        data_ref: child(n, "bind")
+            .filter(|b| b.attribute("match").is_some_and(|m| m.trim() == "dataRef"))
+            .and_then(|b| b.attribute("ref"))
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty()),
+        star_ordinal: 0,
+        follows_ref: false,
     }
 }
 
@@ -989,6 +996,8 @@ fn parse_subform(n: XmlNode, warnings: &mut Vec<String>, depth: usize, set_layou
         set: false,
         column_widths,
         overflow_leader: child(n, "overflow").and_then(|o| o.attribute("leader")).map(str::to_string).filter(|s| !s.is_empty()),
+        unbound: child(n, "bind").and_then(|b| b.attribute("match")).is_some_and(|m| m.trim() == "none"),
+        adopted: Default::default(),
     }
 }
 
@@ -1319,7 +1328,10 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     collect_page_roles(&root_node, &mut page_roles, 0);
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
-    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), cache: Default::default() };
+    let mut tpl =
+        Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default(), explicit_binds: false, cache: Default::default() };
+    crate::data::mark_bindings(&mut tpl);
+    crate::data::number_star_refs(&mut tpl);
     let paths = crate::data::fields_with_ids(&tpl)
         .into_iter()
         .filter(|(id, _, _)| tpl.embedded.contains(*id))
