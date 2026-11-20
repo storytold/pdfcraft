@@ -140,6 +140,32 @@ fn a_ligature_is_one_glyph_in_every_writing_direction() {
     }
 }
 
+/// calibre writes ToUnicode maps whose `bfrange`s overlap. Copy and Find read them through the
+/// vendored hayro-cmap, which binary-searched mappings sorted by their first code: the search
+/// stepped past every range holding `g` and `x`, and "exaggeration" was copied as "e a eration"
+/// (#6740). These are the book's own entries for `a`–`z` (codes 0x44–0x5D), in its order.
+#[test]
+fn overlapping_to_unicode_ranges_give_every_letter() {
+    let chars = [0x44u8, 0x4F, 0x5A, 0x5C].map(|c| format!("<{c:02X}> <{:04X}>", c + 0x1D)).join(" ");
+    let ranges = "44-49 44-5C 44-4C 44-5D 44-4D 44-45 44-53 44-5A 46-4C 48-49 4B-4C 4B-53 4E-5D 4E-4F 4E-5A \
+                  4E-52 4E-5C 4E-53 4F-58 4F-53 51-52 51-53 54-5D 55-5C 55-5A 55-5D 55-58 55-59 5C-5D"
+        .split(' ')
+        .map(|pair| {
+            let (lo, hi) = pair.split_once('-').unwrap();
+            let base = u8::from_str_radix(lo, 16).unwrap() + 0x1D;
+            format!("<{lo}> <{hi}> <{base:04X}>")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let unicode = format!("4 beginbfchar {chars} endbfchar 29 beginbfrange {ranges} endbfrange");
+    // Each letter's code is 0x1D below it, as in the book.
+    let words = "exaggeration quiz";
+    let codes: String = words.chars().map(|c| if c == ' ' { ' ' } else { char::from(c as u8 - 0x1D) }).collect();
+    let pdf = ligature_pages(&unicode, &codes, &["1 0 0 1 10 150"]);
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(text.plain_text(), words);
+}
+
 /// One page per content stream, in Helvetica (`/F1`), with `/P1` in the resources'
 /// `/Properties` naming the `/ActualText` "fi".
 fn marked_pages(contents: &[&str]) -> Pdf {

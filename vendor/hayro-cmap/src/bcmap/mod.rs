@@ -201,6 +201,7 @@ pub(crate) fn parse<'a>(
         cid_ranges,
         notdef_ranges,
         bf_entries,
+        bf_pieces: Vec::new(),
         base,
     })
 }
