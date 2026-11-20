@@ -289,13 +289,8 @@ fn box_controls(
     let bounds = bounds_of(&quad);
     let visible = image.visible_rect.unwrap_or(image.rect);
     let pivot = view.to_doc(user_to_screen(xf, info, page, (visible[0] + visible[2]) * 0.5, (visible[1] + visible[3]) * 0.5));
-    let added = image.object.is_some_and(|object| {
-        doc.added()
-            .iter()
-            .any(|item| item.page == page && matches!(&item.content, pdfcraft_engine::AddedContent::Image(image) if image.image == object))
-    });
     let rules = BoxRules::in_mode(TransformMode::Free)
-        .with_scale(if added { ScaleRule::LargerAxis } else { ScaleRule::Proportional })
+        .with_scale(ScaleRule::LargerAxis)
         .with_allow(BoxAllow::new(true, false, false))
         .with_min_side(least_side(ui, placed));
     let shown = TransformBox::new(tl!("Picture"), Bind::given(BoxState::new(quad, pivot)), bounds, 0.0)
@@ -312,15 +307,18 @@ fn box_controls(
             EditEvent::Begin { .. } => {
                 let cut = cut_preview(doc, placed, index);
                 if let Some(s) = session.image_selection.as_mut() {
-                    s.preview = cut;
-                    s.settled = None;
-                    s.settled_revision = None;
+                    if s.preview.is_none() {
+                        s.preview = cut;
+                    }
                 }
             }
             EditEvent::Commit { after, .. } => {
                 edit = picture_edit(page, index, image.matrix, image.rect, quad, after.quad, &to_user);
                 if let Some(s) = session.image_selection.as_mut() {
-                    s.settled = edit.as_ref().map(|_| (norm_rect(view, xf, bounds), norm_rect(view, xf, bounds_of(&after.quad))));
+                    let from = s.settled.map_or_else(|| norm_rect(view, xf, bounds), |(from, _)| from);
+                    if edit.is_some() {
+                        s.settled = Some((from, norm_rect(view, xf, bounds_of(&after.quad))));
+                    }
                     if s.settled.is_none() {
                         s.preview = None;
                     }
@@ -328,7 +326,9 @@ fn box_controls(
             }
             EditEvent::Cancel { .. } => {
                 if let Some(s) = session.image_selection.as_mut() {
-                    s.preview = None;
+                    if s.settled.is_none() {
+                        s.preview = None;
+                    }
                 }
             }
             _ => {}
@@ -338,15 +338,17 @@ fn box_controls(
     let Some(s) = session.image_selection.as_mut() else { return edit };
     s.paper = None;
     let Some(textures) = s.preview.as_ref() else { return edit };
-    let (from, to) = match s.settled {
-        Some((from, to)) => (corners_of(doc_rect(view, xf, from)), corners_of(doc_rect(view, xf, to))),
-        None => (quad, shown.edit.shown.as_ref().and_then(|m| m.same()).map_or(quad, |state| state.quad)),
+    let from = s.settled.map_or(quad, |(from, _)| corners_of(doc_rect(view, xf, from)));
+    let to = if shown.held.is_some() {
+        shown.edit.shown.as_ref().and_then(|m| m.same()).map_or(quad, |state| state.quad)
+    } else {
+        s.settled.map_or(quad, |(_, to)| corners_of(doc_rect(view, xf, to)))
     };
     s.paper = Some(from.map(|p| placed.to_page(view.to_screen(p))));
     let paper_quad = from.map(|p| view.to_screen(p));
     PicturePaper::new(paper_quad, placed.rect).show_at(ui, body.rect);
     let full = matrix_corners(xf, info, page, image.matrix).map(|p| view.to_doc(p));
-    let map = affine_between(from, to);
+    let map = affine_between(quad, to);
     let _ = TransformPreview::new(tl!("Picture"), textures).map(PreviewMap::Quad(full.map(map))).show_at(ui, body.rect);
     edit
 }
