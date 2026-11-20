@@ -51,7 +51,26 @@ pub struct DocId(pub u64);
 pub(crate) const LOW_RESOLUTION_PRINT_DPI: f64 = 150.0;
 
 pub(crate) fn render_threads() -> usize {
-    std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(4).clamp(2, 8) - 1
+    let logical_cores = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
+    render_worker_count(logical_cores, std::env::var("PDFCRAFT_RENDER_THREADS").ok().as_deref())
+}
+
+fn render_worker_count(logical_cores: usize, requested: Option<&str>) -> usize {
+    // Logical CPUs may share execution units. Leave room for the UI and other applications,
+    // even when several visible pages or tiles are waiting for the renderer.
+    requested.and_then(|n| n.trim().parse::<usize>().ok()).filter(|n| (1..=7).contains(n)).unwrap_or((logical_cores / 4).clamp(1, 4))
+}
+
+#[cfg(test)]
+#[test]
+fn the_viewer_leaves_cpu_headroom_on_small_machines() {
+    assert_eq!(render_worker_count(2, None), 1);
+    assert_eq!(render_worker_count(4, None), 1);
+    assert_eq!(render_worker_count(8, None), 2);
+    assert_eq!(render_worker_count(24, None), 4);
+    assert_eq!(render_worker_count(4, Some(" 2 ")), 2);
+    assert_eq!(render_worker_count(4, Some("0")), 1);
+    assert_eq!(render_worker_count(4, Some("128")), 1);
 }
 
 /// A document's working file captured for crash recovery.

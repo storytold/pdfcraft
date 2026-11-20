@@ -1801,6 +1801,15 @@ fn scroll_demand(v: &DocView, shown: &[usize]) -> Vec<RenderRequest> {
     wanted.into_iter().map(|(page, scale, tag, tile)| RenderRequest { page, scale, tag, tile, ..Default::default() }).collect()
 }
 
+fn cache_whole_pages(view: &mut DocView, pages: impl IntoIterator<Item = usize>, tag: u64) -> TextureHandle {
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("cached page", egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    for page in pages {
+        view.pages.insert(page, PageTex { tag, tex: tex.clone() });
+    }
+    tex
+}
+
 #[test]
 fn continuous_view_prefetches_the_rows_ahead_of_the_way_it_moved() {
     let mut v = view(20, PageLayout::Single, true);
@@ -1846,13 +1855,14 @@ fn scrolling_the_other_way_drops_the_prefetch_from_the_queue() {
     v.current = 10;
     v.scroll_dir = 1;
     v.frame_visible = [9, 10].into();
+    let _ = cache_whole_pages(&mut v, [9, 10], 1000);
     v.frame_queue = scroll_demand(&v, &[9, 10]);
     let down: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
-    assert_eq!(down, [10, 9, 11, 12], "on-screen pages first, then the pages below");
+    assert_eq!(down, [11, 12], "the on-screen pages are ready, so prefetch the pages below");
     v.scroll_dir = -1;
     v.frame_queue = scroll_demand(&v, &[9, 10]);
     let up: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
-    assert_eq!(up, [10, 9, 8, 7], "the pages below leave the queue, which cancels their renders");
+    assert_eq!(up, [8, 7], "the pages below leave the queue, which cancels their renders");
 }
 
 #[test]
@@ -1884,10 +1894,10 @@ fn the_prefetch_ahead_stays_within_the_page_allowance() {
     // Eight 16 MB pages on screen leave no room in the 128 MiB allowance for another.
     let shown: Vec<usize> = (0..8).collect();
     v.frame_visible = shown.iter().copied().collect();
+    let _ = cache_whole_pages(&mut v, shown.iter().copied(), 1000);
     v.frame_queue = scroll_demand(&v, &shown);
     assert!(v.frame_queue.iter().any(|r| r.page == 8), "the prefetch asks for the next page");
-    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
-    assert_eq!(pages.iter().copied().max(), Some(7), "no prefetch past the allowance: {pages:?}");
+    assert!(v.prepare_render_queue(&info, 1.0).is_empty(), "no prefetch past the allowance");
 }
 
 #[test]
@@ -1988,9 +1998,10 @@ fn large_pages_on_screen_widen_the_allowance_for_the_pages_around_them() {
         let info = fit_width_pages(5, size);
         let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
         v.frame_visible = HashSet::from([3, 4]);
+        let _ = cache_whole_pages(&mut v, [3, 4], 1000);
         v.frame_queue = (0..5).map(|page| RenderRequest { page, scale, tag: 1000, ..Default::default() }).collect();
         let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
-        assert_eq!(pages, (0..5).collect::<Vec<_>>(), "two pages on screen and three off screen at scale {scale}");
+        assert_eq!(pages, [0, 1, 2], "two pages on screen leave room for three off screen at scale {scale}");
     }
 }
 
@@ -1999,6 +2010,9 @@ fn tiled_pages_on_screen_keep_the_128_mib_page_allowance() {
     let info = fit_width_pages(8, 1.0);
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.frame_visible = HashSet::from([3, 4]);
+    let tex = cache_whole_pages(&mut v, [3, 4], 2000);
+    v.tiles.insert((3, 1000, 0, 0), tex.clone());
+    v.tiles.insert((4, 1000, 0, 0), tex);
     // Pages 3 and 4 are on screen as a backdrop and tiles, beside whole pages off screen.
     let mut queue: Vec<RenderRequest> = [3, 4]
         .into_iter()
@@ -2012,7 +2026,7 @@ fn tiled_pages_on_screen_keep_the_128_mib_page_allowance() {
     queue.extend([2, 5, 1, 6, 0, 7].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }));
     v.frame_queue = queue;
     let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().filter(|r| r.tile.is_none()).map(|r| r.page).collect();
-    assert_eq!(pages, vec![3, 4, 2, 5], "two backdrops and two whole pages fit in 128 MiB");
+    assert_eq!(pages, [2, 5], "two backdrops leave room for two whole pages in 128 MiB");
 }
 
 #[test]
@@ -2094,29 +2108,31 @@ fn visible_pages_render_before_thumbnails_and_text() {
     let info = thumbnail_info(4);
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     let main = RenderRequest { page: 0, scale: 1.0, tag: 1000, ..Default::default() };
+    let prefetch = RenderRequest { page: 1, ..main };
     let text = RenderRequest { page: 0, kind: RequestKind::Text, scale: 1.0, tag: TEXT_TAG, ..Default::default() };
     // Opening page 0 queues its pixels and text alongside Pages-panel thumbnails.
     v.begin_render_frame();
     v.frame_visible = [0].into();
-    v.frame_queue = vec![main, text];
+    v.frame_queue = vec![main, prefetch, text];
     for p in 1..4 {
         v.need_thumbnail(p, true);
     }
     let queue = v.prepare_render_queue(&info, 1.0);
-    assert_eq!(queue, vec![main], "visible pixels first: no thumbnails or text yet");
+    assert_eq!(queue, vec![main], "visible pixels first: no prefetch, thumbnails or text yet");
     // Once the visible raster arrives, background work is admitted.
     v.last_queue = queue;
     assert!(v.receive_result(&ctx, solid_result(main, 100, 130)) > 0);
     v.begin_render_frame();
     v.frame_visible = [0].into();
-    v.frame_queue = vec![text];
+    v.frame_queue = vec![main, prefetch, text];
     for p in 1..4 {
         v.need_thumbnail(p, true);
     }
     let queue = v.prepare_render_queue(&info, 1.0);
     assert!(queue.iter().any(|r| r.kind == RequestKind::Text), "text admitted after pixels");
     assert!(queue.iter().any(|r| r.tag & THUMB_TAG != 0), "thumbnails admitted after pixels");
-    assert!(!queue.iter().any(|r| r.kind == RequestKind::Pixels && r.tag & THUMB_TAG == 0), "no main pixels re-requested");
+    assert!(queue.contains(&prefetch), "prefetch resumes after pixels");
+    assert!(!queue.contains(&main), "no main pixels re-requested");
     // An errored visible page never holds background work back.
     v.errors.insert(0, "gone".to_string());
     v.begin_render_frame();
@@ -2128,6 +2144,28 @@ fn visible_pages_render_before_thumbnails_and_text() {
     let queue = v.prepare_render_queue(&info, 1.0);
     assert!(queue.iter().any(|r| r.kind == RequestKind::Text), "text admitted despite the error");
     assert!(queue.iter().any(|r| r.tag & THUMB_TAG != 0), "thumbnails still admitted");
+}
+
+#[test]
+fn zoom_reuses_a_ready_texture_and_defers_prefetch_until_settled() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(4);
+    let mut view = DocView::new(DocId(1), &info, ViewDefaults { continuous: false, ..Default::default() });
+    let scale = 2.0;
+    let tag = scale_tag(scale);
+    let plan = RenderPlan { visible_pages: &[0, 1], tag, scale, sharp_held: true, pan_held: false, hand: true };
+    let first = RenderRequest { page: 0, scale: 1.0, tag: scale_tag(1.0), ..Default::default() };
+    view.last_queue = vec![first];
+    view.frame_visible = [0].into();
+    assert!(view.receive_result(&ctx, solid_result(first, 100, 130)) > 0);
+    let mut frame = |plan: &RenderPlan<'_>| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            plan_renders(ui, &mut view, &info, (vec![(0, scale, tag, None), (1, scale, tag, None)], vec![0, 1]), plan);
+        });
+        view.frame_queue.iter().map(|r| r.page).collect::<Vec<_>>()
+    };
+    assert_eq!(frame(&plan), [1], "only the page without a texture needs work during zoom");
+    assert_eq!(frame(&RenderPlan { sharp_held: false, ..plan }), [0, 1, 2]);
 }
 
 #[test]

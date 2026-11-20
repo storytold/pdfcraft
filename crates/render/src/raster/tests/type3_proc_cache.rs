@@ -90,6 +90,29 @@ fn a_type3_glyph_shown_again_decodes_its_procedure_once() {
     }
 }
 
+#[test]
+fn simple_type3_outlines_match_the_interpreter_pixel_for_pixel() {
+    use crate::raster::{PageRenderer, RenderConfig, RenderRequest};
+    let content = "BT /F1 12 Tf 0 0.5 0.2 rg 1 0.1 0.2 1 2 30 Tm (!!!) Tj ET";
+    let resources = format!("<< /Font << /F1 {} >> >>", font(&["dot".into()], 5));
+    for rule in ["f", "f*"] {
+        let path = "0 0 m 8 0 l 7 5 5 8 0 8 c h 1 1 m 3 1 l 2 3 l h";
+        let render = |ops: &str| {
+            let stream = format!("8 0 0 0 8 8 d1 {ops}");
+            let dict = format!("<< /Length {} >>", stream.len());
+            let bytes = image_cache_pdf(content, &resources, &[(&dict, stream.as_bytes())]);
+            let mut renderer = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
+            let raster = renderer.render(RenderRequest { scale: 2.25, ..Default::default() });
+            assert!(raster.error.is_none(), "{:?}", raster.error);
+            raster.rgba
+        };
+        let cached = render(&format!("{path} {rule}"));
+        let interpreted = render(&format!("q {path} {rule} Q"));
+        assert!(cached.iter().any(|&byte| byte < 255), "the glyph must paint pixels");
+        assert_eq!(cached, interpreted);
+    }
+}
+
 /// A procedure that decodes to more than 64 KiB isn't kept: shown three times, it is decoded three
 /// times, and draws each time.
 #[test]

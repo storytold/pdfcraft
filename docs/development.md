@@ -119,12 +119,17 @@ out-of-memory or internal error as `WgpuError::ConfigureSurface` (see `vendor/RE
 panic, as upstream: an error in a later reconfigure (resizing, a lost surface); a device lost
 during that first configure (wgpu reports it only to a callback, so the first frame panics, after
 the app has started); and a window shown at zero size, which is first configured on resize. If
-OpenGL can't start either, PdfCraft exits with both errors in the log. The fallback is logged at
-`error`, with the wgpu error. Renderer resource creation now uses the same scopes and returns
+OpenGL can't start either, PdfCraft records both errors in the log. Renderer resource creation now uses the same scopes and returns
 `WgpuError::CreateRenderer` before the app is created, so a rejected `egui_pipeline` can also
 reach this retry instead of the uncaptured-error panic handler. This does not fix the failing
 driver's shader compilation, and explicit `PDFCRAFT_RENDERER=wgpu` still disables the retry.
 `PDFCRAFT_RENDERER` skips it or chooses OpenGL from the start.
+
+On Windows in automatic mode, PdfCraft tries hardware-backed wgpu adapters first. If they
+cannot start, it tries native OpenGL before allowing software adapters such as WARP. This
+gives older OpenGL-capable GPUs a chance to display the window even when a software Direct3D
+adapter is available. The GPU draws the interface and composites the page textures. Hayro
+still interprets and rasterizes PDF pages on the CPU.
 
 ## Preferences
 
@@ -151,6 +156,7 @@ copies retain their current preferences locations.
 | `WGPU_DX12_PRESENTATION_SYSTEM` | Windows, Direct3D 12: `hwnd` presents through a swap chain on the window itself, which Windows stretches while the window is resized (#2738); unset or `visual`, PdfCraft presents through a DirectComposition visual |
 | `WGPU_VALIDATION_INDIRECT_CALL` | `1` turns wgpu's check of indirect draw arguments back on. PdfCraft draws nothing indirectly and turns it off, since the compute shader the check needs fails to compile on some drivers (Metal on an Intel Iris Pro), which lost the device at start-up |
 | `PDFCRAFT_RENDERER` | `gl` starts with OpenGL (glow) and never loads wgpu; `wgpu` reports a wgpu failure instead of retrying with OpenGL; unset, wgpu is retried with OpenGL when it can't start (see [Renderer fallback](#renderer-fallback)) |
+| `PDFCRAFT_RENDER_THREADS` | Viewer workers per document, from `1` to `7`. By default, PdfCraft uses one worker for every four logical CPUs, with a minimum of one worker and a maximum of four. |
 | `PDFCRAFT_TITLEBAR` | Linux: `app` draws PdfCraft's own title bar (window buttons in the tab strip, in the order of GNOME's `button-layout`, and resize edges); `system` keeps the frame winit or the desktop draws; unset, PdfCraft draws its own when the Wayland compositor draws no frames (GNOME), and leaves it to the desktop otherwise (KDE, Sway, Hyprland, X11). Where PdfCraft draws it, Preferences ▸ Use system title bar switches back to winit's frame without a restart; `system` also hides that option |
 | `PDFCRAFT_BUILD_LABEL` | Build time: a label for a local or patched build (letters, digits, inner dots), shown after the version in `--version`, About and the log (`0.7.1 (titlebar)`). `packaging/linux/package.sh` also puts it in the file names and the .rpm/.deb release (`1.titlebar`), which upgrades over the release of the same version |
 | `CRAFT_FONTS_DIR` | Build time: a [craft-fonts](https://github.com/storytold/craft-fonts) checkout to embed (Japanese fonts) |
