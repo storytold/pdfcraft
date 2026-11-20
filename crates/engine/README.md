@@ -14,7 +14,7 @@ with optional semantic exclusions; see [word-count behavior and limits](../../do
 
 Two frontends exist on top of it today: `pdfcraft-ui-egui` (desktop and web) and
 `pdfcraft-automation` (headless tools, the CLI and MCP). Anything one can do, the other must be
-able to do — see AGENTS.md §3.
+able to do — see app-agents.md rule 14.
 
 When dynamic XFA layout is active, `JsRunner` does not initialize Acrobat JavaScript with
 scripts from the PDF container's `/Names /JavaScript` tree. Those scripts belong to the
