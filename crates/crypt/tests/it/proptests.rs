@@ -9,7 +9,7 @@
 //! one, a ciphertext cut short by a damaged `/Length`, and keys of a length `create` never builds.
 //!
 //! - plaintext survives encryption at every length, for each algorithm and each crypt filter;
-//! - truncated or mutated ciphertext produces bytes rather than a panic (`AGENTS.md` §4: PdfCraft
+//! - truncated or mutated ciphertext produces bytes rather than a panic (app-agents.md rule 13: PdfCraft
 //!   opens files from strangers, and encrypted streams in the wild do get truncated);
 //! - object keys are scoped to their object, and AES-256's documented exception still holds;
 //! - a file opens for exactly the passwords whose effective bytes match, stated as a rule over
