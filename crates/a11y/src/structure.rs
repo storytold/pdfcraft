@@ -16,7 +16,11 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
+use crate::alt_placeholder::{Placeholder, placeholder};
 use crate::{Finding, MAX_FINDINGS, Rule};
+
+/// The most of a placeholder's alternate text a finding quotes, in characters.
+const QUOTED_ALT: usize = 60;
 
 /// Why a table's rows are irregular; `{min}` and `{max}` are the narrowest and widest row.
 const IRREGULAR: &str = "rows have between {min} and {max} columns";
@@ -167,6 +171,9 @@ pub(crate) struct Frame {
     alt: bool,
     /// An element above it has alternate text.
     alt_above: bool,
+    /// A figure's own `/Alt` is a placeholder, not a description: which kind, and the text,
+    /// shortened to `QUOTED_ALT` characters.
+    placeholder: Option<(Placeholder, String)>,
     /// Has a /Summary attribute.
     summary: bool,
     /// ColSpan and RowSpan, each read as 1 to `MAX_SPAN`.
@@ -356,6 +363,7 @@ impl Walker<'_> {
         let alt = self.has_text(d, b"Alt") || self.has_text(d, b"ActualText");
         let ty = self.standard(s);
         let kind = kind_of(&ty);
+        let placeholder = if kind == Kind::Figure { self.text(d, b"Alt").and_then(|a| Some((placeholder(&a)?, quoted(&a)))) } else { None };
         let attrs = if matches!(kind, Kind::Table | Kind::Td | Kind::Th) { self.attr_dicts(d) } else { Vec::new() };
         let frame = Frame {
             object,
@@ -365,6 +373,7 @@ impl Walker<'_> {
             page,
             alt,
             alt_above: self.frames.last().is_some_and(|p| p.alt || p.alt_above),
+            placeholder,
             summary: attr_int(&attrs, b"Summary").is_some(),
             col_span: span(&attrs, b"ColSpan"),
             row_span: span(&attrs, b"RowSpan"),
@@ -407,7 +416,12 @@ impl Walker<'_> {
 
     /// Whether `key` holds a string with some text in it.
     fn has_text(&self, d: &Dict, key: &[u8]) -> bool {
-        d.get(key).map(|o| self.doc.resolve(o)).and_then(|o| o.as_string().map(|s| !s.to_text().trim().is_empty())).unwrap_or(false)
+        self.text(d, key).is_some_and(|t| !t.trim().is_empty())
+    }
+
+    /// A text string entry, such as `/Alt`.
+    fn text(&self, d: &Dict, key: &[u8]) -> Option<String> {
+        d.get(key).map(|o| self.doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()))
     }
 
     /// The standard type of `ty`, following the role map (a bounded number of steps).
@@ -475,6 +489,17 @@ fn worded(e: &Frame, what: &'static str, extra: Vec<(&'static str, String)>) -> 
     };
     finding.object = e.object;
     finding
+}
+
+/// Alternate text as a finding quotes it: trimmed, and cut at `QUOTED_ALT` characters.
+fn quoted(alt: &str) -> String {
+    let alt = alt.trim();
+    let mut chars = alt.chars();
+    let mut out: String = chars.by_ref().take(QUOTED_ALT).collect();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
 }
 
 /// A finding whose `{what}` wording has no holes of its own.
@@ -671,6 +696,17 @@ impl Visitor for Checks {
         match e.kind {
             Kind::Figure if !e.alt && !e.alt_above => {
                 self.add(Rule::FiguresAltText, e.index, || finding(e, "no alternate text"));
+            }
+            // #7730: alternate text that describes nothing counts as none (WCAG F30).
+            Kind::Figure => {
+                if let Some((kind, alt)) = &e.placeholder {
+                    let what = match kind {
+                        Placeholder::FileName => "its alternate text \"{alt}\" is a file name, not a description",
+                        Placeholder::Generic => "its alternate text \"{alt}\" is a placeholder, not a description",
+                        Placeholder::TooShort => "its alternate text \"{alt}\" is too short to describe it",
+                    };
+                    self.add(Rule::FiguresAltText, e.index, || worded(e, what, vec![("{alt}", alt.clone())]));
+                }
             }
             Kind::Formula if !e.alt && !e.alt_above => {
                 self.add(Rule::OtherElementsAltText, e.index, || finding(e, "no alternate text"));
