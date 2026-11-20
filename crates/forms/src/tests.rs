@@ -6086,6 +6086,82 @@ fn comb_fields_show_their_cells() {
     assert!(!plain.contains(" m ") && plain.contains("(A) Tj"), "{plain}");
 }
 
+/// The characters a generated appearance draws, each with the comb cell (of `cell` points) its
+/// `Tm` starts in, and how far the glyph sits off that cell's centre.
+fn comb_cells_drawn(shown: &str, cell: f64) -> Vec<(char, usize, f64)> {
+    shown
+        .lines()
+        .filter_map(|l| {
+            let (tm, rest) = l.split_once(" Tm (")?;
+            let x: f64 = tm.split_whitespace().nth(4)?.parse().ok()?;
+            let ch = rest.strip_suffix(") Tj")?.chars().next()?;
+            let w = pdfcraft_fonts::helvetica_width(&ch.to_string(), 12.0);
+            let i = (x / cell).floor() as usize;
+            Some((ch, i, x + w / 2.0 - cell * (i as f64 + 0.5)))
+        })
+        .collect()
+}
+
+/// ISO 32000-2 12.7.4.3 Table 228 (Q) and 12.7.5.3 Table 231 (Comb): the text of a comb field is
+/// laid out into its MaxLen combs as its quadding says. Left starts at the first comb, centred at
+/// comb ⌊(MaxLen − len) / 2⌋ and right-aligned at MaxLen − len, each character centred in its
+/// comb. A full field, and one whose value runs past MaxLen (only the first MaxLen characters are
+/// drawn), start at the first comb whatever the quadding, and a MaxLen of 0 is no comb field and
+/// draws its text whole.
+#[test]
+fn comb_fields_place_their_text_by_their_quadding() {
+    // Each widget is 100 x 20 pt with no border: ten 10 pt combs at /MaxLen 10.
+    let tx = |name: &str, q: &str, max: i32, v: &str, top: i32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /DA (/Helv 12 Tf 0 g) /Ff {} /MaxLen {max} {q} /V ({v}) /Rect [50 {} 150 {top}] /P 3 0 R >>",
+            flags::COMB,
+            top - 20
+        )
+    };
+    let rows = [
+        ("left", "/Q 0", 10, "ABC"),
+        ("unset", "", 10, "ABC"),
+        ("centre", "/Q 1", 10, "ABC"),
+        ("centre-even", "/Q 1", 10, "ABCD"),
+        ("right", "/Q 2", 10, "ABC"),
+        ("full", "/Q 2", 10, "ABCDEFGHIJ"),
+        ("long", "/Q 1", 10, "ABCDEFGHIJKL"),
+        ("odd-q", "/Q 7", 10, "ABC"),
+        ("empty", "/Q 2", 10, ""),
+        ("zero", "/Q 2", 0, "ABC"),
+    ];
+    let refs: Vec<String> = (0..rows.len()).map(|i| format!("{} 0 R", i + 6)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{}] >>", refs.join(" ")),
+        format!("<< /Fields [{}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>", refs.join(" ")),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    objs.extend(rows.iter().enumerate().map(|(i, (name, q, max, v))| tx(name, q, *max, v, 780 - 30 * i as i32)));
+    let doc = document(&objs);
+    let cells_of = |name: &str| -> Vec<(char, usize)> {
+        let drawn = comb_cells_drawn(&saved_look(&doc, name), 10.0);
+        for (ch, i, off) in &drawn {
+            assert!(off.abs() < 0.01, "{name}: {ch} off the centre of comb {i} by {off}");
+        }
+        drawn.into_iter().map(|(ch, i, _)| (ch, i)).collect()
+    };
+    let from = |s: &str, first: usize| -> Vec<(char, usize)> { s.chars().enumerate().map(|(i, c)| (c, first + i)).collect() };
+    assert_eq!(cells_of("left"), from("ABC", 0));
+    assert_eq!(cells_of("unset"), from("ABC", 0));
+    assert_eq!(cells_of("odd-q"), from("ABC", 0), "an unknown quadding is left");
+    assert_eq!(cells_of("centre"), from("ABC", 3), "⌊(10 − 3) / 2⌋");
+    assert_eq!(cells_of("centre-even"), from("ABCD", 3));
+    assert_eq!(cells_of("right"), from("ABC", 7));
+    assert_eq!(cells_of("full"), from("ABCDEFGHIJ", 0));
+    assert_eq!(cells_of("long"), from("ABCDEFGHIJ", 0), "past MaxLen is not drawn");
+    assert!(cells_of("empty").is_empty());
+    // MaxLen 0: no combs, the value drawn whole.
+    let zero = saved_look(&doc, "zero");
+    assert!(zero.contains("(ABC) Tj"), "{zero}");
+}
+
 /// Check boxes and radio buttons with an `/MK` look and appearances of their own, in a form that
 /// sets `/NeedAppearances` (`need`) or not.
 fn mk_buttons(need: bool) -> Document {
