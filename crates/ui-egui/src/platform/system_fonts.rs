@@ -4,9 +4,10 @@
 //! only draws characters none of them has, such as an Arabic file name in a build without
 //! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
-//! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
-//! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
-//! shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it off (published screenshots do).
+//! [`tamil_fallback`], [`hebrew_fallback`], [`armenian_fallback`] and [`hangul_fallback`], draw
+//! Hindi, Telugu, Sinhala, Tamil, Hebrew, Armenian and Korean when one is installed. It is read at
+//! runtime and never embedded or shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0` turns it
+//! off (published screenshots do).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -34,6 +35,8 @@ const SINHALA_PROBE: char = '\u{0D9A}';
 const TAMIL_PROBE: char = '\u{0B95}';
 /// Hebrew letter alef: the face must have it to cover Hebrew.
 const HEBREW_PROBE: char = '\u{05D0}';
+/// Armenian capital letter ayb (Ա): the face must have it to cover Armenian.
+const ARMENIAN_PROBE: char = '\u{0531}';
 /// Hangul syllable hih (힣, U+D7A3), the last of the 11,172 modern syllables: a face with it has
 /// the whole block. Droid Sans Fallback, for one, has 가 but few other syllables.
 const HANGUL_PROBE: char = '\u{D7A3}';
@@ -113,6 +116,13 @@ pub fn tamil_fallback() -> Option<Arc<FontData>> {
 pub fn hebrew_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE.get_or_init(|| script_fallback(&hebrew_candidates(), HEBREW_PROBE)).clone()
+}
+
+/// The installed fallback face for Armenian, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn armenian_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&armenian_candidates(), ARMENIAN_PROBE)).clone()
 }
 
 /// The installed fallback face for Hangul (Korean), read once. `None` when it is turned off or no
@@ -294,6 +304,36 @@ fn hebrew_candidates() -> Vec<PathBuf> {
             "google-noto-vf/NotoSansHebrew[wght].ttf",
             "truetype/noto/NotoSansHebrew-Regular.ttf",
             "noto/NotoSansHebrew-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+            "TTF/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "dejavu-sans-fonts/DejaVuSans.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Armenian faces, best first. The general fallback does not cover it:
+/// SF Arabic, Geeza Pro and Noto Sans Arabic have no Armenian.
+fn armenian_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["segoeui.ttf", "arial.ttf", "tahoma.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/SFArmenian.ttf",
+            "/System/Library/Fonts/Supplemental/SFArmenian.ttf",
+            "/System/Library/Fonts/NotoSansArmenian.ttc",
+            "/System/Library/Fonts/Supplemental/NotoSansArmenian.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansArmenian-Regular.ttf",
+            "google-noto-vf/NotoSansArmenian[wght].ttf",
+            "truetype/noto/NotoSansArmenian-Regular.ttf",
+            "noto/NotoSansArmenian-Regular.ttf",
             "truetype/dejavu/DejaVuSans.ttf",
             "TTF/DejaVuSans.ttf",
             "dejavu/DejaVuSans.ttf",
@@ -491,6 +531,7 @@ mod tests {
         assert_eq!(face_with(inter, PROBE), None);
         assert_eq!(face_with(inter, HANS_PROBE), None);
         assert_eq!(face_with(inter, HANT_PROBE), None);
+        assert_eq!(face_with(inter, ARMENIAN_PROBE), None);
         assert_eq!(face_with(inter, 'A'), Some(0));
     }
 
@@ -556,12 +597,20 @@ mod tests {
         assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
         assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
         assert!(script_fallback(&candidates, HEBREW_PROBE).is_none());
+        assert!(script_fallback(&candidates, ARMENIAN_PROBE).is_none());
     }
 
     #[test]
     fn script_candidates_are_absolute_font_files() {
-        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates(), hebrew_candidates(), hangul_candidates()]
-        {
+        for list in [
+            devanagari_candidates(),
+            telugu_candidates(),
+            sinhala_candidates(),
+            tamil_candidates(),
+            hebrew_candidates(),
+            armenian_candidates(),
+            hangul_candidates(),
+        ] {
             assert!(!list.is_empty());
             assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
             assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
