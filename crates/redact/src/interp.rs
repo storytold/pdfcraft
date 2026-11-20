@@ -30,8 +30,13 @@ mod layers;
 mod prune;
 
 use layers::strip_hidden_layers;
-use prune::{clip_out, extgstate_font, prune_form_resources};
-pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns, unlink_undrawn};
+#[cfg(test)]
+pub(crate) use prune::{CLEANUP_SCOPES, OWN_ENTRIES, SCOPED_OPS_READ, SHARED_FORM_READS, SHARED_SCOPES};
+pub(crate) use prune::{
+    ScopedReads, may_remove, prune, prune_patterns, prune_properties, resource_ops, resource_ops_with, unlink_doomed, unlink_pruned_patterns,
+    unlink_undrawn,
+};
+use prune::{clip_out, extgstate_font, prune_form_resources, resource_ops_from, sets_type3_drawn};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
@@ -46,6 +51,83 @@ pub(crate) const MAX_DEPTH: usize = 50;
 // A form a reader still shows must be walkable here, or a redaction removes content that is
 // visible; the build says so rather than a test, so the two limits cannot drift apart.
 const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
+/// How many bytes of resources the forms nested along one path may hold between them
+/// ([`held_bytes`]). Each is read with a copy of its caller's names, its own added
+/// ([`form_resources`]; a form without resources of its own, its caller's alone), so a chain of
+/// forms each giving many names, or long ones, would otherwise hold its depth times their size.
+/// Past it, the page is refused (Apply) or the form counted as content that may remain (Verify),
+/// as past the page's budget; the proof says it can't check.
+pub(crate) const MAX_HELD_BYTES: usize = 16 << 20;
+
+/// The resource categories the walk and the proof look names up in, and copy for each form they
+/// read ([`form_resources`], `Walk::new`, and the proof's readers). Colour spaces and shadings
+/// aren't looked up by name (`cs` keeps a pattern for the name `/Pattern` alone, and `sh` is
+/// clipped as it stands), and marked-content properties are the form's own or the page's.
+const COPIED: [&[u8]; 4] = [b"XObject", b"Font", b"ExtGState", b"Pattern"];
+
+/// About how many bytes the resource dictionary `res` takes once copied ([`copy_bytes`]): each
+/// category the walk copies, given by reference or not, and whatever else it gives directly.
+/// Nothing else it refers to is read: a copy keeps only the reference.
+pub(crate) fn held_bytes(doc: &Document, res: &Dict) -> usize {
+    res.iter()
+        .map(|(key, value)| {
+            match value {
+                Object::Ref(_) if COPIED.contains(&key.as_slice()) => {
+                    #[cfg(test)]
+                    HELD_READS.with(|c| c.set(c.get() + 1));
+                    copy_bytes(&doc.resolve(value))
+                }
+                _ => copy_bytes(value),
+            }
+            .saturating_add(key.len())
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// About how many bytes a copy of `value` takes: 56 for each object in it, and the bytes of its
+/// names, strings, dictionary keys and stream data. References aren't followed.
+fn copy_bytes(value: &Object) -> usize {
+    let mut bytes = 0usize;
+    let mut pending = vec![value];
+    while let Some(o) = pending.pop() {
+        let own = match o {
+            Object::Name(n) => n.len(),
+            Object::String(s) => s.bytes.len(),
+            Object::Array(items) => {
+                pending.extend(items);
+                0
+            }
+            Object::Dict(d) => d
+                .iter()
+                .map(|(k, v)| {
+                    pending.push(v);
+                    k.len()
+                })
+                .fold(0, usize::saturating_add),
+            Object::Stream(s) => s
+                .dict
+                .iter()
+                .map(|(k, v)| {
+                    pending.push(v);
+                    k.len()
+                })
+                .fold(s.raw.len(), usize::saturating_add),
+            _ => 0,
+        };
+        bytes = bytes.saturating_add(56).saturating_add(own);
+    }
+    bytes
+}
+
+/// How many entries the dictionary `value` is, or refers to, holds, without copying it.
+pub(crate) fn dict_len(doc: &Document, value: &Object) -> usize {
+    match value {
+        Object::Dict(d) => d.len(),
+        Object::Ref(_) => doc.resolve(value).as_dict().map_or(0, Dict::len),
+        _ => 0,
+    }
+}
+
 /// Bounds on the removed text collected for the metadata check (#2448).
 const MAX_RUNS: usize = 100_000;
 const MAX_RUN_BYTES: usize = 64 * 1024;
@@ -134,9 +216,16 @@ pub(crate) struct Output {
     pub patterns_seen: Vec<Vec<u8>>,
     pub patterns_painted: Vec<Vec<u8>>,
     /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
-    /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
-    /// not tracked, so the page keeps them all.
+    /// through a font set by `Tf` or an ExtGState, or such a font is set by a form left as it is
+    /// ([`unwalked_patterns`]) or for one by what draws it: which of the page's patterns it paints
+    /// with is not tracked, so the page keeps them all.
     pub keeps_all_patterns: bool,
+    /// A form left as it is in this scope or a nested form may paint with patterns that couldn't
+    /// be read ([`unwalked_patterns`]): pruning the page's patterns then fails.
+    pub patterns_unknown: bool,
+    /// The forms left as they are, each with its chain of walked forms, whose patterns this scope
+    /// has counted: drawn again, they add nothing.
+    unwalked: HashSet<(ObjRef, usize)>,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -210,6 +299,40 @@ pub(crate) struct Scope<'a> {
     /// shared forms drawn from other shared forms would otherwise multiply the work with every
     /// level.
     budget: DecodeBudget,
+    /// The page's `/Properties`, which a form without resources of its own reads its
+    /// marked-content properties from, as the renderer does, not its caller's.
+    page_properties: Option<Object>,
+    /// The resources each form on the way with resources of its own gives, as written: a form
+    /// without resources of its own is written back with its caller's so, references kept, not
+    /// with the lookup it is read with ([`form_resources`]), which would store a copy of every
+    /// name its callers give at each rewrite. Drawn by the page, it is written back with the
+    /// page's, which are its lookup.
+    given: Vec<Dict>,
+    /// The resource names the forms on the way to this point are read with ([`MAX_HELD_BYTES`]).
+    held: usize,
+    /// The patterns each form left as it is selects through the names it is drawn with, by the
+    /// form and the chain of walked forms it is drawn in ([`Scope::chain`]); `None` where that
+    /// couldn't all be read ([`unwalked_patterns`]). No more than [`MAX_UNWALKED`] are read.
+    unwalked: HashMap<(ObjRef, usize), Picked>,
+    /// What those reads may decode, of forms without resources of their own and with: an
+    /// allowance of a page each, apart from the walk's.
+    unwalked_budget: DecodeBudget,
+    unwalked_scoped: ScopedReads,
+    /// What the cleanups of the forms this walk rewrites, and the page's after it, spend reading
+    /// forms with resources of their own, between them ([`resource_ops_with`]).
+    scoped: ScopedReads,
+    /// The bytes of pattern names forms left as they are have counted as painted on the page, no
+    /// more than [`MAX_UNWALKED_BYTES`]; past it, `usize::MAX`, and no more are read.
+    unwalked_bytes: usize,
+    /// Whether the names of each chain of walked forms give a pattern ([`unwalked_patterns`]).
+    chain_patterns: HashMap<usize, bool>,
+    /// The chain of forms being walked, as a number: 0 for none, and one for each form walked
+    /// under each chain ([`Scope::chains`]).
+    chain: usize,
+    /// The numbers given to chains of walked forms, each a form under the chain it is walked in.
+    chains: HashMap<(usize, ObjRef), usize>,
+    /// What the objects the page's forms give in their resources are ([`kind`]).
+    kinds: Kinds,
 }
 
 impl<'a> Scope<'a> {
@@ -239,13 +362,26 @@ impl<'a> Scope<'a> {
             used_names: Vec::new(),
             depth: 0,
             budget,
+            page_properties: None,
+            given: Vec::new(),
+            held: 0,
+            unwalked: HashMap::new(),
+            unwalked_budget: DecodeBudget::page(),
+            unwalked_scoped: ScopedReads::default(),
+            scoped: ScopedReads::default(),
+            unwalked_bytes: 0,
+            chain_patterns: HashMap::new(),
+            chain: 0,
+            chains: HashMap::new(),
+            kinds: Kinds::new(),
         }
     }
 
     /// What is left of the page's allowance once the content is walked, for the cleanups after it
-    /// that read the forms drawing through the page's resources ([`prune`]) to go on spending.
-    pub(crate) fn into_budget(self) -> DecodeBudget {
-        self.budget
+    /// that read the forms drawing through the page's resources ([`prune`]) to go on spending, and
+    /// what is left for their reads of forms with resources of their own.
+    pub(crate) fn into_budgets(self) -> (DecodeBudget, ScopedReads) {
+        (self.budget, self.scoped)
     }
 
     /// Keep at most `room` bytes of removed text: what earlier pages left of the document's
@@ -334,8 +470,301 @@ impl<'a> Scope<'a> {
     }
 }
 
+/// What a form whose resources are `own` draws with, drawn by a scope whose resources are
+/// `caller`, as the renderer looks a name up (hayro-syntax `Resources::for_form`), in the
+/// categories the walk and the proof look names up in ([`COPIED`]): in the form's own resources
+/// where they give it as what its category holds (a stream for an XObject, a dictionary for a
+/// font or a graphics state, anything the file defines for a pattern), and otherwise in its
+/// caller's, which are themselves looked up so. A category its own give nothing in is the
+/// caller's as the caller gives it, a reference kept one. Its other categories are its own, and
+/// so are its `/Properties`: the renderer reads the page's for a form without resources.
+pub(crate) fn form_resources(doc: &Document, own: &Dict, caller: &Dict, kinds: &mut Kinds) -> Dict {
+    let mut resources = own.clone();
+    for category in COPIED {
+        let Some(theirs) = caller.get(category) else { continue };
+        let given: Vec<(Vec<u8>, Object)> = res_dict(doc, own, category)
+            .iter()
+            .filter(|(_, value)| {
+                let kind = kind(doc, value, kinds);
+                match category {
+                    b"XObject" => kind.stream,
+                    b"Font" | b"ExtGState" => kind.dict,
+                    _ => kind.defined,
+                }
+            })
+            .map(|(name, value)| (name.to_vec(), value.clone()))
+            .collect();
+        if given.is_empty() {
+            resources.set(category.to_vec(), theirs.clone());
+            continue;
+        }
+        let mut names = res_dict(doc, caller, category);
+        if names.is_empty() {
+            continue;
+        }
+        for (name, value) in given {
+            names.set(name, value);
+        }
+        resources.set(category.to_vec(), Object::Dict(names));
+    }
+    resources
+}
+
+/// Where a form with resources of its own, rewritten, looks up the XObjects it draws, as the walk
+/// read it ([`form_resources`]): the forms the walk wrote for it, `added`; in the resources it is
+/// written back with, `written`, where they give a stream; and otherwise in `caller`, its caller's
+/// XObject names. The cleanups after the walk read what it draws through these: else a form it
+/// draws through its caller's names goes unread, and what that form draws with the form's own
+/// resources is dropped from them.
+pub(crate) fn form_xobject_lookup(doc: &Document, written: &Dict, added: &[(Vec<u8>, ObjRef)], caller: &Dict, kinds: &mut Kinds) -> Dict {
+    let mut xobjects = caller.clone();
+    for (name, value) in res_dict(doc, written, b"XObject").iter() {
+        if kind(doc, value, kinds).stream {
+            xobjects.set(name.to_vec(), value.clone());
+        }
+    }
+    // Streams, taken as such: they are new objects, and `kinds` may hold for their numbers what a
+    // reference the file gave to nothing there was read as.
+    for (name, reference) in added {
+        xobjects.set(name.clone(), Object::Ref(*reference));
+    }
+    xobjects
+}
+
+/// A form's resources of its own, if it has them, and the resources it is written back with: its
+/// own, or, without them, its caller's names with the page's marked-content properties (ISO
+/// 32000-2 §7.8.3), as the renderer reads them, not its caller's; with a /Resources that isn't a
+/// dictionary, no properties.
+fn form_own_resources(doc: &Document, form: &Stream, caller: &Dict, page_properties: Option<&Object>) -> (Option<Dict>, Dict) {
+    let entry = form.dict.get(b"Resources");
+    if let Some(own) = entry.and_then(|r| doc.resolve(r).as_dict().cloned()) {
+        return (Some(own.clone()), own);
+    }
+    let mut res = caller.clone();
+    // Present but no dictionary, `null` and a reference to nothing among them: the renderer
+    // reads no properties then.
+    let malformed = entry.is_some();
+    match page_properties {
+        Some(page) if !malformed => res.set(b"Properties".to_vec(), page.clone()),
+        _ => {
+            res.remove(b"Properties");
+        }
+    }
+    (None, res)
+}
+
+/// Walk a form's content, `data`, read with the lookup `names` from `gs`, one level down: with its
+/// own resources as written, if it has them, on [`Scope::given`], and the names its lookup holds,
+/// `held`, counted ([`MAX_HELD_BYTES`]).
+fn walk_form(doc: &mut Document, scope: &mut Scope<'_>, data: &[Vec<u8>], names: &Dict, gs: Gs, own: Option<&Dict>, held: usize) -> Output {
+    let saved_fonts = std::mem::take(&mut scope.fonts);
+    scope.depth += 1;
+    scope.held += held;
+    if let Some(own) = own {
+        scope.given.push(own.clone());
+    }
+    let inner = process_from(doc, scope, data, names, gs);
+    if own.is_some() {
+        scope.given.pop();
+    }
+    scope.held = scope.held.saturating_sub(held);
+    scope.depth -= 1;
+    scope.fonts = saved_fonts;
+    inner
+}
+
+/// The patterns a form left as it is selects ([`unwalked_patterns`]), `None` where they couldn't
+/// all be read.
+type Picked = Option<Rc<Selected>>;
+
+/// The pattern names a form left as it is selects, each once, and what they weigh: each its length
+/// and 32 bytes ([`MAX_UNWALKED_BYTES`]); and whether it sets a Type 3 font without resources of
+/// its own, whose glyphs may paint with any pattern the names give.
+struct Selected {
+    names: Vec<Vec<u8>>,
+    bytes: usize,
+    type3: bool,
+}
+
+/// How many forms left as they are a page reads for the patterns they select
+/// ([`unwalked_patterns`]): past it, which they paint with isn't known.
+const MAX_UNWALKED: usize = 4_096;
+
+/// How many bytes of pattern names forms left as they are count as painted on a page, each form
+/// once in each scope it is drawn in, a name counted as its length and 32 bytes: past it, which
+/// they paint with isn't known, and no more such forms are read. A read's names are kept for the
+/// page only where they are counted, so what is kept is no more.
+const MAX_UNWALKED_BYTES: usize = 16 << 20;
+
+/// A form drawn with `op` that the walk leaves as it is (it reaches no mark) still paints all it
+/// did, so the patterns it selects through `resources` are painted, and [`prune_patterns`] keeps
+/// them; where it sets a Type 3 font without resources of its own, every pattern is kept
+/// ([`Output::keeps_all_patterns`]). It is read as the cleanups read what draws through these names ([`resource_ops_from`],
+/// through `xobjects`), only where `resources` give a pattern (told once for each chain of walked
+/// forms), and once for each chain it is drawn in; its names, each once, are counted once in each
+/// scope. Where that can't all be read, or past [`MAX_UNWALKED`] such reads or
+/// [`MAX_UNWALKED_BYTES`] of names counted on a page, which of the patterns it paints with is
+/// unknown.
+fn unwalked_patterns(doc: &Document, scope: &mut Scope<'_>, out: &mut Output, resources: &Dict, xobjects: &Dict, op: &Op, r: ObjRef) {
+    let key = (r, scope.chain);
+    if scope.mode != Mode::Apply || !out.unwalked.insert(key) {
+        return;
+    }
+    // The names of a chain are the page's with those of the forms walked on the way.
+    let gives_patterns = *scope.chain_patterns.entry(key.1).or_insert_with(|| {
+        #[cfg(test)]
+        PATTERN_LOOKUPS.with(|c| c.set(c.get() + 1));
+        resources.get(b"Pattern").is_some_and(|p| doc.resolve(p).as_dict().is_some_and(|d| !d.is_empty()))
+    });
+    if !gives_patterns {
+        return;
+    }
+    let room = MAX_UNWALKED_BYTES.saturating_sub(scope.unwalked_bytes);
+    let picked = match scope.unwalked.get(&key) {
+        Some(picked) => picked.clone(),
+        None if scope.unwalked.len() >= MAX_UNWALKED || scope.unwalked_bytes > MAX_UNWALKED_BYTES => None,
+        None => {
+            let picked = match resource_ops_from(doc, &mut scope.unwalked_budget, &mut scope.unwalked_scoped, xobjects, vec![op.clone()]) {
+                Ok(drawn) if !drawn.partial => {
+                    let mut names: Vec<Vec<u8>> =
+                        drawn.ops.iter().filter(|op| op.is("scn") || op.is("SCN")).filter_map(Op::last_name).map(<[u8]>::to_vec).collect();
+                    names.sort_unstable();
+                    names.dedup();
+                    let bytes = names.iter().fold(0usize, |sum, name| sum.saturating_add(name.len()).saturating_add(32));
+                    let type3 = sets_type3_drawn(doc, &mut scope.unwalked_scoped, resources, &drawn);
+                    // Kept only where they can be counted here.
+                    (bytes <= room).then(|| Rc::new(Selected { names, bytes, type3 }))
+                }
+                _ => None,
+            };
+            #[cfg(test)]
+            UNWALKED_READS.with(|c| c.set(c.get() + 1));
+            #[cfg(test)]
+            UNWALKED_HELD.with(|c| c.set(c.get() + picked.as_ref().map_or(0, |p| p.bytes)));
+            scope.unwalked.insert(key, picked.clone());
+            picked
+        }
+    };
+    match picked {
+        Some(selected) if selected.bytes <= room => {
+            scope.unwalked_bytes += selected.bytes;
+            #[cfg(test)]
+            UNWALKED_NAMES.with(|c| c.set(c.get() + selected.names.len()));
+            out.patterns_painted.extend(selected.names.iter().cloned());
+            // Its Type 3 glyphs may paint with any of the page's patterns, as one the walk shows.
+            out.keeps_all_patterns |= selected.type3;
+        }
+        _ => {
+            out.patterns_unknown = true;
+            // The page can't tell now: no more are read or counted.
+            scope.unwalked_bytes = usize::MAX;
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many forms left as they are were read for their patterns.
+    pub(crate) static UNWALKED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many bytes of pattern names the reads of forms left as they are have kept.
+    pub(crate) static UNWALKED_HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many pattern names forms left as they are have counted as painted.
+    pub(crate) static UNWALKED_NAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times whether a chain's names give a pattern was looked up.
+    pub(crate) static PATTERN_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What a form is written back with: its own resources (`res`), or, without, what its caller
+/// gives as written ([`Scope::given`]), with the page's properties, as it was read.
+fn written_resources(doc: &Document, scope: &Scope<'_>, form: &Stream, has_own: bool, res: Dict) -> Dict {
+    match scope.given.last() {
+        Some(given) if !has_own => form_own_resources(doc, form, given, scope.page_properties.as_ref()).1,
+        _ => res,
+    }
+}
+
+/// Whether `value` is something, as the renderer reads a resource entry: a reference to an object
+/// the file doesn't define is nothing, and a name it is given for is looked up further.
+fn defined(doc: &Document, value: &Object) -> bool {
+    let Object::Ref(r) = value else { return true };
+    #[cfg(test)]
+    ENTRY_READS.with(|c| c.set(c.get() + 1));
+    !matches!(&*doc.get(*r), Object::Null)
+        || doc.is_edited(r.num)
+        || matches!(doc.xref_entry(r.num), Some(pdfcraft_cos::XrefEntry::InFile { .. } | pdfcraft_cos::XrefEntry::InStream { .. }))
+}
+
 fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default()
+}
+
+/// Whether one more form, read with `held` names, would take the forms nested on the way past
+/// [`MAX_HELD_BYTES`]: then the page is refused (Apply), or the form counted as content that may
+/// remain (Verify), as past the page's budget.
+fn past_held(scope: &mut Scope<'_>, out: &mut Output, held: usize) -> bool {
+    if scope.held.saturating_add(held) <= MAX_HELD_BYTES {
+        return false;
+    }
+    if scope.mode == Mode::Apply {
+        out.error = Some(CosError::Filter(format!("the forms nested on the page hold more than {} MiB of resources", MAX_HELD_BYTES >> 20)));
+    } else if scope.everywhere() {
+        scope.layer_blocks += 1;
+    } else {
+        out.residue += 1;
+    }
+    true
+}
+
+/// What a resource entry is, as a form's lookup asks of it ([`form_resources`]): a stream (a form
+/// among them), a dictionary that is no stream, or anything the file defines ([`defined`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Kind {
+    pub(crate) stream: bool,
+    pub(crate) form: bool,
+    pub(crate) dict: bool,
+    pub(crate) defined: bool,
+}
+
+/// What each object resource entries refer to is, read once for a page (and once for the check
+/// of what pages sharing a resource dictionary still draw): a form drawn again and again, or a
+/// dictionary many forms give, would otherwise load each object it names on every draw, which
+/// costs an object stream's decoding when the file keeps them there. Objects don't change kind
+/// while a page is walked or checked: the walk adds objects and edits dictionaries' entries. But
+/// an object it adds can take the number of a reference the file gave to nothing, read as such
+/// before. A rewritten form's cleanups take the forms the walk wrote for it as streams
+/// ([`form_xobject_lookup`]), but the cleanups' own reads of forms with resources of their own
+/// (`ScopedReads`) can still take such a number, given to a form the walk writes after they
+/// first read it (one rewritten further in, or later on the page), as nothing, and leave that
+/// form unread.
+pub(crate) type Kinds = HashMap<ObjRef, Kind>;
+
+/// What `value` is: a reference is read from `kinds`, or once from the file into it.
+pub(crate) fn kind(doc: &Document, value: &Object, kinds: &mut Kinds) -> Kind {
+    let Object::Ref(r) = value else {
+        return Kind {
+            stream: matches!(value, Object::Stream(_)),
+            form: matches!(value, Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")),
+            dict: matches!(value, Object::Dict(_)),
+            defined: true,
+        };
+    };
+    *kinds.entry(*r).or_insert_with(|| {
+        let held = doc.resolve(value);
+        Kind {
+            stream: matches!(&*held, Object::Stream(_)),
+            form: matches!(&*held, Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form")),
+            dict: matches!(&*held, Object::Dict(_)),
+            defined: defined(doc, value),
+        }
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many objects [`defined`] has read from the file, for [`kind`] among others.
+    pub(crate) static ENTRY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many category dictionaries given by reference [`held_bytes`] has read.
+    pub(crate) static HELD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
@@ -394,6 +823,9 @@ fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
 
 /// Process a scope's content streams (state flows from one stream to the next).
 pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, ctm: Matrix) -> Output {
+    if scope.depth == 0 {
+        scope.page_properties = resources.get(b"Properties").cloned();
+    }
     let gs = Gs {
         ctm,
         font: Rc::new(Metrics::fallback()),
@@ -1204,6 +1636,11 @@ fn xobject(
                 && !scope.everywhere()
                 && !scope.hits(fctm.bbox(bb))
             {
+                // Left as it is, the form still paints all it did: with a Type 3 font without
+                // resources of its own that its caller set too, whose glyphs may paint with any of
+                // the page's patterns, as where the walk shows one.
+                out.keeps_all_patterns |= gs.type3_inherits;
+                unwalked_patterns(doc, scope, out, resources, xobjects, op, r);
                 return None;
             }
             // Too deep: this form cannot be read, so it goes (Apply) or the page is left alone
@@ -1263,13 +1700,30 @@ fn xobject(
                     return None;
                 }
             };
-            let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
-            let res = own.clone().unwrap_or_else(|| resources.clone());
-            let saved_fonts = std::mem::take(&mut scope.fonts);
-            scope.depth += 1;
-            let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
-            scope.depth -= 1;
-            scope.fonts = saved_fonts;
+            let (own, res) = form_own_resources(doc, s, resources, scope.page_properties.as_ref());
+            // Read with a copy of its caller's names, its own added: counted before it is made.
+            let held = match &own {
+                Some(own) => held_bytes(doc, own).saturating_add(held_bytes(doc, resources)),
+                None => held_bytes(doc, &res),
+            };
+            if past_held(scope, out, held) {
+                return None;
+            }
+            // A name its own resources lack, the renderer looks up in its caller's: the form is
+            // walked so, and written back with its own.
+            let merged;
+            let names = match &own {
+                Some(own) => {
+                    merged = form_resources(doc, own, resources, &mut scope.kinds);
+                    &merged
+                }
+                None => &res,
+            };
+            let outer = scope.chain;
+            let next = scope.chains.len() + 1;
+            scope.chain = *scope.chains.entry((outer, r)).or_insert(next);
+            let inner = walk_form(doc, scope, std::slice::from_ref(&data), names, Gs { ctm: fctm, ..gs.clone() }, own.as_ref(), held);
+            scope.chain = outer;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.dropped_codes |= inner.dropped_codes;
@@ -1281,14 +1735,20 @@ fn xobject(
             // patterns (the renderer resolves its names there), whether or not the form has
             // /Resources of its own.
             out.keeps_all_patterns |= inner.keeps_all_patterns;
+            out.patterns_unknown |= inner.patterns_unknown;
             out.tag_changes.extend(inner.tag_changes);
             out.error = inner.error.or(out.error.take());
-            // A form without /Resources of its own paints with its caller's patterns, so what it
-            // still paints keeps the caller's entry. Only the painted side is passed up: a name
-            // the form selected but no longer paints with is left for the caller to keep.
-            if own.is_none() {
-                out.patterns_painted.extend(inner.patterns_painted);
-            }
+            // A form paints with its caller's patterns where its own resources lack the name (all of
+            // them, without /Resources of its own), so what it still paints with them keeps the
+            // caller's entry. Only the painted side is passed up: a name the form selected but no
+            // longer paints with is left for the caller to keep.
+            // Each name once: a paint or a Type 3 glyph lists one again for each time it paints.
+            let own_patterns = own.as_ref().map(|own| res_dict(doc, own, b"Pattern")).unwrap_or_default();
+            let mut painted = inner.patterns_painted;
+            painted.sort_unstable();
+            painted.dedup();
+            out.patterns_painted
+                .extend(painted.into_iter().filter(|name| !own_patterns.get(name).is_some_and(|value| kind(doc, value, &mut scope.kinds).defined)));
             if scope.mode == Mode::Verify {
                 return None;
             }
@@ -1303,6 +1763,7 @@ fn xobject(
                 // content) would keep what the rewrite removed.
                 dict.remove(b"PCAdded");
             }
+            let res = written_resources(doc, scope, s, own.is_some(), res);
             let mut cleaned_res = res.clone();
             // Install rewritten nested forms before finding live property names: a new form may
             // still inherit its caller's resources, and its new Do name must resolve here.
@@ -1318,20 +1779,36 @@ fn xobject(
             }
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut scope.budget, &mut cleaned_res, content) {
+                // A form it draws through its caller's names draws with its own resources too.
+                let lookup = own.is_some().then(|| form_xobject_lookup(doc, &res, &inner.xobjects, xobjects, &mut scope.kinds));
+                let drawn_through = lookup.as_ref();
+                // Its own properties are named by its own content alone: a form it draws reads its
+                // own, or, without resources, the page's (ISO 32000-2 §7.8.3), as the walk reads
+                // them. So with resources of its own, no form it draws is read for them.
+                let no_forms = Dict::new();
+                let marked_through = if own.is_some() { Some(&no_forms) } else { None };
+                match prune_properties(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, marked_through, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);
                         return None;
                     }
                 }
-                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
+                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut scope.scoped, &mut cleaned_res, drawn_through, content) {
                     out.error = Some(error);
                     return None;
                 }
                 // No page: annotation appearances draw through a page's resources, never through a
                 // form's. The form's own soft masks are still counted.
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut scope.budget, &mut cleaned_res, content, None) {
+                if let Err(error) = crate::type3::prune_type3_from_resources(
+                    doc,
+                    &mut scope.budget,
+                    &mut scope.scoped,
+                    &mut cleaned_res,
+                    drawn_through,
+                    content,
+                    None,
+                ) {
                     out.error = Some(error);
                     return None;
                 }
@@ -1354,39 +1831,46 @@ fn xobject(
             scope.report.forms_rewritten += 1;
             Some(Some(Op::new("Do", vec![Object::Name(n)])))
         }
-        // No `/Subtype`, or one the redactor does not read: what it draws is unknown, so a
-        // placement under a mark fails closed. Apply removes it, as it does a form it cannot read,
-        // and verification counts it as what may remain. Its place is the unit square an image
-        // fills or, when it has a `/BBox`, the box a form would draw in: either one under a mark
-        // counts. Both are read as the proof reads a form's, entries by reference included; a
-        // `/Matrix` or `/BBox` that is present but malformed leaves its place unknown, so it counts
-        // as under a mark rather than as outside every one.
-        _ => {
-            let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
-            let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
-                (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
-                _ => true,
-            };
-            if !scope.hits(unit) && !framed {
-                return None;
-            }
-            if scope.mode == Mode::Verify {
-                out.residue += 1;
-                return None;
-            }
-            scope.report.forms_removed += 1;
-            // Any text it held was never read, so the metadata check can't know what went with it.
-            scope.removed_cut = true;
-            out.replaced.push(name);
-            out.doomed.push(r);
-            Some(None)
-        }
+        _ => unread_xobject(doc, scope, s, gs, name, r, out),
     }
+}
+
+/// `Do` of an XObject with no `/Subtype`, or one the redactor does not read: what it draws is
+/// unknown, so a placement under a mark fails closed. Apply removes it, as it does a form it cannot
+/// read, and verification counts it as what may remain. Its place is the unit square an image fills
+/// or, when it has a `/BBox`, the box a form would draw in: either one under a mark counts. Both
+/// are read as the proof reads a form's, entries by reference included; a `/Matrix` or `/BBox`
+/// that is present but malformed leaves its place unknown, so it counts as under a mark rather
+/// than as outside every one.
+fn unread_xobject(doc: &Document, scope: &mut Scope<'_>, s: &Stream, gs: &Gs, name: Vec<u8>, r: ObjRef, out: &mut Output) -> Option<Option<Op>> {
+    let unit = gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]);
+    let framed = match (crate::verify::matrix_of(doc, &s.dict), crate::verify::bbox_of(doc, &s.dict)) {
+        (Ok(m), Ok(bbox)) => bbox.is_some_and(|b| scope.hits(m.then(&gs.ctm).bbox(b))),
+        _ => true,
+    };
+    if !scope.hits(unit) && !framed {
+        return None;
+    }
+    if scope.mode == Mode::Verify {
+        out.residue += 1;
+        return None;
+    }
+    scope.report.forms_removed += 1;
+    // Any text it held was never read, so the metadata check can't know what went with it.
+    scope.removed_cut = true;
+    out.replaced.push(name);
+    out.doomed.push(r);
+    Some(None)
 }
 
 /// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
 fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {
-    let Some(state) = ext_gstates.get(name).map(|s| doc.resolve(s)) else { return false };
+    ext_gstates.get(name).is_some_and(|state| state_sets_type3(doc, state))
+}
+
+/// Whether the graphics state `state` sets a Type 3 font that has no `/Resources` of its own.
+fn state_sets_type3(doc: &Document, state: &Object) -> bool {
+    let state = doc.resolve(state);
     let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
     let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
     let dict = doc.resolve(reference);
