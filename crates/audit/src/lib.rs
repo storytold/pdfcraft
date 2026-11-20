@@ -429,10 +429,14 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<Annot>, AuditError> {
                 Some(rgb) if drawn => Mark::Highlight(rgb),
                 _ => continue,
             },
-            Some(b"Square") => match opaque(b"IC") {
-                Some(rgb) if drawn => Mark::Square(rgb),
-                _ => continue,
-            },
+            Some(b"Square") => {
+                let ca_fill = dict.get(b"ca").and_then(|o| doc.resolve(o).as_f64()).unwrap_or(1.0);
+                let has_appearance = dict.get(b"AP").is_some();
+                match opaque(b"IC") {
+                    Some(rgb) if drawn && (has_appearance || ca_fill >= 1.0) => Mark::Square(rgb),
+                    _ => continue,
+                }
+            }
             _ => continue,
         };
         let v = nums(b"Rect");
