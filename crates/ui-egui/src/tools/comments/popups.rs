@@ -174,6 +174,33 @@ struct Palette {
     faint: Color32,
 }
 
+/// Side of the pop-up's close button, in points: the title bar's height, less its margin.
+const CLOSE_SIDE: f32 = 18.0;
+
+/// The pop-up's ×, drawn in the title bar's own ink rather than the app theme's icon colour: the
+/// bar keeps the comment's colour in either theme, so the theme's light dark-mode icon would vanish
+/// on a light yellow bar. A faint disc behind it says it is a button before the pointer reaches it.
+fn close_button(ui: &mut egui::Ui, ink: Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::Vec2::splat(CLOSE_SIDE), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Close")));
+    if ui.is_rect_visible(rect) {
+        let wash = if resp.is_pointer_button_down_on() {
+            0.32
+        } else if resp.hovered() {
+            0.22
+        } else {
+            0.10
+        };
+        ui.painter().circle_filled(rect.center(), CLOSE_SIDE / 2.0, ink.gamma_multiply(wash));
+        if resp.has_focus() {
+            ui.painter().circle_stroke(rect.center(), CLOSE_SIDE / 2.0 - 0.5, egui::Stroke::new(1.0, ink));
+        }
+        let tint = if ui.is_enabled() { ink } else { ink.gamma_multiply(0.4) };
+        crate::icons::paint(ui, rect, "x", 12.0, tint);
+    }
+    theme::hand(resp).on_hover_text(tl!("Close"))
+}
+
 fn palette(color: Color32) -> Palette {
     // `color` mixed into white, `f` of the way.
     let mix = |f: f32| {
@@ -398,7 +425,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                         ui.horizontal(|ui| {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 // Closing changes the comment's /Open, which needs comment permission.
-                                if ui.add_enabled_ui(allowed, |ui| crate::icons::button(ui, "x", 14.0, false, tl!("Close"))).inner.clicked() {
+                                if ui.add_enabled_ui(allowed, |ui| close_button(ui, pal.title_ink)).inner.clicked() {
                                     edits.push(Edit::SetAnnotationPopup { page, index: a.index, rect: None, open: Some(false) });
                                 }
                                 if let Some(m) = &a.modified {

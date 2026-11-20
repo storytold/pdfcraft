@@ -4513,6 +4513,20 @@ fn closing_a_pop_up_saves_its_typed_text() {
     assert_eq!((note.contents.as_deref(), note.popup.map(|p| p.open)), (Some("A note"), Some(true)), "one undo step for both");
 }
 
+/// A pop-up's × is big enough to see and hit: it was a 14-point icon button whose 7-point glyph
+/// took the app theme's icon colour, light grey in the dark theme, and all but vanished on a light
+/// comment-coloured title bar.
+#[test]
+fn a_pop_up_close_button_is_big_enough_to_see() {
+    let mut h = harness_with_bytes(BLUE_NOTE_WITH_OPEN_POP_UP.to_vec(), |_| {});
+    h.run_steps(2);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the pop-up is open");
+    let close = h.query_all_by_label("Close").map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the window's ×");
+    assert!(close.width() >= 18.0 && close.height() >= 18.0, "the × is {:?}", close.size());
+    // It stays in the bar's right end, which the drag grip leaves to it.
+    assert!(close.left() >= window.right() - 24.0 - 1.0, "the × {close:?} reaches the grip of {window:?}");
+}
+
 /// The selection bar stays inside the pages' area: its place was worked out for a 520 pt bar,
 /// so longer labels (German here) pushed it over the side panel next to a selection on the right.
 #[test]
