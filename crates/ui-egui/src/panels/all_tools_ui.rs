@@ -81,16 +81,12 @@ fn tile(g: &'static ToolGroup, items: &[&'static str]) -> Tile<'static> {
 /// Draw the view over the workspace: the title with Collapse, the search field, and each
 /// category's tiles that match the search. Choosing a tile opens that tool's panel.
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    // A dialog, prompt or the command palette over the view owns Escape.
-    if !app.modal_open() && !app.palette_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.all_tools_full = false;
-        return;
-    }
     let mut chosen = None;
+    let mut escape = false;
     Panel::new(tl!("All tools").to_owned())
         .titled()
         .commands([HeaderCommand::new(IconId::new("minimize-2"), CommandRef::new("tools.collapse"))])
-        .show(ui, |ui, _| {
+        .show(ui, |ui, cx| {
             // The search field takes the keys whenever nothing else holds them, as it did when the view opened.
             TextField::search(tl!("Search tools and commands…").to_owned(), Bind::bound(&mut app.all_tools_query))
                 .request_focus(FocusRequest::WhenNone)
@@ -131,7 +127,13 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     chosen = Some(g.id);
                 }
             }
+            if !app.modal_open() && !app.palette_open {
+                escape = cx.take_cancel();
+            }
         });
+    if escape {
+        app.all_tools_full = false;
+    }
     if let Some(id) = chosen {
         app.set_left_open(true);
         app.select_tool(ui.ctx(), id);

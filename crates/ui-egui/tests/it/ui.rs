@@ -191,12 +191,25 @@ fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
         h.get_by_label(c.label);
     }
     for g in pdfcraft_engine::catalog::TOOL_GROUPS {
-        assert!(h.query_all_by_label(g.label).count() >= 1, "tool {} missing from the expanded view", g.label);
+        assert!(
+            h.query_all_by(|n| n.role() == egui::accesskit::Role::ListItem
+                && n.label().is_some_and(|label| label == g.label || label.starts_with(&format!("{},", g.label))))
+                .count()
+                >= 1,
+            "tool {} missing from the expanded view",
+            g.label
+        );
     }
     // An item name finds its tool; the other categories drop out.
     h.state_mut().all_tools_query = "rotate".into();
     h.run_steps(3);
-    assert_eq!(h.query_all_by_label("Organize pages").count(), 1, "only the expanded view's tile; the sidebar is gone");
+    assert_eq!(
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::ListItem
+            && n.label().is_some_and(|label| label == "Organize pages" || label.starts_with("Organize pages,")))
+            .count(),
+        1,
+        "only the expanded view's tile; the sidebar is gone"
+    );
     assert!(h.query_by_label("Forms & Signatures").is_none());
     h.state_mut().all_tools_query = "no such tool".into();
     h.run_steps(3);
@@ -689,8 +702,8 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
             app.open_bytes(&egui::Context::default(), &name(i), None, FIXTURE.to_vec()).unwrap();
         }
     });
-    let open = h.get_by_label("Open").rect();
-    let discord = h.get_by_label("Discord").rect();
+    let open = h.get_by_label("Open…").rect();
+    let discord = h.get_by_label("Join the ArtCraft Discord").rect();
     assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
     let mut previous_right = f32::MIN;
     for i in 0..5 {
@@ -705,15 +718,15 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
         h.state_mut().open_bytes(&ctx_h, &name(i), None, FIXTURE.to_vec()).unwrap();
     }
     h.run_steps(6);
-    let (open, discord) = (h.get_by_label("Open").rect(), h.get_by_label("Discord").rect());
+    let (open, discord) = (h.get_by_label("Open…").rect(), h.get_by_label("Join the ArtCraft Discord").rect());
     assert!(open.right() <= discord.left(), "Open {open:?} stays left of Discord {discord:?} with seven tabs");
     for i in 0..13 {
         let ctx_h = h.ctx.clone();
         h.state_mut().open_bytes(&ctx_h, &format!("more-{i:02}.pdf"), None, FIXTURE.to_vec()).unwrap();
     }
     h.run_steps(4);
-    let open = h.get_by_label("Open").rect();
-    let discord = h.get_by_label("Discord").rect();
+    let open = h.get_by_label("Open…").rect();
+    let discord = h.get_by_label("Join the ArtCraft Discord").rect();
     assert!(open.left() > 0.0 && open.right() <= discord.left(), "Open {open:?} stays in sight left of Discord {discord:?}");
 }
 
@@ -1816,7 +1829,7 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
         let rail = |h: &Harness<'static, PdfCraftApp>, label: &str| {
             h.query_all_by_label(label).map(|n| n.rect()).find(|r| in_rail(*r)).unwrap_or_else(|| panic!("{label} in the rail"))
         };
-        let page = h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect();
+        let page = h.get(By::new().role(egui::accesskit::Role::TextInput).label("Current page")).rect();
         assert!(in_rail(page) && page.bottom() <= height, "page field {page:?} in the rail");
         let dock_label = if on_left { "Dock navigation rail on Right" } else { "Dock navigation rail on Left" };
         let dock = rail(&h, dock_label);
@@ -1839,7 +1852,7 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
         let tags = rail(&h, "Tags");
         assert!(tags.top() >= first.top(), "Tags {tags:?} is fully visible in the scrolling area");
         assert!(tags.bottom() <= page.top(), "Tags {tags:?} scrolls into view above the page field {page:?}");
-        assert_eq!(h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect(), page, "navigation stays put");
+        assert_eq!(h.get(By::new().role(egui::accesskit::Role::TextInput).label("Current page")).rect(), page, "navigation stays put");
     }
 }
 
