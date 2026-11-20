@@ -8,15 +8,18 @@
 //! line, is the item's `Lbl`. Anything else ends the list, and a run of one item stays a paragraph.
 //!
 //! A marker shown by its own operator, before the item's text in the same text object, is tagged
-//! `Lbl` there (see `Evidence::label_op`). Otherwise only whole text objects are grouped: a list
-//! drawn in one text object (an object with marked lines after its first stays a paragraph), a marker in the same show as its item's text (it stays in `LBody`),
-//! an item's wrapped lines drawn as separate objects, and nested lists are not recognised. Those
-//! lines end the list, or stay paragraphs, as they were tagged before.
+//! `Lbl` there (see `Evidence::label_op`). Otherwise only whole text objects are grouped. These are
+//! not recognised, and end the list or stay paragraphs as they were tagged before:
+//! - a list drawn in one text object: an object with a later line that continues its first line's
+//!   marker, at the same indent, stays a paragraph;
+//! - a marker in the same show as its item's text (it stays in `LBody`);
+//! - an item's wrapped lines drawn as separate objects;
+//! - nested lists.
 
 use crate::autotag_roles::Evidence;
 
 /// Markers this far apart horizontally, in points, are at different indents.
-const INDENT_TOLERANCE: f64 = 2.0;
+pub(crate) const INDENT_TOLERANCE: f64 = 2.0;
 /// A label and its item's text are on one line when their baselines are this many text sizes
 /// apart or less.
 const SAME_LINE: f64 = 0.5;
@@ -52,7 +55,7 @@ impl Numbering {
         }
     }
 
-    fn ordered(self) -> bool {
+    pub(crate) fn ordered(self) -> bool {
         !matches!(self, Numbering::Bullet(_))
     }
 }
@@ -119,6 +122,23 @@ pub(crate) fn marker(text: &str) -> Option<Marker> {
         _ => None,
     };
     Some(Marker { numbering, punctuation, value, alternative, alone: rest.trim().is_empty() })
+}
+
+impl Marker {
+    /// Whether `next` could be the marker of the item after this one's, in the same list: the
+    /// same bullet, or the same punctuation and numbering (either reading of a letter) counting
+    /// up by one.
+    pub(crate) fn followed_by(&self, next: &Marker) -> bool {
+        let readings = [Some((self.numbering, self.value)), self.alternative];
+        let next_readings = [Some((next.numbering, next.value)), next.alternative];
+        self.punctuation == next.punctuation
+            && readings.into_iter().flatten().any(|(kind, value)| {
+                next_readings
+                    .into_iter()
+                    .flatten()
+                    .any(|(next_kind, next_value)| kind == next_kind && (!kind.ordered() || next_value == value.saturating_add(1)))
+            })
+    }
 }
 
 /// A marker is followed by white space or by nothing.

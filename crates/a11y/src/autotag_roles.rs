@@ -157,11 +157,14 @@ struct Shown {
     /// Text past [`MAX_PREFIX`] was left out of `prefix`, so a marker there is not alone.
     prefix_cut: bool,
     /// The start of the current line after the first, kept the same way.
-    line: Option<String>,
-    /// A line after the first starts with a list marker: the object holds a list of its own.
+    /// and where that line starts.
+    line: Option<(String, f64)>,
+    /// A line after the first starts at the same indent with the marker that would follow the
+    /// first line's: the object holds a list of its own.
     later_marker: bool,
-    /// The next text shown is a separate word: text was moved or a space was shown since the
-    /// last text. Shows that follow each other directly join (`(1) Tj (.) Tj` is `1.`).
+    /// The next text shown is a separate word: since the last text, the text was moved, a space
+    /// was shown, or `TJ` adjustments added up to [`WORD_GAP`]. Shows that follow each other
+    /// directly join (`(1) Tj (.) Tj` is `1.`).
     gap: bool,
     start: Option<(f64, f64)>,
     /// The first operator that shows something, the start of what it shows, and whether text past
@@ -189,11 +192,12 @@ impl Shown {
         }
         if self.shown && self.moved {
             self.close_line();
-            self.line = Some(String::new());
+            let [.., e, _] = state.tm.then(&state.ctm).0;
+            self.line = Some((String::new(), e));
         }
         let gap = std::mem::take(&mut self.gap);
         self.prefix_cut |= keep_start(&mut self.prefix, &text, gap);
-        if let Some(line) = self.line.as_mut() {
+        if let Some((line, _)) = self.line.as_mut() {
             keep_start(line, &text, gap);
         }
         match &mut self.first_show {
@@ -229,10 +233,14 @@ impl Shown {
         self.gap = true;
     }
 
+    /// A wrapped line that only looks like a marker (`A. Smith` after `1. Written by`, or text at
+    /// a hanging indent) does not count.
     fn close_line(&mut self) {
-        if let Some(line) = self.line.take()
-            && autotag_lists::marker(&line).is_some()
-        {
+        let Some((line, x)) = self.line.take() else { return };
+        let (Some(first), Some(next), Some((start, _))) = (autotag_lists::marker(&self.prefix), autotag_lists::marker(&line), self.start) else {
+            return;
+        };
+        if first.followed_by(&next) && (x - start).abs() <= autotag_lists::INDENT_TOLERANCE {
             self.later_marker = true;
         }
     }
@@ -364,6 +372,8 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     let mut adjusted = 0.0;
                     for item in items {
                         match item {
+                            // An empty string shows nothing, so the adjustments around it add up.
+                            Object::String(s) if s.bytes.is_empty() => {}
                             Object::String(s) => {
                                 o.gap |= adjusted <= -WORD_GAP;
                                 adjusted = 0.0;
@@ -380,6 +390,8 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                             }
                         }
                     }
+                    // A gap after the last string separates it from the next show (`[(1.) -300] TJ`).
+                    o.gap |= adjusted <= -WORD_GAP;
                 }
             }
             _ => {}
@@ -508,15 +520,35 @@ mod tests {
               BT /F1 12 Tf (7. A long item) Tj 0 -14 Td (that wraps) Tj ET \
               BT /F1 12 Tf (8. One) Tj 0 -14 Td (9. Two) Tj ET \
               BT /F1 12 Tf (10.              Pears) Tj ET \
-              BT /F1 12 Tf [(11.) -250 250 (Ugli)] TJ ET",
+              BT /F1 12 Tf [(11.) -250 250 (Ugli)] TJ ET \
+              BT /F1 12 Tf [(12.) -300] TJ (Dates) Tj ET \
+              BT /F1 12 Tf [(13.) -100 () -100 (Yuzu)] TJ ET \
+              BT /F1 12 Tf (14.              Apples) Tj (more) Tj ET",
         );
         let markers: Vec<Option<u32>> = found.iter().map(|e| e.marker.filter(|m| !m.alone).map(|m| m.value)).collect();
-        // `8.` holds two marked lines, a list of its own: it is not one item. `10.` has its text past
-        // the kept start. `11.` is drawn against `Ugli`: the adjustments cancel.
-        assert_eq!(markers, [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), None, Some(10), None]);
+        // `8.` holds two marked lines, a list of its own: it is not one item. `10.` and `14.` have
+        // their text past the kept start. `11.` is drawn against `Ugli`: the adjustments cancel.
+        // `12.` is followed by a gap at the end of its `TJ`; `13.` by one split by an empty string.
+        let expected = [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), None, Some(10), None, Some(12), Some(13), Some(14)];
+        assert_eq!(markers, expected);
         // Only the marker shown by an operator of its own can be tagged apart: the `(3.) Tj`.
         let labels: Vec<bool> = found.iter().map(|e| e.label_op.is_some()).collect();
-        assert_eq!(labels, [false, false, true, false, false, false, false, false, false, false]);
+        // `12.` is its own show too. `14.` is not: text past its kept start was left out.
+        let shown_apart: Vec<usize> = labels.iter().enumerate().filter(|(_, l)| **l).map(|(i, _)| i).collect();
+        assert_eq!(shown_apart, [2, 10]);
+    }
+
+    #[test]
+    fn a_wrapped_line_that_only_looks_like_a_marker_keeps_the_item() {
+        let found = walk(
+            b"BT /F1 12 Tf 20 100 Td (1. Written by John) Tj 12 -14 Td (A. Smith and others) Tj ET \
+              BT /F1 12 Tf 20 70 Td (2. Decided in Roe) Tj 12 -14 Td (v. Wade, 1973) Tj ET \
+              BT /F1 12 Tf 20 40 Td (3. Built) Tj 0 -14 Td (c. 1900 by) Tj ET \
+              BT /F1 12 Tf 20 10 Td (4. One) Tj 0 -14 Td (5. Two) Tj ET",
+        );
+        let markers: Vec<Option<u32>> = found.iter().map(|e| e.marker.map(|m| m.value)).collect();
+        // Only the last continues its first line's marker at the same indent.
+        assert_eq!(markers, [Some(1), Some(2), Some(3), None]);
     }
 
     #[test]
