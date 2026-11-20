@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft::behavior::kurbo::Size;
-use craft::pages::ui::PageSource;
+use craft::pages::ui::{PageRevision, PageSource};
 use craft::ui::primitives::textures::{LoadFailure, LoadedPicture, Revision, ThumbRender, ThumbRequest, ThumbSource};
 use egui::{Color32, ColorImage, Rect};
 use pdfcraft_engine::{DocId, Session};
@@ -210,6 +210,11 @@ impl<'a> DocPages<'a> {
 }
 
 impl PageSource for DocPages<'_> {
+    fn page_revision(&self, page: usize) -> Option<PageRevision> {
+        let (document, page) = self.revisions?.of(page);
+        Some(PageRevision { document, page })
+    }
+
     fn page_count(&self) -> usize {
         self.info.map_or(0, |i| i.pages.len())
     }
