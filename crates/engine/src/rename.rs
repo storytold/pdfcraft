@@ -25,7 +25,7 @@ pub enum RenameError {
     Invalid(String),
     /// Another file already has that name.
     Exists(String),
-    /// The operating system refused (in use by another program, no permission, …).
+    /// The operating system refused (in use by another program, no permission, â€¦).
     Failed(String),
 }
 
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(name("Budget.PDF"), Ok("Budget.PDF".into()));
         assert_eq!(name("  spaced  "), Ok("spaced.pdf".into()), "surrounding spaces are trimmed");
         assert_eq!(name("notes.txt"), Ok("notes.txt.pdf".into()), "another extension is part of the name");
-        assert_eq!(name("年度 report"), Ok("年度 report.pdf".into()));
+        assert_eq!(name("å¹´åº¦ report"), Ok("å¹´åº¦ report.pdf".into()));
     }
 
     #[test]
