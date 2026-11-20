@@ -134,6 +134,7 @@ Detached windows render a lightweight top header panel and a central document pa
 
 - Merging two arbitrary detached windows into a second independent multi-tab window group (each detached window hosts a single document tab; grouping only occurs in the primary window).
 - Native OS menu bars per detached window (detached windows use a streamlined in-window toolbar with essential controls and re-attach action).
+- Detached windows currently only handle Undo and Redo shortcuts (no Save, Print, Find, Zoom shortcuts, and no menu bar).
 - Cross-process window instances (all windows remain part of the single multi-viewport application process).
 - Cross-viewport physical drag-and-drop of OS windows back into the tab strip (re-docking is driven via the explicit "Re-attach Tab" header control).
 - Multi-viewport support on WebAssembly/browsers.

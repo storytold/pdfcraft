@@ -1010,7 +1010,6 @@ impl PdfCraftApp {
                     child_ui.input(|i| i.viewport().close_requested() || i.raw.viewports.get(&viewport_id).is_some_and(|v| v.close_requested()));
                 if close_requested && !self.allow_quit {
                     if self.has_unsaved_work(idx) {
-                        child_ui.ctx().send_viewport_cmd_to(viewport_id, egui::ViewportCommand::CancelClose);
                         child_ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
                         if self.close_request.is_none() {
                             self.close_request = Some(crate::CloseRequest::Tab(doc_id));
@@ -1027,19 +1026,14 @@ impl PdfCraftApp {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(&title).font(theme::semibold(13.0)));
                             if is_dirty {
-                                ui.label(egui::RichText::new("(edited)").font(theme::regular(11.0)).color(t.text_muted));
+                                ui.label(egui::RichText::new(tl!("(edited)")).font(theme::regular(11.0)).color(t.text_muted));
                             }
                             if let (Some(view), Some(doc)) = (self.views.get(idx), self.session.get(doc_id)) {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "Page {} of {} • {:.0}%",
-                                        view.current.saturating_add(1),
-                                        doc.info.pages.len(),
-                                        view.zoom * 100.0,
-                                    ))
-                                    .font(theme::regular(11.0))
-                                    .color(t.text_muted),
-                                );
+                                let p = view.current.saturating_add(1).to_string();
+                                let n = doc.info.pages.len().to_string();
+                                let zoom = format!("{:.0}", view.zoom * 100.0);
+                                let readout = i18n::fmt(tl!("Page {p} of {n} • {zoom}%"), &[("p", &p), ("n", &n), ("zoom", &zoom)]);
+                                ui.label(egui::RichText::new(readout).font(theme::regular(11.0)).color(t.text_muted));
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.button(tl!("Re-attach Tab")).clicked() {
