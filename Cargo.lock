@@ -5259,6 +5259,7 @@ version = "0.21.1"
 dependencies = [
  "craft-image-codecs",
  "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e2dc681a3)",
+ "hayro-jpeg2000",
  "image",
  "pdfcraft-annot",
  "pdfcraft-content",
