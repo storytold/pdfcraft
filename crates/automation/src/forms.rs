@@ -272,6 +272,27 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
 }
 
 impl Automation {
+    /// Import an image using an optional exact field ID, preserving the legacy name-only tool.
+    pub(crate) fn form_set_image(&mut self, a: &Args) -> Result<Value> {
+        let name = a.str("field")?.to_owned();
+        let object = a
+            .0
+            .get("field_id")
+            .map(|value| -> Result<pdfcraft_cos::ObjRef> {
+                let key =
+                    value.as_u64().filter(|key| *key < 1u64 << 48).ok_or_else(|| bad("field_id must be an integer between 0 and 281474976710655"))?;
+                Ok(pdfcraft_cos::ObjRef::new((key >> 16) as u32, key as u16))
+            })
+            .transpose()?;
+        let path = self.resolve(a.str("path")?, false)?;
+        let image = std::sync::Arc::new(crate::paths::read_input(&path)?);
+        let edit = match object {
+            Some(object) => Edit::SetFieldImageTarget { name, object, image },
+            None => Edit::SetFieldImage { name, image },
+        };
+        self.apply(a, edit)
+    }
+
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let out: Vec<Value> = doc
@@ -286,6 +307,7 @@ impl Automation {
                 });
                 let mut v = json!({
                     "name": f.name,
+                    "field_id": pdfcraft_engine::js::field_object_id(f.obj),
                     "type": kind_name(f.kind),
                     "value": match f.kind {
                         FormFieldKind::CheckBox => json!(!f.value.is_empty()),
@@ -645,6 +667,7 @@ impl Automation {
                     Ok((wi, caption.to_owned()))
                 })
                 .transpose()?,
+            caption_all: None,
             read_only: a.opt_bool("read_only")?,
             required: a.opt_bool("required")?,
             multiline: a.opt_bool("multiline")?,
@@ -878,8 +901,12 @@ impl Automation {
         let bytes = crate::read_input(&path)?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let before = (self.doc(a)?.info.annotations.len(), self.doc(a)?.form.iter().filter(|f| !f.value.is_empty()).count());
+        let repairs_before = self.doc(a)?.repair_log().len();
         let mut out = self.apply(a, Edit::ImportData { name, bytes: std::sync::Arc::new(bytes) })?;
         let doc = self.doc(a)?;
+        // What this import added to the repair log (values the form refused, comments taken
+        // without their appearance): the log is otherwise only in `doc_info`.
+        out["import_repairs"] = json!(doc.repair_log().into_iter().skip(repairs_before).collect::<Vec<_>>());
         out["comments"] = json!(doc.info.annotations.len() as i64 - before.0 as i64);
         out["filled_fields"] = json!(doc.form.iter().filter(|f| !f.value.is_empty()).count());
         Ok(out)

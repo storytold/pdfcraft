@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::geometry::{corner_ratio, frame, is_markup, resized};
-use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
+use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect, pos2, vec2};
 use crate::page_keys::PageKeys;
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -36,9 +36,13 @@ pub enum Gesture {
     Place { xfdf: String, bounds: [f64; 4], count: usize, outlines: Vec<pdfcraft_engine::CommentOutline> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ComposerKind {
     Note,
+    /// A comment anchored to selected text; replacing the composer drops its quads.
+    TextNote {
+        quads: Vec<[f64; 8]>,
+    },
     /// A text box; `size` is the box dragged out (displayed width and height, in user space
     /// units), `None` after a click: then the box fits its text.
     TextBox {
@@ -602,7 +606,7 @@ impl PageCx<'_> {
         self.xf.user_rect(self.info, self.page, frame(a, self.rotation()))
     }
 
-    /// Top-level comments on this page, in paint order.
+    /// Top-level comments on this page, in inspection order.
     pub(super) fn comments(&self) -> impl Iterator<Item = &Annotation> {
         self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
     }
@@ -621,6 +625,32 @@ impl PageCx<'_> {
                 self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
             })
             .chain(fallback)
+    }
+
+    /// A viewer-only marker for commented text markup intersecting the page.
+    pub(crate) fn comment_marker_rect(&self, a: &Annotation) -> Option<Rect> {
+        if !is_markup(&a.subtype) || a.contents.as_deref().is_none_or(|s| s.trim().is_empty()) {
+            return None;
+        }
+        let r = self.screen_rects(a).last()?;
+        let size = vec2(12.0, 12.0);
+        let page = self.xf.rect;
+        let marker_max = page.max - size;
+        let desired = pos2(r.right() + 3.0, r.top() - 14.0);
+        // Keep the fixed-size marker visible at page edges. At extremely small zooms,
+        // omit it rather than covering a page that is smaller than the marker itself.
+        if !page.is_finite()
+            || !r.is_finite()
+            || !desired.is_finite()
+            || !page.intersects(r)
+            || page.width() < size.x
+            || page.height() < size.y
+            || marker_max.x < page.min.x
+            || marker_max.y < page.min.y
+        {
+            return None;
+        }
+        Some(Rect::from_min_size(desired.clamp(page.min, marker_max), size))
     }
 
     /// A redaction mark's areas: one per marked quad, or its rectangle.
@@ -655,9 +685,16 @@ impl PageCx<'_> {
             .filter_map(|s| {
                 let (page, index) = s.parent?;
                 let caret = self.get(index).filter(|c| page == self.page && c.subtype == "Caret")?;
-                Some((s.index, caret))
+                Some((false, s.index, caret))
             });
-        self.comments().filter(under).map(|a| (a.index, a)).chain(strikes).max_by_key(|(i, _)| *i).map(|(_, a)| a)
+        self.comments()
+            .filter_map(|a| {
+                let marker = self.comment_marker_rect(a).is_some_and(|r| r.expand(3.0).contains(p));
+                (marker || under(&a)).then_some((marker, a.index, a))
+            })
+            .chain(strikes)
+            .max_by_key(|(marker, index, _)| (*marker, *index))
+            .map(|(_, _, a)| a)
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {

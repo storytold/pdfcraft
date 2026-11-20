@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "name": "Document Properties: inspection tabs refresh only without pending input",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Space Audit"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "external_edit", "key": "Title", "value": "Updated"},
+      "expect": {"error": null, "properties_open": true, "draft": {"title": "Updated"}, "document": {"title": "Updated", "undo": "Change Title"}}
+    },
+    {
+      "event": {"op": "click", "label": "Description"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Pending"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Space Audit"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "external_edit", "key": "Subject", "value": "New subject"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "notice": "The document changed. Reopen Document Properties to edit the current version.", "document": {"title": "Updated", "subject": "New subject", "undo": "Change Subject"}}
+    },
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Custom"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Name:", "value": "Project"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Value:", "value": "Unaccepted"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "Space Audit"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "external_edit", "key": "Author", "value": "New author"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "notice": "The document changed. Reopen Document Properties to edit the current version.", "document": {"title": "Updated", "author": "New author", "custom": {"Untouched": "Keep me"}, "custom_count": 1}}
+    }
+  ]
+}

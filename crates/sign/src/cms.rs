@@ -413,6 +413,7 @@ pub fn attach_timestamp_token(cms: &[u8], token: &[u8]) -> Result<Vec<u8>, SignE
     let wrapped_new = der::explicit(0, &new_sd);
     Ok(der::seq(&[&der::oid(SIGNED_DATA), &wrapped_new]))
 }
+#[cfg(test)]
 fn attribute(o: &str, value: &[u8]) -> Vec<u8> {
     der::seq(&[&der::oid(o), &der::set_of(&[value])])
 }
@@ -456,34 +457,75 @@ struct SignedDataInput<'a> {
 }
 
 fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
+    use craft_pkcs7::cms::{SigningCertificate, SigningInput};
     let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
-    let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
-    let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
-    let serial = der::tlv(tag::INTEGER, if cert.serial.is_empty() { &[0] } else { &cert.serial });
-    let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &serial])])])]);
-    let attrs =
-        [attribute(CONTENT_TYPE, &der::oid(content_type)), attribute(MESSAGE_DIGEST, &der::octets(content_digest)), attribute(SIGNING_CERT_V2, &ess)];
-    let refs: Vec<&[u8]> = attrs.iter().map(Vec::as_slice).collect();
-    let set = der::set_of(&refs);
-    let signature = key.sign(alg, &set)?;
-    let mut signed_attrs = set.clone();
-    signed_attrs[0] = tag::ctx(0);
-    let sid = der::seq(&[&cert.issuer.raw, &serial]);
-    let signer = der::seq(&[&der::int(1), &sid, &alg.algorithm(), &signed_attrs, &key.signature_algorithm(alg), &der::octets(&signature)]);
-    let mut certs: Vec<&[u8]> = vec![&cert.raw];
-    certs.extend(chain.iter().filter(|c| c.raw != cert.raw).map(|c| c.raw.as_slice()));
-    let encap = match content {
-        Some(c) => der::seq(&[&der::oid(content_type), &der::explicit(0, &der::octets(c))]),
-        None => der::seq(&[&der::oid(content_type)]),
-    };
-    let signed_data =
-        der::seq(&[&der::int(1), &der::set_of(&[&alg.algorithm()]), &encap, &der::tlv(tag::ctx(0), &certs.concat()), &der::set_of(&[&signer])]);
-    Ok(der::seq(&[&der::oid(SIGNED_DATA), &der::explicit(0, &signed_data)]))
+    let chain: Vec<&[u8]> = chain.iter().map(|c| c.raw.as_slice()).collect();
+    // Keep the app's platform/keychain provider and error intact. Only the public certificate
+    // material and exact signed-attribute bytes cross the shared writer boundary.
+    craft_pkcs7::cms::sign_with(
+        SigningInput {
+            cert: SigningCertificate { der: &cert.raw, issuer_der: &cert.issuer.raw, serial: &cert.serial },
+            chain: &chain,
+            alg: crate::keys::shared_digest(alg),
+            content_type,
+            content,
+            content_digest,
+            signature_algorithm: &key.signature_algorithm(alg),
+        },
+        |attrs| key.sign(alg, attrs),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_signer_receives_legacy_attributes_once_and_preserves_error() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::keys::ExternalKey;
+        use crate::x509::Name;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Provider {
+            expected: Vec<u8>,
+            calls: AtomicUsize,
+        }
+        impl ExternalKey for Provider {
+            fn sign(&self, alg: DigestAlg, msg: &[u8]) -> Result<Vec<u8>, SignError> {
+                assert_eq!(alg, DigestAlg::Sha256);
+                assert_eq!(msg, self.expected);
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Err(SignError::Crypto("provider declined".into()))
+            }
+        }
+        let software = PrivateKey::generate_p256()?;
+        let name = Name::build("External signer", "", "", "", "");
+        let from = Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        let cert = Certificate::self_signed(&name, &software, from, 1, &[1])?;
+        let alg = DigestAlg::Sha256;
+        let content = b"detached or encapsulated";
+        let digest = alg.digest(&[content]);
+        // Pin the former app writer's signed-attribute construction independently of the
+        // shared helper. Both entry points must send these exact bytes, not a double hash.
+        let hash = alg.digest(&[&cert.raw]);
+        let names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
+        let serial = der::tlv(tag::INTEGER, &cert.serial);
+        let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&hash), &der::seq(&[&names, &serial])])])]);
+        let expected = der::set_of(&[
+            &attribute(CONTENT_TYPE, &der::oid(DATA)),
+            &attribute(MESSAGE_DIGEST, &der::octets(&digest)),
+            &attribute(SIGNING_CERT_V2, &ess),
+        ]);
+        let provider = Arc::new(Provider { expected, calls: AtomicUsize::new(0) });
+        let external = PrivateKey::external(cert.public_key.clone(), provider.clone());
+        for result in [sign_detached(&external, &cert, &[], alg, &digest), sign_encapsulated(&external, &cert, &[], alg, DATA, content)] {
+            assert!(matches!(result, Err(SignError::Crypto(message)) if message == "provider declined"));
+        }
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "exactly once per request, no retries");
+        Ok(())
+    }
 
     #[test]
     fn strip_removes_multiple_leading_zero_bytes() {
