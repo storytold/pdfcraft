@@ -2873,7 +2873,13 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     if shots {
         h.render().unwrap().save("/tmp/5850-multiline.png").unwrap();
     }
-    commit_typed_text(&mut h);
+    let page = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let outside = pos2(page.left() - 20.0, page.center().y);
+    h.hover_at(outside);
+    h.drag_at(outside);
+    h.run_steps(1);
+    h.drop_at(outside);
+    h.run_steps(3);
     assert!(h.state().views[0].session.fill_text.is_none());
     assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
     let id = h.state().views[0].id;
