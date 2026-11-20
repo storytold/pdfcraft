@@ -248,7 +248,12 @@ pub(crate) fn show_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
     if let Some(edited) = edited {
         // Built-in slots are not the user's list; only commands the registry has are kept.
-        app.hotbar.tools = edited.iter().flat_map(|slot| slot.tools.iter()).map(|tool| tool.id.clone()).collect();
+        app.hotbar.tools = edited
+            .iter()
+            .filter(|slot| !defaults.iter().any(|built_in| built_in.id == slot.id))
+            .flat_map(|slot| slot.tools.iter())
+            .map(|tool| tool.id.clone())
+            .collect();
         app.hotbar.normalize();
     }
     if let Some(id) = drawer.select {
