@@ -451,6 +451,66 @@ fn document_info_edits_round_trip_with_unicode() {
 /// Page transitions (§12.4.4): written as `/Trans` and `/Dur` with only the entries the style
 /// reads and that differ from the defaults, removed again, checked before any page changes, and
 /// kept through a save.
+/// PdfCraft #7686: Fly, Push, Cover, Uncover and Fade came in PDF 1.5 (ISO 32000-1 table 162). A
+/// page given one raises a file that declares an earlier version: the catalog says `/Version /1.5`
+/// after an in-place save that keeps the header. An older style, a later version, a removal, or no
+/// page leave the version alone.
+#[test]
+fn a_pdf_1_5_transition_raises_an_earlier_file_to_1_5() {
+    let with_header = |v: &[u8]| {
+        let mut bytes = fixture();
+        bytes[5..8].copy_from_slice(v);
+        open(bytes)
+    };
+    let catalog_version = |doc: &Document| {
+        let root = doc.root().expect("root");
+        doc.get(root).as_dict().and_then(|c| c.name(b"Version")).map(|v| String::from_utf8_lossy(v).into_owned())
+    };
+    let set = |doc: &mut Document, pages: &[usize], style: Option<&str>| {
+        set_transition(doc, pages, &TransitionSpec { transition: style.map(Transition::new), display: None }).unwrap();
+    };
+    for style in ["Fly", "Push", "Cover", "Uncover", "Fade"] {
+        let mut doc = with_header(b"1.4");
+        set(&mut doc, &[0], Some(style));
+        let doc = save_and_reopen(&doc);
+        assert_eq!((doc.version(), catalog_version(&doc).as_deref()), ("1.4", Some("1.5")), "{style}");
+        // The saved file has both the transition and the version it needs.
+        let t = page_dict(&doc, 0).get(b"Trans").and_then(|o| o.as_dict()).expect("/Trans").clone();
+        assert_eq!(t.name(b"S"), Some(style.as_bytes()), "{style}");
+    }
+    for style in ["Split", "Blinds", "Box", "Wipe", "Dissolve", "Glitter", "R"] {
+        let mut doc = with_header(b"1.4");
+        set(&mut doc, &[0], Some(style));
+        assert_eq!(catalog_version(&save_and_reopen(&doc)), None, "{style} is PDF 1.4");
+    }
+    let mut doc = with_header(b"1.4");
+    set(&mut doc, &[0], None);
+    set(&mut doc, &[], Some("Fade"));
+    assert_eq!(catalog_version(&doc), None, "a removal or no page");
+    let mut doc = with_header(b"1.7");
+    set(&mut doc, &[0], Some("Fade"));
+    assert_eq!(catalog_version(&doc), None, "a 1.7 header is later");
+    // A version asked of a full save doesn't change the header an in-place save keeps (#7707 review).
+    let mut doc = with_header(b"1.4");
+    doc.set_version("1.7");
+    set(&mut doc, &[0], Some("Fade"));
+    assert_eq!(catalog_version(&save_and_reopen(&doc)).as_deref(), Some("1.5"), "the kept header says 1.4");
+    // A catalog `/Version` that isn't a version declares nothing; `/1.10` is later than `/1.5`.
+    for (said, after) in [("Latest", "1.5"), ("1.", "1.5"), ("1.10", "1.10")] {
+        let mut doc = with_header(b"1.4");
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name(said))).unwrap();
+        set(&mut doc, &[0], Some("Fade"));
+        assert_eq!(catalog_version(&doc).as_deref(), Some(after), "/Version /{said}");
+    }
+    // A catalog that already says a later version keeps it.
+    let mut doc = with_header(b"1.4");
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name("1.6"))).unwrap();
+    set(&mut doc, &[0], Some("Fade"));
+    assert_eq!(catalog_version(&doc).as_deref(), Some("1.6"));
+}
+
 #[test]
 fn page_transitions_are_set_removed_and_checked() {
     let mut doc = open(fixture());
