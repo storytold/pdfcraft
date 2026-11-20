@@ -80,3 +80,19 @@ fn light_past_full_colour_saturates() {
     let lit = centre(&square_z(), &camera([0.0, 0.0, 10.0], [0.0, 1.0, 0.0]), Lighting::Scheme(LightingScheme::Hard));
     assert_eq!(lit, [255, 255, 255, 255]);
 }
+
+#[test]
+fn a_tilted_face_takes_each_light_by_its_own_direction() {
+    // A face with normal (1, 1, 1)/√3 seen from +z under Day, on grey 100: the lights meet it at
+    // |cos| 0.679, 0.955 and 0.569, so red and green take 0.5·0.679 + 0.8·0.955 + 0.9·0.569 and
+    // blue 0.5·0.679 + 0.9·0.955 + 0.9·0.569. A light mirrored in x or y changes these.
+    let (r2, r6) = (std::f64::consts::SQRT_2, 6f64.sqrt());
+    let (u, v) = ([1.0 / r2, -1.0 / r2, 0.0], [1.0 / r6, 1.0 / r6, -2.0 / r6]);
+    let corner = |a: f64, b: f64| [0, 1, 2].map(|i| a * u[i] + b * v[i]);
+    let face = square([corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)]);
+    let grey = WorldMesh { colour: Some([100, 100, 100, 255]), ..face };
+    let lit = centre(&grey, &camera([0.0, 0.0, 10.0], [0.0, 1.0, 0.0]), Lighting::Scheme(LightingScheme::Day));
+    for (got, want) in lit.iter().zip([161.6, 161.6, 171.1, 255.0]) {
+        assert!((f64::from(*got) - want).abs() <= 1.0, "{lit:?}");
+    }
+}
