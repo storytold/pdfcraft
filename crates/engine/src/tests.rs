@@ -15765,3 +15765,43 @@ fn inline_conversions_refuse_office_documents_without_running_libreoffice() {
     assert_eq!(s.convert_to_pdf_inline("notes.txt", &Arc::new(b"hello".to_vec())).unwrap().0, SourceKind::Text);
     assert!(s.as_pdf_inline("scan.jpg", &Arc::new(jpeg_bytes())).unwrap().starts_with(b"%PDF-"));
 }
+
+/// A document opened only to be inspected (`pdfcraft-cli info`) reports what the app reports
+/// (its repair notes, standards and form) without drawing the display copy: a comment the file
+/// leaves to the viewer to draw stays undrawn, and the bytes shown are the file's own.
+#[test]
+fn an_inspected_document_reports_what_the_app_does_without_drawing_a_display_copy() {
+    // No cross-reference table, so the reader repairs it and says so; and a square comment
+    // without an appearance, which the app draws into its display copy.
+    let bare = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /Square /Rect [140 40 190 90] /C [1 0 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let open = |inspection: bool| {
+        let mut s = Session::new();
+        s.set_javascript(false);
+        s.set_inspection(inspection);
+        let id = s.open("bare.pdf", None, Arc::new(bare.to_vec()), None).unwrap();
+        let doc = s.get(id).unwrap();
+        (doc.repair_log(), doc.standards(), doc.form.len(), Arc::ptr_eq(&doc.display, &doc.bytes))
+    };
+    let (shown, inspected) = (open(false), open(true));
+    assert!(!shown.0.is_empty(), "the file is repaired on opening: {:?}", shown.0);
+    assert_eq!((&inspected.0, &inspected.1, inspected.2), (&shown.0, &shown.1, shown.2), "the same notes, standards and form");
+    assert!(!shown.3, "the app draws the comment into its display copy");
+    assert!(inspected.3, "inspection draws no display copy");
+
+    // A signed document: the app validates its signature, inspection doesn't (noted in review).
+    let signatures = |inspection: bool| {
+        let mut s = Session::new();
+        s.set_javascript(false);
+        s.set_inspection(inspection);
+        let id = s.open("form.pdf", None, Arc::new(signed_field_named(8)), None).unwrap();
+        s.get(id).unwrap().signatures.len()
+    };
+    assert_eq!(signatures(false), 1, "the app lists the signature");
+    assert_eq!(signatures(true), 0, "inspection validates no signature");
+}
