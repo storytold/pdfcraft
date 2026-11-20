@@ -148,6 +148,12 @@ fn annotation_tool(quick: QuickTool) -> AnnotationTool {
     }
 }
 
+fn set_page(annotate: &mut AnnotateTool, page: usize, map: &PageMap<'_>, quick: QuickTool, allowed: bool, hidden: bool) {
+    annotate.page = page;
+    annotate.annotations =
+        if hidden { Vec::new() } else { bridge::annotations(map.info, map, quick, allowed).into_iter().filter(|a| a.page == page).collect() };
+}
+
 /// The eraser's radius, in screen points, from its thickness setting (#3747): three points per point of
 /// thickness, so the default 2 pt keeps the 12-point eraser. A setting that is not a number is the default.
 fn eraser_radius(width: f64) -> f32 {
@@ -171,11 +177,7 @@ impl CanvasTool for CommentsTool<'_> {
         }
         let page = self.annotate.page;
         self.annotate.tool = annotation_tool(self.quick);
-        self.annotate.annotations = if self.hidden {
-            Vec::new()
-        } else {
-            bridge::annotations(self.map.info, &self.map, self.quick, self.allowed).into_iter().filter(|a| a.page == page).collect()
-        };
+        set_page(self.annotate, page, &self.map, self.quick, self.allowed, self.hidden);
         let mut eraser_width = 2.0;
         if let (Some(prefs), QuickTool::Comment(comment)) = (self.prefs, self.quick) {
             let style = prefs.style(comment);
@@ -243,12 +245,7 @@ impl CanvasTool for CommentsTool<'_> {
             && let Some(page) = self.page_under(pointer.pos)
             && page != self.annotate.page
         {
-            self.annotate.page = page;
-            self.annotate.annotations = if self.hidden {
-                Vec::new()
-            } else {
-                bridge::annotations(self.map.info, &self.map, self.quick, self.allowed).into_iter().filter(|a| a.page == page).collect()
-            };
+            set_page(self.annotate, page, &self.map, self.quick, self.allowed, self.hidden);
         }
         let action = self.annotate.press(pointer, cx);
         *self.pressed = action != ToolAction::Ignored;
@@ -433,12 +430,13 @@ pub(crate) fn context_comment(cx: &PageCx<'_>, at: Pos2) -> Option<usize> {
 /// A click on a comment's body, from the page part that owns it (M-1): the annotation tool selects it with the
 /// modifiers and click count of the press, a double click opening it. A click on a group subordinate selects its
 /// group's primary and remembers the member under the pointer (`cx` is the comment's page).
-pub(crate) fn part_pressed(view: &mut CommentView, press: &PagePress, cx: &PageCx<'_>, words: &AnnotateWords) {
+pub(crate) fn part_pressed(view: &mut CommentView, press: &PagePress, cx: &PageCx<'_>, map: &PageMap<'_>, quick: QuickTool, words: &AnnotateWords) {
     let Owner::Comment { index } = press.owner else { return };
     let PressPhase::Release { start, click: true, .. } = press.phase else { return };
     if start.button != PointerButton::Primary {
         return;
     }
+    set_page(&mut view.tool, press.page, map, quick, cx.allowed, cx.hidden);
     view.tool.click(bridge::id_of(press.page, index), press.mods, start.clicks, words);
     view.member = cx.picked(start.origin, view.primary());
 }
