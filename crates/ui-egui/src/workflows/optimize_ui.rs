@@ -522,9 +522,8 @@ fn audit_row(rows: Arc<RwLock<Vec<SpaceUse>>>) -> Param {
 }
 
 /// The Space Audit row, for a dialog that shows the audit among other rows (Properties ▸ Space Audit): reads the app's shared
-/// result each pass. It starts no measure, so a dialog may build it every pass; the caller runs `measure_space_audit` once when
-/// the tab opens and again on the document-changed event.
-// PLAN: pdf-dialogs-w7 calls `measure_space_audit` when Properties ▸ Space Audit opens; the document-changed handler (pdf-hub-w3) calls it too.
+/// result each pass. It starts no measure, so a dialog may build it every pass; `properties.rs` runs `measure_space_audit`
+/// when Properties ▸ Space Audit opens and again after an edit.
 pub(crate) fn space_audit_param(app: &PdfCraftApp) -> Param {
     audit_row(app.space_audit.clone())
 }

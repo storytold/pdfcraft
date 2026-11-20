@@ -252,6 +252,9 @@ pub struct PdfCraftApp {
     pub(crate) closed_tabs: Vec<String>,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
+    /// The active document during the previous frame, so a deferred keyboard Save from that frame
+    /// never saves a different document that became active before the next frame's `before_input`.
+    pub(crate) last_frame_active: Option<DocId>,
     pub mode: Mode,
     /// Workspace used for newly opened PDFs; independent of PDF Initial View metadata.
     pub default_mode: Mode,

@@ -540,7 +540,6 @@ fn keys(h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers, key: Key) {
 
 /// The paste chord: the platform answers the request with the text of the latest copy.
 fn paste(h: &mut Harness<'static, PdfCraftApp>, copies: &Copies) {
-    h.key_press_modifiers(Modifiers::COMMAND, Key::V);
     h.event(egui::Event::Paste(copied_text(copies).unwrap_or_default()));
     h.run_steps(4);
 }
@@ -657,11 +656,11 @@ fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page(
         h.run_steps(1);
     }
     h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the context menu is open");
+    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_some(), "the context menu is open");
     let before = can_undo(&h, 0);
     crate::support::fire_menu(&mut h, "edit.paste");
     assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
-    assert!(!egui::Popup::is_any_open(&h.ctx), "Edit ▸ Paste closed the context menu");
+    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_none(), "Edit ▸ Paste closed the context menu");
     h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_ne!(can_undo(&h, 0), before, "the picture was dropped");

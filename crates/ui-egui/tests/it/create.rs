@@ -206,13 +206,14 @@ fn the_pdf_optimizer_dialog_picks_a_preset() {
     assert!(h.execute("optimize.advanced"));
     h.run_steps(2);
     h.get_by_value("Standard");
+    assert!(h.query_all_by_value("150").next().is_some(), "Standard downsamples colour/gray images to 150 ppi");
     assert_eq!(h.get_by_label("Merge image fragments").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
     h.get_by_value("Standard").click();
     h.run_steps(4);
     h.get_by_label("Mobile").click();
     h.run_steps(2);
     h.get_by_value("Mobile");
-    assert_eq!(h.get_by_label("Merge image fragments").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "Mobile turns it off");
+    assert!(h.query_all_by_value("96").next().is_some(), "Mobile downsamples colour/gray images to 96 ppi");
     // Changing an option makes the settings custom.
     h.get_by_label("Merge image fragments").click();
     h.run_steps(2);

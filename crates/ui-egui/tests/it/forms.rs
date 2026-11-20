@@ -39,7 +39,9 @@ fn scripted_harness(
 
 /// The text of the newest notice on screen, if one is shown.
 fn notice(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
-    toast::cards(&h.ctx, &WindowKey::main()).last().map(|card| card.toast.message.as_str().to_owned())
+    toast::cards(&h.ctx, &WindowKey::main())
+        .last()
+        .map(|card| card.toast.title.as_ref().map_or_else(|| card.toast.message.as_str(), |t| t.as_str()).to_owned())
 }
 
 fn undo(h: &mut Harness<'static, PdfCraftApp>) {
@@ -704,12 +706,11 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
     h.run_steps(3);
     click_field(&mut h, "city", 0);
     assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
-    let (rect, id) = {
+    let rect = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "name").unwrap();
-        let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
-        (rect, egui::Id::unique(("form-field", s.views[0].view_key(), "name", 0usize)))
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
     };
     // From inside the first word ("Ad|a" at the field's auto size, 13.9 pt) to past the end of the text.
     let (from, to) = (egui::pos2(rect.left() + 38.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));
@@ -725,10 +726,10 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
     h.run_steps(3);
     assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.as_str()), Some("name"), "the press moved the focus");
     let n = "Ada Lovelace".chars().count();
-    let range = egui::TextEdit::load_state(&h.ctx, id).and_then(|s| s.cursor.char_range()).expect("a selection in the field");
+    let sel = h.state().views[0].session.forms.focus.as_ref().expect("focused field").selection;
     // "Ad|a": not the caret at the end that a newly focused editor gets on its own.
-    assert_eq!(range.secondary.index.0, 2, "anchored where the drag started: {range:?}");
-    assert_eq!(range.primary.index.0, n, "and extended to where it ended: {range:?}");
+    assert_eq!(sel.anchor, 2, "anchored where the drag started: {sel:?}");
+    assert_eq!(sel.caret, n, "and extended to where it ended: {sel:?}");
 }
 
 #[test]
@@ -746,9 +747,9 @@ fn date_fields_offer_a_calendar() {
     let month =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][(m - 1) as usize];
     h.get_by_label(&format!("{month} {y}"));
-    h.get_by_label("›").click();
+    h.get_by_label("Next").click();
     h.run_steps(2);
-    h.get_by_label("15").click();
+    h.get_by_label_contains(" 15, ").click();
     h.run_steps(4);
     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
     assert_eq!(value(&h, "due"), vec![format!("{nm:02}/15/{ny}")], "picked in the field's format");
@@ -781,7 +782,7 @@ fn the_calendar_follows_a_complete_date_typed_while_it_is_open() {
     h.get_by_label("March 2025");
     // The arrows still turn the months, and the calendar stays on their month while the text
     // doesn't change.
-    h.get_by_label("›").click();
+    h.get_by_label("Next").click();
     h.run_steps(3);
     h.get_by_label("April 2025");
 }
@@ -849,7 +850,7 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
     ));
     h.run_steps(4);
     // Two months on, and two months back: Today still picks the 14th of November.
-    for (name, arrow, shown, want) in [("due", "›", "January 2024", "11/14/2023"), ("start", "‹", "September 2023", "2023-11-14")] {
+    for (name, arrow, shown, want) in [("due", "Next", "January 2024", "11/14/2023"), ("start", "Previous", "September 2023", "2023-11-14")] {
         click_field(&mut h, name, 0);
         h.get_by_label("November 2023");
         for _ in 0..2 {

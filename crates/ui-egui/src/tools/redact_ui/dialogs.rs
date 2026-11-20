@@ -265,7 +265,7 @@ pub(crate) fn show_search(app: &mut PdfCraftApp, ui: &mut Ui) {
             true
         });
     app.redact_search = draft;
-    if shown.accepted.is_some() {
+    if shown.accepted.is_some() || shown.picked == Some(0) {
         let n = app.redact_search(ui.ctx());
         app.redact_search.found = Some(n);
     } else if shown.closed.is_some() {

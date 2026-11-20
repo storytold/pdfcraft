@@ -754,7 +754,7 @@ fn item_controls(
     let out = TransformBox::text_frame(tl!("Added text frame"), Bind::given(state), doc_rect(&body.view, frame, applied))
         .rules(rules)
         .session_arrows(false)
-        .show(ui);
+        .show_at(ui, body.rect);
     if out.discard {
         session.content.selected = None;
         session.content.preview = None;
@@ -1027,7 +1027,7 @@ fn draft_session(
     let origin = layout.origin;
     // A box still waiting for its focus was started in this pass by the press the editor also sees as a press on the
     // canvas background: that press is the one that opened it, not a click away from it.
-    let fresh = std::mem::replace(&mut draft.focus, false);
+    let fresh = if body.pass.is_some() { std::mem::replace(&mut draft.focus, false) } else { draft.focus };
     let mut selection = draft.selection.unwrap_or_else(|| TextSelection::caret_at(draft.text.chars().count()));
     let mut host = AddedTextHost { draft, ctx: ctx.clone(), view: body.view, layout, laid_out: None };
     let paper = Rect::from_min_size(at, egui::vec2(width, host.galley().rect.height() + INSET.y * 2.0));
@@ -1799,26 +1799,37 @@ mod tests {
 
     /// The image a flip button leaves behind, as the panel returns it.
     fn flipped(tooltip: &str) -> pdfcraft_engine::AddedImage {
+        struct PanelApp {
+            img: pdfcraft_engine::AddedImage,
+            out: Option<pdfcraft_engine::AddedImage>,
+        }
+        impl eframe::App for PanelApp {
+            fn raw_input_hook(&mut self, ctx: &egui::Context, _raw: &mut egui::RawInput) {
+                craft::ui::shell::embed::before_input(ctx, |_| {
+                    craft::ui::runtime::frame::FrameInput::new(craft::ui::runtime::env::RootEnv::default())
+                });
+            }
+            fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+                craft::ui::shell::embed::logic(ctx, || craft::ui::shell::embed::CloseDecision::Close);
+            }
+            fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+                craft::ui::shell::embed::before_ui(ui.ctx(), frame);
+                egui::CentralPanel::default().show(ui, |ui| {
+                    if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &self.img) {
+                        self.out = Some(i);
+                    }
+                });
+            }
+        }
         let img = pdfcraft_engine::AddedImage::new([0.0, 0.0, 100.0, 50.0], pdfcraft_cos::ObjRef::new(7, 0));
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::new_ui_state(
-            move |ui, out: &mut Option<pdfcraft_engine::AddedImage>| {
-                // The app's fonts (the semibold section title) take effect from the next frame.
-                if !fonts {
-                    crate::fonts::ui_fonts(crate::i18n::Lang::EN).install(ui.ctx());
-                    fonts = true;
-                    return;
-                }
-                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &img) {
-                    *out = Some(i);
-                }
-            },
-            None,
-        );
-        h.run();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_eframe(move |cc| {
+            crate::PdfCraftApp::install_runtime(&cc.egui_ctx);
+            PanelApp { img, out: None }
+        });
+        h.run_steps(3);
         h.get_by_label(tooltip).click();
-        h.run();
-        h.state().clone().expect("the button updates the image")
+        h.run_steps(3);
+        h.state().out.clone().expect("the button updates the image")
     }
 
     #[test]

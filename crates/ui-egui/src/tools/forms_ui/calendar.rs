@@ -3,6 +3,7 @@
 use craft::ui::contract::{Bind, ShowContainer as _, overlay::Anchor};
 // PLAN: assumed `craft::ui::pickers` re-exports `CalendarPopover`, `DatePrecision` and `PickedDate`.
 use craft::ui::pickers::{CalendarPopover, DatePrecision, PickedDate};
+use craft::ui::runtime::focus::Initial;
 use egui::Rect;
 use pdfcraft_engine::form_scripts::{DateTime, format_date, parse_date};
 
@@ -13,14 +14,21 @@ fn picked_date(text: &str, fmt: &str) -> Option<PickedDate> {
 }
 
 /// The calendar of a date field with format `fmt`, hung from `rect` and open while `open` is true. A day picked comes
-/// back written in the field's own format, so the caller commits it. Today is the host's day (`RootEnv::today`); the
+/// back written in the field's own format, so the caller commits it. Today comes from the session clock; the
 /// words follow the interface language.
-pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, open: &mut bool) -> Option<String> {
+pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, today: (i64, u32, u32), open: &mut bool) -> Option<String> {
     let before = picked_date(text, fmt);
     let mut picked = before.clone();
+    let today = PickedDate::day(i32::try_from(today.0).unwrap_or(1970), u8::try_from(today.1).unwrap_or(1), u8::try_from(today.2).unwrap_or(1));
     CalendarPopover::new("Calendar", Bind::bound(&mut *open), Bind::bound(&mut picked))
         .precisions(&[DatePrecision::Day])
-        .overlay(|overlay| overlay.anchor(Anchor::Rect(rect)))
+        .today(today)
+        .overlay(|overlay| {
+            // The text field keeps keyboard focus so typing a date updates the open calendar live.
+            let focus = overlay.focus.trap(false).restore(false).initial(Initial::KeepAnchor);
+            let dismiss = overlay.dismiss.focus_left(false);
+            overlay.anchor(Anchor::Rect(rect)).focus(focus).dismiss(dismiss)
+        })
         .show(ui, |_, _| {});
     if picked == before {
         return None;
