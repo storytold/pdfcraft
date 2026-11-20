@@ -3880,6 +3880,10 @@ fn two_boxes_animated() -> (Harness<'static, PdfCraftApp>, [egui::Rect; 2]) {
 fn editor_frame_color(h: &Harness<'static, PdfCraftApp>, r: egui::Rect) -> Option<egui::Color32> {
     h.output().shapes.iter().find_map(|shape| match &shape.shape {
         egui::Shape::Rect(rect) if rect.stroke.width == 1.5 && rect.rect.contains(r.center()) => Some(rect.stroke.color),
+        egui::Shape::Path(path) if path.closed && egui::Rect::from_points(&path.points).contains(r.center()) => match &path.stroke.color {
+            egui::epaint::ColorMode::Solid(color) if color.r() == 0x14 && color.g() == 0x73 && color.b() == 0xE6 => Some(*color),
+            _ => None,
+        },
         _ => None,
     })
 }
@@ -7999,7 +8003,8 @@ fn a_selected_pictures_keys_wait_for_its_page_to_be_on_screen() {
         h.state_mut().views[0].view.continuous = false;
         h.state_mut().views[0].go_to_page(1);
         h.run_steps(4);
-        assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 is off the screen");
+        let viewport = h.state().views[0].viewport_rect();
+        assert!(h.state().views[0].page_screen_rect(0).is_none_or(|r| !r.intersects(viewport)), "page 1 is off the screen");
         h.key_press(key);
         h.run_steps(4);
         let after = h.state().session.get(id).unwrap().page_images(0);

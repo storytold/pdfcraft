@@ -967,13 +967,17 @@ fn page_parts_of(
         return (parts, tabs);
     }
     if cx.editing_content {
-        for placed in body.pages {
-            parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
+        if cx.tool == QuickTool::EditText && cx.can_modify {
+            for placed in body.pages {
+                parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
+            }
         }
         // A picture being cropped holds every press on its page: its paragraphs and added text take none there.
         let cropping = session.image_selection.as_ref().filter(|s| s.crop.is_some()).map(|s| s.page);
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
-            parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo));
+            if cx.can_modify && matches!(cx.tool, QuickTool::EditText | QuickTool::AddText) {
+                parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo));
+            }
         }
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
             parts.extend(crate::content_ui::page_parts(session, cx.doc, placed.page, placed));
@@ -1104,9 +1108,9 @@ fn route_press(
                 QuickTool::Field(_) => true,
                 _ => false,
             };
-            // Added text, pictures and the objects selected together lie over the comments: a right-click on them
+            // Added text and the objects selected together lie over the comments: a right-click on them
             // reaches no comment under them and leaves the selection cleared.
-            let over_comments = matches!(owner, Owner::Added { .. } | Owner::Picture { .. } | Owner::Objects { .. } | Owner::Frame { .. });
+            let over_comments = matches!(owner, Owner::Added { .. } | Owner::Objects { .. } | Owner::Frame { .. });
             if held || tool_takes_it || matches!(press.owner, Owner::Comment { .. }) {
                 comments::context_anchor(&page_cx, &mut session.comments, start.origin);
             } else if over_comments {
@@ -1114,6 +1118,9 @@ fn route_press(
                 session.comments.select(None);
             } else if let Some(index) = comments::context_target(&page_cx, &mut session.comments, start.origin) {
                 menu_for = Some((page, Owner::Comment { index }));
+                if cx.tool == QuickTool::EditText {
+                    crate::edit_text_ui::picture_context(page, None, session);
+                }
             }
         }
         // The page's menu reads what the secondary press went to; a comment is selected for its menu, as a comment's

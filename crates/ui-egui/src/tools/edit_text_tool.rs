@@ -117,7 +117,7 @@ impl CanvasTool for EditTextTool<'_> {
                     return true;
                 }
                 let edit = object_ui::delete(self.session)
-                    .or_else(|| crate::edit_text_ui::delete_picture(self.session, self.placed))
+                    .or_else(|| crate::edit_text_ui::delete_picture(self.session, self.placed, self.geo.viewport))
                     .or_else(|| crate::content_ui::delete_selected(self.session));
                 self.queue(edit);
                 true
