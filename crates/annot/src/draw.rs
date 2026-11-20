@@ -2,7 +2,7 @@ use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
 use super::types::NOTE_SIZE;
-use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
+use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, Stream, appearance};
 
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary, for an edit that keeps its
 /// text (a restyle, a new size or colour).
@@ -35,9 +35,30 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
     let page = appearance::is_drawn_from_points(&d).then(|| page_box_listing(doc, r)).flatten();
     let direct = with_direct_values(doc, &d);
-    let Some(stream) = build_appearance(doc, &d, &direct, page) else { return Err(AnnotError::Unsupported(subtype)) };
+    let Some(stream) = build_appearance(doc, &d, &direct, page) else {
+        return Err(shaped_text_error(doc, &d).unwrap_or(AnnotError::Unsupported(subtype)));
+    };
     let built = Built::new(stream, &direct);
     apply_appearance(doc, r, &d, built)
+}
+
+/// Why a text box `d` whose text takes the Arabic and Hebrew writer has no appearance, when the
+/// text is the reason: it is past the shaping or outline budget, which shortening it fixes.
+/// `None` when the box can't be drawn with a short Latin text either (a cloudy callout): the
+/// text is not what stops it, so the caller reports the box as unsupported. The short text goes
+/// through the redraw's own two tries ([`can_draw`]), so the answer is about the same drawing.
+pub(crate) fn shaped_text_error(doc: &Document, d: &Dict) -> Option<AnnotError> {
+    if d.name(b"Subtype") != Some(b"FreeText") {
+        return None;
+    }
+    let text = with_direct_values(doc, d).get(b"Contents").and_then(Object::as_string).map(PdfString::to_text)?;
+    if !(pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text)) {
+        return None;
+    }
+    let mut plain = d.clone();
+    plain.set(b"Contents".to_vec(), Object::String(PdfString::text("x")));
+    can_draw(doc, &plain)
+        .then(|| AnnotError::Invalid("the comment's text is too long or too complex to draw; shorten it or split it into several comments".into()))
 }
 
 /// Whether [`set_appearance`] can draw the annotation `d`: read as the display reads it, with
@@ -94,7 +115,25 @@ fn build_appearance(doc: &Document, d: &Dict, direct: &Dict, page: Option<[f64; 
     // cloudy `/BE` on a square), the drawing made without them stays, rather than none.
     let mut stream = match appearance::build_on_page(doc, direct, page) {
         Some(stream) => stream,
-        None if !std::ptr::eq(direct, d) => appearance::build_on_page(doc, d, page)?,
+        None if !std::ptr::eq(direct, d) => {
+            // Text the Arabic and Hebrew writer draws stays the text drawn when `/Contents` is
+            // behind a reference: where that writer refused it, it is refused here too, instead
+            // of being drawn as none over the appearance the comment had. Any other text is read
+            // from the dictionary as stored, as it always was.
+            let shaped = direct
+                .get(b"Contents")
+                .and_then(Object::as_string)
+                .map(PdfString::to_text)
+                .is_some_and(|text| pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text));
+            match direct.get(b"Contents").filter(|_| shaped) {
+                Some(contents) => {
+                    let mut stored = d.clone();
+                    stored.set(b"Contents".to_vec(), contents.clone());
+                    appearance::build_on_page(doc, &stored, page)?
+                }
+                None => appearance::build_on_page(doc, d, page)?,
+            }
+        }
         None => return None,
     };
     // Picture-stamp restyling must retain the placement's page-axis correction.
@@ -276,6 +315,12 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, built: Built) -> Re
     // `missing`: characters the standard fonts can't draw came out as `?`; the annotation is
     // marked with the first.
     let Built { mut stream, missing, rect, markup_rect } = built;
+    if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
+        && let Some(Object::Dict(fonts)) = resources.get(b"Font")
+    {
+        let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(doc, fonts);
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    }
     // A text box's Thai glyphs are streams of their own.
     pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
     let ap = doc.add(Object::Stream(stream));
@@ -344,8 +389,28 @@ impl AppearanceCache {
         if self.entries.len() >= 1_000_000 {
             self.clear();
         }
-        if self.bytes.saturating_add(stream.raw.len()) <= Self::MAX_BYTES {
-            self.bytes += stream.raw.len();
+        // Shaped font templates also own compressed glyph/CMap streams. Include them in the
+        // cache budget; none is allocated in the document until a copy is displayed.
+        let font_bytes =
+            stream.dict.get(b"Resources").and_then(Object::as_dict).and_then(|res| res.get(b"Font")).and_then(Object::as_dict).map_or(0, |fonts| {
+                fonts.iter().fold(0usize, |total, (_, font)| {
+                    let Some(font) = font.as_dict() else { return total };
+                    let cmap = match font.get(b"ToUnicode") {
+                        Some(Object::Stream(s)) => s.raw.len(),
+                        _ => 0,
+                    };
+                    let glyphs = font.get(b"CharProcs").and_then(Object::as_dict).map_or(0, |procs| {
+                        procs.iter().fold(0usize, |sum, (_, glyph)| match glyph {
+                            Object::Stream(s) => sum.saturating_add(s.raw.len()),
+                            _ => sum,
+                        })
+                    });
+                    total.saturating_add(cmap).saturating_add(glyphs)
+                })
+            });
+        let bytes = stream.raw.len().saturating_add(font_bytes);
+        if self.bytes.saturating_add(bytes) <= Self::MAX_BYTES {
+            self.bytes += bytes;
             self.entries.insert(r, (crop, built.clone()));
         }
         // Else over budget: keep serving the entries already cached instead of growing.

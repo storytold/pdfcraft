@@ -10,13 +10,15 @@
 //!
 //! The note icons are PdfCraft's own drawings (clean-room.md and licences.md). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
-//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face as Type 3 glyphs
-//! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
-//! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
+//! ([`crate::text_style`]), draw Thai from the craft-fonts Thai face as Type 3 glyphs
+//! (`pdfcraft_fonts::shaped_text`, the writer Add text uses), and Arabic and Hebrew from their
+//! optional faces in logical order (`pdfcraft_fonts::appearance_text`); lines break at that face's
+//! standard-14 widths and the shaped advances (no other font program is bundled).
+//! [`shaped_width`] and [`text_height`] measure a text box as its appearance draws it.
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
-use pdfcraft_fonts::{first_undrawable, literal, win_ansi, wrap_with};
+use pdfcraft_fonts::{appearance_text, first_undrawable, literal, win_ansi, wrap_with};
 
 /// The width of `text` at `size` as appearances draw it: Helvetica, with Thai shaped in the Thai
 /// face that text boxes draw it with.
@@ -55,6 +57,42 @@ mod symbols;
 
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+
+/// The width of the widest line of a text box's text, when the Arabic and Hebrew writer draws
+/// it: all of the text is drawn by that writer, its Latin rows too, so all of it is measured
+/// here. `None` for any other text and for a build without the script's face, which callers
+/// measure as they always did ([`text_width`]). Captions, stamps and labels are drawn in
+/// Helvetica and are never measured here.
+pub fn shaped_width(text: &str, size: f64) -> Option<f64> {
+    shaped_lines(text, size, f64::MAX).map(|lines| lines.iter().map(|line| line.width).fold(0.0, f64::max))
+}
+
+/// The height a text box's text takes `width` wide, for sizing a new box: Arabic and Hebrew
+/// wrapped at their shaped advances, each line as tall as its marks reach. Any other text, and
+/// text past the shaping limits, takes 1.2 em for each row of [`wrap`], as it always did (a
+/// Thai box is then grown to its ink where it is created).
+pub fn text_height(text: &str, size: f64, width: f64) -> f64 {
+    shaped_lines(text, size, width)
+        .map_or_else(|| wrap(text, size, width).len().max(1) as f64 * size * 1.2, |lines| appearance_text::height(&lines, size))
+}
+
+/// The width of the widest line and the height of the lines of a text box's text wrapped `width`
+/// wide, as its appearance draws it ([`shaped_width`], [`text_height`]).
+pub(crate) fn text_box_extent(text: &str, size: f64, width: f64) -> [f64; 2] {
+    match shaped_lines(text, size, width) {
+        Some(lines) => [lines.iter().map(|line| line.width).fold(0.0, f64::max), appearance_text::height(&lines, size)],
+        None => {
+            let lines = wrap(text, size, width);
+            [lines.iter().map(|l| text_width(l, size)).fold(0.0, f64::max), text_lines_height(&lines, size)]
+        }
+    }
+}
+
+/// The lines the Arabic and Hebrew writer draws `text` on, when it is the writer a text box
+/// draws `text` with.
+fn shaped_lines(text: &str, size: f64, width: f64) -> Option<Vec<appearance_text::Line>> {
+    if appearance_text::has_shaped_text(text) && appearance_text::can_shape(text) { appearance_text::wrap(text, size, width).ok() } else { None }
+}
 
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
@@ -550,8 +588,16 @@ pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        // A text box draws Thai too.
-        b"FreeText" => return Some(("the comment's text", shaped_text::first_undrawable(&text(b"Contents")?)?)),
+        b"FreeText" => {
+            // A text box draws Arabic and Hebrew (`appearance_text`), and Thai (`shaped_text`).
+            let text = text(b"Contents")?;
+            let missing = if pdfcraft_fonts::appearance_text::has_shaped_text(&text) {
+                pdfcraft_fonts::appearance_text::first_undrawable(&text)
+            } else {
+                shaped_text::first_undrawable(&text)
+            };
+            return Some(("the comment's text", missing?));
+        }
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) || d.contains(b"PCPicture") => {
@@ -1551,6 +1597,13 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     if parts.text != parts.fill {
         c.push_str("/GS1 gs\n");
     }
+    if pdfcraft_fonts::appearance_text::has_shaped_text(&text) && pdfcraft_fonts::appearance_text::can_shape(&text) {
+        let (text_content, fonts) = shaped_free_text(&text, face, size, text_color, rect, pad, q, round)?;
+        let mut content = c.into_bytes();
+        content.extend(text_content);
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        return Some(with_matrix(form(full, &content, res), matrix));
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/{} {} Tf\n{}",
         n(rect[0]),
@@ -1588,11 +1641,45 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     }
     out.extend_from_slice(b"ET\n");
     res.set(b"Font".to_vec(), Object::Dict(fonts));
-    let mut stream = form(full, &out, res);
+    Some(with_matrix(form(full, &out, res), matrix))
+}
+
+/// A text box's form with the `/Matrix` that maps its upright box into a turned page's `/Rect`.
+fn with_matrix(mut stream: Stream, matrix: Option<[f64; 6]>) -> Stream {
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
     }
-    Some(stream)
+    stream
+}
+
+/// Arabic or Hebrew in a text box or callout, shaped in logical order from the craft-fonts faces
+/// and clipped to the text box `rect` (inset by `pad`): its content and font resources. Latin
+/// beside it is drawn in the box's own `face`; `round` (an oval or a circle) centres the lines
+/// up and down as well. Kept self-contained until it is installed: the appearance cache must
+/// never keep font references allocated only in one temporary display document. `None` when
+/// shaping or its outline budget fails, so the redraw is refused rather than leaving unmarked
+/// `?` that flattening could make permanent.
+#[allow(clippy::too_many_arguments)]
+fn shaped_free_text(
+    text: &str,
+    face: pdfcraft_fonts::Std14,
+    size: f64,
+    color: Rgb,
+    rect: [f64; 4],
+    pad: f64,
+    q: i64,
+    round: bool,
+) -> Option<(Vec<u8>, Dict)> {
+    let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
+    let lines = pdfcraft_fonts::appearance_text::wrap_with_latin(text, size, width, face).ok()?;
+    let mut inner = [rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad];
+    if round {
+        inner[3] -= ((inner[3] - inner[1] - pdfcraft_fonts::appearance_text::height(&lines, size)) / 2.0).max(0.0);
+    }
+    let (text_content, fonts) = pdfcraft_fonts::appearance_text::draw_directional(&lines, size, inner, q, color).ok()?;
+    let mut content = format!("{} {} {} {} re W n\n", n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])).into_bytes();
+    content.extend(text_content);
+    Some((content, fonts))
 }
 
 fn draw_icon(context: &AppearanceContext<'_>, name: &str, fallback: Rgb, mut drawing: AppearanceDrawing) -> Option<Stream> {

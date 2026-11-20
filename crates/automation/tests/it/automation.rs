@@ -836,6 +836,97 @@ fn added_arabic_text_keeps_copy_search_and_editor_order_after_retyping_and_reope
 }
 
 #[test]
+fn arabic_comments_render_edit_and_keep_their_thread_through_save_reopen() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let dir = workdir("arabic-comments-roundtrip");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":800}))["doc"].as_u64().unwrap();
+    let original = "سَلَام 123 (PDF) - ملاحظة عربية";
+    let added = ok(&mut a, "comment_add", json!({"doc":doc,"page":1,"type":"textbox","rect":[50,60,540,120],"contents":original,"font_size":16}));
+    assert!(added.get("warnings").is_none(), "supported Arabic must be drawn: {added}");
+    let id = added["comment"]["id"].as_str().unwrap().to_owned();
+    ok(&mut a, "comment_reply", json!({"doc":doc,"id":id,"text":"رد عربي ٤٥٦","author":"اختبار"}));
+    let replacement = "مُرَاجَعَة PDF رقم ١٢٣";
+    ok(&mut a, "comment_edit", json!({"doc":doc,"id":id,"contents":replacement,"font_size":20,"color":"#123456"}));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    let undone = ok(&mut a, "comment_list", json!({"doc":doc}));
+    assert_eq!(undone["comments"][0]["contents"], original);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    let before = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":96})).unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"arabic-comments.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"arabic-comments.pdf"}))["doc"].as_u64().unwrap();
+    let comments = ok(&mut a, "comment_list", json!({"doc":reopened}));
+    assert_eq!(comments["comments"][0]["contents"], replacement);
+    assert_eq!(comments["comments"][0]["replies"][0]["contents"], "رد عربي ٤٥٦");
+    assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":96})).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Text typed in reading (logical) order comes back as typed from a text box and from Fill & Sign
+/// text: as the comment's contents after save and reopen, again after that read-back text is
+/// written a second time (text already in logical order is not reordered twice), and as the
+/// page's text once both are flattened into it.
+#[test]
+fn right_to_left_text_box_and_fill_sign_text_round_trips_in_typing_order() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("set CRAFT_FONTS_DIR to exercise Arabic and Hebrew");
+        return;
+    }
+    let dir = workdir("rtl-typing-order-round-trip");
+    let mut a = auto(&dir);
+    let cases = [
+        // One script alone, with and without marks.
+        "مرحبا بالعالم",
+        "سَلَامٌ عَلَيْكُمْ",
+        "שלום עולם",
+        // Digits: Western with separators, Arabic-Indic, and both in one line.
+        "الفاتورة رقم 2026-11 بمبلغ 1,250.50 ريال",
+        "العدد ١٢٣ ثم 456",
+        // Latin words inside a right-to-left paragraph, and brackets.
+        "ملف PDF من Adobe Reader نسخة 2",
+        "קובץ PDF מספר 7 (טיוטה)",
+        // Arabic words inside a left-to-right paragraph.
+        "Invoice فاتورة number 42 رقم",
+    ];
+    for (case, typed) in cases.into_iter().enumerate() {
+        let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":800}))["doc"].as_u64().unwrap();
+        let added = ok(&mut a, "comment_add", json!({"doc":doc,"page":1,"type":"textbox","rect":[40,60,560,100],"contents":typed,"font_size":12}));
+        assert!(added.get("warnings").is_none(), "{typed} must be drawn: {added}");
+        ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[40.0,300.0],"text":typed}));
+        let contents = |a: &mut Automation, doc: u64| -> Vec<String> {
+            let listed = ok(a, "comment_list", json!({"doc":doc}));
+            listed["comments"].as_array().unwrap().iter().map(|c| c["contents"].as_str().unwrap().to_owned()).collect()
+        };
+
+        let first = format!("typed-{case}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":first}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":first}))["doc"].as_u64().unwrap();
+        assert_eq!(contents(&mut a, reopened), [typed, typed], "after save and reopen");
+
+        // The text read back is already in typing order: writing it again must leave it alone.
+        let listed = ok(&mut a, "comment_list", json!({"doc":reopened}));
+        for comment in listed["comments"].as_array().unwrap() {
+            ok(&mut a, "comment_edit", json!({"doc":reopened,"id":comment["id"],"contents":comment["contents"]}));
+        }
+        let second = format!("retyped-{case}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":reopened,"path":second}));
+        let again = ok(&mut a, "doc_open", json!({"path":second}))["doc"].as_u64().unwrap();
+        assert_eq!(contents(&mut a, again), [typed, typed], "after the read-back text is written again");
+
+        ok(&mut a, "doc_flatten", json!({"doc":again}));
+        let flat = format!("flat-{case}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":again,"path":flat}));
+        let flattened = ok(&mut a, "doc_open", json!({"path":flat}))["doc"].as_u64().unwrap();
+        let text = page_text(&mut a, flattened).concat();
+        assert_eq!(text.matches(typed).count(), 2, "{typed} is on the page twice, in typing order: {text}");
+        assert!(!text.contains('?'), "{text}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn arabic_actual_text_stays_logical_through_editor_tools_and_save_reopen() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
     use std::sync::Arc;
@@ -5586,6 +5677,72 @@ fn saving_with_flatten_fill_sign_bakes_marks_and_leaves_other_comments() {
     assert!(comments.iter().any(|c| c["contents"] == "keep"), "the highlight stays: {comments:?}");
     let fields = ok(&mut a, "form_fields", json!({ "doc": flat }))["fields"].as_array().unwrap().clone();
     assert_eq!(fields.len(), 1, "the form field stays");
+}
+
+/// Arabic and Hebrew typed with Fill & Sign, in a text box or in a callout stay copyable in their
+/// logical order once the marks are baked into the page, by a flattening save or by flattening.
+#[test]
+fn flattened_arabic_and_hebrew_fill_sign_text_and_comments_extract_in_logical_order() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("set CRAFT_FONTS_DIR to exercise Arabic and Hebrew marks");
+        return;
+    }
+    let dir = workdir("rtl-fill-sign-flatten");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":800}))["doc"].as_u64().unwrap();
+    let arabic = "سَلَام 123 (PDF) توقيع";
+    let hebrew = "שָׁלוֹם 123 (PDF) חתימה";
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[60.0,100.0],"text":arabic}));
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[60.0,300.0],"text":hebrew}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"rtl-flat.pdf","flatten_fill_sign":true}));
+    let flat = ok(&mut a, "doc_open", json!({"path":"rtl-flat.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc":flat}))["count"], 0, "both marks were baked in");
+    let text = page_text(&mut a, flat).concat();
+    assert!(text.contains(arabic) && text.contains(hebrew), "{text}");
+    assert!(!text.contains('?'), "{text}");
+
+    let box_text = "טקסט עברי בתיבה 456";
+    let callout_text = "הערה עם חץ 789";
+    let added = ok(&mut a, "comment_add", json!({"doc":flat,"page":1,"type":"textbox","rect":[50,500,540,560],"contents":box_text,"font_size":16}));
+    assert!(added.get("warnings").is_none(), "supported Hebrew must be drawn: {added}");
+    let added = ok(
+        &mut a,
+        "comment_add",
+        json!({"doc":flat,"page":1,"type":"callout","rect":[200,600,540,660],"knee":[150,630],"to":[80,620],"contents":callout_text,"font_size":16}),
+    );
+    assert!(added.get("warnings").is_none(), "supported Hebrew must be drawn: {added}");
+    ok(&mut a, "doc_flatten", json!({"doc":flat}));
+    ok(&mut a, "doc_save", json!({"doc":flat,"path":"rtl-comments-flat.pdf"}));
+    let re = ok(&mut a, "doc_open", json!({"path":"rtl-comments-flat.pdf"}))["doc"].as_u64().unwrap();
+    let text = page_text(&mut a, re).concat();
+    for logical in [arabic, hebrew, box_text, callout_text] {
+        assert!(text.contains(logical), "{logical} missing from {text}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// From #4153: Hebrew typed with Fill & Sign can be found before and after a flattening save,
+/// and the flattened page renders.
+#[test]
+fn check_4153_hebrew_fill_sign_text_is_searchable_before_and_after_flattening() {
+    if pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        return;
+    }
+    let dir = workdir("check-4153-hebrew-fill-sign");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "שם: שרה כהן";
+    ok(&mut a, "fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": text}));
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": doc}))["comments"][0]["contents"], text);
+    assert!(page_text(&mut a, doc)[0].contains(text), "{:?}", page_text(&mut a, doc));
+    ok(&mut a, "doc_save", json!({"doc": doc, "path": "flat.pdf", "flatten_fill_sign": true}));
+    let flat = ok(&mut a, "doc_open", json!({"path": "flat.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "comment_list", json!({"doc": flat}))["count"], 0);
+    assert!(page_text(&mut a, flat)[0].contains(text), "{:?}", page_text(&mut a, flat));
+    let found = ok(&mut a, "text_find", json!({"doc": flat, "query": "כהן"}));
+    assert_eq!(found["matches"].as_array().map(Vec::len), Some(1), "{found}");
+    let rendered = a.call("page_render", &json!({"doc": flat, "page": 1, "dpi": 144})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png { data, width, height } if !data.is_empty() && *width > 0 && *height > 0)));
 }
 
 #[test]
@@ -14853,4 +15010,54 @@ fn grouped_existing_thai_body_edits_saves_reopens_and_undo_restores_original_gly
     assert_eq!(a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), after);
     assert_eq!(page_text(&mut a, reopened), [new, old]);
     assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 0, "editing existing text must not create Add Text objects");
+}
+
+/// Multi-line Arabic and Hebrew Fill & Sign text: the box is as wide as its widest shaped line,
+/// not the whole text set as one row, and as tall as all its rows, blank ones included.
+#[test]
+fn multiline_arabic_and_hebrew_fill_sign_text_sizes_its_box_by_its_shaped_lines() {
+    if pdfcraft_fonts::document_arabic_font().is_none() || pdfcraft_fonts::document_hebrew_font(false).is_none() {
+        eprintln!("set CRAFT_FONTS_DIR to exercise multi-line Arabic and Hebrew Fill & Sign text");
+        return;
+    }
+    let dir = workdir("fill-sign-multiline-rtl");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let (size, lines) = (14.0, ["سَلَامٌ عَلَيْكُمْ", "", "שָׁלוֹם עולם PDF 123"]);
+    let text = lines.join("\n");
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[20,20],"text":text,"font_size":size}));
+    let annot = &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text.as_str()), "logical text with its breaks");
+    let (w, h) = (f64::from(annot.rect[2] - annot.rect[0]), f64::from(annot.rect[3] - annot.rect[1]));
+    let widest = pdfcraft_engine::annot_text::shaped_width(&text, size).unwrap();
+    assert!((w - (widest + 8.0)).abs() < 0.01, "box width {w} follows the widest shaped line {widest}");
+    assert!(w < pdfcraft_engine::annot_text::shaped_width(&lines.concat(), size).unwrap(), "not the width of the lines set as one row");
+    // `/Rect` is stored as f32.
+    assert!(h + 0.01 >= lines.len() as f64 * size * 1.2 + 6.0, "three rows, the blank one included: {h}");
+    let ink = pdfcraft_engine::annot_text::text_height(&text, size, w - 4.0);
+    assert!(h + 0.01 >= ink + 6.0, "box height {h} holds the shaped rows and their marks ({ink})");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn fill_sign_boxes_fit_the_ink_height_of_large_arabic_marks() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let dir = workdir("fill-sign-arabic-mark-height");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "السَّلَامُ";
+    let size = 40.0;
+    ok(&mut a, "fill_sign_add", json!({"doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": text, "font_size": size}));
+    let comments = ok(&mut a, "comment_list", json!({"doc": doc}));
+    assert_eq!(comments["comments"][0]["contents"], text);
+    let rect: Vec<f64> = comments["comments"][0]["rect"].as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+    let inner_width = (rect[2] - rect[0]).abs() - 4.0;
+    let inner_height = (rect[3] - rect[1]).abs() - 4.0;
+    let lines = pdfcraft_fonts::appearance_text::wrap(text, size, inner_width).unwrap();
+    let ink_height = pdfcraft_fonts::appearance_text::height(&lines, size);
+    assert!(inner_height + 0.001 >= ink_height, "Arabic marks need {ink_height:.3} pt, but Fill & Sign leaves {inner_height:.3} pt");
+    assert!(page_text(&mut a, doc)[0].contains(text), "the marks remain in the typed text");
+    std::fs::remove_dir_all(dir).unwrap();
 }

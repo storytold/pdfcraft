@@ -1,6 +1,7 @@
 //! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use harfrust::{BufferClusterLevel, Direction, ShapeOptions, ShaperData, UnicodeBuffer, script};
 use skrifa::instance::{LocationRef, Size};
@@ -216,6 +217,35 @@ fn glyph(font: &FontRef, id: u32) -> Result<GlyphOutline, GlyphError> {
         return Ok(GlyphOutline { contours: Vec::new(), width, bbox: [0.0, 0.0, width, 0.0] });
     }
     crate::script::bounded_outline(font, gid, width)
+}
+
+/// A shaped glyph's ink bounds in em units, cached independently of flattened outlines so
+/// measuring many wrap candidates never repeatedly walks the same glyph's curves.
+pub fn shaped_bounds(script: ShapedScript, id: u32) -> Result<[f64; 4], GlyphError> {
+    type BoundsCache = Mutex<HashMap<(ShapedScript, u32), [f64; 4]>>;
+    static CACHE: OnceLock<BoundsCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(bounds) = cache.lock().ok().and_then(|cache| cache.get(&(script, id)).copied()) {
+        return Ok(bounds);
+    }
+    let (font, _) = face(script).ok_or(GlyphError::NoFont)?;
+    let loc = LocationRef::default();
+    let em = f64::from(font.metrics(Size::unscaled(), loc).units_per_em.max(1));
+    let bounds = match font.glyph_metrics(Size::unscaled(), loc).bounds(GlyphId::new(id)) {
+        Some(bounds) => [bounds.x_min, bounds.y_min, bounds.x_max, bounds.y_max].map(|v| f64::from(v) / em),
+        // Empty variable-font glyphs (space and joining controls) have no curve bounds.
+        None => shaped_glyph(script, id)?.bbox,
+    };
+    if bounds.iter().any(|v| !v.is_finite() || v.abs() > 64.0) {
+        return Err(GlyphError::TooComplex);
+    }
+    // A poisoned cache is dispensable; the measured bounds above remain usable.
+    if let Ok(mut cache) = cache.lock()
+        && cache.len() < 65_536
+    {
+        cache.insert((script, id), bounds);
+    }
+    Ok(bounds)
 }
 
 #[cfg(test)]
