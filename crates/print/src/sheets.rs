@@ -353,17 +353,12 @@ pub fn layout(sizes: &[(f64, f64)], settings: &Settings) -> Result<Vec<Sheet>, P
             if !((0.0..=MAX_CREEP).contains(&creep) && innermost < half / 2.0) {
                 return Err(PrintError::Invalid("invalid booklet creep".into()));
             }
+            sheets.reserve(n4 / 2);
             for k in 0..n4 / 4 {
                 let front = (at(n4 - 1 - 2 * k), at(2 * k));
                 let back = (at(2 * k + 1), at(n4 - 2 - 2 * k));
-                let mut sides = Vec::new();
-                if subset != BookletSubset::BackOnly {
-                    sides.push(front);
-                }
-                if subset != BookletSubset::FrontOnly {
-                    sides.push(back);
-                }
-                for (l, r) in sides {
+                let sides = [(subset != BookletSubset::BackOnly).then_some(front), (subset != BookletSubset::FrontOnly).then_some(back)];
+                for (l, r) in sides.into_iter().flatten() {
                     let (l, r) = if binding == Binding::Right { (r, l) } else { (l, r) };
                     let mut sheet = Sheet { size, ..Sheet::default() };
                     for (p, cell, toward) in [(l, cells[0], 1.0), (r, cells[1], -1.0)] {
