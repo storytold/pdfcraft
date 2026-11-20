@@ -3,8 +3,8 @@ use super::CLOCK_EVERY;
 use super::ast::{Expr, Idx};
 use super::value::{Val, num_text, parse_num};
 use super::{
-    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instances,
-    resolve_som,
+    HNode, HashSet, Interp, LIST_TOO_LONG, MAX_LIST, MAX_PARSE_DEPTH, MAX_STEPS, R, RAN_TOO_LONG, child_named, descendants_named, instance_place,
+    instances, managed_named, props, resolve_som, scope_of, scoped,
 };
 
 impl Interp<'_> {
@@ -77,7 +77,8 @@ impl Interp<'_> {
 
     /// What copying `v` (or the values it stands for) costs, in steps: one per 256 bytes, so
     /// copying long strings over and over runs out of steps even where there is no clock
-    /// (wasm). A form object counts its value; a list its items too.
+    /// (wasm). A form object counts its value, a property object the text it reads as; a list
+    /// its items too.
     pub(super) fn cost(&self, v: &Val) -> u64 {
         let mut bytes = 0usize;
         let mut todo = vec![v];
@@ -85,6 +86,7 @@ impl Interp<'_> {
             match v {
                 Val::Str(s) => bytes = bytes.saturating_add(s.len()),
                 Val::Node(i) => bytes = bytes.saturating_add(self.node(*i).map_or(0, |n| n.value.len())),
+                Val::Prop(i, p) => bytes = bytes.saturating_add(props::value_of(self.h, *i, p).len()),
                 Val::List(items) => {
                     bytes = bytes.saturating_add(items.len().saturating_mul(16));
                     todo.extend(items.iter());
@@ -105,6 +107,7 @@ impl Interp<'_> {
     pub(super) fn deref(&self, v: Val) -> Val {
         match v {
             Val::Node(i) => self.node_value(i),
+            Val::Prop(i, p) => Val::Str(props::value_of(self.h, i, &p)),
             Val::List(items) => Val::List(items.into_iter().map(|x| self.deref(x)).collect()),
             other => other,
         }
@@ -117,6 +120,8 @@ impl Interp<'_> {
             Val::Str(s) => parse_num(s).unwrap_or(0.0),
             Val::Node(i) => self.to_num(&self.node_value(*i)),
             Val::List(items) => items.first().map_or(0.0, |x| self.to_num(x)),
+            // A property object reads as its value, as `deref` gives it (`for i = 1 upto $.font.size`).
+            Val::Prop(..) => self.to_num(&self.deref(v.clone())),
             _ => 0.0,
         }
     }
@@ -133,6 +138,7 @@ impl Interp<'_> {
             Val::Event => "event".into(),
             Val::Xfa => "xfa".into(),
             Val::Im(..) => "instanceManager".into(),
+            Val::Prop(i, p) => props::value_of(self.h, *i, p),
             Val::Sink => String::new(),
         }
     }
@@ -147,6 +153,7 @@ impl Interp<'_> {
                 self.truthy(&d)
             }
             Val::List(items) => !items.is_empty(),
+            Val::Prop(..) => self.truthy(&self.deref(v.clone())),
             _ => true,
         }
     }
@@ -203,11 +210,14 @@ impl Interp<'_> {
             "xfa" => Val::Xfa,
             _ => {
                 if let Some(child) = name.strip_prefix('_') {
-                    // The instance manager of `child`, looked for like a name.
+                    // The instance manager of `child`, looked for like a name: of the repeating
+                    // subform of the name in the scope the name is found in (`managed_named`).
+                    let unknown = || format!("unknown instance manager _{child}");
                     let found = resolve_som(self.h, self.h.current, child);
-                    let Some(&first) = found.first() else { return Err(format!("unknown instance manager _{child}")) };
-                    let parent = self.node(first).and_then(|n| n.parent).ok_or_else(|| format!("unknown instance manager _{child}"))?;
-                    return Ok(Val::Im(parent, child.to_string()));
+                    let first = *found.first().ok_or_else(unknown)?;
+                    let parent = self.node(first).and_then(|n| n.parent).ok_or_else(unknown)?;
+                    let managed = managed_named(self.h, scope_of(self.h, parent), child).and_then(|c| self.node(c)).and_then(|n| n.parent);
+                    return Ok(Val::Im(managed.unwrap_or(parent), child.to_string()));
                 }
                 let found = resolve_som(self.h, self.h.current, name);
                 match found.as_slice() {
@@ -291,6 +301,17 @@ impl Interp<'_> {
                 "classname" => Val::Str("instanceManager".into()),
                 _ => Val::Sink,
             }),
+            Val::Prop(i, path) => match name {
+                "className" => Ok(Val::Str(props::tag_of(&path).to_string())),
+                _ => match props::read_member(self.h, i, &path, name) {
+                    props::Read::Text(t) => Ok(Val::Str(t)),
+                    props::Read::Prop(p) => Ok(Val::Prop(i, p)),
+                    props::Read::Null => Ok(Val::Null),
+                    props::Read::Empty => Ok(Val::Sink),
+                    props::Read::Missing => Err(format!("the validation's message has no text named {name}")),
+                    props::Read::Failed => Err(format!("{name}: operation failed")),
+                },
+            },
             Val::Sink => Ok(Val::Sink),
             Val::Null => Err(format!("no object to take {name} from")),
             Val::Num(_) | Val::Str(_) => Err(format!("{} has no property {name}", self.to_str(&base))),
@@ -326,30 +347,43 @@ impl Interp<'_> {
             "name" => Val::Str(n.name.to_string()),
             "somExpression" => Val::Str(n.som.to_string()),
             "className" => Val::Str(n.kind.class_name().into()),
-            "index" | "instanceIndex" => Val::Num(n.index as f64),
+            "index" => Val::Num(n.index as f64),
+            "instanceIndex" => Val::Num(instance_place(self.h, i) as f64),
             "presence" => Val::Str(n.presence.to_string()),
             "access" => Val::Str(n.access.to_string()),
             "isNull" => Val::Num(if n.value.is_empty() { 1.0 } else { 0.0 }),
-            "mandatory" => Val::Str("disabled".into()),
+            "mandatory" if child_named(self.h, i, name).is_none() => Val::Str(props::node_mandatory(self.h, i)),
+            "fillColor" | "fontColor" | "borderColor" if child_named(self.h, i, name).is_none() => {
+                Val::Str(props::node_color(self.h, i, props::shorthand_color(name).unwrap_or_default()))
+            }
+            "validationMessage" | "formatMessage" | "mandatoryMessage" if child_named(self.h, i, name).is_none() => {
+                Val::Str(props::node_message(self.h, i, props::message_test(name).unwrap_or_default()))
+            }
+            // Property objects (XFA 3.3 p. 78), caption and items included, unless a child has the
+            // name (p. 99).
+            p if props::NODE_PROPS.contains(&p) && child_named(self.h, i, p).is_none() => Val::Prop(i, props::node_prop_path(p)),
             "parent" => n.parent.map_or(Val::Null, Val::Node),
             "nodes" => Val::List(n.children.iter().copied().filter(|c| self.node(*c).is_some()).map(Val::Node).collect()),
             "all" => match n.parent {
-                Some(p) => Val::List(instances(self.h, p, &n.name).into_iter().map(Val::Node).collect()),
+                Some(p) => Val::List(scoped(self.h, scope_of(self.h, p), &n.name).into_iter().map(Val::Node).collect()),
                 None => Val::Node(i),
             },
             "instanceManager" => match n.parent {
                 Some(p) => Val::Im(p, n.name.to_string()),
                 None => Val::Null,
             },
-            "border" | "ui" | "font" | "caption" | "fillColor" | "borderColor" | "fontColor" | "margin" | "para" | "assist" | "validate"
-            | "format" | "items" | "bind" | "keep" | "h" | "w" | "x" | "y" | "minH" | "maxH" | "minW" | "maxW" | "layout" | "model"
-            | "oneOfChild" | "locale" | "relevant" | "colSpan" | "dataNode" | "defaultValue" | "editValue" | "selectedIndex" | "event"
-            | "calculate" | "traversal" | "extras" | "desc" => Val::Sink,
+            "h" | "w" | "x" | "y" | "minH" | "maxH" | "minW" | "maxW" | "layout" | "model" | "oneOfChild" | "locale" | "relevant" | "colSpan"
+            | "dataNode" | "defaultValue" | "editValue" | "selectedIndex" | "event" | "traversal" => Val::Sink,
             other => {
                 if let Some(child) = other.strip_prefix('_') {
-                    return Ok(if child_named(self.h, i, child).is_some() { Val::Im(i, child.to_string()) } else { Val::Null });
+                    // The manager of the container the subform is a child of: an unnamed subform
+                    // of this one when the name was found through it.
+                    return Ok(match managed_named(self.h, i, child) {
+                        Some(c) => Val::Im(self.node(c).and_then(|n| n.parent).unwrap_or(i), child.to_string()),
+                        None => Val::Null,
+                    });
                 }
-                let found = instances(self.h, i, other);
+                let found = scoped(self.h, i, other);
                 match found.as_slice() {
                     [] => Val::Null,
                     [one] => Val::Node(*one),
@@ -361,7 +395,7 @@ impl Interp<'_> {
 
     /// `base[n]` / `base[*]`: all the instances the last step named, then one or all.
     pub(super) fn index(&mut self, base: &Expr, idx: &Idx) -> R<Val> {
-        let all = self.all_of(base)?;
+        let (all, named) = self.all_named(base)?;
         match idx {
             Idx::All => Ok(Val::List(all.into_iter().map(Val::Node).collect())),
             Idx::Abs(e) => {
@@ -370,7 +404,15 @@ impl Interp<'_> {
                 if !n.is_finite() || n < 0.0 {
                     return Ok(Val::Null);
                 }
-                Ok(all.get(n as usize).map_or(Val::Null, |i| Val::Node(*i)))
+                // `n` finite and not negative: the cast saturates at the largest index.
+                let n = n as usize;
+                // A SOM name's number is its object's SOM number in the scope (XFA 3.3 pp.
+                // 94-95), which an unnamed object of the class shares with a named one, so it
+                // isn't the place among the objects once an unnamed subform's content is among
+                // them. A list from a variable, from descendants (`..`) or from a collection
+                // such as `nodes` counts places.
+                let pick = if named { all.iter().copied().find(|&i| self.h.nodes.get(i).is_some_and(|x| x.index == n)) } else { all.get(n).copied() };
+                Ok(pick.map_or(Val::Null, Val::Node))
             }
             Idx::Rel(k) => {
                 // From the instance the script runs in (`row[-1]` in a row is the row above),
@@ -400,18 +442,28 @@ impl Interp<'_> {
 
     /// Every instance an accessor names (`Row` → all rows, not just the first), each once.
     pub(super) fn all_of(&mut self, e: &Expr) -> R<Vec<usize>> {
+        self.all_named(e).map(|(all, _)| all)
+    }
+
+    /// [`Interp::all_of`], and whether the objects are those a SOM name found in its scope, so
+    /// a number after it is their SOM number; not for a variable's list, descendants (`..`) or
+    /// a collection a member gives (`nodes`), where it is the place.
+    fn all_named(&mut self, e: &Expr) -> R<(Vec<usize>, bool)> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
+        let mut named = false;
         match e {
             Expr::Ident(name) => {
                 if self.lookup(name).is_some() || name.starts_with('$') || name.eq_ignore_ascii_case("xfa") {
                     let v = self.eval(e)?;
-                    return Ok(self.nodes_list(&v));
+                    return Ok((self.nodes_list(&v), false));
                 }
-                // The name resolves to its first instance; `row[*]` means every sibling of it.
+                named = true;
+                // The name resolves to its first instance; `row[*]` means every object of the
+                // name in its SOM scope.
                 for first in resolve_som(self.h, self.h.current, name) {
                     match self.node(first).and_then(|n| n.parent.map(|p| (p, n.name.clone()))) {
-                        Some((p, n)) => self.gather(&mut out, &mut seen, instances(self.h, p, &n))?,
+                        Some((p, n)) => self.gather(&mut out, &mut seen, scoped(self.h, scope_of(self.h, p), &n))?,
                         None => self.gather(&mut out, &mut seen, [first])?,
                     }
                 }
@@ -419,8 +471,9 @@ impl Interp<'_> {
             Expr::Member(base, name) => {
                 let b = self.eval(base)?;
                 for i in self.nodes_list(&b) {
-                    self.gather(&mut out, &mut seen, instances(self.h, i, name))?;
+                    self.gather(&mut out, &mut seen, scoped(self.h, i, name))?;
                 }
+                named = !out.is_empty();
                 if out.is_empty() {
                     let v = self.member(b, name)?;
                     out = self.nodes_list(&v);
@@ -437,6 +490,6 @@ impl Interp<'_> {
                 out = self.nodes_list(&v);
             }
         }
-        Ok(out)
+        Ok((out, named))
     }
 }

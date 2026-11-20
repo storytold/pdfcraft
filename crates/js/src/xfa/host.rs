@@ -28,8 +28,13 @@ pub(crate) struct HNode {
     pub(crate) gone: bool,
     /// See [`XfaNode::formatted`]; dropped when a script sets the value, which it no longer shows.
     pub(crate) formatted: Option<Arc<str>>,
-    /// See [`XfaNode::props`]; instances a script adds share their first instance's.
+    /// See [`XfaNode::props`]; an instance a script adds takes the template's
+    /// ([`XfaNode::template_props`]).
     pub(crate) props: std::sync::Arc<super::XfaProps>,
+    /// See [`XfaNode::template_props`].
+    pub(crate) template_props: Option<std::sync::Arc<super::XfaProps>>,
+    /// See [`XfaNode::changed`]; none for an instance a script adds.
+    pub(crate) changed: Arc<[String]>,
     /// A choice list's entries as a script's list methods leave them, one list per `<items>`;
     /// `None` while they are as the template lists them. The hook for PdfCraft's choice-list
     /// methods (`addItem`, `clearItems`; the Series 1 work, not on main yet), which will set it so
@@ -38,10 +43,39 @@ pub(crate) struct HNode {
     pub(crate) items: Option<Vec<super::props::ItemList>>,
 }
 
+/// The objects of the form that own one SOM path ([`XHost::som_owners`]): how many, and the
+/// last of them in document order.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PathOwners {
+    pub(crate) count: u32,
+    pub(crate) last: usize,
+}
+
+/// Who owns each SOM path of the form, by path.
+pub(crate) type SomOwnerCounts = HashMap<Arc<str>, PathOwners>;
+
+/// The form the last script on this thread started from: the snapshot, its nodes flattened, and
+/// who owns each of their SOM paths once a script counted them.
+type Base = (Arc<XfaNode>, Vec<HNode>, Option<Arc<SomOwnerCounts>>);
+
 thread_local! {
     /// The form the last script on this thread started from, flattened: the next script of the
-    /// event starts from a copy of it while the engine sends the same form.
-    static BASE: std::cell::RefCell<Option<(Arc<XfaNode>, Vec<HNode>)>> = const { std::cell::RefCell::new(None) };
+    /// event starts from a copy of it while the engine sends the same form, and from the owners
+    /// of its SOM paths, counted once rather than by each script that writes a property.
+    static BASE: std::cell::RefCell<Option<Base>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Keep `owners`, counted on the nodes of `root` as flattened, for the next scripts started
+/// from it on this thread (see [`BASE`]); nothing when the thread now holds another form.
+pub(super) fn remember_owners(root: &Arc<XfaNode>, owners: &Arc<SomOwnerCounts>) {
+    BASE.with(|b| {
+        if let Ok(mut b) = b.try_borrow_mut()
+            && let Some((r, _, kept)) = b.as_mut()
+            && Arc::ptr_eq(r, root)
+        {
+            *kept = Some(Arc::clone(owners));
+        }
+    });
 }
 
 /// Let go of the form the scripts on this thread started from.
@@ -69,6 +103,8 @@ fn flattened(root: &XfaNode) -> Vec<HNode> {
         gone: false,
         formatted: None,
         props: Arc::default(),
+        template_props: None,
+        changed: Arc::from([]),
         items: None,
     }];
     if let Some(ci) = flatten(root, Some(0), &mut nodes, 1)
@@ -103,13 +139,33 @@ pub(crate) struct XHost {
     kept: usize,
     dropped_bytes: usize,
     /// What the script wrote to property objects, by (node, property path): read back later in
-    /// the run, applied nowhere yet. Charged against [`MAX_PAYLOAD`].
+    /// the run, and each handed to the engine as an [`XfaEffect::SetProperty`]. Charged against
+    /// [`MAX_PAYLOAD`].
     pub(crate) prop_writes: super::props::PropWrites,
     /// Attributes written to a property past [`super::props::MAX_WRITTEN_ATTRS`], left out.
     pub(super) dropped_prop_writes: usize,
+    /// Writes of a new property to an object already holding
+    /// [`super::props::MAX_CHANGES_PER_OBJECT`] changes, left out as the form leaves them out.
+    pub(super) dropped_object_writes: usize,
+    /// The keys of the changes this event handed the form beyond the snapshot's
+    /// ([`XfaNode::changed`]), by node: the script's writes, the earlier scripts' and the
+    /// copies of drawn edges and corners (`=` first), as the form keeps them, for its limit on
+    /// changes to one object.
+    pub(super) run_keys: HashMap<usize, Vec<String>>,
     /// Bytes of edges and corners copied when a script reached sides a border doesn't list,
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
+    /// The writes being made are copies of a drawn edge or corner (`XHost::instantiate`), not
+    /// the script's own.
+    pub(crate) copying: bool,
+    /// Who owned each SOM path among the objects when the script started ([`PathOwners`]),
+    /// which [`XHost::preset`] finds the objects of earlier scripts' changes by: counted when
+    /// first asked, or taken from the form the script started from when an earlier script of
+    /// the event counted it there ([`BASE`]). Not kept up as instances are added or removed.
+    pub(super) som_owners: std::cell::OnceCell<Arc<SomOwnerCounts>>,
+    /// The form these nodes were copied from, when it is kept on this thread ([`BASE`]): the
+    /// owners counted on them as copied are kept with it.
+    pub(super) base: Option<Arc<XfaNode>>,
 }
 
 impl XHost {
@@ -118,21 +174,25 @@ impl XHost {
     /// With `reuse`, the flattened form is kept on this thread for the next script given the
     /// same `root` (the scripts of one event, [`crate::xfa_session`]).
     pub(crate) fn new(root: Arc<XfaNode>, reuse: bool, target: &str, doc: &XfaDoc) -> XHost {
-        let nodes = if !reuse {
-            flattened(&root)
+        let (nodes, owners, base) = if !reuse {
+            (flattened(&root), None, None)
         } else {
             BASE.with(|b| {
                 let mut b = b.borrow_mut();
                 match b.as_ref() {
-                    Some((r, nodes)) if Arc::ptr_eq(r, &root) => nodes.clone(),
+                    Some((r, nodes, owners)) if Arc::ptr_eq(r, &root) => (nodes.clone(), owners.clone(), Some(root)),
                     _ => {
                         let nodes = flattened(&root);
-                        *b = Some((root, nodes.clone()));
-                        nodes
+                        *b = Some((Arc::clone(&root), nodes.clone(), None));
+                        (nodes, None, Some(root))
                     }
                 }
             })
         };
+        let som_owners = std::cell::OnceCell::new();
+        if let Some(owners) = owners {
+            let _ = som_owners.set(owners);
+        }
         let current = nodes.iter().position(|n| &*n.som == target && n.kind != XfaKind::Form).unwrap_or(1.min(nodes.len().saturating_sub(1)));
         XHost {
             nodes,
@@ -152,7 +212,12 @@ impl XHost {
             dropped_bytes: 0,
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
+            dropped_object_writes: 0,
+            run_keys: HashMap::new(),
             copied: 0,
+            copying: false,
+            som_owners,
+            base,
         }
     }
 
@@ -295,6 +360,13 @@ impl XHost {
                 self.dropped_prop_writes
             ));
         }
+        if self.dropped_object_writes > 0 {
+            out.push(format!(
+                "the script changed more than {} properties of one object; {} more were left out",
+                super::props::MAX_CHANGES_PER_OBJECT,
+                self.dropped_object_writes
+            ));
+        }
         out
     }
 
@@ -359,6 +431,8 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         gone: false,
         formatted: n.formatted.as_deref().map(Arc::from),
         props: Arc::clone(&n.props),
+        template_props: n.template_props.clone(),
+        changed: Arc::clone(&n.changed),
         items: None,
     });
     let mut kids = Vec::new();

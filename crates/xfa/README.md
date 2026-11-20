@@ -26,7 +26,9 @@ that warning and keeps the existing layout and accepted widget values.
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
   text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
   required fields and exclusion groups (`<validate nullTest="error">`), inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
-  leaders, `columnWidths` and `colSpan`.
+  leaders, `columnWidths` and `colSpan`. Fills draw their pattern (hatching), linear or radial
+  gradient or stipple over the fill colour (a widget's on the page under it); `lineThrough` strikes draw text
+  and, through `/PCXfaLineThrough` on the widget, a field's value; `tabDefault` sets tab stops.
 - **Prototypes** (`proto`, XFA 3.3 chapter 6, "Prototypes"): before parsing, every `use` and
   `usehref` reference into the same template is resolved and the template is written again
   with it merged in, so Designer style sheets (`usehref=".#som($template.#subform.styles.X)"`)
@@ -119,7 +121,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | --- | --- | --- |
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
-  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> /Props 12 0 R >>`, the object `/Props` names being `<< /som << /border#0/fill#0/color#0@value (255,0,0) … >> … >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all), and the property changes scripts made to objects the template makes once (by the object's SOM path, then the property's path from it and the attribute, `=` in front for a copy of a drawn edge or corner; in an object of their own, as they can run to a megabyte, written over in place only when the document added it for them); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 presence or access entries, and 10 000 property changes in 1 MiB (64 on one object, 16 KiB a value), are read, kept and written (a script's change past them is not kept: the console names one its object has no room for, one message says when the form has none, and the script that made it reads its own value until it ends, the next one the form's); an item list's entries are changed, never added. The object `/Props` names holds each path's dictionary and each value directly, as PdfCraft writes them: a reference inside it isn't followed, a value longer than any that is kept isn't decoded, and reading stops at twice the entries that may be kept. Entries a file holds past them, that a script couldn't make, named by a reference inside `/Props`, or kept by a SOM path that is not one object's the template makes once, aren't applied (a layout note says so) and stay in the file until the overrides are next written, by a script's change of a property, presence or access |
   | `/PCXfaDate` | generated date fields | `true`: text the field's date pattern doesn't read is kept, and shown, as typed rather than refused, as an XFA form keeps it; the forms layer reads it |
   | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
@@ -152,12 +154,63 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (the parser keeps each object's property elements, shared by every instance and every
   script's snapshot) with the spec's defaults for what forms read, `getElement`,
   `isPropertySpecified`, `getAttribute`, and a node's `mandatory`, validation messages and
-  colour shorthands; writes to them are read back in the same script but change nothing yet.
+  colour shorthands. FormCalc reads and writes the same property objects (`$.font.fill.color.value`,
+  `$.caption.value.text.value`, and a SOM string that runs into properties,
+  `resolveNode("f.ui.#textEdit.border.fill.color")`). What a script writes to them takes effect
+  (`restyle`) on an object the template makes once: each write is a property change of that
+  object, kept in `/PCXfaOverrides /Props` and applied to the template before the layout; the
+  property group it falls under is read again by the functions that read the template
+  (`parse::restyle_from`), so the border, fill, edges and corners, font, paragraph, margins,
+  the widget's border, multi-line, scrolling and check box shape, a choice list taking typed
+  text, caption (font, reserve, label), item lists, the Required flag, tooltip, maxChars,
+  pictures, validation and format tests and page breaks follow
+  it. The rules a change must meet (paths, colours,
+  measurements, whole numbers, sizes) are one crate, `pdfcraft-xfa-rules` (re-exported here as
+  `prop_rules`), that this crate and `pdfcraft-js` both depend on, so a script never reads back a
+  value the form drops. Same-named objects are numbered through unnamed subforms and areas,
+  which add no path segment (XFA 3.3 ch. 3, "Transparent Nodes", pp. 94-95, Example 3.12): the
+  numbers are worked out once, when the template is read (`numbering`, `Common::som_index`),
+  and the layout, the live form scripts run on, the Tab order and the template look-ups all
+  read them, so two `verified` subforms, each in an unnamed subform of one container, are
+  `verified[0]` and `verified[1]` and keep a change each. Scripts resolve names the same way
+  (`form1.yes[1]` is the second `yes` of `form1`, through its unnamed subforms and areas). A
+  property change is kept only for an object the template makes once (`som_made_once`): its
+  path starts at the root subform and each segment names one object that occurs once. So none
+  is kept inside a subform that may repeat (a row's path names another row once one goes), for
+  page-area content (each page laid out from the area has a copy), or at a SOM path several
+  objects have: an unnamed subform, area or draw takes its parent's path, unnamed fields and
+  exclusion groups of one container are each `…field[0]` or `…group[0]`, and the later
+  instances of a named subform that may repeat count on from its number, which a same-named
+  object after it in the template has too. A write to any of these is refused with a console
+  note, by the script and by the form, which ask one record of the template (`SomPaths`), so a
+  script never reads back a change the form won't keep; such a change a file holds is left out
+  with a layout note. How often a subform occurs (`occur`) is read but not changed by scripts.
+  Presence and access are kept by path alone, as they were: set through a path several objects
+  have they are every object's that has it. Who owns which path is worked out once per
+  template. Numbering starts again in a named area while what the area holds binds under the
+  area's container (an area is no data scope), so a field in a named area and a same-named
+  field beside the area have paths of their own and one data value. An unnamed exclusion group's buttons are named under `group[n]` by the layout and
+  the Tab order, as scripts name them. `execValidate()` runs the null test on every
+  required object under the node and lists the empty ones in one message. An event's work
+  doesn't grow with the changes the form already keeps: the template keeps (`memo`) the changes
+  last read, with the object they came from, the property tree each changed object was given,
+  and each field whose changes reach more than its tree (its validation, pictures or items), so
+  the next event neither checks the changes one by one nor builds those trees or reads those
+  fields again (two generations of each at most, each within 20,000 entries and 16 MiB, so a
+  script that gives an object new values event after event doesn't grow it without end). A
+  change makes at most what one object's budget allows; an item list's entries, outside that
+  budget, are the template's, as a change sets an entry but never adds one, and the memo counts
+  each copy of them.
   Not `xfa.template`, data descriptions, `xfa.connectionSet`, the choice-list methods
   (`addItem`, `clearItems`, `boundItem`; `selectedIndex` reads give a sink that accepts
-  writes), a node's `value` as its value element, `traversal` and `overflow`, property reads
-  in FormCalc, `execEvent`, or the change event per keystroke.
-  Validate failures show their message and keep the value, as Acrobat does for scripts.
+  writes), a node's `value` as its value element, `traversal` and `overflow`, `execEvent`, or
+  the change event per keystroke. Kept but not drawn: `assist.speak` (only the tooltip maps to
+  `/TU`), barcode `dataLength` (barcodes are drawn as text), `keep` on a subform.
+  Validate failures show their message and keep the value, as Acrobat does for scripts. A value
+  its validation picture doesn't describe (`formatTest`, XFA 3.3 p. 880) shows the format message
+  when the user leaves the field, and stays. A field whose value says it overrides its
+  calculation (`value override="1"`, p. 883, in the template) is left alone
+  by the calculations. These choices live in `validation_rules`.
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
   `initial` count, and never fewer than one (`occur min="0"` still shows one row).

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::host::{HNode, XHost, host};
@@ -142,13 +143,31 @@ fn child_som(parent_som: String, name: &str, index: usize) -> String {
 fn subtree_bytes(h: &XHost, src: usize, depth: usize) -> usize {
     let Some(n) = h.nodes.get(src).filter(|_| depth <= MAX_DEPTH) else { return 0 };
     let own = std::mem::size_of::<HNode>().saturating_add(n.name.len()).saturating_add(n.som.len());
-    n.children
-        .iter()
-        .filter(|&&k| !h.nodes.get(k).is_some_and(|c| c.gone || c.repeatable && c.index > 0))
-        .fold(own, |sum, &k| sum.saturating_add(subtree_bytes(h, k, depth + 1)))
+    copied_children(h, &n.children).into_iter().fold(own, |sum, k| sum.saturating_add(subtree_bytes(h, k, depth + 1)))
 }
 
-/// A copy of `src`'s subtree (values cleared) under `parent`, returning the copy's index.
+/// The children a copy of their parent takes: the live ones, and of a repeating subform its
+/// first instance only (the later ones follow it under the same name). The first instance is
+/// the first of its name by the order (a named subform's first instance is numbered after the
+/// same-named objects before it in its SOM scope, which need not be 0), or one numbered 0: an
+/// unnamed subform's first instance always is, so each of several unnamed repeating subforms
+/// is copied, though they share the name scripts see them under.
+fn copied_children(h: &XHost, kids: &[usize]) -> Vec<usize> {
+    let mut repeating: HashSet<&str> = HashSet::new();
+    let mut copied = Vec::new();
+    for &k in kids {
+        let Some(c) = h.nodes.get(k).filter(|c| !c.gone) else { continue };
+        // Its name is recorded whatever its number, so a later instance is told from the first.
+        let first_of_its_name = !c.repeatable || repeating.insert(&c.name);
+        if first_of_its_name || c.index == 0 {
+            copied.push(k);
+        }
+    }
+    copied
+}
+
+/// A copy of `src`'s subtree (values cleared, properties the template's) under `parent`,
+/// returning the copy's index.
 fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize) -> Option<usize> {
     if depth > MAX_DEPTH || h.nodes.len() >= MAX_NODES {
         return None;
@@ -173,7 +192,13 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
                 gone: false,
                 // The copy holds no value, so nothing is shown in its picture either.
                 formatted: None,
-                props: std::sync::Arc::clone(&n.props),
+                // A new instance is a copy of the template's object (XFA 3.3, "Instance
+                // Manager", p. 353): its properties are the template's, not the changes the
+                // form keeps for the instance it is copied from.
+                props: n.template_props.as_ref().map_or_else(|| Arc::clone(&n.props), Arc::clone),
+                template_props: None,
+                // A new instance holds no changes yet.
+                changed: Arc::from([]),
                 // A new instance lists what the template lists.
                 items: None,
             },
@@ -183,12 +208,8 @@ fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize)
     let idx = h.nodes.len();
     h.nodes.push(template);
     let mut copied = Vec::new();
-    for k in kids.iter().copied() {
-        // Nested repeating subforms copy their first instance only.
-        let skip = h.nodes.get(k).is_some_and(|c| c.gone || c.repeatable && c.index > 0);
-        if skip {
-            continue;
-        }
+    // Nested repeating subforms copy their first instance only.
+    for k in copied_children(h, &kids) {
         if let Some(ci) = clone_subtree(h, k, Some(idx), depth + 1) {
             copied.push(ci);
         }
@@ -224,7 +245,11 @@ impl XHost {
         // The copy's SOM, as `renumber` will give it, so its effect is reserved before the copy.
         let name = h.nodes.get(first).map(|n| n.name.to_string()).unwrap_or_default();
         let parent_som = h.nodes.get(parent).map(|p| p.som.to_string()).unwrap_or_default();
-        let som = child_som(parent_som, &name, live.len());
+        // Instances are numbered on from the first, which follows the same-named objects before
+        // it in its SOM scope (XFA 3.3 pp. 94-95), so the new one is one past the last.
+        let last = live.last().copied().unwrap_or(first);
+        let index = h.nodes.get(last).map_or(live.len(), |n| n.index.saturating_add(1));
+        let som = child_som(parent_som, &name, index);
         // The copy's nodes, their names and SOMs, are charged to the run's byte budget before
         // they are made: a subtree with long names must not be copied past it.
         let copied = subtree_bytes(h, first, 0);
@@ -232,9 +257,8 @@ impl XHost {
             return None;
         }
         let new = clone_subtree(h, first, Some(parent), 0)?;
-        let last = live.last().copied().unwrap_or(first);
         if let Some(n) = h.nodes.get_mut(new) {
-            n.index = live.len();
+            n.index = index;
         }
         // Keep instances together: right after the last one.
         if let Some(p) = h.nodes.get_mut(parent) {
@@ -289,9 +313,9 @@ impl XHost {
             n.gone = true;
         }
         // Later instances move down one.
-        for (k, &inst) in live.iter().enumerate().skip(i + 1) {
+        for &inst in live.iter().skip(i + 1) {
             if let Some(n) = h.nodes.get_mut(inst) {
-                n.index = k - 1;
+                n.index = n.index.saturating_sub(1);
             }
             renumber(h, inst, 0);
         }

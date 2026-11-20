@@ -1,22 +1,19 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
-    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, FillKind, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value,
+    Views, XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
+
+/// A radio button's group: its name, the on value of a button that lists none (its place in the
+/// group), the group's tooltip, and the on value the group's data selects.
+pub(super) type Radio<'a> = (&'a str, &'a str, Option<String>, Option<&'a str>);
 
 impl Layouter<'_> {
     /// Draw field `f` at `rect`: its border (a button's is its widget's box), its caption, then its
     /// widget, or its value as plain text when it is non-interactive, a barcode, or a text field
     /// taller than its content area. `radio` is set for a group's radio button; `sib` is its SOM index.
-    pub(super) fn draw_field(
-        &mut self,
-        f: &Field,
-        rect: Rect,
-        ctx: &Ctx,
-        radio: Option<(&str, &str, Option<String>, bool)>,
-        sib: usize,
-    ) -> Result<(), XfaError> {
+    pub(super) fn draw_field(&mut self, f: &Field, rect: Rect, ctx: &Ctx, radio: Option<Radio<'_>>, sib: usize) -> Result<(), XfaError> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
@@ -186,11 +183,11 @@ impl Layouter<'_> {
                 let r = Rect::new(x, y, s, s);
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "1".into());
                 let (kind, tip, checked) = match radio {
-                    Some((group, on_value, tip, chosen)) => (
-                        WidgetKind::Radio { group: group.to_string(), on: on_value.to_string(), round: f.check_round },
-                        tip.or_else(|| f.tooltip.clone()),
-                        chosen,
-                    ),
+                    Some((group, fallback_on, group_tip, selected)) => {
+                        let on_value = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| fallback_on.to_string());
+                        let chosen = selected == Some(on_value.as_str());
+                        (WidgetKind::Radio { group: group.to_string(), on: on_value, round: f.check_round }, f.tooltip.clone().or(group_tip), chosen)
+                    }
                     None => (
                         WidgetKind::CheckBox { on: on.clone(), round: f.check_round },
                         f.tooltip.clone(),
@@ -241,6 +238,22 @@ impl Layouter<'_> {
             Ui::PasswordEdit => (WidgetKind::Password, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
             _ => (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
         };
+        // A widget fill that is more than a colour (a pattern, a gradient, a stipple) is page
+        // content under the widget, whose own background stays clear (see `widget_border`). A
+        // button's box is its field border. An image field's widget has no border or background
+        // of its own, whatever its fill, and its picture is already on the page: nothing is
+        // drawn over it.
+        let widget_box = match f.ui {
+            Ui::ImageEdit => None,
+            Ui::Button => f.common.border.as_ref(),
+            _ => f.ui_border.as_ref(),
+        };
+        if let Some(b) = widget_box.filter(|b| b.fill().is_some() && b.fill_kind != FillKind::Solid) {
+            if let Some(base) = b.fill() {
+                self.push(Item::Fill { rect, color: base.0 })?;
+            }
+            self.fill_overlay(b, rect)?;
+        }
         if rect.w < 1.0 || rect.h < 1.0 {
             return Ok(());
         }
@@ -309,7 +322,8 @@ fn widget_border(b: Option<&Border>, check: bool) -> WidgetBorder {
     let edge = (0..4).find(|&i| vis[i]).map(|i| b.edges[i]).unwrap_or_default();
     WidgetBorder {
         color: (shape != BorderShape::None).then_some(edge.color.0),
-        fill: b.fill().map(|c| c.0),
+        // A fill that is more than a colour is drawn on the page under the widget instead.
+        fill: b.fill().filter(|_| b.fill_kind == FillKind::Solid).map(|c| c.0),
         shape,
         width: edge.thickness.clamp(0.1, 12.0),
     }

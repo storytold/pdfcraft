@@ -73,6 +73,11 @@ const GROUPS: [(&str, &str, &str, &str, &str); 2] =
 /// reads this key).
 pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 
+/// On a widget generated for an XFA field whose font draws lines through its text
+/// (`lineThrough`, XFA 3.3 p. 742): how many, 1 or 2 (the forms layer reads this key and
+/// strikes the value it draws).
+pub const LINE_THROUGH_KEY: &[u8] = b"PCXfaLineThrough";
+
 /// On an image XObject written for a picture: the SHA-256 (hex) of the picture's bytes. A
 /// re-layout (after every script event) finds the XObjects on the pages it replaces by this,
 /// and reuses them instead of decoding and embedding the same picture again. Nothing is kept
@@ -510,6 +515,9 @@ impl Emitter<'_> {
         d.set(b"BS".to_vec(), Object::Dict(bs));
         if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
             d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
+        if w.face.line_through > 0 {
+            d.set(LINE_THROUGH_KEY.to_vec(), Object::Int(i64::from(w.face.line_through.min(2))));
         }
         let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk)?;
         if !mk.is_empty() {

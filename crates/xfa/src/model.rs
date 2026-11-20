@@ -87,8 +87,7 @@ impl Color {
 
     /// `value="r,g,b"` with components 0–255.
     pub fn parse(s: &str) -> Option<Color> {
-        let mut parts = s.split(',').map(|p| p.trim().parse::<f64>().ok());
-        let (r, g, b) = (parts.next()??, parts.next()??, parts.next()??);
+        let [r, g, b] = crate::prop_rules::color_components(s)?;
         let c = |v: f64| if v.is_finite() { (v / 255.0).clamp(0.0, 1.0) } else { 0.0 };
         Some(Color([c(r), c(g), c(b)]))
     }
@@ -134,6 +133,56 @@ pub struct Corner {
     pub inverted: bool,
 }
 
+/// What a fill paints over its colour (XFA 3.3 p. 734): nothing more (solid), a hatching
+/// pattern (p. 806), a linear or radial gradient to another colour (p. 770, p. 820), or a
+/// stipple of another colour (p. 839).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum FillKind {
+    #[default]
+    Solid,
+    Pattern {
+        kind: Hatch,
+        color: Color,
+    },
+    /// From the fill colour on the side `to` points away from, to `color` on the side it names.
+    Linear {
+        to: Side,
+        color: Color,
+    },
+    /// From the fill colour at the centre to `color` at the edges, or the other way round.
+    Radial {
+        to_center: bool,
+        color: Color,
+    },
+    /// `rate` (0-1) of `color` over the fill colour.
+    Stipple {
+        rate: f64,
+        color: Color,
+    },
+}
+
+/// The strokes of a hatching pattern (XFA 3.3 p. 807).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Hatch {
+    #[default]
+    CrossHatch,
+    CrossDiagonal,
+    DiagonalLeft,
+    DiagonalRight,
+    Horizontal,
+    Vertical,
+}
+
+/// A side of a box, the way a linear gradient runs (XFA 3.3 p. 770).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Side {
+    #[default]
+    Right,
+    Left,
+    Top,
+    Bottom,
+}
+
 /// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
 /// bottom-right, bottom-left) and a fill.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -142,6 +191,8 @@ pub struct Border {
     pub edges: [Edge; 4],
     pub corners: [Corner; 4],
     pub fill: Option<Color>,
+    /// What the fill paints over its colour.
+    pub fill_kind: FillKind,
 }
 
 impl Border {
@@ -174,6 +225,8 @@ pub struct FontSpec {
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<bool>,
+    /// Lines through the text: 0, 1 or 2 (`lineThrough`, XFA 3.3 p. 742).
+    pub line_through: Option<u8>,
     pub color: Option<Color>,
     /// `fontHorizontalScale`, as a fraction (0.9 for `90%`).
     pub h_scale: Option<f64>,
@@ -187,6 +240,7 @@ pub struct Font {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub line_through: u8,
     pub color: Color,
     /// Horizontal scale of the glyphs, as a fraction (1.0: as designed).
     pub h_scale: f64,
@@ -195,7 +249,16 @@ pub struct Font {
 impl Default for Font {
     /// XFA's default font: Courier 10 pt.
     fn default() -> Self {
-        Font { typeface: "Courier".into(), size: 10.0, bold: false, italic: false, underline: false, color: Color::BLACK, h_scale: 1.0 }
+        Font {
+            typeface: "Courier".into(),
+            size: 10.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            line_through: 0,
+            color: Color::BLACK,
+            h_scale: 1.0,
+        }
     }
 }
 
@@ -209,6 +272,7 @@ impl Font {
             bold: spec.bold.unwrap_or(self.bold),
             italic: spec.italic.unwrap_or(self.italic),
             underline: spec.underline.unwrap_or(self.underline),
+            line_through: spec.line_through.unwrap_or(self.line_through),
             color: spec.color.unwrap_or(self.color),
             h_scale: spec.h_scale.unwrap_or(self.h_scale),
         }
@@ -296,6 +360,9 @@ pub struct ParaSpec {
     pub space_above: Option<f64>,
     pub space_below: Option<f64>,
     pub text_indent: Option<f64>,
+    /// The distance between default tab stops (`tabDefault`, XFA 3.3 p. 802); none set, a tab
+    /// is a space.
+    pub tab_default: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -309,6 +376,7 @@ pub struct Para {
     pub space_above: f64,
     pub space_below: f64,
     pub text_indent: f64,
+    pub tab_default: Option<f64>,
 }
 
 impl Para {
@@ -322,6 +390,7 @@ impl Para {
             space_above: spec.space_above.unwrap_or(self.space_above),
             space_below: spec.space_below.unwrap_or(self.space_below),
             text_indent: spec.text_indent.unwrap_or(self.text_indent),
+            tab_default: spec.tab_default.or(self.tab_default),
         }
     }
 }
@@ -393,6 +462,12 @@ pub struct Common {
     /// scripts to read (see [`Props`]). Shared: the live form's instances of the object and
     /// copies of the template point at the same tree.
     pub props: std::sync::Arc<Props>,
+    /// The object's number among the same-named objects of its SOM scope (`Name[n]`), 0 for an
+    /// unnamed one: XFA 3.3 ch. 3, "Transparent Nodes" (pp. 94-95, Example 3.12) counts them
+    /// across unnamed subforms and areas, whose children are named as their parent's. The parser
+    /// fills it in ([`crate::numbering`]); a repeating subform's later instances count on from
+    /// it. Copies of the object keep it.
+    pub som_index: usize,
 }
 
 /// A container's or object's `<traversal>` links, as SOM references relative to it. Only the
@@ -411,15 +486,19 @@ pub struct Traversal {
 /// font, para, margin, ui, validate, occur, break, assist, format, value, bind, desc, extras, keep),
 /// as written. Properties the template leaves out are not here: the scripting host supplies
 /// their defaults.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Props {
     pub attrs: Vec<(String, String)>,
     pub elements: Vec<Prop>,
+    /// The template wrote more than the reader keeps for scripts (see
+    /// `parse::MAX_OBJECT_PROPS`): the tree is cut short, so it is no source to lay the object
+    /// out from again.
+    pub cut: bool,
 }
 
 /// One property element: its tag, attributes, text (for elements that hold text, such as
 /// `picture` or `toolTip`) and its own property elements.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prop {
     pub tag: String,
     pub attrs: Vec<(String, String)>,
@@ -481,25 +560,30 @@ impl Node {
             Node::ExclGroup(g) => &g.common,
         }
     }
+
+    pub fn common_mut(&mut self) -> &mut Common {
+        match self {
+            Node::Subform(s) => &mut s.common,
+            Node::Area(a) => &mut a.common,
+            Node::Field(f) => &mut f.common,
+            Node::Draw(d) => &mut d.common,
+            Node::ExclGroup(g) => &mut g.common,
+        }
+    }
 }
 
+/// The SOM index of each of a container's children ([`Common::som_index`]): what every walk of
+/// the template (layout, live form, tab order, data) numbers them by, so they agree.
 pub(crate) struct SomIndices(Vec<usize>);
 
 impl SomIndices {
     pub(crate) fn of(children: &[Node]) -> Self {
-        let mut seen = std::collections::HashMap::new();
-        SomIndices(
-            children
-                .iter()
-                .map(|c| {
-                    c.common().name.as_deref().map_or(0, |name| {
-                        let n = seen.entry(name).or_insert(0);
-                        *n += 1;
-                        *n - 1
-                    })
-                })
-                .collect(),
-        )
+        SomIndices(children.iter().map(|c| c.common().som_index).collect())
+    }
+
+    /// An exclusion group's buttons', numbered among themselves.
+    pub(crate) fn of_fields(fields: &[Field]) -> Self {
+        SomIndices(fields.iter().map(|f| f.common.som_index).collect())
     }
 
     pub(crate) fn at(&self, i: usize) -> usize {
@@ -646,7 +730,17 @@ pub struct Field {
     /// `<validate><script>`: false (or an exception) shows `validate_message`; the value stays,
     /// as Acrobat marks the field invalid rather than reverting it.
     pub validate: Option<Script>,
+    /// The validation script while its test is turned off (`scriptTest="disabled"`, by the
+    /// template or a script): kept, so a script turning the test on again runs it.
+    pub validate_off: Option<Script>,
     pub validate_message: Option<String>,
+    /// The validation's format test (`<validate formatTest>`, default `warning`), its picture
+    /// clause (`<validate><picture>`) and its message (see [`crate::validation_rules`]).
+    pub format_test: crate::validation_rules::Test,
+    pub format_picture: Option<String>,
+    pub format_message: Option<String>,
+    /// `<value override="1">`: the user overrode the calculation, which leaves the field alone.
+    pub value_override: bool,
     /// Numeric fields (numericEdit, or a decimal/integer/float value) give scripts numbers.
     pub numeric: bool,
     /// The display picture clause (`<format><picture>`), e.g. `date{YYYYMMDD}`: how the value
@@ -875,6 +969,8 @@ pub struct Template {
     pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
     /// What a user of the template keeps for as long as it lives (see [`TemplateCache`]).
     pub cache: TemplateCache,
+    /// What this crate keeps for as long as the template lives (see [`crate::memo`]).
+    pub(crate) memo: crate::memo::Memo,
 }
 
 /// Room for one value a user of a template keeps alongside it for as long as the template

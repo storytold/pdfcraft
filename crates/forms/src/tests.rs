@@ -848,6 +848,48 @@ fn a_round_xfa_check_button_draws_a_round_background_and_border() {
     assert!(underlined.contains("1 0 0 RG\n1 w\n0 0.5 m 20 0.5 l S"), "an underline stays an underline: {underlined}");
 }
 
+/// A text field laid out for an XFA field whose font draws lines through its text
+/// (`/PCXfaLineThrough 1` or `2`) strikes its value with that many lines, across the text and
+/// at about half a lower-case letter's height; one without the key, or an empty one, draws none.
+#[test]
+fn an_xfa_line_through_field_strikes_its_value() {
+    let widget = |name: &str, extra: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /V (struck) /DA (/Helv 10 Tf 0 g) /Rect [50 700 250 720] /P 3 0 R{extra} >>")
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>".into(),
+        widget("one", " /PCXfaLineThrough 1"),
+        widget("two", " /PCXfaLineThrough 2"),
+        widget("plain", ""),
+        widget("odd", " /PCXfaLineThrough 7"),
+        widget("empty", " /PCXfaLineThrough 1").replace("/V (struck) ", ""),
+    ];
+    let mut doc = document(&objs);
+    let strikes = |doc: &Document, name: &str| {
+        let all = fields(doc);
+        let w = field(&all, name).widgets[0].obj;
+        let wd = doc.get(w).as_dict().cloned().unwrap();
+        let r = wd.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+        let Object::Stream(s) = &*doc.get(r) else { panic!("N is a stream") };
+        let text = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+        let after = text.split("ET\n").nth(1).unwrap_or_default().to_string();
+        after.lines().filter(|l| l.ends_with(" re f")).map(str::to_string).collect::<Vec<_>>()
+    };
+    for name in ["one", "two", "plain", "odd", "empty"] {
+        redraw_field(&mut doc, name).unwrap();
+    }
+    let one = strikes(&doc, "one");
+    assert_eq!(one.len(), 1, "{one:?}");
+    // From the text's start, as wide as "struck" in 10pt Helvetica (26.67pt), 0.5pt thick.
+    let parts: Vec<f64> = one[0].split(' ').take(4).map(|v| v.parse().unwrap()).collect();
+    assert!((parts[2] - 26.67).abs() < 0.01 && (parts[3] - 0.5).abs() < 1e-9, "{one:?}");
+    assert_eq!(strikes(&doc, "two").len(), 2);
+    assert!(strikes(&doc, "plain").is_empty() && strikes(&doc, "odd").is_empty() && strikes(&doc, "empty").is_empty());
+}
+
 /// Issue #1323: a text field without a format keeps a whitespace-only value as typed; only an
 /// empty value clears it.
 #[test]
