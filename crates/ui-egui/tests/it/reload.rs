@@ -89,7 +89,7 @@ fn app_with(jobs: Arc<craft::host::ManualJobs>) -> PdfCraftApp {
     use craft::platform::watch::FileWatch;
     use pdfcraft_ui_egui::AppServices;
     let info = AppInfo { id: "pdfcraft", name: "PdfCraft", version: "0" };
-    let host = Host::builder(info).jobs(jobs).files(Arc::new(craft::host::ScriptedFiles::new())).build();
+    let host = Host::builder(info).jobs(jobs).files(Arc::new(craft::host::NoPickFiles::default())).build();
     let (intake, _sender) = FileIntake::new(Wake::none());
     let watch = FileWatch::new(Wake::none()).inline();
     let services = AppServices::new(Wake::none(), Clipboard::new(SystemClipboard::new()), None, None, intake, watch);
@@ -358,7 +358,7 @@ fn saving_over_a_file_changed_by_something_else_asks_first() {
     let ctx_h = h.ctx.clone();
     assert!(!h.state_mut().save_active(&ctx_h, SaveTarget::InPlace));
     h.run_steps(2);
-    h.get_by_label("Save anyway").click();
+    h.get_by_label("Replace").click();
     h.run_steps(3);
     assert!(!dirty(&h), "written");
     assert_ne!(std::fs::read(&file.path).unwrap(), fixture(4));
@@ -456,7 +456,7 @@ fn a_newer_version_found_as_the_dialog_closes_replaces_the_held_one() {
     let generation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
     let before = generation(&h);
     h.get_by_label("Cancel").click();
-    h.step();
+    h.run_steps(2);
     assert_eq!((pages(&h), generation(&h) - before), (5, 1), "the held version is not loaded on the way");
 }
 

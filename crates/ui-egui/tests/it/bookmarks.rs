@@ -134,7 +134,7 @@ fn search_finds_collapsed_bookmarks_and_keeps_original_paths() {
         h.state_mut().apply_edit(&ctx_h, Edit::AddBookmark { parent, index, title: title.into(), page, left: None, top: None });
     }
     h.run_steps(3);
-    h.get_by_label("Panel Menu").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Collapse all bookmarks").click();
     h.run_steps(3);
@@ -210,7 +210,7 @@ trailer << /Root 1 0 R >>
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "tagged.pdf", None, TAGGED.to_vec()).unwrap();
     h.run_steps(3);
-    h.get_by_label("Panel Menu").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("New bookmarks from structure").click();
     h.run_steps(3);
@@ -267,7 +267,7 @@ fn new_bookmarks_from_text_styles_from_the_bookmark_options() {
     h.run_steps(3);
     let id = h.state().active.and_then(|i| h.state().views.get(i)).unwrap().id;
     let open = |h: &mut Harness<'static, PdfCraftApp>| {
-        h.get_by_label("Panel Menu").click();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
         h.run_steps(2);
         h.get_by_label("New bookmarks from text styles…").click();
         h.run_steps(3);
@@ -330,17 +330,17 @@ fn expanding_and_collapsing_all_bookmarks() {
     }
     h.run_steps(3);
     let shown = |h: &Harness<'static, PdfCraftApp>, t: &str| h.query_by_label(t).is_some();
-    h.get_by_label("Panel Menu").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Expand all bookmarks").click();
     h.run_steps(3);
     assert!(shown(&h, "Chapter") && shown(&h, "Section"));
-    h.get_by_label("Panel Menu").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Collapse all bookmarks").click();
     h.run_steps(3);
     assert!(shown(&h, "Part") && !shown(&h, "Chapter"));
-    h.get_by_label("Panel Menu").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Expand top-level bookmarks").click();
     h.run_steps(3);
@@ -415,12 +415,9 @@ trailer << /Root 1 0 R >>
 
     // The disclosure triangle at the row's left still opens and closes it.
     let toggle = |h: &mut Harness<'static, PdfCraftApp>, title: &str| {
-        let row = h.get_by_label(title).rect();
-        let at = egui::pos2(row.left() + 8.0, row.top() + 14.0);
-        h.hover_at(at);
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        let expand = format!("Expand {title}");
+        let collapse = format!("Collapse {title}");
+        h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l == expand || l == collapse)).click();
         h.run_steps(3);
     };
     toggle(&mut h, "Closed parent");
@@ -501,7 +498,7 @@ fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
     let ctx_h = h.ctx.clone();
     h.state_mut().open_bytes(&ctx_h, "one.pdf", None, ONE_PAGE.to_vec()).unwrap();
     h.run_steps(3);
-    h.get_by_label("Panel Menu").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Panel Menu").click();
     h.run_steps(2);
     h.get_by_label("Paste bookmarks").click();
     h.run_steps(3);

@@ -386,7 +386,9 @@ impl PdfCraftApp {
         // What was repaired while reading a damaged file (fidelity: never silent).
         let repairs = doc.repair_log();
         rows.push(value("Repairs", if repairs.is_empty() { tl!("None").to_string() } else { repairs.len().to_string() }));
-        rows.extend(repairs.into_iter().map(|line| PropertyRow::value(tl!("Repair log").to_string(), line)));
+        if !repairs.is_empty() {
+            rows.push(PropertyRow::value(tl!("Repair log").to_string(), repairs.join("\n")));
+        }
         rows
     }
 }

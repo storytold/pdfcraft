@@ -247,6 +247,10 @@ pub struct DocView {
     pub(crate) pages_focus_id: Option<egui::Id>,
     /// Scale of the thumbnails in the Pages inspector, independent of document and grid zoom.
     thumbnail_zoom: f32,
+    /// The current page the Pages panel last scrolled into view.
+    pub(crate) panel_followed: Option<usize>,
+    /// The thumbnail zoom the Pages panel last scrolled for.
+    pub(crate) panel_zoom_followed: f32,
     /// The page the grid scrolls into view on its next pass (Organize just opened on it).
     grid_reveal: Option<usize>,
     /// The bookmarks open in the Bookmarks panel, by their path in the outline.
@@ -607,6 +611,8 @@ impl DocView {
             dropped_files: None,
             pages_focus_id: None,
             thumbnail_zoom: 1.0,
+            panel_followed: None,
+            panel_zoom_followed: 1.0,
             grid_reveal: None,
             bookmarks_open: crate::panels::bookmarks::opened_as_filed(&info.outline),
             redactions_applied: 0,
@@ -924,6 +930,8 @@ struct BodyOut {
     /// A part of the page (a link, a field, a comment…) is under the pointer: in full screen a click there is the
     /// part's and turns no page.
     over_part: bool,
+    /// The page a primary press started on in this pass, so clicking a page in continuous view makes it current.
+    pressed_page: Option<usize>,
 }
 
 /// The part list of a pass, in paint order: pictures, paragraphs and added items, links and text links (only under
@@ -1230,9 +1238,12 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
 
     // 4. The tool host, in the real run only: a measuring run has no tool pass.
     if let Some(pass) = body.pass {
-        if matches!(pass.press.phase, PressPhase::Down { .. }) {
+        if let PressPhase::Down { start, .. } = &pass.press.phase {
             // A press nobody's part took, on the page or the gap between pages, ends Select All of the document.
             session.all_text = false;
+            if start.button == PointerButton::Primary {
+                out.pressed_page = body.pages.iter().find(|p| p.rect.contains(start.origin)).map(|p| p.page);
+            }
         }
         let button_held = ui.input(|i| i.pointer.any_down());
         let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, view: body.view, button_held, ..cx.tools };
@@ -1268,7 +1279,10 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         }
         out.turn = finish.turn;
         out.open_signature = finish.open_signature;
-        let outcome = session.prepare.take_outcome();
+        let mut outcome = session.prepare.take_outcome();
+        if let Some(edit) = outcome.edit.take() {
+            session.pending_edit = Some(edit);
+        }
         out.back_to_select |= outcome.placed;
         out.prepare = Some(outcome);
     }
@@ -1280,7 +1294,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
             .show_at(ui, body.rect);
     }
     if cx.preparing {
-        crate::prepare::tool::show_overlays(ui, body.rect, session, cx.form, cx.info, body.pages, cx.rotation);
+        crate::prepare::tool::show_overlays(ui, body.rect, body.view, session, cx.form, cx.info, body.pages, cx.rotation);
     }
     if cx.editing_content {
         let geo = cx.geometry(body);
@@ -1647,13 +1661,23 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
-    let out = PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
-        ui,
-        rect,
-        |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
-    );
+    // Scope each tab's PageView by its view key so per-canvas gestures (like middle-button autoscroll) stay tab-local.
+    let out = ui
+        .push_id(view_key, |ui| {
+            PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
+                ui,
+                rect,
+                |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
+            )
+        })
+        .inner;
     if let Some(canvas) = &body_out.view {
         out.adopt(&mut view.view, canvas);
+    }
+    if view.view.continuous
+        && let Some(page) = body_out.pressed_page
+    {
+        view.view.current = page;
     }
     if out.scrolled {
         view.end_find_following();

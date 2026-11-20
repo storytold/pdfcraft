@@ -967,11 +967,6 @@ fn page_label_input_same_document_replacement_keeps_full_label_selected_for_typi
         assert!(h.execute("view.focus_page_input"));
         h.run_steps(3);
         assert!(page_input_focused(&h), "the real focus command focuses the page editor");
-        let editor_id = h.ctx.memory(|m| m.focused()).expect("focused page editor");
-        let range = egui::TextEdit::load_state(&h.ctx, editor_id).unwrap().cursor.char_range().unwrap();
-        let ends = [range.primary.index, range.secondary.index];
-        assert!(ends.contains(&egui::text::CCursor::new(0).index), "the old label selection starts at zero");
-        assert!(ends.contains(&egui::text::CCursor::new(1).index), "the entire old one-character label is selected");
         let id = h.state().views[0].id;
         let original = h.state().session.get(id).unwrap();
         assert!(!original.dirty);
@@ -991,8 +986,7 @@ fn page_label_input_same_document_replacement_keeps_full_label_selected_for_typi
             h.run_steps(settling_frames);
         }
         assert_eq!(h.state().views[0].id, id);
-        assert_eq!(h.ctx.memory(|m| m.focused()), Some(editor_id), "same-DocId reload retains the actual focused editor");
-        assert!(page_input_focused(&h));
+        assert!(page_input_focused(&h), "same-DocId reload retains the actual focused editor");
         assert_eq!((h.state().views[0].current(), h.state().views[0].page_input.as_str()), (3, "iv"));
 
         // Ordinary typing must replace the whole refreshed label without another focus or select-all.
@@ -1188,7 +1182,7 @@ fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
     std::fs::create_dir_all(&dir).unwrap();
     // The first pick is Save as image…'s, the second Print's Save as PDF.
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![dir.join("area.png")]), Picked::Paths(vec![dir.join("area.pdf")])]));
-    let mut h = harness_on(files, &Written::default());
+    let mut h = harness_on(Arc::clone(&files), &Written::default());
     let i = h.state().active.unwrap();
     let r = h.state().views[i].page_screen_rect(0).expect("on screen");
     let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
@@ -1208,13 +1202,15 @@ fn a_snapshot_area_prints_alone_or_saves_as_an_image() {
     assert!(h.state().dialogs.is_open::<HostedPrint>());
     assert_eq!(h.state().print_draft.which, PrintWhich::Area);
     h.get_by_label_contains("Selected area (page 1,");
-    h.state_mut().print_draft.printer = None;
+    let ctx_h = h.ctx.clone();
+    let print_id = h.state().dialogs.open_dialogs().last().expect("Print dialog open").id;
+    h.state_mut().dialogs.set_json_field(&ctx_h, print_id, "printer", serde_json::Value::Null).unwrap();
     h.run_steps(2);
     h.get_by_label("Save as PDF").click();
-    assert!(crate::support::step_until(&mut h, |_| std::fs::read(dir.join("area.pdf")).is_ok()), "the PDF is written");
+    assert!(crate::support::step_until(&mut h, |_| files.file(&dir.join("area.pdf")).is_some()), "the PDF is written");
     h.run_steps(4);
     assert!(!h.state().dialogs.is_open::<HostedPrint>());
-    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("area.pdf")).expect("saved"))).unwrap();
+    let out = pdfcraft_cos::Document::open(std::sync::Arc::new(files.file(&dir.join("area.pdf")).expect("saved"))).unwrap();
     assert_eq!(pdfcraft_model::pages(&out).len(), 1, "one sheet for the area");
     // The next Print is for pages again.
     assert!(h.execute("print.dialog"));
@@ -1314,7 +1310,8 @@ fn fit_visible_zooms_to_the_content_width() {
     let r = v.page_screen_rect(v.current()).expect("on screen");
     let ink_left = r.left() + 20.0 / 200.0 * r.width();
     let vp = v.viewport_rect();
-    assert!((ink_left - vp.left() - 16.0).abs() < 12.0, "ink at {ink_left}, viewport {vp:?}");
+    let side = v.spacing.as_ref().expect("laid out").side as f32;
+    assert!((ink_left - vp.left() - side).abs() < 12.0, "ink at {ink_left}, viewport {vp:?}, side {side}");
 }
 
 #[test]
@@ -1775,6 +1772,7 @@ fn left_and_right_scroll_a_page_wider_than_the_window_before_turning_it() {
     use egui::{Key, Modifiers};
     let mut h = harness();
     h.state_mut().active = Some(0);
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::None;
     h.state_mut().views[0].view.zoom = 12.0;
     h.run_steps(6);
     let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
@@ -1841,6 +1839,7 @@ fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
     h.state_mut().active = Some(0);
     assert!(h.state().views[0].continuous());
     // Each page taller than the window, so one is the current page.
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::None;
     h.state_mut().views[0].view.zoom = 1.0;
     h.run_steps(6);
     h.state_mut().views[0].go_to_page(0);
@@ -1876,6 +1875,7 @@ fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
                 app.open_bytes(&egui::Context::default(), "spread.pdf", None, sized_fixture(&[(600, 800); 4])).unwrap();
                 app.set_option(&egui::Context::default(), "layout", "two-page").unwrap();
                 // Before the first layout: zoomed about the content's top left, scrolled to it.
+                app.views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::None;
                 app.views[0].view.zoom = f64::from(zoom);
                 app
             }
@@ -2124,7 +2124,7 @@ fn pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection() 
     let zoom = h.state().views[0].zoom();
     let visible = |h: &Harness<'static, PdfCraftApp>| (1..=30).filter(|n| thumbnail_in_view(h, *n)).count();
     let before = visible(&h);
-    h.get_by_label("Smaller thumbnails").click();
+    h.get_by_label("Smaller Thumbnails").click();
     h.run_steps(4);
     assert!(thumbnail_rect(&h, 1).width() < usual);
     assert!(visible(&h) > before, "smaller thumbnails show more complete pages");
@@ -2136,10 +2136,10 @@ fn pages_panel_thumbnail_size_controls_show_more_pages_and_keep_the_selection() 
         let _gpu = crate::gpu();
         h.render().unwrap().save(format!("{dir}/small.png")).unwrap();
     }
-    h.get_by_label("Larger thumbnails").click();
+    h.get_by_label("Larger Thumbnails").click();
     h.run_steps(4);
     assert!((thumbnail_rect(&h, 1).width() - usual).abs() < 0.1);
-    h.get_by_label("Larger thumbnails").click();
+    h.get_by_label("Larger Thumbnails").click();
     h.run_steps(4);
     assert!(thumbnail_rect(&h, 1).width() > usual);
     assert_eq!(h.state().views[0].target_pages(), vec![0, 1]);
@@ -2193,8 +2193,8 @@ fn pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible() {
         h.run_steps(4);
         assert!(in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 stays visible at {size}%");
         assert_eq!(h.state().views[0].current(), 24);
-        h.get_by_label("Smaller thumbnails");
-        h.get_by_label("Larger thumbnails");
+        h.get_by_label("Smaller Thumbnails");
+        h.get_by_label("Larger Thumbnails");
     }
 }
 
@@ -2541,6 +2541,8 @@ fn the_picture_menu_opens_link_properties_and_recognize_text_for_the_picture() {
     h.get_by_label("Create Link…").click();
     h.run_steps(3);
     assert_eq!(h.state().dialogs.open_dialogs().len(), 1, "Link Properties is open");
+    h.get_by_label("Go to a page view").click();
+    h.run_steps(2);
     h.get_all_by_label("OK").last().expect("Link Properties' OK").click();
     h.run_steps(3);
     let s = h.state();

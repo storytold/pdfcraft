@@ -330,16 +330,18 @@ impl DockPanels<PanelId> for Panels<'_> {
     }
 
     fn group_view(&mut self, panels: &[PanelId], _active: usize, ui: &mut Ui, at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
-        // Measuring is the dock's; a shown view takes the rect it is given.
-        let GroupAt::Show(rect) = at else { return None };
-        if panels.contains(&PanelId::Toolbar) {
-            crate::hotbar::show_rail(self.app, ui);
-        } else if panels.contains(&PanelId::Document) {
-            document_view(self.app, ui, rect);
-        } else {
-            return None;
+        match at {
+            GroupAt::Measure(width) if panels.contains(&PanelId::Toolbar) => Some(crate::hotbar::measure_rail(self.app, ui, width)),
+            GroupAt::Show(rect) if panels.contains(&PanelId::Toolbar) => {
+                crate::hotbar::show_rail(self.app, ui);
+                Some(rect.height())
+            }
+            GroupAt::Show(rect) if panels.contains(&PanelId::Document) => {
+                document_view(self.app, ui, rect);
+                Some(rect.height())
+            }
+            _ => None,
         }
-        Some(rect.height())
     }
 
     fn group_header(&mut self, panels: &[PanelId], active: usize, ui: &mut Ui, _cx: &mut BodyCx<'_>) {

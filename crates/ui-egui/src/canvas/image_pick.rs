@@ -60,6 +60,9 @@ pub(crate) fn resolve_pending(
         })
     });
     let Some(picked) = answer else { return };
+    if picked.is_some() {
+        session.text.selection = None;
+    }
     session.picked_image = picked;
     session.pending_pick = None;
 }

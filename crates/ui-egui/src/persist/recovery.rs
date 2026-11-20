@@ -200,6 +200,11 @@ impl PdfCraftApp {
         }
     }
 
+    /// Whether a hosted dialog other than the startup recovery offer is open.
+    pub(crate) fn has_non_recovery_dialog(&self) -> bool {
+        self.dialogs.open_dialogs().len() > usize::from(self.dialogs.is_open::<RecoveryDialog>())
+    }
+
     /// Stops offering the first entry in this run; its copy stays for the next launch.
     #[cfg(not(target_arch = "wasm32"))]
     fn skip_offer(&mut self) {
