@@ -29,12 +29,16 @@ pub const TIME_LIMIT: Duration = Duration::from_secs(20);
 /// A whole file's reading budget across all its pages. The per-page watchdog bounds one slow page;
 /// this bounds a file of many pages that are each slow but under the page limit.
 pub const FILE_TIME_LIMIT: Duration = Duration::from_secs(600);
+/// Maximum total time for one folder search, including directory enumeration and all PDFs.
+pub const SEARCH_TIME_LIMIT: Duration = Duration::from_secs(1_800);
 /// Pages asked for at once.
 const PAGE_BATCH: usize = 16;
 /// Glyphs of context on each side of a match.
 const CONTEXT: usize = 36;
 
 /// Threads a search let go of. They can't be killed, so each counts until it exits.
+/// A stuck reader can retain an entire PDF (up to 512 MiB); the count cap is not a byte cap.
+/// Several outstanding searches can therefore retain multiple GiB until their workers exit.
 static LEFT_RUNNING: Mutex<Vec<Retiring>> = Mutex::new(Vec::new());
 
 /// What to look for, and where.
@@ -53,6 +57,8 @@ pub struct Options {
     pub page_limit: Duration,
     /// How long a whole file may take to read, across all its pages.
     pub file_limit: Duration,
+    /// Whole search budget, covering directory enumeration, every file and every page.
+    pub search_limit: Duration,
 }
 
 impl Options {
@@ -67,6 +73,7 @@ impl Options {
             open_limit: TIME_LIMIT,
             page_limit: TIME_LIMIT,
             file_limit: FILE_TIME_LIMIT,
+            search_limit: SEARCH_TIME_LIMIT,
         }
     }
 }
@@ -132,6 +139,8 @@ pub enum Stop {
     Cancelled,
     MatchLimit,
     TooManySlowFiles,
+    /// Overall deadline expired. Previously found results are preserved.
+    TimeLimit,
 }
 
 /// What a search has found so far, as it happens.
@@ -195,8 +204,13 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
     if running(left) >= MAX_LEFT_RUNNING {
         return Err("files from earlier searches are still being read; wait for them to finish, or restart PdfCraft".into());
     }
-    let mut walk = Walk::default();
-    walk.folder(&options.folder, options.subfolders, 0, cancel);
+    let deadline = Instant::now().checked_add(options.search_limit);
+    // Directory enumeration can block indefinitely in read_dir/next on a disconnected share.
+    // Keep it off the caller thread, so Stop and the overall deadline remain responsive.
+    let walk = match list_folder(&options.folder, options.subfolders, cancel, deadline, left)? {
+        Ok(walk) => walk,
+        Err(stopped) => return Ok(Summary { stopped: Some(stopped), ..Summary::default() }),
+    };
     let mut summary = Summary { found: walk.pdfs.len(), folder_cut_short: walk.cut_short, ..Summary::default() };
     events(Event::Found(summary.found));
     for skipped in walk.skipped {
@@ -208,6 +222,15 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
     }
     let mut slow = 0usize;
     for (index, path) in walk.pdfs.into_iter().enumerate() {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            summary.stopped = Some(Stop::TimeLimit);
+            break;
+        }
+        // A previous slow worker must not let this search create unbounded new workers.
+        if running(left) >= MAX_LEFT_RUNNING {
+            summary.stopped = Some(Stop::TooManySlowFiles);
+            break;
+        }
         if summary.matches >= options.limit {
             summary.stopped = Some(Stop::MatchLimit);
             break;
@@ -217,7 +240,7 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
             break;
         }
         events(Event::Reading { index, path: path.clone() });
-        let read = search_file(&path, query, options, options.limit.saturating_sub(summary.matches), cancel, left);
+        let read = search_file(&path, query, options, options.limit.saturating_sub(summary.matches), cancel, left, deadline);
         if !read.matches.is_empty() {
             summary.matches = summary.matches.saturating_add(read.matches.len());
             summary.files_with_matches = summary.files_with_matches.saturating_add(1);
@@ -235,6 +258,10 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
             None if read.at_limit => {}
             None => summary.searched = summary.searched.saturating_add(1),
         }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            summary.stopped = Some(Stop::TimeLimit);
+            break;
+        }
         if read.at_limit {
             summary.stopped = Some(Stop::MatchLimit);
             break;
@@ -245,6 +272,55 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
         }
     }
     Ok(summary)
+}
+
+/// Return a complete directory listing, or a reason the listing stopped before completion.
+/// A filesystem operation may not be interruptible: record any abandoned listing thread under
+/// the same process-wide cap as abandoned PDF workers, rather than blocking the caller.
+fn list_folder(
+    folder: &Path,
+    subfolders: bool,
+    cancel: &AtomicBool,
+    deadline: Option<Instant>,
+    left: &Mutex<Vec<Retiring>>,
+) -> Result<Result<Walk, Stop>, String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(Err(Stop::Cancelled));
+    }
+    if deadline.is_some_and(|d| Instant::now() >= d) {
+        return Ok(Err(Stop::TimeLimit));
+    }
+    let path = folder.to_path_buf();
+    let stopping = Arc::new(AtomicBool::new(false));
+    let worker_stop = stopping.clone();
+    let (send, recv) = mpsc::sync_channel(1);
+    let thread = std::thread::Builder::new()
+        .name("folder-search-list".into())
+        .spawn(move || {
+            let mut walk = Walk::default();
+            walk.folder(&path, subfolders, 0, &worker_stop);
+            let _ = send.send(walk);
+        })
+        .map_err(|e| format!("could not start folder listing: {e}"))?;
+    loop {
+        let stop = if cancel.load(Ordering::Relaxed) {
+            Some(Stop::Cancelled)
+        } else if deadline.is_some_and(|d| Instant::now() >= d) {
+            Some(Stop::TimeLimit)
+        } else {
+            None
+        };
+        if let Some(stop) = stop {
+            stopping.store(true, Ordering::Relaxed);
+            let_go(left, thread.into());
+            return Ok(Err(stop));
+        }
+        match recv.recv_timeout(Duration::from_millis(20)) {
+            Ok(walk) => return Ok(Ok(walk)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err("folder listing stopped unexpectedly".into()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
 }
 
 #[derive(Default)]
@@ -317,9 +393,11 @@ struct FileRead {
     at_limit: bool,
 }
 
-fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel: &AtomicBool, left: &Mutex<Vec<Retiring>>) -> FileRead {
+fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel: &AtomicBool, left: &Mutex<Vec<Retiring>>, deadline: Option<Instant>) -> FileRead {
     let mut read = FileRead::default();
-    let (bytes, pages) = match open(path, options.open_limit, cancel, left) {
+    // A whole-search deadline also bounds opening a slow or disconnected file.
+    let open_limit = deadline.map_or(options.open_limit, |d| options.open_limit.min(d.saturating_duration_since(Instant::now())));
+    let (bytes, pages) = match open(path, open_limit, cancel, left) {
         Opened::File(bytes, pages) => (bytes, pages),
         Opened::Skip(skip) => {
             read.skip = Some(skip);
@@ -330,7 +408,7 @@ fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel:
             return read;
         }
     };
-    read_pages(bytes, pages, query, options, room, cancel, left)
+    read_pages(bytes, pages, query, options, room, cancel, left, deadline)
 }
 
 /// How many of the threads let go of are still running.
@@ -352,12 +430,13 @@ fn read_pages(
     room: usize,
     cancel: &AtomicBool,
     left: &Mutex<Vec<Retiring>>,
+    deadline: Option<Instant>,
 ) -> FileRead {
     // The pool, not a bare renderer: its watchdog stops a page that would otherwise never end.
     // No replacement: its retry would run beside the stuck thread, with a time limit of its own.
     let mut pool = RenderPool::new(bytes, 1, RenderConfig::default()).without_replacements();
     pool.set_stuck_after(options.page_limit);
-    let read = read_queued(&mut pool, pages, query, options, room, cancel);
+    let read = read_queued(&mut pool, pages, query, options, room, cancel, deadline);
     // With every page answered its worker is idle; otherwise it may be on a page that never ends.
     if read.cancelled || read.at_limit || read.skip == Some(Skip::TooSlow) {
         let_go(left, pool.retire());
@@ -365,7 +444,7 @@ fn read_pages(
     read
 }
 
-fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Options, room: usize, cancel: &AtomicBool) -> FileRead {
+fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Options, room: usize, cancel: &AtomicBool, search_deadline: Option<Instant>) -> FileRead {
     let mut read = FileRead::default();
     let mut unread = 0usize;
     let mut first = 0;
@@ -390,7 +469,9 @@ fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Optio
                 // the whole-file budget is checked here, while waiting for a page, not only once
                 // it arrives. Matches found so far stay in `read`, and the TooSlow return routes
                 // through read_pages' retirement path.
-                if deadline.is_some_and(|d| Instant::now() >= d) {
+                if deadline.is_some_and(|d| Instant::now() >= d)
+                    || search_deadline.is_some_and(|d| Instant::now() >= d)
+                {
                     read.skip = Some(Skip::TooSlow);
                     return read;
                 }
