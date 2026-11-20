@@ -116,6 +116,23 @@ pub(crate) fn signatures_of(
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
 }
 
+/// [`signatures_of`] the document shown as `cos` (its file `bytes`), or of the signed file when
+/// what is shown was reconciled with its XFA packets for display only
+/// ([`crate::Document::shown_not_saved`]): nothing of that is in the file, so the signatures are
+/// as signed.
+pub(crate) fn shown_signatures(
+    shown: Option<&crate::document::ShownOnly>,
+    cos: &pdfcraft_cos::Document,
+    bytes: &[u8],
+    trust: &TrustStore,
+    cache: &pdfcraft_sign::DigestCache,
+) -> Vec<SignatureInfo> {
+    match shown {
+        Some(s) => signatures_of(&s.signed, s.signed.bytes(), trust, cache),
+        None => signatures_of(cos, bytes, trust, cache),
+    }
+}
+
 /// What Optimize PDF did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OptimizeReport {

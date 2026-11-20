@@ -1194,8 +1194,8 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
-/// A signature shows its state on its own page, which an edit elsewhere can change (a
-/// certification forbidding it, say): every page redraws. An edit that moves no page (a form edit,
+/// A signature shows its state on its own page, which an edit elsewhere can change (content an
+/// approval signature covered, say): every page redraws. An edit that moves no page (a form edit,
 /// or one to a page's comments or content) keeps the values typed, in it and before it, showing
 /// until their pages redraw.
 fn signatures_changed_after_edit(

@@ -243,6 +243,7 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
             ran_away: false,
             highlight,
             time_scale: cx.xfa_time_scale,
+            keep_layout: cx.certification.is_some(),
         };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
@@ -259,9 +260,9 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
     if !taken.is_empty() {
         cx.xfa_out.console.push(format!("{} field value(s) taken from the imported data", taken.len()));
     }
-    // Not laid out again (a static form, or scripts off): fields the data no longer holds are
-    // emptied, so the data replaced is the data shown.
-    if cx.xfa.is_none() && calculate {
+    // Not laid out again (a static form, scripts off, or a certification that keeps the signed
+    // pages): fields the data no longer holds are emptied, so the data replaced is the data shown.
+    if (cx.xfa.is_none() || cx.certification.is_some()) && calculate {
         let data = xfa_field_data(doc);
         let present: std::collections::HashSet<String> = pdfcraft_xfa::read_values(doc, &data).into_iter().map(|(n, _)| n).collect();
         for f in pdfcraft_forms::fields(doc) {

@@ -131,6 +131,7 @@ impl Session {
         if let Some(p) = editor.cos.permissions() {
             check_permission(&Edit::EnhanceScan { images: Vec::new() }, &p)?;
         }
+        doc.check_certification(&Edit::EnhanceScan { images: Vec::new() })?;
         let all = doc.info.pages.len();
         let mut wanted: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.to_vec() };
         if let Some(p) = wanted.iter().find(|p| **p >= all) {
