@@ -535,6 +535,31 @@ fn fields_listed_only_on_the_pages_are_adopted() {
     assert_eq!(adopted_page_fields(&doc), 4);
 }
 
+/// Reading the form reads each page once: the walk that finds the pages hands each page's
+/// `/Annots` to the field reading and to the adoption of fields only a page lists. Both used to
+/// read every page again, three reads of each, and for a long document whose pages carry
+/// InDesign's `/PieceInfo` each read of them all is a full parse (#5873).
+#[test]
+fn reading_the_form_reads_each_page_once() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>".into(),                             // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R] >>".into(),                               // 3
+        "<< /Type /Page /Parent 2 0 R >>".into(),                                               // 4
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R] >>".into(),                               // 5
+        "<< /Fields [7 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                                    // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (listed) /Rect [50 700 250 720] /P 3 0 R >>".into(), // 7
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (adopted) /Rect [50 600 250 620] /P 5 0 R >>".into(), // 8
+    ];
+    let doc = document(&objs);
+    crate::read::PAGE_NODES_READ.with(|n| n.set(0));
+    let (fields, adopted) = enumerate(&doc);
+    assert_eq!(crate::read::PAGE_NODES_READ.with(std::cell::Cell::get), 4, "the page-tree node and its three pages, once each");
+    let read: Vec<_> = fields.iter().map(|f| (f.name.as_str(), f.widgets[0].page, f.widgets[0].tab)).collect();
+    assert_eq!(read, [("listed", Some(0), 0), ("adopted", Some(2), 1)]);
+    assert_eq!(adopted, 1, "the field only the third page lists is adopted");
+}
+
 /// A widget whose `/Parent` names an object the file doesn't hold, or one that isn't a dictionary,
 /// has no parent: the reference reads as `null`, the same as an absent entry (ISO
 /// 32000-2 §7.3.9). It is adopted as a field of its own, under its own name, and can be filled.
@@ -4837,7 +4862,7 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     kids.extend(std::iter::repeat_n(Object::Ref(page), 128));
     doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
     let mut walk = PageWalk::new(&doc, root);
-    assert_eq!(walk.next(), Some(page));
+    assert_eq!(walk.next().map(|(r, _)| r), Some(page));
     assert!(walk.pending.len() <= 2, "repeated kids retained {} pending entries", walk.pending.len());
     assert_eq!(walk.next(), None);
     assert_eq!(page_refs(&doc), [page]);

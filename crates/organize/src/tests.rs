@@ -173,6 +173,29 @@ fn walks_nested_tree_in_order() {
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
 }
 
+/// `has_pages` reads the page tree only as far as the first page. Opening a document asks it, and
+/// counting the pages read every page dictionary (#5873).
+#[test]
+fn has_pages_reads_only_as_far_as_the_first_page() {
+    let mut doc = open(fixture());
+    let read = page_nodes_read_on_this_thread();
+    assert!(has_pages(&doc));
+    assert_eq!(page_nodes_read_on_this_thread() - read, 3, "the root, the node under it and its first page");
+    let read = page_nodes_read_on_this_thread();
+    assert_eq!(page_count(&doc).unwrap(), 3);
+    assert_eq!(page_nodes_read_on_this_thread() - read, 5, "counting reads every node");
+    // A tree without leaves, and no tree at all, have no pages.
+    let root = ObjRef::new(2, 0);
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(Vec::new()))).unwrap();
+    assert!(!has_pages(&doc));
+    let catalog = ObjRef::new(1, 0);
+    doc.update_dict(catalog, |d| {
+        d.remove(b"Pages");
+    })
+    .unwrap();
+    assert!(!has_pages(&doc));
+}
+
 #[test]
 fn rotate_uses_inherited_rotation_and_round_trips() {
     let mut doc = open(fixture());

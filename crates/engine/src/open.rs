@@ -266,7 +266,7 @@ impl Session {
         // (#1656). Kept only when the reader then shows the same pages, and never on a signed
         // document, where writing the repair could rewrite the file under its signatures.
         let (bytes, info, cos) = match cos {
-            Ok(Ok(cos)) if !info.pages.is_empty() && pdfcraft_organize::page_count(&cos).unwrap_or(0) == 0 => {
+            Ok(Ok(cos)) if !info.pages.is_empty() && !pdfcraft_organize::has_pages(&cos) => {
                 let mut work = cos.clone();
                 let signed = || pdfcraft_sign::pdf::list(&cos, &bytes, &context.trust).iter().any(|s| s.signed);
                 let rebuilt = match pdfcraft_organize::recover_page_tree(&mut work) {

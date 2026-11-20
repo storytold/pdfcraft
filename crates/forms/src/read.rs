@@ -313,15 +313,40 @@ fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
 
 /// Leaf page objects in order (a small walker; `organize` and `annot` have their own).
 pub(crate) fn page_refs(doc: &Document) -> Vec<ObjRef> {
-    let Some(root) = doc.root() else { return Vec::new() };
-    let Some(pages) = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")) else { return Vec::new() };
-    PageWalk::new(doc, pages).collect()
+    page_walk(doc).map(|(page, _)| page).collect()
 }
 
-/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
-/// never one entry per child, so a child listed many times or shared between nodes is skipped by
-/// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
-/// Cycles end at the seen check and at most a million nodes are visited.
+/// The leaf pages in order, each with the object the walk read to find it, so reading a page's
+/// entries doesn't read the page again ([`page_object`]).
+fn page_walk(doc: &Document) -> PageWalk<'_> {
+    match doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) {
+        Some(pages) => PageWalk::new(doc, pages),
+        None => PageWalk { doc, seen: Default::default(), pending: Vec::new() },
+    }
+}
+
+/// A page-tree node, read to walk the tree or for a page's entries. A long document's pages don't
+/// stay cached between two reads, so each read is a full parse of the page, and a page can carry
+/// tens of kilobytes of private data (InDesign's `/PieceInfo`, #5873). Tests count the reads
+/// ([`PAGE_NODES_READ`]).
+fn page_object(doc: &Document, node: ObjRef) -> std::sync::Arc<Object> {
+    #[cfg(test)]
+    PAGE_NODES_READ.with(|n| n.set(n.get() + 1));
+    doc.get(node)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Page-tree nodes read on this thread ([`page_object`]), so a test can count how often
+    /// reading the form reads each page.
+    pub(crate) static PAGE_NODES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Depth-first walk over the leaf pages under `top`, each with the object read to find it. It
+/// keeps one cursor per open `/Kids` array, never one entry per child, so a child listed many
+/// times or shared between nodes is skipped by the seen check without being queued first
+/// (`pdfcraft_model::pages` walks the same way). Cycles end at the seen check and at most a
+/// million nodes are visited.
 pub(crate) struct PageWalk<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<ObjRef>,
@@ -336,9 +361,9 @@ impl<'a> PageWalk<'a> {
 }
 
 impl Iterator for PageWalk<'_> {
-    type Item = ObjRef;
+    type Item = (ObjRef, std::sync::Arc<Object>);
 
-    fn next(&mut self) -> Option<ObjRef> {
+    fn next(&mut self) -> Option<Self::Item> {
         while let Some((kids, next)) = self.pending.last_mut() {
             let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
                 self.pending.pop();
@@ -354,11 +379,11 @@ impl Iterator for PageWalk<'_> {
             if !self.seen.insert(node) {
                 continue;
             }
-            let obj = self.doc.get(node);
+            let obj = page_object(self.doc, node);
             let Some(d) = obj.as_dict() else { continue };
             match d.get(b"Kids").map(|k| self.doc.resolve(k)) {
                 Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((kids, 0)),
-                _ => return Some(node),
+                _ => return Some((node, obj)),
             }
         }
         None
@@ -458,18 +483,20 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     let mut page_of = std::collections::HashMap::new();
     let mut annot_index = std::collections::HashMap::new();
     let mut by_parent: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
-    let pages = page_refs(doc);
-    for (i, p) in pages.iter().enumerate() {
-        if let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) {
-            for (k, e) in doc.resolve(&a).as_array().into_iter().flatten().enumerate() {
-                if let Some(r) = e.as_ref()
-                    && let std::collections::hash_map::Entry::Vacant(slot) = page_of.entry(r)
-                {
-                    slot.insert(i);
-                    annot_index.insert(r, k);
-                    if let Some(parent) = widget_parent(doc, r) {
-                        by_parent.entry(parent).or_default().push(r);
-                    }
+    // Each page's `/Annots`, taken from the object the walk read to find the page and kept for
+    // `adopt_page_fields`: reading every page again for them, here and there, read each page
+    // three times (#5873).
+    let page_annots: Vec<(ObjRef, Option<std::sync::Arc<Object>>)> =
+        page_walk(doc).map(|(page, obj)| (page, obj.as_dict().and_then(|d| d.get(b"Annots")).map(|a| doc.resolve(a)))).collect();
+    for (i, (_, annots)) in page_annots.iter().enumerate() {
+        for (k, e) in annots.as_deref().and_then(Object::as_array).into_iter().flatten().enumerate() {
+            if let Some(r) = e.as_ref()
+                && let std::collections::hash_map::Entry::Vacant(slot) = page_of.entry(r)
+            {
+                slot.insert(i);
+                annot_index.insert(r, k);
+                if let Some(parent) = widget_parent(doc, r) {
+                    by_parent.entry(parent).or_default().push(r);
                 }
             }
         }
@@ -516,8 +543,9 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
     }
     let listed = out.len();
-    adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
+    adopt_page_fields(doc, &page_annots, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
+    let pages: Vec<ObjRef> = page_annots.iter().map(|(page, _)| *page).collect();
     rank_tabs(doc, &pages, &annot_index, &mut out);
     (out, adopted)
 }
@@ -528,16 +556,14 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
 /// field. Tree-listed fields keep their order first; the rest follow in page-annotation order.
 fn adopt_page_fields(
     doc: &Document,
-    pages: &[ObjRef],
+    page_annots: &[(ObjRef, Option<std::sync::Arc<Object>>)],
     base: &Inherited,
     page_of: &std::collections::HashMap<ObjRef, usize>,
     seen: &mut Seen,
     out: &mut Vec<Field>,
 ) {
-    for p in pages {
-        let Some(a) = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
-        let annots = doc.resolve(&a);
-        let Some(annots) = annots.as_array() else { continue };
+    for (_, annots) in page_annots {
+        let Some(annots) = annots.as_deref().and_then(Object::as_array) else { continue };
         for e in annots {
             let Some(r) = e.as_ref() else { continue };
             if seen.fields.contains(&r) || seen.widgets.contains(&r) {
