@@ -303,7 +303,7 @@ fn the_whole_file_time_limit_expires_while_waiting_for_a_slow_page() {
     let mut options = Options::new("unused", "needle");
     options.page_limit = Duration::from_secs(60);
     options.file_limit = Duration::from_millis(50);
-    let read = super::read_pages(Arc::new(long), 1, "needle", &options, 10, &AtomicBool::new(false), &left, None);
+    let read = super::read_pages(Arc::new(long), 1, &options, 10, &AtomicBool::new(false), &left, None);
     assert_eq!(read.skip, Some(Skip::TooSlow));
 }
 
@@ -317,7 +317,7 @@ fn the_whole_search_deadline_expires_while_waiting_for_a_page() {
     options.page_limit = Duration::from_secs(60);
     options.file_limit = Duration::from_secs(60);
     let search_deadline = std::time::Instant::now().checked_add(Duration::from_millis(700));
-    let read = super::read_pages(bytes, 2, "needle", &options, 10, &AtomicBool::new(false), &left, search_deadline);
+    let read = super::read_pages(bytes, 2, &options, 10, &AtomicBool::new(false), &left, search_deadline);
     assert_eq!(read.skip, Some(Skip::TooSlow), "the overall deadline must interrupt a slow page");
     assert!(!read.matches.is_empty(), "matches found before the deadline must be retained");
 }
@@ -413,7 +413,7 @@ fn a_file_the_limit_ended_says_so() {
     let options = Options::new("unused", "needle");
     let bytes = Arc::new(pdf(&["needle needle"]));
     let left = none_left();
-    let read = super::read_pages(bytes, 1, "needle", &options, 1, &AtomicBool::new(false), &left, None);
+    let read = super::read_pages(bytes, 1, &options, 1, &AtomicBool::new(false), &left, None);
     assert!(read.at_limit);
     assert_eq!(read.matches.len(), 1);
     assert_eq!(kept(&left), 1, "its worker may be on a page nobody will read");
@@ -428,7 +428,7 @@ fn cancelling_while_a_file_opens_or_its_pages_are_read_ends_at_once() {
     let left = none_left();
     assert!(matches!(super::open(&file, Duration::from_secs(60), &cancelled, &left), super::Opened::Cancelled));
     assert_eq!(kept(&left), 1, "the thread that was opening it");
-    let read = super::read_pages(Arc::new(bytes), 1, "needle", &Options::new("unused", "needle"), 10, &cancelled, &left, None);
+    let read = super::read_pages(Arc::new(bytes), 1, &Options::new("unused", "needle"), 10, &cancelled, &left, None);
     assert!(read.cancelled);
     assert!(read.matches.is_empty());
     assert_eq!(kept(&left), 2, "and the worker on its page");
@@ -546,7 +546,7 @@ fn a_file_or_a_page_out_of_time_leaves_its_thread_counted() {
     assert_eq!(kept(&left), 1);
     let mut options = Options::new("unused", "needle");
     options.page_limit = PAGE_LIMIT;
-    let read = super::read_pages(Arc::new(slow_pdf("needle")), 2, "needle", &options, 10, &AtomicBool::new(false), &left, None);
+    let read = super::read_pages(Arc::new(slow_pdf("needle")), 2, &options, 10, &AtomicBool::new(false), &left, None);
     assert_eq!(read.skip, Some(Skip::TooSlow));
     assert_eq!(kept(&left), 2);
 }
@@ -558,7 +558,7 @@ fn a_page_out_of_time_gets_one_limit_and_one_thread() {
     let mut options = Options::new("unused", "needle");
     options.page_limit = PAGE_LIMIT;
     let left = none_left();
-    let read = super::read_pages(Arc::new(long), 1, "needle", &options, 10, &AtomicBool::new(false), &left, None);
+    let read = super::read_pages(Arc::new(long), 1, &options, 10, &AtomicBool::new(false), &left, None);
     assert_eq!(read.skip, Some(Skip::TooSlow));
     assert!(super::running(&left) <= 1, "a retry would run beside the stuck thread");
 }
@@ -573,8 +573,8 @@ fn a_read_that_blocks_ends_at_the_time_limit_and_at_stop() {
     let mut options = Options::new(&folder.0, "needle");
     options.open_limit = PAGE_LIMIT;
     let left = none_left();
-    assert_eq!(super::search_file(&pipe, "needle", &options, 10, &AtomicBool::new(false), &left, None).skip, Some(Skip::TooSlow));
-    assert!(super::search_file(&pipe, "needle", &options, 10, &AtomicBool::new(true), &left, None).cancelled);
+    assert_eq!(super::search_file(&pipe, &options, 10, &AtomicBool::new(false), &left, None).skip, Some(Skip::TooSlow));
+    assert!(super::search_file(&pipe, &options, 10, &AtomicBool::new(true), &left, None).cancelled);
     assert_eq!(super::running(&left), 2, "both are still in the read, and counted");
     drop(fs::File::options().write(true).open(&pipe).unwrap());
 }
@@ -630,7 +630,7 @@ fn a_page_that_can_not_be_read_is_counted_and_what_was_read_is_kept() {
     // One page more than the file has: the renderer's answer for it is an error.
     let options = Options::new("unused", "needle");
     let left = none_left();
-    let read = super::read_pages(Arc::new(pdf(&["one", "two needle"])), 3, "needle", &options, 10, &AtomicBool::new(false), &left, None);
+    let read = super::read_pages(Arc::new(pdf(&["one", "two needle"])), 3, &options, 10, &AtomicBool::new(false), &left, None);
     assert_eq!(read.skip, Some(Skip::PagesUnread(1)));
     assert_eq!(read.matches.len(), 1);
     assert_eq!(read.matches[0].page, 1);
@@ -640,7 +640,7 @@ fn a_page_that_can_not_be_read_is_counted_and_what_was_read_is_kept() {
 #[test]
 fn a_file_with_a_page_unread_does_not_count_as_searched() {
     let options = Options::new("unused", "needle");
-    let read = super::read_pages(Arc::new(pdf(&["one"])), 2, "needle", &options, 10, &AtomicBool::new(false), &none_left(), None);
+    let read = super::read_pages(Arc::new(pdf(&["one"])), 2, &options, 10, &AtomicBool::new(false), &none_left(), None);
     assert_eq!(read.skip, Some(Skip::PagesUnread(1)));
     assert!(read.matches.is_empty());
 }
