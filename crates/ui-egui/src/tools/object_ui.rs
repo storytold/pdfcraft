@@ -301,12 +301,11 @@ fn modified_target(session: &mut PageSession, doc: &Document, page: usize, xf: &
     }
 }
 
-/// An area selection begins on `page`: the single selections of the families let go. The sweep itself is the
+/// An area selection begins: the single selections of the families let go. The sweep itself is the
 /// press's span, read from each pass's press phase.
-pub(crate) fn begin_marquee(session: &mut PageSession, page: usize, mods: Mods) {
+pub(crate) fn begin_marquee(session: &mut PageSession, mods: Mods) {
     leave_single(session);
     session.objects.marquee_mods = mods;
-    session.pending_page = Some((page, None));
 }
 
 /// The swept rectangle on screen while the press `phase` drags, whatever it started from.
