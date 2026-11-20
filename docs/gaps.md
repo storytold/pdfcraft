@@ -228,11 +228,13 @@ update the numbers.
 
 ### 10. Signatures: no PKCS #11, timestamp servers or online revocation
 
-- **Missing:** PKCS #11 tokens and smart cards on macOS and Linux; timestamp-server preferences;
-  fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU
-  Trusted Lists; signature graphics and saved appearances; compare signed version; signing in the
-  browser.
-- **Evidence:** `sign.pkcs11`, `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
+- **Missing:** PKCS #11 cards on macOS (the Keychain's CryptoTokenKit path covers PIV/CAC);
+  timestamp-server preferences; fetching OCSP/CRL online for LTV; FieldMDP and locking fields on
+  signing; the OS trust store; EU Trusted Lists; signature graphics and saved appearances;
+  compare signed version; signing in the browser.
+- **Evidence:** `sign.pkcs11` partial (Linux, FreeBSD and Windows through the card's own
+  middleware: an Italian CNS or CIE, a PIV card, any token; SoftHSM2 covers the path, a real card
+  signature is a hardware check), `sign.timestamp-servers`, `sign.field-mdp`, `sign.os-trust`,
   `sign.eutl` planned; `sign.pades-bt`, `sign.ltv`, `sign.ocsp-crl` partial (caller-supplied
   evidence). Users ask for Acrobat-like validation
   ([#824](https://github.com/storytold/pdfcraft/issues/824),
