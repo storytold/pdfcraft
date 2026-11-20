@@ -2367,3 +2367,149 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// A page that draws `content` with the colour spaces `/C4` (ICCBased CMYK) and `/C3` (ICCBased
+/// RGB), the graphics states `/GS0`..`/GS3`, and a form `/Fm` that draws `form`.
+fn overprinting(content: &str, form: &str) -> Document {
+    overprinting_as("C4", content, form)
+}
+
+/// [`overprinting`], with the ICCBased CMYK space under the resource name `cmyk`.
+fn overprinting_as(cmyk: &str, content: &str, form: &str) -> Document {
+    let stream = |d: &str, extra: &str| format!("<< /Length {} {extra} >>\nstream\n{d}\nendstream", d.len());
+    build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ColorSpace << /{cmyk} [/ICCBased 5 0 R] /C3 [/ICCBased 6 0 R] >> /ExtGState << /GS0 << /OP true /op false /OPM 1 >> /GS1 << /OP false /op true /OPM 1 >> /GS2 << /OP true /OPM 1 >> /GS3 << /OP true /op true /OPM 0 >> >> /XObject << /Fm 7 0 R >> >> >>"
+            ),
+            &stream(content, ""),
+            &stream("", "/N 4"),
+            &stream("", "/N 3"),
+            &stream(form, "/Type /XObject /Subtype /Form /BBox [0 0 10 10]"),
+        ],
+        "",
+    )
+}
+
+fn overprint_reported(doc: &Document) -> bool {
+    verify(doc, Level::A2b).iter().any(|i| i.clause == "6.2.4.2")
+}
+
+#[test]
+fn icc_cmyk_painted_with_overprint_mode_1_is_reported_clause_6_2_4_2() {
+    let reported = |content: &str, form: &str| overprint_reported(&overprinting(content, form));
+    // Stroking overprint on, and a stroke in ICCBased CMYK (by `B`, `S`, or text in a stroking mode).
+    assert!(reported("/GS0 gs /C4 CS 0 0 0 1 SC 0 0 10 10 re B", ""));
+    assert!(reported("/GS0 gs /C4 CS 0 0 0 1 SC 0 0 10 10 re S", ""));
+    assert!(reported("/GS0 gs /C4 CS 0 0 0 1 SC BT 1 Tr (x) Tj ET", ""));
+    // Non-stroking overprint on, and a fill in ICCBased CMYK.
+    assert!(reported("/GS1 gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f", ""));
+    assert!(reported("/GS1 gs /C4 cs 0 0 0 1 sc BT (x) Tj ET", ""));
+    // `OP` without `op` sets both.
+    assert!(reported("/GS2 gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f", ""));
+    // A form drawn in that state, and a form that sets it itself.
+    assert!(reported("/GS1 gs /C4 cs /Fm Do", "0 0 10 10 re f"));
+    assert!(reported("/Fm Do", "/GS1 gs /C4 cs 0 0 10 10 re f"));
+
+    // Device CMYK drawn in an ICCBased CMYK `/DefaultCMYK`, by `k` and by `cs`.
+    let defaulted = |content: &str| overprint_reported(&overprinting_as("DefaultCMYK", content, ""));
+    assert!(defaulted("/GS2 gs 0 0 0 1 k 0 0 10 10 re f"));
+    assert!(defaulted("/GS2 gs /DeviceCMYK cs 0 0 0 1 sc 0 0 10 10 re f"));
+    assert!(!defaulted("/GS2 gs 0 0 0 rg 0 0 10 10 re f"));
+
+    // ICCBased RGB, device CMYK, overprinting off for the operation that paints, mode 0.
+    assert!(!reported("/GS2 gs /C3 cs /C3 CS 0 0 10 10 re B", ""));
+    assert!(!reported("/GS2 gs 0 0 0 1 k 0 0 0 1 K 0 0 10 10 re B", ""));
+    assert!(!reported("/GS0 gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f", ""));
+    assert!(!reported("/GS1 gs /C4 CS 0 0 0 1 SC 0 0 10 10 re S", ""));
+    assert!(!reported("/GS3 gs /C4 cs /C4 CS 0 0 10 10 re B", ""));
+    // The state is restored by `Q`; a device colour replaces the space; text in mode 3 paints
+    // nothing; a form that isn't drawn is read from the initial state.
+    assert!(!reported("q /GS2 gs Q /C4 cs 0 0 10 10 re f", ""));
+    assert!(!reported("/GS2 gs /C4 cs 0 0 0 1 k 0 0 10 10 re f", ""));
+    assert!(!reported("/GS2 gs /C4 cs /C4 CS BT 3 Tr (x) Tj ET", ""));
+    assert!(!reported("/GS2 gs /C4 cs", "0 0 10 10 re f"));
+    // Painting before the state is set, and the same bytes in a string.
+    assert!(!reported("/C4 cs 0 0 10 10 re f /GS2 gs", ""));
+    assert!(!reported("/GS2 gs /C4 cs BT 3 Tr (0 0 10 10 re f) Tj ET", ""));
+}
+
+#[test]
+fn icc_cmyk_overprint_is_cited_and_not_fixable() {
+    let issues = verify(&overprinting("/GS2 gs /C4 cs 0 0 10 10 re f", ""), Level::A2b);
+    let found: Vec<&Issue> = issues.iter().filter(|i| i.clause == "6.2.4.2").collect();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].message, "An ICCBased CMYK colour space is painted with overprinting on and overprint mode 1");
+    assert!(!found[0].fixable);
+}
+
+/// A form XObject stream with dictionary entries `extra`, drawing `content`.
+fn form_xobject(content: &str, extra: &str) -> String {
+    format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {extra} /Length {} >>\nstream\n{content}\nendstream", content.len())
+}
+
+/// A graphics state with `/OPM 1` that only a form's own direct `/Resources` hold is still found,
+/// so the document is read.
+#[test]
+fn icc_cmyk_overprint_set_only_in_a_forms_own_resources_is_reported() {
+    let icc = "<< /Length 0 /N 4 >>\nstream\n\nendstream";
+    let form = form_xobject(
+        "/GSF gs /C4 cs 0 0 0 1 sc 0 0 10 10 re f",
+        "/Resources << /ExtGState << /GSF << /OP true /OPM 1 >> >> /ColorSpace << /C4 [/ICCBased 5 0 R] >> >>",
+    );
+    assert!(overprint_reported(&drawing("/Fm Do", "/XObject << /Fm 6 0 R >>", &[icc, &form])));
+    // The same form with mode 0 says nothing.
+    let mode_0 = form.replace("/OPM 1", "/OPM 0");
+    assert!(!overprint_reported(&drawing("/Fm Do", "/XObject << /Fm 6 0 R >>", &[icc, &mode_0])));
+}
+
+/// A form without resources of its own takes each caller's: drawn by two pages in the same state,
+/// it is read with each page's resources, not once for both.
+#[test]
+fn a_form_taking_its_callers_resources_is_read_with_each_callers() {
+    let page = |cs: u32| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /ExtGState << /GS << /OP true /OPM 1 >> >> /ColorSpace << /C [/ICCBased {cs} 0 R] >> /XObject << /Fm 6 0 R >> >> >>"
+        )
+    };
+    let (rgb_page, cmyk_page) = (page(7), page(8));
+    let content = "/Fm Do";
+    let contents = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let form = form_xobject("/GS gs /C cs 0 0 10 10 re f", "");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>",
+        rgb_page.as_str(),
+        cmyk_page.as_str(),
+        contents.as_str(),
+        form.as_str(),
+        "<< /Length 0 /N 3 >>\nstream\n\nendstream",
+        "<< /Length 0 /N 4 >>\nstream\n\nendstream",
+    ];
+    assert!(overprint_reported(&build(&objs, "")));
+}
+
+/// A form first reached at the depth limit, where the forms it draws are not followed, is read
+/// again when the page draws it directly, so the form it draws inherits the page's state.
+#[test]
+fn a_form_first_reached_at_the_depth_limit_is_read_again_less_deeply() {
+    // `/L1` .. `/L15` each draw the next, `/L15` draws `/F`, which is then read at the limit;
+    // `/F` draws `/G`, which fills.
+    let mut extra = vec!["<< /Length 0 /N 4 >>\nstream\n\nendstream".to_string()];
+    let mut names = String::new();
+    for n in 1..=15 {
+        let next = if n == 15 { "F".to_string() } else { format!("L{}", n + 1) };
+        extra.push(form_xobject(&format!("/{next} Do"), ""));
+        names.push_str(&format!("/L{n} {} 0 R ", 5 + n));
+    }
+    extra.push(form_xobject("/G Do", ""));
+    extra.push(form_xobject("0 0 10 10 re f", ""));
+    names.push_str("/F 21 0 R /G 22 0 R");
+    let resources = format!("/ExtGState << /GS << /OP true /OPM 1 >> >> /ColorSpace << /C4 [/ICCBased 5 0 R] >> /XObject << {names} >>");
+    let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+    assert!(overprint_reported(&drawing("/GS gs /C4 cs /L1 Do /F Do", &resources, &extra)));
+    // Drawn only through the chain, `/G` is past the limit and not read in the page's state.
+    assert!(!overprint_reported(&drawing("/GS gs /C4 cs /L1 Do", &resources, &extra)));
+}
