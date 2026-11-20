@@ -153,7 +153,7 @@ impl Automation {
                 .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), javascript, |_, _| {}));
             out.push(match result {
                 Ok(r) => {
-                    let target = crate::batch::publish(&child(&folder, &name), &r.bytes)?;
+                    let target = pdfcraft_engine::batch::publish(&child(&folder, &name), &r.bytes).map_err(failed)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }
                 Err(e) => json!({ "path": p, "error": e }),

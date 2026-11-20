@@ -172,16 +172,94 @@ pub struct OcrProgress {
     pub total: usize,
     pub result: Option<Result<Vec<OcrPage>, String>>,
     pub cancel: bool,
+    /// The remaining-time estimate, kept by the UI.
+    pub eta: Eta,
 }
 
-/// Recognize text in multiple files: files done, total, and the summary once finished. Cancel
-/// is asked for between files: the file in flight finishes, the rest are counted as not run.
+/// Recognize text in multiple files: files done, total, the page being read in the current file,
+/// the summary once finished, and a cancel request.
 #[derive(Default)]
 pub struct BatchProgress {
     pub done: usize,
     pub total: usize,
+    /// The page being read in the current file (0-based) and the file's pages; 0 before its first.
+    pub page: usize,
+    pub pages: usize,
+    /// Pages read in the files finished so far.
+    pub pages_done: usize,
     pub message: Option<String>,
+    /// Stop: the file being read is not written, the ones finished stay.
     pub cancel: bool,
+    /// The remaining-time estimate, kept by the UI.
+    pub eta: Eta,
+}
+
+impl BatchProgress {
+    /// The progress `recognize_file` reports for the current file; `false` once cancelled.
+    pub(crate) fn page(p: &Mutex<BatchProgress>, page: usize, pages: usize) -> bool {
+        p.lock()
+            .map(|mut s| {
+                (s.page, s.pages) = (page, pages);
+                !s.cancel
+            })
+            // A poisoned lock means the UI can't show or cancel anything: carry on.
+            .unwrap_or(true)
+    }
+
+    /// A file is done: its pages count as read.
+    pub(crate) fn file_done(p: &Mutex<BatchProgress>) {
+        if let Ok(mut s) = p.lock() {
+            s.pages_done = s.pages_done.saturating_add(s.pages);
+            (s.page, s.pages) = (0, 0);
+        }
+    }
+
+    /// Pages read so far, and an estimate of the pages left: the current file's rest, and the
+    /// average page count so far for each file still to come.
+    fn pages_read_and_left(&self) -> (f64, f64) {
+        let done = (self.pages_done + self.page) as f64;
+        let files_seen = (self.done + 1) as f64;
+        let average = (self.pages_done + self.pages) as f64 / files_seen;
+        let after = self.total.saturating_sub(self.done + 1) as f64;
+        (done, self.pages.saturating_sub(self.page) as f64 + after * average)
+    }
+}
+
+/// A remaining-time estimate from the pace so far. It is timed with the UI's clock (egui's input
+/// time, which the web build has too) from the first time it is asked, so the time the models
+/// take to load doesn't count.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Eta {
+    start: Option<(f64, f64)>,
+}
+
+impl Eta {
+    /// Seconds left for `left` more units, `done` units being done at `now`. `None` until at least
+    /// one unit and three seconds have passed since the first call: too early to say.
+    pub fn update(&mut self, now: f64, done: f64, left: f64) -> Option<f64> {
+        let (t0, d0) = *self.start.get_or_insert((now, done));
+        let (elapsed, units) = (now - t0, done - d0);
+        // NaN.max(0.0) is 0.0: check the count first, or a bad one reads as "almost done".
+        if !left.is_finite() {
+            return None;
+        }
+        let secs = elapsed / units * left.max(0.0);
+        (elapsed >= 3.0 && units >= 1.0 && secs.is_finite()).then_some(secs)
+    }
+}
+
+/// "less than a minute left", "about 6 min left", "about 2 h 5 min left".
+pub(crate) fn eta_text(secs: f64) -> String {
+    if !secs.is_finite() || secs < 60.0 {
+        return tl!("less than a minute left").to_string();
+    }
+    // Saturating: a nonsense estimate shows a long time rather than wrapping.
+    let mins = (secs / 60.0).ceil().min(f64::from(u32::MAX)) as u64;
+    if mins < 120 {
+        crate::i18n::fmt(tl!("about {n} min left"), &[("n", &mins.to_string())])
+    } else {
+        crate::i18n::fmt(tl!("about {h} h {m} min left"), &[("h", &(mins / 60).to_string()), ("m", &(mins % 60).to_string())])
+    }
 }
 
 /// A page Edit should read now (see [`PdfCraftApp::scan_to_read`]).
@@ -280,83 +358,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     ui.add_enabled(on, egui::DragValue::new(&mut d.to).range(1..=pages));
                 });
             });
-            group(ui, "Settings", &mut |ui| {
-                egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label(tl!("Document language"));
-                    let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
-                        for (code, name) in LANGUAGES {
-                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
-                        }
-                    });
-                    ui.end_row();
-                    ui.label(tl!("Engine"));
-                    let engine_name = match d.engine {
-                        EngineChoice::Auto => tl!("Automatic"),
-                        EngineChoice::Ocrs => tl!("Built-in"),
-                        EngineChoice::Tesseract => tl!("Tesseract"),
-                    };
-                    craft_ui::ComboBox::from_id_salt("ocr-engine").selected_text(engine_name).width(220.0).show_ui(ui, |ui| {
-                        let choices: [(EngineChoice, &str); 3] =
-                            [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
-                        for (choice, name) in choices {
-                            ui.selectable_value(&mut d.engine, choice, tl!(name));
-                        }
-                    });
-                    ui.end_row();
-                    ui.label(tl!("Combine engines"));
-                    let strategy_name = match d.strategy {
-                        MergeStrategy::PrimaryOnly => tl!("Primary only"),
-                        MergeStrategy::ConfidenceWeighted => tl!("Confidence weighted"),
-                        MergeStrategy::RoverVote => tl!("ROVER vote"),
-                    };
-                    craft_ui::ComboBox::from_id_salt("ocr-strategy").selected_text(strategy_name).width(220.0).show_ui(ui, |ui| {
-                        let choices: [(MergeStrategy, &str); 3] = [
-                            (MergeStrategy::PrimaryOnly, "Primary only"),
-                            (MergeStrategy::ConfidenceWeighted, "Confidence weighted"),
-                            (MergeStrategy::RoverVote, "ROVER vote"),
-                        ];
-                        for (choice, name) in choices {
-                            ui.selectable_value(&mut d.strategy, choice, tl!(name));
-                        }
-                    });
-                    ui.end_row();
-                    ui.label(tl!("Output"));
-                    let mode_name = match d.output_mode {
-                        OutputMode::Searchable => tl!("Searchable Image (Exact)"),
-                        OutputMode::EditableText => tl!("Editable text"),
-                    };
-                    craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
-                        let s = ui
-                            .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
-                            .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
-                        if s.clicked() {
-                            d.output_mode = OutputMode::Searchable;
-                        }
-                        let e = ui
-                            .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
-                            .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
-                        if e.clicked() {
-                            d.output_mode = OutputMode::EditableText;
-                        }
-                    });
-                    ui.end_row();
-                    ui.label(tl!("Downsample to"));
-                    craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
-                        for v in [600, 300, 150, 72] {
-                            ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
-                        }
-                    });
-                    ui.end_row();
-                });
-                ui.add_space(4.0);
-                ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
-                    .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
-                ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
-                ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
-                ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
-                ui.add(crate::widgets::checkbox(&mut d.binarize, tl!("Black and white (binarize)")));
-            });
+            group(ui, "Settings", &mut |ui| settings_fields(ui, d));
             group(ui, "Skip", &mut |ui| {
                 ui.add(crate::widgets::checkbox(&mut d.skip_text_pages, tl!("Skip pages that already have text")))
                     .on_hover_text(tl!("Pages with renderable text are left alone and reported as skipped"));
@@ -434,6 +436,94 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         })
     });
     (go, cancel)
+}
+
+/// The recognition settings both Recognize Text dialogs show: the document language, the output,/// the engines behind it, the resolution pages are read at and which pages and files are left
+/// alone.
+pub(crate) fn settings_fields(ui: &mut egui::Ui, d: &mut OcrDraft) {
+    settings_fields_with(ui, d, true);
+}
+
+/// [`settings_fields`], with or without the Output choice: a flow that can only write a searchable
+/// image (the folder batch) leaves it out rather than offer what it would not produce.
+pub(crate) fn settings_fields_with(ui: &mut egui::Ui, d: &mut OcrDraft, output_choice: bool) {
+    egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label(tl!("Document language"));
+        let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
+        craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
+            for (code, name) in LANGUAGES {
+                ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Engine"));
+        let engine_name = match d.engine {
+            EngineChoice::Auto => tl!("Automatic"),
+            EngineChoice::Ocrs => tl!("Built-in"),
+            EngineChoice::Tesseract => tl!("Tesseract"),
+        };
+        craft_ui::ComboBox::from_id_salt("ocr-engine").selected_text(engine_name).width(220.0).show_ui(ui, |ui| {
+            let choices: [(EngineChoice, &str); 3] =
+                [(EngineChoice::Auto, "Automatic"), (EngineChoice::Ocrs, "Built-in"), (EngineChoice::Tesseract, "Tesseract")];
+            for (choice, name) in choices {
+                ui.selectable_value(&mut d.engine, choice, tl!(name));
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Combine engines"));
+        let strategy_name = match d.strategy {
+            MergeStrategy::PrimaryOnly => tl!("Primary only"),
+            MergeStrategy::ConfidenceWeighted => tl!("Confidence weighted"),
+            MergeStrategy::RoverVote => tl!("ROVER vote"),
+        };
+        craft_ui::ComboBox::from_id_salt("ocr-strategy").selected_text(strategy_name).width(220.0).show_ui(ui, |ui| {
+            let choices: [(MergeStrategy, &str); 3] = [
+                (MergeStrategy::PrimaryOnly, "Primary only"),
+                (MergeStrategy::ConfidenceWeighted, "Confidence weighted"),
+                (MergeStrategy::RoverVote, "ROVER vote"),
+            ];
+            for (choice, name) in choices {
+                ui.selectable_value(&mut d.strategy, choice, tl!(name));
+            }
+        });
+        ui.end_row();
+        if output_choice {
+            ui.label(tl!("Output"));
+            let mode_name = match d.output_mode {
+                OutputMode::Searchable => tl!("Searchable Image (Exact)"),
+                OutputMode::EditableText => tl!("Editable text"),
+            };
+            craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
+                let s = ui
+                    .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
+                    .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
+                if s.clicked() {
+                    d.output_mode = OutputMode::Searchable;
+                }
+                let e = ui
+                    .selectable_label(d.output_mode == OutputMode::EditableText, tl!("Editable text"))
+                    .on_hover_text(tl!("Writes a new document of visible text; the scan is not changed"));
+                if e.clicked() {
+                    d.output_mode = OutputMode::EditableText;
+                }
+            });
+            ui.end_row();
+        }
+        ui.label(tl!("Downsample to"));
+        craft_ui::ComboBox::from_id_salt("ocr-dpi").selected_text(format!("{} dpi", d.dpi)).width(220.0).show_ui(ui, |ui| {
+            for v in [600, 300, 150, 72] {
+                ui.selectable_value(&mut d.dpi, v, format!("{v} dpi"));
+            }
+        });
+        ui.end_row();
+    });
+    ui.add_space(4.0);
+    ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
+        .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
+    ui.add(crate::widgets::checkbox(&mut d.auto_rotate, tl!("Straighten pages scanned sideways or upside down")));
+    ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
+    ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
+    ui.add(crate::widgets::checkbox(&mut d.binarize, tl!("Black and white (binarize)")));
 }
 
 impl PdfCraftApp {
@@ -615,7 +705,7 @@ impl PdfCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work), |s, e| s.result = Some(Err(e)));
         }
         self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
         self.poll_ocr();
@@ -763,9 +853,7 @@ impl PdfCraftApp {
         let javascript = self.session.javascript();
         let work = move || {
             crate::i18n::set_current(lang);
-            let write = move |name: &str, r: &pdfcraft_engine::ocr::FileResult| {
-                crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())
-            };
+            let write = move |name: &str, r: &pdfcraft_engine::ocr::FileResult| publish_copy(&dir, name, &r.bytes);
             // A panic in the recognizer still ends the batch with a summary (#3919).
             let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, javascript, &p, write))
                 .unwrap_or_else(|panic| failed(&panic));
@@ -777,7 +865,7 @@ impl PdfCraftApp {
         if self.run_inline {
             work();
         } else {
-            std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work).ok();
+            unstarted(&progress, std::thread::Builder::new().name("pdfcraft-ocr-files".into()).spawn(work), |s, e| s.message = Some(e));
         }
         self.ocr_batch = Some(progress);
         self.poll_ocr();
@@ -793,12 +881,42 @@ impl PdfCraftApp {
         }
     }
 
-    /// Stop a running recognition (the pages read so far are kept).
+    /// Stop a running recognition: in a document the pages read so far are kept; in files and
+    /// folders the file being read is not written, and the ones finished stay.
     pub fn cancel_ocr(&mut self) {
         if let Some(r) = &self.ocr_run
             && let Ok(mut s) = r.progress.lock()
         {
             s.cancel = true;
+        }
+        if let Some(b) = &self.ocr_batch
+            && let Ok(mut s) = b.lock()
+        {
+            s.cancel = true;
+        }
+    }
+
+    /// The UI clock, for the remaining-time estimate.
+    fn now(&self) -> f64 {
+        self.ctx.as_ref().map_or(0.0, |ctx| ctx.input(|i| i.time))
+    }
+
+    /// Show `label` in the progress card, with Cancel, unless a cancel is under way.
+    fn ocr_notice(&mut self, label: String, detail: Option<String>, fraction: f32, cancelling: bool) {
+        let label = if cancelling { tl!("Cancelling…").to_string() } else { label };
+        self.progress_notice = Some(crate::widgets::ProgressNotice {
+            label,
+            detail: if cancelling { None } else { detail },
+            fraction,
+            cancellable: !cancelling,
+            job: crate::widgets::ProgressJob::Ocr,
+        });
+    }
+
+    /// Take the progress card down if it is this job's.
+    fn clear_ocr_notice(&mut self) {
+        if self.progress_notice.as_ref().is_some_and(|p| p.job == crate::widgets::ProgressJob::Ocr) {
+            self.progress_notice = None;
         }
     }
 
@@ -871,20 +989,39 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         self.pump_web_ocr();
         if let Some(b) = self.ocr_batch.clone() {
-            let msg = b.lock().map(|mut s| s.message.take().ok_or((s.done, s.total))).map_err(|e| e.to_string());
-            match msg {
+            let now = self.now();
+            let state = b
+                .lock()
+                .map(|mut s| match s.message.take() {
+                    Some(m) => Ok(m),
+                    None => {
+                        let (read, left) = s.pages_read_and_left();
+                        let eta = if s.pages > 0 { s.eta.update(now, read, left) } else { None };
+                        Err((s.done, s.total, s.page, s.pages, s.cancel, eta))
+                    }
+                })
+                .map_err(|e| e.to_string());
+            match state {
                 Ok(Ok(m)) => {
                     self.ocr_batch = None;
+                    self.clear_ocr_notice();
                     self.notify(m);
                 }
-                Ok(Err((done, total))) => {
-                    let m = crate::i18n::fmt(
+                Ok(Err((done, total, page, pages, cancelling, eta))) => {
+                    let total = total.max(1);
+                    let label = crate::i18n::fmt(
                         tl!("Recognizing text… file {d} of {t}"),
-                        &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+                        &[("d", &(done + 1).min(total).to_string()), ("t", &total.to_string())],
                     );
-                    if self.toast.as_ref().is_none_or(|t| t.0 != m) {
-                        self.notify(m);
+                    let mut detail = Vec::new();
+                    if pages > 0 {
+                        detail
+                            .push(crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(page + 1).min(pages).to_string()), ("n", &pages.to_string())]));
                     }
+                    detail.extend(eta.map(eta_text));
+                    let within = if pages > 0 { page as f32 / pages as f32 } else { 0.0 };
+                    let fraction = (done as f32 + within) / total as f32;
+                    self.ocr_notice(label, (!detail.is_empty()).then(|| detail.join(" · ")), fraction, cancelling);
                     if let Some(ctx) = &self.ctx {
                         ctx.request_repaint_after(std::time::Duration::from_millis(200));
                     }
@@ -892,10 +1029,12 @@ impl PdfCraftApp {
                 // The worker stopped while holding the lock: it will never report back (#3919).
                 Err(e) => {
                     self.ocr_batch = None;
+                    self.clear_ocr_notice();
                     self.notify(failed(&e));
                 }
             }
         }
+        let now = self.now();
         let Some(run) = self.ocr_run.as_ref() else { return };
         let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
         let automatic = auto.is_some();
@@ -905,6 +1044,7 @@ impl PdfCraftApp {
                 // As above: without this the run never clears and refuses every later one.
                 let e = e.to_string();
                 self.ocr_run = None;
+                self.clear_ocr_notice();
                 self.notify(failed(&e));
                 return;
             }
@@ -920,13 +1060,15 @@ impl PdfCraftApp {
             return;
         }
         let Some(result) = s.result.take() else {
-            let msg = crate::i18n::fmt(
-                tl!("Recognizing text… page {d} of {t}"),
-                &[("d", &(s.done + 1).min(s.total.max(1)).to_string()), ("t", &s.total.max(1).to_string())],
-            );
+            let total = s.total.max(1);
+            let label =
+                crate::i18n::fmt(tl!("Recognizing text… page {d} of {t}"), &[("d", &(s.done + 1).min(total).to_string()), ("t", &total.to_string())]);
+            let (done, cancelling) = (s.done, s.cancel);
+            let eta = s.eta.update(now, done as f64, total.saturating_sub(done) as f64);
             drop(s);
-            if !automatic && self.toast.as_ref().is_none_or(|t| t.0 != msg) {
-                self.notify(msg);
+            // A run Edit started shows nothing.
+            if !automatic {
+                self.ocr_notice(label, eta.map(eta_text), done as f32 / total as f32, cancelling);
             }
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint_after(std::time::Duration::from_millis(200));
@@ -935,6 +1077,9 @@ impl PdfCraftApp {
         };
         drop(s);
         self.ocr_run = None;
+        if !automatic {
+            self.clear_ocr_notice();
+        }
         // The result is for the bytes the run started from. If the document has changed since (a
         // page deleted or moved, say) its page index may now name another page: drop it, and let
         // the page in view be judged again.
@@ -1029,7 +1174,18 @@ pub(crate) fn run_batch_files(
         if let Ok(mut s) = progress.lock() {
             s.done = i;
         }
-        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, javascript, |_, _| true);
+        // A file stopped partway is not written: it would look recognized and isn't.
+        let mut stopped = false;
+        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, javascript, |page, pages| {
+            let go = BatchProgress::page(progress, page, pages);
+            stopped |= !go;
+            go
+        });
+        if stopped {
+            not_run = Some(total - i);
+            break;
+        }
+        BatchProgress::file_done(progress);
         match r {
             Ok(res) if res.skipped() => skipped += 1,
             Ok(res) => match write(&name, &res) {
@@ -1081,6 +1237,30 @@ fn batch_summary(ok: usize, words: usize, skipped: usize, failed: &[String], not
 }
 
 /// "Recognize text failed: {e}", in the current language.
+/// No worker thread: end the run with the failure, written into its progress by `report`,
+/// instead of waiting for a result that never comes and refusing every later run (#1819).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn unstarted<P, T>(p: &Mutex<P>, spawned: std::io::Result<T>, report: impl FnOnce(&mut P, String)) {
+    if let Err(e) = spawned
+        && let Ok(mut s) = p.lock()
+    {
+        report(&mut s, failed(&e.to_string()));
+    }
+}
+
+/// The last part of a file's name, so a name with folders in it still lands in the chosen folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn file_name(name: &str) -> &std::ffi::OsStr {
+    std::path::Path::new(name).file_name().unwrap_or(std::ffi::OsStr::new("document.pdf"))
+}
+
+/// Where a batch's searchable copy goes: `dir`, under the file's own name, and a number when that
+/// name is taken — a copy never replaces a file the folder already has (#1795).
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_copy(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    pdfcraft_engine::batch::publish(&dir.join(file_name(name)), bytes).map(|_| ())
+}
+
 fn failed(e: &str) -> String {
     crate::i18n::fmt(tl!("{label} failed: {e}"), &[("label", tl!("Recognize text")), ("e", e)])
 }
@@ -1111,6 +1291,42 @@ mod tests {
         app.open_bytes("doc.pdf", None, pdf).unwrap();
         app.quick_tool = QuickTool::EditText;
         app
+    }
+
+    /// #1819: a recognition whose worker can't start ends with the reason, so the next one isn't
+    /// refused as already running.
+    #[test]
+    fn a_recognition_whose_worker_cannot_start_ends() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = app_with(scan());
+        let doc = app.active_ids().unwrap().1;
+        let progress = Arc::new(Mutex::new(OcrProgress::default()));
+        unstarted(&progress, Ok(()), |s: &mut OcrProgress, e| s.result = Some(Err(e)));
+        assert!(progress.lock().unwrap().result.is_none());
+        unstarted::<_, ()>(&progress, Err(std::io::Error::other("no threads left")), |s, e| s.result = Some(Err(e)));
+        let guard = app.session.ocr_guard(doc).unwrap();
+        app.ocr_run = Some(OcrRun { doc, progress, guard, automatic: None, editable: false });
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run ended");
+        assert_eq!(app.toast.clone().unwrap().0, "Recognize text failed: no threads left");
+        let batch = Arc::new(Mutex::new(BatchProgress::default()));
+        unstarted::<_, ()>(&batch, Err(std::io::Error::other("no threads left")), |s, e| s.message = Some(e));
+        app.ocr_batch = Some(batch);
+        app.poll_ocr();
+        assert!(app.ocr_batch.is_none(), "the batch ended");
+    }
+
+    /// #1795: a searchable copy never replaces a file the folder already has, nor leaves it.
+    #[test]
+    fn recognized_files_keep_the_files_already_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("scan.pdf"), b"keep me").unwrap();
+        publish_copy(dir.path(), "scan.pdf", b"new").unwrap();
+        assert_eq!(std::fs::read(dir.path().join("scan.pdf")).unwrap(), b"keep me");
+        assert!(dir.path().join("scan (2).pdf").exists());
+        publish_copy(dir.path(), "../up.pdf", b"new").unwrap();
+        assert!(dir.path().join("up.pdf").exists(), "a name with a folder in it stays in the folder");
+        assert!(!dir.path().parent().unwrap().join("up.pdf").exists());
     }
 
     fn found(app: &mut PdfCraftApp) -> Option<usize> {
@@ -1198,7 +1414,7 @@ mod tests {
         let finished = |app: &PdfCraftApp, automatic: bool| {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
             let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None, notes: Vec::new() };
-            let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+            let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), ..Default::default() }));
             let guard = app.session.ocr_guard(app.active_ids().unwrap().1).unwrap();
             OcrRun {
                 doc: app.active_ids().unwrap().1,
@@ -1253,7 +1469,7 @@ mod tests {
             skipped: None,
             notes: Vec::new(),
         };
-        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), ..Default::default() }));
         let guard = app.session.ocr_guard(id).unwrap();
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
         app.views[0].auto_ocr_tried.insert(0);
@@ -1501,7 +1717,7 @@ mod tests {
             source: "fake".into(),
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
-        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), ..Default::default() }));
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
@@ -1537,7 +1753,7 @@ mod tests {
             notes: vec!["3 characters had no font that could show them and appear as ? in the output".into()],
         };
         let guard = app.session.ocr_guard(id).unwrap();
-        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), ..Default::default() }));
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
         app.poll_ocr();
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -1563,7 +1779,7 @@ mod tests {
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
         let guard = app.session.ocr_guard(id).unwrap();
-        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
+        let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), ..Default::default() }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
         app.poll_ocr();
@@ -1571,5 +1787,65 @@ mod tests {
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");
         assert!(app.ocr_verify.open, "the review opens, to accept as an editable document");
         assert_eq!(app.ocr_verify.phase, crate::workflows::ocr_verify::Phase::ReviewReady);
+    }
+
+    #[test]
+    fn the_estimate_waits_for_a_page_and_three_seconds_then_follows_the_pace() {
+        let mut eta = Eta::default();
+        assert_eq!(eta.update(10.0, 0.0, 10.0), None, "the first look only starts the clock");
+        assert_eq!(eta.update(12.0, 1.0, 9.0), None, "two seconds is too early to say");
+        assert_eq!(eta.update(14.0, 1.0, 9.0), Some(36.0), "4 s for 1 page, 9 to go");
+        assert_eq!(eta.update(20.0, 5.0, 5.0), Some(10.0), "10 s for 5 pages, 5 to go");
+        assert_eq!(eta.update(30.0, 5.0, f64::NAN), None, "no nonsense from a bad count");
+    }
+
+    #[test]
+    fn the_estimate_reads_in_minutes_and_hours() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        assert_eq!(eta_text(20.0), "less than a minute left");
+        assert_eq!(eta_text(61.0), "about 2 min left");
+        assert_eq!(eta_text(119.0 * 60.0), "about 119 min left");
+        assert_eq!(eta_text(125.0 * 60.0), "about 2 h 5 min left");
+        assert_eq!(eta_text(f64::INFINITY), "less than a minute left");
+        assert!(eta_text(1e30).ends_with("min left"), "a huge estimate doesn't wrap or panic");
+    }
+
+    #[test]
+    fn files_still_to_come_are_estimated_at_the_average_so_far() {
+        // File 3 of 5 at page 2 of 10, after two files of 4 and 6 pages.
+        let p = BatchProgress { done: 2, total: 5, page: 2, pages: 10, pages_done: 10, ..Default::default() };
+        let (read, left) = p.pages_read_and_left();
+        assert_eq!(read, 12.0);
+        // 8 more in this file, and two files at (10 + 10) / 3 pages.
+        assert!((left - (8.0 + 2.0 * 20.0 / 3.0)).abs() < 1e-9, "{left}");
+    }
+
+    /// The progress card of a batch: file, page and Cancel; Cancel asks the worker to stop and
+    /// the card says so until it has.
+    #[test]
+    fn a_batch_shows_its_file_and_page_and_cancel_stops_it() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let batch = Arc::new(Mutex::new(BatchProgress { done: 1, total: 4, page: 2, pages: 10, pages_done: 7, ..Default::default() }));
+        let worker = batch.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.ocr_batch = Some(batch);
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("Recognizing text… file 2 of 4");
+        h.get_by_label_contains("Page 3 of 10");
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(worker.lock().unwrap().cancel, "the worker is told to stop");
+        h.get_by_label("Cancelling…");
+        assert!(h.query_by_label("Cancel").is_none(), "no second Cancel while it stops");
+        // The worker finishes with its summary: the card goes and the summary shows.
+        worker.lock().unwrap().message = Some("Text recognition cancelled. Recognized 9 words in 1 file".into());
+        h.run_steps(3);
+        assert!(h.state().ocr_batch.is_none() && h.state().progress_notice.is_none());
+        assert!(h.state().toast.as_ref().is_some_and(|t| t.0.starts_with("Text recognition cancelled.")));
     }
 }

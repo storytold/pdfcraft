@@ -14,6 +14,9 @@
 
 pub mod actions;
 pub mod autotag;
+/// Folder jobs (finding the files, running the steps, publishing without replacing). The web build
+/// compiles it for the automation tools, but has no folders to run it on.
+pub mod batch;
 mod bookmarks;
 pub mod build_info;
 pub mod camera;

@@ -202,6 +202,8 @@ use workflows::create_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
+#[cfg(not(target_arch = "wasm32"))]
+use workflows::ocr_batch_ui;
 #[cfg(target_arch = "wasm32")]
 use workflows::ocr_route;
 use workflows::ocr_ui;
@@ -639,6 +641,9 @@ pub struct PdfCraftApp {
     ocr_web_waiting: Option<ocr_ui::WaitingFiles>,
     /// Scan & OCR ▸ Correct recognized text: the OCR Verify screen (its state, never persisted).
     pub ocr_verify: ocr_verify::OcrVerify,
+    /// Recognize text in multiple files: the files and folders, and where the results go.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub ocr_batch_draft: ocr_batch_ui::OcrBatchDraft,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Frames in a row whose logic or drawing panicked, and whether this frame's did

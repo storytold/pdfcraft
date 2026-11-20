@@ -239,6 +239,8 @@ impl PdfCraftApp {
             #[cfg(target_arch = "wasm32")]
             ocr_web_waiting: None,
             ocr_verify: ocr_verify::OcrVerify::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ocr_batch_draft: Default::default(),
             run_inline: false,
             panicking_frames: 0,
             frame_panicked: false,

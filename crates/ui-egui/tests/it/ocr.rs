@@ -506,3 +506,99 @@ fn recognize_text_keeps_its_buttons_in_a_short_window() {
         assert!(h.state().dialog.is_none(), "{height}: Cancel closes the dialog");
     }
 }
+
+/// The batch dialog follows the same shape (#4866 review): in a short window its cards scroll
+/// and the Recognize text / Cancel row stays in reach, at every window height.
+#[test]
+fn recognize_text_in_multiple_files_keeps_its_buttons_in_a_short_window() {
+    use egui::accesskit::Role;
+    let width = 640.0;
+    for height in [173.0, 208.0, 260.0, 400.0, 480.0, 560.0, 700.0, 900.0, 1100.0] {
+        let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("ocr.recognize_batch"));
+        h.run_steps(6);
+        let on_screen = |r: egui::Rect| r.min.x >= 0.0 && r.max.x <= width && r.min.y >= 0.0 && r.max.y <= height;
+        let title = h.get_by(|n| n.role() == Role::Label && n.value().as_deref().is_some_and(|v| v.starts_with("Recognize text in multiple"))).rect();
+        let run = h.get_by_role_and_label(Role::Button, "Recognize text").rect();
+        let cancel = h.get_by_role_and_label(Role::Button, "Cancel").rect();
+        assert!(on_screen(title), "{height}: the title at {title:?} is off the window");
+        assert!(on_screen(run), "{height}: Recognize text at {run:?} is off the window");
+        assert!(on_screen(cancel), "{height}: Cancel at {cancel:?} is off the window");
+        // The last card scrolls in between the title and the buttons, which do not move.
+        h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Settings")).scroll_to_me();
+        h.run_steps(4);
+        let last = h.get_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("Settings")).rect();
+        assert!(last.min.y >= title.max.y && last.max.y <= run.min.y, "{height}: Settings {last:?} between {title:?} and {run:?}");
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Recognize text").rect(), run, "{height}: the buttons stay put");
+        // On screen is not enough: a click reaches Cancel and closes the dialog.
+        h.get_by_role_and_label(Role::Button, "Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none(), "{height}: Cancel closes the dialog");
+    }
+}
+/// Recognize text in multiple files takes folders too: their subfolders when asked, the folder
+/// tree kept in the output folder, the originals unchanged, a name the output folder already has
+/// kept with the new file numbered, and files that aren't PDFs counted as skipped.
+#[test]
+fn recognize_text_in_files_and_folders_keeps_the_originals_and_the_folder_tree() {
+    use egui::accesskit::Role;
+    let dir = tempfile::tempdir().unwrap();
+    let (scans, out) = (dir.path().join("scans"), dir.path().join("out"));
+    std::fs::create_dir_all(scans.join("2025")).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    // One scan for every file: scan() is stamped with the time it was made.
+    let original = scan();
+    for path in [scans.join("a.pdf"), scans.join("2025/b.pdf"), dir.path().join("loose.pdf")] {
+        std::fs::write(path, &original).unwrap();
+    }
+    std::fs::write(scans.join("notes.txt"), "not a PDF").unwrap();
+    std::fs::write(out.join("a.pdf"), "keep me").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize_batch"));
+    h.run_steps(2);
+    h.get_by_label("Add files or folders to recognize.");
+    h.get_by_label("Add folder…");
+    let start_enabled = |h: &Harness<'static, PdfCraftApp>| {
+        h.query_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("Recognize text") && !n.is_disabled()).is_some()
+    };
+    assert!(!start_enabled(&h), "nothing to read yet");
+    // The native pickers can't run headless: fill the list as they would.
+    h.state_mut().ocr_batch_draft.add([scans.clone(), dir.path().join("loose.pdf")]);
+    h.state_mut().ocr_batch_draft.out_dir = Some(scans.clone());
+    h.run_steps(2);
+    h.get_by_label("The output folder can't be one of the folders being read, or contain one.");
+    assert!(!start_enabled(&h), "the results would land among the originals");
+    h.state_mut().ocr_batch_draft.out_dir = Some(out.clone());
+    h.get_by_role_and_label(Role::CheckBox, "Include subfolders").click();
+    h.run_steps(2);
+    assert!(h.state().ocr_batch_draft.recursive);
+    if !pdfcraft_engine::ocr::available() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    assert!(start_enabled(&h));
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_batch.is_none(), "finished");
+    assert!(h.state().dialog.is_none(), "the dialog closed");
+    let toast = h.state().toast.clone().unwrap().0;
+    assert!(toast.starts_with("Recognized ") && toast.contains("in 3 files; skipped: 1"), "{toast}");
+    assert_eq!(std::fs::read(out.join("a.pdf")).unwrap(), b"keep me", "an existing file is never replaced");
+    for written in [out.join("a (2).pdf"), out.join("2025/b.pdf"), out.join("loose.pdf")] {
+        assert!(std::fs::read(&written).unwrap().len() > original.len(), "{} has its text layer", written.display());
+    }
+    for source in [scans.join("a.pdf"), scans.join("2025/b.pdf"), dir.path().join("loose.pdf")] {
+        assert!(std::fs::read(&source).unwrap() == original, "{} is unchanged", source.display());
+    }
+}
