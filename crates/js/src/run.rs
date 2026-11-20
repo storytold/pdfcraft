@@ -1,8 +1,9 @@
 use super::globals::{event_object, install};
-use super::host::{Host, Shared, host, text};
+use super::host::{Host, Shared, arg, error, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
 use super::{
-    Arc, BTreeSet, Context, HostHooks, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell, Source, js_string,
+    Arc, BTreeSet, Context, FunctionObjectBuilder, HostHooks, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell,
+    Source, js_string, xfa,
 };
 
 /// Longest script, in bytes.
@@ -17,6 +18,20 @@ pub(crate) const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
 /// Longest array read item by item (`resetForm`, a field's `value` or colours). A sparse array's
 /// length costs the script nothing but the host one string per item; real lists are tiny.
 pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
+
+/// Longest string converted to the host or built by `repeat` / `padStart` / `padEnd` / `join`, in
+/// UTF-16 code units.
+pub(crate) const MAX_STRING_UNITS: usize = 64 << 20;
+/// Most string bytes copied into a host collection (`strings()`, `alerts`, `console`, `requests`).
+pub const MAX_HOST_BYTES: usize = 1 << 20;
+/// Most alerts one script run may record.
+pub const MAX_ALERTS: usize = xfa::MAX_ALERTS;
+/// Most console lines one script run may record.
+pub const MAX_CONSOLE: usize = xfa::MAX_CONSOLE;
+/// Most viewer requests one script run may record.
+pub const MAX_REQUESTS: usize = 1_000;
+/// Largest `ArrayBuffer` or `SharedArrayBuffer` a script may allocate, in bytes.
+const MAX_BUFFER_BYTES: u64 = 16 << 20;
 
 /// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
 pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
@@ -165,6 +180,10 @@ impl HostHooks for NoCodeFromStrings {
     fn ensure_can_compile_strings(&self, _: Realm, _: &[JsString], _: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
         Err(JsNativeError::typ().with_message("scripts can't compile code from strings (eval, Function)").into())
     }
+
+    fn max_buffer_size(&self, _context: &mut Context) -> u64 {
+        MAX_BUFFER_BYTES
+    }
 }
 
 /// Host hooks that hold code compiled from strings to the checks a script passes ([`refuse`]),
@@ -177,15 +196,171 @@ impl HostHooks for CheckedCodeFromStrings {
         if units > MAX_SCRIPT_BYTES {
             return Err(JsNativeError::range().with_message("the code is too long to compile").into());
         }
+        let mut total_bytes = 0usize;
+        let mut params = Vec::with_capacity(parameters.len());
+        for p in parameters {
+            let s = p.to_std_string_lossy();
+            total_bytes = total_bytes.saturating_add(s.len());
+            if total_bytes > MAX_SCRIPT_BYTES {
+                return Err(JsNativeError::range().with_message("the code is too long to compile").into());
+            }
+            if let Some(why) = refuse(&s) {
+                return Err(JsNativeError::range().with_message(why).into());
+            }
+            params.push(s);
+        }
+        let body_str = body.to_std_string_lossy();
+        total_bytes = total_bytes.saturating_add(body_str.len());
+        if total_bytes > MAX_SCRIPT_BYTES {
+            return Err(JsNativeError::range().with_message("the code is too long to compile").into());
+        }
+        if let Some(why) = refuse(&body_str) {
+            return Err(JsNativeError::range().with_message(why).into());
+        }
         // As one text: brackets left open in one parameter carry into the next.
-        let mut source = parameters.iter().map(JsString::to_std_string_lossy).collect::<Vec<_>>().join(",");
+        let mut source = params.join(",");
         source.push('\n');
-        source.push_str(&body.to_std_string_lossy());
+        source.push_str(&body_str);
         match refuse(&source) {
             Some(why) => Err(JsNativeError::range().with_message(why).into()),
             None => Ok(()),
         }
     }
+
+    fn max_buffer_size(&self, _context: &mut Context) -> u64 {
+        MAX_BUFFER_BYTES
+    }
+}
+
+fn string_repeat(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if this.is_null_or_undefined() {
+        return Err(error("String.prototype.repeat called on null or undefined"));
+    }
+    let s = this.to_string(ctx)?;
+    let n = arg(args, 0).to_number(ctx)?;
+    if n < 0.0 || n.is_infinite() {
+        return Err(JsNativeError::range().with_message("repeat count must be non-negative and finite").into());
+    }
+    let count = if n.is_nan() { 0usize } else { n.trunc() as usize };
+    if count == 0 || s.is_empty() {
+        return Ok(js_string!().into());
+    }
+    let total = s.len().checked_mul(count).ok_or_else(|| JsNativeError::range().with_message(format!("string length exceeds {MAX_STRING_UNITS}")))?;
+    if total > MAX_STRING_UNITS {
+        return Err(JsNativeError::range().with_message(format!("string length exceeds {MAX_STRING_UNITS}")).into());
+    }
+    let unit_vec: Vec<u16> = s.iter().collect();
+    let mut out = Vec::with_capacity(total);
+    for _ in 0..count {
+        out.extend_from_slice(&unit_vec);
+    }
+    Ok(JsString::from(&out[..]).into())
+}
+
+fn string_pad(this: &JsValue, args: &[JsValue], start: bool, ctx: &mut Context) -> JsResult<JsValue> {
+    if this.is_null_or_undefined() {
+        return Err(error("String.prototype.pad called on null or undefined"));
+    }
+    let s = this.to_string(ctx)?;
+    let max_len = arg(args, 0).to_length(ctx)? as usize;
+    if max_len <= s.len() {
+        return Ok(s.into());
+    }
+    let filler = match args.get(1) {
+        Some(v) if !v.is_undefined() => v.to_string(ctx)?,
+        _ => js_string!(" "),
+    };
+    if filler.is_empty() {
+        return Ok(s.into());
+    }
+    if max_len > MAX_STRING_UNITS {
+        return Err(JsNativeError::range().with_message(format!("string length exceeds {MAX_STRING_UNITS}")).into());
+    }
+    let fill_len = max_len - s.len();
+    let filler_units: Vec<u16> = filler.iter().collect();
+    let mut out = Vec::with_capacity(max_len);
+    if !start {
+        out.extend(s.iter());
+    }
+    let mut remaining = fill_len;
+    while remaining > 0 {
+        let take = remaining.min(filler_units.len());
+        out.extend_from_slice(&filler_units[..take]);
+        remaining -= take;
+    }
+    if start {
+        out.extend(s.iter());
+    }
+    Ok(JsString::from(&out[..]).into())
+}
+
+fn string_pad_start(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    string_pad(this, args, true, ctx)
+}
+
+fn string_pad_end(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    string_pad(this, args, false, ctx)
+}
+
+fn array_join(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if this.is_null_or_undefined() {
+        return Err(error("Array.prototype.join called on null or undefined"));
+    }
+    let o = this.to_object(ctx)?;
+    let len = o.get(js_string!("length"), ctx)?.to_length(ctx)?;
+    if len > MAX_ARRAY_LENGTH {
+        return Err(JsNativeError::range().with_message(format!("array length exceeds {MAX_ARRAY_LENGTH}")).into());
+    }
+    let sep = match args.first() {
+        Some(v) if !v.is_undefined() => v.to_string(ctx)?,
+        _ => js_string!(","),
+    };
+    if len == 0 {
+        return Ok(js_string!().into());
+    }
+    let total_sep = (len as usize).saturating_sub(1).saturating_mul(sep.len());
+    if total_sep > MAX_STRING_UNITS {
+        return Err(JsNativeError::range().with_message(format!("string length exceeds {MAX_STRING_UNITS}")).into());
+    }
+    let mut units = Vec::new();
+    for k in 0..len {
+        if k > 0 && !sep.is_empty() {
+            units.extend(sep.iter());
+        }
+        let el = o.get(k, ctx)?;
+        if !el.is_null_or_undefined() && &el != this {
+            let s = el.to_string(ctx)?;
+            if units.len().saturating_add(s.len()) > MAX_STRING_UNITS {
+                return Err(JsNativeError::range().with_message(format!("string length exceeds {MAX_STRING_UNITS}")).into());
+            }
+            units.extend(s.iter());
+        }
+    }
+    Ok(JsString::from(&units[..]).into())
+}
+
+fn array_to_locale_string(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    array_join(this, &[], ctx)
+}
+
+pub(crate) fn install_intrinsic_limits(ctx: &mut Context) -> JsResult<()> {
+    let str_proto = ctx.intrinsics().constructors().string().prototype();
+    for (name, len, f) in [
+        ("repeat", 1, NativeFunction::from_fn_ptr(string_repeat)),
+        ("padStart", 1, NativeFunction::from_fn_ptr(string_pad_start)),
+        ("padEnd", 1, NativeFunction::from_fn_ptr(string_pad_end)),
+    ] {
+        let func = FunctionObjectBuilder::new(ctx.realm(), f).name(JsString::from(name)).length(len).build();
+        str_proto.set(JsString::from(name), func, false, ctx)?;
+    }
+    let arr_proto = ctx.intrinsics().constructors().array().prototype();
+    for (name, len, f) in
+        [("join", 1, NativeFunction::from_fn_ptr(array_join)), ("toLocaleString", 0, NativeFunction::from_fn_ptr(array_to_locale_string))]
+    {
+        let func = FunctionObjectBuilder::new(ctx.realm(), f).name(JsString::from(name)).length(len).build();
+        arr_proto.set(JsString::from(name), func, false, ctx)?;
+    }
+    Ok(())
 }
 
 /// How [`Outcome::doc_errors`] names a failing document script: by its 1-based place.
@@ -234,6 +409,11 @@ pub(crate) fn run_in_context(
 ) -> Outcome {
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    // A failed install would leave repeat, pad and join unbounded. Refuse the script instead.
+    if let Err(e) = install_intrinsic_limits(ctx) {
+        let error = Some(format!("the script engine could not start: {e}"));
+        return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
+    }
     let (icons, mut objects, cached_keys) = ctx
         .remove_data::<Shared>()
         .map(|h| {

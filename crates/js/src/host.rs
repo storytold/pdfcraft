@@ -1,5 +1,5 @@
 use super::model::{DocInfo, FieldState, FieldType, Request};
-use super::run::MAX_ARRAY_LENGTH;
+use super::run::{MAX_ARRAY_LENGTH, MAX_STRING_UNITS};
 use super::{
     Arc, BTreeSet, Context, FunctionObjectBuilder, JsArray, JsError, JsFunction, JsNativeError, JsResult, JsString, JsValue, Message, NativeFunction,
     RefCell, xfa,
@@ -70,6 +70,12 @@ impl Host {
         }
     }
 
+    pub(crate) fn clear_console(&mut self) {
+        let cleared: usize = self.console.iter().map(String::len).sum();
+        self.kept = self.kept.saturating_sub(cleared);
+        self.console.clear();
+    }
+
     /// Record `r`, its names and URLs cut to a message's length, up to [`xfa::MAX_EFFECTS`]
     /// requests and the run's byte budget.
     pub(crate) fn request(&mut self, r: Request) -> bool {
@@ -118,7 +124,11 @@ pub(crate) fn text(v: &JsValue, ctx: &mut Context) -> JsResult<String> {
     if v.is_undefined() || v.is_null() {
         return Ok(String::new());
     }
-    Ok(v.to_string(ctx)?.to_std_string_escaped())
+    let s = v.to_string(ctx)?;
+    if s.len() > MAX_STRING_UNITS {
+        return Err(error(format!("string length exceeds {MAX_STRING_UNITS}")));
+    }
+    Ok(s.to_std_string_escaped())
 }
 
 /// [`text`] cut to a message's length ([`xfa::clip`]), without first copying all of a longer
