@@ -4749,7 +4749,7 @@ fn image_right_click_context_menu_items_and_actions() {
         "Create Link",
         "Recognize Text",
     ] {
-        if item == "Paste" {
+        if item == "Paste" || item == "Draw freehand" {
             h.get_by_role_and_label(Role::MenuItem, item);
         } else {
             h.get_by_label_contains(item);
@@ -6398,6 +6398,9 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
     h.drop_at(point);
     h.run_steps(6);
     assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().text, "Heading\nPlain bold words\nLast row");
+    // Unchanged text is painted by the page. An edit makes the editor paint its styled layout.
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.push('!');
+    h.run_steps(3);
     let galley = h
         .output()
         .shapes
@@ -6411,6 +6414,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
     assert!(galley.job.sections.iter().any(|s| s.format.color == egui::Color32::BLACK));
     assert!(galley.job.sections.iter().any(|s| s.format.color == egui::Color32::from_rgb(0, 51, 128)));
     assert!(galley.job.sections.iter().any(|s| s.format.font_id.size > galley.job.sections.last().unwrap().format.font_id.size));
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.pop();
     let original_text = h.state().views[0].session.line_editor.as_ref().unwrap().text.clone();
     h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.push_str("\nAdditional row\nAnother row");
     h.run_steps(3);
