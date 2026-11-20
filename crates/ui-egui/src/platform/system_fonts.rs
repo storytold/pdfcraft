@@ -472,8 +472,37 @@ fn unix_fonts(files: &[&str]) -> Vec<PathBuf> {
 }
 
 fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = Vec::new();
+    // The multi-language Noto Sans CJK collection must be tried before an
+    // opposite-region OTF, so its interface-language face (2 for Simplified,
+    // 3 for Traditional) is used when the matching OTF is absent. Keep it after
+    // the first run of OTFs sharing one file name, which are the matching-region
+    // faces, and before any later opposite-region OTF.
+    let mut ordered: Vec<&str> = Vec::new();
+    let mut ttc: Vec<&str> = Vec::new();
     for file in files {
+        if Path::new(file).file_name() == Some(std::ffi::OsStr::new("NotoSansCJK-Regular.ttc")) {
+            ttc.push(*file);
+        } else {
+            ordered.push(*file);
+        }
+    }
+    let insert_at = if let Some(first) = ordered.iter().position(|f| Path::new(f).extension().is_some_and(|e| e == "otf")) {
+        let target = Path::new(ordered[first]).file_name();
+        let mut end = first;
+        while end < ordered.len()
+            && Path::new(ordered[end]).extension().is_some_and(|e| e == "otf")
+            && Path::new(ordered[end]).file_name() == target
+        {
+            end += 1;
+        }
+        end
+    } else {
+        ordered.len()
+    };
+    ordered.splice(insert_at..insert_at, ttc);
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for file in ordered {
         let name = Path::new(file).file_name();
         for dir in ["/usr/share/fonts", "/usr/local/share/fonts"] {
             paths.push(Path::new(dir).join(file));
@@ -882,6 +911,60 @@ mod tests {
         assert!(
             sc_otf.iter().all(|i| ttc.iter().all(|j| i < j)),
             "every NotoSansCJKsc-Regular.otf candidate must precede every NotoSansCJK-Regular.ttc candidate: {list:?}"
+        );
+    }
+
+    #[test]
+    fn hans_candidates_include_noto_sans_cjk_review_regression_1_review_regression_2() {
+        // Reproduce the Unix ordering through `unix_candidates`: the opposite-region
+        // OTF is appended before the multi-language collection, so the collection's
+        // preferred face is never tried first.
+        let files = &[
+            "NotoSansCJKsc-Regular.otf",
+            "NotoSansCJKtc-Regular.otf",
+            "NotoSansCJK-Regular.ttc",
+        ];
+        let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKtc-Regular.otf")];
+        let list = unix_candidates(files, installed);
+        let ttc: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"))
+            .map(|(i, _)| i)
+            .collect();
+        let opposite: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKtc-Regular.otf"))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            ttc.iter().all(|i| opposite.iter().all(|j| i < j)),
+            "Simplified Chinese candidates must try NotoSansCJK-Regular.ttc before NotoSansCJKtc-Regular.otf: {list:?}"
+        );
+
+        let files = &[
+            "NotoSansCJKtc-Regular.otf",
+            "NotoSansCJKsc-Regular.otf",
+            "NotoSansCJK-Regular.ttc",
+        ];
+        let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKsc-Regular.otf")];
+        let list = unix_candidates(files, installed);
+        let ttc: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"))
+            .map(|(i, _)| i)
+            .collect();
+        let opposite: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            ttc.iter().all(|i| opposite.iter().all(|j| i < j)),
+            "Traditional Chinese candidates must try NotoSansCJK-Regular.ttc before NotoSansCJKsc-Regular.otf: {list:?}"
         );
     }
 }
