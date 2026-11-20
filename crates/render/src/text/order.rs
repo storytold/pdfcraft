@@ -36,6 +36,9 @@ pub(super) struct Seg {
     pub(super) ink: f32,
     /// A row of a barcode drawn with a font (see [`mark_barcode_rows`]): it joins no other text.
     pub(super) barcode: bool,
+    /// A column of upright CJK glyphs, one per baseline, read top to bottom: it must not be merged
+    /// with the horizontal lines its characters would otherwise form across columns (#3712).
+    pub(super) vertical: bool,
 }
 
 #[derive(Default)]
@@ -76,7 +79,7 @@ pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32
 
 impl Seg {
     pub(super) fn new(first: Run, bbox: [f32; 4], h: f32, ink: f32) -> Self {
-        Seg { first, extra: None, bbox, h, ink, barcode: false }
+        Seg { first, extra: None, bbox, h, ink, barcode: false, vertical: false }
     }
 
     /// Whether this segment is a table cell padded with spaces towards `next`, the next cell on
@@ -85,6 +88,11 @@ impl Seg {
     pub(super) fn padded_towards(&self, next: &Seg, h: f32) -> bool {
         let gap = next.bbox[0] - self.bbox[2];
         self.ink.is_finite() && self.bbox[2] - self.ink >= h * PADDED_FIELD && (0.0..h * PADDED_REACH).contains(&gap)
+    }
+
+    /// A line of upright CJK glyphs drawn one per baseline, top to bottom (#3712).
+    pub(super) fn vertical(first: Run, bbox: [f32; 4], h: f32, ink: f32) -> Self {
+        Seg { first, extra: None, bbox, h, ink, barcode: false, vertical: true }
     }
 
     pub(super) fn cy(&self) -> f32 {
@@ -372,9 +380,10 @@ pub(super) fn restarts_run(glyphs: &[&TextGlyph], start: usize, next: usize, pro
 ///
 /// Glyphs are placed by x. Runs that collide, meaning that glyphs of different runs overprint each other, stay whole
 /// and are placed by their left edge. Runs that only interleave along the line, such as symbols between letters, keep
-/// their glyph-by-glyph order, so the common case is one sort. A run of zero-width glyphs (a combining mark) has no
-/// extent of its own, so it goes next to the glyph it starts at. A space whose advance the next glyph takes back stays
-/// before that glyph ([`keep_taken_back_blanks`]).
+/// their glyph-by-glyph order, so the common case is one sort. A vertical column keeps the drawing order it was
+/// written in, top to bottom, because the x offsets between its stacked glyphs are not the line positions a sort
+/// would order. A run of zero-width glyphs (a combining mark) has no extent of its own, so it goes next to the glyph
+/// it starts at. A space whose advance the next glyph takes back stays before that glyph ([`keep_taken_back_blanks`]).
 pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32, s: &Seg, sc: &mut Scratch) {
     let x0 = |i: usize| glyphs[i].rect[0];
     let zero_width = |i: usize| glyphs[i].rect[2] - glyphs[i].rect[0] <= 0.05 * height(i);
@@ -389,7 +398,11 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
             sc.text.push(run);
         }
     }
-    if sc.text.len() <= 1 {
+    if s.vertical {
+        // A column of stacked glyphs reads top to bottom in drawing order, whatever small x
+        // offsets sit between them (the stack allows part of a glyph width).
+        sc.placed.extend(s.first.range());
+    } else if sc.text.len() <= 1 {
         // A single run cannot collide with itself: its glyphs only need sorting by x.
         sc.placed.extend(sc.text.iter().flat_map(|run| run.range()));
         sc.placed.sort_unstable_by(|a, b| by_cluster(glyphs, &sc.anchor, *a, *b));
