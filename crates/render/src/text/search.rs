@@ -37,6 +37,12 @@ fn breaks_before(page: &PageText, i: usize) -> bool {
     i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b)
 }
 
+mod turkish;
+
+pub(super) fn find_turkish(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+    turkish::find(page, query, sensitive, whole_words, limit)
+}
+
 pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();

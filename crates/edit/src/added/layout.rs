@@ -14,7 +14,7 @@ pub(super) fn norm(r: [f64; 4]) -> [f64; 4] {
 /// The advance of `s` in the item's standard font: its glyphs' widths and the character spacing
 /// after each of them, as `Tc` moves the pen (ISO 32000-2 §9.3.2).
 pub(super) fn latin_width(t: &AddedText, s: &str) -> f64 {
-    t.family.width(s, t.size, t.bold, t.italic) + t.char_spacing * s.chars().count() as f64
+    super::latin::width(t, s)
 }
 
 /// The lines of a text item after wrapping to its box width.
@@ -88,8 +88,8 @@ fn thai_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, Edit
     for piece in pieces {
         match piece {
             Piece::Shaped(clusters) => atoms.extend(clusters.into_iter().map(|c| (c.text, c.advance * t.size + t.char_spacing))),
-            Piece::Latin(s) => atoms.extend(s.chars().map(|c| {
-                let text = c.to_string();
+            Piece::Latin(s) => atoms.extend(pdfcraft_fonts::latin_text::clusters(&s).map(|cluster| {
+                let text = cluster.to_string();
                 let w = latin_width(t, &text);
                 (text, w)
             })),
@@ -210,13 +210,13 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
     if !shaped_by_a_face(t) {
         // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
         // that is also how `draw` redraws an existing item, so it's checked that way.
-        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
+        return t.text.split('\n').find_map(|line| super::latin::first_unsupported(line, t.bold));
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl, _)| {
         let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
         pieces.iter().find_map(|p| match p {
-            Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),
+            Piece::Latin(s) => super::latin::first_unsupported(s, t.bold),
             Piece::Shaped(_) => None,
         })
     })

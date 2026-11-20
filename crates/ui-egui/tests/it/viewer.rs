@@ -2,7 +2,7 @@
 //! cover page, a scroll position per tab.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::{By, Queryable};
+use egui_kittest::kittest::{By, NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// `n` pages of 200×300; page i says "Page i+1" plus "page" and "Pages" for find tests.
@@ -1510,6 +1510,60 @@ fn advanced_search_lists_results_with_context() {
     h.state_mut().right = None;
     h.run_steps(2);
     assert!(!h.state().views[i].find.as_ref().unwrap().in_panel);
+}
+
+#[test]
+fn turkish_search_options_are_shared_by_find_bar_and_advanced_search() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { text: "I ı İ i".into(), rect: [20.0, 30.0, 180.0, 70.0], ..Default::default() },
+    });
+    assert!(h.state_mut().execute("edit.find"));
+    {
+        let f = h.state_mut().views[i].find.as_mut().unwrap();
+        f.query = "i".into();
+        f.whole_words = true;
+    }
+    for _ in 0..3000 {
+        h.run_steps(2);
+        if h.state().views[i].find.as_ref().unwrap().matches.len() == 4 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().matches.len(), 4);
+    let option = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        // Counts/automatic scroll change the floating Area's layout. Each menu
+        // checkbox closes its popup, so settle and reopen before the next option.
+        h.run_steps(8);
+        h.get_by_label("Find options").click();
+        h.run_steps(3);
+        h.get_by_label(label).click();
+        h.run_steps(4);
+    };
+    option(&mut h, "Türkçe");
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().matches.len(), 2);
+    option(&mut h, "Case-sensitive");
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().matches.len(), 1);
+    option(&mut h, "Case-sensitive");
+    assert!(h.state_mut().execute("edit.advanced_search"));
+    h.run_steps(4);
+    assert!(h.state().views[i].find.as_ref().unwrap().turkish);
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().matches.len(), 2);
+    let language = h.get_by_label("Türkçe").rect();
+    let words = h.get_by_label("Whole words only").rect();
+    assert!(language.height() <= words.height() + 0.5, "the language name must stay on one line in the narrow panel: {language:?}");
+    h.get_by_label("Türkçe").click();
+    h.run_steps(4);
+    assert!(!h.state().views[i].find.as_ref().unwrap().turkish);
+    assert_eq!(h.state().views[i].find.as_ref().unwrap().matches.len(), 4);
+    h.state_mut().choose_right_panel(None);
+    assert!(h.state_mut().execute("edit.replace"));
+    h.state_mut().views[i].find.as_mut().unwrap().turkish = true;
+    h.run_steps(4);
+    assert!(h.get_by_label("Replace all").accesskit_node().is_disabled(), "replace must not apply different matching rules");
 }
 
 #[test]

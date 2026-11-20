@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 
 use crate::{Args, Automation, Result, ToolError, failed, write_atomic};
 
+mod windows_dxgi;
+mod windows_output;
+
 /// The job's two-sided setting for `doc_print`'s `duplex`: `printer` sends none, so the printer's
 /// own default applies (as the Print dialog's Printer default, #2422), except that cut and stack
 /// needs single-sided sheets.
@@ -107,11 +110,22 @@ fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64
 }
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
-/// (as `media` after the driver's `options`) rather than the queue's default paper, which a job
-/// naming none got (A4 under Letter sheets on the queue in #3752), and tells CUPS which way the
-/// laid-out `sheets` run, as the Print dialog does (#2713): an orientation the caller chose in
-/// `options` stands. It asks the driver for grayscale only when the pages aren't grey pictures
-/// already ([`print::driver_needs_grayscale`]).
+/// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
+/// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752).
+fn driver_options(a: &Args) -> Result<Vec<(String, String)>> {
+    match a.get("options") {
+        None => Ok(Vec::new()),
+        Some(Value::Object(m)) => m
+            .iter()
+            .map(|(k, v)| match v.as_str() {
+                Some(v) => Ok((k.clone(), v.to_string())),
+                None => Err(bad(format!("options.{k} must be a string (a choice from printer_options)"))),
+            })
+            .collect(),
+        Some(_) => Err(bad("options must be an object of option keys and choices from printer_options")),
+    }
+}
+
 fn spool_job(
     a: &Args,
     printer: &str,
@@ -121,17 +135,7 @@ fn spool_job(
     raster: Option<&print::Raster>,
     sheets: &[print::Sheet],
 ) -> Result<spool::Job> {
-    let options = match a.get("options") {
-        None => Vec::new(),
-        Some(Value::Object(m)) => m
-            .iter()
-            .map(|(k, v)| match v.as_str() {
-                Some(v) => Ok((k.clone(), v.to_string())),
-                None => Err(bad(format!("options.{k} must be a string (a choice from printer_options)"))),
-            })
-            .collect::<Result<Vec<_>>>()?,
-        Some(_) => return Err(bad("options must be an object of option keys and choices from printer_options")),
-    };
+    let options = driver_options(a)?;
     Ok(spool::Job {
         printer: if printer == "default" { None } else { Some(printer.to_string()) },
         copies: a.opt_int("copies")?.unwrap_or(1).clamp(1, 999) as u32,
@@ -237,6 +241,21 @@ impl Automation {
     /// `doc_print`: lay the document out with the Print dialog's options, then save the
     /// print-ready PDF to `path` or send it to `printer` with the chosen paper.
     pub(crate) fn doc_print(&mut self, a: &Args) -> Result<Value> {
+        // Validate the explicit native destination before export or submission: it must never
+        // be silently treated as an ordinary print-ready PDF save or DXGI print job.
+        let native = windows_output::request(a)?;
+        if cfg!(windows)
+            && native.is_none()
+            && let Some(printer) = a.opt_str("printer")?
+        {
+            // Invalid choices must produce the same actionable argument error regardless of
+            // the machine's default printer, before any platform lookup or destination guard.
+            drop(driver_options(a)?);
+            // Reading the name avoids querying every queue's capabilities (including offline
+            // network drivers) just to reject a headless file printer without a destination.
+            let default = if printer == "default" { spool::rgb::default_printer().map_err(failed)? } else { None };
+            windows_dxgi::check_headless_destination(printer, default.as_deref())?;
+        }
         let doc = self.doc(a)?;
         let (id, count) = (doc.id, doc.info.pages.len());
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
@@ -366,11 +385,29 @@ impl Automation {
                 Some([r[0].min(r[2]), h - r[1].max(r[3]), r[0].max(r[2]), h - r[1].min(r[3])])
             }
         };
+        if native.is_some() && raster.as_ref().is_some_and(|r| r.colour.is_some()) {
+            return Err(bad("printer_output requires printer-managed colour"));
+        }
+        let (raster, native_raster) = if native.is_some() { (None, raster) } else { (raster, None) };
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new(), area };
         let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
         let sheets = laid_out.len();
         // Where it goes is checked before the Will Print actions run, so a call that can't print
         // doesn't change the document.
+        if let Some(destination) = native {
+            let expected = windows_output::ExpectedSheets::new(sheets, native_raster.is_some())?;
+            let title = self.doc(a)?.name.clone();
+            let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
+            let out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
+            return pdfcraft_engine::guard(|| match native_raster {
+                Some(raster) => windows_output::print(self, destination, expected, bytes, raster, &title, out),
+                None => {
+                    let job = spool_job(a, destination.printer, title, duplex, media.as_deref(), None, &laid_out)?;
+                    windows_dxgi::print(self, destination.path, expected, bytes, &job, out)
+                }
+            })
+            .map_err(failed)?;
+        }
         let destination = match (a.opt_str("path")?, printer) {
             (Some(p), None) => Destination::File(self.resolve(p, true)?),
             (None, Some(printer)) => {

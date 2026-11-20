@@ -778,6 +778,102 @@ fn typed_signatures_and_initials() {
     assert_eq!(again.initials, Some(pdfcraft_ui_egui::fill_sign::SavedSig::Typed("GH".into())));
 }
 
+fn signature_type_editor(initials: bool) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Original".into()));
+    h.state_mut().initials = Some(SavedSig::Typed("OL".into()));
+    assert!(h.state_mut().execute(if initials { "sign.fill.initials.change" } else { "sign.fill.signature.change" }));
+    h.run_steps(3);
+    h.get_by_label(if initials { "Type your initials." } else { "Type your signature." }).click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h
+}
+
+#[test]
+fn nfd_signature_limit_preserves_full_drafts_from_every_input_channel() {
+    let before = "A".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS - 1);
+    let input = format!("{before}g\u{306}");
+    for initials in [false, true] {
+        for channel in ["paste", "text", "scalar-typing", "accesskit-set", "accesskit-replace", "ime"] {
+            let mut h = signature_type_editor(initials);
+            let label = if initials { "Type your initials." } else { "Type your signature." };
+            match channel {
+                "paste" => h.event(egui::Event::Paste(input.clone())),
+                "text" => h.event(egui::Event::Text(input.clone())),
+                "scalar-typing" => {
+                    h.event(egui::Event::Text(format!("{before}g")));
+                    h.run_steps(2);
+                    h.event(egui::Event::Text("\u{306}".into()));
+                }
+                "accesskit-set" => h.get_by_label(label).set_text_value_accesskit(&input),
+                "accesskit-replace" => h.get_by_label(label).replace_selected_text_accesskit(&input),
+                "ime" => {
+                    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: format!("{before}g"), active_range_chars: Some(0..256) }));
+                    h.run_steps(2);
+                    h.event(egui::Event::Ime(egui::ImeEvent::Commit(input.clone())));
+                }
+                _ => unreachable!(),
+            }
+            h.run_steps(3);
+            assert_eq!(h.state().signature_draft.text, input, "{initials}/{channel}: the pasted mark may not disappear at the scalar boundary");
+            assert!(h.get_by_label("Apply").accesskit_node().is_disabled(), "{initials}/{channel}: over-limit source must stay a draft");
+            h.key_press(egui::Key::Enter);
+            h.run_steps(2);
+            assert_eq!(h.state().dialog, Some(Dialog::Signature));
+            assert_eq!(h.state().signature_draft.text, input);
+            assert_eq!(h.state().signature, Some(SavedSig::Typed("Original".into())));
+            assert_eq!(h.state().initials, Some(SavedSig::Typed("OL".into())));
+            h.get_by_label("Cancel").click();
+            h.run_steps(2);
+            assert_eq!(h.state().signature, Some(SavedSig::Typed("Original".into())));
+            assert_eq!(h.state().initials, Some(SavedSig::Typed("OL".into())));
+        }
+    }
+}
+
+#[test]
+fn nfd_signature_at_the_scalar_limit_is_saved_and_preferences_roundtrip_exactly() {
+    for initials in [false, true] {
+        let mut h = signature_type_editor(initials);
+        let input = format!("{}g\u{306}", "A".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS - 2));
+        h.event(egui::Event::Paste(input.clone()));
+        h.run_steps(3);
+        assert_eq!(h.state().signature_draft.text, input);
+        assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
+        h.get_by_label("Apply").click();
+        h.run_steps(3);
+        let saved = Some(SavedSig::Typed(input.clone()));
+        assert_eq!(if initials { &h.state().initials } else { &h.state().signature }, &saved);
+        let mut again = PdfCraftApp::new();
+        again.set_option("language", "en").unwrap();
+        again.restore(&h.state().persist());
+        assert_eq!(if initials { again.initials } else { again.signature }, saved);
+    }
+    let mut h = signature_type_editor(false);
+    h.event(egui::Event::Paste("A".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1)));
+    h.run_steps(3);
+    assert_eq!(h.state().signature_draft.text, "A".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS), "plain partial input keeps its scalar limit");
+}
+
+#[test]
+fn nfd_signature_rejected_coverage_preserves_the_saved_value() {
+    for input in ["🦀".to_owned(), "\u{306}g".to_owned(), format!("g{}", "\u{306}".repeat(33))] {
+        let mut h = signature_type_editor(false);
+        // Arbitrary input must remain editable with the production context's tofu policy;
+        // kittest defaults to panicking on missing UI glyphs to catch accidental omissions.
+        h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+        h.event(egui::Event::Paste(input.clone()));
+        h.run_steps(3);
+        assert_eq!(h.state().signature_draft.text, input);
+        assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
+        assert_eq!(h.state().signature, Some(SavedSig::Typed("Original".into())));
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!(h.state().signature, Some(SavedSig::Typed("Original".into())));
+    }
+}
+
 #[test]
 fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     let mut h = harness();

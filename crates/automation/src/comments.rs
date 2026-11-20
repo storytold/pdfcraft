@@ -631,7 +631,8 @@ impl Automation {
         // A circle goes around the text, so its box is no wider than the text needs.
         let min_width = if border_shape == Some(BorderShape::Circle) { 0.0 } else { 20.0 };
         let text_at = |t: &str| {
-            let longest = t.lines().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
+            let measure = pdfcraft_engine::annot_text::text_width;
+            let longest = t.lines().map(|line| measure(line, size)).fold(0.0, f64::max);
             let w = (longest + 8.0).clamp(min_width, 600.0);
             let rows = pdfcraft_engine::annot_text::wrap(t, size, w - 4.0).len().max(1);
             let h = rows as f64 * size * 1.2 + 6.0;
@@ -655,6 +656,12 @@ impl Automation {
             // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
+                if t.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() > pdfcraft_engine::MAX_SIGNATURE_CHARS {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "{kind} text must contain at most {} characters",
+                        pdfcraft_engine::MAX_SIGNATURE_CHARS
+                    )));
+                }
                 // Nobody sees a preview here: refuse what the script font would leave out.
                 if let Some(c) = pdfcraft_engine::script_missing(t) {
                     return Err(ToolError::InvalidArgs(format!(

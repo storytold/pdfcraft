@@ -6,10 +6,30 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode};
+use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, ModelProfile, OcrPage, OcrSettings, OutputMode};
 
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, i18n, widgets};
+
+/// Use the active catalog's language name when it has no separate OCR label for itself.
+pub(super) fn language_label<'a>(lang: i18n::Lang, code: &str, english: &'a str) -> &'a str {
+    if lang.code() == code && !i18n::has(lang, english) { lang.name() } else { i18n::tr(lang, english) }
+}
+
+/// One profile control for Recognize and Verify. Language/engine changes never rewrite
+/// an explicit choice; the shared preflight names incompatible settings or missing models.
+pub(crate) fn model_profile_combo(ui: &mut egui::Ui, draft: &mut OcrDraft, id: &str, width: f32) {
+    let label = match draft.model_profile {
+        ModelProfile::Standard => tl!("Standard"),
+        ModelProfile::TurkishExtended => tl!("Turkish extended alphabet"),
+    };
+    craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).show_ui(ui, |ui| {
+        ui.selectable_value(&mut draft.model_profile, ModelProfile::Standard, tl!("Standard"));
+        ui.selectable_value(&mut draft.model_profile, ModelProfile::TurkishExtended, tl!("Turkish extended alphabet")).on_hover_text(tl!(
+            "Experimental Turkish alphabet: review recognized words before applying them. Requires Tesseract and the profile's installed models."
+        ));
+    });
+}
 
 /// Which pages to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +49,8 @@ pub struct OcrDraft {
     pub from: usize,
     pub to: usize,
     pub language: String,
+    /// Explicit model opt-in, shared by recognition, batch and Verify re-read.
+    pub model_profile: ModelProfile,
     /// "Downsample to" resolution.
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
@@ -62,6 +84,7 @@ impl Default for OcrDraft {
             from: 1,
             to: 1,
             language: "en".into(),
+            model_profile: ModelProfile::Standard,
             dpi: 300,
             text_pages: false,
             engine: EngineChoice::default(),
@@ -85,6 +108,7 @@ impl OcrDraft {
         OcrSettings {
             dpi: self.dpi as f32,
             language: self.language.clone(),
+            model_profile: self.model_profile,
             engine: self.engine,
             strategy: self.strategy,
             auto_rotate: self.auto_rotate,
@@ -99,12 +123,21 @@ impl OcrDraft {
         }
     }
 
+    /// The same language, engine and installed-model preflight for every OCR entry point.
+    /// Discovery stays in the background; no process is waited on by the interface.
+    pub(crate) fn unavailable_reason(&self) -> Option<String> {
+        ui_preflight_reason(&self.settings())
+    }
+
     /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
     /// defaults, like every other restored setting.
     pub fn apply_pref(&mut self, v: &serde_json::Value) {
         if let Some(l) = v["language"].as_str().filter(|l| LANGUAGES.iter().any(|x| x.0 == *l)) {
             self.language = l.to_string();
         }
+        // Old preferences have no profile and keep Standard. Restore the profile independently
+        // of language/engine: an incompatible saved selection is explained by preflight.
+        self.model_profile = v["model_profile"].as_str().and_then(|p| ModelProfile::parse(p).ok()).unwrap_or_default();
         if let Some(e) = v["engine"].as_str() {
             self.engine = EngineChoice::parse(e);
         }
@@ -146,6 +179,7 @@ impl OcrDraft {
     pub fn to_pref(&self) -> serde_json::Value {
         serde_json::json!({
             "language": self.language,
+            "model_profile": self.model_profile.id(),
             "engine": self.engine.name(),
             "strategy": match self.strategy {
                 MergeStrategy::PrimaryOnly => "primary",
@@ -213,6 +247,8 @@ pub struct OcrRun {
     /// The web build reads the pages in Web Workers, pumped by [`PdfCraftApp::poll_ocr`].
     #[cfg(target_arch = "wasm32")]
     pub web: Option<crate::ocr_web::Pages>,
+    /// Settings captured by the original recognition, never the current dialog draft.
+    pub settings: OcrSettings,
 }
 
 /// What an Edit-started run needs to know to refuse a result that no longer fits its document.
@@ -231,6 +267,26 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
     if pdfcraft_engine::ocr::engine_probe_running() {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
+}
+
+pub(super) fn ui_preflight_reason(settings: &OcrSettings) -> Option<String> {
+    let lang = i18n::current();
+    pdfcraft_engine::ocr::settings_unavailable_reason_with(settings, |key, args| preflight_message(lang, key, args))
+}
+
+fn preflight_message(lang: i18n::Lang, key: &str, args: &[(&str, &str)]) -> Option<String> {
+    if args.is_empty() {
+        let key = if key == pdfcraft_engine::ocr::OcrError::NoModels.to_string() {
+            "Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them."
+        } else {
+            key
+        };
+        return Some(i18n::tr(lang, key).to_owned());
+    }
+
+    let template = i18n::message_template(lang, key)?;
+    let args: Vec<_> = args.iter().map(|&(name, value)| (name, if name == "why" { i18n::tr(lang, value) } else { value })).collect();
+    Some(i18n::fmt(template, &args))
 }
 
 /// The dialog's height outside its scrolling settings: the title, a notice of up to two lines,
@@ -283,10 +339,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             group(ui, "Settings", &mut |ui| {
                 egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label(tl!("Document language"));
-                    let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
+                    let lang = i18n::current();
+                    let name = LANGUAGES
+                        .iter()
+                        .find(|(code, _)| *code == d.language)
+                        .map_or_else(|| i18n::tr(lang, "English"), |(code, name)| language_label(lang, code, name));
+                    craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(name).width(220.0).show_ui(ui, |ui| {
                         for (code, name) in LANGUAGES {
-                            ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                            ui.selectable_value(&mut d.language, (*code).to_string(), language_label(lang, code, name));
                         }
                     });
                     ui.end_row();
@@ -303,6 +363,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                             ui.selectable_value(&mut d.engine, choice, tl!(name));
                         }
                     });
+                    ui.end_row();
+                    ui.label(tl!("Model profile"));
+                    model_profile_combo(ui, d, "ocr-model-profile", 220.0);
                     ui.end_row();
                     ui.label(tl!("Combine engines"));
                     let strategy_name = match d.strategy {
@@ -382,7 +445,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     keep_asking_while_probing(ui.ctx());
     // The web build has no model files: it downloads the models the first time they're needed.
     #[cfg(target_arch = "wasm32")]
-    let downloading = d.engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
+    let downloading =
+        d.language == "en" && d.engine != EngineChoice::Tesseract && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let downloading = false;
     #[cfg(target_arch = "wasm32")]
@@ -409,20 +473,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         }
         ui.add_space(6.0);
     }
-    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).filter(|_| !downloading) {
-        // Said in the interface's language: the built-in engine's missing models get the
-        // notice users know; Tesseract's reasons are catalog keys of their own.
-        let text = match d.engine {
-            pdfcraft_engine::ocr::EngineChoice::Tesseract => crate::i18n::t(&why).to_string(),
-            _ => tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
-                .to_string(),
-        };
-        ui.label(egui::RichText::new(text).small().color(t.text_muted));
+    let why = d.unavailable_reason();
+    if let Some(reason) = why.as_deref().filter(|_| !downloading) {
+        ui.label(egui::RichText::new(reason).small().color(t.text_muted));
         ui.add_space(6.0);
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    let can_run = why.is_none();
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
@@ -472,13 +530,27 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     /// Without an engine the page waits for one (see [`Self::await_ocr_models`]).
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
-        let Some(scan) = self.scan_to_read() else { return };
-        // the engine this run will use, not always the built-in one
-        let mut settings = self.ocr_draft.settings();
-        if pdfcraft_engine::ocr::engine_unavailable_reason(settings.engine).is_some() {
-            self.await_ocr_models(&scan);
+        // Context comes before discovery: Home, Read mode, another tool or an open dialog
+        // must never probe an external program merely because its preference was restored.
+        if self.auto_ocr_candidate().is_none() {
             return;
         }
+        // the engine this run will use, not always the built-in one
+        let mut settings = self.ocr_draft.settings();
+        if let Some(reason) = pdfcraft_engine::ocr::settings_unavailable_reason(&settings) {
+            if reason == pdfcraft_engine::ocr::OcrError::NoModels.to_string()
+                && let Some(scan) = self.scan_to_read()
+            {
+                self.await_ocr_models(&scan);
+            }
+            // A background probe must get another chance once it lands. Treating a pending
+            // answer as a non-scan would suppress OCR until the document changed.
+            if let Some(ctx) = &self.ctx {
+                keep_asking_while_probing(ctx);
+            }
+            return;
+        }
+        let Some(scan) = self.scan_to_read() else { return };
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
         // Only a page with no text of its own is read. Comments and text boxes over the picture do
         // not count as its text (a scan with a few comments is still a scan, as in Acrobat), but
@@ -518,6 +590,25 @@ impl PdfCraftApp {
     /// covers at least half of it. Needs no OCR models, so the rules can be tested without them;
     /// the page's own text is judged by the run itself.
     fn scan_to_read(&mut self) -> Option<ScanToRead> {
+        let candidate = self.auto_ocr_candidate()?;
+        let ScanToRead { view, doc, page, generation } = candidate;
+        let document = self.session.get(doc)?;
+        let info = document.info.pages.get(page)?;
+        let page_area = f64::from(info.width) * f64::from(info.height);
+        let covered = document.page_images(page).iter().any(|i| {
+            let [x0, y0, x1, y1] = i.visible_rect.unwrap_or(i.rect);
+            page_area > 0.0 && ((x1 - x0) * (y1 - y0)).abs() >= 0.5 * page_area
+        });
+        if !covered {
+            self.views[view].auto_ocr_skipped.insert(page, generation);
+            return None;
+        }
+        Some(ScanToRead { view, doc, page, generation })
+    }
+
+    /// Cheap automatic-OCR eligibility: no page-content inventory and no engine discovery.
+    /// Both the preflight caller and `scan_to_read` use this gate so context rules stay aligned.
+    fn auto_ocr_candidate(&self) -> Option<ScanToRead> {
         // Edit is on when its panel is open (the Edit tab) or Edit text & images or Add text is picked,
         // the same test the page view uses for editing content.
         let editing = (self.left_open && self.left == crate::LeftPanel::Tool("edit"))
@@ -545,16 +636,7 @@ impl PdfCraftApp {
         {
             return None;
         }
-        let info = document.info.pages.get(page)?;
-        let page_area = f64::from(info.width) * f64::from(info.height);
-        let covered = document.page_images(page).iter().any(|i| {
-            let [x0, y0, x1, y1] = i.visible_rect.unwrap_or(i.rect);
-            page_area > 0.0 && ((x1 - x0) * (y1 - y0)).abs() >= 0.5 * page_area
-        });
-        if !covered {
-            self.views[view].auto_ocr_skipped.insert(page, generation);
-            return None;
-        }
+        document.info.pages.get(page)?;
         Some(ScanToRead { view, doc, page, generation })
     }
 
@@ -573,7 +655,7 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             let web = Some(crate::ocr_web::Pages::new(job.steps()));
-            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, web });
+            self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, settings, web });
             self.poll_ocr();
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -593,6 +675,7 @@ impl PdfCraftApp {
         auto: Option<AutoOcr>,
         editable: bool,
     ) {
+        let captured_settings = settings.clone();
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
@@ -617,7 +700,7 @@ impl PdfCraftApp {
         } else {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
-        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable });
+        self.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: auto, editable, settings: captured_settings });
         self.poll_ocr();
     }
 
@@ -747,14 +830,6 @@ impl PdfCraftApp {
     /// Recognize text in the files on a worker thread (inline in tests).
     #[cfg(not(target_arch = "wasm32"))]
     fn run_ocr_files(&mut self, files: Vec<(String, Vec<u8>)>, settings: OcrSettings, dir: std::path::PathBuf) {
-        // The engines are built (and named if they cannot be) before anything starts.
-        let recognizers = match pdfcraft_engine::ocr::recognizers(&settings) {
-            Ok(r) => r,
-            Err(why) => {
-                self.notify_error(why);
-                return;
-            }
-        };
         let progress = Arc::new(Mutex::new(BatchProgress { total: files.len(), ..Default::default() }));
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
@@ -767,8 +842,13 @@ impl PdfCraftApp {
                 crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())
             };
             // A panic in the recognizer still ends the batch with a summary (#3919).
-            let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, javascript, &p, write))
-                .unwrap_or_else(|panic| failed(&panic));
+            // Engine construction and the language-data probe belong on this worker too;
+            // even a first batch must leave the interface responsive.
+            let msg = pdfcraft_engine::guard(|| match pdfcraft_engine::ocr::recognizers(&settings) {
+                Ok(recognizers) => run_batch_files(files, settings, &recognizers, javascript, &p, write),
+                Err(why) => failed(crate::i18n::t(&why)),
+            })
+            .unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
                 s.message = Some(msg);
@@ -897,7 +977,8 @@ impl PdfCraftApp {
             }
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
-        let (doc, progress, auto, guard, editable) = (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable);
+        let (doc, progress, auto, guard, editable, captured_settings) =
+            (run.doc, run.progress.clone(), run.automatic, run.guard.clone(), run.editable, run.settings.clone());
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -957,7 +1038,7 @@ impl PdfCraftApp {
         // invisible layer here. It opens in the OCR Verify screen, whose Accept produces the
         // editable document (a NEW file) the choice promises.
         if editable && !automatic {
-            self.ocr_verify.load(doc, guard, found);
+            self.ocr_verify.load_captured(doc, guard, found, captured_settings);
             self.ocr_verify.open = true;
             self.notify_tr("Review the recognition, then Accept to write the editable document");
             return;
@@ -1094,10 +1175,218 @@ fn recognize_guarded<T>(recognize: impl FnOnce() -> Result<T, String>) -> Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn persisted_turkish_ocr_choices_survive_restoring_the_draft() {
+        let mut draft = super::OcrDraft::default();
+        draft.apply_pref(&serde_json::json!({ "language": "tr", "engine": "auto" }));
+        assert_eq!(draft.language, "tr");
+        assert_eq!(draft.settings().language, "tr");
+        assert_eq!(draft.settings().engine, pdfcraft_engine::ocr::EngineChoice::Auto);
+        assert_eq!(draft.to_pref()["language"], "tr");
+    }
+
+    #[test]
+    fn an_explicit_model_profile_survives_preferences_and_incompatible_draft_changes() {
+        let mut draft = super::OcrDraft::default();
+        assert_eq!(draft.settings().model_profile, pdfcraft_engine::ocr::ModelProfile::Standard);
+        draft.apply_pref(&serde_json::json!({ "language": "tr", "engine": "auto", "model_profile": "turkish_extended" }));
+        let mut restored = super::OcrDraft::default();
+        restored.apply_pref(&draft.to_pref());
+        assert_eq!(restored.settings().model_profile, pdfcraft_engine::ocr::ModelProfile::TurkishExtended);
+        assert_eq!(restored.to_pref()["model_profile"], "turkish_extended");
+        restored.language = "en".into();
+        restored.engine = pdfcraft_engine::ocr::EngineChoice::Ocrs;
+        assert_eq!(restored.settings().model_profile, pdfcraft_engine::ocr::ModelProfile::TurkishExtended);
+        assert!(restored.unavailable_reason().is_some(), "an invalid combination blocks, never downgrades");
+        restored.apply_pref(&serde_json::json!({ "language": "tr", "engine": "auto" }));
+        assert_eq!(restored.settings().model_profile, pdfcraft_engine::ocr::ModelProfile::Standard, "old preferences retain the old behavior");
+    }
+
     use super::*;
     use crate::{Dialog, LeftPanel, Mode, QuickTool};
     use pdfcraft_engine::ocr::{Recognizer, Recognizers};
     use pdfcraft_engine::{Edit, Session};
+
+    #[test]
+    fn preflight_localization_preserves_literal_details_and_requires_message_context() {
+        let key = "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}";
+        let fixture = concat!(
+            "@msg\tthe turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}\tAyrıntı: {why}. Modeller: {models}.\n",
+            "\tstill checking\tDenetleniyor\n",
+        );
+        let lang = i18n::fixture_lang("tr", fixture);
+        let path = r"C:\Türkçe\{models}\tesseract.exe {why}";
+        let args = [("models", "script/Latin"), ("why", path)];
+        assert_eq!(preflight_message(lang, key, &args), Some(format!("Ayrıntı: {path}. Modeller: script/Latin.")));
+        assert_eq!(
+            preflight_message(lang, key, &[("models", "script/Latin"), ("why", "still checking")]).as_deref(),
+            Some("Ayrıntı: Denetleniyor. Modeller: script/Latin.")
+        );
+        assert_eq!(preflight_message(i18n::Lang::EN, key, &args), None);
+        let plain = i18n::fixture_lang(
+            "tr",
+            "\tthe turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}\t{models}: {why}\n",
+        );
+        assert_eq!(preflight_message(plain, key, &args), None);
+    }
+
+    #[test]
+    #[ignore = "requires the updated Turkish OCR preflight catalog embedded at build time"]
+    fn preflight_localization_uses_the_updated_embedded_turkish_catalog() {
+        let tr = i18n::Lang::from_code("tr").expect("the updated Turkish catalog must be embedded");
+        let path = r"C:\Türkçe\{models}\tesseract.exe";
+        let cases = [
+            (
+                "Turkish OCR requires the Turkish (tur) language data installed for tesseract",
+                &[][..],
+                "Tesseract için Türkçe dil verisi (tur) eksik. Devam etmek için bu veriyi yükleyin.",
+            ),
+            (
+                "Turkish OCR requires Tesseract with Turkish (tur) language data: {why}",
+                &[("why", path)][..],
+                "Türkçe OCR için Tesseract çalışabilmeli ve Türkçe dil verisi (tur) yüklü olmalıdır. Ayrıntı: C:\\Türkçe\\{models}\\tesseract.exe",
+            ),
+            (
+                "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used",
+                &[("models", "script/Latin")][..],
+                "Genişletilmiş Türkçe alfabesi profili şu Tesseract modellerinin tümünü gerektirir: script/Latin. Eksik modelleri yükleyin. Standart profile otomatik geçiş yapılmaz.",
+            ),
+            (
+                "the turkish_extended model profile requires every Tesseract model: {models}; no Standard fallback is used: {why}",
+                &[("models", "script/Latin"), ("why", path)][..],
+                "Genişletilmiş Türkçe alfabesi profili için Tesseract çalışabilmeli ve şu modellerin tümü yüklü olmalıdır: script/Latin. Standart profile otomatik geçiş yapılmaz. Ayrıntı: C:\\Türkçe\\{models}\\tesseract.exe",
+            ),
+        ];
+        for (key, args, expected) in cases {
+            assert_eq!(preflight_message(tr, key, args).as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn recognize_ocr_language_label_uses_turkish_catalog() {
+        use egui_kittest::kittest::Queryable;
+
+        let Some(turkish) = crate::i18n::Lang::from_code("tr") else { return };
+        let mut app = PdfCraftApp::new();
+        app.ocr_draft.language = "tr".into();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(700.0, 1100.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                crate::i18n::set_current(turkish);
+                body(ui, app, &Tokens::get(ui.ctx()));
+            },
+            app,
+        );
+        h.run();
+        h.get_by_value("Türkçe");
+        assert_eq!(h.state().ocr_draft.settings().language, "tr");
+    }
+
+    fn assert_ocr_modal_layout_at_height(height: f32) {
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, height));
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.ocr_draft.language = "tr".into();
+        app.ocr_draft.engine = EngineChoice::Ocrs;
+        let mut fonts = false;
+        // Exercise the real modal frame and its 30-point controls. Unnamed existing form
+        // fields remain outside this layout regression's accessibility assertions.
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(viewport.size()).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                widgets::show_modal(ui.ctx(), "ocr-layout-regression", |ui| {
+                    ui.set_width(520.0);
+                    let t = Tokens::get(ui.ctx());
+                    body(ui, app, &t);
+                });
+            },
+            app,
+        );
+        h.run_steps(8);
+        let warning = "the ocrs engine does not support Turkish; choose Tesseract or Automatic with Turkish (tur) language data installed";
+        for label in ["Recognize Text", warning, "Cancel", "Recognize text"] {
+            let rect = h.get_by_label(label).rect();
+            assert!(viewport.contains_rect(rect), "{label} must stay within a {height}-point viewport: {rect:?}");
+        }
+        assert!(h.get_by_label("Recognize text").accesskit_node().is_disabled());
+        let footer_before = h.get_by_label("Cancel").rect();
+        let settings_before = h.get_by_label("Document language").rect();
+        h.hover_at(settings_before.center());
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -10_000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        });
+        h.run_steps(40);
+        assert!(
+            h.query_by_label("Document language").is_none_or(|node| node.rect().top() < settings_before.top() - 20.0),
+            "settings must scroll independently of the footer at height {height}"
+        );
+        assert!(viewport.contains_rect(h.get_by_label("Output folder").rect()));
+        h.get_by_label("Force OCR (override skip options)").click();
+        h.run_steps(2);
+        assert!(h.state().ocr_draft.force_ocr, "the scrolled settings remain usable");
+        let footer_after = h.get_by_label("Cancel").rect();
+        assert!((footer_after.top() - footer_before.top()).abs() < 1.0, "scrolling settings must not move the footer");
+        for label in ["Recognize Text", warning, "Cancel", "Recognize text"] {
+            assert!(viewport.contains_rect(h.get_by_label(label).rect()), "{label} remains visible after scrolling");
+        }
+    }
+
+    #[test]
+    fn ocr_modal_keeps_actions_visible_at_720_points() {
+        assert_ocr_modal_layout_at_height(720.0);
+    }
+
+    #[test]
+    fn ocr_modal_keeps_actions_visible_at_920_points() {
+        assert_ocr_modal_layout_at_height(920.0);
+    }
+
+    /// The previous dialog checked only the engine: with English model files present it
+    /// enabled this button, and without them it showed an unrelated missing-model notice.
+    #[test]
+    fn turkish_ocrs_dialog_disables_recognition_and_names_the_language_requirement() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.ocr_draft.language = "tr".into();
+        app.ocr_draft.engine = EngineChoice::Ocrs;
+        let mut fonts = false;
+        // Check the button's accessible enabled state here; the existing form's unnamed
+        // combo/spin controls are a separate accessibility issue, not this preflight regression.
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(700.0, 1100.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                let (go, _) = body(ui, app, &t);
+                assert!(!go, "an unavailable language must never start recognition");
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("the ocrs engine does not support Turkish; choose Tesseract or Automatic with Turkish (tur) language data installed");
+        assert!(h.get_by_label("Recognize text").accesskit_node().is_disabled());
+        assert_eq!(h.state().ocr_draft.engine, EngineChoice::Ocrs, "the dialog does not change an explicit choice");
+    }
 
     /// A one-page PDF that is one picture covering the page.
     fn scan() -> Vec<u8> {
@@ -1115,6 +1404,49 @@ mod tests {
 
     fn found(app: &mut PdfCraftApp) -> Option<usize> {
         app.scan_to_read().map(|s| s.page)
+    }
+
+    /// A context check may offer a blank page for later inspection without parsing it or
+    /// classifying it. It also gates engine discovery while no editable page is eligible.
+    #[test]
+    fn automatic_ocr_candidate_requires_an_editable_context_without_classifying_pages() {
+        assert!(PdfCraftApp::new().auto_ocr_candidate().is_none(), "Home has no candidate");
+        let blank = Session::new().create_blank(595.0, 842.0, 1).unwrap().to_vec();
+        let mut app = app_with(blank);
+        assert!(app.auto_ocr_candidate().is_some(), "an editable page can be checked later");
+        assert!(app.views[0].auto_ocr_skipped.is_empty(), "the cheap gate does not classify the blank page");
+        app.mode = Mode::Read;
+        assert!(app.auto_ocr_candidate().is_none());
+        app.mode = Mode::Edit;
+        app.dialog = Some(Dialog::JsConsole);
+        assert!(app.auto_ocr_candidate().is_none());
+        app.dialog = None;
+        app.left_open = false;
+        app.quick_tool = QuickTool::Select;
+        assert!(app.auto_ocr_candidate().is_none(), "another tool does not start discovery");
+        app.quick_tool = QuickTool::EditText;
+        assert!(app.auto_ocr_candidate().is_some(), "returning to Edit makes it eligible again");
+        assert!(app.views[0].auto_ocr_skipped.is_empty());
+    }
+
+    /// Unavailable recognition must not inspect and classify document content on every
+    /// frame. In particular it must not cache a blank page as a non-scan before the language
+    /// gate runs; the same document can later be used with a supported engine.
+    #[test]
+    fn unavailable_automatic_ocr_leaves_pages_unclassified() {
+        let blank = Session::new().create_blank(595.0, 842.0, 1).unwrap().to_vec();
+        let mut app = app_with(blank);
+        app.ocr_draft.language = "tr".into();
+        app.ocr_draft.engine = EngineChoice::Ocrs;
+        let id = app.active_ids().unwrap().1;
+        let before = app.session.get(id).unwrap().bytes.clone();
+        for _ in 0..3 {
+            app.auto_ocr_scanned_page();
+        }
+        assert!(app.views[0].auto_ocr_skipped.is_empty(), "an unavailable engine must not inventory and classify pages");
+        assert!(app.views[0].auto_ocr_tried.is_empty());
+        assert!(app.ocr_run.is_none());
+        assert!(Arc::ptr_eq(&before, &app.session.get(id).unwrap().bytes), "no document change was attempted");
     }
 
     /// These rules need no OCR models (the run itself judges the page's own text), so they are
@@ -1206,6 +1538,7 @@ mod tests {
                 guard,
                 automatic: automatic.then_some(AutoOcr { page: 0, generation }),
                 editable: false,
+                settings: OcrSettings::default(),
             }
         };
         let label = |app: &PdfCraftApp| app.session.get(app.active_ids().unwrap().1).unwrap().can_undo().map(String::from);
@@ -1255,7 +1588,14 @@ mod tests {
         };
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
+        app.ocr_run = Some(OcrRun {
+            doc: id,
+            progress,
+            guard,
+            automatic: Some(AutoOcr { page: 0, generation }),
+            editable: false,
+            settings: OcrSettings::default(),
+        });
         app.views[0].auto_ocr_tried.insert(0);
         // The document changes while the run is out.
         let img = craft_image_codecs::Image::from_u8(8, 8, craft_image_codecs::ChannelLayout::Rgba, [250, 250, 250, 255].repeat(64)).unwrap();
@@ -1295,7 +1635,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 3, ..Default::default() }));
         poison(&progress);
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, settings: OcrSettings::default() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the next run isn't refused as already running");
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
@@ -1502,7 +1842,7 @@ mod tests {
         };
         let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, settings: OcrSettings::default() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
@@ -1538,7 +1878,7 @@ mod tests {
         };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false, settings: OcrSettings::default() });
         app.poll_ocr();
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.contains("3 characters had no font"), "{toast}");
@@ -1565,7 +1905,7 @@ mod tests {
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;
-        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true });
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: true, settings: OcrSettings::default() });
         app.poll_ocr();
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), None, "no invisible layer was written");

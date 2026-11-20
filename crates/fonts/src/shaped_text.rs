@@ -6,6 +6,7 @@
 //! draws the rest ([`thai_pieces`]).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
@@ -23,7 +24,7 @@ pub fn is_thai(c: char) -> bool {
 /// Thai vowel signs and tone marks drawn on the consonant before them, and Sara Am, which the
 /// face splits over it: a line never breaks before one, so a mark stays on its letter.
 pub fn joins_previous(c: char) -> bool {
-    matches!(u32::from(c), 0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E)
+    matches!(u32::from(c), 0x0300..=0x036F | 0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E)
 }
 
 /// Why Thai text can't be drawn, for a message an agent or user can act on.
@@ -278,6 +279,16 @@ impl ShapedFonts {
             let Some(&k) = self.index.get(&cluster_key(c)) else { continue };
             let Some(name) = self.names.get(k / GLYPHS_PER_FONT) else { continue };
             let code = u8::try_from(k % GLYPHS_PER_FONT + 1).unwrap_or(1);
+            let logical = c.script == ShapedScript::Latin && c.text.chars().any(is_mark);
+            if logical {
+                let mut prefix = String::from("/Span << /ActualText <FEFF");
+                for scalar in c.text.encode_utf16() {
+                    // Writing to a String is infallible.
+                    let _ = write!(prefix, "{scalar:04X}");
+                }
+                prefix.push_str("> >> BDC\n");
+                out.extend(prefix.bytes());
+            }
             if *current != Some(k / GLYPHS_PER_FONT) {
                 out.extend(format!("/{name} {} Tf ", n(size)).bytes());
                 *current = Some(k / GLYPHS_PER_FONT);
@@ -285,6 +296,9 @@ impl ShapedFonts {
             out.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
             out.extend(literal(&[code]));
             out.extend_from_slice(b" Tj\n");
+            if logical {
+                out.extend_from_slice(b"EMC\n");
+            }
             pen += c.advance * size + spacing + if c.text == " " { word_spacing } else { 0.0 };
         }
         pen
@@ -379,8 +393,14 @@ pub fn first_undrawable(s: &str) -> Option<char> {
 
 /// [`first_undrawable`] for one line drawn as it is: a line break in it counts.
 pub fn first_undrawable_in_line(line: &str) -> Option<char> {
+    if let Some(mark) = crate::latin_text::clusters(line).find_map(|cluster| {
+        let first = cluster.chars().next()?;
+        is_mark(first).then_some(first)
+    }) {
+        return Some(mark);
+    }
     let thai_fails = line.chars().any(is_thai) && thai_pieces(line).is_err();
-    line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
+    line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) && !latin_fallback(*c) })
 }
 
 /// Why the Thai in `text` can't be drawn ([`thai_message`]): this build has no Thai face, or the
@@ -628,7 +648,7 @@ mod tests {
     fn thai_runs_are_shaped_and_the_rest_left_to_the_standard_font() {
         assert_eq!(thai_pieces("Hello").unwrap(), [Piece::Latin("Hello".into())]);
         assert!(joins_previous('\u{0E49}') && joins_previous('\u{0E33}') && !joins_previous('ก') && !joins_previous('a'));
-        assert_eq!((first_undrawable("Café\nпривет"), thai_refusal("Café"), thai_reach("Hg")), (Some('п'), None, None));
+        assert_eq!((first_undrawable("Café\nпривет"), thai_refusal("Café"), thai_reach("Hg")), (None, None, None));
         if crate::document_thai_font().is_none() {
             assert_eq!(thai_pieces("น้ำ 1"), Err(GlyphError::NoFont));
             assert!(thai_message(GlyphError::NoFont, "").contains("this build has none"));

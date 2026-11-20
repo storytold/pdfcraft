@@ -281,6 +281,18 @@ impl OcrsRecognizer {
     }
 }
 
+/// Validate before inference, including for callers that bypass the engine selector.
+fn validate_options(options: &RecognizeOptions) -> Result<(), OcrError> {
+    options.model_profile.validate(&options.language)?;
+    if options.model_profile != super::ModelProfile::Standard {
+        return Err(OcrError::Recognize("turkish_extended requires Tesseract; OCRS supports only the standard model profile".into()));
+    }
+    if super::is_turkish_language(&options.language) {
+        return Err(OcrError::Recognize("Turkish OCR requires Tesseract with Turkish (tur) language data; the ocrs model reads only English".into()));
+    }
+    Ok(())
+}
+
 impl Recognizer for OcrsRecognizer {
     fn id(&self) -> &'static str {
         "ocrs"
@@ -294,7 +306,8 @@ impl Recognizer for OcrsRecognizer {
         LANGUAGES.iter().map(|(c, n)| ((*c).to_string(), (*n).to_string())).collect()
     }
 
-    fn recognize(&self, image: &OcrImage, _options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+    fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+        validate_options(options)?;
         self.engine.recognize(image.rgba(), image.width(), image.height())
     }
 }
@@ -332,6 +345,37 @@ mod tests {
         // A word wholly in the padding keeps its own box rather than none.
         assert_eq!(clip([262.0, 94.0, 270.0, 146.0], line), [262.0, 94.0, 270.0, 146.0]);
         assert_eq!(clip([1.0, 2.0, 3.0, 4.0], None), [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn extended_profile_is_refused_before_ocrs_inference_without_loading_models() {
+        for language in ["tr", "tr-TR", "tr_CY.UTF-8", "tur"] {
+            let options = RecognizeOptions { language: language.into(), model_profile: super::super::ModelProfile::TurkishExtended };
+            let error = validate_options(&options).unwrap_err();
+            assert!(error.to_string().contains("Tesseract") && error.to_string().contains("OCRS"), "{error}");
+        }
+        for language in ["en", "unknown"] {
+            assert!(validate_options(&RecognizeOptions { language: language.into(), ..RecognizeOptions::default() }).is_ok());
+        }
+    }
+
+    /// Direct library callers must receive the same Turkish-language refusal as the engine:
+    /// the built-in model cannot read Turkish, even when installed and ready to recognise.
+    #[test]
+    fn turkish_recognition_is_refused_by_the_english_only_model() {
+        let Some(models) = Models::find() else {
+            eprintln!("skipped: OCR models not installed (cargo xtask models)");
+            return;
+        };
+        let recognizer = OcrsRecognizer::load(&models).unwrap();
+        let image = OcrImage::new(8, 8, vec![255; 8 * 8 * 4]).unwrap();
+        for language in ["tr", " TR ", "tr-TR", "tr_CY.UTF-8", "tur"] {
+            let result = recognizer.recognize(&image, &RecognizeOptions { language: language.into(), ..RecognizeOptions::default() });
+            assert!(
+                matches!(result, Err(OcrError::Recognize(ref reason)) if reason.contains("Turkish") && reason.contains("Tesseract")),
+                "{language:?} must be refused before an English-only reading: {result:?}"
+            );
+        }
     }
 
     /// Raw dimensions are untrusted (they come from callers, ultimately from documents): zero

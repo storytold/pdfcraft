@@ -19,6 +19,49 @@ mod scan;
 pub use scan::ScanDraft;
 use scan::scan_tab;
 
+/// Receive complete marked insertions before egui's scalar limit could strip an
+/// accent. An over-limit NFD draft stays editable while Apply rejects it; plain
+/// input retains its existing partial-insertion limit.
+struct SignatureTextBuffer<'a> {
+    text: &'a mut String,
+}
+
+impl egui::TextBuffer for SignatureTextBuffer<'_> {
+    fn is_mutable(&self) -> bool {
+        true
+    }
+
+    fn as_str(&self) -> &str {
+        self.text
+    }
+
+    fn insert_text(&mut self, text: &str, char_index: egui::text::CharIndex) -> usize {
+        let accepted = if pdfcraft_fonts::latin_text::required(text) {
+            text
+        } else {
+            let room = pdfcraft_engine::MAX_SIGNATURE_CHARS.saturating_sub(self.text.chars().count());
+            let end = text.char_indices().nth(room).map_or(text.len(), |(at, _)| at);
+            text.get(..end).unwrap_or_default()
+        };
+        <String as egui::TextBuffer>::insert_text(self.text, accepted, char_index)
+    }
+
+    fn delete_char_range(&mut self, range: std::ops::Range<egui::text::CharIndex>) {
+        if range.start <= range.end {
+            <String as egui::TextBuffer>::delete_char_range(self.text, range);
+        }
+    }
+
+    fn replace_with(&mut self, text: &str) {
+        // Undo/redo restores the exact preceding draft, including a refused one.
+        <String as egui::TextBuffer>::replace_with(self.text, text);
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<SignatureTextBuffer<'static>>()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FillTool {
     Text,
@@ -98,7 +141,11 @@ pub struct SigDraft {
 
 impl SigDraft {
     pub fn new(initials: bool, name: &str) -> Self {
-        let text = if initials { name.split_whitespace().filter_map(|w| w.chars().next()).collect() } else { name.trim().to_string() };
+        let text = if initials {
+            name.split_whitespace().filter_map(|word| pdfcraft_fonts::latin_text::clusters(word).next()).collect()
+        } else {
+            name.trim().to_string()
+        };
         Self { text, initials, ..Default::default() }
     }
 
@@ -138,6 +185,8 @@ impl SigDraft {
         } else {
             !self.text.trim().is_empty()
                 && self.text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
+                && pdfcraft_engine::script_missing(&self.text).is_none()
+                && !pdfcraft_engine::script_outline(&self.text).contours.is_empty()
         }
     }
 
@@ -149,7 +198,7 @@ impl SigDraft {
         } else if self.drawing {
             Some(SavedSig::Drawn(self.strokes.clone()))
         } else {
-            Some(SavedSig::Typed(self.text.trim().to_string()))
+            self.ready().then(|| SavedSig::Typed(self.text.trim().to_string()))
         }
     }
 }
@@ -755,13 +804,22 @@ pub(crate) fn signature_pad(
     }
     if !d.drawing {
         let l = ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Type your {what}."), &[("what", what)])).color(t.text_muted));
-        ui.add(
-            egui::TextEdit::singleline(&mut d.text)
-                .char_limit(pdfcraft_engine::MAX_SIGNATURE_CHARS)
-                .desired_width(460.0)
-                .hint_text(tl!(if d.initials { "Initials" } else { "Your name" })),
-        )
-        .labelled_by(l.id);
+        let mut buffer = SignatureTextBuffer { text: &mut d.text };
+        ui.add(egui::TextEdit::singleline(&mut buffer).desired_width(460.0).hint_text(tl!(if d.initials { "Initials" } else { "Your name" })))
+            .labelled_by(l.id);
+        if d.text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() > pdfcraft_engine::MAX_SIGNATURE_CHARS {
+            ui.horizontal(|ui| {
+                let color = ui.visuals().error_fg_color;
+                ui.colored_label(color, tl!("At most"));
+                ui.colored_label(color, pdfcraft_engine::MAX_SIGNATURE_CHARS.to_string());
+                ui.colored_label(color, tl!("characters"));
+            });
+        } else if let Some(ch) = pdfcraft_engine::script_missing(&d.text) {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("The signature fonts cannot draw U+{:04X}; use supported text or an image.", u32::from(ch)),
+            );
+        }
         let (rect, _) = ui.allocate_exact_size(vec2(460.0, 150.0), Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, CornerRadius::same(6), Color32::WHITE);
@@ -1027,6 +1085,35 @@ impl crate::PdfCraftApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nfd_signature_initials_keep_the_complete_first_clusters() {
+        let initials = super::SigDraft::new(true, "I\u{307}stanbul G\u{306}uler S\u{327}ahin");
+        assert_eq!(initials.text, "I\u{307}G\u{306}S\u{327}");
+        assert_eq!(super::SigDraft::new(true, "Grace Hopper").text, "GH");
+        assert_eq!(super::SigDraft::new(false, " I\u{307}stanbul G\u{306}uler ").text, "I\u{307}stanbul G\u{306}uler");
+    }
+
+    #[test]
+    fn nfd_signature_unplaceable_drafts_cannot_be_saved() {
+        for text in ["🦀".to_owned(), "\u{306}g".to_owned(), format!("g{}", "\u{306}".repeat(33)), "A".repeat(257)] {
+            let draft = super::SigDraft { text, ..Default::default() };
+            assert!(!draft.ready(), "an unplaceable typed draft must not enable Apply: {:?}", draft.text);
+            assert_eq!(draft.saved(), None, "a direct caller must not save an invalid typed draft");
+        }
+    }
+
+    #[test]
+    fn nfd_signature_zero_ink_is_not_an_applicable_graphic() {
+        // Inter contains a zero-width-space glyph, so cmap coverage succeeds while
+        // the actual signature graphic has nothing to place.
+        let text = "\u{200b}";
+        assert_eq!(pdfcraft_engine::script_missing(text), None);
+        assert!(pdfcraft_engine::script_outline(text).contours.is_empty());
+        let draft = super::SigDraft { text: text.into(), ..Default::default() };
+        assert!(!draft.ready());
+        assert_eq!(draft.saved(), None);
+    }
+
     #[test]
     fn undo_removes_the_last_stroke_and_skips_empty_ones() {
         let mut d = super::SigDraft { drawing: true, ..Default::default() };

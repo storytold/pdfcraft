@@ -28,9 +28,17 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         let w = &mut ui.visuals_mut().widgets;
         w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
         w.inactive.bg_fill = t.hover;
-        let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
-        let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
-        if a || b {
+        let changed = ui
+            .horizontal_wrapped(|ui| {
+                let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
+                let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
+                a || b
+            })
+            .inner;
+        // Give the language option a full row: leftover width beside the other
+        // options would split its single-word name in the default narrow panel.
+        let c = ui.add(widgets::checkbox(&mut find.turkish, crate::canvas::Find::turkish_label())).changed();
+        if changed || c {
             find.case_query.clear();
         }
     });

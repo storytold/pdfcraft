@@ -1,0 +1,662 @@
+--- a/src/printer/dxgi.rs
++++ b/src/printer/dxgi.rs
+@@ -1,4 +1,5 @@
+-use crate::printer::PrinterDevice;
++use super::job_init::{at_job_init_with_observer, JobInitError, JobInitEvent, JobInitStage};
++use crate::printer::{NewOutputFile, PrinterDevice};
+ use crate::ticket::PrintTicket;
+ use crate::ticket::ToDevModeError;
+ use crate::utils::com::ComInitializer;
+@@ -41,7 +42,10 @@ use windows::Win32::Storage::Xps::Printing::PrintDocumentPackageTargetFactory;
+ use windows::Win32::System::Com::CoCreateInstance;
+ use windows::Win32::System::Com::CLSCTX_ALL;
+ use windows::Win32::System::Com::{IConnectionPoint, IConnectionPointContainer};
+-use windows::Win32::UI::Shell::SHCreateMemStream;
++use windows::Win32::System::Com::{
++    IStream, STGM_FAILIFTHERE, STGM_READWRITE, STGM_SHARE_EXCLUSIVE, STREAM_SEEK_SET,
++};
++use windows::Win32::UI::Shell::{SHCreateMemStream, SHCreateStreamOnFileEx};
+ 
+ #[derive(Error, Debug)]
+ /// Represents an error occurred while printing via DXGI.
+@@ -58,6 +62,9 @@ pub enum DxgiPrintContextError {
+     /// Failed to start job.
+     #[error("Failed to start job")]
+     FailedToStartJob(#[source] windows::core::Error),
++    /// The precise failed native initialization call, elapsed time and original HRESULT.
++    #[error("DXGI job initialization failed")]
++    JobInitialization(#[source] JobInitError<windows::core::Error>),
+     /// Stream not allocated.
+     #[error("Stream not allocated")]
+     StreamNotAllocated,
+@@ -69,6 +76,9 @@ pub enum DxgiPrintContextError {
+     FailedToClosePrintControl(#[source] windows::core::Error),
+ }
+ 
++// Windows SDK winnt.h: FILE_ATTRIBUTE_NORMAL = 0x00000080.
++const NORMAL_FILE_ATTRIBUTES: u32 = 0x00000080;
++
+ const DEFAULT_DPI: u32 = 300;
+ 
+ /// The resolution that `dev_mode` asks for, taking one axis for the other when it asks for only
+@@ -106,6 +116,8 @@ pub struct DxgiPrintContext {
+     status_connection: IConnectionPoint,
+     status_cookie: u32,
+     completed: bool,
++    // Keep the stream alive through Close/completion and release it before COM uninitializes.
++    _job_output_stream: Option<IStream>,
+     // The last field will be dropped last, according to the drop order.
+     _com_initializer: ComInitializer,
+ }
+@@ -116,6 +128,41 @@ impl DxgiPrintContext {
+         device: &PrinterDevice,
+         options: &PrintTicket,
+         job_name: &OsStr,
++    ) -> Result<Self, DxgiPrintContextError> {
++        Self::new_with_init_observer(device, options, job_name, &mut |_| {})
++    }
++
++    /// The same native initialization, observing only the three job-start calls.
++    /// Events contain no printer name, job name, ticket XML, or document data.
++    /// Callbacks must return promptly; they do not cancel, retry, or change COM apartments.
++    pub fn new_with_init_observer(
++        device: &PrinterDevice,
++        options: &PrintTicket,
++        job_name: &OsStr,
++        observer: &mut dyn FnMut(JobInitEvent),
++    ) -> Result<Self, DxgiPrintContextError> {
++        Self::new_with_output_target(device, options, job_name, None, observer)
++    }
++
++    /// The same DXGI path, with an explicit CREATE_NEW file-backed job output stream.
++    /// No COM, factory, ticket or renderer setting is changed. Failure may leave this new
++    /// file incomplete; callers validate and publish it separately. Existing files are refused.
++    pub fn new_with_output_file_observer(
++        device: &PrinterDevice,
++        options: &PrintTicket,
++        job_name: &OsStr,
++        output: &NewOutputFile,
++        observer: &mut dyn FnMut(JobInitEvent),
++    ) -> Result<Self, DxgiPrintContextError> {
++        Self::new_with_output_target(device, options, job_name, Some(output), observer)
++    }
++
++    fn new_with_output_target(
++        device: &PrinterDevice,
++        options: &PrintTicket,
++        job_name: &OsStr,
++        output: Option<&NewOutputFile>,
++        observer: &mut dyn FnMut(JobInitEvent),
+     ) -> Result<Self, DxgiPrintContextError> {
+         // Initialize COM before calling any COM functions.
+         let _com_initializer = ComInitializer::new();
+@@ -171,29 +218,75 @@ impl DxgiPrintContext {
+                     .map_err(DxgiPrintContextError::InitializeDirectX)?;
+ 
+             let document_target_factory: IPrintDocumentPackageTargetFactory =
+-                CoCreateInstance(&PrintDocumentPackageTargetFactory, None, CLSCTX_ALL)
+-                    .map_err(DxgiPrintContextError::FailedToStartJob)?;
++                at_job_init_with_observer(
++                    JobInitStage::PackageTargetFactory,
++                    || CoCreateInstance(&PrintDocumentPackageTargetFactory, None, CLSCTX_ALL),
++                    |e| e.code().0,
++                    observer,
++                )
++                .map_err(DxgiPrintContextError::JobInitialization)?;
+             let print_ticket_stream = SHCreateMemStream(Some(options.get_xml()))
+                 .ok_or(DxgiPrintContextError::StreamNotAllocated)?;
+-            let document_target = document_target_factory
+-                .CreateDocumentPackageTargetForPrintJob(
+-                    PCWSTR(wchar::to_wide_chars(device.os_name()).as_ptr()),
+-                    PCWSTR(wchar::to_wide_chars(job_name).as_ptr()),
+-                    None,
+-                    &print_ticket_stream,
++            let job_output_stream = if let Some(output) = output {
++                // SHCreateStreamOnFileEx documents FAILIFTHERE + fCreate=TRUE as
++                // CREATE_NEW. Never use STGM_CREATE: that would replace existing work.
++                let stream = at_job_init_with_observer(
++                    JobInitStage::OutputStreamCreateNew,
++                    || {
++                        SHCreateStreamOnFileEx(
++                            PCWSTR(output.wide().as_ptr()),
++                            (STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_FAILIFTHERE).0,
++                            NORMAL_FILE_ATTRIBUTES,
++                            true,
++                            None::<&IStream>,
++                        )
++                    },
++                    |e| e.code().0,
++                    observer,
++                )
++                .map_err(DxgiPrintContextError::JobInitialization)?;
++                at_job_init_with_observer(
++                    JobInitStage::OutputStreamSeekToStart,
++                    || stream.Seek(0, STREAM_SEEK_SET, None),
++                    |e| e.code().0,
++                    observer,
+                 )
+-                .map_err(DxgiPrintContextError::FailedToStartJob)?;
++                .map_err(DxgiPrintContextError::JobInitialization)?;
++                Some(stream)
++            } else {
++                None
++            };
++            let document_target = at_job_init_with_observer(
++                JobInitStage::PackageTarget,
++                || {
++                    document_target_factory.CreateDocumentPackageTargetForPrintJob(
++                        PCWSTR(wchar::to_wide_chars(device.os_name()).as_ptr()),
++                        PCWSTR(wchar::to_wide_chars(job_name).as_ptr()),
++                        job_output_stream.as_ref(),
++                        &print_ticket_stream,
++                    )
++                },
++                |e| e.code().0,
++                observer,
++            )
++            .map_err(DxgiPrintContextError::JobInitialization)?;
+             let print_control_options = D2D1_PRINT_CONTROL_PROPERTIES {
+                 rasterDPI: max(dpi.0, dpi.1) as f32,
+                 ..Default::default()
+             };
+-            let print_control = d2d_device
+-                .CreatePrintControl(
+-                    &wic_factory,
+-                    &document_target,
+-                    Some(ptr::addr_of!(print_control_options)),
+-                )
+-                .map_err(DxgiPrintContextError::FailedToStartJob)?;
++            let print_control = at_job_init_with_observer(
++                JobInitStage::PrintControl,
++                || {
++                    d2d_device.CreatePrintControl(
++                        &wic_factory,
++                        &document_target,
++                        Some(ptr::addr_of!(print_control_options)),
++                    )
++                },
++                |e| e.code().0,
++                observer,
++            )
++            .map_err(DxgiPrintContextError::JobInitialization)?;
+ 
+             let completion_source =
+                 PrintCompletionSource::new().map_err(DxgiPrintContextError::FailedToCreateEvent)?;
+@@ -225,6 +318,7 @@ impl DxgiPrintContext {
+                 status_connection,
+                 status_cookie,
+                 completed: false,
++                _job_output_stream: job_output_stream,
+                 _com_initializer,
+             })
+         }
+--- /dev/null
++++ b/src/printer/file_target.rs
+@@ -0,0 +1,42 @@
++//! A bounded, non-normalizing path for a native CREATE_NEW output stream.
++use std::{
++    os::windows::ffi::OsStrExt,
++    path::{Path, PathBuf},
++};
++use thiserror::Error;
++
++/// Invalid path supplied for a new native output file.
++#[derive(Debug, Error, PartialEq, Eq)]
++#[error("native output requires an absolute path without NUL and at most 32767 UTF-16 units")]
++pub struct OutputFilePathError;
++
++/// Describes a new native output file, without opening or reserving it yet.
++/// The DXGI constructor uses the kernel CREATE_NEW-equivalent stream operation.
++pub struct NewOutputFile {
++    path: PathBuf,
++    wide: Vec<u16>,
++}
++
++impl NewOutputFile {
++    /// Validate and bound a path without changing its Unicode or touching the filesystem.
++    pub fn new(path: &Path) -> Result<Self, OutputFilePathError> {
++        let mut wide: Vec<u16> = path.as_os_str().encode_wide().take(32768).collect();
++        if !path.is_absolute() || wide.len() >= 32768 || wide.contains(&0) {
++            return Err(OutputFilePathError);
++        }
++        wide.push(0);
++        Ok(Self {
++            path: path.into(),
++            wide,
++        })
++    }
++
++    /// The original path; validation does not normalize or canonicalize it.
++    pub fn path(&self) -> &Path {
++        &self.path
++    }
++
++    pub(super) fn wide(&self) -> &[u16] {
++        &self.wide
++    }
++}
+--- /dev/null
++++ b/src/printer/job_init.rs
+@@ -0,0 +1,321 @@
++//! Content-free diagnostics for the three native print-job initialization calls.
++//!
++//! This module needs no Windows APIs. The caller supplies the native HRESULT and retains
++//! the original error, so a localized message is never parsed to determine a cause.
++
++use std::error::Error;
++use std::fmt;
++use std::time::{Duration, Instant};
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++/// The native call starting a DXGI print job; excludes document loading and completion.
++pub enum JobInitStage {
++    /// Instantiate the package-target COM factory.
++    PackageTargetFactory,
++    /// Ask that factory to start the job and return its package target.
++    PackageTarget,
++    /// Create the Direct2D control for the package target.
++    PrintControl,
++    /// Create a new file-backed output stream without replacing an existing file.
++    OutputStreamCreateNew,
++    /// Put the new stream at byte zero, as the package-target API requires.
++    OutputStreamSeekToStart,
++}
++
++impl fmt::Display for JobInitStage {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(match self {
++            Self::PackageTargetFactory => "CoCreateInstance(PrintDocumentPackageTargetFactory)",
++            Self::PackageTarget => "CreateDocumentPackageTargetForPrintJob",
++            Self::PrintControl => "ID2D1Device::CreatePrintControl",
++            Self::OutputStreamCreateNew => "SHCreateStreamOnFileEx(CREATE_NEW)",
++            Self::OutputStreamSeekToStart => "IStream::Seek(FILE_BEGIN)",
++        })
++    }
++}
++
++/// The reported native category. Cancellation does not identify who canceled or why.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum NativeFailureKind {
++    /// The native API reported print or operation cancellation; the actor is unknown.
++    Canceled,
++    /// The native API reported a timeout; this does not identify a particular waiter.
++    TimedOut,
++    /// A different or unknown HRESULT, preserved without inferring a cause.
++    Other,
++}
++
++/// Classify an HRESULT, never a localized error message or an unwrapped Win32 number.
++pub fn classify_hresult(hresult: i32) -> NativeFailureKind {
++    match hresult as u32 {
++        0x8007003F | 0x800704C7 => NativeFailureKind::Canceled,
++        0x800705B4 => NativeFailureKind::TimedOut,
++        _ => NativeFailureKind::Other,
++    }
++}
++
++#[derive(Debug)]
++/// A failed initialization call with content-free context and its untouched native error.
++pub struct JobInitError<E> {
++    stage: JobInitStage,
++    elapsed: Duration,
++    hresult: i32,
++    source: E,
++}
++
++impl<E> JobInitError<E> {
++    /// The exact native call that returned an error.
++    pub fn stage(&self) -> JobInitStage {
++        self.stage
++    }
++
++    /// Time spent inside this one call, not the whole print job or completion waiter.
++    pub fn elapsed(&self) -> Duration {
++        self.elapsed
++    }
++
++    /// The original signed HRESULT with every bit preserved.
++    pub fn hresult(&self) -> i32 {
++        self.hresult
++    }
++
++    /// The native category, without attributing cancellation to a person or file.
++    pub fn kind(&self) -> NativeFailureKind {
++        classify_hresult(self.hresult)
++    }
++}
++
++impl<E> fmt::Display for JobInitError<E> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(
++            f,
++            "{} failed after {} ms (HRESULT 0x{:08X})",
++            self.stage,
++            self.elapsed.as_millis(),
++            self.hresult as u32
++        )
++    }
++}
++
++impl<E: Error + 'static> Error for JobInitError<E> {
++    fn source(&self) -> Option<&(dyn Error + 'static)> {
++        Some(&self.source)
++    }
++}
++
++/// The outcome reported for one observed native call.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum JobInitOutcome {
++    /// Emitted and flushed by the caller before entering the native API.
++    Begin,
++    /// The native wrapper returned Ok; a successful HRESULT is not invented.
++    Succeeded,
++    /// The native wrapper returned its original error.
++    Failed,
++}
++
++/// Content-free observation of one native initialization call.
++#[derive(Clone, Copy, Debug)]
++pub struct JobInitEvent {
++    /// The exact native call being observed.
++    pub stage: JobInitStage,
++    /// Whether it begins, succeeds, or fails.
++    pub outcome: JobInitOutcome,
++    /// Time inside this call; absent for Begin.
++    pub elapsed: Option<Duration>,
++    /// Native failure HRESULT only; absent for Begin and success.
++    pub hresult: Option<i32>,
++}
++
++/// Invoke once, preserving ordering, original native error and HRESULT.
++pub(super) fn at_job_init_with_observer<T, E>(
++    stage: JobInitStage,
++    call: impl FnOnce() -> Result<T, E>,
++    hresult: impl FnOnce(&E) -> i32,
++    observer: &mut dyn FnMut(JobInitEvent),
++) -> Result<T, JobInitError<E>> {
++    observer(JobInitEvent {
++        stage,
++        outcome: JobInitOutcome::Begin,
++        elapsed: None,
++        hresult: None,
++    });
++    let start = Instant::now();
++    match call() {
++        Ok(value) => {
++            observer(JobInitEvent {
++                stage,
++                outcome: JobInitOutcome::Succeeded,
++                elapsed: Some(start.elapsed()),
++                hresult: None,
++            });
++            Ok(value)
++        }
++        Err(source) => {
++            let elapsed = start.elapsed();
++            let hresult = hresult(&source);
++            observer(JobInitEvent {
++                stage,
++                outcome: JobInitOutcome::Failed,
++                elapsed: Some(elapsed),
++                hresult: Some(hresult),
++            });
++            Err(JobInitError {
++                stage,
++                elapsed,
++                hresult,
++                source,
++            })
++        }
++    }
++}
++
++#[cfg(test)]
++pub(super) fn at_job_init<T, E>(
++    stage: JobInitStage,
++    call: impl FnOnce() -> Result<T, E>,
++    hresult: impl FnOnce(&E) -> i32,
++) -> Result<T, JobInitError<E>> {
++    at_job_init_with_observer(stage, call, hresult, &mut |_| {})
++}
++
++#[cfg(test)]
++#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
++mod tests {
++    use super::*;
++    use std::cell::Cell;
++
++    #[derive(Debug, PartialEq)]
++    struct NativeFailure(i32);
++
++    impl fmt::Display for NativeFailure {
++        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++            f.write_str("synthetic native failure")
++        }
++    }
++
++    impl Error for NativeFailure {}
++
++    #[test]
++    fn each_failed_call_has_its_own_stage_and_keeps_hresult_and_source() {
++        for (stage, label) in [
++            (
++                JobInitStage::PackageTargetFactory,
++                "CoCreateInstance(PrintDocumentPackageTargetFactory)",
++            ),
++            (
++                JobInitStage::PackageTarget,
++                "CreateDocumentPackageTargetForPrintJob",
++            ),
++            (
++                JobInitStage::PrintControl,
++                "ID2D1Device::CreatePrintControl",
++            ),
++        ] {
++            let calls = Cell::new(0);
++            let code = 0x8007003F_u32 as i32;
++            let error = at_job_init(
++                stage,
++                || {
++                    calls.set(calls.get() + 1);
++                    Err::<(), _>(NativeFailure(code))
++                },
++                |e| e.0,
++            )
++            .unwrap_err();
++            assert_eq!(calls.get(), 1);
++            assert_eq!(error.stage(), stage);
++            assert_eq!(error.hresult(), code);
++            assert_eq!(error.kind(), NativeFailureKind::Canceled);
++            assert!(error.to_string().contains(label), "{error}");
++            assert!(error.to_string().contains("0x8007003F"), "{error}");
++            assert!(error
++                .to_string()
++                .contains(&format!("{} ms", error.elapsed().as_millis())));
++            assert_eq!(
++                error
++                    .source()
++                    .and_then(|e| e.downcast_ref::<NativeFailure>()),
++                Some(&NativeFailure(code))
++            );
++        }
++    }
++
++    #[test]
++    fn success_is_returned_once_without_reading_an_hresult() {
++        let calls = Cell::new(0);
++        let value = at_job_init(
++            JobInitStage::PackageTarget,
++            || {
++                calls.set(calls.get() + 1);
++                Ok::<_, NativeFailure>(17)
++            },
++            |_| panic!("HRESULT must only be read on failure"),
++        )
++        .unwrap();
++        assert_eq!(value, 17);
++        assert_eq!(calls.get(), 1);
++    }
++
++    #[test]
++    fn observer_reports_begin_then_failure_with_original_hresult() {
++        for stage in [
++            JobInitStage::PackageTargetFactory,
++            JobInitStage::PackageTarget,
++            JobInitStage::PrintControl,
++        ] {
++            let mut seen = Vec::new();
++            let code = 0x8007003F_u32 as i32;
++            let failure = at_job_init_with_observer(
++                stage,
++                || Err::<(), _>(NativeFailure(code)),
++                |e| e.0,
++                &mut |event| seen.push(event),
++            )
++            .unwrap_err();
++            assert_eq!(seen.len(), 2);
++            assert_eq!(seen[0].stage, stage);
++            assert_eq!(seen[0].outcome, JobInitOutcome::Begin);
++            assert!(seen[0].elapsed.is_none() && seen[0].hresult.is_none());
++            assert_eq!(seen[1].stage, stage);
++            assert_eq!(seen[1].outcome, JobInitOutcome::Failed);
++            assert_eq!(seen[1].hresult, Some(code));
++            assert_eq!(seen[1].elapsed, Some(failure.elapsed()));
++        }
++    }
++
++    #[test]
++    fn observer_success_never_invents_an_hresult() {
++        let mut seen = Vec::new();
++        let value = at_job_init_with_observer(
++            JobInitStage::PrintControl,
++            || Ok::<_, NativeFailure>(7),
++            |_| panic!("success has no native failure HRESULT"),
++            &mut |event| seen.push(event),
++        )
++        .unwrap();
++        assert_eq!(value, 7);
++        assert_eq!(
++            seen.iter().map(|e| e.outcome).collect::<Vec<_>>(),
++            [JobInitOutcome::Begin, JobInitOutcome::Succeeded]
++        );
++        assert!(seen[1].elapsed.is_some() && seen[1].hresult.is_none());
++    }
++
++    #[test]
++    fn canceled_timeout_and_unrelated_errors_are_distinct() {
++        for (code, expected) in [
++            (0x8007003F_u32, NativeFailureKind::Canceled),
++            (0x800704C7, NativeFailureKind::Canceled),
++            (0x800705B4, NativeFailureKind::TimedOut),
++            (0x80070002, NativeFailureKind::Other),
++            (0x80070005, NativeFailureKind::Other),
++            (0x80010106, NativeFailureKind::Other),
++            (0x0000003F, NativeFailureKind::Other),
++            (0x00000000, NativeFailureKind::Other),
++            (0x00000001, NativeFailureKind::Other),
++        ] {
++            assert_eq!(classify_hresult(code as i32), expected, "0x{code:08X}");
++        }
++    }
++}
+--- a/src/printer/mod.rs
++++ b/src/printer/mod.rs
+@@ -1,7 +1,9 @@
+ mod device;
+ mod dxgi;
+ mod file;
++mod file_target;
+ mod image;
++mod job_init;
+ #[cfg(feature = "pdfium")]
+ mod pdfium;
+ mod win_pdf;
+@@ -10,7 +12,11 @@ mod xps;
+ pub use device::{DriverInfoError, PrinterDevice};
+ pub use dxgi::{DxgiPrintContext, DxgiPrintContextError};
+ pub use file::FilePrinter;
++pub use file_target::{NewOutputFile, OutputFilePathError};
+ pub use image::{ImagePrinter, ImagePrinterError};
++pub use job_init::{
++    classify_hresult, JobInitError, JobInitEvent, JobInitOutcome, JobInitStage, NativeFailureKind,
++};
+ #[cfg(feature = "pdfium")]
+ pub use pdfium::{PdfiumPrinter, PdfiumPrinterError};
+ pub use win_pdf::{WinPdfPrinter, WinPdfPrinterError};
+--- a/src/printer/win_pdf.rs
++++ b/src/printer/win_pdf.rs
+@@ -1,5 +1,6 @@
+ use super::DxgiPrintContext;
+ use super::DxgiPrintContextError;
++use super::{JobInitEvent, NewOutputFile};
+ use crate::printer::FilePrinter;
+ use crate::printer::PrinterDevice;
+ use crate::ticket::PrintTicket;
+@@ -109,13 +110,62 @@ impl WinPdfPrinter {
+         &self,
+         path: &Path,
+         options: PrintTicket,
++        progress: impl FnMut(u32, u32),
++    ) -> Result<(), WinPdfPrinterError> {
++        self.print_with_target(path, options, None, &mut |_| {}, progress)
++    }
++
++    /// Render through the existing vector DXGI path into a new native file.
++    /// This safe convenience API observes no init events and preserves progress semantics.
++    pub fn print_to_file_with_progress(
++        &self,
++        path: &Path,
++        options: PrintTicket,
++        output: &NewOutputFile,
++        progress: impl FnMut(u32, u32),
++    ) -> Result<(), WinPdfPrinterError> {
++        self.print_to_file_with_progress_and_init_observer(
++            path,
++            options,
++            output,
++            &mut |_| {},
++            progress,
++        )
++    }
++
++    /// Render through Windows.Data.Pdf and the existing DXGI print control into a new
++    /// native output file. This is not PDF export or a raster/GDI fallback.
++    pub fn print_to_file_with_progress_and_init_observer(
++        &self,
++        path: &Path,
++        options: PrintTicket,
++        output: &NewOutputFile,
++        observer: &mut dyn FnMut(JobInitEvent),
++        progress: impl FnMut(u32, u32),
++    ) -> Result<(), WinPdfPrinterError> {
++        self.print_with_target(path, options, Some(output), observer, progress)
++    }
++
++    fn print_with_target(
++        &self,
++        path: &Path,
++        options: PrintTicket,
++        output: Option<&NewOutputFile>,
++        observer: &mut dyn FnMut(JobInitEvent),
+         mut progress: impl FnMut(u32, u32),
+     ) -> Result<(), WinPdfPrinterError> {
+-        let context = DxgiPrintContext::new(
+-            &self.printer,
+-            &options,
+-            path.file_name().unwrap_or(path.as_ref()),
+-        )?;
++        let job_name = path.file_name().unwrap_or(path.as_ref());
++        let context = if let Some(output) = output {
++            DxgiPrintContext::new_with_output_file_observer(
++                &self.printer,
++                &options,
++                job_name,
++                output,
++                observer,
++            )
++        } else {
++            DxgiPrintContext::new_with_init_observer(&self.printer, &options, job_name, observer)
++        }?;
+         let dxgi_device = &context.dxgi_device;
+         let print_control = &context.print_control;
+         let d2d_context = &context.d2d_context;

@@ -7,6 +7,9 @@ use super::*;
 #[path = "mark_transaction_tests.rs"]
 mod mark_transactions;
 
+#[path = "turkish_added_tests.rs"]
+mod turkish_added;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {
@@ -6979,12 +6982,16 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
         ..HeaderFooter::default()
     };
     for (text, refused) in [
-        ("Страница <<1>> из 1 / Page <<1>> of 1", Some('С')),
+        ("Страница <<1>> из 1 / Page <<1>> of 1", None),
         ("TEST-001 <<Page 1 of n>>", None),
         ("Café — 5€ ™ <<Bates Number#6#1#ACME-#>>", None),
         ("Left\r\nRight", None),
         ("A\rB", Some('\r')),
-        ("line one\nΕλληνικά", Some('Ε')),
+        ("line one\nΕλληνικά", None),
+        ("Türkçe Iğdır Şişli", None),
+        ("I\u{307}", None),
+        ("I\u{1ab0}", Some('\u{1ab0}')),
+        ("日本語", Some('日')),
     ] {
         let hf = footer(text);
         assert_eq!(hf.first_undrawable(), refused, "{text:?}");
@@ -7060,10 +7067,10 @@ fn page_text_the_standard_fonts_cant_draw_is_refused() {
     let err = add_content(&mut doc, 0, &Content::Text(text)).unwrap_err().to_string();
     assert!(err.contains("\"日\" (U+65E5)"), "{err}");
     let hf = HeaderFooter {
-        text: ["Ελληνικά".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        text: ["日本語".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
         ..HeaderFooter::default()
     };
-    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+0395"));
+    assert!(add_header_footer(&mut doc, &[0, 1], &hf, true, &cx()).unwrap_err().to_string().contains("U+65E5"));
     let wm = Watermark { text: "机密".into(), ..Watermark::default() };
     assert!(add_watermark(&mut doc, &[0], &wm, true).unwrap_err().to_string().contains("U+673A"));
     let after: Vec<Vec<String>> = (0..3).map(|p| streams(&reopen(&doc), p)).collect();

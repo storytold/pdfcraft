@@ -383,7 +383,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             let vgap = s.bbox[1] - last.bbox[3];
             let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
             let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
-            vgap > -last.h * 0.5
+            // On tilted scans, axis-aligned OCR glyphs make the whole line's box much taller
+            // than one glyph. Its bottom can overlap the next line deeply; comparing line
+            // centres avoids skipping that line and appending a later one to this block.
+            s.cy() - last.cy() > last.h * 0.5
                 && vgap < last.h.max(s.h) * 1.1
                 && overlap > minw * 0.3
                 && (last.h / s.h - 1.0).abs() < 0.6

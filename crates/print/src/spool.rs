@@ -1,6 +1,7 @@
 //! System print spooler supplied by craft-print. PDF composition and permission checks
 //! stay in PdfCraft; these adapters retain the application's print-error surface.
 
+pub use craft_print::rgb;
 pub use craft_print::{
     AUTO_SELECT, Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, apply_queue_defaults, lp_args,
     lpstat_command, parse_lpoptions, parse_lpstat, parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers_parsed,
@@ -121,6 +122,35 @@ pub fn two_sided(printer: &str) -> Option<bool> {
     #[cfg(windows)]
     let _provider = print_ticket_provider();
     craft_print::two_sided(printer)
+}
+
+/// Explicit DXGI file output through the maintained Windows wrapper. The caller owns a new
+/// staging destination and validates/publishes the completed PDF; this never falls back to GDI.
+pub fn submit_dxgi_to_file(pdf: &[u8], job: &Job, output: &std::path::Path) -> Result<String, crate::PrintError> {
+    #[cfg(all(windows, feature = "dxgi-file-output"))]
+    {
+        if let Some(dll) = missing_print_dll() {
+            return Err(unavailable(dll));
+        }
+        let _provider = print_ticket_provider();
+        craft_print::submit_to_file(pdf, &spooled(job), output).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    }
+    #[cfg(not(all(windows, feature = "dxgi-file-output")))]
+    {
+        let _ = (pdf, job, output);
+        Err(crate::PrintError::Spool(
+            "DXGI file output needs a Windows build with the dxgi-file-output feature and prepared native dependencies; use prepare-dxgi-deps.ps1 or explicitly choose as_image true".into(),
+        ))
+    }
+}
+
+#[cfg(all(test, not(all(windows, feature = "dxgi-file-output"))))]
+mod dxgi_without_prepared_deps {
+    #[test]
+    fn unavailable_dxgi_file_output_returns_an_actionable_error_without_submitting() {
+        let error = super::submit_dxgi_to_file(b"not a PDF", &super::Job::default(), std::path::Path::new("never-created.pdf")).unwrap_err();
+        assert!(error.to_string().contains("dxgi-file-output"));
+    }
 }
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);

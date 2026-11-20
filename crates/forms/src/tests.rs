@@ -4,6 +4,8 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 
+mod turkish;
+
 /// One page with a form: text fields (plain, multiline, comb, password, read-only, nested),
 /// a check box with appearances, one without, a radio group, a combo and a multi-select list,
 /// and a push button.

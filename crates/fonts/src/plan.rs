@@ -1,19 +1,25 @@
 //! Planning visible Unicode text output for OCR: which characters the standard WinAnsi
-//! fonts show as is, which need a Type3 font drawn from the craft-fonts faces, and which have
+//! fonts show as is, which need a Type3 font drawn from approved document faces, and which have
 //! no glyph anywhere (written as `?` — and counted, never silently dropped).
 //!
-//! The plan is a pure function of the words ([`TextPlan::for_words`]). The content generators
+//! The scalar plan is a pure function of the words ([`TextPlan::for_words`]); editable OCR
+//! uses [`TextPlan::for_editable_words`] to preflight and shape supported Latin clusters.
+//! The content generators
 //! (`pdfcraft_ocr::text_layer` / `visible_text_layer`) read the per-character codes and
 //! advances from it, and whoever registers the fonts (`pdfcraft_edit::add_type3_fonts`) fills
-//! in each face's resource name and object. The build must work without craft-fonts too: there
-//! [`CRAFT_FONTS`] is empty, nothing can be planned, and every non-WinAnsi character is
-//! reported as a substitution instead.
+//! in each face's resource name and object. The bundled Inter document face remains available
+//! without the optional craft-fonts input; characters no approved face covers are counted as
+//! substitutions instead.
 
 use std::collections::HashMap;
 
+mod editable;
+#[cfg(test)]
+mod editable_tests;
+
 use pdfcraft_cos::ObjRef;
 
-use crate::{CraftFont, GlyphOutline, craft_glyph, document_japanese_font, face_has, fits_win_ansi, win_ansi_char};
+use crate::{CraftFont, GlyphOutline, craft_glyph, document_japanese_font, document_latin_fonts, face_has, fits_win_ansi, win_ansi_char};
 
 /// Unique characters per Type3 font: the same bound the text-editing fallback uses, so one
 /// hostile word cannot balloon into thousands of glyph streams. A face with more characters
@@ -24,14 +30,15 @@ pub const MAX_TYPE3_GLYPHS: usize = 240;
 /// exceed it; hostile input beyond it degrades to `?` substitutions, which are counted.
 pub const MAX_PLAN_GLYPHS: usize = 2400;
 
-/// One planned Type3 font: the glyphs of one craft-fonts face, one character per code
+/// One planned Type3 font: the glyphs of one approved document face, one character per code
 /// (`code = position + 1`, as in the text-editing fallback). `name` and `object` are filled in
 /// when the font is added to a page's resources; until then the content generators fall back to
 /// the WinAnsi path for the words that reference it.
 pub struct PlannedType3 {
     /// The face family the glyphs are drawn from ("Shippori Mincho").
     pub family: &'static str,
-    /// (character, outline with its advance) per code, in code order.
+    /// (scalar label, outline with its advance) per code, in code order. Editable clusters
+    /// use their first scalar as a label; [`TextPlan::cluster_text`] owns their full Unicode.
     pub glyphs: Vec<(char, GlyphOutline)>,
     /// The resource name the content references (`PCOcr`, `PCOcr1`, …); empty until registered.
     pub name: String,
@@ -50,14 +57,14 @@ impl PlannedType3 {
     }
 }
 
-/// How the text layers write a plan's characters: each planned character is a
+/// How the text layers write a plan's characters or editable clusters: each planned code is a
 /// `(font index, code)` pair in its font's encoding; a character no face had a glyph for is
 /// either the font's `?` code or absent from the run (both counted in [`TextPlan::missing`]).
 #[derive(Default)]
 pub struct TextPlan {
     /// One planned font per face chunk, in first-use order.
     pub fonts: Vec<PlannedType3>,
-    /// Per input word: `(font, code)` per character; empty for a word the standard WinAnsi
+    /// Per input word: `(font, code)` per scalar (or checked editable cluster); empty for a word the standard WinAnsi
     /// fonts write as is (or for which nothing could be planned).
     words: Vec<Vec<(usize, u8)>>,
     /// character → where its glyph lives, across all fonts (codes are font-local).
@@ -65,65 +72,74 @@ pub struct TextPlan {
     /// Characters with no code in their word's font: they appear as `?` (or, when not even a
     /// `?` glyph exists, are left out) and are reported, never silently lost.
     missing: usize,
+    // Editable-only metadata: the scalar glyph labels and public encoding remain unchanged.
+    cluster_index: HashMap<String, (usize, u8, usize)>,
+    cluster_sources: HashMap<(usize, u8), String>,
+    shaped_words: HashMap<usize, [f64; 4]>,
+    shaped_points: usize,
 }
 
 impl TextPlan {
     /// Plan the output for `words`, in order: characters the WinAnsi fonts can't show get codes
-    /// in Type3 fonts built from the craft-fonts faces (the document face preferred, then the
-    /// rest of the build input in manifest order); a word whose face can't show a character
+    /// in Type3 fonts built from approved faces (the Japanese document face preferred, then the
+    /// rest of craft-fonts in manifest order, then bundled Inter); a word whose face can't show a character
     /// substitutes its `?`. Faces are chosen per word, so a word of one script stays one face;
-    /// characters already planned for an earlier word keep their code. Built without
-    /// craft-fonts, the plan reports every non-WinAnsi character as a substitution.
+    /// characters already planned for an earlier word keep their code. Without craft-fonts,
+    /// bundled Inter still covers precomposed Turkish, Greek and Cyrillic letters.
     pub fn for_words<'a>(words: impl IntoIterator<Item = &'a str>) -> TextPlan {
         let faces = document_faces();
         let mut coverage = Coverage::default();
         let mut plan = TextPlan::default();
         for word in words {
-            if fits_win_ansi(word) {
-                // The WinAnsi path substitutes '?' behind the caller's back; count it.
-                plan.missing += word.chars().filter(|&c| win_ansi_char(c).is_none()).count();
-                plan.words.push(Vec::new());
-                continue;
-            }
-            let Some(face) = choose_face(&faces, word, &mut coverage) else {
-                // No face for this word's script: the WinAnsi path writes '?' for what it
-                // can't encode.
-                plan.missing += word.chars().filter(|&c| win_ansi_char(c).is_none()).count();
-                plan.words.push(Vec::new());
-                continue;
-            };
-            let mut enc: Vec<(usize, u8)> = Vec::with_capacity(word.len());
-            let mut run: Option<usize> = None;
-            for ch in word.chars() {
-                if let Some(&where_) = plan.index.get(&ch) {
-                    enc.push(where_);
-                    run = Some(where_.0);
-                    continue;
-                }
-                if let Ok(glyph) = craft_glyph(face, ch)
-                    && plan.planned_glyphs() < MAX_PLAN_GLYPHS
-                    && let Some((fi, code)) = plan.add_glyph(face, ch, glyph)
-                {
-                    plan.index.insert(ch, (fi, code));
-                    enc.push((fi, code));
-                    run = Some(fi);
-                    continue;
-                }
-                // The face has no glyph for the character (or the plan is full): substitute
-                // the font's '?', in the font the surrounding run is set in.
-                if let Some((fi, code)) = plan.question_mark(face, run.filter(|&f| plan.fonts[f].family == face.family)) {
-                    enc.push((fi, code));
-                    run = Some(fi);
-                }
-                plan.missing += 1;
-            }
-            plan.words.push(enc);
+            plan.push_scalar_word(word, &faces, &mut coverage);
         }
         plan
     }
 
-    /// The encoding of word `i` (parallel to the slice [`Self::for_words`] planned): a list of
-    /// `(font, code)` per character, or an empty slice for a word the WinAnsi fonts write.
+    fn push_scalar_word(&mut self, word: &str, faces: &[&CraftFont], coverage: &mut Coverage) {
+        if fits_win_ansi(word) {
+            // The WinAnsi path substitutes '?' behind the caller's back; count it.
+            self.missing += word.chars().filter(|&c| win_ansi_char(c).is_none()).count();
+            self.words.push(Vec::new());
+            return;
+        }
+        let Some(face) = choose_face(faces, word, coverage) else {
+            // No face for this word's script: the WinAnsi path writes '?' for what it
+            // can't encode.
+            self.missing += word.chars().filter(|&c| win_ansi_char(c).is_none()).count();
+            self.words.push(Vec::new());
+            return;
+        };
+        let mut enc: Vec<(usize, u8)> = Vec::with_capacity(word.len());
+        let mut run: Option<usize> = None;
+        for ch in word.chars() {
+            if let Some(&where_) = self.index.get(&ch) {
+                enc.push(where_);
+                run = Some(where_.0);
+                continue;
+            }
+            if let Ok(glyph) = craft_glyph(face, ch)
+                && self.planned_glyphs() < MAX_PLAN_GLYPHS
+                && let Some((fi, code)) = self.add_glyph(face, ch, glyph)
+            {
+                self.index.insert(ch, (fi, code));
+                enc.push((fi, code));
+                run = Some(fi);
+                continue;
+            }
+            // The face has no glyph for the character (or the plan is full): substitute
+            // the font's '?', in the font the surrounding run is set in.
+            if let Some((fi, code)) = self.question_mark(face, run.filter(|&f| self.fonts[f].family == face.family)) {
+                enc.push((fi, code));
+                run = Some(fi);
+            }
+            self.missing += 1;
+        }
+        self.words.push(enc);
+    }
+    /// The encoding of word `i` (parallel to the words planned): a list of `(font, code)` per
+    /// scalar, or per complete cluster for marked words from [`Self::for_editable_words`].
+    /// An empty slice selects the WinAnsi path.
     /// Out-of-range indexes degrade to the empty slice rather than panicking — callers pass the
     /// same word list they planned with.
     pub fn encoding(&self, word: usize) -> &[(usize, u8)] {
@@ -166,8 +182,7 @@ impl TextPlan {
         Some((fi, code))
     }
 
-    /// The index of the face's open font, or a fresh one. `None` without craft-fonts (the
-    /// face itself comes from there, so this cannot happen for a planned face).
+    /// The index of the face's open font, or a fresh one. `None` when the plan is full.
     fn font_of_face(&mut self, family: &'static str) -> Option<usize> {
         if let Some(fi) = self.fonts.iter().rposition(|f| f.family == family && f.glyphs.len() < MAX_TYPE3_GLYPHS) {
             return Some(fi);
@@ -180,7 +195,7 @@ impl TextPlan {
     }
 
     /// The code of the font's `?` stand-in, adding the glyph when the font lacks it.
-    /// `prefer` is the run's current font; `None` without craft-fonts.
+    /// `prefer` is the run's current font.
     fn question_mark(&mut self, face: &CraftFont, prefer: Option<usize>) -> Option<(usize, u8)> {
         if let Some(fi) = prefer
             && let Some(code) = self.fonts[fi].glyphs.iter().position(|(c, _)| *c == '?')
@@ -198,7 +213,8 @@ impl TextPlan {
 }
 
 /// The faces that can draw document text, in preference order: the Japanese document face
-/// (serif document text) first, then the rest of the build input in manifest order.
+/// (serif document text) first, then the rest of the build input in manifest order. Bundled
+/// Inter is last, preserving existing CJK preferences while covering Turkish in every build.
 fn document_faces() -> Vec<&'static CraftFont> {
     let mut out = Vec::new();
     if let Some(d) = document_japanese_font() {
@@ -209,6 +225,7 @@ fn document_faces() -> Vec<&'static CraftFont> {
             out.push(f);
         }
     }
+    out.extend(document_latin_fonts(false));
     out
 }
 
@@ -250,20 +267,44 @@ impl Coverage {
 mod tests {
     use super::*;
 
+    #[test]
+    fn turkish_ocr_words_have_real_glyphs_without_optional_fonts() {
+        let words = ["İstanbul", "Iğdır", "Çağrı", "Şişli", "Öğrenci", "GÜNEŞ", "ılık", "çÇğĞıIiİöÖşŞüÜâÂîÎûÛ"];
+        let plan = TextPlan::for_words(words);
+        assert_eq!(plan.missing(), 0, "Turkish OCR output must not silently substitute question marks");
+        for (wi, word) in words.iter().enumerate() {
+            if fits_win_ansi(word) {
+                continue;
+            }
+            assert_eq!(plan.encoding(wi).len(), word.chars().count(), "{word}");
+            for (&(fi, code), ch) in plan.encoding(wi).iter().zip(word.chars()) {
+                let (actual, glyph) = &plan.fonts[fi].glyphs[usize::from(code) - 1];
+                assert_eq!(*actual, ch, "{word}: planned glyph must represent its source character");
+                assert!(glyph.width > 0.0 && !glyph.contours.is_empty(), "{ch}: actual ink and advance");
+            }
+        }
+        let dotted = TextPlan::for_words(["İ"]);
+        let plain = TextPlan::for_words(["Iğ"]);
+        let (f, c) = dotted.encoding(0)[0];
+        let (pf, pc) = plain.encoding(0)[0];
+        assert_ne!(
+            dotted.fonts[f].glyphs[usize::from(c) - 1].1,
+            plain.fonts[pf].glyphs[usize::from(pc) - 1].1,
+            "dotted capital I must have a different outline from plain I"
+        );
+    }
+
     /// Face coverage is asked once per (face, character): repeating words cost no new font
     /// lookups.
     #[test]
     fn face_coverage_is_remembered_per_face_and_character() {
         let faces = document_faces();
-        let Some(face) = faces.first() else {
-            eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to run it)");
-            return;
-        };
+        let face = faces.first().unwrap();
         let mut coverage = Coverage::default();
-        let first = (0..50).map(|_| choose_face(&faces, "日本語", &mut coverage)).last().flatten();
+        let first = (0..50).map(|_| choose_face(&faces, "Iğdır", &mut coverage)).last().flatten();
         assert!(first.is_some());
-        assert!(coverage.lookups <= faces.len() * 3, "{} lookups for 3 characters", coverage.lookups);
-        assert_eq!(coverage.has(0, face, '日'), face_has(face.bytes, '日'));
+        assert!(coverage.lookups <= faces.len() * 5, "{} lookups for 5 characters", coverage.lookups);
+        assert_eq!(coverage.has(0, face, 'ğ'), face_has(face.bytes, 'ğ'));
     }
 
     /// A page's vocabulary: German umlauts are WinAnsi, and a character no bundled face has
@@ -283,15 +324,19 @@ mod tests {
     }
 
     #[test]
-    fn without_craft_fonts_every_non_win_ansi_character_is_reported() {
+    fn without_craft_fonts_inter_covers_its_letters_and_reports_other_scripts() {
         if !crate::CRAFT_FONTS.is_empty() {
             eprintln!("built with craft-fonts: the planning tests with faces cover this instead");
             return;
         }
         let plan = TextPlan::for_words(["Привет", "日本", "abc"]);
-        assert!(plan.words.iter().all(Vec::is_empty));
-        assert!(plan.fonts.is_empty());
-        assert_eq!(plan.missing(), 8, "six Cyrillic + two CJK characters, each reported");
+        assert_eq!(plan.encoding(0).len(), 6, "bundled Inter covers Cyrillic too");
+        let actual: String = plan.encoding(0).iter().map(|&(f, c)| plan.fonts[f].glyphs[usize::from(c) - 1].0).collect();
+        assert_eq!(actual, "Привет", "the planned Unicode values stay exact");
+        assert!(plan.encoding(0).iter().all(|&(f, c)| !plan.fonts[f].glyphs[usize::from(c) - 1].1.contours.is_empty()), "real Cyrillic ink");
+        assert!(plan.encoding(1).is_empty() && plan.encoding(2).is_empty());
+        assert!(plan.fonts.iter().all(|font| font.family == "Inter"));
+        assert_eq!(plan.missing(), 2, "the two CJK characters still require craft-fonts");
     }
 
     #[test]

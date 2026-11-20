@@ -1,5 +1,5 @@
 //! The Tesseract engine: an installed `tesseract` binary driven as an optional external
-//! process (`tesseract <png> stdout -l <lang> tsv`), never linked, never bundled, never
+//! process (`tesseract <png> stdout -l <lang> -c tessedit_create_tsv=1`), never linked, never bundled, never
 //! downloaded. The whole module is compiled out for wasm32, where nothing may spawn.
 //!
 //! Security posture (hard rules): the program path comes from the PATH or a user-configured
@@ -14,7 +14,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
-use super::{Line, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
+use super::{Line, ModelProfile, OcrError, OcrImage, RecognizeOptions, Recognizer, Word, WordCandidate};
+
+mod word_candidates;
 
 /// How long one recognition may run before the process is killed.
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -27,22 +29,12 @@ const MAX_STDERR: u64 = 256 * 1024;
 /// is truncated at the cap — corrupt or runaway output must not become unbounded memory in
 /// the word list, the text layer and the review UI.
 pub const MAX_WORDS: usize = 50_000;
-/// Tesseract's code for each language PdfCraft offers (ISO 639-1 → tessdata name). Only these
-/// codes ever reach the process, whatever the settings say.
-pub const LANGUAGE_CODES: &[(&str, &str)] = &[
-    ("en", "eng"),
-    ("de", "deu"),
-    ("fr", "fra"),
-    ("es", "spa"),
-    ("it", "ita"),
-    ("pt", "por"),
-    ("ru", "rus"),
-    ("zh", "chi_sim"),
-    ("ja", "jpn"),
-    ("ko", "kor"),
-    ("ar", "ara"),
-    ("nl", "nld"),
-];
+/// A blank page can contain only this header: that is valid TSV, unlike plain-text output
+/// caused by a renderer/configuration failure in an otherwise successful process.
+const TSV_HEADER: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
+/// Standard-profile language codes (ISO 639-1 → fixed tessdata name). Extended uses the
+/// separate fixed pack list from ModelProfile::required_packs, never caller-supplied argv.
+pub use super::model_profile::LANGUAGE_CODES;
 
 /// English names for [`LANGUAGE_CODES`] (dropdowns show code + name).
 pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
@@ -58,11 +50,15 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("ko", "Korean"),
     ("ar", "Arabic"),
     ("nl", "Dutch"),
+    ("tr", "Turkish"),
 ];
 
 /// Map a settings language code to a Tesseract one: trimmed, case-insensitive, allow-listed;
 /// anything unknown falls back to `"eng"`.
 pub fn language_code(code: &str) -> &'static str {
+    if super::is_turkish_language(code) {
+        return "tur";
+    }
     let c = code.trim().to_ascii_lowercase();
     LANGUAGE_CODES.iter().find(|(k, _)| *k == c).map(|(_, v)| *v).unwrap_or("eng")
 }
@@ -312,10 +308,38 @@ impl TesseractCli {
         Ok(codes
             .into_iter()
             .map(|c| {
-                let name = LANGUAGE_NAMES.iter().find(|(k, _)| *k == c.as_str()).map(|(_, n)| (*n).to_string()).unwrap_or_else(|| c.clone());
+                let name = LANGUAGE_CODES
+                    .iter()
+                    .find(|(_, trained)| *trained == c.as_str())
+                    .and_then(|(iso, _)| LANGUAGE_NAMES.iter().find(|(code, _)| *code == *iso))
+                    .map(|(_, name)| (*name).to_string())
+                    .unwrap_or_else(|| c.clone());
                 (c, name)
             })
             .collect())
+    }
+
+    /// Resolve a fixed expression; Extended verifies every pack before encoding the image.
+    /// Standard retains its existing Turkish-only check. Discovery may run --list-langs.
+    fn recognition_language(&self, options: &RecognizeOptions) -> Result<String, OcrError> {
+        let required = options.model_profile.required_packs(&options.language)?;
+        let language = required.join("+");
+        // Preserve Standard's legacy behavior: only Turkish requires discovery before the
+        // image is encoded. The new Extended profile checks every pack without fallback.
+        if options.model_profile == ModelProfile::Standard && !super::is_turkish_language(&options.language) {
+            return Ok(language);
+        }
+        let installed = self.languages();
+        let missing: Vec<&str> = required.into_iter().filter(|pack| !installed.iter().any(|(code, _)| code.as_str() == *pack)).collect();
+        if !missing.is_empty() {
+            let kind = if super::is_turkish_language(&options.language) { "Turkish OCR" } else { "OCR" };
+            return Err(OcrError::Recognize(format!(
+                "{kind} profile {} requires installed Tesseract language data; missing: {}",
+                options.model_profile.id(),
+                missing.join(", ")
+            )));
+        }
+        Ok(language)
     }
 
     /// The program's first `--version` line (named by `ocr_status`); `None` when the program
@@ -446,6 +470,22 @@ impl TesseractCli {
     }
 }
 
+/// Only complete installed pack sets advertise the opt-in extended profile.
+fn profiles_for_packs(installed: &[(String, String)]) -> Vec<ModelProfile> {
+    let mut profiles = vec![ModelProfile::Standard];
+    if ModelProfile::TurkishExtended
+        .required_packs("tr")
+        .is_ok_and(|packs| packs.iter().all(|pack| installed.iter().any(|(code, _)| code.as_str() == *pack)))
+    {
+        profiles.push(ModelProfile::TurkishExtended);
+    }
+    profiles
+}
+
+fn recognition_args<'a>(image: &'a str, language: &'a str) -> [&'a str; 6] {
+    [image, "stdout", "-l", language, "-c", "tessedit_create_tsv=1"]
+}
+
 impl Recognizer for TesseractCli {
     fn id(&self) -> &'static str {
         "tesseract"
@@ -473,9 +513,17 @@ impl Recognizer for TesseractCli {
         langs.clone()
     }
 
+    fn model_profiles(&self) -> Vec<ModelProfile> {
+        profiles_for_packs(&self.languages())
+    }
+
+    fn word_candidates(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<WordCandidate>, OcrError> {
+        word_candidates::recognize_word(self, image, options)
+    }
+
     /// Write the page as a PNG and read it back as TSV.
     fn recognize(&self, image: &OcrImage, options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
-        let lang = language_code(&options.language);
+        let lang = self.recognition_language(options)?;
         let png = encode_png(image)?;
         let dir = TempDir::create()?;
         let png_path = dir.path.join("page.png");
@@ -484,8 +532,14 @@ impl Recognizer for TesseractCli {
             set_private(&mut f);
             f.write_all(&png).map_err(|e| OcrError::Process(format!("writing the image failed: {e}")))?;
         }
-        // Fixed argv, no shell: tesseract <png> stdout -l <lang> tsv.
-        let tsv = self.run(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output)?;
+        // Enable the renderer directly: a model-only TESSDATA_PREFIX may have no configs/tsv
+        // file. Asking for that missing file exits successfully but produces plain text.
+        let tsv = self.run(&recognition_args(&png_path.to_string_lossy(), &lang), self.timeout, self.max_output)?;
+        if !tsv.lines().any(|row| row == TSV_HEADER || tsv_row(row).is_some()) {
+            return Err(OcrError::Recognize(
+                "the tesseract program returned non-TSV output; check its output renderer and language data installation".into(),
+            ));
+        }
         let (lines, truncated) = parse_tsv_bounded(&tsv);
         if truncated {
             return Err(OcrError::Recognize(format!("the {MAX_WORDS}-word limit was exceeded; the incomplete reading was rejected")));
@@ -676,6 +730,78 @@ mod tests {
         assert_eq!(lines.last().and_then(|l| l.words.last()).map(|w| w.text.as_str()), Some(&*format!("w{}", MAX_WORDS - 1)));
     }
 
+    fn cached_packs(codes: &[&str]) -> TesseractCli {
+        let recognizer = TesseractCli::new(PathBuf::from("must-not-run-profile-test"));
+        *recognizer.langs.lock().unwrap() = codes.iter().map(|code| ((*code).into(), (*code).into())).collect();
+        recognizer.probed.store(1, Ordering::Relaxed);
+        recognizer
+    }
+
+    #[test]
+    fn extended_is_advertised_only_for_the_complete_installed_pack_set() {
+        for codes in [vec![], vec!["tur"], vec!["eng"], vec!["eng", "tur"]] {
+            let installed = codes.iter().map(|code| ((*code).to_string(), String::new())).collect::<Vec<_>>();
+            assert_eq!(profiles_for_packs(&installed), [ModelProfile::Standard]);
+        }
+        for codes in [vec!["script/Latin"], vec!["eng", "script/Latin", "tur"]] {
+            let recognizer: std::sync::Arc<dyn Recognizer> = std::sync::Arc::new(cached_packs(&codes));
+            assert_eq!(recognizer.model_profiles(), [ModelProfile::Standard, ModelProfile::TurkishExtended]);
+        }
+    }
+
+    #[test]
+    fn fixed_argv_and_profile_metadata_share_the_same_pack_list() {
+        let recognizer = cached_packs(&["eng", "tur", "script/Latin"]);
+        let options = RecognizeOptions { language: "tr-TR".into(), model_profile: ModelProfile::TurkishExtended };
+        let expression = recognizer.recognition_language(&options).unwrap();
+        assert_eq!(expression, options.model_profile.required_packs(&options.language).unwrap().join("+"));
+        assert_eq!(expression, "script/Latin");
+        assert_eq!(
+            recognition_args("C\u{327}ag\u{306}rı.png", &expression),
+            ["C\u{327}ag\u{306}rı.png", "stdout", "-l", "script/Latin", "-c", "tessedit_create_tsv=1"]
+        );
+        // The winning profile must work with Latin alone; Standard Turkish still needs tur.
+        let latin_only = cached_packs(&["script/Latin"]);
+        assert_eq!(latin_only.recognition_language(&options).unwrap(), "script/Latin");
+        let turkish_standard = RecognizeOptions { language: "tr".into(), ..RecognizeOptions::default() };
+        assert!(latin_only.recognition_language(&turkish_standard).unwrap_err().to_string().contains("missing: tur"));
+        // A cached recognizer selects anew on every call. No builder, downcast or sticky mode.
+        let standard = RecognizeOptions { language: "tr".into(), ..RecognizeOptions::default() };
+        assert_eq!(recognizer.recognition_language(&standard).unwrap(), "tur");
+        assert_eq!(recognizer.recognition_language(&options).unwrap(), expression);
+        for language in ["unknown", "", "EN", "eng+tur", "--list-langs"] {
+            let standard = RecognizeOptions { language: language.into(), ..RecognizeOptions::default() };
+            assert_eq!(recognizer.recognition_language(&standard).unwrap(), language_code(language), "Standard mapping stays compatible");
+        }
+    }
+
+    #[test]
+    fn missing_any_extended_pack_is_refused_before_image_or_recognition_process() {
+        let image = OcrImage::new(1, 1, vec![255; 4]).unwrap();
+        let options = RecognizeOptions { language: "tr".into(), model_profile: ModelProfile::TurkishExtended };
+        for (codes, missing) in [(vec!["tur"], "script/Latin"), (vec!["eng"], "script/Latin"), (vec!["eng", "tur"], "script/Latin")] {
+            let recognizer = cached_packs(&codes);
+            let error = recognizer.recognize(&image, &options).unwrap_err();
+            assert!(matches!(&error, OcrError::Recognize(reason) if reason.contains("turkish_extended") && reason.contains(missing)), "{error}");
+            assert_eq!(recognizer.model_profiles(), [ModelProfile::Standard], "an incomplete profile must not advertise readiness");
+        }
+    }
+
+    #[test]
+    fn invalid_extended_language_is_refused_before_model_discovery() {
+        let recognizer = TesseractCli::new(PathBuf::from("must-not-run-profile-test"));
+        let image = OcrImage::new(1, 1, vec![255; 4]).unwrap();
+        for language in ["en", "de", "tur+eng", "script/Latin"] {
+            let options = RecognizeOptions { language: language.into(), model_profile: ModelProfile::TurkishExtended };
+            let error = recognizer.recognize(&image, &options).unwrap_err();
+            assert!(matches!(&error, OcrError::Recognize(reason) if reason.contains("only Turkish")), "{error}");
+            assert_eq!(recognizer.probed.load(Ordering::Relaxed), 0, "even list-langs must not be attempted for this invalid request");
+        }
+        // Preserve the pre-existing Standard non-Turkish path: no extra language discovery.
+        assert_eq!(recognizer.recognition_language(&RecognizeOptions::default()).unwrap(), "eng");
+        assert_eq!(recognizer.probed.load(Ordering::Relaxed), 0);
+    }
+
     #[test]
     fn language_table_maps_and_falls_back() {
         assert_eq!(language_code("en"), "eng");
@@ -693,6 +819,114 @@ mod tests {
             let mapped = language_code(code);
             assert!(LANGUAGE_CODES.iter().any(|(_, v)| *v == mapped), "{code:?} → {mapped:?} is not allow-listed");
         }
+    }
+
+    #[test]
+    fn turkish_language_codes_never_fall_back_to_english() {
+        for code in ["tr", " TR ", "tr-TR", "tr_CY.UTF-8", "tur"] {
+            assert_eq!(language_code(code), "tur", "{code:?} must use Turkish trained data");
+        }
+    }
+
+    /// The model preflight must also run on Windows. A cached English-only installation and
+    /// a nonexistent program prove that no recognition process is needed to refuse Turkish.
+    #[test]
+    fn turkish_missing_model_is_refused_for_every_alias_before_starting_a_process() {
+        let dir = TempDir::create().unwrap();
+        let recognizer = TesseractCli::new(dir.path.join("must-not-start.exe"));
+        *recognizer.langs.lock().unwrap() = vec![("eng".into(), "English".into())];
+        recognizer.probed.store(1, Ordering::Relaxed);
+        let image = OcrImage::new(8, 8, vec![255; 8 * 8 * 4]).unwrap();
+        for language in ["tr", " TR ", "tr-TR", "tr_CY.UTF-8", "tur"] {
+            let result = recognizer.recognize(&image, &RecognizeOptions { language: language.into(), ..RecognizeOptions::default() });
+            assert!(
+                matches!(result, Err(OcrError::Recognize(ref reason)) if reason.contains("Turkish") && reason.contains("tur")),
+                "{language:?} must report missing Turkish data without starting the program: {result:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turkish_recognition_uses_the_installed_model_and_preserves_text() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("synthetic-turkish-recognizer");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'tur\\n'; exit 0; fi\nprintf '%s\\n' \"$4\" > \"$0.language\"\nprintf '5\\t1\\t1\\t1\\t1\\t1\\t0\\t0\\t4\\t4\\t95\\tçÇğĞıIiİöÖşŞüÜâîû\\n'\n",
+        )
+        .unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::at(script.clone()).unwrap();
+        assert_eq!(recognizer.languages(), vec![("tur".into(), "Turkish".into())]);
+        let found =
+            recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions { language: "tr".into(), ..RecognizeOptions::default() }).unwrap();
+        assert_eq!(std::fs::read_to_string(script.with_extension("language")).unwrap().trim(), "tur");
+        assert_eq!(found[0].text(), "çÇğĞıIiİöÖşŞüÜâîû");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turkish_recognition_refuses_missing_model_before_reading() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("synthetic-english-only-recognizer");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$1\" = --list-langs ]; then printf 'eng\\n'; exit 0; fi\ntouch \"$0.read\"\nprintf '5\\t1\\t1\\t1\\t1\\t1\\t0\\t0\\t4\\t4\\t95\\tEnglish\\n'\n",
+        )
+        .unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::at(script.clone()).unwrap();
+        let result = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions { language: "tr".into(), ..RecognizeOptions::default() });
+        assert!(matches!(result, Err(ref e) if e.to_string().contains("tur")), "{result:?}");
+        assert!(!script.with_extension("read").exists(), "a missing Turkish model must not start recognition in English");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recognize_requests_tsv_without_an_external_renderer_config() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("model-only-tesseract");
+        // A model-only tessdata folder has no configs/tsv file. Tesseract reports that missing
+        // config on stderr, exits successfully, and writes plain text unless its TSV renderer
+        // is enabled explicitly. Reproduce both outcomes from the actual process arguments.
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nif [ \"$5\" = -c ] && [ \"$6\" = tessedit_create_tsv=1 ]; then\n printf '5\\t1\\t1\\t1\\t1\\t1\\t0\\t0\\t4\\t4\\t95\\tword\\n'\nelse\n printf \"read_params_file: Can't open tsv\\n\" >&2\n printf 'plain text\\n'\nfi\n",
+        )
+        .unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::new(script);
+        let lines = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default()).unwrap();
+        assert_eq!(lines.iter().map(Line::text).collect::<Vec<_>>(), ["word"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recognize_refuses_plain_text_even_when_the_process_succeeds() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("plain-text-tesseract");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'successfully read text, but not TSV\\n'\n").unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::new(script);
+        let result = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default());
+        assert!(matches!(result, Err(ref e) if e.to_string().contains("TSV")), "plain text must not silently become an empty reading: {result:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recognize_accepts_valid_tsv_for_a_blank_page() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("blank-page-tesseract");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf 'level\\tpage_num\\tblock_num\\tpar_num\\tline_num\\tword_num\\tleft\\ttop\\twidth\\theight\\tconf\\ttext\\n'\n",
+        )
+        .unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::new(script);
+        let lines = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default()).unwrap();
+        assert!(lines.is_empty(), "valid empty OCR output is not a renderer failure");
     }
 
     #[test]
@@ -790,6 +1024,30 @@ mod tests {
         assert!(langs.iter().all(|(c, n)| !c.is_empty() && !n.is_empty()), "{langs:?}");
     }
 
+    /// Exercise real process discovery and recognition for the Turkish aliases on every
+    /// native platform. The Latin fixture checks the process path, not Turkish OCR accuracy.
+    #[test]
+    fn installed_turkish_model_accepts_the_language_aliases() {
+        let Some(t) = TesseractCli::find() else {
+            eprintln!("skipped: the tesseract program is not installed");
+            return;
+        };
+        if !t.languages().iter().any(|(code, _)| code == "tur") {
+            eprintln!("skipped: the Turkish (tur) tesseract model is not installed");
+            return;
+        }
+        let (w, h, rgba) = hello_world_image();
+        let image = OcrImage::new(w, h, rgba).unwrap();
+        for language in ["tr", " TR ", "tr-TR", "tr_CY.UTF-8", "tur"] {
+            let lines = t.recognize(&image, &RecognizeOptions { language: language.into(), ..RecognizeOptions::default() }).unwrap();
+            assert!(
+                lines.iter().any(|line| line.text().to_uppercase().contains("HELL")),
+                "{language:?}: {:?}",
+                lines.iter().map(Line::text).collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn recognize_refuses_a_truncated_reading() {
@@ -869,7 +1127,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-err-flood");
         // (below MAX_STDERR, past which the child is stopped: `an_stderr_flood_is_killed_while_the_child_runs`)
-        std::fs::write(&script, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'e' >&2\necho flooded away\n").unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'e' >&2\nprintf '1\\t1\\t0\\t0\\t0\\t0\\t0\\t0\\t8\\t8\\t-1\\t\\n'\n",
+        )
+        .unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.timeout = Duration::from_secs(10);

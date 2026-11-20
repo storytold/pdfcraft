@@ -353,6 +353,9 @@ impl Automation {
         }
         if let Some(text) = o.get("text") {
             let text = text.as_str().ok_or_else(|| bad("graphic.text must be a string"))?;
+            if text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() > pdfcraft_engine::MAX_SIGNATURE_CHARS {
+                return Err(bad(format!("graphic.text must contain at most {} characters", pdfcraft_engine::MAX_SIGNATURE_CHARS)));
+            }
             // Nobody sees a preview here: refuse what the script font and its fallback would leave out.
             if let Some(c) = pdfcraft_engine::script_missing(text) {
                 return Err(bad(format!(
@@ -409,5 +412,22 @@ impl Automation {
         }
         self.session.set_trusted_certificates(certs);
         Ok(json!({ "trusted": self.session.trusted_certificates().iter().map(cert_json).collect::<Vec<_>>() }))
+    }
+}
+
+#[cfg(test)]
+mod text_limit_tests {
+    use super::*;
+
+    #[test]
+    fn typed_graphic_reports_scalar_length_before_font_coverage() {
+        let app = Automation::new();
+        assert!(app.signature_graphic(&json!({"text":"a".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS)})).is_ok());
+        for text in
+            ["a".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1), format!("{}g\u{306}", "a".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS - 1))]
+        {
+            let error = app.signature_graphic(&json!({"text":text})).expect_err("the scalar limit must reject the complete value");
+            assert!(error.to_string().contains("graphic.text must contain at most 256 characters"), "{error}");
+        }
     }
 }

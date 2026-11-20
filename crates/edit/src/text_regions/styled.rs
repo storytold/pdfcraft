@@ -36,6 +36,34 @@ struct FontResolver<'a> {
 }
 
 impl FontResolver<'_> {
+    fn uniform_latin_source(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
+        if source.base_font != "Inter"
+            || !pdfcraft_fonts::latin_text::required(text)
+            || self.fonts.get(source.font.as_bytes()).and_then(|font| self.doc.dict(font)).is_none_or(|font| font.name(b"Subtype") != Some(b"Type3"))
+        {
+            return Ok(None);
+        }
+        // A scalar-encodable mark does not prove that a complete supported cluster
+        // can be shaped. Keep the same orphan/mark/row/glyph budgets as OCR output.
+        for row in text.split(['\r', '\n']).filter(|row| !row.is_empty()) {
+            pdfcraft_fonts::latin_text::plan(row, source.bold).map_err(EditError::Invalid)?;
+        }
+        let probe = text.replace(['\r', '\n'], "");
+        let name = self.metrics.iter().find_map(|(name, metrics)| {
+            (pdfcraft_fonts::embedding::face_key(&metrics.base_font) == pdfcraft_fonts::embedding::face_key(&source.base_font)
+                && source_encodes(metrics, &probe)
+                && self
+                    .fonts
+                    .get(name.as_bytes())
+                    .and_then(|font| self.doc.dict(font))
+                    .is_some_and(|font| matches!(font.name(b"Subtype"), Some(b"Type0" | b"TrueType"))))
+            .then(|| name.clone())
+        });
+        let Some(name) = name else { return Ok(None) };
+        let valid = self.programs.entry(name.clone()).or_insert_with(|| source_program(self.doc, self.fonts, &name).map(std::sync::Arc::new));
+        Ok(valid.as_ref().filter(|bytes| pdfcraft_fonts::embedding::covers(bytes, &probe)).map(|_| name))
+    }
+
     fn encodable_font(&mut self, source: &TextLine, text: &str, requested: Option<&str>) -> Result<Option<String>, EditError> {
         if let Some(resource) = requested {
             if !self.metrics.get(resource).is_some_and(|metrics| source_encodes(metrics, text)) {
@@ -178,6 +206,7 @@ impl CharacterPreparation<'_> {
             // Keep the exact source face. A different Thai face requires an explicit choice.
             // Interface fallback fonts never enter a PDF.
             let selected_resource = overrides.get(&index).and_then(|r| r.resource.as_deref()).or(style.resource.as_deref());
+            let uniform = if selected_resource.is_none() { resolver.uniform_latin_source(source, span)? } else { None };
             let use_thai_outlines = if selected_resource == Some(thai_choice.as_str()) {
                 let face = pdfcraft_fonts::document_thai_font().ok_or_else(|| {
                     EditError::Invalid(format!(
@@ -266,7 +295,7 @@ impl CharacterPreparation<'_> {
                 }
                 let text = ch.to_string();
                 let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-                let name = if let Some(name) = outline_name.as_ref().or(program_name.as_ref()) {
+                let name = if let Some(name) = uniform.as_ref().or(outline_name.as_ref()).or(program_name.as_ref()) {
                     name.clone()
                 } else if let Some(name) = &existing_thai {
                     name.clone()
@@ -400,6 +429,8 @@ fn prepare_shaped_rows(
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
     let mut char_advances = HashMap::new();
+    let mut retained_program_bytes = 0usize;
+    let mut retained_glyphs = 0usize;
     for (row_index, row) in rows.iter().enumerate().filter(|(index, _)| !kept.get(*index).copied().unwrap_or(false)) {
         let mut at = 0;
         while let Some(item) = row.get(at) {
@@ -410,6 +441,13 @@ fn prepare_shaped_rows(
             char_advances.insert((row_index, at), widths);
             let text: String = segment.iter().map(|character| character.0).collect();
             if let Some(shaped) = shape_source(doc, fonts, thai, &item.2, &text)? {
+                if let ShapedFont::Program { bytes, .. } = &shaped.font {
+                    retained_program_bytes = retained_program_bytes.saturating_add(bytes.capacity());
+                }
+                retained_glyphs = retained_glyphs.saturating_add(shaped.run.glyphs.len());
+                if retained_program_bytes > 64 << 20 || retained_glyphs > 262_144 {
+                    return Err(EditError::Invalid("the shaped replacement exceeds its font/glyph cache budget; edit a smaller paragraph".into()));
+                }
                 runs.insert((row_index, at), shaped);
             }
             at = end;
@@ -838,7 +876,9 @@ fn apply_range_styles<'a>(
         edges.sort_unstable();
         edges.dedup();
         for bounds in edges.windows(2) {
-            let (Some(start), Some(end)) = (bounds.first().copied(), bounds.get(1).copied()) else { continue };
+            let (Some(start), Some(end)) = (bounds.first().copied(), bounds.get(1).copied()) else {
+                continue;
+            };
             let selected = ranges.iter().find(|range| range.range.contains(&start)).copied();
             let mut index = source;
             if selected.is_some() || style.family.is_some() || style.bold.is_some() {
@@ -1921,7 +1961,9 @@ pub(crate) fn rewrite_styled_block(
     fit_to_phrase(&mut calibration, lines, phrase_size);
     let advance = |item: &(char, usize, String)| -> f64 {
         let source = lines.get(item.1).unwrap_or(first);
-        let Some(m) = metrics.get(&item.2) else { return 0.0 };
+        let Some(m) = metrics.get(&item.2) else {
+            return 0.0;
+        };
         source_width(
             m,
             &item.0.to_string(),

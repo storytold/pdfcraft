@@ -24,6 +24,54 @@ const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Background of the in-place text field editor, the same in every theme.
 const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 
+/// Preserve complete marked input until the engine can report `/MaxLen` validation.
+/// Egui's scalar `char_limit` cuts incoming NFD between its base and mark before any
+/// validation runs. A buffer sees the full insertion from typing, paste, IME and AccessKit.
+/// Plain input keeps the existing partial-insertion behavior; marked input stays exact,
+/// including when over-limit, so a refused commit can keep the recoverable draft visible.
+struct FieldTextBuffer<'a> {
+    text: &'a mut String,
+    maximum: Option<usize>,
+}
+
+impl egui::TextBuffer for FieldTextBuffer<'_> {
+    fn is_mutable(&self) -> bool {
+        true
+    }
+
+    fn as_str(&self) -> &str {
+        self.text
+    }
+
+    fn insert_text(&mut self, text: &str, char_index: egui::text::CharIndex) -> usize {
+        let accepted = if let Some(maximum) = self.maximum
+            && !pdfcraft_fonts::latin_text::required(text)
+        {
+            let room = maximum.saturating_sub(self.text.chars().count());
+            let end = text.char_indices().nth(room).map_or(text.len(), |(byte, _)| byte);
+            text.get(..end).unwrap_or_default()
+        } else {
+            text
+        };
+        <String as egui::TextBuffer>::insert_text(self.text, accepted, char_index)
+    }
+
+    fn delete_char_range(&mut self, range: std::ops::Range<egui::text::CharIndex>) {
+        if range.start <= range.end {
+            <String as egui::TextBuffer>::delete_char_range(self.text, range);
+        }
+    }
+
+    fn replace_with(&mut self, text: &str) {
+        // Undo/redo restores an exact prior draft, including a refused over-limit value.
+        <String as egui::TextBuffer>::replace_with(self.text, text);
+    }
+
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<FieldTextBuffer<'static>>()
+    }
+}
+
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focus {
@@ -956,7 +1004,26 @@ pub fn field_text_size(painter: &egui::Painter, f: &FormField, w: &FormWidget, t
         let wrapped_height = |size: f64| f64::from(painter.layout(text.to_string(), font(size), Color32::BLACK, wrap).size().y);
         pdfcraft_engine::field_auto_text_size_by(width, height, f.has(field_flags::MULTILINE), line_width, wrapped_height)
     });
-    size as f32
+    if fixed.is_none()
+        && pdfcraft_fonts::first_non_win_ansi(text).is_some()
+        && pdfcraft_fonts::latin_text::first_unsupported(&text.replace(['\r', '\n', '\t'], " "), false).is_none()
+    {
+        // The on-page editor uses Inter even while /DA retains the original font. Its
+        // accented capitals must fit while typing, just as in the embedded appearance.
+        let (mut ascent, mut descent) = pdfcraft_fonts::inter_vertical_metrics();
+        if pdfcraft_fonts::latin_text::required(text)
+            && let Ok(plan) = pdfcraft_fonts::latin_text::plan(&text.replace(['\r', '\n', '\t'], " "), false)
+        {
+            // A positioned mark can exceed the nominal ascender. Fit the same ink
+            // bounds as the PDF appearance while retaining the original editor text.
+            ascent = ascent.max(plan.bounds[3]);
+            descent = descent.min(plan.bounds[1]);
+        }
+        let height = (w.rect[3] - w.rect[1]).abs() - 6.0;
+        size.min(height / (ascent - descent)).max(4.0) as f32
+    } else {
+        size as f32
+    }
 }
 
 /// The width of a line at `size` points from `measure`, the width at a given size, called at no
@@ -1322,7 +1389,8 @@ pub(crate) fn overlay(
                     // the box less 3 pt each side, scaled.
                     let wrap = (upright.width() - 6.0 * zoom).max(1.0);
                     let mut layouter = turned_layouter(font, multiline.then_some(wrap), password);
-                    let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
+                    let mut buffer = FieldTextBuffer { text: &mut fx.text, maximum: f.max_len };
+                    let mut te = if multiline { egui::TextEdit::multiline(&mut buffer) } else { egui::TextEdit::singleline(&mut buffer) };
                     te = te
                         .desired_width((upright.width() - 6.0 * zoom + 6.0).max(1.0))
                         .font(egui::FontId::proportional(font))
@@ -1331,9 +1399,6 @@ pub(crate) fn overlay(
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(password)
                         .id(egui::Id::unique(("form-field", view.pane.key, &f.name, focus.widget)));
-                    if let Some(max) = f.max_len {
-                        te = te.char_limit(max);
-                    }
                     if multiline {
                         te = te.desired_rows(((upright.height() / (font * 1.3)).floor() as usize).max(1));
                     }

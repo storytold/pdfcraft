@@ -1,0 +1,86 @@
+--- a/crates/print/src/lib.rs
++++ b/crates/print/src/lib.rs
+@@ -922,6 +922,22 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, Error> {
+     submit_with_progress(pdf, job, &mut |_, _| {})
+ }
+ 
++/// Render a print-ready PDF through the native Windows DXGI pipeline into a new file.
++/// This is an explicit destination, never a fallback, and supports one copy per output file.
++/// Callers own confinement, temporary staging and publication of the driver-created result.
++pub fn submit_to_file(pdf: &[u8], job: &Job, output: &std::path::Path) -> Result<String, Error> {
++    if job.copies != 1 {
++        return Err(Error::Spool("DXGI file output requires exactly one copy".into()));
++    }
++    #[cfg(windows)]
++    { windows::submit_to_file(pdf, job, output) }
++    #[cfg(not(windows))]
++    {
++        let _ = (pdf, job, output);
++        Err(Error::Spool("DXGI file output is available only on Windows".into()))
++    }
++}
++
+ /// [`submit`] with Windows sheet-processing progress: `(processed, sheets)` before the first
+ /// sheet and after each sheet is successfully added to the native print job. Counts refer to
+ /// source PDF sheets, regardless of copies or duplex, except for collated copies on a driver
+--- a/crates/print/src/windows.rs
++++ b/crates/print/src/windows.rs
+@@ -13,7 +13,7 @@
+ use std::io::Write as _;
+ use std::sync::{Mutex, MutexGuard, PoisonError};
+ 
+-use winprint::printer::{PrinterDevice, WinPdfPrinter};
++use winprint::printer::{NewOutputFile, PrinterDevice, WinPdfPrinter};
+ use winprint::ticket::document::{NS_PSK, OwnedName, PrintCapabilitiesDocument, PrintFeature, PrintTicketDocument, reader::ParsableXmlDocument as _};
+ use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities, PrintTicket, PrintTicketBuilder};
+ 
+@@ -303,6 +303,14 @@ fn imageable_margin(device: &PrinterDevice, ticket: &PrintTicket) -> f64 {
+ /// it, and the folder is removed however the job ended. Windows answers once the job is in the
+ /// queue: a paused queue or an offline printer keeps the job there, as with any program.
+ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
++    submit_with_target(pdf, job, None, progress, cancel)
++}
++
++pub(crate) fn submit_to_file(pdf: &[u8], job: &Job, output: &std::path::Path) -> Result<String, Error> {
++    submit_with_target(pdf, job, Some(output), &mut |_, _| {}, &Cancel::default())
++}
++
++fn submit_with_target(pdf: &[u8], job: &Job, output: Option<&std::path::Path>, progress: &mut dyn FnMut(usize, usize), cancel: &Cancel) -> Result<String, Error> {
+     let read = sheets::read(pdf)?;
+     read.check_print_annotations()?;
+     let count = read.sheets.len();
+@@ -379,21 +387,23 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
+         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(written)?;
+         file.write_all(updated.as_deref().unwrap_or(pdf)).map_err(written)?;
+         drop(file);
++        let output = output.map(NewOutputFile::new).transpose().map_err(spool_error)?;
+         let printer = WinPdfPrinter::new(device);
+         let jobs = jobs as usize;
+         for copy in 0..jobs {
+-            // winprint converts the ticket to a DEVMODE through the provider before each job's
+-            // first progress report, which releases the guard.
+             let mut provider = first.take().or_else(|| Some(print_ticket_provider()));
+-            printer
+-                .print_with_progress(&path, ticket.clone(), |processed, total| {
+-                    drop(provider.take());
+-                    // Page acceptance is distinct from terminal job success. The callback
+-                    // drains on the submitter's thread, so it can retain non-Send UI state.
+-                    let (processed, total) = (processed as usize, total as usize);
+-                    let _ = sender.send((copy * total + processed, jobs * total));
+-                })
+-                .map_err(|e| {
++            // Page acceptance is distinct from terminal job success; the callback
++            // drains on the submitter thread and may retain non-Send UI state.
++            let mut report = |processed: u32, total: u32| {
++                drop(provider.take());
++                let (processed, total) = (processed as usize, total as usize);
++                let _ = sender.send((copy * total + processed, jobs * total));
++            };
++            let result = match output.as_ref() {
++                Some(output) => printer.print_to_file_with_progress(&path, ticket.clone(), output, &mut report),
++                None => printer.print_with_progress(&path, ticket.clone(), &mut report),
++            };
++            result.map_err(|e| {
+                     let mut message = e.to_string();
+                     let mut cause = std::error::Error::source(&e);
+                     while let Some(source) = cause {
