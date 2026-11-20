@@ -1114,6 +1114,25 @@ fn decode_raster(
     let mut ctx = decode_context(obj, target_dimension)?;
     let mut height = ctx.height;
 
+    // PdfCraft patch (107): with /SMaskInData 2 the colour samples were multiplied by the opacity
+    // channel (premultiplied, T.800 Table I.16), which is the image's soft mask. They are divided
+    // by it again in their own colour space, before the `/Decode` array, the transfer function and
+    // the colour conversion: none of those are linear, so dividing the RGB afterwards made a
+    // partly transparent pixel too bright (#7250, review on #7292). The opacity channel is one
+    // 8-bit sample per pixel (hayro-syntax patch 48).
+    let in_data_alpha = if obj.stream.dict().get::<u8>(SMASK_IN_DATA) == Some(2) {
+        ctx.decoded
+            .image_data
+            .as_ref()
+            .and_then(|image| image.alpha.as_deref())
+    } else {
+        None
+    };
+    // PdfCraft patch (107): taken as a bool, so the borrow of `ctx.decoded` ends before the mask
+    // is resolved against it mutably below. With /SMaskInData nonzero the image's /SMask shall be
+    // ignored (ISO 32000-2 Table 87), so its /Matte is not applied to colours it did not multiply.
+    let embedded_opacity = in_data_alpha.is_some();
+
     let is_default_decode = ctx.decode_arr
         == ctx
             .color_space
@@ -1140,6 +1159,16 @@ fn decode_raster(
             0,
             &ctx.color_space,
         )?;
+
+        // PdfCraft patch (107): divided by the opacity before `/Decode` inverts the samples.
+        if let Some(alpha) = in_data_alpha.filter(|a| a.len() == ctx.width as usize * height as usize)
+        {
+            unpremultiply_8_bit_samples(
+                ctx.decoded.data.to_mut(),
+                alpha,
+                ctx.color_space.num_components() as usize,
+            );
+        }
 
         if is_inverted_default_decode {
             for b in ctx.decoded.data.to_mut() {
@@ -1169,13 +1198,25 @@ fn decode_raster(
             }))
         }
     } else {
-        let components = get_components(
+        let mut components = get_components(
             &ctx.decoded.data,
             ctx.width,
             height,
             &ctx.color_space,
             ctx.bits_per_component,
         )?;
+
+        // PdfCraft patch (107): divided by the opacity in their own colour space, before `/Decode`,
+        // the transfer function and the colour conversion.
+        if let Some(alpha) = in_data_alpha.filter(|a| a.len() == ctx.width as usize * height as usize)
+        {
+            unpremultiply_samples(
+                &mut components,
+                alpha,
+                ctx.color_space.num_components() as usize,
+                ctx.bits_per_component,
+            );
+        }
 
         // PdfCraft patch (28): an image with few possible pixel values converts each of them once.
         let mut rgb_data = if let Some(rgb) = rgb_via_lookup(
@@ -1256,8 +1297,9 @@ fn decode_raster(
         })
     };
     let obj = &obj.reporting_to(&sink);
-    let alpha = if let Some((alpha, matte_rgb)) =
-        resolve_matte(obj, &ctx.color_space, target_dimension)
+    let alpha = if !embedded_opacity
+        && let Some((alpha, matte_rgb)) =
+            resolve_matte(obj, &ctx.color_space, target_dimension)
         && alpha.width == ctx.width
         && alpha.height == height
     {
@@ -1265,6 +1307,10 @@ fn decode_raster(
 
         Some(alpha)
     } else {
+        // PdfCraft patch (107): /SMaskInData 2 takes the JPX opacity channel as the soft mask too
+        // (ISO 32000-2 Table 87), and the colours it multiplied are divided by it above. The
+        // opacity channel used to be dropped, so a transparent pixel was painted opaque black
+        // (#7250).
         // Use flatten here, so in case the alpha channel is invalid we can still
         // return the main image (see PDFJS-19611).
         resolve_alpha(
@@ -1361,8 +1407,14 @@ fn resolve_alpha(
     target_dimension: Option<(u32, u32)>,
 ) -> Option<Option<LumaData>> {
     let dict = obj.stream.dict();
+    let smask_in_data = dict.get::<u8>(SMASK_IN_DATA);
 
-    let alpha = if let Some(1) = dict.get::<u8>(SMASK_IN_DATA) {
+    // PdfCraft patch (107): /SMaskInData 2 takes the JPX opacity channel as the soft mask too
+    // (ISO 32000-2 Table 87); the caller undoes the colours' premultiplication (#7250). Without an
+    // opacity channel the image's other masks apply, as before.
+    let alpha = if smask_in_data == Some(1)
+        || (smask_in_data == Some(2) && has_in_data_alpha(decoded))
+    {
         let smask_data = decoded.image_data.as_mut().and_then(|i| i.alpha.take());
 
         if let Some(mut data) = smask_data {
@@ -1426,6 +1478,11 @@ fn resolve_alpha(
     Some(alpha)
 }
 
+/// PdfCraft patch (107): whether the decoder gave `decoded` an opacity channel of its own (JPX).
+fn has_in_data_alpha(decoded: &FilterResult<'_>) -> bool {
+    decoded.image_data.as_ref().is_some_and(|i| i.alpha.is_some())
+}
+
 fn resolve_matte(
     obj: &ImageXObject<'_>,
     color_space: &ColorSpace,
@@ -1473,6 +1530,55 @@ fn unpremultiply(image: &mut ImageData, alpha: &[u8], matte_rgb: &[u8]) {
                 let inv_alpha = 255.0 / a as f32;
                 *c = (m + (*c as f32 - m) * inv_alpha) as u8;
             }
+        }
+    }
+}
+
+/// PdfCraft patch (107): divides premultiplied 8-bit colour samples by the opacity that multiplied
+/// them (T.800 Table I.16), in the image's own colour space and before `/Decode`, the transfer
+/// function and the colour conversion, which are not linear (#7292 review). A pixel of zero
+/// opacity is left as it is: it is not painted at all.
+fn unpremultiply_8_bit_samples(data: &mut [u8], alpha: &[u8], num_components: usize) {
+    if num_components == 0 {
+        return;
+    }
+
+    for (pixel, &a) in data.chunks_exact_mut(num_components).zip(alpha) {
+        if a == 0 {
+            continue;
+        }
+        let inverse = 255.0 / a as f32;
+        for sample in pixel {
+            *sample = (*sample as f32 * inverse) as u8;
+        }
+    }
+}
+
+/// [`unpremultiply_8_bit_samples`] for colour samples of `bits_per_component` bits, held one to a
+/// `u16`, clamped to the sample range of that depth.
+fn unpremultiply_samples(
+    samples: &mut [u16],
+    alpha: &[u8],
+    num_components: usize,
+    bits_per_component: u8,
+) {
+    if num_components == 0 {
+        return;
+    }
+
+    let max = if bits_per_component >= 16 {
+        u16::MAX
+    } else {
+        (1_u16 << bits_per_component) - 1
+    };
+
+    for (pixel, &a) in samples.chunks_exact_mut(num_components).zip(alpha) {
+        if a == 0 {
+            continue;
+        }
+        let inverse = 255.0 / a as f32;
+        for sample in pixel {
+            *sample = ((*sample as f32 * inverse) as u16).min(max);
         }
     }
 }

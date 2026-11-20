@@ -116,7 +116,7 @@ fn decode_with_pixel_limit(
     let has_alpha = image.has_alpha();
     let bitmap = image.decode().ok()?;
 
-    let (mut data, mut alpha) = if !has_alpha {
+    let (mut data, alpha) = if !has_alpha {
         (bitmap, None)
     } else {
         // Extract the alpha channel.
@@ -139,7 +139,10 @@ fn decode_with_pixel_limit(
     // ourselves.
     if bpc != 8 {
         data = scale(&data, bpc, cs.num_components(), width, height)?;
-        alpha = alpha.and_then(|alpha| scale(&alpha, bpc, cs.num_components(), width, height));
+        // PdfCraft patch (48): the opacity channel stays one 8-bit sample per pixel whatever the
+        // colour samples' depth. Rescaled to `bpc` bits it was twice the pixel count at 16 bits,
+        // and `resolve_alpha` read it as 8-bit and truncated it, so every pixel after the first
+        // took an earlier one's opacity (#7292 review).
     }
 
     Some(FilterResult {
@@ -672,5 +675,48 @@ mod tests {
             "the target shrinks the image under the limit: {size:?}"
         );
         assert!(decode_with_pixel_limit(&image, &small_target, 1024).is_none());
+    }
+
+    /// A `width` x 1 raw codestream with two 16-bit components and no packet data, so every
+    /// sample is the midpoint (32768, an 8-bit 128 once decoded), the second component the
+    /// opacity channel.
+    fn sixteen_bit_opacity_codestream(width: u32) -> Vec<u8> {
+        let mut out = alloc::vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
+        out.extend_from_slice(&44_u16.to_be_bytes()); // Lsiz: 38 plus three bytes a component.
+        out.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
+        // Xsiz, Ysiz, XOsiz, YOsiz, XTsiz, YTsiz, XTOsiz, YTOsiz.
+        for value in [width, 1, 0, 0, width, 1, 0, 0] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+        out.extend_from_slice(&2_u16.to_be_bytes()); // Two components.
+        for _ in 0..2 {
+            out.extend_from_slice(&[15, 1, 1]); // Sixteen bits, no subsampling.
+        }
+        // COD: LRCP, one layer, no component transform, no decomposition levels, 64 x 64 code
+        // blocks, reversible wavelet. QCD: no quantization.
+        out.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+        out.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+        out.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]); // SOT, tile zero.
+        // One tile part: the SOT segment, SOD and an empty packet for each component.
+        out.extend_from_slice(&16_u32.to_be_bytes());
+        out.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
+        out.extend_from_slice(&[0, 0]); // An empty packet for each component.
+        out.extend_from_slice(&[0xff, 0xd9]); // EOC.
+        out
+    }
+
+    /// Review on #7292: the opacity channel is one 8-bit sample per pixel however deep the colour
+    /// samples are. Rescaled to the colour depth it held two bytes for each pixel of this two-pixel
+    /// image, and the reader's `fix_image_length` cut it to the pixel count, so the second pixel
+    /// took the first one's opacity: an opaque pixel became transparent.
+    #[test]
+    fn jpx_opacity_is_one_eight_bit_sample_per_pixel_at_any_colour_depth() {
+        let params = ImageDecodeParams { width: 2, height: 1, ..ImageDecodeParams::default() };
+        let result =
+            decode(&sixteen_bit_opacity_codestream(2), &params).expect("the codestream decodes");
+        let image = result.image_data.expect("a decoded image");
+        assert_eq!(image.bits_per_component, 16);
+        assert_eq!(result.data.len(), 2 * 2, "two 16-bit colour samples");
+        assert_eq!(image.alpha, Some(alloc::vec![128, 128]), "one 8-bit opacity sample per pixel");
     }
 }
