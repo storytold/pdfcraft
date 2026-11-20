@@ -51,7 +51,7 @@ pub(crate) fn report_json(r: &Report) -> Value {
                     })
                 })
                 .collect();
-            json!({ "rule": x.rule.id(), "name": x.rule.name(), "category": category_id(x.rule.category()), "status": status_id(x.status), "findings": findings })
+            json!({ "rule": x.rule.id(), "name": x.rule.name(), "category": category_id(x.rule.category()), "status": status_id(x.status), "tested": x.tested, "findings": findings })
         })
         .collect();
     json!({
