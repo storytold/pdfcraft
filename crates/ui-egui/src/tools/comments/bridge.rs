@@ -451,7 +451,8 @@ pub(crate) fn parts(
         return vec![PagePart::new(owner, page, shape, PageLayer::Comment).context_only()];
     }
     let tip = tips(info, prefs, tool).into_iter().find(|(t, _)| *t == id).map(|(_, tip)| tip);
-    let part = PagePart::new(owner, page, shape, PageLayer::Comment).passes_drag().cursor(icon);
+    let layer = if engine(info, page, index).is_some_and(|a| a.fill_sign) { PageLayer::Placed } else { PageLayer::Comment };
+    let part = PagePart::new(owner, page, shape, layer).passes_drag().cursor(icon);
     vec![match tip {
         Some(tip) => part.tip_now(tip),
         None => part,

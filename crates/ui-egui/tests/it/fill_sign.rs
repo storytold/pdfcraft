@@ -2003,10 +2003,10 @@ fn settle_scan(h: &mut Harness<'static, PdfCraftApp>) -> bool {
 /// Draw a new scan frame on the pad's photo from one point of the photo (800 × 600) to another.
 fn drag_frame(h: &mut Harness<'static, PdfCraftApp>, from: (f32, f32), to: (f32, f32)) -> bool {
     let area = h.get_by_label("Photo").rect();
-    let fit = area.shrink(8.0);
-    let scale = (fit.width() / 800.0).min(fit.height() / 600.0);
-    let origin = fit.center() - egui::vec2(400.0, 300.0) * scale;
-    let to_screen = |p: (f32, f32)| origin + egui::vec2(p.0, p.1) * scale;
+    let mut view = craft::behavior::CanvasView::new(area, craft::behavior::kurbo::Point::ORIGIN, 1.0);
+    let target = craft::ui::canvas::ViewTarget::new(craft::behavior::kurbo::Size::new(800.0, 600.0));
+    craft::ui::canvas::ViewCommands::FitOnScreen.apply(&mut view, &target, None, h.ctx.pixels_per_point());
+    let to_screen = |p: (f32, f32)| view.to_screen(craft::behavior::kurbo::Point::new(f64::from(p.0), f64::from(p.1)));
     let (a, b) = (to_screen(from), to_screen(to));
     h.hover_at(a);
     h.run_steps(1);
@@ -2764,10 +2764,7 @@ fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
     h.get_by_label("Font size").click();
     h.run_steps(2);
     let type_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
-        h.query_all_by_role(egui::accesskit::Role::SpinButton)
-            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
-            .expect("the Font size control")
-            .click();
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Font size").click();
         h.run_steps(2);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(value.into()));
