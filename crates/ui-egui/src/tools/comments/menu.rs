@@ -237,9 +237,12 @@ fn rgb_of(c: Color32) -> Rgb {
     [c.r(), c.g(), c.b()].map(|v| f64::from(v) / 255.0)
 }
 
+/// Diameter of a round colour swatch.
+const SWATCH_SIZE: f32 = 22.0;
+
 /// One round swatch; `on` rings it as the current colour.
 fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(SWATCH_SIZE, SWATCH_SIZE), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     ui.painter().circle_filled(r.center(), 9.0, color32(c));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
@@ -251,7 +254,7 @@ fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response 
 
 /// The "+" swatch that opens "Other colour…": a ring with a plus, the size of a swatch.
 fn other_colour_swatch(ui: &mut egui::Ui, open: bool) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(SWATCH_SIZE, SWATCH_SIZE), Sense::click());
     let ink = ui.visuals().widgets.inactive.fg_stroke.color;
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, ink.gamma_multiply(0.6)));
     let c = r.center();
@@ -279,7 +282,7 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     let open_id = base.with("other-colour");
     let value_id = open_id.with("value");
     let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
+    let grid = egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).min_col_width(SWATCH_SIZE).show(ui, |ui| {
         for (i, (name, c)) in SWATCHES.iter().enumerate() {
             if swatch(ui, *c, on(c), tl!(name)).clicked() {
                 picked = Some(*c);
@@ -309,7 +312,12 @@ pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     }
     if open && picked.is_none() {
         let mut value = ui.data(|d| d.get_temp::<Color32>(value_id)).unwrap_or_else(|| current.map_or(Color32::BLACK, color32));
-        egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
+        // The picker's square and bars follow `slider_width`: give them the grid's width so the
+        // picker fills the popup instead of sitting at its left (#6612).
+        ui.scope(|ui| {
+            ui.spacing_mut().slider_width = grid.response.rect.width();
+            egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
+        });
         ui.data_mut(|d| d.insert_temp(value_id, value));
         // Dragging in the picker previews nothing; Apply commits once (one undo step).
         if ui.button(tl!("Apply")).clicked() {
