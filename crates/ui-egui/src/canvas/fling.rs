@@ -29,6 +29,8 @@ const STALE: f64 = 0.1;
 pub(crate) struct Fling {
     /// Whether a lift glides on this platform (see the module docs).
     pub(crate) enabled: bool,
+    /// Whether an active touchpad gesture is currently in progress (#4917).
+    touch_active: bool,
     /// The gesture in progress: when each pass's motion arrived, and how far it went.
     samples: Vec<(f64, Vec2)>,
     /// The glide's speed in points per second (positive moves the content down), or zero.
@@ -46,17 +48,26 @@ impl Default for Fling {
 }
 
 impl Fling {
+    /// Creates a new fling momentum tracker, enabled where supported by the platform.
     pub(crate) fn new(enabled: bool) -> Self {
-        Self { enabled, samples: Vec::new(), velocity: Vec2::ZERO, at: 0.0, stalled: 0 }
+        Self { enabled, touch_active: false, samples: Vec::new(), velocity: Vec2::ZERO, at: 0.0, stalled: 0 }
     }
 
+    /// Whether the view is currently gliding on fling momentum.
     pub(crate) fn gliding(&self) -> bool {
         self.velocity != Vec2::ZERO
     }
 
+    /// Stops any ongoing glide and resets stalled counter.
     pub(crate) fn stop(&mut self) {
         self.velocity = Vec2::ZERO;
         self.stalled = 0;
+    }
+
+    /// Resets active touchpad gesture tracking and clears accumulated samples (#4917).
+    pub(crate) fn reset_gesture(&mut self) {
+        self.touch_active = false;
+        self.samples.clear();
     }
 
     /// Reads one pass's wheel events, at time `now`. Any wheel input stops a glide; a touchpad
@@ -68,23 +79,28 @@ impl Fling {
             self.stop();
             // Zooming, a mouse wheel and sideways Shift scrolling never glide.
             if *unit != MouseWheelUnit::Point || modifiers.command || modifiers.ctrl || modifiers.shift {
-                self.samples.clear();
+                self.reset_gesture();
                 continue;
             }
             match phase {
                 TouchPhase::Start => {
+                    self.touch_active = true;
                     self.samples.clear();
                     self.push(now, *delta);
                 }
-                TouchPhase::Move => self.push(now, *delta),
+                TouchPhase::Move => {
+                    if self.touch_active {
+                        self.push(now, *delta);
+                    }
+                }
                 TouchPhase::End => {
-                    if glide && self.enabled {
+                    if self.touch_active && glide && self.enabled {
                         self.velocity = self.lift_velocity(now);
                         self.at = now;
                     }
-                    self.samples.clear();
+                    self.reset_gesture();
                 }
-                TouchPhase::Cancel => self.samples.clear(),
+                TouchPhase::Cancel => self.reset_gesture(),
             }
         }
     }
