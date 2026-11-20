@@ -6844,16 +6844,7 @@ fn inline_editor_preserves_source_font_and_previews_live_bounds() {
     }
     h.state_mut().views[0].session.line_editor.as_mut().unwrap().look.color = original_color;
     h.run_steps(3);
-    let frame = |h: &Harness<'_, PdfCraftApp>| {
-        h.output()
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.stroke.color == egui::Color32::from_rgb(0x14, 0x73, 0xE6) && r.rect.width() > 100.0 => Some(r.rect),
-                _ => None,
-            })
-            .unwrap()
-    };
+    let frame = |h: &Harness<'_, PdfCraftApp>| h.get_by_label("Text editing line").rect().expand(2.0);
     let original_frame = frame(&h);
     h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.push_str("\nExtra row that does not fit\nAnother row");
     h.run_steps(3);
@@ -7100,10 +7091,9 @@ fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
     h.run_steps(3);
     assert!(h.state().views[0].session.image_selection.is_some());
     let frame = |h: &Harness<'static, PdfCraftApp>| {
-        h.output().shapes.iter().find_map(|s| match &s.shape {
-            egui::Shape::Rect(r) if r.stroke.color == egui::Color32::from_rgb(0x14, 0x73, 0xE6) && r.rect.width() > 20.0 => Some(r.rect),
-            _ => None,
-        })
+        let top_right = h.get_by_role_and_label(Role::Button, "Top right corner").rect().center();
+        let bottom_left = h.get_by_role_and_label(Role::Button, "Bottom left corner").rect().center();
+        egui::Rect::from_two_pos(top_right, bottom_left)
     };
     // Textured meshes smaller than the page: the page raster itself always covers the page.
     let pictures = |h: &Harness<'static, PdfCraftApp>| -> Vec<egui::Rect> {
@@ -7132,7 +7122,7 @@ fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     };
-    let start = frame(&h).expect("the selected image has a frame");
+    let start = frame(&h);
     let (grip, fixed) = (start.right_top(), start.left_bottom());
     for factor in [0.6, 1.3] {
         wait_for_raster(&mut h);
@@ -7145,7 +7135,7 @@ fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
             h.hover_at(grip + (to - grip) * (k as f32 / 4.0));
             h.run_steps(1);
         }
-        let live = frame(&h).expect("the drag shows its frame");
+        let live = frame(&h);
         assert!((live.width() - start.width() * factor).abs() < 1.0, "the frame follows the grip: {live:?} from {start:?}");
         let drawn = pictures(&h);
         assert!(
