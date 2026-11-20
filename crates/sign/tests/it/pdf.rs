@@ -3939,3 +3939,158 @@ fn the_catalogs_perms_do_not_change_under_no_changes() {
         );
     }
 }
+
+// ── One object, two roles: an alias excuses nothing (#7032) ─────────────────────────────────
+
+/// A page with text, the "Approval" signature field (6) and a square annotation (7) whose
+/// appearance is stream 8 (`ap_dict`), a blue box over the text. `catalog_extra` goes into the
+/// catalog, `form` is its `/AcroForm`, `contents` the page's `/Contents`, `annot_extra` into the
+/// annotation, and `more` are objects from number 9 on.
+fn fixture_with_appearance(catalog_extra: &str, form: &str, contents: &str, annot_extra: &str, ap_dict: &str, more: &[&str]) -> Vec<u8> {
+    let body = "0 0 1 rg 0 0 300 150 re f";
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm {form} {catalog_extra} >>");
+    let page = format!(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents {contents} /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R 7 0 R] >>"
+    );
+    let annot = format!("<< /Type /Annot /Subtype /Square /Rect [0 150 300 300] /F 4 /AP << /N 8 0 R >> {annot_extra} >>");
+    let ap = format!("<< {ap_dict} /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let mut objs: Vec<Vec<u8>> = vec![
+        catalog.into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        page.into_bytes(),
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>".to_vec(),
+        annot.into_bytes(),
+        ap.into_bytes(),
+    ];
+    objs.extend(more.iter().map(|o| o.as_bytes().to_vec()));
+    let refs: Vec<&[u8]> = objs.iter().map(Vec::as_slice).collect();
+    write_pdf(&refs)
+}
+
+/// A Form XObject the size of the annotation, with the `/Type` (if any) given, that paints white.
+fn white_box(label: Option<&str>) -> Object {
+    let body = b"1 1 1 rg 0 0 300 150 re f".to_vec();
+    let mut d = dict_of(vec![
+        ("Subtype", Object::name("Form")),
+        ("BBox", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(150)])),
+        ("Length", Object::Int(body.len() as i64)),
+    ]);
+    if let Some(label) = label {
+        d.set(b"Type".to_vec(), Object::name(label));
+    }
+    Object::Stream(pdfcraft_cos::Stream::from_raw(d, body))
+}
+
+/// At each of `levels`, the untouched signed `base` is valid, and after `attack` the signature
+/// is invalid with a disallowed change, none of whose reasons is `excuse`.
+fn assert_not_excused(base: &[u8], levels: &[Option<u8>], excuse: &str, attack: impl Fn(&mut Document)) {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed).unwrap();
+    for certify in levels {
+        let signed = pdfcraft_sign::sign(&open(base), &id, &SignOptions { certify: *certify, ..opts() }).unwrap();
+        assert_eq!(check(&signed).status, Status::Valid, "{certify:?}: untouched");
+        let s = check(&edit_after(&signed, &attack));
+        assert_eq!(s.status, Status::Invalid, "{certify:?}: {:?} {:?}", s.modification, s.details);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if !k.contains(&excuse)), "{certify:?}: {:?}", s.modification);
+    }
+}
+
+fn obj(num: u32) -> ObjRef {
+    ObjRef { num, generation: 0 }
+}
+
+/// Point the annotation's normal appearance at a new white box.
+fn repaint_annotation(doc: &mut Document) {
+    let cover = doc.add(white_box(None));
+    doc.update_dict(obj(7), |d| d.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", Object::Ref(cover))])))).unwrap();
+}
+
+#[test]
+fn an_appearance_that_is_also_the_catalogs_xmp_is_not_metadata() {
+    // The catalog's /Metadata names the annotation's appearance stream. Painting it white after
+    // signing hides the signed text: no metadata change, at any level.
+    let base =
+        fixture_with_appearance("/Metadata 8 0 R", "<< /Fields [6 0 R] >>", "4 0 R", "", "/Type /Metadata /Subtype /Form /BBox [0 0 300 150]", &[]);
+    assert_not_excused(&base, &LEVELS, kind::METADATA, |doc| doc.set(obj(8), white_box(Some("Metadata"))));
+}
+
+#[test]
+fn an_appearance_that_is_also_an_xfa_data_packet_is_not_a_form_fill() {
+    // The form's XFA `datasets` packet is the annotation's appearance stream.
+    let base = fixture_with_appearance("", "<< /Fields [6 0 R] /XFA [(datasets) 8 0 R] >>", "4 0 R", "", "/Subtype /Form /BBox [0 0 300 150]", &[]);
+    assert_not_excused(&base, &LEVELS, kind::FORM_FILL, |doc| doc.set(obj(8), white_box(None)));
+}
+
+#[test]
+fn an_appearance_labelled_file_plumbing_when_signed_is_still_judged() {
+    // The label the signed version carried does not make a drawn stream an xref or object
+    // stream, whether the appearance is rewritten or freed.
+    for label in ["ObjStm", "XRef"] {
+        let ap = format!("/Type /{label} /Subtype /Form /BBox [0 0 300 150]");
+        let base = fixture_with_appearance("", "<< /Fields [6 0 R] >>", "4 0 R", "", &ap, &[]);
+        assert_not_excused(&base, &LEVELS, kind::METADATA, |doc| doc.set(obj(8), white_box(Some(label))));
+        assert_not_excused(&base, &LEVELS, kind::METADATA, |doc| doc.free(obj(8)));
+    }
+}
+
+#[test]
+fn a_contents_array_the_signed_store_also_lists_is_page_content() {
+    // The page's /Contents array (9) is also the signed store's /Certs. Appending a stream that
+    // paints over the text only grows the store, but it is page content.
+    let base =
+        fixture_with_appearance("/DSS << /Certs 9 0 R >>", "<< /Fields [6 0 R] >>", "9 0 R", "", "/Subtype /Form /BBox [0 0 300 150]", &["[4 0 R]"]);
+    assert_not_excused(&base, &LEVELS, kind::SECURITY_STORE, |doc| {
+        let cover = doc.add(stream_of(b"1 1 1 rg 0 0 300 300 re f"));
+        doc.set(obj(9), Object::Array(vec![oref(4), Object::Ref(cover)]));
+    });
+}
+
+#[test]
+fn an_info_dictionary_with_another_role_is_judged_by_that_role() {
+    // The trailer's /Info is the annotation itself: giving it a white appearance is a comment
+    // change, which P=1 and P=2 refuse, not metadata.
+    let base = fixture_with_appearance("", "<< /Fields [6 0 R] >>", "4 0 R", "", "/Subtype /Form /BBox [0 0 300 150]", &[]);
+    let base = edit_after(&base, |doc| doc.trailer_mut().set(b"Info".to_vec(), oref(7)));
+    assert_not_excused(&base, &[Some(1), Some(2)], kind::METADATA, repaint_annotation);
+    // The catalog's /OCProperties named as /Info: turning every layer off is no metadata change.
+    let base = fixture_with_appearance(
+        "/OCProperties 9 0 R",
+        "<< /Fields [6 0 R] >>",
+        "4 0 R",
+        "",
+        "/Subtype /Form /BBox [0 0 300 150]",
+        &["<< /OCGs [] /D << /Order [] >> >>"],
+    );
+    let base = edit_after(&base, |doc| doc.trailer_mut().set(b"Info".to_vec(), oref(9)));
+    assert_not_excused(&base, &LEVELS, kind::METADATA, |doc| {
+        let off = dict_of(vec![("BaseState", Object::name("OFF"))]);
+        doc.set(obj(9), Object::Dict(dict_of(vec![("OCGs", Object::Array(vec![])), ("D", Object::Dict(off))])));
+    });
+}
+
+#[test]
+fn a_plain_info_dictionary_may_still_be_rewritten_after_signing() {
+    // The control for the test above: an /Info only the trailer reaches is metadata.
+    let base = fixture_with_appearance("", "<< /Fields [6 0 R] >>", "4 0 R", "", "/Subtype /Form /BBox [0 0 300 150]", &["<< /Title (Draft) >>"]);
+    let base = edit_after(&base, |doc| doc.trailer_mut().set(b"Info".to_vec(), oref(9)));
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for certify in LEVELS {
+        let signed = pdfcraft_sign::sign(&open(&base), &id, &SignOptions { certify, ..opts() }).unwrap();
+        let edited = edit_after(&signed, |doc| doc.set(obj(9), Object::Dict(dict_of(vec![("Title", Object::String(PdfString::text("Final")))]))));
+        let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.signed).unwrap();
+        assert_eq!(s.status, Status::Valid, "{certify:?}: {:?} {:?}", s.modification, s.details);
+        assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::METADATA)), "{certify:?}: {:?}", s.modification);
+    }
+}
+
+#[test]
+fn an_annotation_that_is_also_the_form_dictionary_is_not_a_form_fill() {
+    // The catalog's /AcroForm is the square annotation. Replacing its appearance is a comment
+    // change, which P=1 and P=2 refuse, not a form fill.
+    let base = fixture_with_appearance("", "7 0 R", "4 0 R", "/Fields [6 0 R]", "/Subtype /Form /BBox [0 0 300 150]", &[]);
+    assert_not_excused(&base, &[Some(1), Some(2)], kind::FORM_FILL, repaint_annotation);
+}

@@ -36,6 +36,9 @@ pub(super) struct Snapshot {
     pub(super) old_info: Option<u32>,
     /// The signed catalog's `/AcroForm`, when it is an object of its own.
     pub(super) old_form: Option<u32>,
+    /// What the signed pages' annotations draw: the appearance streams their `/AP` names, the
+    /// appearance-state dictionaries that are objects of their own, and what those streams reach.
+    pub(super) appearances: HashSet<u32>,
     pub(super) annot_budget: Cell<usize>,
 }
 
@@ -99,6 +102,7 @@ impl Snapshot {
         let signed_resources = signed_page_resources(old, &signed_page_refs);
         let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
         let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
+        let appearances = signed_appearances(old, &placed_annots, &signed_pages);
         Snapshot {
             old_content,
             old_metadata,
@@ -113,6 +117,7 @@ impl Snapshot {
             signed_resources,
             old_info,
             old_form,
+            appearances,
             annot_budget,
         }
     }
@@ -122,6 +127,65 @@ impl Snapshot {
     pub(super) fn signed_role(&self, num: u32) -> bool {
         self.old_content.contains(&num) || self.signed_pages.contains(&num) || self.signed_resources.contains_key(&num)
     }
+
+    /// Whether object `num` shaped what the signed pages show: drawn by a page (`signed_role`),
+    /// one of the pages' annotations or what they draw, or the page tree and annotation lists
+    /// that place them. The labels that excuse a change (document information, XMP, XFA data,
+    /// the security store, the form dictionary, file plumbing) are given by object number or by
+    /// a label the signed version carried; an object that also held one of these roles is
+    /// judged by that role instead, so pointing a harmless role at it excuses nothing.
+    pub(super) fn shapes_pages(&self, num: u32) -> bool {
+        self.signed_role(num)
+            || self.placed_annots.contains(&num)
+            || self.appearances.contains(&num)
+            || self.signed_annots.contains(&num)
+            || self.page_nodes.contains(&num)
+            || self.kids_arrays.contains(&num)
+    }
+}
+
+/// What the annotations `placed` on the signed pages draw (ISO 32000-2 §12.5.5): their `/AP`
+/// dictionaries, every stream those name under `/N`, `/R` and `/D` (directly, or through an
+/// appearance-state dictionary), and everything those streams reach (their resources, forms and
+/// fonts). The walk stops at the signed pages, the catalog and the annotations themselves, which
+/// keep their own roles, and is bounded: past the bound the rest is left out, so a change to it
+/// is judged as before, by its own shape.
+fn signed_appearances(old: &Document, placed: &HashSet<u32>, pages: &HashSet<u32>) -> HashSet<u32> {
+    const MAX_VISITED: usize = 50_000;
+    const MAX_DEPTH: u8 = 32;
+    fn reach(old: &Document, o: &Object, depth: u8, stop: &dyn Fn(u32) -> bool, found: &mut HashSet<u32>) {
+        if found.len() >= MAX_VISITED || depth > MAX_DEPTH {
+            return;
+        }
+        let resolved;
+        let o = match o {
+            Object::Ref(r) => {
+                if stop(r.num) || !found.insert(r.num) {
+                    return;
+                }
+                resolved = old.get(*r);
+                &*resolved
+            }
+            other => other,
+        };
+        match o {
+            Object::Dict(d) => d.iter().for_each(|(_, v)| reach(old, v, depth + 1, stop, found)),
+            Object::Stream(s) => s.dict.iter().for_each(|(_, v)| reach(old, v, depth + 1, stop, found)),
+            Object::Array(a) => a.iter().for_each(|v| reach(old, v, depth + 1, stop, found)),
+            _ => {}
+        }
+    }
+    let root = old.root().map(|r| r.num);
+    let stop = |num: u32| placed.contains(&num) || pages.contains(&num) || Some(num) == root;
+    let mut found = HashSet::new();
+    for num in placed {
+        let annot = old.get(ObjRef { num: *num, generation: old.generation(*num) });
+        // The /AP dictionary (an object of its own or not), its /N, /R and /D streams or
+        // appearance-state dictionaries, and what they reach: all of it is drawn.
+        let Some(ap) = annot.as_dict().and_then(|d| d.get(b"AP")).cloned() else { continue };
+        reach(old, &ap, 0, &stop, &mut found);
+    }
+    found
 }
 
 /// One object a later revision changed or added, with what it was when signed (`None` for a new
@@ -171,7 +235,12 @@ pub(super) fn observe(doc: &Document, old: &Document) -> Observed {
     }
     // Every reference the signed revision makes, read only when a slot's generations narrowed.
     let signed_references = OnceCell::new();
-    let dss = dss_parts(doc, old);
+    // What the signed revision's objects refer to (the trailer aside), read only when a change
+    // relies on an object being reached by nothing else.
+    let object_refs = OnceCell::new();
+    // The security store is judged by the roles it gives, never over a role the signed pages
+    // gave: a signed page's /Contents array named in /DSS is still page content.
+    let dss: HashSet<u32> = dss_parts(doc, old).into_iter().filter(|num| !s.shapes_pages(*num)).collect();
     let ends = RevisionEnds::new();
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
@@ -202,7 +271,7 @@ pub(super) fn observe(doc: &Document, old: &Document) -> Observed {
     if doc.root() != old.root() {
         hard.push(kind::STRUCTURE);
     }
-    let classifier = ChangedObjectClassifier { doc, old, snapshot: s, dss: &dss, ends: &ends };
+    let classifier = ChangedObjectClassifier { doc, old, snapshot: s, dss: &dss, ends: &ends, object_refs: &object_refs };
     for num in doc.object_numbers() {
         if same_place(num) {
             continue;
@@ -264,8 +333,9 @@ pub(super) fn observe(doc: &Document, old: &Document) -> Observed {
     for num in old.object_numbers().into_iter().filter(|n| !current.contains(n)) {
         let was = old.get(ObjRef { num, generation: old.generation(num) });
         let signed_role = signed_role(num);
-        // A signed page's content or resource is judged by that role, whatever /Type its stream carried.
-        if !signed_role && matches!(&*was, Object::Stream(s) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm"))) {
+        // A signed page's content or resource, or an annotation's appearance, is judged by that
+        // role, whatever /Type its stream carried.
+        if classifier.was_plumbing(num, Some(&*was)) {
             continue;
         }
         note(&mut freed, if signed_role { kind::PAGE_CONTENT } else { kind::OTHER });
@@ -289,9 +359,27 @@ struct ChangedObjectClassifier<'a> {
     snapshot: &'a Snapshot,
     dss: &'a HashSet<u32>,
     ends: &'a RevisionEnds,
+    object_refs: &'a OnceCell<Option<HashSet<u32>>>,
 }
 
 impl ChangedObjectClassifier<'_> {
+    /// Whether the signed revision's object `num` is reached by no other object (the trailer
+    /// aside). Unknown (past the bounds of [`object_references`]) counts as reached.
+    fn unreferenced(&self, num: u32) -> bool {
+        self.object_refs.get_or_init(|| object_references(self.old)).as_ref().is_some_and(|refs| !refs.contains(&num))
+    }
+
+    /// Whether `before`, object `num` in the signed revision, was file plumbing: a cross-reference
+    /// or object stream that nothing refers to and that played no role on the signed pages. Every
+    /// save rewrites plumbing, so changing or freeing it is not a change. The `/Type` its signed
+    /// version carried is only a label: a stream drawn as an annotation's appearance, or referred
+    /// to by anything, is judged by that role.
+    fn was_plumbing(&self, num: u32, before: Option<&Object>) -> bool {
+        matches!(before, Some(Object::Stream(previous)) if matches!(previous.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")))
+            && !self.snapshot.shapes_pages(num)
+            && self.unreferenced(num)
+    }
+
     fn classify(&self, r: ObjRef, new: &Object, before: Option<&Object>) -> Option<&'static str> {
         if let Some(kind) = self.resource_kind(r, new, before) {
             return Some(kind);
@@ -380,11 +468,16 @@ impl ChangedObjectClassifier<'_> {
         } else if let Some(previous) = previous.filter(|_| self.old.root().is_some_and(|root| root.num == r.num)) {
             // The signed catalog, whatever /Type its new version carries.
             Some(catalog_kind(self.doc, self.old, self.ends, dict, previous))
-        } else if let Some(previous) = previous.filter(|_| self.snapshot.old_form == Some(r.num)) {
-            // The signed form dictionary, held in an object of its own, whatever keys it carries now.
+        } else if let Some(previous) = previous.filter(|_| self.snapshot.old_form == Some(r.num) && !self.snapshot.shapes_pages(r.num)) {
+            // The signed form dictionary, held in an object of its own, whatever keys it carries
+            // now. One the signed pages also placed (an annotation the catalog names as its form)
+            // is judged as what it drew, below.
             Some(acroform_kind(self.doc, self.old, self.ends, dict, Some(previous)))
-        } else if previous.is_some() && Some(r.num) == self.snapshot.old_info {
-            // Only the signed revision's own /Info dictionary is a metadata change.
+        } else if previous.is_some() && Some(r.num) == self.snapshot.old_info && !self.snapshot.shapes_pages(r.num) && self.unreferenced(r.num) {
+            // Only the signed revision's own /Info dictionary is a metadata change: one the
+            // trailer alone reaches. An object some other one refers to (the catalog's
+            // /OCProperties or /Names, a page's annotation) is judged by that role, whatever the
+            // trailer also calls it.
             Some(kind::METADATA)
         } else {
             // A new dictionary is not labelled by its shape: an operation claims it or it is refused.
@@ -412,16 +505,19 @@ impl ChangedObjectClassifier<'_> {
 
     fn stream_change(&self, r: ObjRef, stream: &pdfcraft_cos::Stream, before: Option<&Object>) -> Option<&'static str> {
         // File plumbing is the stream's role when signed; a later /Type label cannot change it.
-        let was_plumbing = matches!(before, Some(Object::Stream(previous)) if matches!(previous.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")));
+        // Nor can the label the signed version carried make a drawn stream plumbing.
+        let drawn = self.snapshot.shapes_pages(r.num);
         if self.snapshot.old_content.contains(&r.num) {
             Some(kind::PAGE_CONTENT)
-        } else if before.is_none() || was_plumbing {
+        } else if before.is_none() || self.was_plumbing(r.num, before) {
             None
-        } else if stream.dict.name(b"Type") == Some(b"Metadata") && Some(r.num) == self.snapshot.old_metadata {
-            // Only the signed catalog's XMP stream is metadata.
+        } else if !drawn && stream.dict.name(b"Type") == Some(b"Metadata") && Some(r.num) == self.snapshot.old_metadata {
+            // Only the signed catalog's XMP stream is metadata, and not when an annotation also
+            // draws it as its appearance.
             Some(kind::METADATA)
-        } else if self.snapshot.old_xfa_data.contains(&r.num) {
-            // Signed XFA data and state packets are changed by a form fill.
+        } else if !drawn && self.snapshot.old_xfa_data.contains(&r.num) {
+            // Signed XFA data and state packets are changed by a form fill, unless the signed
+            // pages also draw them.
             Some(kind::FORM_FILL)
         } else {
             Some(kind::OTHER)
@@ -722,6 +818,17 @@ pub(super) fn annot_refs(doc: &Document, o: Option<&Object>, budget: &Cell<usize
 /// Every indirect reference in `doc`'s objects and trailer. `None` (nothing can be shown
 /// unreferenced) when an object can't be read, or past a bound on references or nesting.
 pub(super) fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
+    references_from(doc, true)
+}
+
+/// The object numbers `doc`'s objects refer to, leaving out the trailer: what an object is
+/// reached as besides the trailer's `/Info` or `/Root`. `None` past the same bounds as
+/// [`references`].
+fn object_references(doc: &Document) -> Option<HashSet<u32>> {
+    references_from(doc, false).map(|found| found.into_iter().map(|r| r.num).collect())
+}
+
+fn references_from(doc: &Document, with_trailer: bool) -> Option<HashSet<ObjRef>> {
     const MAX_REFERENCES: usize = 1 << 22;
     const MAX_DEPTH: u8 = 64;
     fn walk(o: &Object, depth: u8, found: &mut HashSet<ObjRef>) -> bool {
@@ -741,9 +848,17 @@ pub(super) fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
     }
     let mut found = HashSet::new();
     for num in doc.object_numbers() {
-        if !walk(&*doc.try_get(num).ok()?, 0, &mut found) {
+        let o = doc.try_get(num).ok()?;
+        // A cross-reference stream's dictionary is a trailer (its /Root, /Info, /Encrypt).
+        if !with_trailer && matches!(&*o, Object::Stream(s) if s.dict.name(b"Type") == Some(b"XRef")) {
+            continue;
+        }
+        if !walk(&o, 0, &mut found) {
             return None;
         }
+    }
+    if !with_trailer {
+        return Some(found);
     }
     doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found)
 }
@@ -1235,10 +1350,11 @@ mod tests {
             signed_resources: HashMap::new(),
             old_info: None,
             old_form: None,
+            appearances: HashSet::new(),
             annot_budget: Cell::new(MAX_ANNOT_ENTRIES),
         };
-        let (none, ends) = (HashSet::new(), RevisionEnds::new());
-        let classifier = ChangedObjectClassifier { doc, old, snapshot: &snapshot, dss: &none, ends: &ends };
+        let (none, ends, object_refs) = (HashSet::new(), RevisionEnds::new(), OnceCell::new());
+        let classifier = ChangedObjectClassifier { doc, old, snapshot: &snapshot, dss: &none, ends: &ends, object_refs: &object_refs };
         classifier.page_change_kind(d, before)
     }
 

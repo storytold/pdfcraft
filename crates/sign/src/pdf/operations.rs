@@ -309,7 +309,10 @@ impl Recogniser<'_> {
         let FormChange::By(ops) = &self.form else { return };
         let ops = ops.clone();
         let held = old.root().and_then(|c| doc.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
-        for num in [self.seen.snapshot.old_form, held].into_iter().flatten() {
+        // A form dictionary the signed pages also placed (an annotation the catalog names as its
+        // form) is judged as what it drew: a fill does not explain changing it.
+        let snapshot = &self.seen.snapshot;
+        for num in [snapshot.old_form, held].into_iter().flatten().filter(|num| !snapshot.shapes_pages(*num)) {
             if self.changed.contains_key(&num) {
                 for op in &ops {
                     self.claim(num, *op);

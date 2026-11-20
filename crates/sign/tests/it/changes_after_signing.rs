@@ -34,6 +34,11 @@
 //! - relabelled objects: `pdf::an_existing_object_given_form_keys_after_signing_is_still_judged`,
 //!   `pdf::a_dictionary_labelled_metadata_is_not_a_metadata_change`, `pdf::a_form_xobject_relabelled_metadata_is_not_a_metadata_change`,
 //!   `pdf::a_form_xobject_relabelled_as_file_plumbing_is_still_judged`, `pdf::a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it`
+//! - one object in two roles, where a harmless role must not excuse a drawn one:
+//!   `pdf::an_appearance_that_is_also_the_catalogs_xmp_is_not_metadata`, `pdf::an_appearance_that_is_also_an_xfa_data_packet_is_not_a_form_fill`,
+//!   `pdf::an_appearance_labelled_file_plumbing_when_signed_is_still_judged`, `pdf::a_contents_array_the_signed_store_also_lists_is_page_content`,
+//!   `pdf::an_info_dictionary_with_another_role_is_judged_by_that_role`, `pdf::an_annotation_that_is_also_the_form_dictionary_is_not_a_form_fill`
+//!   (and, staying Valid, `pdf::a_plain_info_dictionary_may_still_be_rewritten_after_signing`)
 //! - the document security store: `pdf::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store`,
 //!   `pdf::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it`, `pdf::an_existing_array_stays_what_it_is_when_the_store_points_at_it`,
 //!   `pdf::a_signed_store_may_grow_but_not_lose_or_swap_entries`
