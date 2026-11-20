@@ -1168,7 +1168,8 @@ fn route_press(
                 let page_cx =
                     comments::PageCx { page: press.page, xf: &xf, info: cx.info, prefs: cx.prefs, allowed: cx.allowed, hidden: cx.comments_hidden };
                 let words = Env::of(ui).words::<AnnotateWords>();
-                comments::part_pressed(&mut session.comments, press, &page_cx, &words);
+                let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+                comments::part_pressed(&mut session.comments, press, &page_cx, &map, cx.tool, &words);
             }
         }
         Owner::Field { .. } => crate::forms_ui::field_press(ui.ctx(), session, cx.doc, cx.info, cx.doc.allows_form_filling(), press, geo),
