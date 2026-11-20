@@ -299,11 +299,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
                 // groups matches under those headings, but an individual button needs its own name.
                 let page_label = fmt(tl!("Page {label}"), &[("label", &found.page.saturating_add(1).to_string())]);
                 let accessible = format!("{name}, {page_label}: {} {} {}", found.before, found.text, found.after);
-                if ui.add(egui::Button::selectable(false, job).wrap())
-                    .accessible_name(accessible)
-                    .on_hover_text(tl!("Go to this result"))
-                    .clicked()
-                {
+                if ui.add(egui::Button::selectable(false, job).wrap()).accessible_name(accessible).on_hover_text(tl!("Go to this result")).clicked() {
                     open = Some((file.path.to_string_lossy().into_owned(), found.page));
                 }
             }
