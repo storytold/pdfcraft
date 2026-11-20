@@ -2786,6 +2786,31 @@ fn text_box_font_size_changes_the_da_and_grows_the_box() {
     }
 }
 
+/// #7277: a size is in displayed points, so `/UserUnit` scales the user-unit value in `/DA`. On a
+/// page whose unit is 2.5 a 2 pt text box or callout keeps 0.8 user units rather than being raised
+/// to 1 (2.5 pt), and an edit to 2 pt is accepted while one below 1 pt stays refused.
+#[test]
+fn font_sizes_below_one_user_unit_are_kept_on_a_user_unit_page() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 160 160] >>",
+        b"<< /Type /Page /Parent 2 0 R /UserUnit 2.5 >>",
+    ]);
+    let shapes = [
+        Shape::TextBox { rect: [10.0, 100.0, 100.0, 120.0], font_size: 0.8 },
+        Shape::Callout { rect: [10.0, 10.0, 100.0, 30.0], knee: [5.0, 5.0], point: [2.0, 2.0], font_size: 0.8, ending: LineEnding::OpenArrow },
+    ];
+    for shape in shapes {
+        let index = add_annotation(&mut doc, &new(0, shape), &meta("t")).unwrap();
+        assert_eq!(props(&doc, 0, index).unwrap().font_size, Some(0.8), "created {index}");
+    }
+    // An edit to 2 pt (0.8 user units) is accepted; 0.3 user units (0.75 pt) is still refused.
+    set_font_size(&mut doc, 0, 0, 0.8, &meta("")).unwrap();
+    assert!(matches!(set_font_size(&mut doc, 0, 0, 0.3, &meta("")), Err(AnnotError::Invalid(_))));
+    let doc = reopen(&doc);
+    assert_eq!(text(&list(&doc, 0)[0], b"DA"), "0 0.4 1 rg /Helv 0.8 Tf");
+}
+
 #[test]
 fn text_boxes_and_callouts_can_change_fill_and_border() {
     let mut doc = fixture();
