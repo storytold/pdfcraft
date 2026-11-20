@@ -112,6 +112,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         doc_links,
         lines: &lines,
         images: &images,
+        doc,
         clip: ui.clip_rect(),
         text_links,
         tabs: &tabs,
@@ -502,6 +503,8 @@ struct PageHits<'a> {
     doc_links: &'a [pdfcraft_engine::LinkItem],
     lines: &'a [pdfcraft_engine::TextBlock],
     images: &'a [pdfcraft_engine::PageImage],
+    /// Says where a picture with transparency shows, so it is picked only there.
+    doc: &'a pdfcraft_engine::Document,
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
     /// Addresses written as plain page text open like links (#4207).
@@ -590,6 +593,7 @@ impl PageHits<'_> {
             doc_links,
             lines,
             images,
+            doc,
             clip,
             text_links,
             tabs,
@@ -634,7 +638,7 @@ impl PageHits<'_> {
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
             (
-                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
+                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, doc, images, view, p)).flatten(),
                 on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
                 edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
                 edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
