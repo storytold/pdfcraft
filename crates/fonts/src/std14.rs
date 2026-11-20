@@ -110,6 +110,14 @@ impl Std14 {
         crate::win_ansi(text).iter().map(|&c| self.width(c)).sum::<f64>() * size / 1000.0
     }
 
+    /// [`Std14::text_width`] for text written with [`crate::win_ansi_extra`]: a
+    /// [`crate::LATIN_EXTRA`] letter is measured as its base letter, whose advance it shares in
+    /// the standard-14 metrics (abreve = a, scommaaccent = s, lslash = l, …).
+    pub fn text_width_extra(self, text: &str, size: f64) -> f64 {
+        let base: String = text.chars().map(|c| crate::extra_base_letter(c).unwrap_or(c)).collect();
+        self.text_width(&base, size)
+    }
+
     /// Courier is the only fixed-pitch family of the fourteen.
     pub fn is_fixed_pitch(self) -> bool {
         matches!(self, Self::Courier | Self::CourierBold | Self::CourierOblique | Self::CourierBoldOblique)
@@ -124,6 +132,15 @@ impl Std14 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_letters_measure_as_their_base_letters() {
+        for font in [Std14::Helvetica, Std14::TimesBold, Std14::Courier] {
+            assert_eq!(font.text_width_extra("ș", 12.0), font.text_width("s", 12.0));
+            assert_eq!(font.text_width_extra("Declarație", 10.0), font.text_width("Declaratie", 10.0));
+            assert_eq!(font.text_width_extra("plain", 10.0), font.text_width("plain", 10.0));
+        }
+    }
 
     #[test]
     fn sans_serif_names_are_not_mapped_to_times() {
