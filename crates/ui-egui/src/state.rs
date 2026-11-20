@@ -88,6 +88,8 @@ pub enum QuickTool {
     },
     /// View ▸ Zoom ▸ Marquee Zoom.
     MarqueeZoom,
+    /// View ▸ Zoom ▸ Dynamic Zoom (Z): drag right or up to zoom in, left or down to zoom out.
+    DynamicZoom,
     /// Edit ▸ Take a Snapshot.
     Snapshot,
     /// Edit ▸ Column Select: drag a rectangle to select only the text inside it (#740). The
