@@ -24,6 +24,7 @@ pub mod commands;
 mod comments;
 pub mod compare;
 mod copy_image;
+mod descreen;
 pub use copy_image::{PagePicture, picture_at};
 pub mod dates;
 mod document;
