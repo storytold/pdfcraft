@@ -5,13 +5,13 @@
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize};
 
 mod extract;
-mod image_probe;
 mod text_font;
 mod upright_image;
-pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 #[cfg(test)]
-use image_probe::JP2_SIGNATURE;
-use image_probe::{is_jpx, probe_jpeg, probe_jpx};
+use craft_image_codecs::jp2_probe::JP2_SIGNATURE;
+use craft_image_codecs::jp2_probe::{is_jpx, probe_jpx};
+use craft_image_codecs::jpeg_probe::probe_jpeg;
+pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 pub use upright_image::jpeg_exif_orientation;
 mod office;
 #[cfg(not(target_arch = "wasm32"))]
