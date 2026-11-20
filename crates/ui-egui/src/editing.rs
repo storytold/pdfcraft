@@ -251,25 +251,7 @@ impl PdfCraftApp {
         // Taken whatever happens to this edit, so it never carries over to another.
         let across_pages = std::mem::take(&mut self.views[i].marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
         let label = edit.label();
-        let target_arrange_image = match &edit {
-            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
-                let doc = self.session.get(id);
-                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
-                let ambiguous = doc.is_some_and(|d| {
-                    if let Some(t) = &target {
-                        d.page_images(*page)
-                            .iter()
-                            .filter(|img| img.name == t.name && img.object == t.object && rect_matches(img.rect, t.rect))
-                            .count()
-                            > 1
-                    } else {
-                        false
-                    }
-                });
-                target.map(|t| (t, ambiguous))
-            }
-            _ => None,
-        };
+        let target_arrange_image = arrange_image_target(self.session.get(id), &edit);
         let (form_before, page_count_before, had_xfa, signatures_before) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some(), Some(std::sync::Arc::clone(&d.signatures)))
         } else {
@@ -1214,6 +1196,17 @@ impl PdfCraftApp {
 
 fn rect_matches(a: [f64; 4], b: [f64; 4]) -> bool {
     a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
+/// The picture an arrange edit moves, and whether another picture on its page looks the same
+/// (same name, object and box), before the edit is applied.
+fn arrange_image_target(doc: Option<&pdfcraft_engine::Document>, edit: &Edit) -> Option<(pdfcraft_engine::PageImage, bool)> {
+    let Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } = edit else { return None };
+    let images = doc?.page_images(*page);
+    let target = images.get(*index).cloned()?;
+    let ambiguous =
+        images.iter().filter(|img| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect)).count() > 1;
+    Some((target, ambiguous))
 }
 
 fn re_resolve_image_selection(
