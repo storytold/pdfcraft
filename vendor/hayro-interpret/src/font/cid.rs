@@ -15,8 +15,11 @@ use hayro_syntax::object::{Array, Object};
 use kurbo::{BezPath, Vec2};
 use skrifa::attribute::Style;
 use skrifa::charmap::MapVariant;
+use skrifa::raw::TableProvider;
 use skrifa::raw::collections::int_set::Domain;
+use skrifa::raw::tables::gsub::{ExtensionSubtable, Gsub, SingleSubst, SubstitutionLookup};
 use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
+use skrifa::raw::types::Tag;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -50,6 +53,9 @@ pub(crate) struct Type0Font {
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
     /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
+    /// PdfCraft patch (107): for a substitute of a font of an Adobe collection, which CIDs are
+    /// the vertical forms of their characters, drawn with the substitute's vertical glyphs.
+    vertical_forms: Option<VerticalForms>,
     /// PdfCraft patch: `/ToUnicode /Identity-H` (a name, not a CMap stream), which CAD exporters
     /// such as WSCAD write for fonts whose two-byte codes are UTF-16 code units. Acrobat shows
     /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
@@ -164,6 +170,12 @@ impl Type0Font {
         let adobe_collection = character_collection
             .as_ref()
             .is_some_and(|cc| cc.family.ucs2_cmap().is_some());
+        // PdfCraft patch (107): only a substitute draws a CID through its character, and so
+        // loses the vertical form the CID names; an embedded program has the CID's own glyph.
+        let vertical_forms = character_collection
+            .as_ref()
+            .filter(|_| fallback)
+            .and_then(|cc| VerticalForms::new(&cc.family, cmap_resolver));
 
         let postscript_name = dict
             .get::<Name<'_>>(BASE_FONT)
@@ -202,6 +214,7 @@ impl Type0Font {
             to_unicode_is_cid_indexed,
             ucs2,
             adobe_collection,
+            vertical_forms,
             identity_to_unicode,
             mac_glyph_order,
         })
@@ -221,7 +234,7 @@ impl Type0Font {
         };
 
         if self.fallback
-            && let Some(glyph) = self.map_via_unicode(to_unicode_key)
+            && let Some(glyph) = self.map_via_unicode(to_unicode_key, cid)
         {
             // Yay, Unicode worked!
             return glyph;
@@ -274,8 +287,8 @@ impl Type0Font {
 
     /// Map a character code (or CID) to a glyph ID
     /// by first getting its Unicode and then looking up the codepoint in the
-    /// font's cmap.
-    fn map_via_unicode(&self, key: u32) -> Option<GlyphId> {
+    /// font's cmap. `cid` is the code's CID.
+    fn map_via_unicode(&self, key: u32, cid: u32) -> Option<GlyphId> {
         let to_unicode = self.to_unicode.as_ref()?;
 
         let (character, selector) = to_unicode
@@ -307,21 +320,32 @@ impl Type0Font {
 
         match &self.font_type {
             FontType::OpenType(t) => {
-                let charmap = t.font_ref().charmap();
+                let font = t.font_ref();
+                let charmap = font.charmap();
                 // PdfCraft patch: the face's glyph for that form when its `cmap` has one, else its
                 // glyph for the character, as when a form isn't supported (Unicode FAQ on
                 // variation sequences).
-                if let Some(selector) = selector
+                let glyph = if let Some(selector) = selector
                     && let Some(MapVariant::Variant(glyph)) = charmap.map_variant(character, selector)
                 {
-                    return Some(glyph);
-                }
-                // PdfCraft patch: a substitute may lack a spacing character (#3601; e.g.
-                // Adobe-Japan1's U+2002). Draw its ordinary space instead of .notdef;
-                // the PDF's widths and Unicode mapping still determine advance and text.
-                charmap.map(character).or_else(|| match character {
-                    '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
-                    _ => None,
+                    Some(glyph)
+                } else {
+                    // PdfCraft patch: a substitute may lack a spacing character (#3601; e.g.
+                    // Adobe-Japan1's U+2002). Draw its ordinary space instead of .notdef;
+                    // the PDF's widths and Unicode mapping still determine advance and text.
+                    charmap.map(character).or_else(|| match character {
+                        '\u{00a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' => charmap.map(' '),
+                        _ => None,
+                    })
+                }?;
+                // PdfCraft patch (107): a CID that is its character's vertical form (「 in a
+                // vertical column is CID 7911 in Adobe-Japan1, not 686) draws the substitute's
+                // vertical glyph for the character, not its ordinary one (#7167).
+                Some(match &self.vertical_forms {
+                    Some(forms) if forms.is_vertical_form(cid, character) => {
+                        forms.vertical_glyph(font, glyph)
+                    }
+                    _ => glyph,
                 })
             }
             FontType::Cff(c) => {
@@ -587,6 +611,266 @@ impl std::fmt::Debug for Ucs2 {
         f.debug_struct("Ucs2")
             .field("bytes", &self.data.len())
             .finish_non_exhaustive()
+    }
+}
+
+/// The most `vert` lookups applied to one glyph: a face has one or two.
+const MAX_VERTICAL_LOOKUPS: usize = 32;
+
+/// PdfCraft patch (107): the vertical forms of an Adobe collection's characters, and a
+/// substitute's glyphs for them.
+///
+/// A collection gives some characters a CID of their own for vertical writing: 「 is CID 686 in
+/// Adobe-Japan1 and its vertical form CID 7911; 、。ー…（） and the small kana have such CIDs too.
+/// A `-V` CMap (`UniJIS-UCS2-V`) picks them for a vertical column, and older documents set them
+/// with `Identity-H` down a column (#7167). The UCS2 CMap gives both CIDs the same character,
+/// so a substitute, which draws a CID through its character, drew the horizontal form.
+///
+/// A CID is a vertical form when the collection's Unicode `-V` CMap gives it for its character
+/// and the `-H` CMap gives another: those CMaps say which CID each writing mode uses for a
+/// character, and are among the bundled ones, so no table is added. The UTF-16 CMaps are read
+/// first; the older UCS-2 ones too, for the few vertical forms only they name (Adobe-Japan1's
+/// “ ‘ 〓, CIDs 8279, 8281 and 8270, which `UniJIS-UTF16-V` gives their horizontal CIDs). Such a
+/// CID draws the substitute's glyph for the character through the substitute's OpenType `vert`
+/// substitution (`vrt2` when it has no `vert`), as a vertical line set in that face would; a
+/// face without one draws the character's ordinary glyph, as before.
+struct VerticalForms {
+    /// The UTF-16 `-H` and `-V` CMaps.
+    unicode: CMapPair,
+    /// The UCS-2 `-H` and `-V` CMaps, when the resolver has them.
+    legacy: Option<CMapPair>,
+    /// The script whose `vert` lookups apply first (`kana`, `hani` or `hang`).
+    script: Tag,
+    /// The substitute's `vert` lookups, read the first time a vertical form is drawn.
+    lookups: OnceLock<Vec<u16>>,
+}
+
+/// A horizontal and a vertical CMap of one collection, parsed the first time they are read.
+struct CMapPair {
+    horizontal: &'static [u8],
+    vertical: &'static [u8],
+    resolver: CMapResolverFn,
+    maps: OnceLock<Option<(CMap, CMap)>>,
+}
+
+impl CMapPair {
+    fn new(
+        horizontal: hayro_cmap::CMapName<'_>,
+        vertical: hayro_cmap::CMapName<'_>,
+        resolver: &CMapResolverFn,
+    ) -> Option<Self> {
+        Some(Self {
+            horizontal: resolver(horizontal)?,
+            vertical: resolver(vertical)?,
+            resolver: resolver.clone(),
+            maps: OnceLock::new(),
+        })
+    }
+
+    /// The horizontal and the vertical CMap.
+    fn maps(&self) -> Option<&(CMap, CMap)> {
+        self.maps
+            .get_or_init(|| {
+                let resolver = self.resolver.clone();
+                let horizontal = CMap::parse(self.horizontal, move |n| (resolver)(n))?;
+                let resolver = self.resolver.clone();
+                let vertical = CMap::parse(self.vertical, move |n| (resolver)(n))?;
+                Some((horizontal, vertical))
+            })
+            .as_ref()
+    }
+}
+
+impl VerticalForms {
+    /// `None` for a collection without Unicode CMaps (Identity, custom ones), and when the
+    /// resolver doesn't have them.
+    fn new(family: &CidFamily, resolver: &CMapResolverFn) -> Option<Self> {
+        use hayro_cmap::CMapName;
+        let (unicode, legacy, script) = match family {
+            CidFamily::AdobeJapan1 => (
+                (CMapName::UniJisUtf16H, CMapName::UniJisUtf16V),
+                (CMapName::UniJisUcs2H, CMapName::UniJisUcs2V),
+                b"kana",
+            ),
+            CidFamily::AdobeGB1 => (
+                (CMapName::UniGbUtf16H, CMapName::UniGbUtf16V),
+                (CMapName::UniGbUcs2H, CMapName::UniGbUcs2V),
+                b"hani",
+            ),
+            CidFamily::AdobeCNS1 => (
+                (CMapName::UniCnsUtf16H, CMapName::UniCnsUtf16V),
+                (CMapName::UniCnsUcs2H, CMapName::UniCnsUcs2V),
+                b"hani",
+            ),
+            CidFamily::AdobeKorea1 => (
+                (CMapName::UniKsUtf16H, CMapName::UniKsUtf16V),
+                (CMapName::UniKsUcs2H, CMapName::UniKsUcs2V),
+                b"hang",
+            ),
+            CidFamily::AdobeIdentity | CidFamily::Custom { .. } => return None,
+        };
+        Some(Self {
+            unicode: CMapPair::new(unicode.0, unicode.1, resolver)?,
+            legacy: CMapPair::new(legacy.0, legacy.1, resolver),
+            script: Tag::new(script),
+            lookups: OnceLock::new(),
+        })
+    }
+
+    /// Whether `cid` is the vertical form of `character`, its character in the UCS2 CMap.
+    fn is_vertical_form(&self, cid: u32, character: char) -> bool {
+        let Some((horizontal, vertical)) = self.unicode.maps() else {
+            return false;
+        };
+        // The UTF-16 CMaps take a character as its UTF-16 code units, one or two.
+        let mut units = [0; 2];
+        let (code, len) = match *character.encode_utf16(&mut units) {
+            [unit] => (u32::from(unit), 2),
+            [high, low] => ((u32::from(high) << 16) | u32::from(low), 4),
+            _ => return false,
+        };
+        // The character's horizontal CID is no vertical form, and most CIDs drawn are that one:
+        // they never read the UCS-2 CMaps.
+        if horizontal.lookup_cid_code(code, len) == Some(cid) {
+            return false;
+        }
+        if vertical.lookup_cid_code(code, len) == Some(cid) {
+            return true;
+        }
+        // The UCS-2 CMaps cover the Basic Multilingual Plane, a character's one code unit.
+        len == 2
+            && self.legacy.as_ref().and_then(CMapPair::maps).is_some_and(
+                |(horizontal, vertical)| {
+                    vertical.lookup_cid_code(code, 2) == Some(cid)
+                        && horizontal.lookup_cid_code(code, 2) != Some(cid)
+                },
+            )
+    }
+
+    /// `glyph`, the face's glyph for a character, as the face's `vert` lookups substitute it.
+    fn vertical_glyph(&self, font: &FontRef<'_>, glyph: GlyphId) -> GlyphId {
+        let Ok(gsub) = font.gsub() else {
+            return glyph;
+        };
+        let lookups = self
+            .lookups
+            .get_or_init(|| vertical_lookups(&gsub, self.script));
+        // Each lookup applies to what the ones before it gave, as in a shaper.
+        lookups.iter().fold(glyph, |glyph, &index| {
+            substitute(&gsub, index, glyph).unwrap_or(glyph)
+        })
+    }
+}
+
+impl std::fmt::Debug for VerticalForms {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerticalForms")
+            .field("script", &self.script)
+            .finish_non_exhaustive()
+    }
+}
+
+/// PdfCraft patch (107): the lookups of a face's `vert` feature (`vrt2` when it has no `vert`),
+/// in lookup order: the feature `script`'s default language system lists, else `DFLT`'s, else
+/// every such feature of the face. Empty when it has none.
+fn vertical_lookups(gsub: &Gsub<'_>, script: Tag) -> Vec<u16> {
+    let Ok(features) = gsub.feature_list() else {
+        return Vec::new();
+    };
+    let listed: Option<Vec<u16>> = gsub.script_list().ok().and_then(|scripts| {
+        [script, Tag::new(b"DFLT")].into_iter().find_map(|tag| {
+            let record = scripts
+                .script_records()
+                .iter()
+                .find(|r| r.script_tag() == tag)?;
+            let language = record
+                .script(scripts.offset_data())
+                .ok()?
+                .default_lang_sys()?
+                .ok()?;
+            // The language system's required feature (0xFFFF: none) and its other features
+            // (OpenType `LangSys`): a face may list `vert` as either.
+            let required = Some(language.required_feature_index()).filter(|&i| i != 0xFFFF);
+            Some(
+                required
+                    .into_iter()
+                    .chain(language.feature_indices().iter().map(|i| i.get()))
+                    .collect(),
+            )
+        })
+    });
+    for tag in [Tag::new(b"vert"), Tag::new(b"vrt2")] {
+        let mut lookups: Vec<u16> = features
+            .feature_records()
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                r.feature_tag() == tag
+                    && listed
+                        .as_ref()
+                        .is_none_or(|l| u16::try_from(*i).is_ok_and(|i| l.contains(&i)))
+            })
+            .filter_map(|(_, r)| r.feature(features.offset_data()).ok())
+            .flat_map(|f| {
+                f.lookup_list_indices()
+                    .iter()
+                    .map(|i| i.get())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if !lookups.is_empty() {
+            lookups.sort_unstable();
+            lookups.dedup();
+            lookups.truncate(MAX_VERTICAL_LOOKUPS);
+            return lookups;
+        }
+    }
+    Vec::new()
+}
+
+/// PdfCraft patch (107): what lookup `index` substitutes for `glyph`, when it is a single
+/// substitution (directly or through an extension) that covers it.
+fn substitute(gsub: &Gsub<'_>, index: u16, glyph: GlyphId) -> Option<GlyphId> {
+    let lookup = gsub
+        .lookup_list()
+        .ok()?
+        .lookups()
+        .get(usize::from(index))
+        .ok()?;
+    match lookup {
+        SubstitutionLookup::Single(lookup) => lookup
+            .subtables()
+            .iter()
+            .filter_map(Result::ok)
+            .find_map(|s| single(&s, glyph)),
+        SubstitutionLookup::Extension(lookup) => lookup
+            .subtables()
+            .iter()
+            .filter_map(Result::ok)
+            .find_map(|s| match s {
+                ExtensionSubtable::Single(s) => s.extension().ok().and_then(|s| single(&s, glyph)),
+                _ => None,
+            }),
+        _ => None,
+    }
+}
+
+/// What a single substitution subtable substitutes for `glyph`, when its coverage holds it.
+fn single(subtable: &SingleSubst<'_>, glyph: GlyphId) -> Option<GlyphId> {
+    match subtable {
+        SingleSubst::Format1(s) => {
+            s.coverage().ok()?.get(glyph)?;
+            // The delta is added modulo 65536 (OpenType GSUB lookup type 1, format 1).
+            let id = u16::try_from(glyph.to_u32()).ok()?;
+            Some(GlyphId::new(u32::from(
+                id.wrapping_add(s.delta_glyph_id() as u16),
+            )))
+        }
+        SingleSubst::Format2(s) => {
+            let index = s.coverage().ok()?.get(glyph)?;
+            let id = s.substitute_glyph_ids().get(usize::from(index))?.get();
+            Some(GlyphId::from(id))
+        }
     }
 }
 
