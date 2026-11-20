@@ -2159,6 +2159,8 @@ fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
     h.run_steps(2);
     // From a file manager (an absolute path) and from a browser-like source (bytes only).
     for file in [Dropped(photo.clone(), Vec::new()), Dropped("photo.png".into(), std::fs::read(&photo).unwrap())] {
+        h.get_by_label("Clear").scroll_to_me();
+        h.run_steps(2);
         h.get_by_label("Clear").click();
         h.run_steps(2);
         assert!(!can_apply(&h));
