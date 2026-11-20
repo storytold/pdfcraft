@@ -261,15 +261,18 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
         .empty(tl!("No matches."))
         .filter(&query, row_key);
 
-    let out = list.show_items(ui, &rows, &mut |_, icx| {
-        let Some(row) = rows.0.get(icx.at) else { return ListRow::new("") };
-        let depth = row.path.len().saturating_sub(1);
-        let (strong, italic, color) = title_style(row.item, depth);
-        let mut r = ListRow::new(row.item.title.clone()).state(icx.row.clone()).strong(strong).italic(italic);
+    let out = list.show_items(ui, &rows, &mut |path, icx| {
+        let Some(item) = item_at(outline, path) else { return ListRow::new("") };
+        let depth = path.len().saturating_sub(1);
+        let (strong, italic, color) = title_style(item, depth);
+        let mut r = ListRow::new(item.title.clone()).state(icx.row.clone()).depth(depth).strong(strong).italic(italic);
+        if !item.children.is_empty() {
+            r = r.group(open(path));
+        }
         if let Some(color) = color {
             r = r.hue(color, HueTarget::Label);
         }
-        if let Some(page) = row.item.page.and_then(|p| info.pages.get(p)) {
+        if let Some(page) = item.page.and_then(|p| info.pages.get(p)) {
             r = r.trailing(page.label.clone());
         }
         r

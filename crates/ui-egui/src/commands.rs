@@ -161,7 +161,14 @@ impl PdfCraftApp {
                     self.open_preferences_at(page);
                 }
             }
-            "app.theme" => self.toggle_theme(ctx),
+            "app.theme" => {
+                let next = match self.theme_preference {
+                    ModeChoice::System => ModeChoice::Light,
+                    ModeChoice::Light => ModeChoice::Dark,
+                    ModeChoice::Dark => ModeChoice::System,
+                };
+                self.set_theme_preference(next);
+            }
             "tools.expand" => self.expand_all_tools(ctx),
             "tools.collapse" => self.all_tools_full = false,
             "tools.all" => {
@@ -453,11 +460,8 @@ impl PdfCraftApp {
                         // Navigation and this command can arrive before the next rail frame.
                         view.page_input = view.current_page_label(doc.info.pages.get(view.current()).map(|p| p.label.as_str()));
                     }
-                    ctx.memory_mut(|m| m.request_focus(id));
-                    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
-                    let len = view.page_input.chars().count();
-                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
-                    state.store(ctx, id);
+                    craft::ui::runtime::focus::request(ctx, craft::ui::runtime::focus::FocusTarget::Id(id));
+                    view.page_input_reselect = true;
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,

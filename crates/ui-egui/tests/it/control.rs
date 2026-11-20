@@ -313,7 +313,9 @@ fn control_button_focus_preserves_document_undo_redo_shortcuts() {
     let (mut h, c) = harness_pages(2);
     ok(&mut h, &c, "ui.focus", json!({"label": "Convert"}));
     ok(&mut h, &c, "ui.key", json!({"key": "Enter"}));
-    ok(&mut h, &c, "ui.click", json!({"label": "All tools"}));
+    let tabs = ok(&mut h, &c, "ui.inspect", json!({"query": "All tools", "role": "Tab"}));
+    let id = tabs["widgets"][0]["id"].as_str().expect("the All tools mode tab");
+    ok(&mut h, &c, "ui.click", json!({"id": id}));
     assert!(h.ctx.egui_wants_keyboard_input());
     assert!(!h.ctx.text_edit_focused());
     ok(&mut h, &c, "ui.command", json!({"id": "page.insert_blank"}));
@@ -655,8 +657,7 @@ fn autoscroll_uses_the_initial_click_position_when_input_arrives_in_one_frame() 
 fn autoscroll_uses_elapsed_frame_time_and_preserves_fractional_motion_in_both_views() {
     for (organize, scale, zoom) in [(false, 1.0, "100"), (false, 2.0, "100"), (false, 1.0, "400"), (true, 1.0, "100"), (true, 2.0, "100")] {
         for frames in [30, 60, 120, 144] {
-            let (mut h, c) = harness_pages(40);
-            h.set_pixels_per_point(scale);
+            let (mut h, c) = harness_pages_at(40, 1400.0, scale);
             h.set_option("zoom", zoom).unwrap();
             h.state_mut().views[0].organize = organize;
             h.run_steps(3);
@@ -745,9 +746,11 @@ fn autoscroll_cancels_on_click_wheel_focus_loss_and_pointer_exit() {
     assert!(!h.state().views[0].auto_scrolling());
     start_autoscroll(&mut h, &c);
     h.input_mut().focused = false;
+    h.event(egui::Event::WindowFocused(false));
     h.run_steps(2);
     assert!(!h.state().views[0].auto_scrolling());
     h.input_mut().focused = true;
+    h.event(egui::Event::WindowFocused(true));
     h.run_steps(2);
     start_autoscroll(&mut h, &c);
     h.event(egui::Event::PointerGone);
@@ -1144,6 +1147,8 @@ fn commands_keys_and_typing() {
     ok(&mut h, &c, "ui.type", json!({ "text": "split" }));
     let hits = ok(&mut h, &c, "ui.inspect", json!({ "query": "split document" }));
     assert!(hits["count"].as_u64().unwrap() >= 1, "{hits}");
+    // First Escape clears the query; second closes the palette.
+    ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
     ok(&mut h, &c, "ui.key", json!({ "key": "Escape" }));
     h.run_steps(2);
     assert!(!palette_on_screen(&h), "Escape closes the palette");
@@ -1380,7 +1385,7 @@ fn a_plan_scale_picked_or_typed_applies_at_once() {
         (measure::reading(Kind::Distance, &line, &scale).unwrap().label, scale.ratio)
     };
     // Picked from the common scales: no Apply click.
-    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().is_some_and(|v| v == "Common scales")).click();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Common scales").click();
     h.run_steps(2);
     h.get_by_label("1:200").click_accesskit();
     h.run_steps(3);
@@ -1783,8 +1788,12 @@ fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
     let (mut h, _c) = harness();
     let area = h.state().views[0].viewport_rect();
     let shown = |h: &Harness<'static, PdfCraftApp>| {
-        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("page-size-hint"));
-        h.ctx.memory(|m| m.areas().visible_last_frame(&layer))
+        let size = {
+            let s = h.state();
+            let p = &s.session.get(s.views[0].id).unwrap().info.pages[0];
+            s.units.size(f64::from(p.width), f64::from(p.height))
+        };
+        h.query_by_label(&size).is_some()
     };
     let away = area.center() + egui::vec2(300.0, -200.0);
     h.event(egui::Event::PointerMoved(away));
@@ -1828,6 +1837,9 @@ fn navigation_history_for_os(os: egui::os::OperatingSystem) {
     // The real rail button is accessible and invokes the same history, not the adjacent page.
     // The toolbar names its slots by their commands (L-233).
     ok(&mut h, &c, "ui.click", json!({"label": "Previous view"}));
+    // `IconButton::command` queues `view.previous_view` on the command board during the click's pass;
+    // the app drains fired commands in the next frame's `prepare_raw_input`.
+    h.step();
     assert_eq!(h.state().views[0].current(), 0);
     assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.next_view"));
     ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));

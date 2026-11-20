@@ -291,7 +291,9 @@ pub(crate) fn page_tool<'a>(
     let selects_text = tool_selects_text(tool, cx.preparing);
     let arm = match tool {
         // Prepare a form under the Select tool: the selection rectangle and the moves of fields are Prepare's.
-        QuickTool::Select if cx.preparing => Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, session, cx.info, xforms))),
+        QuickTool::Select if cx.preparing => {
+            Arm::Area(Box::new(PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)))
+        }
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
             let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
             let picks = PickSlots::new(&mut session.pending_pick, &mut session.picked_image, &mut session.actions_dismissed);
@@ -332,7 +334,12 @@ pub(crate) fn page_tool<'a>(
                     } else {
                         annotate
                     };
-                    Arm::Area(Box::new(annotate))
+                    if cx.preparing && matches!(tool, QuickTool::Comment(_)) {
+                        let prepare = PrepareTool::new(None, cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms);
+                        Arm::Area(Box::new(PrepareWithComment { prepare, comments: Box::new(annotate) }))
+                    } else {
+                        Arm::Area(Box::new(annotate))
+                    }
                 }
             }
         }
@@ -372,7 +379,9 @@ pub(crate) fn page_tool<'a>(
                 .over(place);
             Arm::Area(Box::new(annotate))
         }
-        QuickTool::Field(field_tool) => Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, session, cx.info, xforms))),
+        QuickTool::Field(field_tool) => {
+            Arm::Area(Box::new(PrepareTool::new(Some(field_tool), cx.can_modify, cx.form, &mut session.prepare, &session.placed, cx.info, xforms)))
+        }
         QuickTool::AddText => Arm::Area(Box::new(crate::tools::content_ui::AddTextTool::new(session, cx.doc, cx.pages, cx.text_style))),
         QuickTool::EditText => {
             Arm::Area(Box::new(EditTextTool::new(session, cx.doc, cx.info, cx.pages, press, cx.geometry()).button_held(cx.button_held)))
@@ -474,6 +483,11 @@ impl ToolFinish {
     /// with `finished` only in the pass of the release).
     pub(crate) fn apply(&mut self, fill: Option<FillOutcome>, area_mark: Option<AreaMarkResult>, session: &mut PageSession, cx: &PageToolCx<'_>) {
         if let Some(edit) = self.edit.take() {
+            session.pending_edit = Some(edit);
+        }
+        if let Some(done) = self.crop.take()
+            && let Some(edit) = super::crop::crop_edit(cx.info, &done)
+        {
             session.pending_edit = Some(edit);
         }
         if let Some(page) = self.camera_page.take()
@@ -639,5 +653,91 @@ impl CanvasTool for PageTool<'_> {
 
     fn command_form(&self) -> ToolPath {
         self.tool().command_form()
+    }
+}
+
+/// While Prepare a form is open with a comment tool active: Prepare takes press-and-drag on the
+/// empty page (marquee selection, field moves), while plain clicks reach the comment tool (L-258).
+struct PrepareWithComment<'a> {
+    prepare: PrepareTool<'a>,
+    comments: Box<dyn CanvasTool + 'a>,
+}
+
+impl CanvasTool for PrepareWithComment<'_> {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        self.prepare.each_pass(cx);
+        self.comments.each_pass(cx);
+    }
+
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        let action = self.prepare.press(pointer, cx);
+        if action != ToolAction::Ignored {
+            return action;
+        }
+        self.comments.press(pointer, cx)
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if self.prepare.has_gesture() {
+            self.prepare.drag(pointer, cx);
+        } else {
+            self.comments.drag(pointer, cx);
+        }
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if self.prepare.is_click_marquee() {
+            self.prepare.release(pointer, cx);
+            if self.comments.press(pointer, cx) == ToolAction::Claimed {
+                self.comments.release(pointer, cx);
+            }
+        } else if self.prepare.has_gesture() {
+            self.prepare.release(pointer, cx);
+        } else {
+            self.comments.release(pointer, cx);
+        }
+    }
+
+    fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.prepare.hover(pointer, cx);
+        self.comments.hover(pointer, cx);
+    }
+
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        if self.prepare.has_gesture() {
+            self.prepare.cancel(reason, cx);
+        } else {
+            self.comments.cancel(reason, cx);
+        }
+    }
+
+    fn claims(&self) -> ToolClaims {
+        let prep = self.prepare.claims();
+        if prep != ToolClaims::NONE { prep } else { self.comments.claims() }
+    }
+
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        self.prepare.key(key, cx) || self.comments.key(key, cx)
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        self.comments.paint(draw, cx);
+        self.prepare.paint(draw, cx);
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        self.comments.cursor(cx)
+    }
+
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        self.prepare.takes(button, mods) || self.comments.takes(button, mods)
+    }
+
+    fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
+        self.comments.access(cx)
+    }
+
+    fn command_form(&self) -> ToolPath {
+        self.comments.command_form()
     }
 }

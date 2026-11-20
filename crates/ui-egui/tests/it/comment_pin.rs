@@ -1,7 +1,10 @@
 //! The annotation quick bar's pin is a preference that survives a restart.
 
 use egui::{Pos2, pos2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use pdfcraft_ui_egui::settings::PdfCraftSettings;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool, comments::CommentTool};
 
@@ -83,15 +86,24 @@ fn pin_from_quick_bar_survives_restart_and_unpinning() {
 
     let mut h = harness(Some(saved));
     assert!(h.state().comment_prefs.pinned, "the pin survives a fresh shell");
-    h.get_by_label("Keep tool selected: on");
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Keep tool selected").accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "the restored pin button is toggled on"
+    );
     shot(&mut h, "pin-restored.png");
     callout(&mut h, 140.0);
     crate::support::wait_until(&mut h, "the pinned callout", |app| app.session.get(app.views[0].id).unwrap().info.annotations.len() == 1);
     assert!(matches!(h.state().quick_tool, QuickTool::Comment(CommentTool::Callout)), "the restored pin keeps the tool selected after use");
 
-    h.get_by_label("Keep tool selected: on").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Keep tool selected").click();
     h.run_steps(3);
     assert!(!h.state().comment_prefs.pinned);
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Keep tool selected").accesskit_node().toggled(),
+        None,
+        "unpinning toggles the pin button off"
+    );
     shot(&mut h, "pin-disabled.png");
     let saved = h.state().settings_snapshot();
     callout(&mut h, 60.0);

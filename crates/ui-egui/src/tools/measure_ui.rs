@@ -14,7 +14,7 @@ use craft::ui::{
     form::SliderField,
     list::{List, ListRow},
     notices::Notice,
-    pickers::{ComboBox, UnitSelect},
+    pickers::{Select, UnitSelect},
     primitives::{Draw, PaintShape, StrokeWidth, TextRun, glyph},
     runtime::env::UnitKind,
     text::{NumberField, TextField},
@@ -656,7 +656,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut chosen = None;
     let fields = scale_fields(state);
     let before = state.ratio_text.clone();
-    let typed = TextField::new(tl!("Scale"), Bind::bound(&mut state.ratio_text)).show(ui);
+    let typed = TextField::new(tl!("Scale"), Bind::bound(&mut state.ratio_text)).submits().show(ui);
     state.ratio_dirty |= state.ratio_text != before;
     if (typed.submitted || typed.response.lost_focus()) && std::mem::take(&mut state.ratio_dirty) {
         match parse_ratio(&state.ratio_text) {
@@ -665,7 +665,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         }
     }
     let ratios: Vec<Entry<String>> = RATIOS.iter().map(|&n| Entry::new(format_ratio(n), format_ratio(n))).collect();
-    let common = ComboBox::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui);
+    let common = Select::new(tl!("Common scales"), Bind::given(state.ratio_text.clone()), &ratios).show(ui);
     if let Some(text) = common.value()
         && let Some(n) = parse_ratio(text)
         && *text != state.ratio_text

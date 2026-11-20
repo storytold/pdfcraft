@@ -344,17 +344,16 @@ impl DockPanels<PanelId> for Panels<'_> {
 
     fn group_view(&mut self, panels: &[PanelId], _active: usize, ui: &mut Ui, at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
         match at {
-            GroupAt::Measure(width) => panels.contains(&PanelId::Toolbar).then(|| crate::hotbar::measure_rail(self.app, ui, width)),
-            GroupAt::Show(rect) => {
-                if panels.contains(&PanelId::Toolbar) {
-                    crate::hotbar::show_rail(self.app, ui);
-                } else if panels.contains(&PanelId::Document) {
-                    document_view(self.app, ui, rect);
-                } else {
-                    return None;
-                }
+            GroupAt::Measure(width) if panels.contains(&PanelId::Toolbar) => Some(crate::hotbar::measure_rail(self.app, ui, width)),
+            GroupAt::Show(rect) if panels.contains(&PanelId::Toolbar) => {
+                crate::hotbar::show_rail(self.app, ui);
                 Some(rect.height())
             }
+            GroupAt::Show(rect) if panels.contains(&PanelId::Document) => {
+                document_view(self.app, ui, rect);
+                Some(rect.height())
+            }
+            _ => None,
         }
     }
 

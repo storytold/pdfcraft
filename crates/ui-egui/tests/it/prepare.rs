@@ -226,13 +226,13 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
     }
     assert!(outline(unselected, ink).is_none(), "unselected text field has no selection outline");
     // The anchor, the first one picked, shows a box of corner handles only.
-    let handles: Vec<Pos2> = shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Circle(c) if c.stroke.color == ink => Some(c.center),
-            _ => None,
-        })
+    let handles: Vec<Pos2> = ["Top left corner", "Top right corner", "Bottom right corner", "Bottom left corner"]
+        .into_iter()
+        .map(|label| h.get_by_role_and_label(Role::Button, label).rect().center())
         .collect();
+    for edge in ["Top edge", "Right edge", "Bottom edge", "Left edge"] {
+        assert!(h.query_by_role_and_label(Role::Button, edge).is_none(), "no edge handle {edge}");
+    }
     assert_eq!(handles.len(), 4, "only the primary has resize handles, at its corners");
     let distinct = |value: fn(&Pos2) -> f32| {
         let mut v: Vec<i32> = handles.iter().map(|p| value(p).round() as i32).collect();
@@ -241,6 +241,8 @@ fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
         v.len()
     };
     assert_eq!((distinct(|p| p.x), distinct(|p| p.y)), (2, 2), "four corners of one box: {handles:?}");
+    let box_rect = egui::Rect::from_points(&handles);
+    assert!(box_rect.contains(first) && !box_rect.contains(second), "handles surround only the primary: {box_rect:?}");
 }
 
 #[test]
@@ -1078,6 +1080,7 @@ fn deleting_several_selected_fields_and_detecting_fields_from_the_panel() {
         p.selected = Some(("a".into(), 0));
         p.also = vec![("b".into(), 0), ("c".into(), 0)];
     }
+    h.run_steps(1);
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     let left = names(&h);
@@ -1373,16 +1376,16 @@ fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
     assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select once the area is drawn");
     // The table starts with four rows and one column: two rows fewer and one column more, by the
     // number fields' arrows.
-    let step = |h: &mut Harness<'static, PdfCraftApp>, field: usize, key: egui::Key, times: usize| {
-        h.query_all(by().role(Role::SpinButton)).nth(field).expect("the table's number field").focus();
+    let step = |h: &mut Harness<'static, PdfCraftApp>, label: &str, key: egui::Key, times: usize| {
+        h.get_by_role_and_label(Role::SpinButton, label).focus();
         h.run_steps(1);
         for _ in 0..times {
             h.key_press(key);
             h.run_steps(2);
         }
     };
-    step(&mut h, 0, egui::Key::ArrowDown, 2);
-    step(&mut h, 1, egui::Key::ArrowUp, 1);
+    step(&mut h, "Rows", egui::Key::ArrowDown, 2);
+    step(&mut h, "Columns", egui::Key::ArrowUp, 1);
     retype(&mut h, "Column 1", "desc_N");
     retype(&mut h, "Column 2", "price_N");
     assert_eq!(table(&h)["rows"], 2);
@@ -1438,7 +1441,7 @@ fn enter_in_a_number_field_does_not_add_the_table() {
     let mut h = harness();
     let before = names(&h).len();
     draw_table(&mut h);
-    h.query_all(by().role(Role::SpinButton)).next().expect("the Rows field").focus();
+    h.get_by_role_and_label(Role::SpinButton, "Rows").focus();
     h.run_steps(2);
     h.key_press(egui::Key::Backspace);
     h.event(egui::Event::Text("6".into()));
@@ -1803,6 +1806,7 @@ fn deleting_two_radio_buttons_of_a_group_at_once() {
         p.selected = Some(("shirt".into(), 0));
         p.also = vec![("shirt".into(), 2)];
     }
+    h.run_steps(1);
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert_eq!(buttons(&h), (vec!["M".into()], vec![]), "M is left, and nothing is chosen");
@@ -1811,6 +1815,7 @@ fn deleting_two_radio_buttons_of_a_group_at_once() {
         let p = &mut h.state_mut().views[0].session.prepare;
         p.selected = Some(("shirt".into(), 0));
     }
+    h.run_steps(1);
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert!(!names(&h).iter().any(|n| n == "shirt"));
@@ -1867,7 +1872,10 @@ fn fields_sharing_a_name_each_show_their_own_formula() {
     for (row, formula) in [(0, "= sum(src)"), (1, "= sum(x)")] {
         h.query_all_by(|node| node.label().is_some_and(|label| label == "dup" || label.starts_with("dup: "))).nth(row).expect("a dup row").hover();
         h.run_steps(30);
-        assert!(h.query_by_label_contains(formula).is_some(), "dup row {row} shows {formula}");
+        assert!(
+            h.query_by(|node| node.role() == Role::Tooltip && node.label().is_some_and(|label| label.contains(formula))).is_some(),
+            "dup row {row} shows {formula}"
+        );
     }
 }
 
