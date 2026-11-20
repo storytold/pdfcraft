@@ -89,11 +89,16 @@ pub fn document_devanagari_font() -> Option<&'static CraftFont> {
     ui_devanagari_fonts().into_iter().next()
 }
 
-/// The `Hebr` craft-fonts faces for Hebrew interface text (file names, document titles, text
-/// being edited), in manifest order. Empty when built without craft-fonts or when it has no
-/// Hebrew face.
+/// The `Hebr` craft-fonts UI faces (`Noto Sans Hebrew`, or the first `Hebr` face if no Noto
+/// Sans Hebrew face is embedded) for Hebrew interface text, keeping optional document faces
+/// from `fonts/hebrew-manifest.txt` out of the UI fallback stack.
 pub fn ui_hebrew_fonts() -> Vec<&'static CraftFont> {
-    CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).collect()
+    ui_hebrew_faces(CRAFT_FONTS)
+}
+
+fn ui_hebrew_faces(faces: &[CraftFont]) -> Vec<&CraftFont> {
+    let noto: Vec<&CraftFont> = faces.iter().filter(|f| f.covers("Hebr") && f.family == "Noto Sans Hebrew").collect();
+    if !noto.is_empty() { noto } else { faces.iter().filter(|f| f.covers("Hebr")).take(1).collect() }
 }
 
 /// The face for Hebrew text written into PDFs: the `Hebr` face of the asked weight, else its
@@ -310,7 +315,12 @@ mod tests {
         // No bold face: Regular, never a face of another script.
         assert_eq!(hebrew_face(&faces[..2], true).map(|f| f.bytes), Some(&b"regular"[..]));
         assert!(hebrew_face(&faces[..1], false).is_none());
-        assert_eq!(ui_hebrew_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).count());
+        let mixed = [
+            CraftFont { family: "Amatic SC", style: "Regular", scripts: HEBR_LATN, bytes: b"display" },
+            CraftFont { family: "Noto Sans Hebrew", style: "Regular", scripts: &["Hebr"], bytes: b"noto" },
+        ];
+        assert_eq!(ui_hebrew_faces(&mixed).iter().map(|f| f.family).collect::<Vec<_>>(), vec!["Noto Sans Hebrew"]);
+        assert_eq!(ui_hebrew_fonts().len(), ui_hebrew_faces(CRAFT_FONTS).len());
         assert_eq!(document_hebrew_font(false).is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Hebr")));
     }
 
