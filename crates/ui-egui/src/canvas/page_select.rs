@@ -49,6 +49,7 @@ pub(crate) struct PageSelectTool<'a> {
     picks: PickSlots<'a>,
     xforms: &'a [(usize, PageXform)],
     generation: u64,
+    column: bool,
 }
 
 impl<'a> PageSelectTool<'a> {
@@ -65,12 +66,13 @@ impl<'a> PageSelectTool<'a> {
         xforms: &'a [(usize, PageXform)],
         generation: u64,
     ) -> Self {
-        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation }
+        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation, column: false }
     }
 
     /// The Column Select tool is active.
     pub(crate) fn column(mut self, on: bool) -> Self {
         self.text = self.text.column(on);
+        self.column = on;
         self
     }
 
@@ -121,6 +123,9 @@ impl CanvasTool for PageSelectTool<'_> {
         if matches!(key, ToolKey::Cancel) && self.picks.held() {
             self.picks.let_go();
             return true;
+        }
+        if matches!(key, ToolKey::Cancel) && !self.column {
+            return false;
         }
         self.text.key(key, cx)
     }

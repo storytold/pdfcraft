@@ -804,18 +804,18 @@ fn signing_draws_a_signature_once_and_places_it() {
     assert!(shows(&h, "Create signature"));
     h.get_all_by_label("Draw").last().unwrap().click();
     h.run_steps(2);
-    // The Draw tab's pad is the second widget named Draw, after the tab itself.
-    let pad = h.get_all_by_label("Draw").last().unwrap().rect();
-    let start = pos2(pad.left() + 40.0, pad.bottom() + 70.0);
+    let pad = h.get_by_role_and_label(egui::accesskit::Role::Image, "Draw").rect();
+    let start = pos2(pad.left() + pad.width() * 0.1, pad.center().y);
+    let step = pad.width() * 0.8 / 8.0;
     h.hover_at(start);
     h.run_steps(1);
     h.drag_at(start);
     h.run_steps(1);
     for k in 1..=8 {
-        h.hover_at(start + egui::vec2(k as f32 * 30.0, if k % 2 == 0 { -20.0 } else { 20.0 }));
+        h.hover_at(start + egui::vec2(k as f32 * step, if k % 2 == 0 { -20.0 } else { 20.0 }));
         h.run_steps(1);
     }
-    h.drop_at(start + egui::vec2(240.0, 0.0));
+    h.drop_at(start + egui::vec2(8.0 * step, 0.0));
     h.run_steps(2);
     h.get_by_label("Apply").click();
     h.run_steps(3);
@@ -2551,7 +2551,7 @@ fn cancelling_the_lock_question_saves_nothing() {
 
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
-    h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, label).rect()
 }
 
 /// Scroll the page until `what` (on screen) lies across the mode bar, then the cursor over each

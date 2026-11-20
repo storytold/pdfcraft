@@ -101,8 +101,8 @@ fn save_in_the_second_pane_keeps_its_typing() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-split-save-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("out.pdf");
-    let files = ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]);
-    let mut h = harness_over(crate::support::host_with(Arc::new(InlineJobs), Arc::new(files)));
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![out.clone()])]));
+    let mut h = harness_over(crate::support::host_with(Arc::new(InlineJobs), files.clone()));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Backslash);
     h.run_steps(4);
     let second = 1;
@@ -123,5 +123,5 @@ fn save_in_the_second_pane_keeps_its_typing() {
     assert_eq!(h.state().active, Some(second), "the pane worked in stays the active one");
     let s = h.state();
     assert!(!s.session.get(s.views[second].id).unwrap().dirty, "and wrote it");
-    assert!(std::fs::metadata(&out).is_ok_and(|m| m.len() > 0));
+    assert!(files.file(&out).is_some_and(|bytes| !bytes.is_empty()));
 }

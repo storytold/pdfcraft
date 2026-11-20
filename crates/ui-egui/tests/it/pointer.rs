@@ -772,6 +772,9 @@ fn a_drag_with_the_link_tool_from_a_link_draws_a_new_link() {
 /// Clicks OK in the open Link Properties dialog and returns the page of every link the document
 /// then holds.
 fn confirm_new_link(h: &mut Harness<'_, PdfCraftApp>) -> Vec<usize> {
+    // A new web link needs an address; choose a page destination for this gesture test.
+    h.get_by_label("Go to a page view").click();
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(6);
     let s = h.state();
