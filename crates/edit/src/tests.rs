@@ -726,6 +726,130 @@ fn flattening_fields_drops_the_ones_on_no_page() {
     assert_eq!(left, [pdfcraft_cos::ObjRef::new(7, 0)], "only the hidden field on the page stays");
 }
 
+/// A form whose `/AcroForm` is null, its fields known only from the widgets on the page (viewers
+/// fill them all the same). Flattening draws the shown widget and leaves the one that is not
+/// shown (`/F 32`, NoView): that one stays a field of the form, listed in `/Fields`, and its tree
+/// no longer holds the widget flattened away. With every widget flattened, no form is made.
+#[test]
+fn flattening_lists_the_field_of_a_widget_it_leaves_and_prunes_its_tree() {
+    let page = stream("", " ");
+    let objs = |hidden_flag: u32| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm null >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [6 0 R 7 0 R] >>".into(),
+            page.clone(),
+            "<< /T (form1) /Kids [6 0 R 7 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Parent 5 0 R /Rect [10 10 150 40] /F 4 /AP << /N 8 0 R >> >>".into(),
+            format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (footer) /Parent 5 0 R /Rect [10 90 150 120] /F {hidden_flag} /AP << /N 8 0 R >> >>"
+            ),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream".into(),
+        ]
+    };
+    let form = |doc: &Document| {
+        let root = doc.root().unwrap();
+        doc.get(root).as_dict().unwrap().get(b"AcroForm").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned())
+    };
+    let o = objs(96);
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only the shown widget is drawn");
+    let doc = reopen(&doc);
+    let af = form(&doc).expect("a form, to list the field left on the page");
+    let listed: Vec<pdfcraft_cos::ObjRef> = doc.resolve(af.get(b"Fields").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(listed, [pdfcraft_cos::ObjRef::new(5, 0)], "the left widget's tree is in the form");
+    let kids = doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().unwrap().get(b"Kids").cloned();
+    assert_eq!(kids, Some(Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))])), "the flattened widget is out of its tree");
+    // Both widgets shown and flattened: no field is left, and no form is made for none.
+    let o = objs(4);
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+    assert!(form(&reopen(&doc)).is_none(), "no form dictionary appears");
+}
+
+/// Field trees `/Fields` does not list, in the shapes where adopting them would be wrong. Each
+/// document has two pages, and only the first is flattened.
+/// - A tree whose one widget is drawn: no widget of it is left on a page, so it is not listed,
+///   but its `/Kids` no longer holds the drawn widget.
+/// - A hidden widget whose `/Parent` does not list it in its `/Kids` (ISO 32000-2 Table 226):
+///   that parent is not its field, so the parent's tree is not listed.
+/// - A hidden widget whose climb ends at a broken `/Parent`: no top is reached, so the node
+///   below the break is not listed as a root field.
+#[test]
+fn flattening_lists_only_trees_it_reaches_from_a_widget_left_on_a_page() {
+    let doc_with = |annots: &str, extra: &[&str]| {
+        let mut o: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [{annots}] >>"),
+            stream("", " "),
+            "<< /T (form1) /Kids [6 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Parent 5 0 R /Rect [10 10 150 40] /F 4 /AP << /N 8 0 R >> >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (hidden) /Parent 10 0 R /Rect [10 90 150 120] /F 32 /AP << /N 8 0 R >> >>".into(),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream"
+                .into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into(),
+        ];
+        o.extend(extra.iter().map(|e| e.to_string()));
+        build(&o.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let listed = |doc: &Document| -> Vec<pdfcraft_cos::ObjRef> {
+        let root = doc.root().unwrap();
+        let af = doc.get(root).as_dict().unwrap().get(b"AcroForm").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap();
+        doc.resolve(af.get(b"Fields").unwrap()).as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect()
+    };
+    let kids = |doc: &Document, n: u32| doc.get(pdfcraft_cos::ObjRef::new(n, 0)).as_dict().unwrap().get(b"Kids").cloned();
+
+    // The drawn widget's tree: pruned, not listed. Object 10 is a plain field the hidden widget
+    // is not on the page for.
+    let mut doc = doc_with("6 0 R", &["<< /T (other) /Kids [] >>"]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    let doc = reopen(&doc);
+    assert_eq!(kids(&doc, 5), Some(Object::Array(vec![])), "the drawn widget is out of its tree");
+    assert!(listed(&doc).is_empty(), "a tree with no widget left is not listed");
+
+    // The hidden widget's /Parent (10) lists another field (11), not the widget.
+    let mut doc = doc_with("6 0 R 7 0 R", &["<< /T (unrelated_parent) /Kids [11 0 R] >>", "<< /FT /Tx /T (off_page) /Parent 10 0 R >>"]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    assert!(listed(&reopen(&doc)).is_empty(), "a parent that does not list the widget is not its field");
+
+    // The hidden widget's parent (10) lists it, but its own /Parent (99) does not exist.
+    let mut doc = doc_with("6 0 R 7 0 R", &["<< /T (broken_up) /Kids [7 0 R] /Parent 99 0 R >>"]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1);
+    assert!(listed(&reopen(&doc)).is_empty(), "a node with a /Parent is not a root field");
+}
+
+/// A malformed page tree whose `/Pages` node also lists a widget in its `/Kids`, the widget's
+/// `/Parent` naming that node. A `/Pages` node is not a field (ISO 32000-2 §7.7.3.2, Table 30;
+/// §12.7.4.1, Table 226), so flattening does not treat it as the widget's field tree: the page
+/// stays in the page tree.
+#[test]
+fn flattening_does_not_take_the_page_tree_for_a_field() {
+    let o = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R] >>".into(),
+        stream("", " "),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (shown) /Parent 2 0 R /P 3 0 R /Rect [10 10 150 40] /F 4 /AP << /N 6 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream"
+            .into(),
+    ];
+    let mut doc = build(&o.iter().map(String::as_str).collect::<Vec<_>>());
+    let count = page_list(&doc).len();
+    let all: Vec<usize> = (0..count).collect();
+    let _ = flatten(&mut doc, &all, false, true);
+    let doc = reopen(&doc);
+    let kids = doc.get(pdfcraft_cos::ObjRef::new(2, 0)).as_dict().unwrap().get(b"Kids").cloned().unwrap();
+    assert!(kids.as_array().unwrap().contains(&Object::Ref(pdfcraft_cos::ObjRef::new(3, 0))), "the page stays in /Kids: {kids:?}");
+    assert!(!page_list(&doc).is_empty());
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be
