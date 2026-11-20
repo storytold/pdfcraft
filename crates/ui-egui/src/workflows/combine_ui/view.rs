@@ -43,6 +43,24 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let draft = &app.combine_draft;
         tab.expanded.retain(|id| draft.iter().find(|f| f.id == *id).is_some_and(|f| crate::combine_grid::pages_shown(f).is_some()));
     }
+    // A page can only remain selected while its tile is visible.
+    let shown_pages: BTreeSet<CombineKey> = if app.combine_view == CombineView::Grid {
+        app.combine_draft
+            .iter()
+            .filter(|f| app.combine_tab.expanded.contains(&f.id))
+            .flat_map(|f| {
+                let count = crate::combine_grid::pages_shown(f).map_or(0, |pages| pages.order.len());
+                (0..count).map(move |nth| CombineKey::Page(f.id, nth))
+            })
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    let selection = &mut app.combine_tab.selection;
+    let visible = |key: &CombineKey| !matches!(key, CombineKey::Page(..)) || shown_pages.contains(key);
+    selection.items.retain(visible);
+    selection.lead = selection.lead.filter(visible);
+    selection.anchor = selection.anchor.filter(visible);
     let n = app.combine_draft.len();
     let selected: Vec<bool> = app.combine_draft.iter().map(|f| app.combine_tab.selection.contains(&CombineKey::File(f.id))).collect();
     let count = selected.iter().filter(|s| **s).count();

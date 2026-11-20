@@ -191,17 +191,6 @@ fn portrait(t: &TextureState) -> bool {
     shape(t).is_some_and(|(w, h)| h > w)
 }
 
-/// Wait for a modal opened by an action to be laid out and present in the accessibility tree.
-/// A newly shown modal needs a pass of its own; the action's frame only sets its state.
-fn wait_for_label(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
-    for _ in 0..30 {
-        if h.query_by_label(label).is_some() {
-            return;
-        }
-        h.run_steps(1);
-    }
-}
-
 /// Press, move in steps and release, as a user drags.
 fn drag(h: &mut Harness<'static, PdfCraftApp>, from: Pos2, to: Pos2) {
     h.hover_at(from);
@@ -457,8 +446,13 @@ fn row_unlock_is_on_a_locked_files_menu_only() {
     // The menu's item comes after the toolbar's button of the same name.
     h.get_all_by_label("Unlock…").last().unwrap().click();
     h.run_steps(2);
-    wait_for_label(&mut h, "Unlock secret.pdf");
-    h.get_by_label("Unlock secret.pdf");
+    for _ in 0..30 {
+        if h.query_by_role_and_label(Role::Dialog, "Password required").is_some() {
+            break;
+        }
+        h.run_steps(1);
+    }
+    h.get_by_role_and_label(Role::Dialog, "Password required").get_by_label_contains("secret.pdf");
 }
 
 /// Expand and Collapse on a tile, and from the toolbar for every file.
@@ -624,7 +618,7 @@ fn expanding_a_file_shows_the_pages_it_adds_in_order_with_their_numbers() {
     assert!(h.query_by_label("Expand").is_none());
     expand(&mut h, "b.pdf");
     assert_eq!(h.state().combine_expanded(), [1]);
-    assert!(h.query_by_label("b.pdf").is_none(), "the file's tile gives way to its pages");
+    assert!(h.query_by_role_and_label(Role::ListItem, "b.pdf").is_none(), "the file's tile gives way to its pages");
     // The pages it adds, in the range's order, each saying which page of which file.
     let xs: Vec<f32> = [3, 1, 4].iter().map(|p| card(&h, &page_card(*p, "b.pdf")).left()).collect();
     assert!(xs.windows(2).all(|w| w[0] < w[1]), "pages 3, 1, 4 in that order: {xs:?}");
