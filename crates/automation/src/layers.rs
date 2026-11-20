@@ -1,4 +1,4 @@
-//! Layers (optional content groups) as a tool: the Layers panel's eye icon (#2986, AGENTS.md §3).
+//! Layers (optional content groups) as a tool: the Layers panel's eye icon (#2986, app-agents.md rule 14).
 //!
 //! A per-document view setting, like hidden comments: `page_render` draws with it, and the file
 //! itself never changes.
