@@ -373,10 +373,14 @@ pub(crate) fn field_parts(
     doc: &pdfcraft_engine::Document,
     page: usize,
     can_fill: bool,
+    badge_tips: bool,
     geo: PageGeometry<'_>,
 ) -> Vec<PagePart> {
     let Some(xf) = session.page_xform(page, geo) else { return Vec::new() };
     let form = doc.form.as_slice();
+    let badges = if badge_tips { crate::canvas::signature_badges(&doc.signatures, page) } else { Vec::new() };
+    let tabbed = tab_order(form, info);
+    let in_order: HashSet<(usize, usize)> = tabbed.iter().copied().collect();
     let part = |fi: usize, wi: usize| -> Option<PagePart> {
         let f = form.get(fi)?;
         let w = f.widgets.get(wi)?;
@@ -394,20 +398,22 @@ pub(crate) fn field_parts(
         let stacking = u32::try_from(form.len().saturating_sub(fi)).unwrap_or(u32::MAX);
         let mut part =
             PagePart::new(Owner::Field { field: fi, widget: wi }, page, HitShape::Polygon(corners), PageLayer::Field).cursor(icon).stacked(stacking);
-        if f.kind == FormFieldKind::Signature
-            && let Some(sig) = doc.signatures.iter().find(|s| s.signed && s.visible && s.page == Some(page) && s.field == f.name)
-        {
-            part = part.tip_now(crate::i18n::t(sig.summary()));
+        let badge_tip = (f.kind == FormFieldKind::Signature)
+            .then(|| {
+                badges.iter().find(|b| b.rect.iter().zip(w.rect).all(|(a, b)| (a - b).abs() < 1.0)).map(|b| crate::i18n::t(b.summary).to_string())
+            })
+            .flatten();
+        if let Some(tip) = badge_tip {
+            part = part.tip_now(tip);
         } else if let Some(tip) = f.tooltip.as_deref().filter(|t| !t.trim().is_empty()) {
             part = part.tip(tip.to_owned());
         }
-        if fillable(f) {
+        let is_focused = session.forms.focus.as_ref().is_some_and(|x| x.is_on(f, wi));
+        if in_order.contains(&(fi, wi)) || is_focused {
             part = part.focusable();
         }
         Some(part)
     };
-    let tabbed = tab_order(form, info);
-    let in_order: HashSet<(usize, usize)> = tabbed.iter().copied().collect();
     let mut parts: Vec<PagePart> = tabbed.iter().filter_map(|&(fi, wi)| part(fi, wi)).collect();
     for (fi, f) in form.iter().enumerate() {
         for wi in 0..f.widgets.len() {
@@ -505,6 +511,7 @@ fn clicked(
                 commit(session, form);
                 session.forms.focus = Some(open_focus(f, wi));
             }
+            session.forms.refocus = true;
             // The toggle goes after the edit for any text the click committed, in one batch: if that text is
             // refused, its field reopens and the toggle is dropped with it.
             let toggle = toggle_edit(f, wi);
@@ -521,6 +528,7 @@ fn clicked(
             if session.forms.focus.as_ref().is_none_or(|x| !x.is_on(f, wi)) {
                 commit(session, form);
                 session.forms.focus = Some(open_focus(f, wi));
+                session.forms.refocus = true;
             }
             // A combo box's click runs its Mouse Up JavaScript (#269).
             session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
@@ -532,6 +540,7 @@ fn clicked(
             }
             commit(session, form);
             session.forms.focus = Some(open_focus(f, wi));
+            session.forms.refocus = true;
             let r = widget_rect(&xf, info, page, w.rect);
             let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
             let zoom = (r.height() as f64) / height_pt;
@@ -582,6 +591,16 @@ fn clicked(
             session.forms.triggers.push((widget_ref(f, wi), pdfcraft_engine::FieldTrigger::MouseUp));
         }
     }
+}
+
+/// Tab or Shift+Tab on a focused non-editor field (check box, radio button, list box, non-editable combo):
+/// commits and moves to the next or previous fillable widget in the document's tab order, across pages too.
+pub(crate) fn field_tab(session: &mut PageSession, info: &DocInfo, form: &[FormField], forward: bool, geo: PageGeometry<'_>) -> Option<Edit> {
+    let focus = session.forms.focus.clone()?;
+    let f = focused_field(&focus, form)?;
+    let edit = tab_to_next_field(session, info, form, f, focus.widget, forward, geo);
+    session.forms.refocus = true;
+    edit
 }
 
 /// What a key the focused check box, radio button or list box got does: the edit to apply, if any. Space (or Enter)

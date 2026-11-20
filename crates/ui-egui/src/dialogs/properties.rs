@@ -221,7 +221,12 @@ impl PdfCraftApp {
     /// Opens Document Properties on `tab`, or shows `tab` when it is already open.
     pub(crate) fn open_properties(&mut self, ctx: &egui::Context, tab: PropsTab) {
         match self.dialogs.get_mut_by_id::<HostedParamDialog>(properties_id()) {
-            Some(dialog) => dialog.set_tab(tab.index()),
+            Some(dialog) => {
+                dialog.set_tab(tab.index());
+                if tab == PropsTab::SpaceAudit {
+                    self.measure_space_audit();
+                }
+            }
             None => self.show_properties(ctx, tab),
         }
     }
@@ -230,6 +235,9 @@ impl PdfCraftApp {
     fn show_properties(&mut self, ctx: &egui::Context, tab: PropsTab) {
         let Some((_, id)) = self.active_ids() else { return };
         self.session.refresh_fonts(id);
+        if tab == PropsTab::SpaceAudit {
+            self.measure_space_audit();
+        }
         // Starts the measure, so it is built before the document is borrowed.
         let space = crate::optimize_ui::space_audit_param(self);
         let Some(doc) = self.session.get(id) else { return };
@@ -297,6 +305,15 @@ impl PdfCraftApp {
         // The Fonts tab shows the fonts as they are after any content edit.
         if let (Some((_, id)), Some((_, PropsTab::Fonts))) = (self.active_ids(), self.properties_fields()) {
             self.session.refresh_fonts(id);
+        }
+        // The Space Audit tab measures the live document when opened and again after an edit.
+        if let (Some((_, id)), Some((_, PropsTab::SpaceAudit))) = (self.active_ids(), self.properties_fields())
+            && let Some(doc) = self.session.get(id)
+        {
+            let key = (id, doc.edit_generation());
+            if self.space_audit_of != Some(key) && !self.space_audit_jobs.contains(&key) {
+                self.measure_space_audit();
+            }
         }
         if self.prepare_properties(ctx) {
             self.sync_custom_unlisted(ctx);

@@ -116,9 +116,9 @@ fn link_properties_sets_the_page_view_zoom() {
     // The field's caption and the toolbar's zoom carry the name too: the choice is the drop-down.
     h.get_by_role_and_label(Role::ComboBox, "Zoom").click();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Button, "200%").scroll_to_me();
+    h.get_by_role_and_label(Role::ListBoxOption, "200%").scroll_to_me();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Button, "200%").click();
+    h.get_by_role_and_label(Role::ListBoxOption, "200%").click();
     h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);

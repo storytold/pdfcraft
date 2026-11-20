@@ -15,13 +15,15 @@ fn picked_date(text: &str, fmt: &str) -> Option<PickedDate> {
 }
 
 /// The calendar of a date field with format `fmt`, hung from `rect` and open while `open` is true. A day picked comes
-/// back written in the field's own format, so the caller commits it. Today is the host's day (`RootEnv::today`); the
+/// back written in the field's own format, so the caller commits it. Today comes from the session clock; the
 /// words follow the interface language.
-pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, open: &mut bool) -> Option<String> {
+pub(super) fn calendar(ui: &mut egui::Ui, rect: Rect, text: &str, fmt: &str, today: (i64, u32, u32), open: &mut bool) -> Option<String> {
     let before = picked_date(text, fmt);
     let mut picked = before.clone();
+    let today = PickedDate::day(i32::try_from(today.0).unwrap_or(1970), u8::try_from(today.1).unwrap_or(1), u8::try_from(today.2).unwrap_or(1));
     CalendarPopover::new("Calendar", Bind::bound(&mut *open), Bind::bound(&mut picked))
         .precisions(&[DatePrecision::Day])
+        .today(today)
         .overlay(|overlay| {
             overlay
                 .anchor(Anchor::Rect(rect))

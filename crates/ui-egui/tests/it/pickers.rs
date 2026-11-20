@@ -154,6 +154,15 @@ fn save_answer() -> String {
     save.as_str().to_string()
 }
 
+/// The unsaved-changes question's "don't save" answer as the framework words it on this OS: Don't Save on macOS,
+/// No on Windows and Linux.
+fn dont_save_answer() -> String {
+    use craft::i18n::WordSet as _;
+    let words = craft::ui::dialog::DialogWords::english();
+    let discard = if cfg!(target_os = "macos") { words.unsaved_dont_save } else { words.unsaved_no };
+    discard.as_str().to_string()
+}
+
 /// Presses the button called `label` of the dialog on top (the last such node drawn).
 fn press(r: &mut Rig, label: &str) {
     r.get_all_by_label(label).last().unwrap_or_else(|| panic!("no {label:?} button on screen")).click();
@@ -556,7 +565,7 @@ fn a_close_prompt_still_means_its_own_document_after_a_pending_save_closes_anoth
     h.answer(Picked::Paths(vec![dir.join("a.pdf")]));
     assert_eq!(h.state().views.len(), 2, "the first tab closed once saved");
     // Don't Save: the prompt was about the second document, which is now the first tab.
-    press(&mut h, "Don't save");
+    press(&mut h, &dont_save_answer());
     let open: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
     assert_eq!(open, vec![c], "the second document closed, not the third: {b:?} vs {c:?}");
     assert!(dirty(h.state(), 0), "the third document keeps its unsaved changes");

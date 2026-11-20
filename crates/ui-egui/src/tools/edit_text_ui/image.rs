@@ -9,10 +9,11 @@ use craft::pages::ui::{PageBody, PlacedPage};
 use craft::ui::buttons::Button;
 use craft::ui::canvas::{CropApply, CropOutside, CropOverlay};
 use craft::ui::canvas_controls::{SelectionOutline, TaskBar};
-use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::contract::{Access, Bind, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::menu::{Menu, MenuIcon, MenuIconRow, MenuItem};
 use craft::ui::primitives::textures::TextureState;
+use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
 
 pub(crate) use pdfcraft_content::Matrix;
 
@@ -323,10 +324,77 @@ fn box_controls(
         None => (quad, shown.edit.shown.as_ref().and_then(|m| m.same()).map_or(quad, |state| state.quad)),
     };
     s.paper = Some(from.map(|p| placed.to_page(view.to_screen(p))));
+    let paper_quad = from.map(|p| view.to_screen(p));
+    PicturePaper::new(paper_quad, placed.rect).show_at(ui, body.rect);
     let full = matrix_corners(xf, info, page, image.matrix).map(|p| view.to_doc(p));
     let map = affine_between(from, to);
-    let _ = TransformPreview::new(tl!("Picture"), textures).map(PreviewMap::Quad(full.map(map))).picture().show(ui);
+    let _ = TransformPreview::new(tl!("Picture"), textures).map(PreviewMap::Quad(full.map(map))).show_at(ui, body.rect);
     edit
+}
+
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+struct PicturePaperStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// Fills the quad a moving or resized picture left behind on its page with white paper, so the old pixels
+/// on the page raster do not show beside or under `TransformPreview`.
+#[derive(craft::ui::contract::Component)]
+#[component(canvas_control, content_painter, unregistered)]
+struct PicturePaper {
+    #[common]
+    common: Common,
+    quad: [Pos2; 4],
+    clip: Rect,
+}
+
+impl PicturePaper {
+    fn new(quad: [Pos2; 4], clip: Rect) -> Self {
+        Self { common: Common::new(), quad, clip }
+    }
+}
+
+impl Component for PicturePaper {
+    const ROLE: Role = Role::GROUP;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: craft::behavior::Input = craft::behavior::Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    const SHOWS_LABEL: bool = false;
+    type Style = PicturePaperStyle;
+    type Output = egui::Response;
+
+    fn style(_: &StyleCx<'_>, _: PicturePaperStyleKey) -> PicturePaperStyle {
+        PicturePaperStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {
+        egui::Vec2::ZERO
+    }
+
+    fn sense(&self) -> craft::behavior::Sense {
+        craft::behavior::Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if !self.quad.iter().all(|p| p.is_finite()) {
+            return;
+        }
+        let content = ui.content_painter(cx);
+        let painter = content.painter.with_clip_rect(self.clip.intersect(content.painter.clip_rect()));
+        painter.add(egui::Shape::convex_polygon(self.quad.to_vec(), egui::Color32::WHITE, egui::Stroke::NONE));
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
 }
 
 fn crop_controls(

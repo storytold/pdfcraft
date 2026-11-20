@@ -3,8 +3,8 @@
 //! hit priority ranks them against each other and the press machine holds each press to its release. The tool host
 //! shown after it takes every press no part took.
 
-use craft::behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, PartKey, PartRef, PressPhase, Sense};
-use craft::keymap::Mods;
+use craft::behavior::{CursorIcon, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, NavMove, PartKey, PartRef, PressPhase, Sense};
+use craft::keymap::{Chord, Key, Mods};
 use craft::ui::contract::{
     Common, Component, Cx, Focus as _, MeasureCx, NoValue, Outcome, PartsCx, Pointer as _, Props as _, Role, TooltipAt, TooltipSpec, TooltipWhen,
 };
@@ -33,16 +33,16 @@ pub(crate) enum Owner {
     Paragraph { block: usize },
     /// Edit text: a picture, by its index among the page's.
     Picture { index: usize },
-    /// Edit text: the objects selected together.
-    Objects,
-    /// Edit text: the frame band of the paragraph open for typing, by the paragraph's index.
-    Frame { block: usize },
+    /// Edit text: the objects selected together, by index in the selection.
+    Objects { index: usize },
+    /// Edit text: one side of the frame band of the paragraph open for typing, by the paragraph's index and side (0..4).
+    Frame { block: usize, side: usize },
     /// Added text or a picture placed on the page, by its index among the page's.
     Added { index: usize },
     /// The sign tab on an empty signature field a click would sign, by the field's index in the form.
     SignTab { field: usize },
-    /// A signed signature widget's validation badge (hover-only verdict tip under any tool).
-    SignatureBadge { index: usize },
+    /// A signed signature's validation badge, by its index on the page: shows the verdict tooltip on hover.
+    Badge { index: usize },
 }
 
 const COMMENT: PartKey = PartKey::new("comment");
@@ -56,7 +56,7 @@ const OBJECTS: PartKey = PartKey::new("objects");
 const FRAME: PartKey = PartKey::new("frame");
 const ADDED: PartKey = PartKey::new("added");
 const SIGN_TAB: PartKey = PartKey::new("sign_tab");
-const SIGNATURE_BADGE: PartKey = PartKey::new("signature_badge");
+const BADGE: PartKey = PartKey::new("badge");
 
 /// `high` in the upper 32 bits of a part index and `low` in the lower; `None` when either does not fit, so no two
 /// things ever share an index.
@@ -86,11 +86,11 @@ impl Owner {
             Owner::PrepareField { field, widget } => (PREPARE_FIELD, pack(field, widget)?),
             Owner::Paragraph { block } => (PARAGRAPH, pack(page, block)?),
             Owner::Picture { index } => (PICTURE, pack(page, index)?),
-            Owner::Objects => (OBJECTS, pack(page, 0)?),
-            Owner::Frame { block } => (FRAME, pack(page, block)?),
+            Owner::Objects { index } => (OBJECTS, pack(page, index)?),
+            Owner::Frame { block, side } => (FRAME, pack(page, block.checked_shl(2)? | (side & 3))?),
             Owner::Added { index } => (ADDED, pack(page, index)?),
             Owner::SignTab { field } => (SIGN_TAB, pack(page, field)?),
-            Owner::SignatureBadge { index } => (SIGNATURE_BADGE, pack(page, index)?),
+            Owner::Badge { index } => (BADGE, pack(page, index)?),
         };
         Some(key.at(index))
     }
@@ -109,11 +109,11 @@ impl Owner {
             PREPARE_FIELD => Some((Owner::PrepareField { field: high, widget: low }, None)),
             PARAGRAPH => paged(Owner::Paragraph { block: low }),
             PICTURE => paged(Owner::Picture { index: low }),
-            OBJECTS => paged(Owner::Objects),
-            FRAME => paged(Owner::Frame { block: low }),
+            OBJECTS => paged(Owner::Objects { index: low }),
+            FRAME => paged(Owner::Frame { block: low >> 2, side: low & 3 }),
             ADDED => paged(Owner::Added { index: low }),
             SIGN_TAB => paged(Owner::SignTab { field: low }),
-            SIGNATURE_BADGE => paged(Owner::SignatureBadge { index: low }),
+            BADGE => paged(Owner::Badge { index: low }),
             _ => None,
         }
     }
@@ -302,6 +302,9 @@ pub(crate) struct PagePartsStyle {
     metrics: Metrics,
 }
 
+const TAB: Chord = Chord::plain(Key::Tab);
+const SHIFT_TAB: Chord = Chord::new(Mods::SHIFT, Key::Tab);
+
 /// What the page parts report this pass.
 #[derive(Debug)]
 pub(crate) struct PagePartsOutput {
@@ -311,6 +314,8 @@ pub(crate) struct PagePartsOutput {
     pub(crate) press: Option<PagePress>,
     /// A key the focused part was given: a form field's toggle, its arrows, Enter or typed text.
     pub(crate) key: Option<(Owner, Intent)>,
+    /// Tab (`true`) or Shift+Tab (`false`) pressed while a focusable field part held focus.
+    pub(crate) tab: Option<(Owner, bool)>,
     /// The part under the pointer this pass, and its page.
     pub(crate) hovered: Option<(Owner, usize)>,
     /// The part focus arrived on this pass (Tab, a focus request or a click): a form field opens on it.
@@ -343,6 +348,7 @@ pub(crate) struct PageParts<'a> {
 struct Report {
     press: Option<PagePress>,
     key: Option<(Owner, Intent)>,
+    tab: Option<(Owner, bool)>,
     hovered: Option<(Owner, usize)>,
     focused: Option<(Owner, usize)>,
 }
@@ -378,10 +384,13 @@ impl<'a> PageParts<'a> {
             return Some(Intent::Activate);
         }
         let intents = cx.intents();
+        if intents.take(Intent::Cancel) {
+            return Some(Intent::Cancel);
+        }
         if intents.take(Intent::Submit) {
             return Some(Intent::Submit);
         }
-        if let Some((mv, mods)) = intents.take_move() {
+        if let Some((mv, mods)) = intents.take_move_where(|mv, _| matches!(mv, NavMove::Up | NavMove::Down | NavMove::Back | NavMove::Forward)) {
             return Some(Intent::Move(mv, mods));
         }
         intents.take_text().map(Intent::Text)
@@ -462,11 +471,28 @@ impl Component for PageParts<'_> {
                 self.report.press = Some(PagePress { owner: part.owner, page: part.page, phase: press.phase, mods: press.mods });
             }
         }
-        if let Some(active) = cx.active_part()
-            && let Some(owner) = self.part_named(active).filter(|part| part.focusable).map(|part| part.owner)
-            && let Some(intent) = Self::field_key(cx, active)
-        {
-            self.report.key = Some((owner, intent));
+        let field_owner = cx
+            .active_part()
+            .and_then(|active| self.part_named(active).filter(|part| part.focusable).map(|part| (Some(active), part.owner)))
+            .or_else(|| {
+                (cx.is_focused() || cx.active_part().is_some())
+                    .then_some(self.focus)
+                    .flatten()
+                    .filter(|owner| matches!(owner, Owner::Field { .. }))
+                    .map(|owner| (cx.active_part(), owner))
+            });
+        if let Some((active, owner)) = field_owner {
+            cx.claim(TAB);
+            cx.claim(SHIFT_TAB);
+            if cx.take_claimed(TAB) {
+                self.report.tab = Some((owner, true));
+            } else if cx.take_claimed(SHIFT_TAB) {
+                self.report.tab = Some((owner, false));
+            } else if let Some(active) = active
+                && let Some(intent) = Self::field_key(cx, active)
+            {
+                self.report.key = Some((owner, intent));
+            }
         }
         if let Some(arrived) = cx.focus_arrived() {
             self.report.focused = self.part_named(arrived).map(|part| (part.owner, part.page));
@@ -474,7 +500,7 @@ impl Component for PageParts<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PagePartsOutput {
-        let Report { press, key, hovered, focused } = self.report;
-        PagePartsOutput { response: cx.response.clone(), press, key, hovered, focused }
+        let Report { press, key, tab, hovered, focused } = self.report;
+        PagePartsOutput { response: cx.response.clone(), press, key, tab, hovered, focused }
     }
 }

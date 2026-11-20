@@ -300,15 +300,18 @@ impl PdfCraftApp {
     /// The save `doc`'s question waited for was written: its tab closes and the guard goes on.
     /// An OCR review started meanwhile holds the close as it holds a new one.
     fn guard_saved(&mut self, ctx: &egui::Context, doc: DocId) {
-        if self.close_guard.as_ref().and_then(|g| g.current()) != Some(&doc) {
-            return;
-        }
+        let current = self.close_guard.as_ref().and_then(|g| g.current()) == Some(&doc);
         if let Some(i) = self.asking_tab(doc) {
             if self.hold_close_for_ocr_review(i) {
-                self.end_close_guard(ctx, false);
+                if current {
+                    self.end_close_guard(ctx, false);
+                }
                 return;
             }
             self.close_tab(i);
+        }
+        if !current {
+            return;
         }
         let Some(step) = self.close_guard.as_mut().map(|g| g.saved()) else { return };
         self.run_guard_step(ctx, step);

@@ -335,7 +335,7 @@ pub(super) fn offset_at(
     let rect = widget_rect(&xf, info, page, w.rect);
     let frame = TextFrame::of(&xf, info, page, w, rect);
     let laid = FieldLayout::build(ctx, f, w, Geometry { frame, zoom: xf.zoom() }, &focus.text, focus.selection.caret);
-    laid.hit_box(frame.in_box(xf.view_rect([at.x, at.y, at.x, at.y]).min)).0
+    laid.hit_box(frame.in_box(at)).0
 }
 
 /// Show the session of the focused field for this pass: the editor over a Text field or an editable
@@ -352,6 +352,7 @@ pub(crate) fn show(
     doc: &Document,
     form: &[FormField],
     info: &DocInfo,
+    today: (i64, u32, u32),
     pages: PageGeometry<'_>,
 ) -> Option<egui::Id> {
     let focus = session.forms.focus.as_ref()?;
@@ -406,14 +407,18 @@ pub(crate) fn show(
         Some(_) | None => {}
     }
     let Some(focus) = session.forms.focus.as_mut() else { return shown };
+    let was_open = focus.list_open;
     // A list box is picked from in place on the page, so only a combo box has a drop-down list.
     let picked = if combo { super::choice_list(ui, f, rect, zoom, &mut focus.list_open) } else { None };
+    let list_closed = combo && !types && was_open && !focus.list_open;
     let date = match &f.actions.format {
-        pdfcraft_engine::form_scripts::Format::Date(fmt) if types => super::calendar(ui, rect, &focus.text, fmt, &mut focus.calendar_open),
+        pdfcraft_engine::form_scripts::Format::Date(fmt) if types => super::calendar(ui, rect, &focus.text, fmt, today, &mut focus.calendar_open),
         _ => None,
     };
     if let Some(i) = picked {
         session.pending_edit = Some(list_pick_edit(form, f, vec![i]));
+        session.forms.focus = None;
+    } else if list_closed {
         session.forms.focus = None;
     } else if let Some(text) = date {
         focus.text = text;
