@@ -345,6 +345,8 @@ fn organize_page_actions_rotate_only_the_named_page_and_undo() {
     h.run_steps(2);
     h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
     h.run_steps(2);
+    h.hover_at(h.get_by_label("Page 1").rect().center());
+    h.run_steps(2);
     h.get_by_label("Rotate page 1 clockwise").click();
     h.run_steps(3);
     let rotations = |h: &Harness<'static, PdfCraftApp>| {
@@ -358,6 +360,8 @@ fn organize_page_actions_rotate_only_the_named_page_and_undo() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
     assert_eq!(rotations(&h), [90, 0, 0]);
+    h.hover_at(h.get_by_label("Page 1").rect().center());
+    h.run_steps(2);
     h.get_by_label("Rotate page 1 counterclockwise").click();
     h.run_steps(3);
     assert_eq!(rotations(&h), [0, 0, 0]);
@@ -6252,7 +6256,7 @@ fn resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo() {
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.run_steps(2);
     let from = panel_thumb_rect(&h, "Page 2").center();
-    let to = panel_thumb_rect(&h, "Page 1").center_top() + egui::vec2(0.0, 4.0);
+    let to = panel_thumb_rect(&h, "Page 1").left_center() + egui::vec2(4.0, 0.0);
     drag(&mut h, from, to);
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), vec![before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()]);
