@@ -88,19 +88,19 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            // GNOME on Wayland: the strip is the header bar, with the window buttons at its ends.
+            // With an integrated title bar, the strip carries the window buttons at its ends.
             let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
             let controls = app
                 .window_controls
                 .clone()
                 .filter(|_| app.draws_window_frame() && !fullscreen)
-                .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new() });
+                .unwrap_or_else(|| window_controls::Layout { left: Vec::new(), right: Vec::new(), style: window_controls::Style::default() });
             ui.allocate_ui_with_layout(ui.available_size_before_wrap(), row, |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if !controls.left.is_empty() {
                     ui.scope(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        window_controls::buttons(ui, &controls.left);
+                        window_controls::buttons(ui, &controls.left, controls.style);
                     });
                     ui.add_space(window_controls::SIDE_GAP - 4.0);
                 }
@@ -296,7 +296,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         let size = egui::vec2(window_controls::width(&controls.right) - window_controls::SIDE_GAP, window_controls::BUTTON);
                         ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
-                            window_controls::buttons(ui, &controls.right);
+                            window_controls::buttons(ui, &controls.right, controls.style);
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }
