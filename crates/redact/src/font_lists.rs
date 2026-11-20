@@ -4,7 +4,8 @@
 //! read first ([`crate::type3::shown_codes`]); [`prune`] reads what the whole document shows after
 //! it, and a code shown before and nowhere after leaves its font's map and gets a width of 0.
 //!
-//! Left as they were: form field fonts (`/AcroForm /DR`), and all fonts when anything can't be read.
+//! Left as they were: form field fonts (`/AcroForm /DR`), and all fonts when the document has hidden
+//! page templates or anything can't be read.
 //! Composite fonts, a subset's `/CharSet` and the glyph outlines in the font program stay too.
 
 use std::collections::{HashMap, HashSet};
@@ -26,10 +27,15 @@ pub(crate) fn prune(doc: &mut Document, before: Option<HashMap<ObjRef, HashSet<u
     Ok(())
 }
 
-/// The fonts in `/AcroForm /DR`: form fields write new text with them. `None` when the catalog,
-/// `/AcroForm`, `/DR` or its `/Font` is there but can't be read as a dictionary.
+/// The fonts in `/AcroForm /DR`: form fields write new text with them. `None` when the document
+/// has hidden page templates (`/Names /Templates`): a form can show their pages later, and they
+/// are out of the page tree the scan reads. Also `None` when the catalog, `/Names`, `/AcroForm`,
+/// `/DR` or its `/Font` is there but can't be read as a dictionary.
 fn form_fonts(doc: &Document) -> Option<HashSet<ObjRef>> {
     let mut dict = doc.get(doc.root()?).as_dict()?.clone();
+    if dict.get(b"Names").is_some_and(|n| doc.resolve(n).as_dict().is_none_or(|n| n.contains(b"Templates"))) {
+        return None;
+    }
     for key in [&b"AcroForm"[..], b"DR", b"Font"] {
         let Some(entry) = dict.get(key) else { return Some(HashSet::new()) };
         dict = doc.resolve(entry).as_dict()?.clone();

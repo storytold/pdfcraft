@@ -111,3 +111,19 @@ fn a_type3_font_named_by_reference_leaves_the_fonts_alone() {
     assert_eq!(apply(&mut doc, None).unwrap().glyphs, 2);
     assert_eq!(lists(&doc), before);
 }
+
+/// A hidden page template (`/Names /Templates`) is out of the page tree, but a form can show it
+/// later. It shows Q, so Q keeps its width and its map entry; so it does when the name dictionary
+/// can't be read.
+#[test]
+fn a_hidden_page_template_keeps_its_characters() {
+    let template = b"<< /Type /Template /MediaBox [0 0 300 300] /Contents 11 0 R /Resources << /Font << /F1 5 0 R >> >> >>";
+    let body = stream("", b"BT /F1 10 Tf 20 250 Td (Q) Tj ET");
+    for names in ["/Names << /Templates << /Names [(extra) 10 0 R] >> >>", "/Names 99 0 R"] {
+        let mut doc = two_pages(names, b"", "", vec![template.to_vec(), body.clone()]);
+        assert_eq!(apply(&mut doc, None).unwrap().glyphs, 2);
+        let (widths, map) = lists(&doc);
+        assert_eq!(qzk(&widths)[0], 500.0, "Q's width, {names}");
+        assert!(map.contains("<51> <0051>"), "{map}");
+    }
+}
