@@ -160,7 +160,7 @@ const MAX_RANGE: usize = 1_000_000;
 
 /// 1-based pages ("1,3,5-8": single pages and inclusive ranges, in the order given) → 0-based
 /// indices (#1923).
-fn page_list(s: &str) -> Result<Vec<usize>, String> {
+pub(crate) fn page_list(s: &str) -> Result<Vec<usize>, String> {
     let number = |t: &str, item: &str| t.trim().parse::<usize>().ok().filter(|n| *n > 0).ok_or_else(|| format!("bad page number {item:?}"));
     let mut out = Vec::new();
     for item in s.split(',').map(str::trim) {

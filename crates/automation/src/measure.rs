@@ -149,6 +149,23 @@ impl Automation {
             .transpose()?;
         Ok(json!({"snap":snap,"truncated":geometry.truncated,"intersection_limited":intersection_limited,"segments":geometry.segment_count()}))
     }
+    /// The segments `measurement_snap` snaps to, listed for whole pages.
+    pub(crate) fn page_geometry(&self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let pages = if a.get("pages").is_some() { self.pages(a, "pages")? } else { (0..doc.info.pages.len()).collect() };
+        let display = match a.opt_str("coords")?.unwrap_or("page") {
+            "page" => false,
+            "display" => true,
+            _ => return Err(ToolError::InvalidArgs("coords must be page or display".into())),
+        };
+        let limits = geometry_limits(a)?;
+        let pages = pages.into_iter().map(|page| page_geometry_json(doc, page, limits, display)).collect::<Result<Vec<_>>>()?;
+        Ok(json!({
+            "coords": if display { "display" } else { "page" },
+            "limits": {"segments": limits.segments, "targets": limits.targets, "bytes": limits.bytes},
+            "pages": pages,
+        }))
+    }
     pub(crate) fn measurement_export(&self, a: &Args) -> Result<Value> {
         let all = self.doc(a)?.measurements().map_err(failed)?;
         let csv = measure::csv(&all.measurements);
@@ -156,4 +173,60 @@ impl Automation {
         crate::write_atomic(&target, csv.as_bytes())?;
         Ok(json!({"path":target,"count":all.measurements.len(),"unsupported":all.unsupported.len(),"truncated":all.truncated}))
     }
+}
+
+/// The most a caller may raise `page_geometry`'s limits to: about 2.5 times what heavy CAD sheets
+/// need, so one call stays within a few gigabytes.
+const MAX_GEOMETRY_LIMITS: measure::snap::Limits = measure::snap::Limits { segments: 20_000_000, targets: 60_000_000, bytes: 2 << 30 };
+
+/// The snapping limits a call asks for, each defaulting to what snapping uses.
+fn geometry_limits(a: &Args) -> Result<measure::snap::Limits> {
+    let get = |key: &str, default: usize, most: usize| -> Result<usize> {
+        let Some(n) = a.opt_int(key)? else { return Ok(default) };
+        usize::try_from(n)
+            .ok()
+            .filter(|n| (1..=most).contains(n))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be between 1 and {most}")))
+    };
+    let (default, most) = (measure::snap::Limits::DEFAULT, MAX_GEOMETRY_LIMITS);
+    Ok(measure::snap::Limits {
+        segments: get("max_segments", default.segments, most.segments)?,
+        targets: get("max_targets", default.targets, most.targets)?,
+        bytes: get("max_bytes", default.bytes, most.bytes)?,
+    })
+}
+
+/// Coordinates to 0.0001 units: finer than the `f32` geometry keeps on a large sheet, and short to
+/// print.
+fn round(v: f64) -> f64 {
+    let r = (v * 10_000.0).round() / 10_000.0;
+    if r == 0.0 { 0.0 } else { r }
+}
+
+/// The page's user-to-display transform as `[a, b, c, d, e, f]`. It is affine, so where it puts
+/// the origin and the two unit points fixes it, and a sheet's millions of points then convert
+/// without reading the page's boxes again for each one.
+fn view_matrix(doc: &pdfcraft_engine::Document, page: usize) -> Result<[f64; 6]> {
+    let view = |p: measure::Point| doc.measurement_to_view(page, p).map_err(failed);
+    let [e, f] = view([0.0, 0.0])?;
+    let [a, b] = view([1.0, 0.0])?;
+    let [c, d] = view([0.0, 1.0])?;
+    Ok([a - e, b - f, c - e, d - f, e, f])
+}
+
+fn page_geometry_json(doc: &pdfcraft_engine::Document, page: usize, limits: measure::snap::Limits, display: bool) -> Result<Value> {
+    let geometry = doc.measurement_paths_within(page, limits).map_err(failed)?;
+    let m = if display { Some(view_matrix(doc, page)?) } else { None };
+    let point = |[x, y]: measure::Point| match m {
+        Some(m) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]],
+        None => [x, y],
+    };
+    let segments: Vec<[f64; 4]> = geometry
+        .segments()
+        .map(|[from, to]| {
+            let ([x0, y0], [x1, y1]) = (point(from), point(to));
+            [x0, y0, x1, y1].map(round)
+        })
+        .collect();
+    Ok(json!({"page": page + 1, "count": segments.len(), "segments": segments, "truncated": geometry.truncated, "unreadable": geometry.unreadable}))
 }

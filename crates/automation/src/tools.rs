@@ -942,6 +942,18 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("measure.scale").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"rect":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},"name":{"type":"string"},"unit":{"type":"string"},"precision":{"type":"integer","minimum":0,"maximum":6},"units_per_point":{"type":"number","exclusiveMinimum":0},"page_distance":{"type":"number","exclusiveMinimum":0},"page_unit":{"type":"string","enum":["pt","in","mm","cm"]},"points":measure_points(),"distance":{"type":"number","exclusiveMinimum":0}}), &["doc","page"])),
         t("measure_snap", "Snap a measurement vertex", "Snap a point to vector paths, endpoints, midpoints or intersections. Coordinates and tolerance are in display points. Bounded extraction reports truncated geometry.")
             .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
+        t("page_geometry", "List page geometry", "The straight segments [x0, y0, x1, y1] of pages' vector drawing, as measure_snap snaps to them: painted paths and nested forms, curves split into chords within 0.2 units, clipping and optional content not applied. Reads the document as it stands, unsaved edits included. The same limits as snapping by default (max_segments, max_targets, max_bytes; raised up to 20000000, 60000000 and 2147483648), with `truncated` when one stopped a page and `unreadable` counting the content streams skipped. coords: page (PDF user space, y up; the default) or display (points from the top-left of the displayed page, as measure_snap takes them). Numbers are rounded to 0.0001.")
+            .ro()
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to read (default: all)"),
+                    "coords": { "type": "string", "enum": ["page", "display"] },
+                    "max_segments": { "type": "integer", "minimum": 1, "maximum": 20_000_000 },
+                    "max_targets": { "type": "integer", "minimum": 1, "maximum": 60_000_000 },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 2_147_483_648_u64 },
+                }),
+                &["doc"],
+            )),
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
         t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status, checkmark and replies (each with its own status and checkmark); the points that shape a line, polygon or callout, and a callout's text box. Annotations grouped with a comment (/RT /Group) are listed once, as that comment with its attributes, and named in its `group`. comment_delete deletes just the member named, as Acrobat does (Replace Text's strikeout and caret go together).")

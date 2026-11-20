@@ -265,6 +265,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-20 (M12, page geometry listing):** The new read-only `page_geometry` tool and `pdfcraft-cli geometry FILE` list the straight segments snapping reads for whole pages, in page or display points, with snapping's limits (raisable), `truncated` and `unreadable`. Synthetic automation and CLI regressions; estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
