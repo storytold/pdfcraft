@@ -1227,12 +1227,12 @@ dependencies = [
 [[package]]
 name = "craft-codepage"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3#b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3"
+source = "git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344#9dc2f7608a7342fd29f6e73811aa156050823344"
 
 [[package]]
 name = "craft-codepage"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536#eacc8fcd1094785071d1482a1bdd552e4bf97536"
+source = "git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3#b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3"
 
 [[package]]
 name = "craft-csv"
@@ -1317,9 +1317,9 @@ source = "git+https://github.com/storytold/craft-libs?rev=e2dc681a3#e2dc681a3ad8
 [[package]]
 name = "craft-html"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536#eacc8fcd1094785071d1482a1bdd552e4bf97536"
+source = "git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344#9dc2f7608a7342fd29f6e73811aa156050823344"
 dependencies = [
- "craft-mime 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-mime 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
 ]
 
 [[package]]
@@ -1461,21 +1461,21 @@ dependencies = [
 [[package]]
 name = "craft-mime"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3#b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3"
+source = "git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344#9dc2f7608a7342fd29f6e73811aa156050823344"
 dependencies = [
+ "chardetng",
  "chrono",
- "craft-codepage 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3)",
+ "craft-codepage 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "encoding_rs",
 ]
 
 [[package]]
 name = "craft-mime"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536#eacc8fcd1094785071d1482a1bdd552e4bf97536"
+source = "git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3#b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3"
 dependencies = [
- "chardetng",
  "chrono",
- "craft-codepage 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-codepage 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3)",
  "encoding_rs",
 ]
 
@@ -1766,9 +1766,9 @@ dependencies = [
 [[package]]
 name = "craft-xfdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536#eacc8fcd1094785071d1482a1bdd552e4bf97536"
+source = "git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344#9dc2f7608a7342fd29f6e73811aa156050823344"
 dependencies = [
- "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "thiserror 2.0.21",
 ]
 
@@ -1786,6 +1786,16 @@ dependencies = [
 name = "craft-xml"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
+dependencies = [
+ "quick-xml 0.41.0",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344#9dc2f7608a7342fd29f6e73811aa156050823344"
 dependencies = [
  "quick-xml 0.41.0",
  "serde",
@@ -5085,7 +5095,7 @@ name = "pdfcraft-export"
 version = "0.21.1"
 dependencies = [
  "craft-docx",
- "craft-html 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eacc8fcd1094785071d1482a1bdd552e4bf97536)",
+ "craft-html 0.1.0 (git+https://github.com/storytold/craft-libs?rev=9dc2f7608a7342fd29f6e73811aa156050823344)",
  "craft-markdown",
  "craft-mime 0.1.0 (git+https://github.com/storytold/craft-libs?rev=b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3)",
  "craft-pptx",
