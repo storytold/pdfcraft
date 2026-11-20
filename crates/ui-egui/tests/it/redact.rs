@@ -518,6 +518,10 @@ fn redaction_codes_become_the_overlay_text() {
     assert!(h.execute("redact.properties"));
     h.run_steps(2);
     h.get_by_role_and_label(Role::Dialog, "Redaction Tool Properties");
+    // The long properties dialog opens scrolled below this row; bring it into view first.
+    h.get_by_label("Use overlay text").scroll_to_me();
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::Dialog, "Redaction Tool Properties").rect().contains_rect(h.get_by_label("Use overlay text").rect()));
     h.get_by_label("Use overlay text").click();
     h.run_steps(2);
     h.get_by_label("Custom text").click();
