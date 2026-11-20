@@ -1,13 +1,17 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
-//! use, as files. JPEG images are written unchanged; other images, and JPEG images with
-//! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, separations) are
-//! reported, never silently left out.
+//! use, as files. JPEG images are written unchanged when the file shows the colours the page
+//! does; other images, and JPEG images with transparency, CMYK samples, a CalGray or CalRGB
+//! colour space or an ICC profile the file doesn't carry, are decoded and written as PNG with
+//! their soft mask, stencil mask or colour key as alpha. Decoded colours are converted to sRGB
+//! the way the page renderer draws them (`pdfcraft_render::cmyk_to_srgb`, `IccProfile`,
+//! `CieSpace`). Images PdfCraft can't decode yet (JPEG 2000, separations) are reported, never
+//! silently left out.
 
 use std::collections::HashSet;
 
 use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_DECODED, ObjRef, Object, Stream};
 use pdfcraft_filters::FilterError;
+use pdfcraft_render::{CieSpace, IccProfile};
 
 /// One image, ready to write.
 #[derive(Clone, Debug, PartialEq)]
@@ -161,11 +165,14 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     } else {
         std::borrow::Cow::Borrowed(s.raw.as_ref())
     };
-    let as_is = || Ok(("jpg", jpeg_data.to_vec()));
+    // The JPEG file as it is in the PDF. The page draws a grey or RGB JPEG's samples as they are
+    // and ignores an ICC profile inside the file, which a viewer would apply: then it is left out.
+    let as_is =
+        |device: bool| Ok(("jpg", if device { without_icc_profile(&jpeg_data).unwrap_or_else(|| jpeg_data.to_vec()) } else { jpeg_data.to_vec() }));
     let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
     let Some((w, h)) = size(w, h) else {
         return match () {
-            _ if jpeg => as_is(),
+            _ if jpeg => as_is(matches!(space(doc, s.dict.get(b"ColorSpace"), budget), Ok(Space::Gray | Space::Rgb))),
             _ if w <= 0 || h <= 0 => Err("the image has no size".into()),
             _ => Err(format!("{w} × {h} is too large to export")),
         };
@@ -179,39 +186,47 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         return Err(FilterError::Spent.to_string());
     }
     let key = if mask { None } else { colour_key(doc, s) };
-    // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
+    // A Decode array whose first interval runs backwards: inversion. JPEGs, stencil masks and Lab
+    // images take only that from it; other lossless images map each component (`decode`).
     let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
-    let inverted = (jpeg || mask)
-        && s.dict
-            .get(b"Decode")
-            .map(|d| doc.resolve(d))
-            // Both ends have to be finite numbers, as for lossless images, or the default mapping stands.
-            .and_then(|d| {
-                let a = d.as_array()?;
-                Some(endpoint(a.first())? > endpoint(a.get(1))?)
-            })
-            .unwrap_or(false);
-    // In a PDF a CMYK JPEG's samples are ink amounts unless /Decode inverts them, while image
-    // viewers read a CMYK JPEG file as inverted (Adobe's convention): as is, it would show as
-    // a negative. The space is read once: an indexed one's lookup table is paid for each time.
-    let read = (jpeg && !inverted).then(|| space(doc, s.dict.get(b"ColorSpace"), budget));
-    let as_is_negative = matches!(read, Some(Ok(Space::Cmyk)));
-    if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
-        return as_is();
+    let first_inverted = s
+        .dict
+        .get(b"Decode")
+        .map(|d| doc.resolve(d))
+        // Both ends have to be finite numbers, as for lossless images, or the default mapping stands.
+        .and_then(|d| {
+            let a = d.as_array()?;
+            Some(endpoint(a.first())? > endpoint(a.get(1))?)
+        })
+        .unwrap_or(false);
+    let inverted = (jpeg || mask) && first_inverted;
+    // The space is read once: an indexed one's lookup table is paid for each time.
+    let read = space(doc, s.dict.get(b"ColorSpace"), budget);
+    let device = matches!(read, Ok(Space::Gray | Space::Rgb));
+    let space = if mask { Ok(Space::Gray) } else { read };
+    // Lab JPEGs aren't decoded yet: a decoder may read their samples as YCbCr. Nor is a Lab
+    // image whose /Decode export can't apply yet: it would show the default range's colours.
+    let space = space.and_then(|space| match space {
+        Space::Lab(_) if jpeg => Err("Lab JPEG images can't be exported yet".to_string()),
+        Space::Lab(_) if !lab_decode_supported(doc, s) => Err("Lab images with a /Decode other than the default can't be exported yet".to_string()),
+        space => Ok(space),
+    });
+    // A JPEG in a colour space PdfCraft can't convert yet is written as is, if it can be.
+    let unchanged = jpeg && space.as_ref().map_or(true, |space| shown_as_drawn(space, inverted, &jpeg_data));
+    if unchanged && alpha.is_none() && key.is_none() {
+        return as_is(device);
     }
-    let mut space = match read {
-        _ if mask => Space::Gray,
-        Some(read) => read?,
-        None => space(doc, s.dict.get(b"ColorSpace"), budget)?,
-    };
+    let mut space = space?;
     let (samples, bpc) = if jpeg {
         if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &jpeg_data) {
             return Err(FilterError::Spent.to_string());
         }
         // Grey, RGB or CMYK samples (YCCK is converted); a JPEG that doesn't decode, or an
         // indexed one (not valid), is written as is, without its transparency.
-        let Some((samples, decoded)) = jpeg_samples(&jpeg_data, &space, w, h) else { return as_is() };
-        space = decoded;
+        let Some((samples, decoded)) = jpeg_samples(&jpeg_data, &space, w, h) else { return as_is(device) };
+        if !matches!(space, Space::Icc(..) | Space::Cal(_)) {
+            space = decoded;
+        }
         (samples, 8)
     } else {
         let data = decoded(doc, s, budget)?;
@@ -227,17 +242,22 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         (unpack(&data, w, h, space.components(), bpc).ok_or("the image data is shorter than its size says")?, bpc)
     };
     let n = space.components();
-    let decode = if jpeg || mask { None } else { decode(doc, s, n) };
+    // Lab samples become L*, a* and b* in `to_srgb`, not fractions: their /Decode is the default or
+    // that default inverted (`lab_decode_supported`), so the inversion is all there is to apply.
+    let lab = matches!(space, Space::Lab(_));
+    let decode = if jpeg || mask || lab { None } else { decode(doc, s, n) };
     if alpha.is_none() {
         alpha = key.and_then(|k| keyed_alpha(&samples, n, bpc, &k));
     }
-    if jpeg && alpha.is_none() && !as_is_negative {
-        return as_is();
+    if unchanged && alpha.is_none() {
+        return as_is(device);
     }
-    let invert = inverted ^ mask; // a stencil mask paints its 0 samples
+    let invert = (inverted || (lab && first_inverted)) ^ mask; // a stencil mask paints its 0 samples
     // `unpack` keeps only the high byte at 16 bits, so Decode uses an effective maximum of 255 too.
     let max = (1u32 << bpc.min(8)) - 1;
-    let mut rgb = Vec::with_capacity(w * h * 3);
+    // 8-bit samples in the image's colour space, converted to sRGB below; an indexed image's
+    // palette is in sRGB already.
+    let mut values = Vec::with_capacity(w * h * n.max(3));
     for px in samples.chunks_exact(n) {
         let decoded = |i: usize| {
             decode.as_ref().and_then(|pairs| pairs.get(i)).map(|&[lo, hi]| {
@@ -254,26 +274,24 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
             if invert { 255 - x } else { x }
         };
         match &space {
-            Space::Gray => rgb.extend_from_slice(&[v(0); 3]),
-            Space::Rgb => rgb.extend_from_slice(&[v(0), v(1), v(2)]),
-            Space::Cmyk => rgb.extend_from_slice(&cmyk(v(0), v(1), v(2), v(3))),
-            Space::Indexed(base, hival, table) => {
+            Space::Indexed(hival, palette) => {
                 // Explicit Decode maps into index units, rounded then clipped (8.6.6.3).
                 // Without Decode, retain raw indices rather than normalizing to hival.
                 let i = match decoded(0) {
                     Some(value) => value.round().clamp(0.0, f64::from(*hival)) as usize,
                     None => px.first().copied().unwrap_or(0).min(*hival) as usize,
                 };
-                let k = base.components();
-                let e = table.get(i * k..i * k + k).unwrap_or(&[0, 0, 0, 0][..k]);
-                rgb.extend_from_slice(&match **base {
-                    Space::Gray => [e[0]; 3],
-                    Space::Cmyk => cmyk(e[0], e[1], e[2], e[3]),
-                    _ => [e[0], e[1], e[2]],
-                });
+                values.extend_from_slice(palette.get(i * 3..i * 3 + 3).unwrap_or(&[0; 3]));
             }
+            _ => values.extend((0..n).map(v)),
         }
     }
+    // Freed before converting: images up to `MAX_PIXELS` hold several buffers of this size.
+    drop(samples);
+    let mut rgb = match space {
+        Space::Indexed(..) => values,
+        _ => to_srgb(&space, values).ok_or("the image's colours can't be converted")?,
+    };
     if let (Some(a), Some(matte)) = (alpha.as_deref(), matte(doc, s, &space)) {
         unpremultiply(&mut rgb, a, matte);
     }
@@ -344,9 +362,78 @@ fn jpeg_of_size(data: &[u8], w: usize, h: usize) -> Option<craft_jpeg::Decoded> 
     craft_jpeg::decode(data, &limits, None).ok()
 }
 
+/// Whether a JPEG file written as is shows the colours the page draws it in: grey or RGB
+/// samples the page shows as they are (written without any ICC profile in the file, which the
+/// page ignores), or samples in an ICC profile that the file carries itself (inverted, for
+/// CMYK, as JPEG files store CMYK). Image viewers convert CMYK in their own way, never the
+/// page's, so a DeviceCMYK JPEG is always decoded.
+fn shown_as_drawn(space: &Space, inverted: bool, data: &[u8]) -> bool {
+    match space {
+        Space::Gray | Space::Rgb => true,
+        Space::Icc(device, profile, _) => {
+            (!matches!(**device, Space::Cmyk) || inverted) && crate::jpeg("", data).ok().and_then(|j| j.icc).as_deref() == Some(&profile[..])
+        }
+        // Viewers show CalGray and CalRGB samples as device grey and RGB.
+        Space::Cmyk | Space::Cal(_) | Space::Lab(_) | Space::Indexed(..) => false,
+    }
+}
+
+/// A JPEG file without its ICC profile (the APP2 `ICC_PROFILE` segments, however many chunks it
+/// is split into), every other byte copied as it is, the scans included. `None` when the
+/// segments before the first scan can't be read.
+fn without_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
+    if data.get(..2)? != [0xFF, 0xD8] {
+        return None;
+    }
+    let mut out = Vec::with_capacity(data.len());
+    out.extend_from_slice(data.get(..2)?);
+    let mut i = 2;
+    loop {
+        // A marker: 0xFF, any number of 0xFF fill bytes, then its code.
+        let start = i;
+        if *data.get(i)? != 0xFF {
+            return None;
+        }
+        while data.get(i + 1) == Some(&0xFF) {
+            i += 1;
+        }
+        let marker = *data.get(i + 1)?;
+        i += 2;
+        match marker {
+            // The first scan (or the end): the rest is entropy-coded data and later segments.
+            0xDA | 0xD9 => {
+                out.extend_from_slice(data.get(start..)?);
+                return Some(out);
+            }
+            // Markers without a length.
+            0x01 | 0xD0..=0xD8 => out.extend_from_slice(data.get(start..i)?),
+            _ => {
+                let len = usize::from(u16::from_be_bytes([*data.get(i)?, *data.get(i + 1)?]));
+                let end = i.checked_add(len)?;
+                let segment = data.get(i.checked_add(2)?..end)?;
+                let icc = marker == 0xE2 && segment.starts_with(b"ICC_PROFILE\0");
+                if !icc {
+                    out.extend_from_slice(data.get(start..end)?);
+                }
+                i = end;
+            }
+        }
+    }
+}
+
 /// A JPEG's samples (8 bits): grey for a grey image, CMYK as stored for a CMYK one, else RGB,
-/// with the space they are in.
+/// with the space they are in. An ICC-based space is read as its device space, and CalGray and
+/// CalRGB as grey and RGB (Lab JPEGs are refused before).
 fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u8>, Space)> {
+    let cal;
+    let space = match space {
+        Space::Icc(device, ..) => &**device,
+        Space::Cal(cie) => {
+            cal = if cie.components() == 1 { Space::Gray } else { Space::Rgb };
+            &cal
+        }
+        other => other,
+    };
     match space {
         Space::Indexed(..) => return None,
         Space::Cmyk => return cmyk_jpeg_samples(data, w, h).map(|px| (px, Space::Cmyk)),
@@ -476,19 +563,20 @@ fn keyed_alpha(samples: &[u8], n: usize, bpc: usize, key: &[(u32, u32)]) -> Opti
     )
 }
 
-/// The `/Matte` colour of the image's soft mask (11.6.5.3), for grey and RGB images: the colour
-/// the image samples were pre-blended with.
+/// The `/Matte` colour of the image's soft mask (11.6.5.3), in sRGB: the colour the image
+/// samples were pre-blended with. Like the page renderer, the blend is undone in sRGB.
 fn matte(doc: &Document, s: &Stream, space: &Space) -> Option<Vec<u8>> {
     let r = s.dict.get(b"SMask")?.as_ref()?;
     let obj = doc.get(r);
     let Object::Stream(m) = &*obj else { return None };
     let a = doc.resolve(m.dict.get(b"Matte")?);
-    let v: Vec<u8> =
-        a.as_array()?.iter().map(|o| doc.resolve(o).as_f64().map(|f| (f.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Option<_>>()?;
-    match (space, v.len()) {
-        (Space::Gray, 1) => Some(vec![v[0]; 3]),
-        (Space::Rgb, 3) => Some(v),
-        _ => None,
+    let v: Vec<f64> = a.as_array()?.iter().map(|o| doc.resolve(o).as_f64()).collect::<Option<_>>()?;
+    match space {
+        _ if v.len() != space.components() => None,
+        Space::Indexed(..) => None,
+        // Converted from the values as written: Lab's are L*, a* and b*, not fractions.
+        Space::Cal(cie) | Space::Lab(cie) => cie.colour_to_srgb(&v.iter().map(|&f| f as f32).collect::<Vec<_>>()).map(Vec::from),
+        _ => to_srgb(space, v.iter().map(|f| (f.clamp(0.0, 1.0) * 255.0).round() as u8).collect()),
     }
 }
 
@@ -510,8 +598,16 @@ enum Space {
     Gray,
     Rgb,
     Cmyk,
-    /// Base space, highest valid palette index, and lookup table.
-    Indexed(Box<Space>, u8, Vec<u8>),
+    /// An ICC profile the page converts samples with: the device space of as many components,
+    /// the profile's bytes, and its conversion to sRGB.
+    Icc(Box<Space>, Vec<u8>, IccProfile),
+    /// CalGray or CalRGB: one or three components, converted with the space's gamma, white
+    /// point, black point and matrix.
+    Cal(CieSpace),
+    /// Lab: L\*, a\* and b\*, the samples decoded onto L\* 0–100 and the space's `/Range`.
+    Lab(CieSpace),
+    /// Highest valid palette index, and the palette in sRGB (three bytes an entry, all of them).
+    Indexed(u8, Vec<u8>),
 }
 
 impl Space {
@@ -520,7 +616,23 @@ impl Space {
             Space::Gray | Space::Indexed(..) => 1,
             Space::Rgb => 3,
             Space::Cmyk => 4,
+            Space::Icc(device, ..) => device.components(),
+            Space::Cal(cie) | Space::Lab(cie) => cie.components(),
         }
+    }
+}
+
+/// 8-bit `samples` in `space` (its components a pixel) as sRGB, converted the way the page
+/// renderer draws them. `None` for an indexed space (its palette is sRGB already) and when
+/// `samples` aren't whole pixels.
+fn to_srgb(space: &Space, samples: Vec<u8>) -> Option<Vec<u8>> {
+    match space {
+        Space::Gray => Some(samples.iter().flat_map(|&g| [g; 3]).collect()),
+        Space::Rgb => samples.len().is_multiple_of(3).then_some(samples),
+        Space::Cmyk => pdfcraft_render::cmyk_to_srgb(&samples),
+        Space::Icc(_, _, profile) => profile.to_srgb(&samples),
+        Space::Cal(cie) | Space::Lab(cie) => cie.to_srgb(&samples),
+        Space::Indexed(..) => None,
     }
 }
 
@@ -543,16 +655,38 @@ fn space(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget) -> Resul
         },
         Object::Array(a) => match a.first().and_then(Object::as_name) {
             Some(b"ICCBased") => match a.get(1).map(|s| doc.resolve(s)).as_deref() {
-                Some(Object::Stream(icc)) => match icc.dict.int(b"N") {
-                    Some(1) => Ok(Space::Gray),
-                    Some(3) => Ok(Space::Rgb),
-                    Some(4) => Ok(Space::Cmyk),
-                    _ => Err("an ICC colour space with an unusual number of components".into()),
-                },
+                Some(Object::Stream(icc)) => {
+                    let (device, n) = match icc.dict.int(b"N") {
+                        Some(1) => (Space::Gray, 1),
+                        Some(3) => (Space::Rgb, 3),
+                        Some(4) => (Space::Cmyk, 4),
+                        _ => return Err("an ICC colour space with an unusual number of components".into()),
+                    };
+                    // A profile the renderer can't read leaves the device space; an sRGB one draws
+                    // the samples as they are.
+                    let profile = icc.decoded().ok();
+                    let conversion = profile.as_deref().and_then(|p| IccProfile::new(p, n)).filter(|c| !c.is_srgb());
+                    Ok(match (profile, conversion) {
+                        (Some(profile), Some(conversion)) => Space::Icc(Box::new(device), profile, conversion),
+                        _ => device,
+                    })
+                }
                 _ => Err("a damaged ICC colour space".into()),
             },
-            Some(b"CalGray") => Ok(Space::Gray),
-            Some(b"CalRGB") => Ok(Space::Rgb),
+            Some(name @ (b"CalGray" | b"CalRGB" | b"Lab")) => {
+                let dict = a.get(1).map(|d| doc.resolve(d));
+                let Some(Object::Dict(d)) = dict.as_deref() else { return Err("a damaged colour space".into()) };
+                let white_point = numbers(doc, d, b"WhitePoint");
+                let black_point = numbers(doc, d, b"BlackPoint");
+                Ok(match name {
+                    b"CalGray" => {
+                        let gamma = d.get(b"Gamma").and_then(|g| doc.resolve(g).as_f64()).map(|g| g as f32);
+                        Space::Cal(CieSpace::cal_gray(white_point, black_point, gamma))
+                    }
+                    b"CalRGB" => Space::Cal(CieSpace::cal_rgb(white_point, black_point, numbers(doc, d, b"Gamma"), numbers(doc, d, b"Matrix"))),
+                    _ => Space::Lab(CieSpace::lab(white_point, numbers(doc, d, b"Range"))),
+                })
+            }
             Some(b"Indexed" | b"I") => {
                 // Checked before recursing: Indexed is the only space that recurses, so refusing
                 // an Indexed base here also ends a cyclic base reference.
@@ -582,13 +716,52 @@ fn space(doc: &Document, cs: Option<&Object>, budget: &mut ImageBudget) -> Resul
                     }
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
-                Ok(Space::Indexed(Box::new(base), hival, table))
+                // Every entry up to hival, converted once; one the table is too short for is zero
+                // in the base space.
+                let k = base.components();
+                let entries: Vec<u8> =
+                    (0..=usize::from(hival)).flat_map(|i| table.get(i * k..i * k + k).unwrap_or(&[0; 4][..k]).iter().copied()).collect();
+                let palette = match &base {
+                    // Looked up as pages do (for Lab, other float steps than image samples).
+                    Space::Cal(cie) | Space::Lab(cie) => cie.palette_to_srgb(&entries),
+                    _ => to_srgb(&base, entries),
+                };
+                Ok(Space::Indexed(hival, palette.ok_or("the indexed colour space's palette can't be converted")?))
             }
             Some(other) => unsupported(other),
             None => Err("a damaged colour space".into()),
         },
         _ => Err("a damaged colour space".into()),
     }
+}
+
+/// A colour space dictionary's entry of `N` numbers, read as the page renderer reads it: `None`
+/// when it is missing or isn't exactly `N` numbers (the renderer then uses its default).
+fn numbers<const N: usize>(doc: &Document, d: &Dict, key: &[u8]) -> Option<[f32; N]> {
+    let entry = doc.resolve(d.get(key)?);
+    let values = entry.as_array().filter(|a| a.len() == N)?;
+    let values: Vec<f32> = values.iter().map(|v| doc.resolve(v).as_f64().map(|v| v as f32)).collect::<Option<_>>()?;
+    values.try_into().ok()
+}
+
+/// Whether export reads a Lab image's samples as the page does: with no `/Decode`, the default
+/// one (L\* 0–100 and the a\* and b\* `/Range`, as the renderer defaults it) or that default
+/// inverted, the only mappings export applies so far. The page honours any other `/Decode`.
+fn lab_decode_supported(doc: &Document, s: &Stream) -> bool {
+    let Some(decode) = s.dict.get(b"Decode") else { return true };
+    let decode = doc.resolve(decode);
+    let Some(decode) = decode.as_array().and_then(|a| a.iter().map(|v| doc.resolve(v).as_f64()).collect::<Option<Vec<f64>>>()) else {
+        return false;
+    };
+    let space = s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs));
+    let lab = space.as_deref().and_then(|cs| cs.as_array()).and_then(|a| a.get(1)).map(|d| doc.resolve(d));
+    let range = match lab.as_deref() {
+        Some(Object::Dict(d)) => numbers::<4>(doc, d, b"Range"),
+        _ => None,
+    };
+    let [a0, a1, b0, b1] = range.unwrap_or([-100.0, 100.0, -100.0, 100.0]).map(f64::from);
+    let is = |want: [f64; 6]| decode.len() == 6 && decode.iter().zip(want).all(|(got, want)| (got - want).abs() < 1e-6);
+    is([0.0, 100.0, a0, a1, b0, b1]) || is([100.0, 0.0, a1, a0, b1, b0])
 }
 
 /// Samples as one byte each (16-bit samples keep their high byte).
@@ -615,11 +788,6 @@ fn unpack(data: &[u8], w: usize, h: usize, n: usize, bpc: usize) -> Option<Vec<u
         }
     }
     Some(out)
-}
-
-fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
-    let f = |x: u8| ((255 - x as u32) * (255 - k as u32) / 255) as u8;
-    [f(c), f(m), f(y)]
 }
 
 /// The soft mask (`/SMask`) as 8-bit alpha, scaled to the image's size when it has another.

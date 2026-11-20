@@ -13,6 +13,8 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-filters = { workspace = true }
 pdfcraft-model = { workspace = true }
 pdfcraft-fonts = { workspace = true }
+# Exported images are converted to sRGB the way the page renderer draws them.
+pdfcraft-render = { workspace = true }
 # For `image::bmp_with_pixel_offset`, shared with XFA pictures.
 pdfcraft-xfa = { workspace = true }
 craft-image-codecs = { workspace = true }
@@ -33,4 +35,6 @@ rustix = { version = "1", features = ["process"] }
 # An independent CCITT decoder, to check Create PDF's Group 4 images.
 hayro-ccitt.workspace = true
 hayro-syntax = { workspace = true }
+# Real ICC profiles (Adobe RGB, Display P3) for the colour tests; already in the tree through image.
+moxcms = "0.8"
 pdfcraft-filters = { workspace = true }

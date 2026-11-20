@@ -8,6 +8,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod colour;
 mod inspect;
 mod link_area;
 mod pixels;
@@ -18,6 +19,7 @@ mod system_font;
 pub mod text;
 pub mod transition;
 
+pub use colour::{CieSpace, IccProfile, cmyk_to_srgb};
 pub use inspect::{
     Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
     MAX_GROUP_DEPTH, OutlineItem, PageInfo, PageTransition, Popup, Portfolio, PortfolioView, RemoteDestination, ReviewStates, TransitionStyle, Xfa,
