@@ -241,6 +241,53 @@ fn the_directory_worker_respects_an_expired_deadline() {
 }
 
 #[test]
+fn a_blocked_initial_root_lookup_can_be_cancelled() {
+    let folder = Folder::new();
+    let left = none_left();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let request_cancel = cancelled.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let controller = std::thread::spawn(move || {
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        request_cancel.store(true, Ordering::Relaxed);
+    });
+
+    // The injected provider blocks before it can return any metadata. Cancelling must release
+    // the caller without waiting for the provider or a network filesystem.
+    let result = super::list_folder_with(&folder.0, true, &cancelled, None, &left, move |path| {
+        entered_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+        path.symlink_metadata()
+    })
+    .unwrap();
+    assert!(matches!(result, Err(Stop::Cancelled)));
+    assert_eq!(super::running(&left), 1, "the blocked metadata worker remains accounted for");
+    drop(release_tx);
+    controller.join().unwrap();
+}
+
+#[test]
+fn a_blocked_initial_root_lookup_obeys_the_search_deadline() {
+    let folder = Folder::new();
+    let left = none_left();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let deadline = std::time::Instant::now().checked_add(Duration::from_millis(500));
+
+    let result = super::list_folder_with(&folder.0, true, &AtomicBool::new(false), deadline, &left, move |path| {
+        entered_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+        path.symlink_metadata()
+    })
+    .unwrap();
+    assert!(matches!(result, Err(Stop::TimeLimit)));
+    assert!(entered_rx.try_recv().is_ok(), "expiry must occur during the root metadata call");
+    assert_eq!(super::running(&left), 1, "the root lookup remains tracked after its deadline");
+    drop(release_tx);
+}
+
+#[test]
 fn the_listing_stops_collecting_as_soon_as_it_is_cancelled() {
     let folder = Folder::new();
     for i in 0..50 {
