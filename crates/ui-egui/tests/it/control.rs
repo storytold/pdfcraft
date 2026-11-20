@@ -1193,10 +1193,14 @@ fn organize_overview_is_reachable_through_the_control_channel() {
     ok(&mut h, &c, "ui.set", json!({ "key": "tool", "value": "organize" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["organize"], true);
     h.run_steps(3);
-    for label in ["Select page 1", "Select page 3", "Rotate page 1 clockwise"] {
+    for label in ["Select 1", "Select 3"] {
         ok(&mut h, &c, "ui.click", json!({ "label": label }));
         h.run_steps(3);
     }
+    let page = h.get_by_label("Page 1").rect().center();
+    ok(&mut h, &c, "ui.move", json!({ "x": page.x, "y": page.y }));
+    ok(&mut h, &c, "ui.click", json!({ "label": "Rotate page 1 clockwise" }));
+    h.run_steps(3);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([1, 3]));
     let app = h.state();
     let rotations: Vec<_> = app.session.get(app.views[0].id).unwrap().info.pages.iter().map(|p| p.rotation).collect();
