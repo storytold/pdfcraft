@@ -18,6 +18,8 @@ pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+# Label printers are sent rendered sheets (src/label.rs).
+pdfcraft-render = { workspace = true }
 winprint = { version = "0.2.1", git = "https://github.com/storytold/winprint.rs", rev = "5f80b9baf6b58937c401656634e42d33f00ddf49", default-features = false }
 
 [dev-dependencies]
