@@ -63,9 +63,13 @@ fn harness_document(clipping: bool, background: bool) -> Harness<'static, PdfCra
 
 /// The harness with the clipboard its app copies to: each copy's flavours are recorded in the list.
 fn harness_copying(clipping: bool, background: bool) -> (Harness<'static, PdfCraftApp>, Copies) {
+    harness_copying_step(clipping, background, 0.25)
+}
+
+fn harness_copying_step(clipping: bool, background: bool, step: f32) -> (Harness<'static, PdfCraftApp>, Copies) {
     let copies = Copies::default();
     let sink = copies.clone();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(step).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
             let mut app = clipboard_app(&cc.egui_ctx, &sink);
@@ -461,7 +465,7 @@ fn a_press_just_outside_a_picture_starts_an_area_selection() {
 /// added text opens for typing.
 #[test]
 fn a_double_click_on_a_grouped_object_reaches_it() {
-    let mut h = harness();
+    let mut h = harness_copying_step(false, false, 0.05).0;
     marquee(&mut h);
     // The added note is x 130..230, y 130..144 from the page's top.
     let note = at(&h, 180.0, 137.0);
@@ -474,7 +478,7 @@ fn a_double_click_on_a_grouped_object_reaches_it() {
 /// button came up just off it.
 #[test]
 fn a_double_click_on_a_grouped_paragraph_released_just_off_it_opens_it() {
-    let mut h = harness();
+    let mut h = harness_copying_step(false, false, 0.05).0;
     marquee(&mut h);
     let (inside, outside) = {
         let app = h.state();
@@ -483,7 +487,8 @@ fn a_double_click_on_a_grouped_paragraph_released_just_off_it_opens_it() {
         let doc = app.session.get(view.id).unwrap();
         let block = doc.text_blocks(0).into_iter().find(|b| b.text.contains("Group headline")).expect("the headline");
         let frame = xf.user_rect(&doc.info, 0, block.rect.map(|v| v as f32));
-        (egui::pos2(frame.center().x, frame.top() + 1.0), egui::pos2(frame.center().x, frame.top() - 4.0))
+        // Stay within click slop while releasing outside the paragraph.
+        (egui::pos2(frame.center().x, frame.top() + 1.0), egui::pos2(frame.center().x, frame.top() - 1.0))
     };
     let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     h.hover_at(inside);
@@ -514,7 +519,7 @@ fn a_press_counts_the_modifiers_of_its_own_event() {
 /// A double-click on a paragraph selected with others opens it for typing (the user's ruling).
 #[test]
 fn a_double_click_on_a_grouped_paragraph_opens_it() {
-    let mut h = harness();
+    let mut h = harness_copying_step(false, false, 0.05).0;
     marquee(&mut h);
     // "Group headline" is at x 40, its baseline y 430 of 500.
     let headline = at(&h, 80.0, 65.0);
@@ -660,6 +665,7 @@ fn a_picture_for_a_native_edit_paste_with_a_context_menu_open_lands_on_the_page(
     let before = can_undo(&h, 0);
     crate::support::fire_menu(&mut h, "edit.paste");
     assert!(crate::support::asked_for_the_clipboard(&h), "Edit ▸ Paste asked the platform for the clipboard");
+    h.run_steps(2);
     assert!(h.query_by_role(egui::accesskit::Role::Menu).is_none(), "Edit ▸ Paste closed the context menu");
     h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);

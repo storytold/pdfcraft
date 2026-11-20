@@ -80,6 +80,16 @@ impl PdfCraftApp {
         // In Organize the clipboard rows and keys are the picked pages' (the catalog enables them as
         // `page.copy`, `page.cut` and `page.paste`); the registry's text Copy itself stays off there.
         let organize = self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.organize);
+        if !organize
+            && !self.is_preparing()
+            && id == crate::menus::PASTE
+            && fired.pasted.is_none()
+            && fired.source == craft::ui::runtime::commands::FireSource::Menu
+        {
+            craft::ui::runtime::overlay::close_popups(ctx);
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            return;
+        }
         let page_command = match id {
             "edit.copy" => Some("page.copy"),
             crate::menus::CUT => Some("page.cut"),
