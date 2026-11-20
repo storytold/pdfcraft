@@ -94,8 +94,8 @@ pub(crate) fn catalog(mac: bool) -> Result<AppCatalog, CommandDefError> {
         }
         push(def, Vec::new());
     }
-    // The rows are static, so the catalog never changes generation.
-    AppCatalog::new(defs, 0)
+    // The platform catalogs have different bindings, so switching between them rebuilds the keymap.
+    AppCatalog::new(defs, u64::from(mac))
 }
 
 /// The chords a registry command takes beside its own shortcut: Alt+← / Alt+→ (⌥ on macOS) go back and forward

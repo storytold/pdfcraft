@@ -366,7 +366,8 @@ impl PdfCraftApp {
             return if id == "edit.copy" { self.copy_from_canvas(ctx, i) } else { self.cut_from_canvas(ctx, i) };
         }
         let Some(spec) = commands::command(id) else { return false };
-        if !self.command_enabled(spec) {
+        let close_empty_window = id == "file.close" && self.active.is_none() && mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32");
+        if !close_empty_window && !self.command_enabled(spec) {
             let why = self.disabled_reason(spec);
             self.notify(why);
             return false;
