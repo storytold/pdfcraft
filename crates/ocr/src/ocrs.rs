@@ -103,7 +103,7 @@ const LINE_PAD_ALONG: f32 = 0.1;
 /// [`LINE_PAD_ALONG`] say, after the lines were found, so finding them is unchanged. Returns the
 /// box the words covered before, which the recognised words are clipped to: the text layer sizes
 /// its text from them.
-fn pad_line(line: &mut [RotatedRect]) -> Option<RectF> {
+pub(crate) fn pad_line(line: &mut [RotatedRect]) -> Option<RectF> {
     let before = rten_imageproc::bounding_rect(line.iter())?;
     // A box's height runs along its up axis and its width along the line, whichever way the
     // line lies on the page.
@@ -121,7 +121,7 @@ fn pad_line(line: &mut [RotatedRect]) -> Option<RectF> {
 
 /// `rect` ([left, top, right, bottom]) clipped to `to`; unchanged if that leaves nothing: a word
 /// wholly in the padding is a letter the line found had cut off, and keeps its own box.
-fn clip(rect: [f32; 4], to: Option<RectF>) -> [f32; 4] {
+pub(crate) fn clip(rect: [f32; 4], to: Option<RectF>) -> [f32; 4] {
     let Some(to) = to else { return rect };
     let [l, t, r, b] = rect;
     let clipped = [l.max(to.left()), t.max(to.top()), r.min(to.right()), b.min(to.bottom())];
@@ -134,12 +134,29 @@ pub struct Ocr {
     /// The detection model's fixed input size, (width, height) pixels, when it declares one: a
     /// page much larger than that is detected in tiles.
     pub(crate) detector_input: Option<(u32, u32)>,
+    /// The GPU path, when enabled and its self-check passed.
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    gpu: Option<super::gpu::GpuOcr>,
+    /// Why the GPU is not used, when it was asked for.
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    gpu_refused: Option<String>,
+    /// Pages the GPU read. A page it refused, or that it failed on, is read on the CPU and not
+    /// counted, so a caller can tell which path read a page ([`Self::pages_on_gpu`]).
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+    on_gpu: std::sync::atomic::AtomicUsize,
 }
 
 impl Ocr {
+    /// Load the models; with the `gpu` feature, on the GPU too when `PDFCRAFT_OCR_GPU=1`.
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
+        Self::load_with_gpu(models, std::env::var("PDFCRAFT_OCR_GPU").is_ok_and(|v| v == "1"))
+    }
+
+    /// Load the models, asking for the GPU path when `gpu` (it is used only with the `gpu`
+    /// feature, ONNX models and a passing self-check; see [`Self::backend`]).
+    pub fn load_with_gpu(models: &Models, gpu: bool) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
-        Self::with_models(load(&models.detection)?, load(&models.recognition)?)
+        Self::with_models(load(&models.detection)?, load(&models.recognition)?, gpu.then_some(models))
     }
 
     /// Load the models from the contents of their files, where there is no file system (the web
@@ -151,10 +168,16 @@ impl Ocr {
             }
             rten::Model::load(data).map_err(|e| OcrError::Load(name.into(), e.to_string()))
         };
-        Self::with_models(load(DETECTION_MODEL, DETECTION_MODEL_SHA256, detection)?, load(RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256, recognition)?)
+        Self::with_models(
+            load(DETECTION_MODEL, DETECTION_MODEL_SHA256, detection)?,
+            load(RECOGNITION_MODEL, RECOGNITION_MODEL_SHA256, recognition)?,
+            None,
+        )
     }
 
-    fn with_models(detection: rten::Model, recognition: rten::Model) -> Result<Ocr, OcrError> {
+    /// `gpu_models`: the model files to read for the GPU path, when it is asked for (models given
+    /// as bytes have none).
+    fn with_models(detection: rten::Model, recognition: rten::Model, gpu_models: Option<&Models>) -> Result<Ocr, OcrError> {
         let detector_input = detector_input(&detection);
         let params = ocrs::OcrEngineParams {
             detection_model: Some(detection),
@@ -163,7 +186,61 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine, detector_input })
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+        {
+            let (gpu, gpu_refused) = if let Some(models) = gpu_models {
+                match super::gpu::GpuOcr::load(models, &engine) {
+                    Ok(g) => {
+                        log::info!("text recognition on the GPU: {}", g.adapter());
+                        (Some(g), None)
+                    }
+                    Err(e) => {
+                        log::warn!("text recognition stays on the CPU: {e}");
+                        (None, Some(e))
+                    }
+                }
+            } else {
+                (None, None)
+            };
+            Ok(Ocr { engine, detector_input, gpu, gpu_refused, on_gpu: std::sync::atomic::AtomicUsize::new(0) })
+        }
+        #[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+        {
+            let _ = gpu_models;
+            Ok(Ocr { engine, detector_input })
+        }
+    }
+
+    /// Where recognition runs: "CPU", or the GPU adapter; with the reason when a GPU that was
+    /// asked for is not used.
+    pub fn backend(&self) -> String {
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+        {
+            if let Some(g) = &self.gpu {
+                return match g.status() {
+                    Ok(()) => format!("GPU: {}", g.adapter()),
+                    Err(e) => format!("CPU (the GPU failed: {e})"),
+                };
+            }
+            if let Some(e) = &self.gpu_refused {
+                return format!("CPU (GPU not used: {e})");
+            }
+        }
+        "CPU".into()
+    }
+
+    /// How many pages the GPU has read so far: one more after each [`Self::recognize`] it
+    /// answered, none for a page read on the CPU (no GPU, a page beyond its limits, or a GPU
+    /// that failed). Always 0 without the `gpu` feature.
+    pub fn pages_on_gpu(&self) -> usize {
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+        {
+            self.on_gpu.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        #[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+        {
+            0
+        }
     }
 
     /// Load the models found by [`Models::find`].
@@ -184,9 +261,32 @@ impl Ocr {
             pixels.into()
         };
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
+        let tiled = self.tiles(&rgb, width, height);
+        // The GPU detects a page whole; a page that wants tiles is detected on the CPU.
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+        if let Some(g) = &self.gpu
+            && g.status().is_ok()
+            && tiled.is_none()
+        {
+            let (w, h) = (width as usize, height as usize);
+            // The GPU reads RGB; a grey image is spread over the three channels.
+            let rgb3: std::borrow::Cow<[u8]> =
+                if rgb.len() == w * h { rgb.iter().flat_map(|&v| [v, v, v]).collect::<Vec<u8>>().into() } else { rgb.as_ref().into() };
+            match g.recognize(&self.engine, &rgb3, w, h) {
+                Ok(lines) => {
+                    self.on_gpu.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(lines);
+                }
+                Err(super::gpu::Refused::Page(e)) => log::info!("reading this page on the CPU: {e}"),
+                Err(super::gpu::Refused::Gpu(e)) => {
+                    log::warn!("text recognition on the GPU failed, using the CPU from now on: {e}");
+                    g.fail(&e);
+                }
+            }
+        }
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
-        let found = self.detect_words(&rgb, width, height, &input)?;
+        let found = self.detect_words(&rgb, width, tiled, &input)?;
         let mut lines = self.engine.find_text_lines(&input, &found);
         let before: Vec<Option<RectF>> = lines.iter_mut().map(|l| pad_line(l)).collect();
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
@@ -209,22 +309,33 @@ impl Ocr {
             .collect())
     }
 
-    /// The words in a page, `rgb` (1 or 3 bytes per pixel) prepared as `page`. A page at least
-    /// twice the detector's input along an axis whose text is small once shrunk to that input
-    /// ([`crate::pitch`]) is detected in overlapping tiles ([`crate::tiles`]), each word kept by the
-    /// tile whose core holds its centre and moved back to page pixels.
-    fn detect_words(&self, rgb: &[u8], width: u32, height: u32, page: &ocrs::OcrInput) -> Result<Vec<RotatedRect>, OcrError> {
+    /// The tiles a page, `rgb` (1 or 3 bytes per pixel), is detected in, with its bytes per pixel:
+    /// `None` for a page detected whole. A page at least twice the detector's input along an axis
+    /// whose text is small once shrunk to that input ([`crate::pitch`]) is detected in overlapping
+    /// tiles ([`crate::tiles`]).
+    fn tiles(&self, rgb: &[u8], width: u32, height: u32) -> Option<(Vec<crate::tiles::Tile>, usize)> {
+        let input = self.detector_input?;
+        let tiles = crate::tiles::tiles(width, height, input);
+        let area = (width as usize).checked_mul(height as usize).filter(|&a| a > 0)?;
+        let channels = Some(rgb.len()).filter(|n| n.is_multiple_of(area)).map(|n| n / area).filter(|c| matches!(c, 1 | 3))?;
+        // Large print reads as well whole, at a quarter of the detection time.
+        (tiles.len() > 1 && crate::pitch::lines(rgb, width, height, channels, input).wants_tiles()).then_some((tiles, channels))
+    }
+
+    /// The words in a page, `rgb` prepared as `page`, detected whole or in the `tiled` tiles
+    /// ([`Self::tiles`]), each word kept by the tile whose core holds its centre and moved back to
+    /// page pixels.
+    fn detect_words(
+        &self,
+        rgb: &[u8],
+        width: u32,
+        tiled: Option<(Vec<crate::tiles::Tile>, usize)>,
+        page: &ocrs::OcrInput,
+    ) -> Result<Vec<RotatedRect>, OcrError> {
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
-        let tiles = self.detector_input.map(|input| crate::tiles::tiles(width, height, input)).unwrap_or_default();
-        let area = (width as usize).checked_mul(height as usize).filter(|&a| a > 0);
-        let channels = area.and_then(|a| rgb.len().is_multiple_of(a).then(|| rgb.len() / a)).filter(|c| matches!(c, 1 | 3));
-        let (Some(channels), Some(input), true) = (channels, self.detector_input, tiles.len() > 1) else {
+        let Some((tiles, channels)) = tiled else {
             return self.engine.detect_words(page).map_err(|e| err(&e));
         };
-        // Large print reads as well whole, at a quarter of the detection time.
-        if !crate::pitch::lines(rgb, width, height, channels, input).wants_tiles() {
-            return self.engine.detect_words(page).map_err(|e| err(&e));
-        }
         let mut words = Vec::new();
         for tile in &tiles {
             let pixels = crate::tiles::crop(rgb, width, channels, tile.crop)

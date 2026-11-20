@@ -5224,6 +5224,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-ml"
+version = "0.21.1"
+dependencies = [
+ "bytemuck",
+ "half",
+ "pollster 0.4.0",
+ "rten-onnx",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
 name = "pdfcraft-model"
 version = "0.21.1"
 dependencies = [
@@ -5235,10 +5247,13 @@ name = "pdfcraft-ocr"
 version = "0.21.1"
 dependencies = [
  "craft-image-codecs",
+ "log",
  "ocrs",
  "pdfcraft-fonts",
+ "pdfcraft-ml",
  "rten",
  "rten-imageproc",
+ "rten-tensor",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",

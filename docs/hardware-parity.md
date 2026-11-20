@@ -1,6 +1,6 @@
 # Hardware and platform parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (web OCR shipped: Web Workers with SIMD, checked in a browser; earlier: web printing through the browser's print dialog; earlier: shared craft-print spooler with passing Windows CI; Windows printers row and 1:1 touchpad scrolling, #756, #759) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-18 · **Change:** minor (GPU text recognition: what differs from the CPU; earlier: opt-in GPU text recognition; earlier: web OCR shipped: Web Workers with SIMD, checked in a browser; earlier: web printing through the browser's print dialog; earlier: shared craft-print spooler with passing Windows CI; Windows printers row and 1:1 touchpad scrolling, #756, #759) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Each hardware feature Acrobat Pro uses, per platform, ours against Acrobat's. Acrobat runs on macOS
 and Windows (plus a limited web viewer/editor in Document Cloud); PdfCraft runs on macOS, Windows,
@@ -13,6 +13,7 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 
 | Feature | Acrobat (macOS / Windows) | PdfCraft macOS | PdfCraft Windows | PdfCraft Linux / FreeBSD | PdfCraft web | Evidence |
 |---|---|---|---|---|---|---|
+| GPU text recognition (OCR) | not documented | opt-in (`PDFCRAFT_OCR_GPU=1`): ocrs models in wgpu compute shaders (Metal); CPU fallback, and a page detected in tiles (small print on a large page) is read on the CPU | same (DX12/Vulkan) | same (Vulkan); measured 2× on a 4-page batch, 6–7× for the models alone. Reads the same words as the CPU (1,920 of 1,920 on a 4-page scan); word boxes differ by about a pixel across and up to 4 px in height, so text extracted from the text layer can join or split a few words differently where the gap between them is borderline, as it already does on the CPU (#2306) | no: CPU | `crates/ml`, `crates/ocr` (feature `gpu`); #2285 |
 | GPU page rendering | yes (Page Display ▸ GPU-accelerated rendering) | no: CPU raster, GPU for UI compositing (wgpu, Metal) | no (wgpu DX12, GL fallback) | no (wgpu Vulkan/GL) | no (WebGL/WebGPU UI) | `crates/render`; gap 20 |
 | Multi-threaded rendering | yes | yes (render pool, tiles, watchdog) | yes | yes | single thread | `view.render-priority` |
 | HiDPI / Retina | yes | yes | yes, per-monitor DPI v2 (#324, #725) | yes | yes | text blurry at 1080p/1440p (#730) |
@@ -40,6 +41,8 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | GPU text recognition row: same words as the CPU, word boxes within a pixel across and 4 px in height, and what that does to extracted text |
+| 2026-11-09 | minor | GPU text recognition row (opt-in, `PDFCRAFT_OCR_GPU=1`, #2285) |
 | 2026-10-12 | minor | Web OCR (`ocr.ocr-web`) shipped after a browser check |
 | 2026-10-12 | minor | Web platform row: OCR downloads its models on first use and reads in Web Workers with SIMD (`ocr.ocr-web`, partial); what's left is speed |
 | 2026-10-11 | minor | Web printers row: printing through the browser's print dialog (gap 4 closed); Web platform row no longer lists printing |
