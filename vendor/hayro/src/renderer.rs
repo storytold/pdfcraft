@@ -534,6 +534,21 @@ fn area_resize(
     }
 }
 
+/// PdfCraft patch: premultiplied `[r, g, b, a]` entries for every 8-bit alpha coverage of a
+/// constant stencil colour. Computing the 256-entry table once lets solid-colour stencils shrink as
+/// a single luma channel and expand to premultiplied RGBA only at target size.
+fn premultiplied_stencil_lut(r: u8, g: u8, b: u8) -> [[u8; 4]; 256] {
+    let premul = |c: u8, a: u8| -> u8 {
+        // At most 255 × 255 + 128, so the sum fits in a u32 and the result in a u8.
+        let t = u32::from(c) * u32::from(a) + 128;
+        ((t + (t >> 8)) >> 8) as u8
+    };
+    std::array::from_fn(|a| {
+        let a = a as u8;
+        [premul(r, a), premul(g, a), premul(b, a), a]
+    })
+}
+
 /// PdfCraft patch: premultiplies straight RGBA samples in place.
 fn premultiply_rgba(rgba: &mut [u8]) {
     let (chunks, _) = rgba.as_chunks_mut::<4>();
@@ -1306,6 +1321,15 @@ impl Renderer {
     }
 
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
+        self.draw_image_inner(image_data, alpha_data, None);
+    }
+
+    fn draw_image_inner(
+        &mut self,
+        image_data: ImageData,
+        alpha_data: Option<LumaData>,
+        stencil_rgb: Option<[u8; 3]>,
+    ) {
         let cur_transform = *self.ctx.transform();
         let (x_scale, y_scale) = {
             let (x, y) = x_y_advances(&cur_transform);
@@ -1390,7 +1414,8 @@ impl Renderer {
             ImageQuality::Low
         };
         let has_alpha = alpha_data.is_some();
-        let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
+        let mut may_have_transparency =
+            has_alpha || stencil_rgb.is_some() || self.force_images_may_have_transparency();
         let (new_width, new_height) = match image_resampling_size(
             source_width,
             source_height,
@@ -1569,7 +1594,16 @@ impl Renderer {
                 return;
             };
             match format {
-                ImagePixelFormat::Luma => rgba.extend(data.iter().flat_map(|g| [*g, *g, *g, 255])),
+                ImagePixelFormat::Luma => match stencil_rgb {
+                    Some([r, g, b]) => {
+                        let lut = premultiplied_stencil_lut(r, g, b);
+                        for &a in &data {
+                            rgba.extend_from_slice(&lut[usize::from(a)]);
+                        }
+                        premultiplied = true;
+                    }
+                    None => rgba.extend(data.iter().flat_map(|g| [*g, *g, *g, 255])),
+                },
                 ImagePixelFormat::Rgb => rgba.extend(
                     data.as_chunks::<3>()
                         .0
@@ -2293,14 +2327,7 @@ impl<'a> Device<'a> for Renderer {
                         match paint {
                             Paint::Color(c) => {
                                 let color = c.to_rgba().to_rgba8();
-                                let (rgb_bytes, alpha) = (
-                                    stencil
-                                        .data
-                                        .iter()
-                                        .flat_map(|_| [color[0], color[1], color[2]])
-                                        .collect::<Vec<u8>>(),
-                                    color[3],
-                                );
+                                let alpha = color[3];
 
                                 let blend_mode = self.ctx.blend_mode();
                                 let push_layer =
@@ -2318,14 +2345,11 @@ impl<'a> Device<'a> for Renderer {
                                 let old_rule = *self.ctx.fill_rule();
                                 self.ctx.set_fill_rule(Fill::NonZero);
 
-                                let rgb_data = ImageData::Rgb(RgbData {
-                                    data: rgb_bytes,
-                                    width: stencil.width,
-                                    height: stencil.height,
-                                    interpolate: stencil.interpolate,
-                                    scale_factors: stencil.scale_factors,
-                                });
-                                self.draw_image(rgb_data, Some(stencil));
+                                self.draw_image_inner(
+                                    ImageData::Luma(stencil),
+                                    None,
+                                    Some([color[0], color[1], color[2]]),
+                                );
 
                                 if push_layer {
                                     self.ctx.pop_layer();
@@ -2340,24 +2364,14 @@ impl<'a> Device<'a> for Renderer {
                                     stencil.width as f64,
                                     stencil.height as f64,
                                 );
-                                let Some(len) = source_byte_len(
-                                    stencil.width,
-                                    stencil.height,
-                                    3,
-                                    MAX_IMAGE_PIXELS,
-                                ) else {
+                                if source_byte_len(stencil.width, stencil.height, 1, MAX_IMAGE_PIXELS)
+                                    .is_none()
+                                {
                                     log::warn!(
                                         "Stencil mask dimensions exceeded the buffer limit; image skipped"
                                     );
                                     return;
-                                };
-                                let Some(mut white) = image_buffer(len) else {
-                                    log::warn!(
-                                        "Stencil mask buffer could not be allocated; image skipped"
-                                    );
-                                    return;
-                                };
-                                white.resize(len, 255);
+                                }
                                 // PdfCraft patch (30): under a clip of the stencil's device
                                 // rectangle, the pattern is painted into a layer of its own and
                                 // cut to the stencil by a layer holding the stencil, composited
@@ -2418,15 +2432,10 @@ impl<'a> Device<'a> for Renderer {
                                 // a glyph's image rules (nearest shrink, padded frame) are for
                                 // the glyph's own images.
                                 let in_type3_glyph = std::mem::replace(&mut self.in_type3_glyph, false);
-                                self.draw_image(
-                                    ImageData::Rgb(RgbData {
-                                        data: white,
-                                        width: stencil.width,
-                                        height: stencil.height,
-                                        interpolate: stencil.interpolate,
-                                        scale_factors: stencil.scale_factors,
-                                    }),
-                                    Some(stencil),
+                                self.draw_image_inner(
+                                    ImageData::Luma(stencil),
+                                    None,
+                                    Some([255, 255, 255]),
                                 );
                                 self.in_type3_glyph = in_type3_glyph;
                                 self.ctx.pop_layer();
@@ -3356,5 +3365,47 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+
+    #[test]
+    fn premultiplied_stencil_lut_matches_alpha_color() {
+        for [r, g, b] in [[0, 0, 0], [255, 255, 255], [255, 0, 0], [37, 149, 211], [128, 128, 128]] {
+            let lut = super::premultiplied_stencil_lut(r, g, b);
+            for a in 0..=255_u8 {
+                let expected = super::AlphaColor::from_rgba8(r, g, b, a).premultiply().to_rgba8().to_u8_array();
+                assert_eq!(lut[usize::from(a)], expected, "rgb=({r},{g},{b}) a={a}");
+            }
+        }
+    }
+
+    #[test]
+    fn solid_stencil_luma_shrink_matches_area_shrink_premultiplied() {
+        let (sw, sh) = (25_u32, 19_u32);
+        let alpha: Vec<u8> = (0..(sw * sh) as usize)
+            .map(|i| if (i * 17 + i / sw as usize * 31) % 3 == 0 { 255 } else { 0 })
+            .collect();
+        for [r, g, b] in [[0, 0, 0], [255, 255, 255], [255, 0, 0], [64, 155, 210]] {
+            let rgb: Vec<u8> = alpha.iter().flat_map(|_| [r, g, b]).collect();
+            let image = ImageData::Rgb(RgbData {
+                data: rgb,
+                width: sw,
+                height: sh,
+                interpolate: false,
+                scale_factors: (1.0, 1.0),
+            });
+            for target in [(9, 7), (25, 10), (12, 19), (5, 4)] {
+                let baseline = area_shrink_premultiplied(&image, &alpha, (sw, sh), target).expect("baseline");
+                let shrunk = area_shrink::<1>(&alpha, (sw, sh), target).expect("luma shrink");
+                let lut = super::premultiplied_stencil_lut(r, g, b);
+                let fast: Vec<u8> = shrunk.iter().flat_map(|&a| lut[usize::from(a)]).collect();
+                if [r, g, b].into_iter().all(|c| c == 0 || c == 255) {
+                    assert_eq!(fast, baseline, "exact match for extreme color ({r},{g},{b}) -> {target:?}");
+                } else {
+                    for (idx, (&f, &e)) in fast.iter().zip(&baseline).enumerate() {
+                        assert!(f.abs_diff(e) <= 1, "channel diff > 1 at {idx} ({r},{g},{b}) -> {target:?}: {f} vs {e}");
+                    }
+                }
+            }
+        }
     }
 }
