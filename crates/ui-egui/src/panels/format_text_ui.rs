@@ -177,8 +177,12 @@ pub(crate) fn panel(
                     if ui.selectable_label(false, tl!("Load font…")).clicked() {
                         out.font = Some(FontChoice::Load);
                     }
+                    // A click inside the submenu (its search field, Reload, its scroll bar) keeps it
+                    // and the font list open: a font closes them itself (#7301).
                     #[cfg(not(target_arch = "wasm32"))]
-                    ui.menu_button(tl!("Installed fonts…"), |ui| {
+                    let keep_open = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let _ = egui::containers::menu::SubMenuButton::new(tl!("Installed fonts…")).config(keep_open).ui(ui, |ui| {
                         ui.set_min_width(260.0);
                         let reload = ui.button(tl!("Reload")).clicked();
                         match crate::files::installed_font_files(ui.ctx(), reload) {
@@ -783,5 +787,66 @@ mod typed_size_tests {
         h.get_by_label("Other control").click();
         h.run_steps(2);
         assert_eq!(*h.state(), (6.5, 1), "later focus loss must not revive the cancelled draft");
+    }
+}
+
+// The Installed fonts submenu this exercises exists only on native targets, and the test seam that
+// seeds its scan is native-only too.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod installed_fonts_tests {
+    use super::*;
+    use egui_kittest::kittest::{NodeT as _, Queryable};
+    use pdfcraft_engine::text_fonts::FontFile;
+
+    fn font(family: &str) -> FontFile {
+        FontFile { path: format!("/fonts/{family}.ttf").into(), family: family.into(), face: family.into() }
+    }
+
+    /// The Installed fonts search field: whatever is a text field besides the size.
+    fn search<'h>(h: &'h egui_kittest::Harness<'_, Option<FontChoice>>) -> Option<egui_kittest::Node<'h>> {
+        h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.accesskit_node().label().as_deref() != Some("Font size:"))
+    }
+
+    /// Clicking and typing in Installed fonts ▸ Search filters the list and keeps the menus open
+    /// (#7301).
+    #[test]
+    fn the_installed_fonts_search_keeps_the_menu_open_while_typing() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        crate::files::set_installed_font_files(vec![font("Alpha Sans"), font("Beta Serif"), font("Gamma Mono")]);
+        let mut ready = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 700.0)).with_accessibility_check(false).build_ui_state(
+            move |ui, picked: &mut Option<FontChoice>| {
+                if !ready {
+                    egui_extras::install_image_loaders(ui.ctx());
+                    crate::theme::install_fonts(ui.ctx());
+                    crate::theme::apply(ui.ctx(), crate::theme::ThemeKind::Light);
+                    ready = true;
+                    return;
+                }
+                let fonts = Fonts { sources: Some(&[]), shown: "Helvetica".into(), mixed_size: false };
+                let out = panel(ui, &Tokens::get(ui.ctx()), &mut AddedText::default(), None, fonts, None);
+                if out.font.is_some() {
+                    *picked = out.font;
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font").click();
+        h.run_steps(3);
+        h.get_by_label("Installed fonts…").hover();
+        h.run_steps(3);
+        search(&h).expect("hovering Installed fonts… shows its search field").click();
+        h.run_steps(3);
+        assert!(search(&h).is_some(), "clicking the search field keeps the menu open");
+        h.event(egui::Event::Text("beta".into()));
+        h.run_steps(3);
+        assert!(search(&h).is_some(), "typing in the search field keeps the menu open");
+        assert!(h.query_by_label("Beta Serif").is_some(), "the matching font is listed");
+        assert!(h.query_by_label("Alpha Sans").is_none(), "fonts that don't match are filtered out");
+        h.get_by_label("Beta Serif").click();
+        h.run_steps(3);
+        assert_eq!(*h.state(), Some(FontChoice::Installed("/fonts/Beta Serif.ttf".into())));
+        assert!(search(&h).is_none(), "picking a font closes the menus");
     }
 }

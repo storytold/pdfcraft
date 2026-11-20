@@ -60,14 +60,27 @@ impl FontScanCache {
     }
 }
 
+/// The process's one scan of the installed document fonts.
+#[cfg(not(target_arch = "wasm32"))]
+fn font_scan_cache() -> &'static Arc<std::sync::Mutex<FontScanCache>> {
+    static CACHE: std::sync::OnceLock<Arc<std::sync::Mutex<FontScanCache>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Arc::new(std::sync::Mutex::new(FontScanCache::default())))
+}
+
+/// Puts `files` in place of a scan, so a test of the Installed fonts menu doesn't depend on the
+/// fonts of the machine it runs on.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn set_installed_font_files(files: Vec<pdfcraft_engine::text_fonts::FontFile>) {
+    if let Ok(mut cache) = font_scan_cache().lock() {
+        cache.finish(files);
+    }
+}
+
 /// Discover installed document fonts off the GUI thread. Reload permits retrying a
 /// failed scan or discovering newly installed fonts without restarting the app.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn installed_font_files(ctx: &egui::Context, reload: bool) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
-    use std::sync::{Mutex, OnceLock};
-    type Files = Arc<Mutex<FontScanCache>>;
-    static CACHE: OnceLock<Files> = OnceLock::new();
-    let files = CACHE.get_or_init(|| Arc::new(Mutex::new(FontScanCache::default())));
+    let files = font_scan_cache();
     let start = files.lock().is_ok_and(|mut state| state.begin(reload));
     if start {
         let result = files.clone();
