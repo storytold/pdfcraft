@@ -1,5 +1,5 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
-use super::{Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
+use super::{CombineOptions, Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over, and so is the print standard the
@@ -92,10 +92,10 @@ pub fn combine(sources: &[(&str, &Document)]) -> Result<Document, OrganizeError>
     combine_with(sources, FieldConflicts::Rename).map(|o| o.doc)
 }
 
-/// [`combine`] reporting what the conflict resolution renamed.
-pub fn combine_with(sources: &[(&str, &Document)], conflicts: FieldConflicts) -> Result<CombineOutcome, OrganizeError> {
+/// [`combine`] with `options`, reporting what the conflict resolution renamed.
+pub fn combine_with(sources: &[(&str, &Document)], options: impl Into<CombineOptions>) -> Result<CombineOutcome, OrganizeError> {
     let all: Vec<(&str, &Document, Option<&[usize]>)> = sources.iter().map(|(t, d)| (*t, *d, None)).collect();
-    combine_selected_with(&all, conflicts)
+    combine_selected_with(&all, options)
 }
 
 /// Combine Files with chosen pages: each source contributes `pages` (0-based, in that order;
@@ -105,9 +105,12 @@ pub fn combine_selected(sources: &[(&str, &Document, Option<&[usize]>)]) -> Resu
     combine_selected_with(sources, FieldConflicts::Rename).map(|o| o.doc)
 }
 
-/// [`combine_selected`] reporting what the conflict resolution renamed.
-pub fn combine_selected_with(sources: &[(&str, &Document, Option<&[usize]>)], conflicts: FieldConflicts) -> Result<CombineOutcome, OrganizeError> {
-    let mut combiner = Combiner::with_field_conflicts(conflicts);
+/// [`combine_selected`] with `options`, reporting what the conflict resolution renamed.
+pub fn combine_selected_with(
+    sources: &[(&str, &Document, Option<&[usize]>)],
+    options: impl Into<CombineOptions>,
+) -> Result<CombineOutcome, OrganizeError> {
+    let mut combiner = Combiner::with_options(options.into());
     for (title, src, chosen) in sources {
         combiner.add(title, src, *chosen)?;
     }
@@ -131,6 +134,8 @@ pub struct Combiner {
     agreed: bool,
     /// How colliding field names are resolved as each source is added.
     field_conflicts: FieldConflicts,
+    /// Whether each source gets a top-level bookmark (see [`CombineOptions::file_bookmarks`]).
+    file_bookmarks: bool,
     /// What adding sources renamed (old → new fully-qualified field name), in order.
     renamed_fields: Vec<(String, String)>,
 }
@@ -158,6 +163,11 @@ impl Combiner {
 
     /// [`Combiner::new`] resolving colliding field names as `conflicts` says.
     pub fn with_field_conflicts(field_conflicts: FieldConflicts) -> Self {
+        Self::with_options(field_conflicts.into())
+    }
+
+    /// A combine with no sources yet, built as `options` says.
+    pub fn with_options(options: CombineOptions) -> Self {
         Self {
             out: Document::new_empty(),
             marks: Vec::new(),
@@ -166,7 +176,8 @@ impl Combiner {
             has_labels: false,
             standard: None,
             agreed: true,
-            field_conflicts,
+            field_conflicts: options.field_conflicts,
+            file_bookmarks: options.file_bookmarks,
             renamed_fields: Vec::new(),
         }
     }
@@ -225,7 +236,7 @@ impl Combiner {
 
     /// [`Combiner::finish`] reporting what the combine renamed.
     pub fn finish_with_renames(self) -> Result<CombineOutcome, OrganizeError> {
-        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, .. } = self;
+        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, file_bookmarks, renamed_fields, .. } = self;
         if let Some(first) = standard.filter(|_| agreed) {
             crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects)?;
         }
@@ -233,7 +244,7 @@ impl Combiner {
         let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
         crate::dedupe::dedupe_resources(&mut out, &all, false);
         crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
-        add_outline(&mut out, &marks)?;
+        add_outline(&mut out, marks, file_bookmarks)?;
         set_attachments(&mut out, attachments)?;
         Ok(CombineOutcome { doc: out, renamed_fields })
     }
@@ -253,8 +264,9 @@ pub fn combine_grouped(runs: &[Run<'_>]) -> Result<Document, OrganizeError> {
     combine_grouped_with(runs, FieldConflicts::Rename).map(|o| o.doc)
 }
 
-/// [`combine_grouped`] reporting what the conflict resolution renamed.
-pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Result<CombineOutcome, OrganizeError> {
+/// [`combine_grouped`] with `options`, reporting what the conflict resolution renamed.
+pub fn combine_grouped_with(runs: &[Run<'_>], options: impl Into<CombineOptions>) -> Result<CombineOutcome, OrganizeError> {
+    let CombineOptions { field_conflicts: conflicts, file_bookmarks } = options.into();
     // Each file's pages, in the order its runs list them, and each run's place in that list.
     struct File<'a> {
         title: &'a str,
@@ -333,7 +345,7 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
     crate::dedupe::dedupe_resources(&mut out, &all, false);
     crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
-    add_outline(&mut out, &marks)?;
+    add_outline(&mut out, marks, file_bookmarks)?;
     set_attachments(&mut out, attachments)?;
     Ok(CombineOutcome { doc: out, renamed_fields })
 }

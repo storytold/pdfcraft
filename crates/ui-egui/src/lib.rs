@@ -703,6 +703,9 @@ pub struct PdfCraftApp {
     /// How large Organize pages draws its grid, for every document (1.0 = the usual; kept in
     /// the settings).
     pub organize_zoom: f32,
+    /// Whether Combine files gives each file a bookmark holding its own (kept in the settings).
+    /// Off, the files' own bookmarks are the result's top level (#3679).
+    pub combine_file_bookmarks: bool,
     /// The Combine grid's thumbnails: rendered off the UI thread, a few at a time.
     pub(crate) combine_thumbs: combine_grid::Thumbs,
     /// Images waiting for the resolution choice (released on cancel).

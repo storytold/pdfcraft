@@ -85,6 +85,9 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if response.clicked() {
                     combine = true;
                 }
+                ui.add_space(8.0);
+                // Off, the files' own bookmarks are the result's top level (#3679).
+                ui.add(widgets::checkbox(&mut app.combine_file_bookmarks, tl!("Add a bookmark for each file")));
             });
         });
         let hint = if grid {
