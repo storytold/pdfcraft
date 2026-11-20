@@ -244,7 +244,8 @@ impl HeaderFooter {
     /// Settings back from a [`SETTINGS_KEY`] entry. `None` unless every value is one the dialog
     /// could have written: a file can say anything here.
     pub(crate) fn from_object(doc: &Document, o: &Object) -> Option<Self> {
-        Self::from_object_within(doc, o, &mut usize::MAX)
+        let mut unlimited = usize::MAX;
+        Self::from_object_within(doc, o, &mut unlimited)
     }
 
     /// [`from_object`](Self::from_object), converting at most `budget` bytes of text, which it
