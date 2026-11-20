@@ -37,7 +37,10 @@ DeviceCMYK `k`), so text added to a print file can be 100 K black. `content_list
 
 - Tool names are `snake_case` (`page_rotate`): MCP clients reject dots. `ToolDef::command` links a tool to the registry id it automates (`page.rotate`), and `command_list` reports the link.
 - Pages and positions are **1-based**. Rectangles are PDF points with the origin at the top-left of the displayed page.
-- Unknown arguments are rejected, so typos fail loudly.
+- Unknown top-level tool arguments are rejected, so typos fail loudly. Unknown keys directly in
+  `params` for `command_run` and each `command_batch` step are ignored; successful commands
+  return warnings for those keys. Unknown keys on batch-step objects outside `params` are ignored
+  without warnings (see [Common command tools](#common-command-tools)).
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `comment_image_preview` returns JSON and a PNG: `layer: "background"` (the default) gives the page without the selected image signature/initials; `layer: "image"` gives its embedded image with alpha. The metadata supplies its displayed rectangle, document rotation, `image_rotation` (how far clockwise the image is shown turned: 0 for one placed by PdfCraft, which keeps it upright as displayed) and annotation opacity. Each result can be saved with the CLI's `--out`. Cache the background and transform the image for live movement/resizing; `comment_edit` commits the final geometry in one undo step. Previewing never changes the document.
 - For proportional image signature resizing, use the embedded image layer's width/height ratio rather than a previously stretched annotation rectangle. The GUI preserves this ratio at corners with the opposite corner anchored; edge midpoint handles change only their own axis. `comment_edit` accepts the resulting rectangle.
