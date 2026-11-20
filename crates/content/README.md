@@ -6,9 +6,13 @@ the object layer.
 
 ```rust
 let parsed = parse(&stream.decoded()?);       // operators with operands and source spans
-for op in &parsed.ops { if op.is("Tj") { /* … */ } }
+for op in &parsed.ops {
+    if op.is("Tj") { /* … */ }
+    if op.is("cm") || op.is("Tm") {
+        let m = Matrix::from_operands(&op.operands);  // cm / Tm arithmetic, invert, bbox
+    }
+}
 let bytes = serialize_ops(&parsed.ops);       // write back (inline images kept whole)
-let m = Matrix::from_operands(&op.operands);  // cm / Tm arithmetic, invert, bbox
 ```
 
 The parser is tolerant (unreadable bytes are skipped and counted, never fatal) and never
