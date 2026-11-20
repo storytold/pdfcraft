@@ -2758,6 +2758,19 @@ fn verify_comment_errors(a: &mut Automation, doc: u64, id: &str) {
         Err(ToolError::InvalidArgs(_))
     ));
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1 })), Err(ToolError::InvalidArgs(_))));
+    // #2670: opacity must be between 0 and 1.
+    assert!(matches!(
+        a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "note", "at": [1, 1], "opacity": -3 })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    assert!(matches!(
+        a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "note", "at": [1, 1], "opacity": 1.5 })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    let first = ok(a, "comment_list", json!({ "doc": doc }))["comments"][0].clone();
+    let (page, index) = (first["page"].as_u64().unwrap(), first["index"].as_u64().unwrap());
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "opacity": -1 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "opacity": 2.0 })), Err(ToolError::InvalidArgs(_))));
 }
 
 fn save_and_reopen_comments(dir: &Path, a: &mut Automation, doc: u64) {
@@ -4026,6 +4039,8 @@ fn watermarks_move_from_the_page_centre_through_tools() {
     // Huge offsets are clamped, and a value that isn't a number is refused.
     ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "DRAFT", "offset_y": 1e300, "replace": true }));
     assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "offset_x": "left" })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("doc_watermark", &json!({ "doc": doc, "text": "X", "opacity": -1 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("doc_background", &json!({ "doc": doc, "color": "yellow", "opacity": -1 })), Err(ToolError::InvalidArgs(_))));
 }
 
 #[test]

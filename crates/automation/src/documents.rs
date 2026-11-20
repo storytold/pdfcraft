@@ -659,7 +659,13 @@ impl Automation {
                     scale: a.opt_num("scale")?.unwrap_or(d.scale).clamp(0.01, 1.0),
                     font_size: a.opt_num("font_size")?.unwrap_or(0.0),
                     color: color("color", d.color)?,
-                    opacity: a.opt_num("opacity")?.unwrap_or(d.opacity),
+                    opacity: match a.opt_num("opacity")? {
+                        Some(o) if !(0.0..=1.0).contains(&o) => {
+                            return Err(ToolError::InvalidArgs(format!("opacity must be between 0 and 1, got {o}")));
+                        }
+                        Some(o) => o,
+                        None => d.opacity,
+                    },
                     rotation: a.opt_num("rotation")?.unwrap_or(d.rotation),
                     behind: a.opt_bool("behind")?.unwrap_or(false),
                     offset: [
@@ -673,7 +679,13 @@ impl Automation {
                 pages,
                 settings: Background {
                     color: color("color", [1.0; 3])?,
-                    opacity: a.opt_num("opacity")?.unwrap_or(1.0),
+                    opacity: match a.opt_num("opacity")? {
+                        Some(o) if !(0.0..=1.0).contains(&o) => {
+                            return Err(ToolError::InvalidArgs(format!("opacity must be between 0 and 1, got {o}")));
+                        }
+                        Some(o) => o,
+                        None => 1.0,
+                    },
                     scale: a.opt_num("scale")?.unwrap_or(1.0).clamp(0.01, 1.0),
                     replace_backdrop: a.opt_bool("replace_backdrop")?.unwrap_or(true),
                     ..Background::default()

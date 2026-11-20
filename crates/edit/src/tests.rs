@@ -726,6 +726,85 @@ fn flattening_fields_drops_the_ones_on_no_page() {
     assert_eq!(left, [pdfcraft_cos::ObjRef::new(7, 0)], "only the hidden field on the page stays");
 }
 
+/// #2670: flattening form fields drops removed fields from `/AcroForm /CO` (calculation order)
+/// and removes `/CO` once empty, and drops `/SigFlags` once no signature fields remain.
+#[test]
+fn flattening_fields_cleans_calculation_order_and_sigflags() {
+    let page = stream("", " ");
+    // Test 1: both fields flattened -> /Fields becomes empty, /CO and /SigFlags are removed.
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig) /Rect [10 50 150 80] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 2);
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    let fields = doc.resolve(af_dict.get(b"Fields").unwrap());
+    assert_eq!(fields.as_array().unwrap().len(), 0, "no fields remain");
+    assert!(!af_dict.contains(b"CO"), "empty calculation order was removed");
+    assert!(!af_dict.contains(b"SigFlags"), "SigFlags was removed with no signature fields");
+
+    // Test 2: one field flattened, one surviving field -> /CO retains surviving field, SigFlags kept.
+    // The signature field has no appearance but is signed (a value), so it stays (#1794, #4017).
+    let mut doc2 = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO [5 0 R 6 0 R] /SigFlags 1 >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc1) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (sig_undrawable) /V << /Type /Sig >> /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert_eq!(flatten(&mut doc2, &[0], false, true).unwrap(), 1, "only calc1 with appearance is drawn");
+    let doc2 = reopen(&doc2);
+    let root2 = doc2.root().unwrap();
+    let af2 = doc2.resolve(doc2.get(root2).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict2 = af2.as_dict().unwrap();
+    let co2 = doc2.resolve(af_dict2.get(b"CO").unwrap());
+    let co_refs: Vec<pdfcraft_cos::ObjRef> = co2.as_array().unwrap().iter().filter_map(|f| f.as_ref()).collect();
+    assert_eq!(co_refs, [pdfcraft_cos::ObjRef::new(6, 0)], "only surviving field remains in /CO");
+    assert!(af_dict2.contains(b"SigFlags"), "SigFlags kept because signature field survived");
+}
+
+/// #2670: removing an emptied `/CO` or an unneeded `/SigFlags` drops the key only. Both may be
+/// indirect objects that something else also refers to, and those references must still resolve.
+#[test]
+fn flattening_keeps_shared_calculation_order_and_sigflags_objects() {
+    let page = stream("", " ");
+    let mut doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] /CO 9 0 R /SigFlags 8 0 R >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R /Annots [5 0 R 6 0 R] >>",
+        &page,
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (calc) /Rect [10 10 150 40] /F 4 /AP << /N 7 0 R >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (kept) /V (Ada) /Ff 8 0 R /Order 9 0 R /Rect [10 50 150 80] /F 4 >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 30] /Length 0 >>
+stream
+
+endstream",
+        "3",
+        "[5 0 R]",
+    ]);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "only calc is drawn; kept has no appearance");
+    let doc = reopen(&doc);
+    let root = doc.root().unwrap();
+    let af = doc.resolve(doc.get(root).as_dict().unwrap().get(b"AcroForm").unwrap());
+    let af_dict = af.as_dict().unwrap();
+    assert!(!af_dict.contains(b"CO"), "the emptied calculation order was removed");
+    assert!(!af_dict.contains(b"SigFlags"), "SigFlags was removed with no signature field left");
+    let kept = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let kept = kept.as_dict().unwrap();
+    assert_eq!(doc.resolve(kept.get(b"Ff").unwrap()).as_int(), Some(3), "the shared /SigFlags object still resolves");
+    assert!(doc.resolve(kept.get(b"Order").unwrap()).as_array().is_some(), "the shared /CO array still resolves");
+}
+
 /// #1794: a form field whose widget has no usable appearance (none stored, or none for its
 /// selected state) has nothing to draw. Flattening used to remove it anyway, losing its value
 /// with no ink in its place. It stays, in the page and in the form, like a comment that can't be

@@ -621,6 +621,22 @@ thread_local! {
 
 /// Remove flattened widgets from the AcroForm field tree, and fields left without widgets. With
 /// `on_page`, also the widgets (fields without kids) that are on no page.
+/// Whether the field at `r` is a signature field: its `/FT`, or the nearest one up its `/Parent`
+/// chain (field types are inherited). The walk stops after 64 parents, so a cycle ends.
+fn is_signature_field(doc: &Document, r: ObjRef) -> bool {
+    let mut node = r;
+    for _ in 0..=64 {
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { return false };
+        if let Some(ft) = d.get(b"FT").map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(|n| n.to_vec())) {
+            return ft == b"Sig";
+        }
+        let Some(parent) = d.get(b"Parent").and_then(|p| p.as_ref()) else { return false };
+        node = parent;
+    }
+    false
+}
+
 fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>) -> Result<(), EditError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
@@ -684,6 +700,25 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         return Ok(()); // only looked for fields on no page, and there were none
     }
     af_dict.set(b"Fields".to_vec(), Object::Array(survivors));
+    // #2670: the calculation order keeps only the fields that are left, and goes once it is empty.
+    // Only the keys go: an indirect `/CO` or `/SigFlags` may be shared, and freeing it would null
+    // the other references; once nothing refers to it, a full save leaves it out.
+    let surviving: HashSet<ObjRef> = known.iter().filter(|(_, (survives, _))| *survives).map(|(&r, _)| r).collect();
+    if let Some(co_obj) = af_dict.get(b"CO").cloned() {
+        let co_array = doc.resolve(&co_obj).as_array().cloned().unwrap_or_default();
+        let co_survivors: Vec<Object> = co_array.into_iter().filter(|item| item.as_ref().is_some_and(|r| surviving.contains(&r))).collect();
+        if co_survivors.is_empty() {
+            af_dict.remove(b"CO");
+        } else if let Some(r) = co_obj.as_ref() {
+            doc.set(r, Object::Array(co_survivors));
+        } else {
+            af_dict.set(b"CO".to_vec(), Object::Array(co_survivors));
+        }
+    }
+    // #2670: with no signature field left, the form no longer claims to hold signatures.
+    if !surviving.iter().any(|&r| is_signature_field(doc, r)) {
+        af_dict.remove(b"SigFlags");
+    }
     match af_ref {
         Some(r) => doc.set(r, Object::Dict(af_dict)),
         None => doc.update_dict(root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af_dict)))?,
