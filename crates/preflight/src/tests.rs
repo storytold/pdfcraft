@@ -5,11 +5,19 @@ fn build(objs: &[&str], trailer_extra: &str) -> Document {
 }
 
 fn build_with_header(header: &[u8], objs: &[&str], trailer_extra: &str) -> Document {
+    let objs: Vec<&[u8]> = objs.iter().map(|o| o.as_bytes()).collect();
+    Document::open(std::sync::Arc::new(file_bytes(header, &objs, trailer_extra))).unwrap()
+}
+
+/// A file with the header `header` and the objects `objs`, numbered from 1.
+fn file_bytes(header: &[u8], objs: &[&[u8]], trailer_extra: &str) -> Vec<u8> {
     let mut out = header.to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
@@ -17,7 +25,7 @@ fn build_with_header(header: &[u8], objs: &[&str], trailer_extra: &str) -> Docum
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    Document::open(std::sync::Arc::new(out)).unwrap()
+    out
 }
 
 /// A page with embedded-font-free text, a note without the print flag, a link with a
@@ -79,7 +87,9 @@ fn verify_reports_what_breaks_pdfa() {
 /// what this reads off the file; the sentences `convert` reports as fixed are not wordings.
 #[test]
 fn wordings_are_complete() {
-    let source = include_str!("lib.rs");
+    // PDF/A-4's own rules report through the same `issue` from `part4.rs`.
+    let source = [include_str!("lib.rs"), include_str!("part4.rs")].concat();
+    let source = source.as_str();
     let mut said = Vec::new();
     let mut rest = source;
     // `issue(` and `located_issue(`, written on one line or, when rustfmt breaks it, on several.
@@ -389,7 +399,15 @@ fn standards_identification_uses_namespace_not_prefix() {
     for xml in [attribute, element] {
         let doc = with_xmp(xml);
         assert_eq!(declared(&doc).pdfa, Some((2, "B".into())));
-        assert!(!verify(&doc, Level::A2b).iter().any(|i| i.clause == "6.6.4"));
+        // Identified by namespace; 6.6.4 still asks for the prefix pdfaid.
+        let found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.4").map(|i| i.message).collect();
+        assert_eq!(
+            found,
+            [
+                "The identification property part isn't written with the prefix pdfaid",
+                "The identification property conformance isn't written with the prefix pdfaid"
+            ]
+        );
     }
     assert_eq!(declared(&with_xmp(attribute)).pdfua, Some(1));
     let wrong = r#"<root xmlns:pdfaid="urn:wrong" pdfaid:part="2" pdfaid:conformance="B"/>"#;
@@ -1710,36 +1728,556 @@ fn xmp_value_forms_are_those_xmp_allows() {
     );
 }
 
-/// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1). A font
-/// that only the form's default resources hold (`/AcroForm /DR`, ISO 32000-1 12.7.2) draws
-/// nothing, as in veraPDF's 6-4-1-t02-pass-a; one that a widget's appearance stream draws with is
-/// named in that stream's `/Resources`, and still has to be embedded.
+/// A page's `/Contents` that reaches its stream through an object that is only a reference to it
+/// (ISO 32000-2 7.3.10), alone or in an array, is that stream: the text it draws is read, and its
+/// font has to be embedded.
+#[test]
+fn page_contents_reached_through_an_alias_are_read() {
+    let fonts = |contents: &str| -> Vec<String> {
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &format!("<< /Type /Page /Parent 2 0 R /Contents {contents} /Resources << /Font << /F1 5 0 R >> >> >>"),
+                "6 0 R",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Length 24 >>\nstream\nBT /F1 12 Tf (Hi) Tj ET\nendstream",
+                "[4 0 R]",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    for contents in ["6 0 R", "4 0 R", "[4 0 R]", "7 0 R"] {
+        assert_eq!(fonts(contents), ["The font Helvetica isn't embedded"], "{contents}");
+    }
+}
+
+/// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1; ISO
+/// 19005-4, 6.2.10.4.1). A font draws when content selects it with `Tf`: one that only the form's
+/// default resources (`/AcroForm /DR`) or a default appearance string (`/DA`) name draws nothing, as
+/// in veraPDF's 6-4-1-t02-pass-a, and neither does one an appearance stream's `/Resources` list but
+/// its content never selects, as in the signature fields of octopdf-sample.pdf (PDFBOX-6264). One
+/// the appearance stream selects still has to be embedded.
 #[test]
 fn only_fonts_something_draws_with_must_be_embedded() {
-    let fonts =
-        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect() };
-    let form = |appearance_fonts: &str| {
+    let fonts_at = |doc: &Document, level: Level, clause: &str| -> Vec<String> {
+        verify(doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect()
+    };
+    let fonts = |doc: &Document| fonts_at(doc, Level::A2b, "6.2.11.4");
+    let form = |appearance: &str, content: &str, page: &str| {
         build(
             &[
                 "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R /ZaDb 5 0 R >> >> >> >>",
                 "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
-                "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [6 0 R] >>",
+                &format!("<< /Type /Page /Parent 2 0 R /Resources << {page} >> /Annots [6 0 R] >>"),
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
                 "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
                 "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /F 4 /Rect [10 10 90 30] /P 3 0 R /AP << /N 7 0 R >> >>",
-                &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] /Resources << {appearance_fonts} >> /Length 0 >>\nstream\n\nendstream"),
+                &format!(
+                    "<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] {appearance} /Length {} >>
+stream
+{content}
+endstream",
+                    content.len()
+                ),
                 // An object that is nothing but a reference to the Helvetica font (ISO 32000-1 7.3.10).
                 "4 0 R",
             ],
             "",
         )
     };
-    assert!(fonts(&form("")).is_empty(), "{:?}", fonts(&form("")));
-    assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
+    let draws = "BT /Helv 10 Tf (x) Tj ET";
+    let helvetica = || vec!["The font Helvetica isn't embedded".to_string()];
+    for (appearance, content) in [
+        ("/Resources << >>", ""),
+        // Listed, never selected: the fonts of octopdf-sample.pdf's signature appearances.
+        ("/Resources << /Font << /Helv 4 0 R /ZaDb 5 0 R >> >>", ""),
+        ("/Resources << /Font << /Helv 4 0 R >> >>", "BT /ZaDb 10 Tf ET (/Helv 10 Tf) Tj % /Helv 10 Tf"),
+    ] {
+        let doc = form(appearance, content, "");
+        assert!(fonts(&doc).is_empty(), "{appearance} {content}: {:?}", fonts(&doc));
+        assert!(fonts_at(&doc, Level::A4, "6.2.10.4.1").is_empty(), "{appearance} {content}");
+    }
+    let selected = form("/Resources << /Font << /Helv 4 0 R >> >>", draws, "");
+    assert_eq!(fonts(&selected), helvetica());
+    // PDF/A-4 asks the same, under its own clause.
+    assert_eq!(fonts_at(&selected, Level::A4, "6.2.10.4.1"), helvetica());
     // Named through a reference to it, it is still the font something draws with.
-    assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
+    assert_eq!(fonts(&form("/Resources << /Font << /Helv 8 0 R >> >>", draws, "")), helvetica());
+    // Content without resources of its own may draw with any font of that name.
+    assert_eq!(fonts(&form("", draws, "/Font << /Helv 4 0 R >>")), helvetica());
+    // Content that can't be decoded may select any font its resources list.
+    assert_eq!(fonts(&form("/Filter /NoSuchDecode /Resources << /Font << /Helv 4 0 R >> >>", "x", "")), helvetica());
     // A page's own font is checked as before.
-    assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
+    assert_eq!(fonts(&messy()), helvetica());
+    // A Type 3 glyph procedure draws with the fonts it selects; one that can't be read may draw with
+    // any font.
+    let glyphs = |proc_dict: &str, proc: &str| {
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>",
+                "<< /Length 22 >>
+stream
+BT /T3 10 Tf (a) Tj ET
+endstream",
+                "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 6 0 R >>                  /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /Font << /F2 7 0 R >> >> >>",
+                &format!(
+                    "<< {proc_dict} /Length {} >>
+stream
+{proc}
+endstream",
+                    proc.len()
+                ),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            ],
+            "",
+        )
+    };
+    assert_eq!(fonts(&glyphs("", "1000 0 d0 BT /F2 10 Tf (x) Tj ET")), helvetica());
+    assert!(fonts(&glyphs("", "1000 0 d0 0 0 1 1 re f")).is_empty());
+    assert_eq!(fonts(&glyphs("/Filter /NoSuchDecode", "x")), helvetica());
+    // A page's `/Contents` streams are one stream split between any two tokens (ISO 32000-2
+    // 7.8.2): the font name can end one stream and its `Tf` start the next.
+    let page = |contents: &[&str], resources: &str| {
+        let streams: Vec<String> = contents.iter().map(|c| format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len() + 1)).collect();
+        let refs: Vec<String> = (0..contents.len()).map(|i| format!("{} 0 R", i + 6)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents [{}] /Resources << {resources} >> >>", refs.join(" ")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /ExtGState /Font [4 0 R 10] >>".to_owned(),
+        ];
+        objects.extend(streams);
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&objects, "")
+    };
+    let listed = "/Font << /F1 4 0 R >>";
+    assert_eq!(fonts(&page(&["BT /F1", "10 Tf (x) Tj ET"], listed)), helvetica());
+    assert_eq!(fonts(&page(&["BT", "/F1 10 Tf (x) Tj ET"], listed)), helvetica());
+    assert!(fonts(&page(&["BT", "(x) Tj ET"], listed)).is_empty());
+    // A graphics state's `/Font` entry selects its font for `gs` (ISO 32000-2 8.4.5, Table 57),
+    // with no `Tf` at all.
+    let state = "/ExtGState << /GS1 5 0 R >>";
+    assert_eq!(fonts(&page(&["/GS1 gs BT (x) Tj ET"], state)), helvetica());
+    assert_eq!(fonts(&page(&["/GS1", "gs BT (x) Tj ET"], &format!("{state} {listed}"))), helvetica());
+    assert!(fonts(&page(&["BT (x) Tj ET"], state)).is_empty());
+    assert_eq!(fonts_at(&page(&["/GS1 gs BT (x) Tj ET"], state), Level::A4, "6.2.10.4.1"), helvetica());
+}
+
+/// PDF/A asks for embedding only of the fonts "used for rendering" (ISO 19005-2 6.2.11.4.1, ISO
+/// 19005-4 6.2.10.4.1). Text in rendering mode 3 neither fills nor strokes (ISO 32000-2 9.3.6,
+/// Table 104), as OCR text over a scanned page does, so a font only that text uses renders nothing.
+#[test]
+fn a_font_only_invisible_text_uses_draws_nothing() {
+    let fonts_at = |doc: &Document, level: Level, clause: &str| -> Vec<String> {
+        verify(doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect()
+    };
+    let fonts = |doc: &Document| fonts_at(doc, Level::A2b, "6.2.11.4");
+    let helvetica = || vec!["The font Helvetica isn't embedded".to_string()];
+    let page = |contents: &[&str], resources: &str| {
+        let streams: Vec<String> = contents.iter().map(|c| format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len() + 1)).collect();
+        let refs: Vec<String> = (0..contents.len()).map(|i| format!("{} 0 R", i + 6)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents [{}] /Resources << {resources} >> >>", refs.join(" ")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /ExtGState /Font [4 0 R 10] >>".to_owned(),
+        ];
+        objects.extend(streams);
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&objects, "")
+    };
+    let listed = "/Font << /F1 4 0 R >>";
+    // Selected and never shown, a font draws nothing either; a visible mode after mode 3 draws.
+    for invisible in
+        ["BT /F1 10 Tf 3 Tr (x) Tj ET", "BT /F1 10 Tf ET", "3 Tr q 0 Tr Q BT /F1 10 Tf (x) Tj ET", "BT 3 Tr /F1 10 Tf [(x)] TJ (y) ' 1 2 (z) \" ET"]
+    {
+        assert!(fonts(&page(&[invisible], listed)).is_empty(), "{invisible}");
+        assert!(fonts_at(&page(&[invisible], listed), Level::A4, "6.2.10.4.1").is_empty(), "{invisible}");
+    }
+    for visible in [
+        "BT /F1 10 Tf 3 Tr (x) Tj 0 Tr (y) Tj ET",
+        "q 3 Tr Q BT /F1 10 Tf (x) Tj ET",
+        "BT /F1 10 Tf 7 Tr (x) Tj ET",
+        "BT /F1 10 Tf 3 Tr ET BT 1 Tr (x) Tj ET",
+    ] {
+        assert_eq!(fonts(&page(&[visible], listed)), helvetica(), "{visible}");
+    }
+    // A form is read where it is drawn, in the state it is drawn in: one without resources of its
+    // own takes the font and the mode of the content drawing it. One nothing draws starts visible.
+    let drawn = |content: &str, form: &str, more: &str| {
+        let content = content.to_owned();
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 4 0 R >> /XObject << /X0 7 0 R >> >> >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+            format!(
+                "<< /Length {} >>
+stream
+{content}
+endstream",
+                content.len() + 1
+            ),
+            format!(
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {more} /Length {} >>
+stream
+{form}
+endstream",
+                form.len() + 1
+            ),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&objects, "")
+    };
+    assert!(fonts(&drawn("BT /F1 10 Tf 3 Tr ET /X0 Do", "BT (x) Tj ET", "")).is_empty());
+    assert_eq!(fonts(&drawn("BT /F1 10 Tf ET /X0 Do", "BT (x) Tj ET", "")), helvetica());
+    assert!(fonts(&drawn("3 Tr /X0 Do", "BT /F1 10 Tf (x) Tj ET", "")).is_empty());
+    assert_eq!(fonts(&drawn("/X0 Do", "BT /F1 10 Tf (x) Tj ET", "")), helvetica());
+    let own = "/Resources << /Font << /F1 5 0 R >> >>";
+    assert!(fonts(&drawn("3 Tr /X0 Do", "BT /F1 10 Tf (x) Tj ET", own)).is_empty());
+    assert_eq!(fonts(&drawn("/X0 Do", "BT /F1 10 Tf (x) Tj ET", own)), vec!["The font Courier isn't embedded".to_string()]);
+    assert_eq!(fonts(&drawn("", "BT /F1 10 Tf (x) Tj ET", own)), vec!["The font Courier isn't embedded".to_string()]);
+    // A form that draws itself ends.
+    assert!(
+        fonts(&drawn("3 Tr /X0 Do", "BT /F1 10 Tf (x) Tj ET /X0 Do", "/Resources << /Font << /F1 5 0 R >> /XObject << /X0 7 0 R >> >>")).is_empty()
+    );
+}
+
+/// Past the saved states [`Fonts::read`] keeps, a `Q` restores a state that wasn't kept, so the
+/// mode and font it brings back aren't known (ISO 32000-2 8.4.2): the text after it counts as
+/// visible, and every font that could be current then draws.
+#[test]
+fn a_restore_past_the_kept_saves_counts_its_fonts() {
+    let fonts = |content: &str| -> Vec<String> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    let deep = "q ".repeat(MAX_SAVED_STATES);
+    let helvetica = || vec!["The font Helvetica isn't embedded".to_string()];
+    // The renderer brings back mode 0 here; the walk doesn't know it, and counts the font.
+    assert_eq!(fonts(&format!("BT /F1 10 Tf {deep} q 3 Tr Q (x) Tj ET")), helvetica());
+    // Within the kept saves the mode is still followed.
+    let shallow = "q ".repeat(MAX_SAVED_STATES - 1);
+    assert!(fonts(&format!("BT /F1 10 Tf 3 Tr {shallow} q 0 Tr Q (x) Tj ET")).is_empty());
+}
+
+/// A form XObject without resources of its own takes those of the content drawing it (ISO 32000-2
+/// 7.8.3), so one form drawn on two pages, in the same state, can show a different font on each.
+#[test]
+fn a_form_without_resources_is_read_with_each_drawer_s_resources() {
+    // `/X0` draws text itself, or draws `/X1`, which has no resources of its own either.
+    let found = |x0: &str, x1: &str| -> Vec<String> {
+        let xobjects = "/XObject << /X0 8 0 R /X1 9 0 R >>";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 5 0 R >> {xobjects} >> >>"),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 6 0 R >> {xobjects} >> >>"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+            "<< /Length 7 >>\nstream\n/X0 Do\nendstream".to_owned(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{x0}\nendstream", x0.len() + 1),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{x1}\nendstream", x1.len() + 1),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        let mut found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+        found.sort();
+        found
+    };
+    let text = "BT /F1 10 Tf (x) Tj ET";
+    for (x0, x1) in [(text, "0 0 1 1 re f"), ("/X1 Do", text)] {
+        assert_eq!(found(x0, x1), ["The font Courier isn't embedded", "The font Helvetica isn't embedded"], "{x0}");
+    }
+}
+
+/// A form drawn past [`MAX_FORM_DEPTH`] is read on its own, even when other content drew it too:
+/// there it may have been drawn in mode 3, which neither fills nor strokes (ISO 32000-2 9.3.6), so
+/// its font was never found drawing.
+#[test]
+fn a_form_cut_off_by_the_depth_limit_is_read_on_its_own() {
+    // Object 5 is the form `/C`, which shows text in Courier from its own resources; 6 is `/P`,
+    // which draws `/C`; 7 on are the wrappers `/W1` to `/W11`, each drawing the next and the last
+    // drawing `/P`, so that `/P` is read `MAX_FORM_DEPTH` forms deep. The page draws `/C` in mode
+    // 3, then the chain either itself or through `/X`, a form no content draws and so read on its
+    // own, after `/C` has been passed over as drawn.
+    let found = |through_x: bool| -> Vec<String> {
+        let wrappers = MAX_FORM_DEPTH - 1;
+        let form = |content: &str, more: &str| {
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {more} /Length {} >>\nstream\n{content}\nendstream", content.len() + 1)
+        };
+        let mut names = vec!["/C 5 0 R".to_owned(), "/P 6 0 R".to_owned()];
+        names.extend((1..=wrappers).map(|i| format!("/W{i} {} 0 R", i + 6)));
+        let all = format!("/XObject << {} >>", names.join(" "));
+        let (page_content, page_resources) =
+            if through_x { ("3 Tr /C Do", "/XObject << /C 5 0 R >>") } else { ("3 Tr /C Do 0 Tr /W1 Do /P Do", all.as_str()) };
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << {page_resources} >> >>"),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len() + 1),
+            form("BT /F2 10 Tf (x) Tj ET", "/Resources << /Font << /F2 99 0 R >> >>"),
+            form("/C Do", ""),
+        ];
+        objects.extend((1..=wrappers).map(|i| form(&if i == wrappers { "/P Do".to_owned() } else { format!("/W{} Do", i + 1) }, "")));
+        let font = objects.len() + 1;
+        objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned());
+        if through_x {
+            objects.push(form("/W1 Do /P Do", &format!("/Resources << {all} >>")));
+        }
+        let objects: Vec<String> = objects.into_iter().map(|o| o.replace("99 0 R", &format!("{font} 0 R"))).collect();
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    for through_x in [false, true] {
+        assert_eq!(found(through_x), ["The font Courier isn't embedded"], "through /X: {through_x}");
+    }
+}
+
+/// A form drawn past [`MAX_FORM_DEPTH`] in mode 3 takes the current font from where it is drawn,
+/// and its own content can make the text visible again (ISO 32000-2 9.3.6): read on its own it
+/// starts with no font, so the font current where it is cut off counts.
+#[test]
+fn a_form_cut_off_in_mode_3_counts_the_font_it_takes() {
+    let found = |last: &str| -> Vec<String> {
+        // Object 5 is `/T`, drawing `last`; 6 on are the wrappers `/W1` to `/W12`, each drawing the
+        // next and the last drawing `/T`, all without resources of their own.
+        let wrappers = MAX_FORM_DEPTH;
+        let form = |content: &str| {
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length {} >>\nstream\n{content}\nendstream", content.len() + 1)
+        };
+        let mut names = vec!["/T 5 0 R".to_owned()];
+        names.extend((1..=wrappers).map(|i| format!("/W{i} {} 0 R", i + 5)));
+        let font = wrappers + 6;
+        let page_content = "BT /F1 10 Tf 3 Tr ET /W1 Do";
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 {font} 0 R >> /XObject << {} >> >> >>", names.join(" ")),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len() + 1),
+            form(last),
+        ];
+        objects.extend((1..=wrappers).map(|i| form(&if i == wrappers { "/T Do".to_owned() } else { format!("/W{} Do", i + 1) })));
+        objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned());
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect()
+    };
+    assert_eq!(found("BT 0 Tr (x) Tj ET"), ["The font Helvetica isn't embedded"]);
+}
+
+/// A form whose content isn't read, because it can't be found or decoded, may set a visible mode
+/// (ISO 32000-2 9.3.6) and show text with the font current where it is drawn: that font counts
+/// even when it is drawn in mode 3.
+#[test]
+fn a_form_not_read_counts_the_current_font_in_mode_3() {
+    let found = |page_content: &str, x: &str| -> Vec<String> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /X 5 0 R >> >> >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{page_content}\nendstream", page_content.len() + 1),
+            x.to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
+        ];
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        let mut found: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+        found.sort();
+        found
+    };
+    // `/X` can't be decoded; its own resources hold Courier, and it takes Helvetica from the page.
+    let broken = "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /Font << /F2 7 0 R >> >> /Filter /NoSuchDecode /Length 2 >>\nstream\nxx\nendstream";
+    assert_eq!(found("BT /F1 10 Tf 3 Tr ET /X Do", broken), ["The font Courier isn't embedded", "The font Helvetica isn't embedded"]);
+    // `/X`, which no content draws and so is read on its own without resources, draws `/Y`, which
+    // can't be found: the name it selected counts in every resource dictionary.
+    let alone = "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 27 >>\nstream\nBT /F1 10 Tf 3 Tr ET /Y Do\nendstream";
+    assert_eq!(found("", alone), ["The font Helvetica isn't embedded"]);
+}
+
+/// A page that draws thousands of images listed in one `/XObject` dictionary written in its
+/// resources (PDFBOX-5530 has two pages of some 25,000 each) has that dictionary looked up once for
+/// its content, not once per `Do`: copying it at each one took minutes. The fonts are still found.
+#[test]
+fn a_page_drawing_many_images_looks_up_its_xobjects_once() {
+    const IMAGES: usize = 3000;
+    let names: String = (0..IMAGES).map(|i| format!("/Im{i} 5 0 R ")).collect();
+    let content: String = (0..IMAGES).map(|i| format!("/Im{i} Do\n")).collect::<String>() + "BT /F1 10 Tf (x) Tj ET";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << {names}>> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+            .to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+    ];
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    XOBJECT_LOOKUPS.with(|n| n.set(0));
+    let fonts: Vec<String> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect();
+    assert_eq!(fonts, ["The font Helvetica isn't embedded"]);
+    // One content stream read (the page's), whatever the number of `Do`s in it.
+    let lookups = XOBJECT_LOOKUPS.with(std::cell::Cell::get);
+    assert!(lookups <= 2, "the /XObject dictionary was looked up {lookups} times");
+}
+
+/// The fonts verify finds unembedded at `level` in the document of `objects` (numbered from 1).
+fn unembedded(objects: &[String], level: Level) -> Vec<String> {
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    let clause = if level.part() == 4 { "6.2.10.4.1" } else { "6.2.11.4" };
+    let mut found: Vec<String> = verify(&doc, level).into_iter().filter(|i| i.clause == clause).map(|i| i.message).collect();
+    found.sort();
+    found
+}
+
+/// A field appearance without resources of its own that selects a font by name draws with the
+/// font the interactive form's default resources (`/AcroForm /DR`) give that name, which a reader
+/// falls back on: it counts as drawing.
+#[test]
+fn a_font_an_appearance_without_resources_takes_from_the_form_defaults_draws() {
+    let file = |appearance: &str| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> >> >> >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << >> >>".to_owned(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (f) /Rect [0 0 20 20] /F 4 /P 3 0 R /AP << /N 5 0 R >> >>".to_owned(),
+            format!("<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length {} >>\nstream\n{appearance}\nendstream", appearance.len() + 1),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ]
+    };
+    for level in [Level::A2b, Level::A4] {
+        assert_eq!(unembedded(&file("BT /Helv 10 Tf 2 2 Td (x) Tj ET"), level), ["The font Helvetica isn't embedded"], "{level:?}");
+        // Named, but no text shown with it.
+        assert_eq!(unembedded(&file("BT /Helv 10 Tf ET"), level), Vec::<String>::new(), "{level:?}");
+    }
+}
+
+/// A tiling pattern paints its cell in the graphics state its parent content starts with (ISO
+/// 32000-2 8.7.3.1): text it shows without a `Tf` of its own is in the font the form listing it
+/// was drawn with.
+#[test]
+fn a_tiling_pattern_shows_text_in_the_font_its_form_was_drawn_with() {
+    let file = |page: &str, cell: &str| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> /XObject << /X 5 0 R >> >> >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len() + 1),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Resources << /Pattern << /P1 7 0 R >> >> /Length 34 >>\nstream\n/Pattern cs /P1 scn 0 0 20 20 re f\nendstream".to_owned(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+            format!(
+                "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >>\nstream\n{cell}\nendstream",
+                cell.len() + 1
+            ),
+        ]
+    };
+    let shows = "BT 0 0 Td (x) Tj ET";
+    for level in [Level::A2b, Level::A4] {
+        assert_eq!(unembedded(&file("BT /F1 10 Tf ET /X Do", shows), level), ["The font Helvetica isn't embedded"], "{level:?}");
+        // The form drawn before any font is selected, or the pattern's text in mode 3 as the
+        // form was drawn: nothing shows with Helvetica.
+        assert_eq!(unembedded(&file("/X Do BT /F1 10 Tf ET", shows), level), Vec::<String>::new(), "{level:?}");
+        assert_eq!(unembedded(&file("BT /F1 10 Tf 3 Tr ET /X Do", shows), level), Vec::<String>::new(), "{level:?}");
+        assert_eq!(unembedded(&file("BT /F1 10 Tf 3 Tr ET /X Do", "BT 0 Tr (x) Tj ET"), level), ["The font Helvetica isn't embedded"], "{level:?}");
+    }
+}
+
+/// An ICC profile that many output intents, on the catalog and on every page, name is decoded
+/// once: each decoding can cost up to 16 MB of inflating.
+#[test]
+fn a_profile_many_output_intents_name_is_decoded_once() {
+    const PAGES: usize = 50;
+    let intent = "<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (x) /DestOutputProfile 3 0 R >>";
+    let intents = format!("/OutputIntents [{}]", vec![intent; 20].join(" "));
+    let profile = icc::srgb();
+    let mut out = b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |out: &mut Vec<u8>, body: &[u8]| {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", i + 4)).collect();
+    object(&mut out, format!("<< /Type /Catalog /Pages 2 0 R {intents} >>").as_bytes());
+    object(&mut out, format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} /MediaBox [0 0 200 200] >>").as_bytes());
+    let mut stream = format!("<< /N 3 /Length {} >>\nstream\n", profile.len()).into_bytes();
+    stream.extend_from_slice(&profile);
+    stream.extend_from_slice(b"\nendstream");
+    object(&mut out, &stream);
+    for _ in 0..PAGES {
+        object(&mut out, format!("<< /Type /Page /Parent 2 0 R /Resources << >> {intents} >>").as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
+    for o in &offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
+    let doc = Document::open(std::sync::Arc::new(out)).unwrap();
+    part4::PROFILE_DECODES.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    assert!(!found.iter().any(|i| i.clause == "6.2.3"), "{found:#?}");
+    assert_eq!(part4::PROFILE_DECODES.with(std::cell::Cell::get), 1);
+}
+
+/// However many output intents of different components the pages have, an object they all draw is
+/// drawn in a bounded number of places: the work of placing it doesn't grow with the pages.
+#[test]
+fn pages_with_intents_of_many_component_counts_make_few_places() {
+    const PAGES: usize = 200;
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {PAGES} /MediaBox [0 0 200 200] >>",
+            (0..PAGES).map(|i| format!("{} 0 R ", i + 5)).collect::<String>()
+        ),
+        "<< /Length 21 >>\nstream\n1 0 0 rg 0 0 1 1 re f\nendstream".to_owned(),
+        "<< /N 1 /Length 1 >>\nstream\nx\nendstream".to_owned(),
+    ];
+    // Page `i` is object 5 + i, and its profile, of 5 + i components, object 5 + PAGES + i.
+    for i in 0..PAGES {
+        objects.push(format!(
+            "<< /Type /Page /Parent 2 0 R /Contents 3 0 R /OutputIntents [<< /S /GTS_PDFA1 /DestOutputProfile {} 0 R >>] >>",
+            i + 5 + PAGES
+        ));
+    }
+    for i in 0..PAGES {
+        objects.push(format!(
+            "<< /N {} /Length 1 >>
+stream
+x
+endstream",
+            i + 5
+        ));
+    }
+    let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let doc = build(&objects, "");
+    let pages = pdfcraft_model::pages(&doc);
+    let mut profiles = part4::Profiles::default();
+    let places: Vec<part4::Place> = pages.iter().map(|p| part4::page_place(&doc, &p.dict, None, &mut profiles)).collect();
+    let elsewhere = part4::Place { intent: None, blend: None };
+    let groups = part4::colour_places(&doc, &super::objects(&doc), &pages, &places, elsewhere, &mut profiles);
+    assert!(groups.iter().all(|(places, _)| places.len() <= 12), "{:?}", groups.iter().map(|(p, _)| p.len()).collect::<Vec<_>>());
 }
 
 /// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
@@ -1849,12 +2387,18 @@ fn extended_graphics_states_are_checked() {
     assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), untyped);
     assert_eq!(gs("/A << /HT << /HalftoneType 1.0 >> >>"), untyped);
     assert!(gs("/A << /HT << /HalftoneType 1 /HalftoneName null >> >>").is_empty());
-    // Transfer functions in halftones: only, and always, for a non-primary colorant.
-    let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
+    // Transfer functions in halftones: always for a non-primary colorant, never for every colorant
+    // or for Cyan, Magenta, Yellow or Black.
+    let in_halftone = "A halftone for every colorant, or for Cyan, Magenta, Yellow or Black, has a transfer function";
     assert_eq!(gs("/A << /HT << /HalftoneType 1 /TransferFunction 4 0 R >> >>"), [in_halftone]);
-    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
-    // The primary components are those of DeviceGray, DeviceRGB and DeviceCMYK (ISO 32000-1 10.5.5.6).
-    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Gray << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    // A component per colorant: Cyan, Magenta, Yellow and Black may not have one; the other primary
+    // components, those of DeviceGray and DeviceRGB (ISO 32000-1 10.5.5.6), may or not (ISO
+    // 32000-1 Table 130, pdf-association pdf-issues #314).
+    let component = |c: &str| format!("/A << /HT << /HalftoneType 5 /Default 5 0 R /{c} << /HalftoneType 1 /TransferFunction /Identity >> >> >>");
+    let flagged: Vec<bool> =
+        ["Cyan", "Magenta", "Yellow", "Black", "Gray", "Red", "Green", "Blue"].map(|c| gs(&component(c)) == [in_halftone]).into();
+    assert_eq!(flagged, [true, true, true, true, false, false, false, false]);
+    assert!(gs(&component("Red")).is_empty());
     assert_eq!(
         gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R /Gray 5 0 R >> >>"),
         ["The halftone for the colorant Spot has no transfer function"]
@@ -2366,4 +2910,277 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// 6.6.4 of PDF/A-2 and 3: the identification properties `part` and `conformance` are written with
+/// the prefix `pdfaid`, as attributes or as elements, whatever prefix their namespace is bound to
+/// elsewhere; Save as PDF/A writes them afresh.
+#[test]
+fn identification_properties_need_the_prefix_pdfaid_clause_6_6_4() {
+    fn with_xmp(xmp: &str) -> Document {
+        let stream = format!(
+            "<< /Type /Metadata /Subtype /XML /Length {} >>
+stream
+{xmp}
+endstream",
+            xmp.len()
+        );
+        build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "")
+    }
+    fn prefixes(doc: &Document, level: Level) -> Vec<String> {
+        verify(doc, level).into_iter().filter(|i| i.clause == "6.6.4").map(|i| i.message).collect()
+    }
+    let rdf = |inner: &str| format!(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{inner}</rdf:RDF>"#);
+    let ns = "http://www.aiim.org/pdfa/ns/id/";
+    // The prefix veraPDF's 6-6-4-t01-fail-b uses, as attributes.
+    let pdfa = with_xmp(&rdf(&format!(r#"<rdf:Description xmlns:pdfa="{ns}" rdf:about="" pdfa:part="3" pdfa:conformance="B"/>"#)));
+    assert_eq!(
+        prefixes(&pdfa, Level::A3b),
+        [
+            "The identification property part isn't written with the prefix pdfaid",
+            "The identification property conformance isn't written with the prefix pdfaid"
+        ]
+    );
+    // One property of each kind: an element with another prefix, an attribute with pdfaid.
+    let mixed = with_xmp(&rdf(&format!(
+        r#"<rdf:Description xmlns:pdfaid="{ns}" xmlns:id="{ns}" pdfaid:part="2"><id:conformance>B</id:conformance></rdf:Description>"#
+    )));
+    assert_eq!(prefixes(&mixed, Level::A2b), ["The identification property conformance isn't written with the prefix pdfaid"]);
+    // pdfaid itself, as attributes and as elements; another schema's part property doesn't count.
+    for inner in [
+        format!(r#"<rdf:Description xmlns:pdfaid="{ns}" pdfaid:part="2" pdfaid:conformance="B"/>"#),
+        format!(
+            r#"<rdf:Description xmlns:pdfaid="{ns}" xmlns:o="urn:other"><pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance><o:part>9</o:part></rdf:Description>"#
+        ),
+    ] {
+        assert!(prefixes(&with_xmp(&rdf(&inner)), Level::A2b).is_empty(), "{inner}");
+    }
+    // PDF/A-4 checks part and rev under its own clause, not conformance.
+    let four =
+        with_xmp(&rdf(&format!(r#"<rdf:Description xmlns:pdfaid="{ns}" xmlns:p="{ns}" pdfaid:part="4" pdfaid:rev="2020" p:conformance="F"/>"#)));
+    assert!(!verify(&four, Level::A4f).iter().any(|i| i.message.contains("prefix pdfaid")));
+    let mut converted = pdfa.clone();
+    let report = convert(&mut converted, Level::A3b).unwrap();
+    assert!(!report.remaining.iter().any(|i| i.clause == "6.6.4"), "{:#?}", report.remaining);
+}
+
+/// A PDF/A-4 file (ISO 19005-4) without pages whose objects from 4 on are `more`. With nothing
+/// more it passes verification.
+fn pdfa4_file(more: &[Vec<u8>]) -> Vec<u8> {
+    let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+        <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+        xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>4</pdfaid:part><pdfaid:rev>2020</pdfaid:rev>\
+        </rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>";
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len()).into_bytes();
+    let mut objs: Vec<&[u8]> = vec![b"<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", b"<< /Type /Pages /Kids [] /Count 0 >>", &metadata];
+    objs.extend(more.iter().map(Vec::as_slice));
+    file_bytes(b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n", &objs, "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]")
+}
+
+/// [`pdfa4_file`] with nothing more passes, so a case built on it fails for what it adds.
+#[test]
+fn pdfa4_file_passes() {
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&[]))).unwrap();
+    assert_eq!(verify(&doc, Level::A4), []);
+}
+
+/// An embedded PDF file stream of `data`, with the stream dictionary entries `filter`.
+fn embedded_stream(filter: &str, data: &[u8]) -> Vec<u8> {
+    let mut out = format!("<< /Type /EmbeddedFile /Subtype /application#2Fpdf {filter} /Length {} >>\nstream\n", data.len()).into_bytes();
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"\nendstream");
+    out
+}
+
+/// A file specification of the embedded file stream object `stream`, which both `/F` and `/UF` of
+/// its `/EF` name.
+fn embedded_spec(stream: usize) -> Vec<u8> {
+    format!("<< /Type /Filespec /F (a.pdf) /UF (a.pdf) /AFRelationship /Data /EF << /F {stream} 0 R /UF {stream} 0 R >> >>").into_bytes()
+}
+
+/// An embedded file that many file specifications name, each through both `/F` and `/UF`, is
+/// read and verified once in a PDF/A-4 verification, and its verdict still reported.
+#[test]
+fn pdfa4_reads_a_shared_embedded_file_once() {
+    // A PDF/A-4 file that fails its verification only because data follows `%%EOF`.
+    let inner = [pdfa4_file(&[]), b"junk".to_vec()].concat();
+    let alone = verify(&Document::open(std::sync::Arc::new(inner.clone())).unwrap(), Level::A4);
+    assert_eq!(alone.iter().map(|i| i.clause).collect::<Vec<_>>(), ["6.1.3"], "{alone:#?}");
+    let specs = 50;
+    let mut more = vec![embedded_stream("", &inner)];
+    more.extend((0..specs).map(|_| embedded_spec(4)));
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    part4::EMBEDDED_READ.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 1);
+    let failing = found.iter().filter(|i| i.message == "An embedded file declares PDF/A-4 but doesn't conform to it").count();
+    assert_eq!(failing, 1, "{found:#?}");
+    assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
+
+/// An embedded file stream named directly and through an object that only refers to it (ISO
+/// 32000-2 7.3.10) is one file: read once.
+#[test]
+fn pdfa4_reads_an_embedded_file_named_through_an_alias_once() {
+    let inner = [pdfa4_file(&[]), b"junk".to_vec()].concat();
+    let spec = b"<< /Type /Filespec /F (a.pdf) /UF (a.pdf) /AFRelationship /Data /EF << /F 4 0 R /UF 6 0 R >> >>".to_vec();
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&[embedded_stream("", &inner), spec, b"4 0 R".to_vec()]))).unwrap();
+    part4::EMBEDDED_READ.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 1, "{found:#?}");
+    assert_eq!(found.iter().filter(|i| i.message == "An embedded file declares PDF/A-4 but doesn't conform to it").count(), 1, "{found:#?}");
+}
+
+/// An embedded file is read with the filters it names, given by reference (ISO 32000-2 7.3.8.2),
+/// and one whose data decodes only in part isn't the file: what decoded isn't verified as if it
+/// were the whole of it.
+#[test]
+fn pdfa4_embedded_files_decode_through_indirect_filters_and_not_in_part() {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&pdfa4_file(&[])).unwrap();
+    let packed = z.finish().unwrap();
+    let embedded = |filter: &str, data: &[u8], more: Vec<Vec<u8>>| {
+        let mut objs = vec![embedded_stream(filter, data), embedded_spec(4)];
+        objs.extend(more);
+        verify(&Document::open(std::sync::Arc::new(pdfa4_file(&objs))).unwrap(), Level::A4)
+    };
+    assert_eq!(embedded("/Filter /FlateDecode", &packed, Vec::new()), []);
+    assert_eq!(embedded("/Filter 6 0 R", &packed, vec![b"/FlateDecode".to_vec()]), []);
+    assert_eq!(embedded("/Filter [6 0 R]", &packed, vec![b"/FlateDecode".to_vec()]), []);
+    // Damaged partway: a PDF/A-1b file, which is judged by its declaration, whose compressed data
+    // turns to garbage inside its last object. What decodes before the damage still declares
+    // PDF/A-1b, but it isn't the file.
+    let packet = "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\
+        <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" \
+        xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"><pdfaid:part>1</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>\
+        </rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>";
+    let metadata = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len()).into_bytes();
+    // Data that doesn't compress, so the damage falls inside it.
+    let mut seed = 1u32;
+    let noise: String = (0..4000)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            char::from(b"0123456789ABCDEF"[(seed >> 16) as usize % 16])
+        })
+        .collect();
+    let filler = format!("<< /Length 4000 >>\nstream\n{noise}\nendstream").into_bytes();
+    let objs: [&[u8]; 4] = [b"<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", b"<< /Type /Pages /Kids [] /Count 0 >>", &metadata, &filler];
+    let pdfa1 = file_bytes(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n", &objs, "");
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&pdfa1).unwrap();
+    let whole = z.finish().unwrap();
+    assert_eq!(embedded("/Filter /FlateDecode", &whole, Vec::new()), []);
+    let mut damaged = whole.clone();
+    let start = damaged.len().saturating_sub(800);
+    for b in damaged.get_mut(start..).unwrap() {
+        *b = 0xFF;
+    }
+    let found = embedded("/Filter /FlateDecode", &damaged, Vec::new());
+    assert!(found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+}
+
+/// 6.9: a null `/AFRelationship`, `/F` or `/UF`, written so or through a reference, is no entry
+/// (ISO 32000-2 7.3.9).
+#[test]
+fn pdfa4_null_file_specification_entries_are_absent() {
+    let spec = |entries: &str| format!("<< /Type /Filespec {entries} /EF << /F 4 0 R >> >>").into_bytes();
+    let found = |entries: &str| {
+        let objs = [embedded_stream("", &pdfa4_file(&[])), spec(entries), b"null".to_vec()];
+        verify(&Document::open(std::sync::Arc::new(pdfa4_file(&objs))).unwrap(), Level::A4).into_iter().map(|i| i.message).collect::<Vec<_>>()
+    };
+    assert_eq!(found("/F (a.pdf) /UF (a.pdf) /AFRelationship /Data"), Vec::<String>::new());
+    for entries in ["/F (a.pdf) /UF (a.pdf) /AFRelationship null", "/F (a.pdf) /UF (a.pdf) /AFRelationship 6 0 R"] {
+        assert_eq!(found(entries), ["An embedded file has no AFRelationship"], "{entries}");
+    }
+    for entries in ["/F null /UF (a.pdf) /AFRelationship /Data", "/F (a.pdf) /UF 6 0 R /AFRelationship /Data"] {
+        assert_eq!(found(entries), ["An embedded file's file specification lacks F or UF"], "{entries}");
+    }
+}
+
+/// A PDF/A-4 verification reads at most [`part4::MAX_EMBEDDED_READ`] embedded files and
+/// [`part4::MAX_EMBEDDED_DECODED`] bytes of them, and says, once, that the rest weren't checked.
+#[test]
+fn pdfa4_embedded_files_share_one_allowance() {
+    let inner = pdfa4_file(&[]);
+    let files = part4::MAX_EMBEDDED_READ + 8;
+    let mut more: Vec<Vec<u8>> = (0..files).map(|_| embedded_stream("", &inner)).collect();
+    more.extend((0..files).map(|i| embedded_spec(4 + i)));
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    for _ in 0..2 {
+        // The allowance is one verification's: the next starts afresh.
+        part4::EMBEDDED_READ.with(|n| n.set(0));
+        let found = verify(&doc, Level::A4);
+        assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), part4::MAX_EMBEDDED_READ);
+        assert_eq!(found.iter().filter(|i| i.clause == "6.9" && i.pattern == part4::UNCHECKED).count(), 1, "{found:#?}");
+    }
+
+    // Decoded bytes: files that each inflate to a little under a quarter of the allowance.
+    use std::io::Write;
+    let size = part4::MAX_EMBEDDED_DECODED / 4 - (1 << 20);
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&vec![0; size]).unwrap();
+    let packed = z.finish().unwrap();
+    let files = 6;
+    let mut more: Vec<Vec<u8>> = (0..files).map(|_| embedded_stream("/Filter /FlateDecode", &packed)).collect();
+    more.extend((0..files).map(|i| embedded_spec(4 + i)));
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    part4::EMBEDDED_READ.with(|n| n.set(0));
+    let found = verify(&doc, Level::A4);
+    // Four decode whole, the fifth runs past what is left and spends it, the sixth is refused.
+    assert_eq!(part4::EMBEDDED_READ.with(std::cell::Cell::get), 6);
+    assert!(found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
+
+/// An embedded file that decodes to more than [`part4::MAX_EMBEDDED_PDF`] isn't read, and is
+/// reported as not checked, not as a file that isn't PDF/A: its size is no fault of its data.
+#[test]
+fn pdfa4_an_embedded_file_too_large_to_read_is_unchecked() {
+    use std::io::Write;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&vec![0; part4::MAX_EMBEDDED_PDF + (1 << 20)]).unwrap();
+    let packed = z.finish().unwrap();
+    let more = vec![embedded_stream("/Filter /FlateDecode", &packed), embedded_spec(4)];
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    let found = verify(&doc, Level::A4);
+    assert_eq!(found.iter().filter(|i| i.clause == "6.9" && i.pattern == part4::UNCHECKED).count(), 1, "{found:#?}");
+    assert!(!found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+
+    // Data that isn't a PDF is still one that isn't PDF/A.
+    let more = vec![embedded_stream("", b"not a PDF"), embedded_spec(4)];
+    let doc = Document::open(std::sync::Arc::new(pdfa4_file(&more))).unwrap();
+    let found = verify(&doc, Level::A4);
+    assert!(found.iter().any(|i| i.message.starts_with("Embedded files must be PDF/A")), "{found:#?}");
+    assert!(!found.iter().any(|i| i.pattern == part4::UNCHECKED), "{found:#?}");
+}
+
+/// An embedded file's `/Filter` is made direct only when every filter resolves to a name: one that
+/// resolves to anything else leaves the stream as it is, for the decoder to reject, so a large
+/// object a filter array names many times is never copied.
+#[test]
+fn embedded_file_filters_are_copied_only_when_they_are_names() {
+    let big: String = (0..1000).map(|i| format!("/K{i} {i} ")).collect();
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [] /Count 0 >>",
+            "/FlateDecode",
+            &format!("<< {big} >>"),
+            "<< /Filter [3 0 R 4 0 R 4 0 R 4 0 R] /Length 0 >>\nstream\n\nendstream",
+            "<< /Filter [3 0 R 3 0 R] /Length 0 >>\nstream\n\nendstream",
+            &format!("<< /Filter [{}] /Length 0 >>\nstream\n\nendstream", "3 0 R ".repeat(pdfcraft_filters::MAX_CHAIN + 2)),
+        ],
+        "",
+    );
+    let stream = |n: u32| match &*doc.get(pdfcraft_cos::ObjRef::new(n, 0)) {
+        Object::Stream(s) => s.clone(),
+        other => panic!("not a stream: {other:?}"),
+    };
+    let dictionaries = stream(5);
+    assert!(matches!(part4::with_direct_filters(&doc, &dictionaries), std::borrow::Cow::Borrowed(_)));
+    let names = stream(6);
+    let direct = part4::with_direct_filters(&doc, &names);
+    assert_eq!(direct.dict.get(b"Filter"), Some(&Object::Array(vec![Object::name("FlateDecode"), Object::name("FlateDecode")])));
+    // More filters than a decoder takes: left for the decoder to reject.
+    assert!(matches!(part4::with_direct_filters(&doc, &stream(7)), std::borrow::Cow::Borrowed(_)));
 }
