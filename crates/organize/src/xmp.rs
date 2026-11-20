@@ -109,7 +109,7 @@ pub(crate) fn would_go_stale(doc: &Document, key: &str, value: &str) -> bool {
     // Only a metadata stream is a packet; anything else there is left alone, as `edit_packet` does.
     matches!(&*obj, Object::Stream(_))
         && decoded_packet(&obj).is_none_or(|xmp| {
-            binds_namespace_elsewhere(&xmp, DC, "dc") || (has_property(&xmp, name) && set_property(&xmp, name, ns, shape, value).is_none())
+            binds_namespace_elsewhere(&xmp, DC, name) || (has_property(&xmp, name) && set_property(&xmp, name, ns, shape, value).is_none())
         })
 }
 
@@ -157,9 +157,13 @@ fn binds_prefix_elsewhere(xmp: &str, prefix: &str, ns: &str) -> bool {
     })
 }
 
-/// Whether `xmp` declares the namespace `ns` anywhere with a prefix other than `prefix`, or as the
-/// default namespace, so a property written as `prefix:name` would not replace the one there.
-fn binds_namespace_elsewhere(xmp: &str, ns: &str, prefix: &str) -> bool {
+/// Whether `xmp` declares the namespace `ns` of the property `name` (`prefix:local`) anywhere with
+/// another prefix, or as the default namespace in a packet with an unprefixed `local` element or
+/// attribute, so writing `name` would not replace the value there. Older Adobe tools declare Dublin
+/// Core both ways on one description and write every property with `dc:`; that alone doesn't count.
+fn binds_namespace_elsewhere(xmp: &str, ns: &str, name: &str) -> bool {
+    let Some((prefix, local)) = name.split_once(':') else { return false };
+    let unprefixed = has_property(xmp, local);
     // The attribute name is read back from each quoted value only to the first character a name
     // can't hold, and a quote ends every earlier value, so this is linear in the packet.
     xmp.match_indices(ns).any(|(i, _)| {
@@ -169,8 +173,8 @@ fn binds_namespace_elsewhere(xmp: &str, ns: &str, prefix: &str) -> bool {
             return false;
         }
         let Some(attr) = before.strip_suffix(quote).and_then(|b| b.trim_end().strip_suffix('=')) else { return false };
-        let name = attr.trim_end().rsplit(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '=')).next().unwrap_or_default();
-        name == "xmlns" || name.strip_prefix("xmlns:").is_some_and(|p| p != prefix)
+        let decl = attr.trim_end().rsplit(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '=')).next().unwrap_or_default();
+        (decl == "xmlns" && unprefixed) || decl.strip_prefix("xmlns:").is_some_and(|p| p != prefix)
     })
 }
 
@@ -636,6 +640,7 @@ mod tests {
             ("<d xmlns:dc=\"http://purl.org/dc/elements/1.1/\"/>", false),
             ("<d xmlns:purl = 'http://purl.org/dc/elements/1.1/'/>", true),
             ("<title xmlns='http://purl.org/dc/elements/1.1/'/>", true),
+            ("<d xmlns='http://purl.org/dc/elements/1.1/' xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title/></d>", false),
             // The address as text, in another attribute, or as the start of another value is no
             // declaration.
             ("<a>http://purl.org/dc/elements/1.1/</a><b src=\"http://purl.org/dc/elements/1.1/\"/>", false),
@@ -643,7 +648,7 @@ mod tests {
             ("http://purl.org/dc/elements/1.1/", false),
             ("", false),
         ] {
-            assert_eq!(binds_namespace_elsewhere(xmp, DC, "dc"), other, "{xmp}");
+            assert_eq!(binds_namespace_elsewhere(xmp, DC, "dc:title"), other, "{xmp}");
         }
     }
 
