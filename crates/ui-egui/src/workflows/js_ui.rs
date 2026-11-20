@@ -258,9 +258,11 @@ impl PdfCraftApp {
         }
     }
 
-    /// Run document `id`'s catalog JavaScript for `event` (Will Save before a save, Will Print
-    /// before printing) and show what it said. What it changed is part of what is saved or
-    /// printed. A failing script is reported and the save or print still goes ahead.
+    /// Run document `id`'s catalog JavaScript for `event` (Will Save and Did Save around a save,
+    /// Will Print and Did Print around printing, Will Close before closing) and show what it
+    /// said. What Will Save or Will Print changed is part of what is saved or printed; what Did
+    /// Save changed is left unsaved. A failing script is reported and the save, print or close
+    /// still goes ahead.
     pub(crate) fn run_document_actions(&mut self, id: DocId, event: pdfcraft_engine::js::DocumentScriptEvent) {
         let before = self.session.get(id).map(|d| d.edit_generation());
         let out = self.session.run_document_actions(id, event);

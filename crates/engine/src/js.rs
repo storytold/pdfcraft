@@ -846,6 +846,12 @@ pub enum DocumentScriptEvent {
     CatalogOpen,
     WillSave,
     WillPrint,
+    /// Before the document closes (`/AA /WC`). It can't stop the close.
+    WillClose,
+    /// Once a save has been written (`/AA /DS`). What it changes is left unsaved.
+    DidSave,
+    /// Once printing has finished (`/AA /DP`).
+    DidPrint,
 }
 
 impl DocumentScriptEvent {
@@ -854,6 +860,9 @@ impl DocumentScriptEvent {
             Self::CatalogOpen => "Open",
             Self::WillSave => "WillSave",
             Self::WillPrint => "WillPrint",
+            Self::WillClose => "WillClose",
+            Self::DidSave => "DidSave",
+            Self::DidPrint => "DidPrint",
         }
     }
 
@@ -863,13 +872,16 @@ impl DocumentScriptEvent {
             Self::CatalogOpen => pdfcraft_forms::DocumentTrigger::Open,
             Self::WillSave => pdfcraft_forms::DocumentTrigger::WillSave,
             Self::WillPrint => pdfcraft_forms::DocumentTrigger::WillPrint,
+            Self::WillClose => pdfcraft_forms::DocumentTrigger::WillClose,
+            Self::DidSave => pdfcraft_forms::DocumentTrigger::DidSave,
+            Self::DidPrint => pdfcraft_forms::DocumentTrigger::DidPrint,
         }
     }
 }
 
-/// Keep only what a script that ran unasked (on opening, before saving or printing) may ask
-/// the viewer for: highlighting, zoom, focus and the page shown. Opening a URL, a file, mail or
-/// a dialog needs a click.
+/// Keep only what a script that ran unasked (on opening, around saving, printing or closing)
+/// may ask the viewer for: highlighting, zoom, focus and the page shown. Opening a URL, a file,
+/// mail or a dialog needs a click.
 fn unasked_requests(requests: &mut Vec<Request>) {
     requests
         .retain(|r| matches!(r, Request::Highlight(_) | Request::Zoom(_) | Request::Focus(_) | Request::FocusField { .. } | Request::GoToPage(_)));
@@ -1145,12 +1157,14 @@ impl Session {
         }
     }
 
-    /// Run the catalog's JavaScript actions for document event `event` (`/AA /WS` before a save,
-    /// `/AA /WP` before printing, `/OpenAction` on opening) in document `id`'s retained realm.
-    /// Each action's field changes are one undoable edit. A failing action is reported in the
-    /// output and the next one still runs; it never stops the save or print, which must not
-    /// lose the user's work. Requests are limited to what an unasked script may make. With
-    /// JavaScript off, on an XFA form, or with no such action, nothing runs.
+    /// Run the catalog's JavaScript actions for document event `event` (`/AA /WS` before a save
+    /// and `/AA /DS` once it is written, `/AA /WP` before printing and `/AA /DP` once printed,
+    /// `/AA /WC` before closing, `/OpenAction` on opening) in document `id`'s retained realm.
+    /// Each action's field changes are one undoable edit: after a save they are unsaved changes,
+    /// and the document is not saved again. A failing action is reported in the output and the
+    /// next one still runs; it never stops, cancels or undoes the save, print or close, which
+    /// must not lose the user's work. Requests are limited to what an unasked script may make.
+    /// With JavaScript off, on an XFA form, or with no such action, nothing runs.
     pub fn run_document_actions(&mut self, id: DocId, event: DocumentScriptEvent) -> JsOutput {
         if self.js_off {
             return JsOutput::default();
@@ -1952,9 +1966,14 @@ mod snapshot_review_tests {
         let second = session.open("second.pdf", None, bytes, None).unwrap();
         session.run_javascript(first, "var counter = 4;", None).unwrap();
 
-        for (event, name) in
-            [(DocumentScriptEvent::CatalogOpen, "Open"), (DocumentScriptEvent::WillSave, "WillSave"), (DocumentScriptEvent::WillPrint, "WillPrint")]
-        {
+        for (event, name) in [
+            (DocumentScriptEvent::CatalogOpen, "Open"),
+            (DocumentScriptEvent::WillSave, "WillSave"),
+            (DocumentScriptEvent::WillPrint, "WillPrint"),
+            (DocumentScriptEvent::WillClose, "WillClose"),
+            (DocumentScriptEvent::DidSave, "DidSave"),
+            (DocumentScriptEvent::DidPrint, "DidPrint"),
+        ] {
             let result = session.run_document_script_event(first, event, "[event.name,counter].join('/');").unwrap();
             assert_eq!(result.result, Some(format!("{name}/4")));
         }

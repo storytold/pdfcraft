@@ -1,6 +1,7 @@
 //! Catalog JavaScript actions (#269, ported from #344): the `/OpenAction` runs once on opening
-//! and again on Revert, `/AA /WS` before a save and `/AA /WP` before printing, all in the
-//! document's retained realm.
+//! and again on Revert, `/AA /WS` before a save and `/AA /DS` after it, `/AA /WP` before
+//! printing and `/AA /DP` after it, and `/AA /WC` before closing, all in the document's
+//! retained realm.
 
 use std::sync::Arc;
 
@@ -152,6 +153,117 @@ fn will_print_runs_in_the_document_realm() {
     assert_eq!(log(&s, id), "");
     s.run_document_actions(id, DocumentScriptEvent::WillPrint);
     assert_eq!(log(&s, id), "WillPrint");
+}
+
+/// Did Save runs once the save is written, in the same realm: what it changes is an unsaved,
+/// undoable change and is not in the file just saved. A failing one is reported and leaves the
+/// save as it was.
+#[test]
+fn did_save_runs_after_the_save_and_leaves_its_changes_unsaved() {
+    let bytes = form(
+        "/Names << /JavaScript << /Names [(init) 6 0 R] >> >> /AA << /DS << /S /JavaScript /JS (saves++; getField\\('log'\\).value = event.name + ' ' + saves;) >> >>",
+        &["<< /S /JavaScript /JS (var saves = 0;) >>"],
+    );
+    let mut s = Session::new();
+    let id = s.open("did-save.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(s.run_document_actions(id, DocumentScriptEvent::WillSave).is_empty(), "no Will Save action");
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved.clone(), None).unwrap();
+    assert!(!s.get(id).unwrap().dirty);
+    let out = s.run_document_actions(id, DocumentScriptEvent::DidSave);
+    assert!(out.errors.is_empty(), "{out:?}");
+    assert_eq!(log(&s, id), "DidSave 1", "the realm's counter, after an in-place save");
+    assert!(s.get(id).unwrap().dirty, "the change came after the save: it is unsaved");
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    let mut reopened = Session::new();
+    reopened.set_javascript(false);
+    let again = reopened.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(log(&reopened, again), "", "not in the file it followed");
+
+    let failing = form("/AA << /DS << /S /JavaScript /JS (throw new Error\\('no'\\);) >> >>", &[]);
+    let id = s.open("fail.pdf", None, Arc::new(failing), None).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved, None).unwrap();
+    let out = s.run_document_actions(id, DocumentScriptEvent::DidSave);
+    assert!(out.errors.iter().any(|e| e.contains("no")), "{out:?}");
+    assert!(!s.get(id).unwrap().dirty, "nothing changed: the save stands");
+}
+
+/// Did Print runs after Will Print, in the same realm, and sees `event.name` "DidPrint"; what
+/// it asks for that needs a click is dropped.
+#[test]
+fn did_print_runs_after_will_print_in_the_document_realm() {
+    let bytes = form(
+        "/AA << /WP << /S /JavaScript /JS (var printing = 'WP';) >> /DP << /S /JavaScript /JS (getField\\('log'\\).value = printing + '>' + event.name; this.print\\(\\); app.launchURL\\('https://example.com'\\);) >> >>",
+        &[],
+    );
+    let mut s = Session::new();
+    let id = s.open("did-print.pdf", None, Arc::new(bytes), None).unwrap();
+    s.run_document_actions(id, DocumentScriptEvent::WillPrint);
+    let out = s.run_document_actions(id, DocumentScriptEvent::DidPrint);
+    assert!(out.errors.is_empty() && out.requests.is_empty(), "{out:?}");
+    assert_eq!(log(&s, id), "WP>DidPrint");
+}
+
+/// Will Close runs in the document realm before the document closes. It can't keep the
+/// document open: a failing one is reported, one that changes the document leaves it to the
+/// close, and the close goes ahead.
+#[test]
+fn will_close_runs_before_closing_and_cannot_keep_the_document_open() {
+    let bytes = form(
+        "/OpenAction << /S /JavaScript /JS (var opened = 'yes';) >> /AA << /WC [<< /S /JavaScript /JS (getField\\('log'\\).value = event.name + ' ' + opened;) >> << /S /JavaScript /JS (throw new Error\\('stay'\\);) >>] >>",
+        &[],
+    );
+    let mut s = Session::new();
+    let id = s.open("close.pdf", None, Arc::new(bytes), None).unwrap();
+    assert!(!s.get(id).unwrap().dirty);
+    let out = s.run_document_actions(id, DocumentScriptEvent::WillClose);
+    assert!(out.errors.iter().any(|e| e.contains("stay")), "{out:?}");
+    assert_eq!(log(&s, id), "WillClose yes", "the first action ran, and the realm kept the open action's state");
+    s.close(id);
+    assert!(s.get(id).is_none(), "closed all the same");
+    assert!(s.run_document_actions(id, DocumentScriptEvent::WillClose).is_empty(), "a closed document runs nothing");
+}
+
+/// With JavaScript off, Will Close, Did Save and Did Print run nothing.
+#[test]
+fn will_close_did_save_and_did_print_do_not_run_with_javascript_off() {
+    let set = |v: &str| format!("<< /S /JavaScript /JS (getField\\('log'\\).value = '{v}';) >>");
+    let bytes = form(&format!("/AA << /WC {} /DS {} /DP {} >>", set("wc"), set("ds"), set("dp")), &[]);
+    let mut s = Session::new();
+    s.set_javascript(false);
+    let id = s.open("off.pdf", None, Arc::new(bytes), None).unwrap();
+    for event in [DocumentScriptEvent::WillClose, DocumentScriptEvent::DidSave, DocumentScriptEvent::DidPrint] {
+        assert!(s.run_document_actions(id, event).is_empty(), "{event:?}");
+    }
+    assert_eq!(log(&s, id), "");
+    assert!(!s.get(id).unwrap().dirty);
+}
+
+/// Malformed Will Close, Did Save and Did Print entries never crash: an `/AA` or entry of the
+/// wrong type runs nothing, and a `/Next` chain that loops back through indirect objects runs
+/// each action once.
+#[test]
+fn malformed_will_close_did_save_and_did_print_entries_run_nothing_or_each_action_once() {
+    let mut s = Session::new();
+    for aa in ["/AA 7", "/AA [6 0 R]", "/AA 6 0 R", "/AA 99 0 R", "/AA << /WC (x) /DS 7 /DP /JavaScript >>", "/AA << /WC 99 0 R /DS [1 2] >>"] {
+        let bytes = form(aa, &["[<< /S /JavaScript /JS (getField\\('log'\\).value = 'ran';) >>]"]);
+        let id = s.open("bad.pdf", None, Arc::new(bytes), None).unwrap();
+        for event in [DocumentScriptEvent::WillClose, DocumentScriptEvent::DidSave, DocumentScriptEvent::DidPrint] {
+            assert!(s.run_document_actions(id, event).is_empty(), "{aa} {event:?}");
+        }
+        assert_eq!(log(&s, id), "", "{aa}");
+        s.close(id);
+    }
+    let add = |v: &str, next: &str| format!("<< /S /JavaScript /JS (getField\\('log'\\).value += '{v}';) /Next {next} >>");
+    let bytes = form("/AA << /WC 6 0 R /DS 7 0 R /DP [8 0 R 8 0 R] >>", &[&add("c", "7 0 R"), &add("s", "[6 0 R 7 0 R]"), &add("p", "8 0 R")]);
+    let id = s.open("cycle.pdf", None, Arc::new(bytes), None).unwrap();
+    s.run_document_actions(id, DocumentScriptEvent::WillClose);
+    assert_eq!(log(&s, id), "cs");
+    s.run_document_actions(id, DocumentScriptEvent::DidSave);
+    assert_eq!(log(&s, id), "cssc");
+    s.run_document_actions(id, DocumentScriptEvent::DidPrint);
+    assert_eq!(log(&s, id), "csscp");
 }
 
 /// A form with a text field `log` and a text field `hot` whose widget has JavaScript for every

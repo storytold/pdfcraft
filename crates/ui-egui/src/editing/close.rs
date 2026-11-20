@@ -269,7 +269,37 @@ impl PdfCraftApp {
         } else {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
+            self.run_will_close_on_quit();
         }
+    }
+
+    /// The window is closing with every document resolved: each open document's Will Close
+    /// actions run, once, as closing its tab runs them. They can't keep the window open, and
+    /// what they change is not offered for recovery: the user chose to close. Recovery is
+    /// cleared first, while nothing is unsaved, and no snapshot falls due on the closing frame.
+    pub(crate) fn run_will_close_on_quit(&mut self) {
+        if std::mem::replace(&mut self.will_close_ran, true) {
+            return;
+        }
+        let mut ids: Vec<pdfcraft_engine::DocId> = Vec::new();
+        for id in self.views.iter().map(|v| v.id) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        let mut changed = false;
+        for id in ids {
+            let before = self.session.get(id).map(|d| d.edit_generation());
+            self.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillClose);
+            changed |= self.session.get(id).map(|d| d.edit_generation()) != before;
+        }
+        // What they changed must not hold the quit: where the platform quits its own way (macOS
+        // cancels the window's close and asks again), the next close request would otherwise
+        // ask to save those changes and keep the window open.
+        if changed {
+            self.allow_quit = true;
+        }
+        self.last_autosave = Some(web_time::Instant::now());
     }
 
     /// Ask for the user's attention when the "save changes?" question opens while PdfCraft is in

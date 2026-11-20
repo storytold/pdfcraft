@@ -499,3 +499,87 @@ fn recolouring_print_ink_text_in_its_box_drops_the_ink_without_an_empty_step() {
     let finished = finish(&mut app);
     assert!(finished.is_none(), "an empty Undo step: {finished:?}");
 }
+
+/// A one-field form (`log`) whose catalog's `/AA` gives Did Save, Did Print and Will Close
+/// actions that log their event to the field and the console, and try to print.
+fn after_actions_pdf() -> Vec<u8> {
+    let js = |s: &str| format!("<< /S /JavaScript /JS ({s}) >>");
+    let each = "getField\\('log'\\).value += event.name + ';'; console.println\\(event.name\\); this.print\\(\\);";
+    let objs = [
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /AA << /DS {} /DP {} /WC {} >> /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+            js(each),
+            js(each),
+            js(each)
+        ),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (log) /V () /Rect [20 250 180 270] /P 3 0 R /F 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// The app's Save runs Did Save once the file is written, leaving what it changed unsaved; its
+/// Print (Save as PDF) runs Did Print once the PDF is written; closing the tab runs Will Close,
+/// which neither keeps the document open nor opens the Print dialog it asked for.
+#[test]
+fn save_print_and_close_run_did_save_did_print_and_will_close() {
+    let dir = staging_dir("after-actions");
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("after.pdf", None, after_actions_pdf()).unwrap();
+    let id = app.views[0].id;
+    let log = |app: &crate::PdfCraftApp| app.session.get(id).unwrap().form.iter().find(|f| f.name == "log").unwrap().value.join(",");
+
+    app.save_override = Some(dir.join("saved.pdf").to_string_lossy().into_owned());
+    assert!(app.save_active(SaveTarget::InPlace));
+    assert_eq!(log(&app), "DidSave;");
+    assert!(app.session.get(id).unwrap().dirty, "Did Save's change came after the save");
+    let mut reread = pdfcraft_engine::Session::new();
+    reread.set_javascript(false);
+    let saved = reread.open("saved.pdf", None, std::sync::Arc::new(std::fs::read(dir.join("saved.pdf")).unwrap()), None).unwrap();
+    assert_eq!(reread.get(saved).unwrap().form[0].value.join(","), "", "and is not in the file");
+
+    app.print_draft.printer = None;
+    app.save_override = Some(dir.join("printed.pdf").to_string_lossy().into_owned());
+    assert!(app.print_now());
+    assert!(dir.join("printed.pdf").exists());
+    assert_eq!(log(&app), "DidSave;DidPrint;");
+
+    app.close_tab(0);
+    assert!(app.views.is_empty() && app.session.get(id).is_none(), "closed all the same");
+    let ran: Vec<&str> = app.js_console.log.iter().map(String::as_str).filter(|l| !l.contains("Print requested")).collect();
+    assert_eq!(ran, ["DidSave", "DidPrint", "WillClose"], "{:?}", app.js_console.log);
+    assert_eq!(app.dialog, None, "an unasked script may not open the Print dialog");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Closing the window runs each open document's Will Close once, however many tabs show it
+/// and however often the close is asked for, and leaves the documents to the closing app.
+#[test]
+fn closing_the_window_runs_will_close_once_for_each_document() {
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("one.pdf", None, after_actions_pdf()).unwrap();
+    app.open_bytes("two.pdf", None, after_actions_pdf()).unwrap();
+    assert_eq!(app.views.len(), 2);
+    app.run_will_close_on_quit();
+    app.run_will_close_on_quit();
+    let ran = app.js_console.log.iter().filter(|l| *l == "WillClose").count();
+    assert_eq!(ran, 2, "{:?}", app.js_console.log);
+    assert_eq!(app.views.len(), 2);
+    assert!(app.first_dirty().is_some() && app.allow_quit, "what they changed doesn't hold the quit");
+}

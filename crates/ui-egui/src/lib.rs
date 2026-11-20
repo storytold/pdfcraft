@@ -770,6 +770,8 @@ pub struct PdfCraftApp {
     recovered_paths: std::collections::HashSet<DocId>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
+    /// The documents' Will Close actions have run for the window closing: they run once.
+    will_close_ran: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
     /// `registry_shortcuts`).
     deferred_commands: Vec<(&'static str, Option<DocId>)>,

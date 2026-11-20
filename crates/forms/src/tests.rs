@@ -7767,3 +7767,53 @@ fn page_scripts_are_the_pages_own_then_each_annotations_in_order() {
     assert_eq!(got, [(None, "close()"), (Some("anim"), "stop();")], "a URI action is not a script");
     assert!(page_scripts(&doc, 1, PageEvent::Open).is_empty(), "no such page");
 }
+
+/// A catalog whose `/AA` is `aa` (PDF syntax), with `extra` objects numbered from 3.
+fn catalog_actions(aa: &str, extra: &[&str]) -> Document {
+    let mut objs = vec![format!("<< /Type /Catalog /Pages 2 0 R /AA {aa} >>"), "<< /Type /Pages /Kids [] /Count 0 >>".into()];
+    objs.extend(extra.iter().map(|s| s.to_string()));
+    document(&objs)
+}
+
+/// Will Close, Did Save and Did Print are read from the catalog's `/AA` under `/WC`, `/DS` and
+/// `/DP`, each trigger its own key only (ISO 32000-2 §12.6.3, Table 199).
+#[test]
+fn will_close_did_save_and_did_print_are_read_from_their_own_keys() {
+    let js = |s: &str| format!("<< /S /JavaScript /JS ({s}) >>");
+    let doc = catalog_actions(&format!("<< /WS {} /WP {} /WC {} /DS {} /DP {} >>", js("ws"), js("wp"), js("wc"), js("ds"), js("dp")), &[]);
+    for (trigger, want) in [
+        (DocumentTrigger::WillSave, "ws"),
+        (DocumentTrigger::WillPrint, "wp"),
+        (DocumentTrigger::WillClose, "wc"),
+        (DocumentTrigger::DidSave, "ds"),
+        (DocumentTrigger::DidPrint, "dp"),
+    ] {
+        assert_eq!(document_action_scripts(&doc, trigger), [want], "{trigger:?}");
+    }
+    assert!(document_action_scripts(&doc, DocumentTrigger::Open).is_empty(), "no /OpenAction");
+}
+
+/// Malformed additional actions read as no action, or as the scripts that can be read: an
+/// `/AA` that is not a dictionary, an entry of the wrong type, and `/Next` chains that loop back
+/// through indirect objects run each action once.
+#[test]
+fn malformed_document_additional_actions_are_skipped_and_cycles_end() {
+    for aa in ["42", "(WC)", "[3 0 R]", "3 0 R", "99 0 R"] {
+        let doc = catalog_actions(aa, &["[<< /S /JavaScript /JS (no) >>]"]);
+        for trigger in [DocumentTrigger::WillClose, DocumentTrigger::DidSave, DocumentTrigger::DidPrint] {
+            assert!(document_action_scripts(&doc, trigger).is_empty(), "/AA {aa} {trigger:?}");
+        }
+    }
+    let doc = catalog_actions(
+        "<< /WC (close) /DS 3 0 R /DP [4 0 R 7 /Name 4 0 R] >>",
+        &[
+            "<< /S /JavaScript /JS (a) /Next 5 0 R >>",         // 3
+            "<< /S /JavaScript /JS (p) /Next [4 0 R 6 0 R] >>", // 4
+            "<< /S /JavaScript /JS (b) /Next 3 0 R >>",         // 5
+            "<< /S /JavaScript /JS 99 >>",                      // 6
+        ],
+    );
+    assert!(document_action_scripts(&doc, DocumentTrigger::WillClose).is_empty(), "a string is not an action");
+    assert_eq!(document_action_scripts(&doc, DocumentTrigger::DidSave), ["a", "b"]);
+    assert_eq!(document_action_scripts(&doc, DocumentTrigger::DidPrint), ["p"], "each object read once; a /JS of the wrong type is no script");
+}

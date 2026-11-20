@@ -549,6 +549,27 @@ pub enum DocumentTrigger {
     WillSave,
     /// `/AA /WP`, before the document is printed.
     WillPrint,
+    /// `/AA /WC`, before the document is closed.
+    WillClose,
+    /// `/AA /DS`, after the document has been saved.
+    DidSave,
+    /// `/AA /DP`, after the document has been printed.
+    DidPrint,
+}
+
+impl DocumentTrigger {
+    /// The key of the catalog's additional-actions dictionary (`/AA`) holding this trigger's
+    /// action; `None` for the open action, which is the catalog's own `/OpenAction`.
+    fn additional_actions_key(self) -> Option<&'static [u8]> {
+        match self {
+            DocumentTrigger::Open => None,
+            DocumentTrigger::WillSave => Some(b"WS"),
+            DocumentTrigger::WillPrint => Some(b"WP"),
+            DocumentTrigger::WillClose => Some(b"WC"),
+            DocumentTrigger::DidSave => Some(b"DS"),
+            DocumentTrigger::DidPrint => Some(b"DP"),
+        }
+    }
 }
 
 /// Most actions read for one document trigger, along its `/Next` chain. A chain can be cyclic
@@ -563,12 +584,10 @@ pub fn document_action_scripts(doc: &Document, trigger: DocumentTrigger) -> Vec<
     let Some(root) = doc.root() else { return Vec::new() };
     let cat = doc.get(root);
     let Some(cat) = cat.as_dict() else { return Vec::new() };
-    let first = match trigger {
-        DocumentTrigger::Open => cat.get(b"OpenAction").cloned(),
-        DocumentTrigger::WillSave | DocumentTrigger::WillPrint => {
-            let key: &[u8] = if trigger == DocumentTrigger::WillSave { b"WS" } else { b"WP" };
-            cat.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|d| d.get(key)).cloned())
-        }
+    let first = match trigger.additional_actions_key() {
+        None => cat.get(b"OpenAction").cloned(),
+        // An `/AA` that isn't a dictionary (or refers to none) has no actions.
+        Some(key) => cat.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|d| d.get(key)).cloned()),
     };
     chained_scripts(doc, first)
 }

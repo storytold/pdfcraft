@@ -134,13 +134,20 @@ impl Automation {
         if doc.dirty && !discard_changes {
             return Err(failed("the document has unsaved changes: save it with doc_save, or pass discard_changes: true"));
         }
+        // Its Will Close actions run first. They can't keep it open: what they change closes
+        // with it, and one that fails is only reported.
+        let scripts = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::WillClose);
         self.session.close(id);
         self.renderers.remove(&id);
         self.texts.remove(&id);
         self.listed.retain(|(d, _), _| *d != id);
         self.evicted.remove(&id);
         self.ocr_reviews.remove(&id);
-        Ok(json!({ "closed": id.0 }))
+        let mut out = json!({ "closed": id.0 });
+        if !scripts.is_empty() {
+            out["will_close"] = crate::a11y::form_tools::js_output_json(&scripts);
+        }
+        Ok(out)
     }
 
     pub(crate) fn doc_save(&mut self, a: &Args) -> Result<Value> {
@@ -175,10 +182,19 @@ impl Automation {
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
         let mut out = self.publish_save(id, &target, bytes, incremental, write)?;
-        if !scripts.is_empty()
-            && let Some(o) = out.as_object_mut()
-        {
-            o.insert("will_save".into(), crate::a11y::form_tools::js_output_json(&scripts));
+        // Its Did Save actions run once the file is written. What they change is left unsaved:
+        // the save already happened, and nothing saves it again.
+        let did = self.session.run_document_actions(id, pdfcraft_engine::js::DocumentScriptEvent::DidSave);
+        if let Some(o) = out.as_object_mut() {
+            if !scripts.is_empty() {
+                o.insert("will_save".into(), crate::a11y::form_tools::js_output_json(&scripts));
+            }
+            if !did.is_empty() {
+                o.insert("did_save".into(), crate::a11y::form_tools::js_output_json(&did));
+            }
+            if let Some(doc) = self.session.get(id) {
+                o.insert("document".into(), summary(doc));
+            }
         }
         Ok(out)
     }
