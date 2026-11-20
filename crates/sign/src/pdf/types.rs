@@ -7,8 +7,104 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
+    /// Whether `c` is one of the trusted certificates: the certificate itself, byte for
+    /// byte. A copy of a trusted certificate — the anchor's name and key under another
+    /// issuer's signature, the shape a cross-signed root arrives in — is not the anchor,
+    /// however its fields read: nothing verifies the signature on a copy, so its fields
+    /// are its bearer's word, and judging a chain by them would let the holder of a
+    /// trusted key act beyond the certificate the user trusted — issue when it may not,
+    /// outlive it, drop a restriction it carries, claim a purpose it was never issued
+    /// for. Cross-signed chains still validate: the pools validation builds put this
+    /// store first, so the chain builder reaches the trusted certificate itself and
+    /// ends there. A chain the trusted certificate cannot head — the builder refuses
+    /// it as an issuer, an expired root say — stays untrusted, failing closed.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
         self.certs.iter().any(|t| t.raw == c.raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TrustStore;
+    use crate::der::{self, Time};
+    use crate::keys::PrivateKey;
+    use crate::x509::{Certificate, Name};
+
+    const FROM: Time = Time { year: 2020, month: 6, day: 1, hour: 12, minute: 0, second: 0 };
+
+    /// A CA certificate for `key` under `name`, self-issued, with a critical basicConstraints
+    /// extension whose `pathLenConstraint` is `path_len` (absent when `None`).
+    fn ca_cert(name: &Name, key: &PrivateKey, serial: u8, path_len: Option<u32>) -> Certificate {
+        let alg = key.preferred_digest();
+        let sig_alg = key.signature_algorithm(alg);
+        let until = Time { year: FROM.year + 20, ..FROM };
+        let mut bc_fields: Vec<Vec<u8>> = vec![der::boolean(true)];
+        if let Some(n) = path_len {
+            bc_fields.push(der::int(u64::from(n)));
+        }
+        let bc_refs: Vec<&[u8]> = bc_fields.iter().map(Vec::as_slice).collect();
+        let bc = der::seq(&[&der::oid("2.5.29.19"), &der::boolean(true), &der::octets(&der::seq(&bc_refs))]);
+        let tbs = der::seq(&[
+            &der::explicit(0, &der::int(2)),
+            &der::uint(&[serial]),
+            &sig_alg,
+            &name.raw,
+            &der::seq(&[&FROM.encode(), &until.encode()]),
+            &name.raw,
+            &key.public_key().spki(),
+            &der::explicit(3, &der::seq(&[&bc])),
+        ]);
+        let signature = key.sign(alg, &tbs).unwrap();
+        Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+    }
+
+    /// A certificate for `key` under `name`, self-issued, a CA when `ca`, valid from `FROM`
+    /// until `until`.
+    fn copy_with(name: &Name, key: &PrivateKey, serial: u8, ca: bool, until: Time) -> Certificate {
+        let alg = key.preferred_digest();
+        let sig_alg = key.signature_algorithm(alg);
+        let bc_fields: Vec<Vec<u8>> = if ca { vec![der::boolean(true)] } else { vec![] };
+        let bc_refs: Vec<&[u8]> = bc_fields.iter().map(Vec::as_slice).collect();
+        let bc = der::seq(&[&der::oid("2.5.29.19"), &der::boolean(true), &der::octets(&der::seq(&bc_refs))]);
+        let tbs = der::seq(&[
+            &der::explicit(0, &der::int(2)),
+            &der::uint(&[serial]),
+            &sig_alg,
+            &name.raw,
+            &der::seq(&[&FROM.encode(), &until.encode()]),
+            &name.raw,
+            &key.public_key().spki(),
+            &der::explicit(3, &der::seq(&[&bc])),
+        ]);
+        let signature = key.sign(alg, &tbs).unwrap();
+        Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+    }
+
+    #[test]
+    fn the_trusted_certificate_itself_is_trusted() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let anchor = ca_cert(&name, &key, 1, None);
+        let trust = TrustStore { certs: vec![anchor.clone()] };
+        assert!(trust.trusts(&anchor), "the certificate the user trusted");
+    }
+
+    #[test]
+    fn a_copy_with_the_anchors_name_and_key_is_not_the_trusted_certificate() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let until = Time { year: FROM.year + 20, ..FROM };
+        let trust = TrustStore { certs: vec![ca_cert(&name, &key, 1, None)] };
+        // The cross-signed shape: the anchor's name and key under another serial.
+        assert!(!trust.trusts(&copy_with(&name, &key, 2, true, until)), "a copy with the anchor's name and key");
+        // Not even a stricter copy: trust is in the certificate, not in a reading of it.
+        let trust = TrustStore { certs: vec![copy_with(&name, &key, 1, true, until)] };
+        assert!(!trust.trusts(&ca_cert(&name, &key, 2, Some(0))), "a stricter copy is still a copy");
+        // Another name or another key was never the anchor either.
+        let other = Name::build("Other Root", "", "Anchor Tests", "", "US");
+        assert!(!trust.trusts(&ca_cert(&other, &key, 3, None)), "the anchor's key under another name");
+        let other_key = PrivateKey::generate_p256().unwrap();
+        assert!(!trust.trusts(&ca_cert(&name, &other_key, 4, None)), "the anchor's name with another key");
     }
 }
 
