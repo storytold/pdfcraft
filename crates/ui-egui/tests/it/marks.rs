@@ -442,17 +442,29 @@ struct Picture {
     image: Arc<egui::ColorImage>,
 }
 
+/// Paint groups preserve their children's order in the frame.
+fn frame_shapes(h: &Rig) -> Vec<&egui::Shape> {
+    fn append<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| append(shape, out)),
+            _ => out.push(shape),
+        }
+    }
+    let mut shapes = Vec::new();
+    h.output().shapes.iter().for_each(|s| append(&s.shape, &mut shapes));
+    shapes
+}
+
 /// The picture of the preview pane: the largest uploaded texture painted over the pager, the pane being
 /// the pager's neighbour above.
 fn preview_picture(h: &Rig) -> Option<Picture> {
     let pager_rect = h.query_by(is_pager)?.rect();
     let uploads = h.uploads.0.lock().unwrap();
-    h.output()
-        .shapes
-        .iter()
+    frame_shapes(h)
+        .into_iter()
         .enumerate()
         .filter_map(|(at, s)| {
-            let egui::Shape::Mesh(m) = &s.shape else { return None };
+            let egui::Shape::Mesh(m) = s else { return None };
             let rect = m.calc_bounds();
             let over = rect.width() > 50.0
                 && rect.bottom() <= pager_rect.top() + 4.0
@@ -505,11 +517,10 @@ fn wait_for_preview(h: &mut Rig, what: &str, ready: impl Fn(&egui::ColorImage) -
 /// A text painted on the page last frame (the dialog's text boxes show it too): its paint order
 /// and its laid-out rectangle.
 fn painted(h: &Rig, text: &str, page: egui::Rect) -> (usize, egui::Rect) {
-    h.output()
-        .shapes
-        .iter()
+    frame_shapes(h)
+        .into_iter()
         .enumerate()
-        .find_map(|(k, s)| match &s.shape {
+        .find_map(|(k, s)| match s {
             egui::Shape::Text(t) if t.galley.text() == text => {
                 Some((k, t.galley.rect.translate(t.pos.to_vec2()))).filter(|(_, r)| page.contains(r.center()))
             }
