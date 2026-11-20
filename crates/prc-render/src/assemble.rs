@@ -9,6 +9,7 @@ use craft_prc::{Matrix, PrcFile, Rgba, Tessellation, TriangleMesh};
 pub const MAX_ASSEMBLED_TRIANGLES: usize = 1 << 24;
 
 /// The most positions, normals and texture coordinates [`assemble`] copies, over every placement.
+/// The points of the wires it decodes count too: nothing draws them, but they are held.
 pub const MAX_ASSEMBLED_VERTICES: usize = 1 << 24;
 
 /// A triangle mesh in world coordinates with the colours it draws in.
@@ -74,7 +75,8 @@ pub fn assemble(prc: &PrcFile) -> Result<Vec<WorldMesh>, RenderError> {
 }
 
 /// Each file structure's tessellations, decoded one structure at a time and charged to `budget`
-/// as they are, so decoding stops at the structure that passes a ceiling.
+/// as they are, so decoding stops at the structure that passes a ceiling. A wire is charged for
+/// its points.
 pub(crate) fn decode(
     structures: impl IntoIterator<Item = Result<Vec<Tessellation>, craft_prc::PrcError>>,
     mut budget: Budget,
@@ -82,8 +84,14 @@ pub(crate) fn decode(
     let mut out = Vec::new();
     for tessellations in structures {
         let tessellations = tessellations?;
-        for mesh in tessellations.iter().filter_map(as_mesh) {
-            budget.spend(mesh)?;
+        for tessellation in &tessellations {
+            match tessellation {
+                Tessellation::Mesh(mesh) => budget.spend(mesh)?,
+                // Nothing draws a wire, but its points stay in memory until the placements are read.
+                Tessellation::Wire(polylines) => budget.spend_vertices(polylines.iter().map(Vec::len))?,
+                // Markups and compressed meshes that were not rebuilt carry no arrays.
+                _ => {}
+            }
         }
         out.push(tessellations);
     }
@@ -144,6 +152,16 @@ impl Budget {
             .filter(|&n| n <= MAX_ASSEMBLED_VERTICES)
             .ok_or(RenderError::TooManyVertices)?;
         (self.triangles, self.vertices) = (triangles, vertices);
+        Ok(())
+    }
+
+    /// `counts` more vertex entries that belong to no mesh.
+    fn spend_vertices(&mut self, counts: impl IntoIterator<Item = usize>) -> Result<(), RenderError> {
+        self.vertices = counts
+            .into_iter()
+            .try_fold(self.vertices, usize::checked_add)
+            .filter(|&n| n <= MAX_ASSEMBLED_VERTICES)
+            .ok_or(RenderError::TooManyVertices)?;
         Ok(())
     }
 }
