@@ -1,11 +1,39 @@
 use super::carry::{Mark, add_outline, collect_attachments, kept_bookmarks, set_attachments, source_outline, write_outline_level};
+use std::sync::Arc;
+
+use super::tags::{PageIndex, Tags};
 use super::{Dict, Document, FieldConflicts, HashMap, HashSet, ObjRef, Object, OrganizeError, import_pages_mapped, rebuild};
 
 /// A new document containing copies of `pages` from `src` (Extract Pages / Split).
 /// Document information (title, author…) is carried over, and so is the print standard the
-/// source declares (PDF/X: its output intents and identification, #263), and the bookmarks that
-/// go to the copied pages.
+/// source declares (PDF/X: its output intents and identification, #263), the bookmarks that
+/// go to the copied pages, and the structure tree's elements with content on them (tags; see
+/// `tags`).
 pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, OrganizeError> {
+    extract_with(src, pages, None)
+}
+
+/// [`extract_pages`] for many parts of one document (Split): the source's structure tree is read
+/// once, when the extractor is made, rather than once for every part.
+pub struct Extractor<'a> {
+    src: &'a Document,
+    index: Option<Arc<PageIndex>>,
+}
+
+impl<'a> Extractor<'a> {
+    /// An extractor of `src`'s pages.
+    pub fn new(src: &'a Document) -> Self {
+        Extractor { src, index: PageIndex::build(src).map(Arc::new) }
+    }
+
+    /// A new document containing copies of `pages` (as [`extract_pages`]).
+    pub fn extract(&self, pages: &[usize]) -> Result<Document, OrganizeError> {
+        extract_with(self.src, pages, self.index.clone())
+    }
+}
+
+/// [`extract_pages`], with where the source's elements have content when it was read beforehand.
+fn extract_with(src: &Document, pages: &[usize], index: Option<Arc<PageIndex>>) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
     let mut labels = Vec::new();
     let mut has_labels = false;
@@ -14,6 +42,12 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
     // same-named field roots stays one field, as it was), so Extract and Split never rename.
     let imported = import_pages_mapped(&mut out, src, pages, 0, FieldConflicts::Merge)?;
     crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
+    // The tags of these pages come along, the parent tree rebuilt for the part.
+    // Every source page, each once: a page taken twice carries its tags on its first copy only.
+    let distinct = pages.iter().collect::<HashSet<_>>().len();
+    let whole = distinct == pages.len() && distinct == crate::page_count(src)?;
+    let mut tags = Tags::single(index);
+    tags.add(&mut out, src, &imported.page_map, &imported.objects, whole)?;
     // The bookmarks of these pages come along, mapped to the copies (#4020).
     let outline = kept_bookmarks(source_outline(src, imported.page_map));
     if !outline.is_empty() {
@@ -32,8 +66,9 @@ pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, Organi
             crate::set_info(&mut out, key, &v)?;
         }
     }
+    let ua = tags.finish(&mut out)?;
     // After the title: the XMP packet repeats it.
-    crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects)?;
+    crate::pdfx::carry(&mut out, Some(src), &crate::pdfx::PrintStandard::of(src), imported.objects, ua.as_deref())?;
     // The pages share their source's resource dictionary, so the part would otherwise carry every
     // XObject the source lists — images and all (#204). Keep only what these pages draw.
     crate::prune::prune_unused_xobjects(&mut out)?;
@@ -71,7 +106,8 @@ pub fn split_ranges(page_count: usize, by: &SplitBy) -> Vec<std::ops::Range<usiz
 /// Split a document into several new documents.
 pub fn split(src: &Document, by: &SplitBy) -> Result<Vec<Document>, OrganizeError> {
     let n = crate::page_count(src)?;
-    split_ranges(n, by).into_iter().map(|r| extract_pages(src, &r.collect::<Vec<_>>())).collect()
+    let extractor = Extractor::new(src);
+    split_ranges(n, by).into_iter().map(|r| extractor.extract(&r.collect::<Vec<_>>())).collect()
 }
 
 /// What combining produced, beyond the document: the fields renamed to keep colliding names
@@ -133,6 +169,8 @@ pub struct Combiner {
     field_conflicts: FieldConflicts,
     /// What adding sources renamed (old → new fully-qualified field name), in order.
     renamed_fields: Vec<(String, String)>,
+    /// The sources' structure trees, carried as each source is added (#7025).
+    tags: Tags,
 }
 
 /// The first source's print standard (see [`Combiner`]).
@@ -168,6 +206,7 @@ impl Combiner {
             agreed: true,
             field_conflicts,
             renamed_fields: Vec::new(),
+            tags: Tags::default(),
         }
     }
 
@@ -197,13 +236,15 @@ impl Combiner {
         self.labels = labels;
         self.has_labels = has_labels;
         self.renamed_fields.extend(imported.renamed_fields);
+        let whole = pages.iter().collect::<HashSet<_>>().len() == n;
+        self.tags.add(&mut self.out, src, &imported.page_map, &imported.objects, whole)?;
         if let Some(first) = imported.pages.first() {
             let outline = source_outline(src, imported.page_map);
             self.marks.push(Mark { title: title.to_string(), page: *first, outline });
         }
         // Attachments belong to the whole file: they come along with all of its pages, not with a
         // selection of them.
-        if pages.iter().collect::<HashSet<_>>().len() == n {
+        if whole {
             collect_attachments(&mut self.out, src, &mut self.attachments)?;
         }
         let declared = crate::pdfx::PrintStandard::of(src);
@@ -225,9 +266,11 @@ impl Combiner {
 
     /// [`Combiner::finish`] reporting what the combine renamed.
     pub fn finish_with_renames(self) -> Result<CombineOutcome, OrganizeError> {
-        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, .. } = self;
-        if let Some(first) = standard.filter(|_| agreed) {
-            crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects)?;
+        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, tags, .. } = self;
+        let ua = tags.finish(&mut out)?;
+        match standard.filter(|_| agreed) {
+            Some(first) => crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects, ua.as_deref())?,
+            None => identify_ua(&mut out, ua.as_deref())?,
         }
         // Sources often share fonts, images and profiles (or are the same file): store them once.
         let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
@@ -236,6 +279,15 @@ impl Combiner {
         add_outline(&mut out, &marks)?;
         set_attachments(&mut out, attachments)?;
         Ok(CombineOutcome { doc: out, renamed_fields })
+    }
+}
+
+/// Without a print standard the sources agree on, the PDF/UA part `ua` the combined tags still
+/// meet (see `tags`), declared in XMP metadata of its own.
+fn identify_ua(out: &mut Document, ua: Option<&str>) -> Result<(), OrganizeError> {
+    match ua {
+        Some(_) => crate::pdfx::carry(out, None, &crate::pdfx::PrintStandard::default(), HashMap::new(), ua),
+        None => Ok(()),
     }
 }
 
@@ -292,16 +344,19 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     let mut renamed_fields = Vec::new();
     let mut standard: Option<(crate::pdfx::PrintStandard, &Document, HashMap<ObjRef, ObjRef>)> = None;
     let mut agreed = true;
+    let mut tags = Tags::default();
     for (_, file) in &files {
         let at = crate::page_count(&out)?;
         let imported = import_pages_mapped(&mut out, file.src, &file.pages, at, conflicts)?;
         copies.push(imported.pages.clone());
         renamed_fields.extend(imported.renamed_fields);
+        let whole = file.pages.iter().collect::<HashSet<_>>().len() == crate::page_count(file.src)?;
+        tags.add(&mut out, file.src, &imported.page_map, &imported.objects, whole)?;
         if let Some(first) = imported.pages.first() {
             marks.push(Mark { title: file.title.to_string(), page: *first, outline: source_outline(file.src, imported.page_map) });
         }
         // Attachments come along with all of a file's pages, not with a selection of them.
-        if file.pages.iter().collect::<HashSet<_>>().len() == crate::page_count(file.src)? {
+        if whole {
             collect_attachments(&mut out, file.src, &mut attachments)?;
         }
         let declared = crate::pdfx::PrintStandard::of(file.src);
@@ -327,8 +382,10 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         }
     }
     rebuild(&mut out, &order)?;
-    if let Some((declared, src, objects)) = standard.filter(|_| agreed) {
-        crate::pdfx::carry(&mut out, Some(src), &declared, objects)?;
+    let ua = tags.finish(&mut out)?;
+    match standard.filter(|_| agreed) {
+        Some((declared, src, objects)) => crate::pdfx::carry(&mut out, Some(src), &declared, objects, ua.as_deref())?,
+        None => identify_ua(&mut out, ua.as_deref())?,
     }
     let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
     crate::dedupe::dedupe_resources(&mut out, &all, false);
