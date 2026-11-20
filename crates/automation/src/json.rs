@@ -312,6 +312,9 @@ pub(crate) fn info(d: &Document) -> Value {
         // What was rewritten from, or could not be written to, the XFA data.
         "xfa_warnings": d.xfa_warnings,
         "security": security,
+        // The DocMDP permissions (1 to 3) of a signed certification, which edits must keep to:
+        // 1 no changes, 2 form fill and signing, 3 comments as well (ISO 32000-2 §12.8.2.2.1).
+        "certification": d.certification(),
         "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
             "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
         })).collect::<Vec<_>>(),

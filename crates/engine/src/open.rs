@@ -5,10 +5,11 @@ use std::sync::{Arc, OnceLock};
 use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
+use crate::document::{ShownNotSaved, ShownOnly};
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
     AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
-    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout,
+    info_fields, js, note_warnings, print_preview_layers, recovered_render_password, render_threads, same_pages, shown_signatures, xfa, xfa_layout,
     xfa_values_from_datasets,
 };
 
@@ -37,6 +38,8 @@ struct DocumentOpenData<'a> {
     render_password: Option<String>,
     password: Option<&'a str>,
     xfa: Option<XfaLayout>,
+    /// The form was reconciled with its XFA packets for display only ([`Document::shown_not_saved`]).
+    shown_not_saved: Option<ShownOnly>,
 }
 
 impl OpenContext {
@@ -152,6 +155,32 @@ impl Session {
             }
             Ok((new_bytes, new_info, new_cos))
         };
+        // The certification of an XFA form is looked up first, on the file as signed. One that
+        // allows no changes (DocMDP /P 1, ISO 32000-2 Table 257) still shows the form laid out and
+        // filled in from its XFA packets, as other viewers show it, but only shows it: the document
+        // refuses edits and saving ([`Document::shown_not_saved`]), so the signed file is the only
+        // one written. Under 2 and 3 the form is laid out and its data synchronized as on any form.
+        let certification = match (&info.xfa, &cos) {
+            (Some(_), Ok(Ok(c))) => pdfcraft_sign::pdf::list_cached(c, &bytes, &context.trust, &pdfcraft_sign::DigestCache::default())
+                .iter()
+                .filter(|s| s.signed)
+                .filter_map(|s| s.certify)
+                .min(),
+            _ => None,
+        };
+        let mut shown_not_saved = None;
+        let mut shown_only = |info: &mut DocInfo, kind: ShownNotSaved, signed: &pdfcraft_cos::Document| {
+            if certification == Some(1) {
+                shown_not_saved = Some(ShownOnly { kind, signed: signed.clone() });
+                let what = match kind {
+                    ShownNotSaved::Layout => "it is shown laid out from its XFA template",
+                    ShownNotSaved::Data => "its fields show the values of its XFA data",
+                };
+                info.warnings.push(format!(
+                    "This form's certification allows no changes: {what}, but it can't be changed or saved, which would write that into the signed file"
+                ));
+            }
+        };
         let (bytes, info, cos, xfa) = match (info.xfa, cos) {
             (Some(pdfcraft_render::Xfa::Dynamic), Ok(Ok(cos))) if pdfcraft_xfa::existing_layout(&cos).is_none() => {
                 let mut work = cos.clone();
@@ -159,7 +188,10 @@ impl Session {
                     .unwrap_or_else(|m| Err(format!("laying it out failed unexpectedly ({m})")))
                     .and_then(|report| rebase(&work).map(|(b, i, c)| (b, i, c, report)));
                 match laid_out {
-                    Ok((b, i, c, report)) => (b, i, Ok(Ok(c)), Some(report)),
+                    Ok((b, mut i, c, report)) => {
+                        shown_only(&mut i, ShownNotSaved::Layout, &cos);
+                        (b, i, Ok(Ok(c)), Some(report))
+                    }
                     Err(e) => {
                         let mut info = info;
                         info.warnings.push(format!("This dynamic XFA form could not be laid out: {e}"));
@@ -187,6 +219,7 @@ impl Session {
                                 if names.len() == 1 { "" } else { "s" },
                                 shown.join(", ")
                             ));
+                            shown_only(&mut i, ShownNotSaved::Data, &cos);
                             (b, i, Ok(Ok(c)), report)
                         }
                         Err(e) => {
@@ -217,6 +250,9 @@ impl Session {
                 Some(tpl) => {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
+                    // A certified form keeps its signed pages here as in an edit: its scripts
+                    // run, but don't lay it out again (ISO 32000-2 Table 257). Under a
+                    // certification that allows no changes, what they change isn't kept either.
                     let ran = guard(|| {
                         let mut run = xfa::XfaRun {
                             page_count: pages,
@@ -225,6 +261,7 @@ impl Session {
                             ran_away: false,
                             highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
+                            keep_layout: certification.is_some(),
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
@@ -234,6 +271,14 @@ impl Session {
                     })
                     .unwrap_or_else(|m| Err(format!("its scripts failed unexpectedly ({m})")));
                     match ran {
+                        Ok(changes) if work.is_modified() && certification == Some(1) => {
+                            let mut info = info;
+                            let what = if changes.is_empty() { String::new() } else { format!(" ({})", changes.describe()) };
+                            info.warnings.push(format!(
+                                "This form's scripts would change it on opening{what}, but its certification allows no changes: those changes were not kept"
+                            ));
+                            (bytes, info, Ok(Ok(cos)))
+                        }
                         Ok(changes) if work.is_modified() => match rebase(&work) {
                             Ok((b, mut i, c)) => {
                                 // The file as saved differs from what opening shows: say so.
@@ -285,8 +330,10 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            context,
+            DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa, shown_not_saved },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -300,7 +347,7 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, shown_not_saved } = data;
         let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -326,7 +373,8 @@ impl Session {
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let mut signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
+        let mut signatures =
+            editor.as_ref().map(|e| shown_signatures(shown_not_saved.as_ref(), &e.cos, &bytes, &context.trust, &sig_cache)).unwrap_or_default();
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
         // shows them (#2373).
         if let Some(e) = &editor {
@@ -393,6 +441,7 @@ impl Session {
             fonts_stale: false,
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
+            shown_not_saved,
         }
     }
 }

@@ -135,7 +135,15 @@ pub(crate) struct XfaRun<'a> {
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
     pub time_scale: u32,
+    /// The form is not laid out again (a certification doesn't allow the page changes that
+    /// would make): values and calculations still go into the fields and the data, and
+    /// [`LAYOUT_KEPT`] says so.
+    pub keep_layout: bool,
 }
+
+/// What a certified XFA form says when it was not laid out again after a change.
+pub(crate) const LAYOUT_KEPT: &str =
+    "The form was not laid out again after this change: its certification doesn't allow page changes, so the signed pages were kept";
 
 /// The script engine's copies of a form's property trees, by the address of the tree each was
 /// made from: made the first time a script of the form needs one, then shared by every later
@@ -760,6 +768,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             return Ok(());
         }
+        if self.run.keep_layout {
+            self.flush()?;
+            self.embedded_changed = false;
+            if !self.run.out.errors.iter().any(|e| e == LAYOUT_KEPT) {
+                self.error(LAYOUT_KEPT.to_string());
+            }
+            return Ok(());
+        }
         self.relayouts += 1;
         self.flush()?;
         self.embedded_changed = false;
@@ -1139,10 +1155,29 @@ pub(crate) fn relayout_changed_text(
     cached: Option<&Template>,
     before: &[pdfcraft_forms::Field],
 ) -> Result<Option<Vec<String>>, String> {
-    if pdfcraft_xfa::existing_layout(doc).is_none() {
+    let Some(template) = relayout_template(doc, cached, before)? else {
+        return Ok(None);
+    };
+    let report = pdfcraft_xfa::rerender(doc, &template).map_err(|e| e.to_string())?;
+    crate::xfa_redraw(doc)?;
+    Ok(Some(report.warnings))
+}
+
+/// Whether [`relayout_changed_text`] would lay the form out again, without doing it.
+pub(crate) fn relayout_needed(doc: &pdfcraft_cos::Document, cached: Option<&Template>, before: &[pdfcraft_forms::Field]) -> Result<bool, String> {
+    Ok(relayout_template(doc, cached, before)?.is_some())
+}
+
+/// The template to lay the form out again with, when an edited field calls for it (see
+/// [`relayout_changed_text`]); `None` when it doesn't.
+fn relayout_template<'a>(
+    current: &pdfcraft_cos::Document,
+    cached: Option<&'a Template>,
+    before: &[pdfcraft_forms::Field],
+) -> Result<Option<std::borrow::Cow<'a, Template>>, String> {
+    if pdfcraft_xfa::existing_layout(current).is_none() {
         return Ok(None);
     }
-    let current = &*doc;
     let mut changed = before
         .iter()
         .filter(|f| {
@@ -1166,13 +1201,7 @@ pub(crate) fn relayout_changed_text(
         None => std::borrow::Cow::Owned(pdfcraft_xfa::template_of(current).map_err(|e| e.to_string())?),
     };
     let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som) || pdfcraft_xfa::field_is_embedded(&template, &som));
-    drop(changed);
-    if !reflow {
-        return Ok(None);
-    }
-    let report = pdfcraft_xfa::rerender(doc, &template).map_err(|e| e.to_string())?;
-    crate::xfa_redraw(doc)?;
-    Ok(Some(report.warnings))
+    Ok(reflow.then_some(template))
 }
 
 /// Whether field `f` still holds the value it had (`f.value`), its `/V` being `v`: a list box's
