@@ -3666,6 +3666,54 @@ fn every_adobe_collection_reads_through_its_own_ucs2_cmap() {
     assert_eq!(japan1_page("H", "CIDFontType0", None, "302124222341"), "亜あＡ", "predefined /H, CFF");
 }
 
+/// A Type 0 font whose `/Encoding` names one of the CID CMaps Adobe publishes for its collections
+/// (`/Adobe-Japan1-2` and the like), which ISO 32000-2 §9.7.5.2 doesn't list in Table 116, reads
+/// its two-byte codes as the CIDs of the same number below the supplement's CID count, as
+/// PDFium, Poppler and Ghostscript read it (vendored hayro-interpret patch 116). The font was
+/// dropped for the Helvetica substitute, which read the codes one byte at a time and never
+/// looked at its `/ToUnicode`.
+#[test]
+fn an_adobe_collection_cid_cmap_name_reads_two_byte_codes_as_cids() {
+    // Adobe-Japan1 CIDs 34, 1125 and 843: A, 亜 and あ.
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        assert_eq!(japan1_page("Adobe-Japan1-2", descendant, None, "00220465034B"), "A亜あ", "{descendant}");
+    }
+    let one = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /One def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0022> <005A> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(japan1_page("Adobe-Japan1-2", "CIDFontType0", Some(one), "00220465034B"), "Z亜あ", "/ToUnicode first");
+    // Adobe-Japan1-0 has 8284 CIDs: code 205B (8283) is its last CID, code 205C is past it and
+    // reads as CID 0, where Identity-H reads it as CID 8284.
+    assert_eq!(japan1_page("Adobe-Japan1-0", "CIDFontType2", None, "205B"), japan1_page("Identity-H", "CIDFontType2", None, "205B"), "the last CID");
+    let past = japan1_page("Adobe-Japan1-0", "CIDFontType2", None, "205C");
+    assert_eq!(past, japan1_page("Identity-H", "CIDFontType2", None, "0000"), "past the CID count");
+    assert_ne!(past, japan1_page("Identity-H", "CIDFontType2", None, "205C"), "past the CID count");
+    // Each collection's latest supplement reads too.
+    for (ordering, name, codes, text) in [
+        ("GB1", "Adobe-GB1-6", "00220FA0", "A姓"),
+        ("CNS1", "Adobe-CNS1-7", "00220FA0", "A團"),
+        ("Korea1", "Adobe-Korea1-2", "002207D0", "A밧"),
+        ("Japan1", "Adobe-Japan1-7", "00220465034B", "A亜あ"),
+    ] {
+        assert_eq!(collection_page(("Adobe", ordering), name, "CIDFontType2", None, codes), text, "{name}");
+    }
+    // Other names stay unreadable: the font is dropped for the substitute as before, which
+    // reads the codes a byte at a time.
+    for name in [
+        "Foo-Bar-H",
+        "Adobe-Japan1-8",
+        "Adobe-Japan1-02",
+        "Adobe-Japan1-",
+        "Adobe-Japan1-UCS2",
+        "Adobe-Identity-0",
+        "Adobe-Japan1-99999999999999999999",
+        "Adobe-Japan1",
+        "Adobe--2",
+        "Japan1-2",
+        "adobe-Japan1-2",
+    ] {
+        assert_ne!(japan1_page(name, "CIDFontType2", None, "00220465034B"), "A亜あ", "{name}");
+    }
+}
+
 /// A Type 0 font outside the Adobe collections has no UCS2 CMap: without a `/ToUnicode` its codes
 /// give no text through this route (the CIDs mean nothing outside their collection).
 #[test]
