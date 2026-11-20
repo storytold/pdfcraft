@@ -4,6 +4,8 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_full, write_incremental}
 
 use super::*;
 
+mod combine_tags;
+
 #[test]
 fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
