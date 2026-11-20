@@ -117,6 +117,31 @@ fn a_result_opens_its_file_at_its_page() {
 }
 
 #[test]
+fn result_buttons_name_the_document_and_page_for_screen_readers() {
+    let folder = TempFolder::new();
+    folder.write("a.pdf", &fixture(3));
+    let mut h = harness();
+    search(&mut h, &folder.path(), "Page 2");
+    let label = result_row(&h, "Page 2").label().expect("an accessible label");
+    assert!(label.starts_with("a.pdf, Page 2:"), "screen reader needs the file and page: {label}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_name_ending_in_a_space_is_searched_unchanged() {
+    let mut folder = TempFolder::new();
+    let name = format!("{} ", folder.0.file_name().unwrap().to_string_lossy());
+    let with_space = folder.0.with_file_name(name);
+    std::fs::rename(&folder.0, &with_space).unwrap();
+    folder.0 = with_space;
+    folder.write("a.pdf", &fixture(1));
+
+    let mut h = harness();
+    search(&mut h, &folder.path(), "Page 1");
+    h.get_by_label_contains("Matches: 1.");
+}
+
+#[test]
 fn a_result_in_a_file_already_open_goes_to_its_tab() {
     let folder = TempFolder::new();
     let file = folder.write("a.pdf", &fixture(3));
