@@ -7517,12 +7517,14 @@ fn take_js_errors_leaves_the_alerts_for_take_js_output() {
 
 #[test]
 fn take_js_errors_reports_a_document_scripts_error_again_on_the_next_edit() {
-    let helpers =
-        "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).buttonSetIcon\\(this.getField\\('go'\\).buttonGetIcon\\(\\)\\);";
+    let helpers = "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).missingTestMethod\\(\\);";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
-    let _ = s.take_js_errors(id);
+    assert_eq!(s.take_js_errors(id).len(), 1, "the document script fails at open");
+    // The document scripts run again when the script list changes, which each pass does.
     for qty in ["4", "5"] {
+        let script = format!("/* {qty} */ function times(a, b) {{ return a * b; }} this.getField('go').missingTestMethod();");
+        s.apply(id, Edit::SetDocumentScript { name: "helpers".into(), script: Some(script) }).unwrap();
         s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text(qty.into()) }).unwrap();
         let errors = s.take_js_errors(id);
         assert_eq!(errors.len(), 1, "qty {qty}: {errors:?}");
