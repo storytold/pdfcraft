@@ -1,8 +1,12 @@
 use super::common::{
-    FLAGS, MAX_DEPTH, SUBTYPES, arr, check_form_xml_depth, csv, el_text, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict,
-    text_of, walk_xfdf, xml_nesting_depth,
+    MAX_DEPTH, arr, check_form_xml_depth, csv, el_text, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of,
+    walk_xfdf,
 };
 use super::*;
+use craft_xfdf::grammar::{
+    AnnotFormat, BorderStyle, CaretSymbol, SUBTYPES, format_flags, format_pairs, pairs, parse_flags, parse_format_attrs, rich_plain,
+    rich_text_element, standalone, with_comment_nodes, write_format_attrs,
+};
 
 // ── export ──────────────────────────────────────────────────────────────────────────────────
 
@@ -113,21 +117,6 @@ fn read_own_keys(node: &craft_xml::El, ns: &[(String, String)], d: &mut Dict) {
     }
 }
 
-/// Rich text deeper than this is written as text rather than as markup, so the XFDF it goes into
-/// stays well inside the nesting the reader accepts (`MAX_XML_DEPTH`).
-const MAX_RICH_DEPTH: usize = 512;
-
-/// Rich text (`/RC`) as `<contents-richtext>` holds it: its root element alone (no XML
-/// declaration), when the text is well-formed XML; `None` otherwise.
-fn rich_text_element(rc: &str) -> Option<String> {
-    let t = rc.trim_start_matches('\u{feff}');
-    if xml_nesting_depth(t) > MAX_RICH_DEPTH {
-        return None;
-    }
-    let parsed = parse_form_xml(t).ok()?;
-    Some(parsed.to_xml())
-}
-
 /// The formatting attributes of a comment: XFDF 3.0 "Border style attributes" (`width`, `style`,
 /// `dashes`), "Border effect attributes" (`style="cloudy"`, `intensity`), and the free text
 /// (`rotation`, `justification`), stamp (`rotation`), circle/square/caret (`fringe`), line
@@ -137,7 +126,6 @@ fn rich_text_element(rc: &str) -> Option<String> {
 fn format_attrs(doc: &Document, d: &Dict, sub: &[u8], attrs: &mut String) {
     let num = |k: &[u8]| d.get(k).and_then(|o| doc.resolve(o).as_f64()).filter(|v| v.is_finite());
     let name = |k: &[u8]| d.get(k).and_then(|o| doc.resolve(o).as_name().map(<[u8]>::to_vec));
-    let list = |v: &[f64]| v.iter().map(|x| n(*x)).collect::<Vec<_>>().join(",");
     // The border: /BS, or (without one) the older /Border array [h v width dashes].
     let (width, style, dashes) = match d.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned()) {
         Some(bs) => (
@@ -151,191 +139,103 @@ fn format_attrs(doc: &Document, d: &Dict, sub: &[u8], attrs: &mut String) {
             (border.get(2).and_then(|w| doc.resolve(w).as_f64()), (!dash.is_empty()).then(|| b"D".to_vec()), dash)
         }
     };
-    if let Some(w) = width.filter(|w| w.is_finite()) {
-        let _ = write!(attrs, " width=\"{}\"", n(w));
-    }
-    // One `style` attribute names both: a cloudy border effect (/BE /S /C) takes it.
     let cloudy = d.get(b"BE").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).filter(|b| b.name(b"S") == Some(b"C".as_slice()));
-    if let Some(be) = cloudy {
-        attrs.push_str(" style=\"cloudy\"");
-        if let Some(i) = be.get(b"I").and_then(|i| doc.resolve(i).as_f64()).filter(|i| i.is_finite()) {
-            let _ = write!(attrs, " intensity=\"{}\"", n(i));
-        }
-    } else if let Some(s) = match style.as_deref() {
-        Some(b"D") => Some("dash"),
-        Some(b"B") => Some("bevelled"),
-        Some(b"I") => Some("inset"),
-        Some(b"U") => Some("underline"),
-        _ => None,
-    } {
-        let _ = write!(attrs, " style=\"{s}\"");
-    }
-    // The dash array (/D) whatever the style, as `dashes` maps it; only `style="dash"` draws it.
-    if !dashes.is_empty() && dashes.iter().all(|v| v.is_finite()) {
-        let _ = write!(attrs, " dashes=\"{}\"", list(&dashes));
-    }
-    if let Some(r) = d.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()) {
-        let _ = write!(attrs, " rotation=\"{r}\"");
-    }
-    if let Some(q) = d.get(b"Q").and_then(|o| doc.resolve(o).as_int()) {
-        // Free text names its justification; a redaction mark gives the number (XFDF 3.0).
-        match (sub, q) {
-            (b"FreeText", 0) => attrs.push_str(" justification=\"left\""),
-            (b"FreeText", 1) => attrs.push_str(" justification=\"centered\""),
-            (b"FreeText", 2) => attrs.push_str(" justification=\"right\""),
-            (b"FreeText", _) => {}
-            (_, q) => {
-                let _ = write!(attrs, " justification=\"{q}\"");
-            }
-        }
-    }
-    let rd = nums_of(doc, d.get(b"RD"));
-    if rd.len() == 4 && rd.iter().all(|v| v.is_finite()) {
-        let _ = write!(attrs, " fringe=\"{}\"", list(&rd));
-    }
-    if let Some(ll) = num(b"LL") {
-        let _ = write!(attrs, " leaderLength=\"{}\"", n(ll));
-    }
-    if let Some(lle) = num(b"LLE") {
-        let _ = write!(attrs, " leaderExtend=\"{}\"", n(lle));
-    }
-    if let Some(llo) = num(b"LLO") {
-        let _ = write!(attrs, " leader-offset=\"{}\"", n(llo));
-    }
-    if let Some(Object::Bool(cap)) = d.get(b"Cap").map(|o| doc.resolve(o)).as_deref() {
-        let _ = write!(attrs, " caption=\"{}\"", if *cap { "yes" } else { "no" });
-    }
-    if let Some(cp) = name(b"CP") {
-        let _ = write!(attrs, " caption-style=\"{}\"", esc(&String::from_utf8_lossy(&cp)));
-    }
-    if let [h, v] = nums_of(doc, d.get(b"CO")).as_slice()
-        && h.is_finite()
-        && v.is_finite()
-    {
-        let _ = write!(attrs, " caption-offset-h=\"{}\" caption-offset-v=\"{}\"", n(*h), n(*v));
-    }
-    match name(b"Sy").as_deref() {
-        Some(b"P") => attrs.push_str(" symbol=\"paragraph\""),
-        Some(b"None") => attrs.push_str(" symbol=\"none\""),
-        _ => {}
-    }
-    if let Some(t) = text_of(doc, d, b"OverlayText") {
-        let _ = write!(attrs, " overlay-text=\"{}\"", esc(&t));
-    }
-    if let Some(Object::Bool(repeat)) = d.get(b"Repeat").map(|o| doc.resolve(o)).as_deref() {
-        let _ = write!(attrs, " overlay-text-repeat=\"{repeat}\"");
-    }
+    let fmt = AnnotFormat {
+        width,
+        border_style: match style.as_deref() {
+            Some(b"D") => Some(BorderStyle::Dash),
+            Some(b"B") => Some(BorderStyle::Bevelled),
+            Some(b"I") => Some(BorderStyle::Inset),
+            Some(b"U") => Some(BorderStyle::Underline),
+            _ => None,
+        },
+        dashes: (!dashes.is_empty()).then_some(dashes),
+        cloudy_intensity: cloudy.map(|be| be.get(b"I").and_then(|i| doc.resolve(i).as_f64()).filter(|i| i.is_finite())),
+        rotation: d.get(b"Rotate").and_then(|o| doc.resolve(o).as_int()),
+        justification: d.get(b"Q").and_then(|o| doc.resolve(o).as_int()),
+        fringe: nums_of(doc, d.get(b"RD")).try_into().ok(),
+        leader_length: num(b"LL"),
+        leader_extend: num(b"LLE"),
+        leader_offset: num(b"LLO"),
+        caption: match d.get(b"Cap").map(|o| doc.resolve(o)).as_deref() {
+            Some(Object::Bool(cap)) => Some(*cap),
+            _ => None,
+        },
+        caption_style: name(b"CP").map(|cp| String::from_utf8_lossy(&cp).into_owned()),
+        caption_offset: match nums_of(doc, d.get(b"CO")).as_slice() {
+            [h, v] => Some([*h, *v]),
+            _ => None,
+        },
+        symbol: match name(b"Sy").as_deref() {
+            Some(b"P") => Some(CaretSymbol::Paragraph),
+            Some(b"None") => Some(CaretSymbol::None),
+            _ => None,
+        },
+        overlay_text: text_of(doc, d, b"OverlayText"),
+        overlay_text_repeat: match d.get(b"Repeat").map(|o| doc.resolve(o)).as_deref() {
+            Some(Object::Bool(repeat)) => Some(*repeat),
+            _ => None,
+        },
+    };
+    write_format_attrs(&fmt, sub == b"FreeText", attrs);
 }
 
 /// The formatting attributes of an XFDF comment element back as dictionary entries (see
 /// [`format_attrs`]). Values that are not numbers, or out of range, are left out.
 fn read_format(node: &craft_xml::El, d: &mut Dict) {
-    let num = |a: &str| node.attr(a).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
-    let style = node.attr("style").map(str::trim);
-    let dashes = node.attr("dashes").map(csv).filter(|v| !v.is_empty() && v.iter().all(|x| *x >= 0.0) && v.iter().any(|x| *x > 0.0));
-    let bs_style = match style {
-        Some("dash") => Some("D"),
-        Some("bevelled" | "beveled") => Some("B"),
-        Some("inset") => Some("I"),
-        Some("underline") => Some("U"),
-        Some("solid") => Some("S"),
-        _ => None,
-    };
-    let width = num("width");
-    if width.is_some() || bs_style.is_some() || dashes.is_some() {
+    let fmt = parse_format_attrs(node);
+    if fmt.width.is_some() || fmt.border_style.is_some() || fmt.dashes.is_some() {
         let mut bs = Dict::new();
         // XFDF 3.0: the width is 1 and the style solid unless given.
-        bs.set(b"W".to_vec(), Object::Real(width.unwrap_or(1.0).max(0.0)));
-        bs.set(b"S".to_vec(), Object::name(bs_style.unwrap_or("S")));
-        if let Some(dv) = &dashes {
+        bs.set(b"W".to_vec(), Object::Real(fmt.width.unwrap_or(1.0).max(0.0)));
+        bs.set(b"S".to_vec(), Object::name(fmt.border_style.map_or("S", BorderStyle::as_pdf_name)));
+        if let Some(dv) = &fmt.dashes {
             bs.set(b"D".to_vec(), arr(dv));
         }
         d.set(b"BS".to_vec(), Object::Dict(bs));
     }
-    if style == Some("cloudy") {
+    if let Some(intensity) = fmt.cloudy_intensity {
         let mut be = Dict::new();
         be.set(b"S".to_vec(), Object::name("C"));
-        let intensity = num("intensity").unwrap_or(1.0);
-        be.set(b"I".to_vec(), Object::Real(intensity.clamp(0.0, 2.0)));
+        be.set(b"I".to_vec(), Object::Real(intensity.unwrap_or(1.0).clamp(0.0, 2.0)));
         d.set(b"BE".to_vec(), Object::Dict(be));
     }
-    if let Some(r) = node.attr("rotation").and_then(|r| r.trim().parse::<i32>().ok()) {
-        d.set(b"Rotate".to_vec(), Object::Int(i64::from(r)));
+    if let Some(r) = fmt.rotation {
+        d.set(b"Rotate".to_vec(), Object::Int(r));
     }
-    let q = match node.attr("justification").map(str::trim) {
-        Some("left" | "0") => Some(0),
-        Some("centered" | "center" | "1") => Some(1),
-        Some("right" | "2") => Some(2),
-        _ => None,
-    };
-    if let Some(q) = q {
+    if let Some(q) = fmt.justification {
         d.set(b"Q".to_vec(), Object::Int(q));
     }
-    if let Some(rd) = node.attr("fringe").map(csv).filter(|r| r.len() == 4) {
+    if let Some(rd) = fmt.fringe {
         d.set(b"RD".to_vec(), arr(&rd));
     }
-    if let Some(ll) = num("leaderLength") {
+    if let Some(ll) = fmt.leader_length {
         d.set(b"LL".to_vec(), Object::Real(ll));
     }
-    if let Some(lle) = num("leaderExtend").filter(|v| *v >= 0.0) {
+    if let Some(lle) = fmt.leader_extend {
         d.set(b"LLE".to_vec(), Object::Real(lle));
     }
-    if let Some(llo) = num("leader-offset").filter(|v| *v >= 0.0) {
+    if let Some(llo) = fmt.leader_offset {
         d.set(b"LLO".to_vec(), Object::Real(llo));
     }
-    match node.attr("caption").map(str::trim) {
-        Some("yes" | "true") => d.set(b"Cap".to_vec(), Object::Bool(true)),
-        Some("no" | "false") => d.set(b"Cap".to_vec(), Object::Bool(false)),
-        _ => {}
+    if let Some(cap) = fmt.caption {
+        d.set(b"Cap".to_vec(), Object::Bool(cap));
     }
-    if let Some(cp) = node.attr("caption-style").map(str::trim).filter(|c| matches!(*c, "Inline" | "Top")) {
-        d.set(b"CP".to_vec(), Object::name(cp));
+    if let Some(cp) = fmt.caption_style {
+        d.set(b"CP".to_vec(), Object::name(&cp));
     }
-    let (h, v) = (num("caption-offset-h"), num("caption-offset-v"));
-    if h.is_some() || v.is_some() {
-        d.set(b"CO".to_vec(), arr(&[h.unwrap_or(0.0), v.unwrap_or(0.0)]));
+    if let Some([h, v]) = fmt.caption_offset {
+        d.set(b"CO".to_vec(), arr(&[h, v]));
     }
-    match node.attr("symbol").map(str::trim) {
-        Some("paragraph" | "P") => d.set(b"Sy".to_vec(), Object::name("P")),
-        Some("none" | "None") => d.set(b"Sy".to_vec(), Object::name("None")),
-        _ => {}
+    if let Some(sym) = fmt.symbol {
+        d.set(b"Sy".to_vec(), Object::name(sym.as_pdf_name()));
     }
-    if let Some(t) = node.attr("overlay-text") {
-        d.set(b"OverlayText".to_vec(), PdfString::text(t));
+    if let Some(t) = fmt.overlay_text {
+        d.set(b"OverlayText".to_vec(), PdfString::text(&t));
     }
-    match node.attr("overlay-text-repeat").map(str::trim) {
-        Some("true" | "yes") => d.set(b"Repeat".to_vec(), Object::Bool(true)),
-        Some("false" | "no") => d.set(b"Repeat".to_vec(), Object::Bool(false)),
-        _ => {}
+    if let Some(repeat) = fmt.overlay_text_repeat {
+        d.set(b"Repeat".to_vec(), Object::Bool(repeat));
     }
-}
-
-/// A `<contents-richtext>` element's plain text, a line per paragraph: what `/Contents` gets
-/// when the element comes without `<contents>`.
-fn walk_rich_plain(node: &craft_xml::El, out: &mut String) {
-    for n in &node.children {
-        match n {
-            craft_xml::Node::El(el) => {
-                if el.local() == "br" || (matches!(el.local(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\r')) {
-                    out.push('\r');
-                }
-                walk_rich_plain(el, out);
-            }
-            craft_xml::Node::Text(t) => {
-                // Indentation between elements is not text.
-                if !(t.trim().is_empty() && t.contains('\n')) {
-                    out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn rich_plain(node: &craft_xml::El) -> String {
-    let mut out = String::new();
-    walk_rich_plain(node, &mut out);
-    out.trim_end_matches('\r').to_string()
 }
 
 /// The name of every annotation, for `inreplyto`: its /NM, or, for one without one (other tools
@@ -423,16 +323,16 @@ fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap
         out.push_str("<inklist>");
         for g in ink {
             let v = nums_of(doc, Some(&g));
-            let pts: Vec<String> = v.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
-            let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
+            let pts: Vec<[f64; 2]> = v.as_chunks::<2>().0.to_vec();
+            let _ = write!(out, "<gesture>{}</gesture>", format_pairs(&pts));
         }
         out.push_str("</inklist>");
     }
     // Polygon and polyline points (XFDF `<vertices>`: `x,y;x,y;…`).
     let vertices = nums_of(doc, d.get(b"Vertices"));
-    let pts: Vec<String> = vertices.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+    let pts: Vec<[f64; 2]> = vertices.as_chunks::<2>().0.to_vec();
     if !pts.is_empty() {
-        let _ = write!(out, "<vertices>{}</vertices>", pts.join(";"));
+        let _ = write!(out, "<vertices>{}</vertices>", format_pairs(&pts));
     }
     if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
         let r = nums_of(doc, pd.get(b"Rect"));
@@ -498,8 +398,7 @@ fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, u
                 }
             }
             let flags = d.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-            let fl: Vec<&str> = FLAGS.iter().filter(|(b, _)| flags & b != 0).map(|(_, s)| *s).collect();
-            let _ = write!(attrs, " flags=\"{}\"", fl.join(","));
+            let _ = write!(attrs, " flags=\"{}\"", format_flags(flags));
             if let Some(c) = hex(&nums_of(doc, d.get(b"C"))) {
                 let _ = write!(attrs, " color=\"{c}\"");
             }
@@ -623,12 +522,6 @@ pub fn export_xfdf_comments(doc: &Document, which: &[(usize, usize)], file: &str
     out
 }
 
-/// Whether `text` is XFDF with comments in it (what a paste of copied comments carries).
-pub fn is_xfdf_comments(text: &str) -> bool {
-    let head: String = text.chars().take(400).collect();
-    head.contains("<xfdf") && text.contains("<annots")
-}
-
 /// What a comment of an XFDF text looks like, for drawing a bundle of copied comments before
 /// it is placed: its geometry in user space and its colour (RGB 0–1).
 #[derive(Clone, Debug, PartialEq)]
@@ -648,23 +541,6 @@ pub enum Outline {
     Text { rect: [f64; 4], text: String, size: f64, color: Option<[f64; 3]> },
 }
 
-/// Every comment element of an XFDF text, in order (none when it is no XFDF).
-fn with_comment_nodes(text: &str, mut f: impl FnMut(&craft_xml::El)) {
-    if check_form_xml_depth(text).is_err() {
-        return;
-    }
-    let Ok(root) = parse_form_xml(text) else { return };
-    if root.local() != "xfdf" {
-        return;
-    }
-    let Some(annots) = root.child(craft_xml::Local("annots")) else { return };
-    for node in annots.elements() {
-        if SUBTYPES.iter().any(|(_, t)| *t == node.local().to_ascii_lowercase()) {
-            f(node);
-        }
-    }
-}
-
 /// The comment elements of an XFDF text: tag, `inreplyto`, rect.
 fn comment_nodes(text: &str) -> Vec<(String, Option<String>, Vec<f64>)> {
     let mut out = Vec::new();
@@ -672,11 +548,6 @@ fn comment_nodes(text: &str) -> Vec<(String, Option<String>, Vec<f64>)> {
         out.push((node.local().to_owned(), node.attr("inreplyto").map(str::to_owned), node.attr("rect").map(csv).unwrap_or_default()));
     });
     out
-}
-
-/// Pairs `x,y;x,y;…` (XFDF vertices and ink gestures).
-fn pairs(text: &str) -> Vec<[f64; 2]> {
-    text.split(';').filter_map(|p| if let [x, y] = csv(p).as_slice() { Some([*x, *y]) } else { None }).collect()
 }
 
 /// The outlines of the comments in an XFDF text (replies, which have no place of their own,
@@ -914,12 +785,7 @@ fn annot_from_xml(node: &craft_xml::El, ns: &[(String, String)], subtype: &str, 
     if let Some(v) = node.attr("icon") {
         d.set(b"Name".to_vec(), Object::name(v));
     }
-    let flags: i64 = node
-        .attr("flags")
-        .unwrap_or("print")
-        .split(',')
-        .filter_map(|f| FLAGS.iter().find(|(_, s)| s.eq_ignore_ascii_case(f.trim())).map(|x| x.0))
-        .fold(0, |bits, flag| bits | flag);
+    let flags = parse_flags(node.attr("flags"));
     d.set(b"F".to_vec(), Object::Int(flags));
     if let Some(c) = node.attr("color").and_then(parse_hex) {
         d.set(b"C".to_vec(), arr(&c));
@@ -1028,36 +894,6 @@ fn read_rich_text(rich: &craft_xml::El, ns: &[(String, String)], has_contents: b
         d.set(b"Contents".to_vec(), PdfString::text(&rich_plain(rich)));
     }
 }
-
-/// The one element `markup` (cut out of `rich`, a `<contents-richtext>`) as an XML
-/// document of its own: the namespaces it inherits from the XFDF around it are declared on it,
-/// the default one (XHTML declared on `<contents-richtext>`, say; not XFDF's own, which a
-/// standalone document has no use for) and the prefixes it uses. Unchanged when nothing is
-/// inherited, or when the declarations would not make it parse.
-fn standalone(el: &craft_xml::El, ns: &[(String, String)]) -> String {
-    let mut clone = (*el).clone();
-    let markup = clone.to_xml();
-    if let Some((_, uri)) = ns.iter().rfind(|(p, _)| p.is_empty())
-        && !uri.is_empty()
-        && uri != XFDF_NS
-        && !clone.has_attr("xmlns")
-    {
-        clone.set_attr("xmlns", uri);
-    }
-    for (prefix, uri) in ns {
-        if prefix.is_empty() || prefix == "xml" {
-            continue;
-        }
-        let attr_name = format!("xmlns:{prefix}");
-        if markup.contains(&format!("{prefix}:")) && !clone.has_attr(&attr_name) {
-            clone.set_attr(&attr_name, uri);
-        }
-    }
-    clone.to_xml()
-}
-
-/// XFDF's own namespace (ISO 19444-1).
-const XFDF_NS: &str = "http://ns.adobe.com/xfdf/";
 
 /// Put an annotation dictionary on a page, replacing one with the same `/NM`. Returns its
 /// reference.
