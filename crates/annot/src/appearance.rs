@@ -721,9 +721,18 @@ fn normalised_rect(d: &Dict) -> Option<[f64; 4]> {
 
 /// The subtypes drawn through points of their own rather than within `/Rect`: text markup over
 /// its `/QuadPoints` (ISO 32000-2 §12.5.6.10), lines along `/L` (§12.5.6.7), polygons and
-/// polylines through `/Vertices` (§12.5.6.9) and ink through `/InkList` (§12.5.6.13).
+/// polylines through `/Vertices` (§12.5.6.9), ink through `/InkList` (§12.5.6.13) and a
+/// callout's leader line along `/CL` (§12.5.6.6, [`is_callout`]).
 pub(crate) fn is_drawn_from_points(d: &Dict) -> bool {
     matches!(d.name(b"Subtype"), Some(b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly" | b"Line" | b"PolyLine" | b"Polygon" | b"Ink"))
+        || is_callout(d)
+}
+
+/// A free text annotation whose `/CL` is drawn: ISO 32000-2 Table 177 makes `/CL` "meaningful
+/// only if IT is FreeTextCallout", so a text box or typewriter text that carries one draws no
+/// leader line.
+fn is_callout(d: &Dict) -> bool {
+    d.name(b"Subtype") == Some(b"FreeText") && d.name(b"IT") == Some(b"FreeTextCallout") && d.contains(b"CL")
 }
 
 /// At most this many quadrilaterals widen a text markup's box ([`point_reach`]). Each takes in a
@@ -825,6 +834,12 @@ fn drawn_points(doc: &Document, d: &Dict) -> Option<(Vec<f64>, f64)> {
             }
             (points, w / 2.0 + if has_ending() { arrow_size(w) } else { 0.0 })
         }
+        // A callout's leader line, at the width and with the ending `draw_free_text` draws it.
+        b"FreeText" if is_callout(d) => {
+            let lw = w.max(0.5);
+            let ending = d.name(b"LE").is_some_and(|e| e != b"None");
+            (nums(d, b"CL").filter(|l| l.len() == 4 || l.len() == 6)?, lw / 2.0 + if ending { arrow_size(lw) } else { 0.0 })
+        }
         _ => return None,
     };
     (points.iter().all(|v| v.is_finite()) && margin.is_finite()).then_some((points, margin))
@@ -878,6 +893,28 @@ pub(crate) fn widened_rect(d: &Dict, stream: &Stream) -> Option<[f64; 4]> {
     }
     let bbox = <[f64; 4]>::try_from(nums(&stream.dict, b"BBox")?).ok()?;
     (bbox.iter().all(|v| v.is_finite()) && Some(bbox) != normalised_rect(d)).then_some(bbox)
+}
+
+/// A callout's `/RD` once its `/Rect` is widened to `bbox` ([`widened_rect`]): the text box keeps
+/// its place, `/RD` growing by what `/Rect` grew on each side, in the order `draw_free_text`
+/// reads it. `None` for other annotations and when `/RD` or `/Rect` can't be read.
+pub(crate) fn widened_rd(d: &Dict, bbox: [f64; 4]) -> Option<[f64; 4]> {
+    if !is_callout(d) {
+        return None;
+    }
+    let own = normalised_rect(d)?;
+    let rd = callout_rd(d)?;
+    let out = [rd[0] + (own[0] - bbox[0]), rd[1] + (own[1] - bbox[1]), rd[2] + (bbox[2] - own[2]), rd[3] + (bbox[3] - own[3])];
+    out.iter().all(|v| v.is_finite() && *v >= 0.0).then_some(out)
+}
+
+/// A callout's `/RD`: optional (Table 177; null is absent, §7.3.9), so without it the text box
+/// is `/Rect`; `None` when it is there but not four non-negative numbers.
+fn callout_rd(d: &Dict) -> Option<[f64; 4]> {
+    match d.get(b"RD") {
+        None | Some(Object::Null) => Some([0.0; 4]),
+        Some(_) => nums(d, b"RD").filter(|r| r.iter().all(|x| *x >= 0.0))?.try_into().ok(),
+    }
 }
 
 fn draw_body(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
@@ -1444,7 +1481,10 @@ fn shaped_border(
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, dr_face: Option<pdfcraft_fonts::Std14>) -> Option<Stream> {
     let d = context.dict;
     let parts = context.parts;
-    let rect = context.rect;
+    // The appearance's box: `/Rect`, taking in a callout's leader line where it reaches past it
+    // ([`point_reach`]). The text box is laid out in `/Rect` itself.
+    let bbox = context.rect;
+    let rect = normalised_rect(d).unwrap_or(bbox);
     let stroke = context.stroke;
     let mut c = std::mem::take(&mut drawing.content);
     let mut res = std::mem::take(&mut drawing.resources);
@@ -1474,34 +1514,33 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let mut rect = rect;
     if d.contains(b"CL") {
         let cl = nums(d, b"CL").filter(|l| l.len() == 4 || l.len() == 6)?;
-        // `/RD` is optional (Table 177; null is absent, §7.3.9): without it the text box is `/Rect`.
-        let rd = match d.get(b"RD") {
-            None | Some(Object::Null) => vec![0.0; 4],
-            Some(_) => nums(d, b"RD").filter(|r| r.len() == 4 && r.iter().all(|x| *x >= 0.0))?,
-        };
+        let rd = callout_rd(d)?;
         rect = [full[0] + rd[0], full[1] + rd[1], full[2] - rd[2], full[3] - rd[3]];
         if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
             return None;
         }
-        let end = match d.get(b"LE") {
-            None => b"None".to_vec(),
-            Some(o) => o.as_name()?.to_vec(),
-        };
-        if !known_ending(&end) {
-            return None;
-        }
-        let lw = bw.max(0.5);
-        let pts: Vec<(f64, f64)> = cl.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
-        if pts.len() < 2 || pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
-            return None;
-        }
-        c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
-        for (i, p) in pts.iter().enumerate() {
-            c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
-        }
-        c.push_str("S\n");
-        if !line_end(&mut c, &end, pts[0], pts[1], lw) {
-            return None;
+        // The leader line, for a callout (Table 177 `/IT`; [`is_callout`]).
+        if is_callout(d) {
+            let end = match d.get(b"LE") {
+                None => b"None".to_vec(),
+                Some(o) => o.as_name()?.to_vec(),
+            };
+            if !known_ending(&end) {
+                return None;
+            }
+            let lw = bw.max(0.5);
+            let pts: Vec<(f64, f64)> = cl.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect();
+            if pts.len() < 2 || pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+                return None;
+            }
+            c.push_str(&format!("{}{}{} w 1 J 1 j\n", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(lw)));
+            for (i, p) in pts.iter().enumerate() {
+                c.push_str(&format!("{} {} {}\n", n(p.0), n(p.1), if i == 0 { "m" } else { "l" }));
+            }
+            c.push_str("S\n");
+            if !line_end(&mut c, &end, pts[0], pts[1], lw) {
+                return None;
+            }
         }
     }
     // An oval or a circle (`/PCBorderShape`) around the text box, which is `/Rect` inset by
@@ -1588,7 +1627,8 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     }
     out.extend_from_slice(b"ET\n");
     res.set(b"Font".to_vec(), Object::Dict(fonts));
-    let mut stream = form(full, &out, res);
+    // A turned text box is drawn in its displayed frame; a callout is never turned.
+    let mut stream = form(if matrix.is_some() { full } else { bbox }, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
     }
