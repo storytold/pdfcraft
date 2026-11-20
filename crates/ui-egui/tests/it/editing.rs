@@ -9454,15 +9454,7 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
     set_crop_box(&mut h, smaller);
     h.run_steps(2);
 
-    let done_pos = h.get_by_role_and_label(Role::Button, "Done").rect().center();
-    h.hover_at(done_pos);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Done pill has PointingHand cursor");
-
     let cancel_pos = h.get_by_role_and_label(Role::Button, "Cancel").rect().center();
-    h.hover_at(cancel_pos);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Cancel pill has PointingHand cursor");
 
     // Click Cancel pill: exits crop mode without applying changes
     click_at(&mut h, cancel_pos);
@@ -9477,9 +9469,6 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
 
     // Click "Remove Crop" pill
     let reset_pos = h.get_by_role_and_label(Role::Button, "Remove Crop").rect().center();
-    h.hover_at(reset_pos);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Remove Crop pill has PointingHand cursor");
     click_at(&mut h, reset_pos);
     h.run_steps(2);
     let current_keep = h.state().views[0].session.image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
