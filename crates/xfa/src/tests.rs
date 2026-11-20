@@ -1092,6 +1092,33 @@ fn links_in_rich_text_become_link_annotations_one_per_line() {
     assert!((r[2] - r[0] - width).abs() < 0.01, "over the whole address: {} against {width}", r[2] - r[0]);
 }
 
+/// The links over screen-only (`/F 0`) and print-only (`/F 36`) rich text are the layout's too:
+/// a second layout replaces them, one link for each, rather than keeping the old ones beside.
+#[test]
+fn a_second_layout_replaces_the_links_of_screen_only_and_print_only_text() {
+    let draw = |name: &str, attrs: &str, uri: &str| {
+        format!(
+            r#"<draw name="{name}" w="4in" {attrs}><font typeface="Arial" size="10pt"/><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>See <a href="{uri}">the help</a>.</p></body></exData></value></draw>"#
+        )
+    };
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="page"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ {}{}
+</subform></template></xdp:xdp>"##,
+        draw("screen", r#"relevant="-print""#, "https://example.com/screen"),
+        draw("paper", r#"presence="invisible" relevant="+print""#, "https://example.com/paper"),
+    );
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    render_into(&mut doc).unwrap();
+    let links = text_links(&doc);
+    assert_eq!(links.iter().map(|(u, _)| u.as_str()).collect::<Vec<_>>(), ["https://example.com/screen", "https://example.com/paper"]);
+    let tpl = crate::script::template_of(&doc).unwrap();
+    rerender(&mut doc, &tpl).unwrap();
+    assert_eq!(text_links(&doc), links, "laid out again: one link for each, none left from the first layout");
+}
+
 /// Two pieces of one link side by side on a line join into one link, but a rule drawn between
 /// them keeps them apart, so the link never covers what lies between its pieces; an underline
 /// (a level line drawn with its text) doesn't.
