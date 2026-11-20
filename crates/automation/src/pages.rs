@@ -1,6 +1,7 @@
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based, summary};
+use super::text_cache::TextSource;
 use super::{Arc, Automation, DocId, HashMap, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind, Value, commands, json, tools};
 
 /// Default and maximum resolution for `page_render`.
@@ -139,7 +140,11 @@ impl Automation {
 
     /// The text of `pages` (0-based), from the cache or extracted in parallel.
     pub(crate) fn page_texts(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
-        self.page_text_results(id, pages, &mut extract_parallel)?
+        self.page_texts_from(id, pages, TextSource::Stored)
+    }
+
+    fn page_texts_from(&mut self, id: DocId, pages: &[usize], source: TextSource) -> Result<Vec<Arc<PageText>>> {
+        self.page_text_results_from(id, pages, source, &mut extract_parallel)?
             .into_iter()
             .map(|(p, text)| text.map_err(|e| failed(format!("page {}: {e}", p + 1))))
             .collect()
@@ -152,16 +157,31 @@ impl Automation {
         pages: &[usize],
         extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
     ) -> Result<PageTexts> {
+        self.page_text_results_from(id, pages, TextSource::Stored, extract)
+    }
+
+    fn page_text_results_from(
+        &mut self,
+        id: DocId,
+        pages: &[usize],
+        source: TextSource,
+        extract: &mut impl FnMut(&Arc<Vec<u8>>, Option<Arc<str>>, &[usize]) -> PageTexts,
+    ) -> Result<PageTexts> {
         let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
-        let (bytes, n) = (doc.bytes.clone(), doc.info.pages.len());
+        // The two reads can share the cache when the display is the original bytes.
+        let (source, bytes) = match source {
+            TextSource::Displayed if !Arc::ptr_eq(&doc.display, &doc.bytes) => (source, doc.display.clone()),
+            _ => (TextSource::Stored, doc.bytes.clone()),
+        };
+        let n = doc.info.pages.len();
         let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
-        self.texts.prepare(id, &bytes);
+        self.texts.prepare(id, source, &bytes);
         let mut results = HashMap::new();
         let mut missing = Vec::new();
         for &p in pages {
             if p >= n {
                 results.insert(p, Err("page is out of range".to_owned()));
-            } else if let Some(text) = self.texts.get(id, p) {
+            } else if let Some(text) = self.texts.get(id, p, source) {
                 results.insert(p, Ok(text));
             } else {
                 missing.push(p);
@@ -172,7 +192,7 @@ impl Automation {
         if !missing.is_empty() {
             for (p, text) in extract(&bytes, password, &missing) {
                 if let Ok(text) = &text {
-                    self.texts.insert(id, p, &bytes, text.clone());
+                    self.texts.insert(id, p, source, &bytes, text.clone());
                 }
                 results.insert(p, text);
             }
@@ -223,7 +243,7 @@ impl Automation {
         };
         // Column select (#740): only the text inside the rectangle, row by row.
         let rect = a.nums::<4>("rect")?.map(|r| r.map(|v| v as f32));
-        let texts = self.page_texts(id, &pages)?;
+        let texts = self.page_texts_from(id, &pages, TextSource::Displayed)?;
         let text = |t: &PageText| match rect {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),

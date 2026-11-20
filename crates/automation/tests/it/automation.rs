@@ -11907,6 +11907,44 @@ fn table_pdf() -> Vec<u8> {
     ])
 }
 
+/// #7867: a stale widget appearance can differ from what the viewer draws.
+#[test]
+fn text_extract_reads_displayed_form_text() {
+    let dir = workdir("displayed-form-text");
+    let stored = "BT /Helv 12 Tf 2 10 Td (OLD MARK) Tj ET\n";
+    let appearance = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 180 30] /Resources << /Font << /Helv 6 0 R >> >> /Length {} >>\nstream\n{stored}endstream",
+        stored.len()
+    );
+    let mut a = auto(&dir);
+    for (flag, expected) in [("false", "OLD MARK"), ("true", "NEW LABEL")] {
+        let form = format!("<< /Fields [5 0 R] /NeedAppearances {flag} /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>");
+        let bytes = pdf_of(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R] >>",
+            &form,
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (label) /V (NEW LABEL) /Rect [20 200 200 230] /F 4 /P 3 0 R /AP << /N 7 0 R >> >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            &appearance,
+        ]);
+        let path = format!("form-{flag}.pdf");
+        std::fs::write(dir.join(&path), bytes).unwrap();
+        let doc = ok(&mut a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        // Interleave the two tools: Find continues to read the stored glyphs, even with
+        // the display extraction cached for this same page.
+        for _ in 0..2 {
+            let found = ok(&mut a, "text_find", json!({ "doc": doc, "query": "OLD MARK" }));
+            assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+            assert_eq!(page_text(&mut a, doc), [expected], "NeedAppearances = {flag}");
+            let html = ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }));
+            let page = &html["pages"][0];
+            assert_eq!(page["text"], expected);
+            assert!(page["html"].as_str().unwrap().contains(expected), "{page}");
+        }
+    }
+}
+
 /// Issue #740: `text_extract` with `rect` takes what Column select takes, in the displayed-page
 /// coordinates `text_find` reports, on upright and turned pages alike.
 #[test]
