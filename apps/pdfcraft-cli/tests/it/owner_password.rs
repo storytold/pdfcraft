@@ -45,11 +45,15 @@ fn protected(algorithm: Algorithm) -> Vec<u8> {
 }
 
 fn protected_with(algorithm: Algorithm, content: &str) -> Vec<u8> {
+    protected_with_owner_password(algorithm, content, "owner")
+}
+
+fn protected_with_owner_password(algorithm: Algorithm, content: &str, password: &str) -> Vec<u8> {
     let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(content))).unwrap();
     doc.set_encryption_legacy(&NewEncryption {
         algorithm,
         user_password: "user",
-        owner_password: "owner",
+        owner_password: password,
         permissions: 0,
         encrypt_metadata: true,
         seed: [3; 32],
@@ -154,5 +158,41 @@ fn audit_places_findings_with_the_owner_password() {
         assert_eq!(report["findings"][0]["covered_text"], "Page 1", "{alg:?}");
         // Top-left points on the 300 pt high page: the box spans y 140–180 from the bottom.
         assert_eq!(report["findings"][0]["rect"], serde_json::json!([10.0, 120.0, 130.0, 160.0]), "{alg:?}");
+    }
+}
+
+#[test]
+fn option_shaped_passwords_do_not_replace_render_extract_or_split_options() {
+    for (command, password) in [("render", "--page"), ("extract", "--pages"), ("split", "--before")] {
+        let source = tmp(&format!("option-shaped-{command}.pdf"));
+        std::fs::write(&source, protected_with_owner_password(Algorithm::Aes128, PAGE, password)).unwrap();
+        let output = tmp(&format!("option-shaped-{command}-out"));
+        let mut cli = Command::new(BIN);
+        cli.args([command, source.to_str().unwrap(), "--password", password]);
+        let produced = match command {
+            "render" => {
+                let png = output.with_extension("png");
+                cli.args(["--page", "1", "--dpi", "144", "--out", png.to_str().unwrap()]);
+                png
+            }
+            "extract" => {
+                let pdf = output.with_extension("pdf");
+                cli.args(["--pages", "1", "--out", pdf.to_str().unwrap()]);
+                pdf
+            }
+            _ => {
+                cli.args(["--every", "1", "--out-dir", output.to_str().unwrap()]);
+                output.join("option-shaped-split-p1.pdf")
+            }
+        };
+        let out = cli.output().unwrap();
+        assert!(out.status.success(), "{command}: {}", String::from_utf8_lossy(&out.stderr));
+        if command == "render" {
+            assert_rendered_page(&std::fs::read(&produced).unwrap(), 144, command);
+        } else {
+            let out = Command::new(BIN).args(["info", produced.to_str().unwrap(), "--password", password]).output().unwrap();
+            assert!(out.status.success(), "{command}: {}", String::from_utf8_lossy(&out.stderr));
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["pages"], 1);
+        }
     }
 }
