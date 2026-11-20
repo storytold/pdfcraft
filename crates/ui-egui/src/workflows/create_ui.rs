@@ -569,6 +569,6 @@ mod tests {
         h.state_mut().reduce_file_size(&ctx_h);
         h.run_steps(2);
         assert_eq!(files.requests().len(), 1, "no second question");
-        h.get_by_label_contains("Optimization is already running");
+        h.get_by_role_and_label(egui::accesskit::Role::Status, "Optimization is already running");
     }
 }
