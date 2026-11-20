@@ -35,7 +35,7 @@ craft-zip = { git = "https://github.com/storytold/craft-libs", version = "0.1.0"
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "e2dc681a3", features = ["egui"] }
-craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c8087acbd9711315eefc2790949b7acf915da011", features = ["cos", "crypt", "filters"] }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "c470ed170dcb7aaaad7ce6172ca4e9b68dd1a7cd", features = ["cos", "crypt", "filters"] }
 # The writers the Word and RTF exports map onto (storytold/craft-libs#793). craft-rtf, craft-wordmodel and
 # craft-docx move together: craft_rtf::doc::export takes its own revision's Document.
 craft-rtf = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "b8eaa8e2f3561f9fa27fcf3b7f67ce915e93caa3" }
@@ -166,12 +166,12 @@ codegen-units = 1
 
 # Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
 [patch.crates-io]
-hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "c8087acbd9711315eefc2790949b7acf915da011" }
-hayro = { git = "https://github.com/storytold/craft-libs", rev = "c8087acbd9711315eefc2790949b7acf915da011" }
-hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "c8087acbd9711315eefc2790949b7acf915da011" }
-hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "c8087acbd9711315eefc2790949b7acf915da011" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "c470ed170dcb7aaaad7ce6172ca4e9b68dd1a7cd" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "c470ed170dcb7aaaad7ce6172ca4e9b68dd1a7cd" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "c470ed170dcb7aaaad7ce6172ca4e9b68dd1a7cd" }
+hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "c470ed170dcb7aaaad7ce6172ca4e9b68dd1a7cd" }
 hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "e7873217287876f76a045550369c90a541693c33" }
-hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "c8087acbd9711315eefc2790949b7acf915da011" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "c470ed170dcb7aaaad7ce6172ca4e9b68dd1a7cd" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
