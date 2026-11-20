@@ -508,6 +508,7 @@ fn audit_row(rows: Arc<RwLock<Vec<SpaceUse>>>) -> Param {
         Table::<usize>::new(tl!("Space Audit"), columns)
             .select(SelectMode::None)
             .sizing(Sizing::Content)
+            .natural_height(true)
             .striped(true)
             .show_items(ui, &AuditRows(&lines), &mut |at, icx| {
                 let Some(line) = lines.get(*at) else { return ListRow::new("") };

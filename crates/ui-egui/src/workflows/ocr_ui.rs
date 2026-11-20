@@ -510,9 +510,9 @@ impl PdfCraftApp {
     /// is the answer's reason, shown in the dialog).
     pub(crate) fn recognize_text_pass(&mut self, ctx: &egui::Context) {
         keep_asking_while_probing(ctx);
-        // PLAN: assumed the host calls this only while `ocr.recognize` is the open `HostedParamDialog`.
+        let dialog_id = craft::ui::dialog::dialog_id("ocr.recognize");
         #[cfg(target_arch = "wasm32")]
-        if let Some(open) = self.dialogs.get::<HostedParamDialog>() {
+        if let Some(open) = self.dialogs.get_by_id::<HostedParamDialog>(dialog_id) {
             let engine = EngineChoice::parse(open.fields().text("engine").unwrap_or_default());
             if engine != EngineChoice::Tesseract
                 && pdfcraft_engine::ocr::engine_unavailable_reason(EngineChoice::Ocrs).is_some()
@@ -523,18 +523,18 @@ impl PdfCraftApp {
         }
         // The Output folder row's Choose… asks for a folder; the answer fills the row.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.dialogs.get_mut::<HostedParamDialog>().and_then(|d| d.take_action()).is_some_and(|action| action == CHOOSE_FOLDER) {
+        if self.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_id).and_then(|d| d.take_action()).is_some_and(|action| action == CHOOSE_FOLDER) {
             self.pick_first(output_folder_request(), None, |app, _, dir| {
-                if let Some(dialog) = app.dialogs.get_mut::<HostedParamDialog>() {
+                if let Some(dialog) = app.dialogs.get_mut_by_id::<HostedParamDialog>(craft::ui::dialog::dialog_id("ocr.recognize")) {
                     dialog.answer_path("output_folder", dir);
                 }
             });
         }
-        let Some(confirmed) = self.dialogs.get_mut::<HostedParamDialog>().and_then(|d| d.take_ok()) else { return };
+        let Some(confirmed) = self.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_id).and_then(|d| d.take_ok()) else { return };
         let count = self.active_ids().and_then(|(_, id)| self.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
         draft_from(&mut self.ocr_draft, &confirmed.fields, count);
         let answer = self.start_ocr(ctx);
-        if let Some(dialog) = self.dialogs.get_mut::<HostedParamDialog>() {
+        if let Some(dialog) = self.dialogs.get_mut_by_id::<HostedParamDialog>(dialog_id) {
             dialog.answer_ok(answer.map_err(Into::into));
         }
     }
