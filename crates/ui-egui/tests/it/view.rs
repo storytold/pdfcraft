@@ -609,7 +609,8 @@ fn the_rail_zoom_field_sets_a_typed_zoom() {
     assert_eq!(h.state().views[0].zoom(), 64.0);
     h.state_mut().views[0].view.zoom = 2.0;
     h.run_steps(2);
-    assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Zoom").value().as_deref(), Some("200%"));
+    // The number field paints the percent unit separately from its accessible text value.
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Zoom").value().as_deref(), Some("200"));
 }
 
 #[test]
