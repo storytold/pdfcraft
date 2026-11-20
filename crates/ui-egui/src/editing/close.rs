@@ -262,7 +262,8 @@ impl PdfCraftApp {
         }
         let name = self.session.get(doc).map(|d| d.name.clone()).unwrap_or_default();
         let remaining = self.close_guard.as_ref().map_or(1, |g| g.remaining());
-        self.close_guard_dialog = Some(self.dialogs.open(UnsavedChangesDialog::new(scope, name).remaining(remaining)));
+        let shown = crate::dialogs::shorten_middle(&name, 80);
+        self.close_guard_dialog = Some(self.dialogs.open(UnsavedChangesDialog::new(scope, shown).remaining(remaining)));
     }
 
     /// Saves `doc`, then lets the guard go on. The save may finish on a later frame (the user
