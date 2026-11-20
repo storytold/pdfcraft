@@ -388,7 +388,8 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
         h.get_by_label("Morning").click();
         wait_for(&mut h, "Suffix");
         if typed {
-            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.value().as_deref() == Some("x")).focus();
+            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.label().as_deref() == Some("Answer") && n.value().as_deref() == Some("x"))
+                .focus();
             h.run_steps(2);
             h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
             h.run_steps(1);
