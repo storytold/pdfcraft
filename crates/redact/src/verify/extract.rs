@@ -147,7 +147,7 @@ impl Font {
         let mut f = Font { dec, widths: HashMap::new(), default_width: FLAT_WIDTH, vertical: false };
         let num = |o: &Object| doc.resolve(o).as_f64();
         if font.name(b"Subtype") == Some(b"Type0") {
-            f.vertical = font.get(b"Encoding").map(|e| doc.resolve(e)).and_then(|e| e.as_name().map(|n| n.ends_with(b"-V"))).unwrap_or(false);
+            f.vertical = crate::interp::is_vertical(doc, font);
             let desc = font.get(b"DescendantFonts").map(|d| doc.resolve(d)).and_then(|d| d.as_array().and_then(|a| a.first().cloned()));
             let desc = desc.and_then(|d| doc.resolve(&d).as_dict().cloned());
             if let Some(d) = desc {
