@@ -418,14 +418,7 @@ struct FileRead {
     at_limit: bool,
 }
 
-fn search_file(
-    path: &Path,
-    options: &Options,
-    room: usize,
-    cancel: &AtomicBool,
-    left: &Mutex<Vec<Retiring>>,
-    deadline: Option<Instant>,
-) -> FileRead {
+fn search_file(path: &Path, options: &Options, room: usize, cancel: &AtomicBool, left: &Mutex<Vec<Retiring>>, deadline: Option<Instant>) -> FileRead {
     let mut read = FileRead::default();
     // A whole-search deadline also bounds opening a slow or disconnected file.
     let open_limit = deadline.map_or(options.open_limit, |d| options.open_limit.min(d.saturating_duration_since(Instant::now())));
