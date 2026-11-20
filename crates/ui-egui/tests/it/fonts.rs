@@ -300,17 +300,19 @@ fn catalog_han(catalog: &str) -> String {
 }
 
 /// One Chinese preference against its catalog: the installed face must be in every family,
-/// before the Japanese faces, and cover every Han character the catalog uses.
+/// before every bundled CJK face, and cover every Han character the catalog uses.
 ///
 /// Returns false when this machine has no installed face for the preference (or system fonts
-/// are off); the caller reports that as a skip. A bundled `Hans` face is never allowed to
-/// stand in for Traditional Chinese.
+/// are off); the caller reports that as a skip. A bundled `Hans` face is never allowed to stand
+/// in for Traditional Chinese, and it does not lead a Simplified Chinese interface either: it is
+/// LXGW WenKai Lite, a Kai document face (#6070).
 fn installed_chinese_face_covers(cjk: theme::CjkPreference, catalog: &str, name: &str) -> bool {
     let defs = theme::installed_font_definitions(cjk);
     if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
         eprintln!("skipping {name}: no installed Chinese face for {cjk:?} (or PDFCRAFT_SYSTEM_FONTS=0)");
         return false;
     }
+    let bundled_hans: Vec<String> = pdfcraft_fonts::ui_chinese_fonts().iter().map(|f| f.name()).collect();
     for (family, stack) in &defs.families {
         let system = stack.iter().position(|n| n == theme::SYSTEM_FALLBACK).expect("in every family");
         assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
@@ -318,6 +320,11 @@ fn installed_chinese_face_covers(cjk: theme::CjkPreference, catalog: &str, name:
         assert!(own < system, "{family:?}: {stack:?}");
         if let Some(first_ja) = stack.iter().position(|n| n.starts_with("BIZ UDPGothic")) {
             assert!(system < first_ja, "{family:?}: {stack:?}");
+        }
+        for name in &bundled_hans {
+            if let Some(at) = stack.iter().position(|n| n == name) {
+                assert!(system < at, "{family:?}: the bundled {name} leads the installed face: {stack:?}");
+            }
         }
     }
     let han = catalog_han(catalog);
@@ -330,19 +337,57 @@ fn installed_chinese_face_covers(cjk: theme::CjkPreference, catalog: &str, name:
     true
 }
 
-/// In a Simplified Chinese interface built without a `Hans` face, a Simplified Chinese face
-/// installed on this machine goes before the Japanese faces, which lack hundreds of the
-/// catalog's characters.
+/// A Simplified Chinese interface draws its hanzi in the Chinese face installed on this machine,
+/// in front of every bundled CJK face, whether or not the build embeds a `Hans` face.
 #[test]
-fn simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one() {
-    if crate::support::skip_without_catalogs("simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one") {
-        return;
-    }
-    if !pdfcraft_fonts::ui_chinese_fonts().is_empty() {
-        eprintln!("skipping simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one: a Hans face is bundled");
+fn simplified_chinese_ui_uses_an_installed_hans_face() {
+    if crate::support::skip_without_catalogs("simplified_chinese_ui_uses_an_installed_hans_face") {
         return;
     }
     installed_chinese_face_covers(theme::CjkPreference::SimplifiedChinese, &catalog("zh-hans"), "Simplified");
+}
+
+/// In a build that bundles a `Hans` face, a Simplified Chinese interface still leads with the
+/// installed face: the bundled one is LXGW WenKai Lite, a Kai face, and a UI drawn in it reads as
+/// a document rather than an application (#6070). Windows and macOS always install such a face
+/// (Microsoft YaHei, PingFang SC); a Linux desktop may not, so the test skips there.
+#[test]
+fn simplified_chinese_ui_prefers_an_installed_face_over_the_bundled_kai_face() {
+    if pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        eprintln!(
+            "skipping simplified_chinese_ui_prefers_an_installed_face_over_the_bundled_kai_face: no bundled Hans face (set CRAFT_FONTS_DIR to run it)"
+        );
+        return;
+    }
+    if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+        eprintln!(
+            "skipping simplified_chinese_ui_prefers_an_installed_face_over_the_bundled_kai_face: PDFCRAFT_SYSTEM_FONTS=0 turns installed faces off"
+        );
+        return;
+    }
+    if !(cfg!(windows) || cfg!(target_os = "macos")) {
+        eprintln!(
+            "skipping simplified_chinese_ui_prefers_an_installed_face_over_the_bundled_kai_face: this platform is not known to install a Simplified Chinese face"
+        );
+        return;
+    }
+    let defs = theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese);
+    let bundled: Vec<String> = pdfcraft_fonts::ui_chinese_fonts().iter().map(|f| f.name()).collect();
+    for (family, stack) in &defs.families {
+        let system = stack
+            .iter()
+            .position(|n| n == theme::SYSTEM_FALLBACK)
+            .unwrap_or_else(|| panic!("{family:?} has no installed Chinese face, so the Kai face leads: {stack:?}"));
+        for name in &bundled {
+            if let Some(at) = stack.iter().position(|n| n == name) {
+                assert!(system < at, "{family:?}: the bundled {name} leads the installed face: {stack:?}");
+            }
+        }
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, CHINESE), "{id:?} lacks {CHINESE}");
+    }
 }
 
 /// A Traditional Chinese interface keeps its installed Traditional face before the Japanese

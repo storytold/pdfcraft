@@ -231,34 +231,46 @@ pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
 pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
 
-/// Which installed face an interface language needs, given whether the build embeds a `Hans`
-/// face.
+/// Which installed face an interface language needs.
 ///
-/// A bundled `Hans` face serves Simplified Chinese, so the installed face stays last there. It
-/// cannot serve Traditional Chinese: a Traditional interface keeps an installed `Hant` face
-/// before the Japanese faces even when a Simplified-only face is embedded, or Traditional-only
-/// characters would fall through to a Japanese face first.
+/// A Chinese interface asks for the face of its own script whichever `Hans` face the build embeds.
+/// A bundled `Hans` face is a document face — LXGW WenKai Lite is a Kai face — and a screen
+/// interface reads as the system's own where the system's own face draws it (#6070). Traditional
+/// Chinese keeps asking for `Hant` for the older reason: a Simplified-only face cannot supply
+/// Traditional-only characters (說, 體, …), so an installed face has to come first.
 #[cfg(not(target_arch = "wasm32"))]
-fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate::system_fonts::Need {
+fn installed_fallback_need(cjk: CjkPreference) -> crate::system_fonts::Need {
     use crate::system_fonts::Need;
     match cjk {
-        CjkPreference::SimplifiedChinese if has_embedded_hans => Need::Other,
         CjkPreference::SimplifiedChinese => Need::Hans,
         CjkPreference::TraditionalChinese => Need::Hant,
         CjkPreference::Default => Need::Other,
     }
 }
 
+/// Where the installed face goes in one family's `stack`: in front of the bundled CJK interface
+/// faces (`bundled_cjk`), so one line of hanzi is drawn by one face and that face is the system's;
+/// at the very end otherwise, where it is the last fallback.
+#[cfg(not(target_arch = "wasm32"))]
+fn installed_face_position(stack: &[String], bundled_cjk: &[String], need: crate::system_fonts::Need) -> usize {
+    use crate::system_fonts::Need;
+    match need {
+        Need::Hans | Need::Hant => stack.iter().position(|n| bundled_cjk.contains(n)).unwrap_or(stack.len()),
+        Need::Other => stack.len(),
+    }
+}
+
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine. It only draws characters no embedded face has.
+/// already installed on this machine.
 ///
-/// - In a Simplified Chinese interface built without an embedded `Hans` face (#826), it is a
-///   Simplified Chinese system face (Microsoft YaHei, PingFang SC, …), placed before the Japanese
-///   craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …), and one
-///   line drawn from two faces with different vertical metrics would not sit on one baseline.
-/// - A Traditional Chinese interface always uses an installed `Hant` face before the Japanese
-///   faces, even when a Simplified-only `Hans` face is embedded: that face cannot supply
-///   Traditional-only characters (說, 體, …).
+/// - A Simplified Chinese interface takes a Simplified Chinese system face (Microsoft YaHei,
+///   PingFang SC, Noto Sans CJK, …) and places it in front of every bundled CJK face (#6070):
+///   a Chinese UI in a Kai face reads as a document, and one line drawn from two faces with
+///   different vertical metrics would not sit on one baseline. Where the machine has no such
+///   face, the bundled `Hans` face still draws Chinese.
+/// - A Traditional Chinese interface likewise uses an installed `Hant` face first, even when a
+///   Simplified-only `Hans` face is embedded: that face cannot supply Traditional-only
+///   characters (說, 體, …), and the installed face is the one the UI should read in.
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
@@ -273,7 +285,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     let mut fonts = font_definitions_for(cjk == CjkPreference::SimplifiedChinese);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use crate::system_fonts::{Need, fallback};
+        use crate::system_fonts::fallback;
         // Before the general installed face, which stays the last fallback outside Chinese.
         for (name, data) in [
             (SYSTEM_DEVANAGARI_FALLBACK, crate::system_fonts::devanagari_fallback()),
@@ -289,16 +301,15 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                 stack.push(name.to_owned());
             }
         }
-        let need = installed_fallback_need(cjk, !pdfcraft_fonts::ui_chinese_fonts().is_empty());
+        let need = installed_fallback_need(cjk);
         if let Some(data) = fallback(need) {
             fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
-            let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
+            // The bundled CJK interface faces in the order this preference puts them, so the
+            // installed face can go in front of all of them (#6070).
+            let bundled_cjk: Vec<String> = pdfcraft_fonts::ui_cjk_fonts(cjk == CjkPreference::SimplifiedChinese).iter().map(|f| f.name()).collect();
             for stack in fonts.families.values_mut() {
-                let at = match need {
-                    Need::Other => None,
-                    Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
-                };
-                stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());
+                let at = installed_face_position(stack, &bundled_cjk, need);
+                stack.insert(at, SYSTEM_FALLBACK.to_owned());
             }
         }
     }

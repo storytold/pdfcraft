@@ -1,8 +1,11 @@
-//! The last-resort interface font: one face already installed on this machine.
+//! The interface face already installed on this machine: the face a Chinese interface draws in,
+//! and the last-resort fallback for characters no embedded face has.
 //!
 //! The embedded faces (Inter, egui's defaults, craft-fonts) come first in every family; this one
-//! only draws characters none of them has, such as an Arabic file name in a build without
-//! craft-fonts, or the Simplified Chinese interface in a build without a `Hans` face (#826). A
+//! draws what none of them has, such as an Arabic file name in a build without craft-fonts. A
+//! Chinese interface is the exception: the installed face of its script goes in front of the
+//! bundled CJK faces, because the only bundled `Hans` face is LXGW WenKai Lite, a Kai document
+//! face, and a UI drawn in it reads as a document rather than as an application (#6070). A
 //! few more installed faces, [`devanagari_fallback`], [`telugu_fallback`], [`sinhala_fallback`],
 //! [`tamil_fallback`], [`hebrew_fallback`] and [`hangul_fallback`], draw Hindi, Telugu, Sinhala,
 //! Tamil, Hebrew and Korean when one is installed. It is read at runtime and never embedded or
