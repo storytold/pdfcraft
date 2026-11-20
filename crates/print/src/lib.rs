@@ -22,6 +22,7 @@ use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, SaveOptions, St
 
 pub mod colour;
 mod font_names;
+pub mod manual_duplex;
 pub mod range;
 pub mod spool;
 #[cfg(test)]

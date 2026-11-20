@@ -45,6 +45,13 @@ pub struct PrintDraft {
     pub grayscale: bool,
     /// `None` = the printer's own default (its Properties), as Acrobat does.
     pub duplex: Option<spool::Duplex>,
+    /// Manual two-sided (#2860): the fronts print, then the dialog asks for the stack to be
+    /// turned over before the backs print; each pass goes to the printer one-sided.
+    pub manual_duplex: bool,
+    /// The edge a manual two-sided print turns on.
+    pub manual_flip: print::manual_duplex::Flip,
+    /// Send the backs last sheet first, as the stack put back printed side up needs (the default).
+    pub manual_reverse: bool,
     pub which: Which,
     pub range: String,
     /// The pages `Which::Selected` prints (0-based, in page order); empty when none were picked.
@@ -134,6 +141,10 @@ impl Default for PrintDraft {
             collate: true,
             grayscale: false,
             duplex: None,
+            manual_duplex: false,
+            manual_flip: Default::default(),
+            // The window says to put the stack back printed side up, which needs the backs reversed.
+            manual_reverse: true,
             which: Which::All,
             range: String::new(),
             selected: Vec::new(),
@@ -462,6 +473,9 @@ impl PrintDraft {
         if self.cut_and_stack() && matches!(self.chosen_duplex(), Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
+        if self.cut_and_stack() && self.manual().is_some() {
+            return Err("Cut and stack needs single-sided sheets. Turn off Manual two-sided.".into());
+        }
         let range = match self.which {
             Which::All | Which::Selected | Which::Current | Which::Area => None,
             Which::Range => Some(self.range.clone()),
@@ -538,6 +552,13 @@ impl PrintDraft {
         }
     }
 
+    /// Manual two-sided as this print takes it: the edge and whether the backs go last sheet
+    /// first. Only to a printer, and not for a booklet, which prints one side at a time with its
+    /// own front and back choices (the dialog hides the option meanwhile).
+    pub fn manual(&self) -> Option<(print::manual_duplex::Flip, bool)> {
+        (self.manual_duplex && self.printer.is_some() && self.handling != Handling::Booklet).then_some((self.manual_flip, self.manual_reverse))
+    }
+
     /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
     /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
@@ -547,8 +568,8 @@ impl PrintDraft {
             collate: self.collate,
             // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
             // decides two-sided itself (#2707), as far as the driver takes it (#5772), leaving the
-            // Two-sided choice as it was.
-            duplex: if self.cut_and_stack() {
+            // Two-sided choice as it was. Each pass of a manual two-sided print is one-sided.
+            duplex: if self.cut_and_stack() || self.manual().is_some() {
                 Some(spool::Duplex::Off)
             } else if self.handling == Handling::Booklet {
                 print::booklet_job_duplex(self.booklet_subset, self.printer_two_sided())
