@@ -158,7 +158,7 @@ pub(super) fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v:
                     let tsa = t.signer_certificate();
                     let trusted_tsa = tsa
                         .as_ref()
-                        .is_some_and(|c| c.valid_at(t.gen_time) && build_chain(c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)));
+                        .is_some_and(|c| c.valid_at(t.gen_time) && trust.anchors(&build_chain(c, &pool, Some(t.gen_time)), Some(t.gen_time)));
                     if !trusted_tsa {
                         unverified_time = Some(t.gen_time);
                     } else if tsa.as_ref().is_some_and(Certificate::may_timestamp) {
@@ -256,8 +256,8 @@ fn finish_validation(context: SignatureValidation<'_>, verified: VerifiedSignatu
     // The time the chain is judged at: trusted timestamp, else the signer's claimed time.
     let at = info.timestamp_time.or(info.signing_time);
     let (chain, refused) = build_chain_noted(&cert, &pool, at);
+    let trusted = trust.anchors(&chain, at);
     let chain: Vec<Certificate> = chain.into_iter().cloned().collect();
-    let trusted = chain.iter().any(|c| trust.trusts(c));
     info.chain = chain;
     info.certificate = Some(cert.clone());
     if let Some(why) = refused
@@ -641,7 +641,8 @@ pub(super) fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, inf
         // nothing either (its detail is already recorded above): never upgrade that to Valid.
         // Nor does one whose certificate is not issued for time stamping.
         let may_stamp = token.signer_certificate().is_some_and(|c| c.valid_at(token.gen_time) && c.may_timestamp());
-        let trusted_tsa = token.signer_certificate().is_some_and(|c| build_chain(&c, &pool, Some(token.gen_time)).iter().any(|x| trust.trusts(x)));
+        let trusted_tsa =
+            token.signer_certificate().is_some_and(|c| trust.anchors(&build_chain(&c, &pool, Some(token.gen_time)), Some(token.gen_time)));
         if trusted_tsa && may_stamp {
             info.status = Status::Valid;
             info.details.push(Detail::plain("The timestamp token is valid and its authority is trusted."));
