@@ -105,7 +105,7 @@ fn check_placement(case: &str, rotation: u16, cropped: bool, view_rotation: u16,
     let originals: Vec<_> = h.state().session.get(id).unwrap().page_images(0).iter().map(|image| image.object.unwrap()).collect();
     let at = if cropped { [250.0, 400.0] } else { [210.0, 80.0] };
     right_click(&mut h, at);
-    h.get_by_label_contains("Paste").click();
+    h.get_by_role_and_label(egui::accesskit::Role::MenuItem, "Paste").click();
     deliver_image(&mut h);
     let doc = h.state().session.get(id).unwrap();
     let inserted = doc
