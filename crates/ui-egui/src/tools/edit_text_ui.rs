@@ -854,7 +854,7 @@ pub(crate) fn paragraph_controls(
         let blocks = page_blocks(session, doc, page);
         let boxes: Vec<Rect> = blocks.iter().map(|l| paragraph_box(&xf, &doc.info, page, l.rect)).collect();
         open_waiting(session, doc, page, &blocks, &boxes, geo);
-        outline_closed(ui, body, session, page, &boxes);
+        outline_closed(ui, body, session, page, &boxes, xf.rect.intersect(geo.viewport));
         draw_move(ui, body, session, page, &boxes, press);
         let framed =
             hovered.filter(|(p, _)| *p == page).and_then(|(_, block)| blocks.get(block).zip(boxes.get(block).copied()).map(|(l, b)| (block, l, b)));
@@ -907,12 +907,12 @@ fn open_waiting(
 }
 
 /// The faint outline of every closed paragraph on `page`, one control with every path.
-fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page: usize, boxes: &[Rect]) {
+fn outline_closed(ui: &mut egui::Ui, body: &PageBody<'_>, session: &PageSession, page: usize, boxes: &[Rect], clip: Rect) {
     let open = session.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     let paths: Vec<BezPath> =
         boxes.iter().enumerate().filter(|(i, _)| Some(*i) != open).take(MAX_OUTLINES).map(|(_, b)| rect_path(doc_rect(&body.view, *b))).collect();
     if !paths.is_empty() {
-        let _ = SelectionOutline::faint(tl!("Edit text & images").to_string(), &paths).show_at(ui, body.rect);
+        let _ = SelectionOutline::faint(tl!("Edit text & images").to_string(), &paths).show_at(ui, clip);
     }
 }
 

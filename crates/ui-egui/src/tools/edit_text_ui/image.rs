@@ -229,7 +229,7 @@ pub(crate) fn picture_controls(
     geo: PageGeometry<'_>,
 ) -> Option<Edit> {
     let mut edit = None;
-    for placed in body.pages {
+    for placed in body.pages.iter().filter(|placed| placed.rect.intersects(geo.viewport)) {
         let xf = geo.xform_of(placed);
         let images = doc.page_images(placed.page);
         let selection = session.image_selection.as_ref().filter(|s| s.page == placed.page && s.index < images.len());
@@ -613,9 +613,9 @@ pub(crate) fn picture_press(session: &mut PageSession, doc: &pdfcraft_engine::Do
 
 /// Delete or Backspace on the selected picture, while its page is shown and it is not being cropped
 /// or changed.
-pub(crate) fn delete_picture(session: &mut PageSession, placed: &[PlacedPage]) -> Option<Edit> {
+pub(crate) fn delete_picture(session: &mut PageSession, placed: &[PlacedPage], viewport: Rect) -> Option<Edit> {
     let s = session.image_selection.as_ref().filter(|s| s.crop.is_none() && !s.gesturing())?;
-    if !placed.iter().any(|p| p.page == s.page) {
+    if !placed.iter().any(|p| p.page == s.page && p.rect.intersects(viewport)) {
         return None;
     }
     let (page, index) = (s.page, s.index);
