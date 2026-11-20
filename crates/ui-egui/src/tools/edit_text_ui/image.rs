@@ -334,6 +334,21 @@ fn box_controls(
             _ => {}
         }
     }
+    if let Some(point) = shown.clicked {
+        let at = view.to_screen(point);
+        let images = doc.page_images(page);
+        let hit = images.iter().enumerate().rposition(|(i, image)| {
+            let quad = picture_quad(xf, info, page, image);
+            let visible = image.visible_rect.map(|r| xf.user_rect(info, page, r.map(|v| v as f32)).intersect(placed.rect));
+            let shape =
+                if i == index { HitShape::Polygon(quad.to_vec()) } else { visible.map_or_else(|| HitShape::Polygon(quad.to_vec()), HitShape::Rect) };
+            shape.hit(at)
+        });
+        if let Some(hit) = hit.filter(|hit| *hit != index) {
+            session.image_selection = Some(ImageSelection::at(page, hit));
+            return edit;
+        }
+    }
     // `shown.discard` (Escape with no drag) is ignored: a selected picture has no Escape outside crop mode.
     let Some(s) = session.image_selection.as_mut() else { return edit };
     s.paper = None;
