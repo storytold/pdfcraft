@@ -62,11 +62,15 @@ pub(crate) struct Copier<'a> {
     /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
     /// copiers made for a repeated page or an action don't each copy it.
     pub(super) kept: Option<Rc<HashSet<ObjRef>>>,
+    /// Pages a destination may keep pointing at when it targets a page that was not copied: the
+    /// pages of a document copying its own pages into itself (Duplicate Pages, #7276), which are
+    /// still there. Empty when copying into another document, where such a link is dropped.
+    pub(super) staying: HashSet<ObjRef>,
 }
 
 impl<'a> Copier<'a> {
     pub(crate) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
-        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None }
+        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None, staying: HashSet::new() }
     }
 
     /// Copy an indirect object (once), returning its destination reference.
@@ -209,7 +213,7 @@ impl<'a> Copier<'a> {
     }
 
     /// Map a source destination (explicit array or reference to one) to the destination
-    /// document; `None` if it targets a page that was not copied.
+    /// document; `None` if it targets a page that was neither copied nor is among `staying`.
     pub(super) fn map_dest(&self, dest: &Object) -> Option<Object> {
         self.map_dest_depth(dest, 0)
     }
@@ -225,7 +229,7 @@ impl<'a> Copier<'a> {
             Object::Dict(d) => self.map_dest_depth(d.get(b"D")?, depth + 1),
             Object::Array(a) => {
                 let page = a.first()?.as_ref()?;
-                let new_page = *self.pages.get(&page)?;
+                let new_page = self.pages.get(&page).copied().or_else(|| self.staying.contains(&page).then_some(page))?;
                 let mut a = a.clone();
                 a[0] = Object::Ref(new_page);
                 Some(Object::Array(a))
