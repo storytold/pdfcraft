@@ -355,6 +355,41 @@ fn a_root_left_out_grants_none_of_its_access() {
 }
 
 #[test]
+fn updating_an_ocr_dictionary_reads_it_only_with_read_authority() {
+    // An update reads the file's words and returns them: a write root alone may create a
+    // dictionary but not read one back (#7889).
+    let (mut server, base) = confined("ocr-dictionary-write-only", false, true);
+    let existing = base.join("out/ocr-dictionary-en.txt");
+    std::fs::write(&existing, "Zebra\nquartz\n").unwrap();
+    for change in [json!({"add": []}), json!({"remove": []}), json!({"add": ["new"]})] {
+        let mut args = change.clone();
+        args["path"] = json!(s(&existing));
+        let (error, text) = call(&mut server, "ocr_dictionary", args);
+        assert!(error && text.contains("read authority is absent"), "{change}: {text}");
+        assert!(!text.contains("zebra") && !text.contains("quartz"), "{change} returned the words: {text}");
+    }
+    assert_eq!(std::fs::read_to_string(&existing).unwrap(), "Zebra\nquartz\n", "the file is left as it was");
+    refused(&mut server, "ocr_dictionary", json!({"path": s(&existing)}), "read authority is absent");
+    // A dictionary that doesn't exist yet holds nothing to read, so it can still be created.
+    let created = base.join("out/ocr-dictionary-fr.txt");
+    assert_eq!(ok(&mut server, "ocr_dictionary", json!({"path": s(&created), "add": ["Mot"]}))["words"], json!(["mot"]));
+    assert!(created.is_file());
+
+    // A dictionary inside the write root but outside the read root is not read either.
+    let (mut server, base) = confined("ocr-dictionary-split", true, true);
+    let existing = base.join("out/ocr-dictionary-en.txt");
+    std::fs::write(&existing, "Zebra\n").unwrap();
+    refused(&mut server, "ocr_dictionary", json!({"path": s(&existing), "add": []}), "outside the read root");
+    assert_eq!(std::fs::read_to_string(&existing).unwrap(), "Zebra\n");
+
+    // With both kinds of access to its folder, an update reads, merges and returns the words.
+    let shared = base.join("out");
+    let roots = AutomationRoots::new(Some(shared.as_path()), Some(shared.as_path())).unwrap();
+    let mut server = McpServer::new(Automation::new().with_automation_roots(roots).with_clock(|| 1_700_000_000));
+    assert_eq!(ok(&mut server, "ocr_dictionary", json!({"path": s(&existing), "add": ["Quartz"]}))["words"], json!(["quartz", "zebra"]));
+}
+
+#[test]
 fn links_out_of_a_root_are_refused() {
     let (mut server, base) = confined("links", true, true);
     #[cfg(unix)]
