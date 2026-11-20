@@ -1622,6 +1622,132 @@ fn measurement_tools_draw_live_calibrate_save_and_export() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+fn set_measurement_defaults(h: &mut Harness<'static, PdfCraftApp>) -> [pdfcraft_engine::Style; 3] {
+    use pdfcraft_engine::measure::{Kind, NewMeasurement, Scale};
+    use pdfcraft_engine::{Edit, Style};
+    let styles = [
+        Style { color: [1.0, 0.0, 0.0], width: 4.0, opacity: 0.5, ..Default::default() },
+        Style { color: [0.0, 1.0, 0.0], width: 6.0, opacity: 0.5, ..Default::default() },
+        Style { color: [0.5, 0.0, 0.5], width: 8.0, opacity: 0.5, fill: Some([1.0, 1.0, 0.0]), fill_opacity: Some(0.25), ..Default::default() },
+    ];
+    for (index, (kind, style)) in [Kind::Distance, Kind::Perimeter, Kind::Area].into_iter().zip(&styles).enumerate() {
+        let points = if kind == Kind::Distance { vec![[20.0, 20.0], [80.0, 20.0]] } else { vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0]] };
+        assert!(h.state_mut().apply_edit(Edit::AddMeasurement(NewMeasurement {
+            page: 0,
+            kind,
+            points,
+            scale: Scale::new(1.0, "pt", 2).unwrap(),
+            style: style.clone(),
+            label: String::new(),
+            author: "Test".into(),
+        })));
+        if kind == Kind::Area {
+            h.state_mut().open_comment_props(0, index);
+            h.run_steps(3);
+            h.get_by_label("Make Properties Default").click();
+            h.run_steps(2);
+            h.get_by_label("OK").click();
+            h.run_steps(3);
+        } else {
+            h.state_mut().make_comment_default(0, index);
+        }
+    }
+    styles
+}
+
+#[test]
+fn measurement_defaults_leave_plain_comment_tools_unchanged() {
+    let (mut h, _) = harness_pages(1);
+    let before: Vec<_> = h.state().comment_prefs.styles().map(|(tool, style)| (tool, style.clone())).collect();
+    set_measurement_defaults(&mut h);
+    for (tool, style) in before {
+        assert_eq!(h.state().comment_prefs.style(tool), style, "measurement defaults must not change {tool:?}");
+    }
+}
+
+#[test]
+fn measurement_defaults_survive_restart_and_style_new_drawings() {
+    let (mut original, _) = harness_pages(1);
+    let styles = set_measurement_defaults(&mut original);
+    let saved = original.state().persist();
+    let (mut h, c) = harness_pages(1);
+    h.state_mut().restore(&saved);
+    h.state_mut().set_option("zoom", "100").unwrap();
+    h.state_mut().views[0].measure.snap_enabled = false;
+    h.run_steps(4);
+    for (command, points) in [
+        ("measure.distance", vec![(20.0, 30.0), (80.0, 110.0)]),
+        ("measure.perimeter", vec![(20.0, 130.0), (80.0, 130.0), (80.0, 210.0)]),
+        ("measure.area", vec![(100.0, 130.0), (160.0, 130.0), (160.0, 210.0), (100.0, 210.0)]),
+    ] {
+        ok(&mut h, &c, "ui.command", json!({"id": command}));
+        h.run_steps(3);
+        for (x, y) in points {
+            let r = h.state().views[0].page_screen_rect(0).unwrap();
+            ok(&mut h, &c, "ui.click", json!({"x": r.left() + x * r.width() / 200.0, "y": r.top() + y * r.height() / 300.0}));
+            h.run_steps(2);
+        }
+        if command != "measure.distance" {
+            ok(&mut h, &c, "ui.key", json!({"key": "Enter"}));
+            h.run_steps(3);
+        }
+    }
+    let app = h.state();
+    let id = app.views[0].id;
+    let bytes = app.session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let reopened_id = reopened.open_new("measurements.pdf", bytes).unwrap();
+    for doc in [app.session.get(id).unwrap(), reopened.get(reopened_id).unwrap()] {
+        let measurements = doc.measurements().unwrap().measurements;
+        assert_eq!(measurements.len(), styles.len());
+        for (measurement, style) in measurements.iter().zip(&styles) {
+            let props = doc.comment_props(measurement.page, measurement.index).unwrap();
+            assert_eq!(props.color, Some(style.color));
+            assert_eq!(props.width, Some(style.width));
+            assert_eq!(props.opacity, style.opacity);
+            assert_eq!(props.fill, style.fill);
+            if style.fill.is_some() {
+                assert_eq!(props.fill_opacity, style.fill_opacity);
+            }
+        }
+    }
+}
+
+#[test]
+fn measurement_defaults_restore_bounded_values_without_migrating_comment_styles() {
+    use pdfcraft_engine::measure::Kind;
+    let mut app = PdfCraftApp::new();
+    let original = app.comment_prefs.measurement_style(Kind::Distance);
+    app.restore(r#"{"comment_styles":[{"tool":"comment.line","color":[1,0,0],"width":7}]}"#);
+    assert_eq!(app.comment_prefs.measurement_style(Kind::Distance), original, "legacy comment defaults are not measurement defaults");
+    app.restore(
+        r#"{"measurement_styles":[
+            {"kind":"unknown","color":[1,0,0]},
+            {"kind":"distance","color":[-1,2,0.5],"width":10000,"opacity":-1,"fill":[1,0,0]},
+            {"kind":"perimeter","color":"red","width":"thick","opacity":null},
+            {"kind":"area","fill":[1,1,0],"fill_opacity":5}
+        ]}"#,
+    );
+    let distance = app.comment_prefs.measurement_style(Kind::Distance);
+    assert_eq!(distance.color, [0.0, 1.0, 0.5]);
+    assert_eq!(distance.width, pdfcraft_ui_egui::comments::MAX_LINE_WIDTH);
+    assert_eq!(distance.opacity, 0.1);
+    assert_eq!(distance.fill, None);
+    assert_eq!(app.comment_prefs.measurement_style(Kind::Perimeter), original);
+    let area = app.comment_prefs.measurement_style(Kind::Area);
+    assert_eq!(area.fill, Some([1.0, 1.0, 0.0]));
+    assert_eq!(area.fill_opacity, Some(1.0));
+    app.restore(r#"{"measurement_styles":[{"kind":"area","fill":"invalid","fill_opacity":"invalid"}]}"#);
+    assert_eq!(app.comment_prefs.measurement_style(Kind::Area), area);
+    app.restore(r#"{"measurement_styles":[{"kind":"area","fill":null,"fill_opacity":null}]}"#);
+    assert_eq!(app.comment_prefs.measurement_style(Kind::Area).fill, None);
+    app.comment_prefs.set_measurement_style(
+        Kind::Distance,
+        pdfcraft_engine::Style { color: [f64::NAN; 3], width: f64::INFINITY, opacity: f64::NAN, ..Default::default() },
+    );
+    assert_eq!(app.comment_prefs.measurement_style(Kind::Distance), distance);
+}
+
 #[test]
 fn a_1_to_50_scale_in_millimetres_measures_a_10_mm_line_as_500_mm() {
     // #2752: a plan drawn at 1:50 is "1 mm = 50 mm". The page side of the scale was fixed in
