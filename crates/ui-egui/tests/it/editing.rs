@@ -3500,25 +3500,41 @@ fn switching_from_a_narrow_editor_keeps_one_frame_and_a_wide_heading_on_one_line
             h.run_steps(2);
         }
     }
+    // Unchanged text is painted by the page; an edit exposes the editor's layout.
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.push('!');
+    h.run_steps(3);
     let heading = h
         .output()
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.text() == "Editable PDF heading" => Some(&text.galley),
+            egui::Shape::Text(text) if text.galley.text() == "Editable PDF heading!" => {
+                Some((text.galley.rect.translate(text.pos.to_vec2()), &text.galley))
+            }
             _ => None,
         })
         .expect("the heading editor is painted");
-    assert_eq!(heading.rows.len(), 1, "opening a wider block must not reuse the previous editor's narrow width");
+    assert_eq!(heading.1.rows.len(), 1, "opening a wider block must not reuse the previous editor's narrow width");
+    let frame_stroke = h
+        .output()
+        .shapes
+        .iter()
+        .rev()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Path(path) if path.closed && egui::Rect::from_points(&path.points).contains(heading.0.min) => Some(path.stroke.clone()),
+            _ => None,
+        })
+        .expect("the heading has an outline");
     let frames = h
         .output()
         .shapes
         .iter()
-        .filter(|shape| {
-            matches!(&shape.shape,
-                egui::Shape::Rect(rect) if rect.stroke.color == egui::Color32::from_rgb(0x14, 0x73, 0xE6)
-                    && rect.rect.width() > 100.0 && page.contains(rect.rect.center())
-            )
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path) if path.closed && path.stroke == frame_stroke => {
+                let rect = egui::Rect::from_points(&path.points);
+                (rect.width() > 100.0 && page.contains(rect.center())).then_some(rect)
+            }
+            _ => None,
         })
         .count();
     assert_eq!(frames, 1, "the active block has only the editor frame");
@@ -6462,7 +6478,10 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
         .shapes
         .iter()
         .find_map(|s| match &s.shape {
-            egui::Shape::Rect(r) if r.stroke.color == egui::Color32::from_rgb(0x14, 0x73, 0xE6) && r.rect.width() > 50.0 => Some(r.rect),
+            egui::Shape::Path(path) if path.closed => {
+                let rect = egui::Rect::from_points(&path.points);
+                (rect.width() > 50.0 && rect.contains(visible.min)).then_some(rect)
+            }
             _ => None,
         })
         .unwrap();

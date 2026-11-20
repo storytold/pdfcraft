@@ -1,6 +1,7 @@
 //! Page Properties ▸ Tab Order for the pages the dialog opened on: Use Row Order, Use Column Order, Use Document
 //! Structure and Unspecified, as a hosted dialog with one radio row.
 
+use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogResult, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind};
 use pdfcraft_engine::{Edit, TabOrder};
@@ -37,8 +38,14 @@ impl PdfCraftApp {
             (order_id(TabOrder::Annotations).to_string(), tl!("Unspecified").into()),
         ];
         let default = draft.before.map(|o| order_id(o).to_string());
-        let params = vec![Param::new(ORDER, tl!("Tab Order"), ParamKind::radio(options, default))];
-        let dialog = HostedParamDialog::new(ctx, KEY, DialogFields::new(), move |_| ParamDialog::new(KEY, tl!("Page Properties"), params.clone()));
+        let params = vec![Param::new(ORDER, tl!("Tab Order"), ParamKind::radio(options, default.clone()))];
+        let mut fields = DialogFields::new();
+        // An empty id represents mixed orders; leaving the field absent picks the first radio.
+        fields.set(ORDER, default.unwrap_or_default());
+        let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
+            let chosen = fields.text(ORDER).and_then(order_of).is_some();
+            ParamDialog::new(KEY, tl!("Page Properties"), params.clone()).ok_enabled(chosen).values(Bind::bound(fields))
+        });
         self.dialogs.open(dialog);
         self.page_props_draft = Some(draft);
     }
