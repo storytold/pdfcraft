@@ -73,7 +73,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut combine = false;
     let mut dropped = None;
 
-    Panel::new(tl!("Combine files")).titled().show(ui, |ui, _| {
+    Panel::new(tl!("Combine files")).titled().fallback_collection(super::collection_id()).show(ui, |ui, _| {
         if Button::new(tl!("Combine")).variant(Variant::PRIMARY).icon(IconId::new("files")).enabled(blocker.is_none()).show(ui).clicked() {
             combine = true;
         }

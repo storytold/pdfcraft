@@ -230,6 +230,7 @@ pub(super) fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> Option<RowActio
     let source = Files { ids: &ids, names: &names };
 
     let out = Table::<CombineKey>::new(tl!("Files"), columns())
+        .id(super::collection_id())
         .sort(sort)
         .selection(Bind::bound(&mut app.combine_tab.selection))
         .column_layout(Bind::bound(&mut app.combine_columns))

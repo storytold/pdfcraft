@@ -32,6 +32,11 @@ use parts::{title_of, utc_stamp};
 pub(crate) use table::columns_from_legacy;
 pub(crate) use view::page;
 
+/// The active Combine collection receives navigation left unused by its toolbar.
+pub(crate) fn collection_id() -> egui::Id {
+    egui::Id::unique("combine_files_collection")
+}
+
 /// Same reds and ambers as the signature status (`sign_ui`).
 pub(crate) const ERROR: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
 pub(crate) const WARNING: Color32 = Color32::from_rgb(0xE6, 0x86, 0x19);
