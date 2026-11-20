@@ -399,6 +399,14 @@ fn marked_as_an_indirect_reference_still_counts_as_tagged() {
     assert_eq!(status(&check(&pdf(&none, ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None }), Rule::TaggedPdf), Status::Failed);
 }
 
+/// The page content of `good()` (object 4).
+const GOOD_CONTENT: &str = "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 20 180 Td (Title) Tj ET EMC \
+     /Figure << /MCID 1 >> BDC q 10 0 0 10 20 120 cm /Im Do Q EMC \
+     /Artifact BMC 0 0 200 2 re f EMC \
+     /TH << /MCID 2 >> BDC BT (A) Tj ET EMC /TH << /MCID 3 >> BDC BT (B) Tj ET EMC \
+     /TD << /MCID 4 >> BDC BT (1) Tj ET EMC /TD << /MCID 5 >> BDC BT (2) Tj ET EMC \
+     /Lbl << /MCID 6 >> BDC BT (1.) Tj ET EMC /LBody << /MCID 7 >> BDC BT (Item) Tj ET EMC";
+
 /// A tagged document that passes every automatic rule.
 fn good() -> Vec<String> {
     vec![
@@ -408,33 +416,37 @@ fn good() -> Vec<String> {
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Tabs /S /Annots [9 0 R 10 0 R] /StructParents 0 \
          /Resources << /Font << /F1 5 0 R >> /XObject << /Im 11 0 R >> >> >>"
             .into(),
-        stream(
-            "/H1 << /MCID 0 >> BDC BT /F1 12 Tf 20 180 Td (Title) Tj ET EMC \
-             /Figure << /MCID 1 >> BDC q 10 0 0 10 20 120 cm /Im Do Q EMC \
-             /Artifact BMC 0 0 200 2 re f EMC \
-             /TH << /MCID 2 >> BDC BT (A) Tj ET EMC /TH << /MCID 3 >> BDC BT (B) Tj ET EMC \
-             /TD << /MCID 4 >> BDC BT (1) Tj ET EMC /TD << /MCID 5 >> BDC BT (2) Tj ET EMC \
-             /Lbl << /MCID 6 >> BDC BT (1.) Tj ET EMC /LBody << /MCID 7 >> BDC BT (Item) Tj ET EMC",
-        ),
+        stream(GOOD_CONTENT),
         FONT.into(),
         // 6 struct tree root, 7 Document element, 8 info
-        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading1 /H1 >> >>".into(),
-        "<< /S /Document /P 6 0 R /Pg 3 0 R /K [\
-         << /S /Heading1 /Pg 3 0 R /K 0 >> \
-         << /S /Figure /Pg 3 0 R /Alt (A red square) /K 1 >> \
-         << /S /Table /Pg 3 0 R /A << /O /Table /Summary (Two columns) >> /K [\
-            << /S /TR /K [ << /S /TH /K 2 >> << /S /TH /K 3 >> ] >> \
-            << /S /TR /K [ << /S /TD /K 4 >> << /S /TD /K 5 >> ] >> ] >> \
-         << /S /L /K [ << /S /LI /K [ << /S /Lbl /K 6 >> << /S /LBody /K 7 >> ] >> ] >> \
-         << /S /Link /K << /Type /OBJR /Obj 9 0 R >> >> \
-         << /S /Form /K << /Type /OBJR /Obj 10 0 R >> >> ] >>"
-            .into(),
+        "<< /Type /StructTreeRoot /K 7 0 R /RoleMap << /Heading1 /H1 >> /ParentTree 22 0 R /ParentTreeNextKey 3 >>".into(),
+        "<< /S /Document /P 6 0 R /Pg 3 0 R /K [12 0 R 13 0 R 23 0 R 26 0 R 20 0 R 21 0 R] >>".into(),
         "<< /Title (Quarterly report) >>".into(),
         // 9 link, 10 field, 11 image
         "<< /Type /Annot /Subtype /Link /Rect [20 20 80 40] /StructParent 1 >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /TU (Your name) /Rect [20 60 120 80] /StructParent 2 >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
             .into(),
+        // 12 to 21: the elements the parent tree names, owners of marked content 0 to 7 on the
+        // page, of the link and of the field. Each names its immediate parent (/P).
+        "<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
+        "<< /S /Figure /P 7 0 R /Pg 3 0 R /Alt (A red square) /K 1 >>".into(),
+        "<< /S /TH /P 24 0 R /Pg 3 0 R /K 2 >>".into(),
+        "<< /S /TH /P 24 0 R /Pg 3 0 R /K 3 >>".into(),
+        "<< /S /TD /P 25 0 R /Pg 3 0 R /K 4 >>".into(),
+        "<< /S /TD /P 25 0 R /Pg 3 0 R /K 5 >>".into(),
+        "<< /S /Lbl /P 27 0 R /Pg 3 0 R /K 6 >>".into(),
+        "<< /S /LBody /P 27 0 R /Pg 3 0 R /K 7 >>".into(),
+        "<< /S /Link /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into(),
+        "<< /S /Form /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 10 0 R >> >>".into(),
+        // 22: the parent tree, by the page's /StructParents and the annotations' /StructParent.
+        "<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into(),
+        // 23 to 27: the table, its two rows, the list and its item.
+        "<< /S /Table /P 7 0 R /Pg 3 0 R /A << /O /Table /Summary (Two columns) >> /K [24 0 R 25 0 R] >>".into(),
+        "<< /S /TR /P 23 0 R /K [14 0 R 15 0 R] >>".into(),
+        "<< /S /TR /P 23 0 R /K [16 0 R 17 0 R] >>".into(),
+        "<< /S /L /P 7 0 R /K [27 0 R] >>".into(),
+        "<< /S /LI /P 26 0 R /K [18 0 R 19 0 R] >>".into(),
     ]
 }
 
@@ -1918,6 +1930,279 @@ fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries(
         "",
     );
     let pages = pdfcraft_model::pages(&doc);
-    let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
+    let (found, _) = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
     assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
+}
+
+/// The automatic rules that fail on `good()` with its parent tree (object 22) replaced by `tree`.
+fn failed_with_parent_tree(tree: &str) -> Vec<Rule> {
+    let mut objs = good();
+    objs[21] = tree.to_string();
+    let mut got = failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default()));
+    got.sort();
+    got
+}
+
+#[test]
+fn tagged_content_and_annotations_need_an_element_in_the_parent_tree() {
+    // ISO 32000-2 §14.7.5.4: the parent tree leads from marked content and from annotations to
+    // the elements that own them. Without an entry, or with one that names no element, the item
+    // has an MCID or a /StructParent but no tag answers it.
+    let all = "[12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R]";
+    let owned = format!("<< /Nums [0 {all} 1 20 0 R 2 21 0 R] >>");
+    assert_eq!(failed_with_parent_tree(&owned), []);
+    // A two-level number tree, its kids given in an array by reference, with a kid listed twice.
+    let kids = "<< /Kids [28 0 R 29 0 R 28 0 R] >>";
+    let mut objs = good();
+    objs[21] = kids.into();
+    objs.push(format!("<< /Limits [0 1] /Nums [0 {all} 1 20 0 R] >>"));
+    objs.push("<< /Limits [2 2] /Nums [2 21 0 R] /Kids [22 0 R] >>".into());
+    let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+    assert!(failed(&r).is_empty());
+    for rule in [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields] {
+        assert_eq!(status(&r, rule), Status::Passed, "{rule:?}");
+    }
+    // No parent tree, no entry for the page, or an MCID whose slot is null or past the array.
+    let annotations = [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields];
+    assert_eq!(failed_with_parent_tree("<< >>"), annotations);
+    assert_eq!(failed_with_parent_tree("<< /Nums [1 20 0 R 2 21 0 R] >>"), [Rule::TaggedContent]);
+    let short = "<< /Nums [0 [12 0 R 13 0 R null 15 0 R 16 0 R 17 0 R 18 0 R] 1 20 0 R 2 21 0 R] >>";
+    assert_eq!(failed_with_parent_tree(short), [Rule::TaggedContent]);
+    // An element without a parent, or whose parents go round without reaching the root, is in
+    // no structure hierarchy (ISO 32000-2 Table 355: /P is required).
+    let mut objs = good();
+    objs[11] = "<< /S /Heading1 /Pg 3 0 R /K 0 >>".into();
+    objs[19] = "<< /S /Link /P 29 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into();
+    objs.push("<< /S /Sect /P 29 0 R >>".into());
+    objs.push("<< /S /Sect /P 28 0 R >>".into());
+    let mut got = failed(&check(&pdf(&objs, "/Info 8 0 R"), &Options::default()));
+    got.sort();
+    assert_eq!(got, [Rule::TaggedContent, Rule::TaggedAnnotations]);
+    // The link's entry names the field's Form element, and the field's a missing object.
+    assert_eq!(failed_with_parent_tree(&format!("<< /Nums [0 {all} 1 21 0 R 2 99 0 R] >>")), [Rule::TaggedAnnotations, Rule::TaggedFormFields]);
+}
+
+#[test]
+fn an_annotation_belongs_in_the_element_type_that_holds_its_kind() {
+    // ISO 32000-2 §14.8.2.5.2: Annot, Link and Form elements hold annotations; Form a widget,
+    // Link a link, Annot any other (Table 368). A role-mapped type counts as the one it maps to.
+    let check_with = |link: &str, field: &str| {
+        let mut objs = good();
+        objs[19] = format!("<< /S /{link} /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+        objs[20] = format!("<< /S /{field} /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 10 0 R >> >>");
+        objs[5] = objs[5].replace("/RoleMap << /Heading1 /H1 >>", "/RoleMap << /Heading1 /H1 /Field /Form /Hyperlink /Link >>");
+        let mut got = failed(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations, Rule::TaggedFormFields]));
+        got.sort();
+        got
+    };
+    assert_eq!(check_with("Hyperlink", "Field"), []);
+    assert_eq!(check_with("Span", "P"), [Rule::TaggedAnnotations, Rule::TaggedFormFields]);
+    assert_eq!(check_with("Annot", "Annot"), [Rule::TaggedAnnotations, Rule::TaggedFormFields]);
+    // Any other annotation goes in Annot.
+    for (element, tagged) in [("Annot", true), ("Link", false), ("Span", false)] {
+        let mut objs = good();
+        objs[8] = "<< /Type /Annot /Subtype /Text /Contents (Note) /Rect [20 20 40 40] /StructParent 1 >>".into();
+        objs[19] = format!("<< /S /{element} /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+        let r = checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]);
+        let want = if tagged { Status::Passed } else { Status::Failed };
+        assert_eq!(status(&r, Rule::TaggedAnnotations), want, "{element}");
+    }
+}
+
+#[test]
+fn marked_content_in_a_form_xobject_is_owned_through_the_forms_own_entry() {
+    // A form XObject's marked content is keyed by its own /StructParents, not the page's.
+    let doc_with = |form_key: &str, nums: &str| {
+        let mut objs = good();
+        objs[2] = objs[2].replace("/XObject << /Im 11 0 R >>", "/XObject << /Im 11 0 R /Fm 28 0 R >>");
+        objs[3] = stream(&GOOD_CONTENT.replace("/Artifact BMC", "/Fm Do /Artifact BMC"));
+        objs[21] = format!("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R {nums}] >>");
+        let content = "/P << /MCID 0 >> BDC BT /F1 12 Tf (In a form) Tj ET EMC";
+        objs.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {form_key} /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{content}\nendstream", content.len()));
+        objs.push("<< /S /P /P 7 0 R /K << /Type /MCR /Stm 28 0 R /MCID 0 >> >>".into());
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(doc_with("/StructParents 3", "3 [29 0 R]"), Status::Passed);
+    // Read through the page's key instead, MCID 0 would be the heading's: it is not.
+    assert_eq!(doc_with("", "3 [29 0 R]"), Status::Failed);
+    assert_eq!(doc_with("/StructParents 3", ""), Status::Failed);
+}
+
+#[test]
+fn marked_content_is_owned_only_by_the_element_that_holds_it() {
+    // ISO 32000-2 §14.7.5.2, §14.7.5.4: the element a parent-tree slot names is the parent of the
+    // marked content, which it holds among its kids: an integer MCID on its own page (/Pg), or a
+    // marked-content reference (Table 357) on its /Pg or the element's.
+    let heading = |element: &str, extra: &[&str]| {
+        let mut objs = good();
+        objs[11] = element.to_string();
+        objs.extend(extra.iter().map(ToString::to_string));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [5 0] >>", &[]), Status::Passed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K << /Type /MCR /MCID 0 >> >>", &[]), Status::Passed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /K << /Type /MCR /Pg 3 0 R /MCID 0 >> >>", &[]), Status::Passed);
+    // The reference given by reference, alone or in an array.
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 28 0 R >>", &["<< /Type /MCR /MCID 0 >>"]), Status::Passed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [28 0 R] >>", &["<< /Type /MCR /MCID 0 >>"]), Status::Passed);
+    // An element that holds another MCID, or nothing; one with no page for its integer kid; one
+    // whose reference names another page, or another content stream.
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K 5 >>", &[]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [] >>", &[]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /K 0 >>", &[]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 28 0 R /MCID 0 >> >>", &["<< /Type /Page >>"]), Status::Failed);
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Stm 11 0 R /MCID 0 >> >>", &[]), Status::Failed);
+    // A kid that is a structure element holds its own content, not its parent's.
+    assert_eq!(heading("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [28 0 R] >>", &["<< /S /Span /P 12 0 R /Pg 3 0 R /K 0 >>"]), Status::Failed);
+    // Kids past the limit of 65,536 are not read: an MCID not among those read may be past it.
+    let many = |first: i64| (0..70_000i64).map(|i| (first + i).to_string()).collect::<Vec<_>>().join(" ");
+    assert_eq!(heading(&format!("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [{}] >>", many(0)), &[]), Status::Passed);
+    assert_eq!(heading(&format!("<< /S /Heading1 /P 7 0 R /Pg 3 0 R /K [{}] >>", many(1)), &[]), Status::Manual);
+}
+
+#[test]
+fn an_annotation_is_tagged_only_by_the_element_that_holds_it() {
+    // ISO 32000-2 §14.7.5.3, §14.7.5.4: the element an annotation's /StructParent names is its
+    // parent, which holds it through an object reference among its kids.
+    let link_held_by = |kids: &str| {
+        let mut objs = good();
+        objs[19] = format!("<< /S /Link /P 7 0 R /Pg 3 0 R /K {kids} >>");
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations)
+    };
+    assert_eq!(link_held_by("[ 0 << /Type /OBJR /Obj 9 0 R >> ]"), Status::Passed);
+    // The OBJR given by reference, alone or in an array given by reference.
+    for kids in ["28 0 R", "29 0 R"] {
+        let mut objs = good();
+        objs[19] = format!("<< /S /Link /P 7 0 R /Pg 3 0 R /K {kids} >>");
+        objs.push("<< /Type /OBJR /Obj 9 0 R >>".into());
+        objs.push("[28 0 R]".into());
+        assert_eq!(status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations), Status::Passed, "{kids}");
+    }
+    // An element of the right type that holds another object, or nothing.
+    assert_eq!(link_held_by("<< /Type /OBJR /Obj 10 0 R >>"), Status::Failed);
+    assert_eq!(link_held_by("[]"), Status::Failed);
+    // Two links under one key, as merged forms that reuse keys have: the element holds the first
+    // only.
+    let mut objs = good();
+    objs[2] = objs[2].replace("/Annots [9 0 R 10 0 R]", "/Annots [9 0 R 10 0 R 28 0 R]");
+    objs.push("<< /Type /Annot /Subtype /Link /Rect [100 20 160 40] /StructParent 1 >>".into());
+    let r = checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]);
+    assert_eq!(r.result(Rule::TaggedAnnotations).unwrap().findings.len(), 1, "{r:?}");
+}
+
+#[test]
+fn an_element_is_in_the_hierarchy_only_through_elements_up_to_the_catalogs_root() {
+    // ISO 32000-2 §14.7.2: the catalog names the structure tree root; an element's parent (/P,
+    // Table 355) is a structure element (/S required) or that root.
+    let heading_parent = |p: &str, extra: &[&str]| {
+        let mut objs = good();
+        objs[11] = format!("<< /S /Heading1 /P {p} /Pg 3 0 R /K 0 >>");
+        objs.extend(extra.iter().map(ToString::to_string));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(heading_parent("28 0 R", &["<< /S /Sect /P 6 0 R >>"]), Status::Passed);
+    // A parent whose type is written as a string (PDFBOX-3652 after_patch.pdf) is still one.
+    assert_eq!(heading_parent("28 0 R", &["<< /S (Sect) /P 6 0 R >>"]), Status::Passed);
+    // A parent that is no structure element, on the way to the root: no /S, or one that is null.
+    assert_eq!(heading_parent("28 0 R", &["<< /P 6 0 R >>"]), Status::Failed);
+    assert_eq!(heading_parent("28 0 R", &["<< /S null /P 6 0 R >>"]), Status::Failed);
+    // A structure tree root other than the catalog's, as a merged file may keep from a source.
+    assert_eq!(heading_parent("28 0 R", &["<< /Type /StructTreeRoot /K 12 0 R >>"]), Status::Failed);
+    assert_eq!(heading_parent("28 0 R", &["<< /S /Sect /P 29 0 R >>", "<< /Type /StructTreeRoot /K 28 0 R >>"]), Status::Failed);
+}
+
+#[test]
+fn a_parent_tree_read_only_in_part_leaves_the_tagging_rules_to_a_manual_check() {
+    // A number tree past the depth limit: the page's entry, at the bottom, is never read, so its
+    // content can't be called untagged; the rules come out manual rather than failed.
+    let nested = |levels: usize| {
+        let mut objs = good();
+        let first = objs.len() + 1;
+        objs[21] = format!("<< /Kids [{first} 0 R] >>");
+        objs.extend((0..levels).map(|i| format!("<< /Kids [{} 0 R] >>", first + i + 1)));
+        objs.push("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into());
+        let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+        [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields].map(|rule| status(&r, rule))
+    };
+    assert_eq!(nested(10), [Status::Passed; 3]);
+    assert_eq!(nested(80), [Status::Manual; 3]);
+    // The page's and the annotations' entries are read, in a first kid, before the tree runs past
+    // the depth limit in a second: every item is decided, so the rules pass.
+    let mut objs = good();
+    let first = objs.len() + 1;
+    objs[21] = format!("<< /Kids [{first} 0 R {} 0 R] >>", first + 1);
+    objs.push("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into());
+    objs.extend((0..80).map(|i| format!("<< /Kids [{} 0 R] >>", first + i + 2)));
+    objs.push("<< /Nums [9 20 0 R] >>".into());
+    let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+    assert_eq!([Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields].map(|rule| status(&r, rule)), [Status::Passed; 3]);
+    // In the truncated tree, MCID -1 has no slot in any array: untagged, whatever the tree holds.
+    let mut objs = good();
+    let first = objs.len() + 1;
+    objs[3] = stream(&format!("{GOOD_CONTENT} /P << /MCID -1 >> BDC 0 0 1 1 re f EMC"));
+    objs[21] = format!("<< /Kids [{first} 0 R] >>");
+    objs.extend((0..80).map(|i| format!("<< /Kids [{} 0 R] >>", first + i + 1)));
+    objs.push("<< /Nums [0 [12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] 1 20 0 R 2 21 0 R] >>".into());
+    let r = check(&pdf(&objs, "/Info 8 0 R"), &Options::default());
+    assert_eq!(status(&r, Rule::TaggedContent), Status::Failed, "{:?}", r.result(Rule::TaggedContent));
+}
+
+#[test]
+fn an_ancestry_past_the_walk_limit_is_left_to_a_manual_check() {
+    // The heading's parents are `len` Sect elements before `last`. Past the walk's limit of 256,
+    // the walk stops without an answer, so the rule is manual, not failed; within it, a chain to
+    // the root passes and one that goes round fails.
+    let chain = |len: usize, last: &str| {
+        let mut objs = good();
+        let first = objs.len() + 1;
+        objs[11] = format!("<< /S /Heading1 /P {first} 0 R /Pg 3 0 R /K 0 >>");
+        objs.extend(
+            (0..len).map(|i| format!("<< /S /Sect /P {} >>", if i + 1 == len { last.to_string() } else { format!("{} 0 R", first + i + 1) })),
+        );
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedContent]), Rule::TaggedContent)
+    };
+    assert_eq!(chain(300, "6 0 R"), Status::Manual);
+    assert_eq!(chain(200, "6 0 R"), Status::Passed);
+    assert_eq!(chain(200, "28 0 R"), Status::Failed);
+}
+
+#[test]
+fn an_annotation_element_type_is_followed_through_every_mapping() {
+    // A Link element typed R0, mapped thirteen times to Link, holds the link; a role map that goes
+    // round never reaches Link.
+    let link_rule = |map: String| {
+        let mut objs = good();
+        objs[19] = "<< /S /R0 /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>".into();
+        objs[5] = objs[5].replace("/RoleMap << /Heading1 /H1 >>", &format!("/RoleMap << /Heading1 /H1 {map} >>"));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations)
+    };
+    let long: String = (0..13).map(|i| if i == 12 { format!("/R{i} /Link ") } else { format!("/R{i} /R{} ", i + 1) }).collect();
+    assert_eq!(link_rule(long), Status::Passed);
+    assert_eq!(link_rule("/R0 /R1 /R1 /R0".into()), Status::Failed);
+}
+
+#[test]
+fn an_annotation_element_type_given_by_reference_is_read() {
+    // ISO 32000-2 §7.3.10: any value may be an indirect reference, the element's /S included.
+    let mut objs = good();
+    let at = objs.len() + 1;
+    objs[19] = format!("<< /S {at} 0 R /P 7 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+    objs.push("/Link".into());
+    let r = checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]);
+    assert_eq!(status(&r, Rule::TaggedAnnotations), Status::Passed, "{:?}", r.result(Rule::TaggedAnnotations));
+}
+
+#[test]
+fn an_annotation_element_of_the_wrong_type_fails_whatever_its_ancestry() {
+    // A Span can't hold a link (ISO 32000-2 Table 368) however far up its parents go; a Link whose
+    // parents run past the walk's limit is left to a manual check.
+    let link_owner = |s: &str| {
+        let mut objs = good();
+        let first = objs.len() + 1;
+        objs[19] = format!("<< /S /{s} /P {first} 0 R /Pg 3 0 R /K << /Type /OBJR /Obj 9 0 R >> >>");
+        objs.extend((0..300).map(|i| format!("<< /S /Sect /P {} >>", if i == 299 { "6 0 R".to_string() } else { format!("{} 0 R", first + i + 1) })));
+        status(&checked(&pdf(&objs, "/Info 8 0 R"), &[Rule::TaggedAnnotations]), Rule::TaggedAnnotations)
+    };
+    assert_eq!(link_owner("Span"), Status::Failed);
+    assert_eq!(link_owner("Link"), Status::Manual);
 }

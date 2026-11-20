@@ -19,6 +19,7 @@ mod autotag_roles;
 mod content;
 mod headings;
 mod layout_table;
+mod parent_tree;
 mod report;
 mod structure;
 mod tags;
@@ -652,6 +653,8 @@ pub fn check(doc: &Document, options: &Options) -> Report {
             results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
             continue;
         }
+        // Whether a page rule left an item it applies to undecided ([`content::page_rule`]).
+        let mut rule_undecided = false;
         // `total` counts every finding; `findings` holds the first MAX_FINDINGS of them.
         let (mut findings, total) = match rule.category() {
             Category::Document => {
@@ -660,7 +663,8 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                 (found, n)
             }
             Category::PageContent | Category::Forms => {
-                let found = content::page_rule(doc, rule, &pages, &page_list, &scan, tagged);
+                let (found, undecided) = content::page_rule(doc, rule, &pages, &page_list, &scan, tagged);
+                rule_undecided = undecided;
                 let n = found.len();
                 (found, n)
             }
@@ -692,6 +696,15 @@ pub fn check(doc: &Document, options: &Options) -> Report {
                 Rule::TaggedContent | Rule::CharacterEncoding => findings.is_empty(),
                 _ => false,
             };
+        // An item the rule applies to whose element the parent tree can't tell (its entry may be in
+        // the part of a truncated tree not read, or its parents run past the ancestor limit) may
+        // be tagged or not; with nothing found against the rule, that decides it.
+        let undecided = match rule {
+            Rule::TaggedContent => scan.undecided,
+            Rule::TaggedAnnotations | Rule::TaggedMultimedia | Rule::TaggedFormFields => rule_undecided,
+            _ => false,
+        };
+        let unsure = unsure || (undecided && findings.is_empty());
         if unsure {
             results.push(RuleResult { rule, status: Status::Manual, findings: Vec::new() });
             continue;

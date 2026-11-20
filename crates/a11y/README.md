@@ -15,7 +15,11 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   regularity with row/column spans, summary), Lists (items, Lbl/LBody) and Headings (nesting).
 - Each result is Passed, Failed (with findings and pages), Needs manual check, or Skipped.
 - **Content checks** walk the page content streams (and form XObjects) tracking marked
-  content: painting outside MCID-marked or `/Artifact` content is untagged.
+  content: painting outside `/Artifact` content, and outside MCID-marked content that a
+  structure element owns through the parent tree, is untagged. An annotation is tagged when its
+  `/StructParent` entry is a Form (widget), Link (link) or Annot element of the tree. The owning
+  element must hold the item among its kids (`/K`: the MCID, or an `/OBJR` naming the
+  annotation), and its parents must reach the structure tree root the catalog names.
 - **Character encoding** accepts a predefined non-Identity CJK CMap or an Adobe CJK
   character collection (`GB1`, `CNS1`, `Japan1`, `Korea1`, `KR`), including Identity-H/V.
   Unknown CMaps and foreign registries do not establish that route. This is a font-level
