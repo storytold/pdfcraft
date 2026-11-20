@@ -202,7 +202,10 @@ pub(crate) mod tests {
         let photo = phone_jpeg(6, 144);
         let with = |n: usize| with_extended_xmp_chunks(&photo, n);
         DECODES.with(|c| c.set(0));
-        assert!(matches!(upright(&with(4)), Cow::Owned(_)), "a few chunks are an ordinary photo");
+        let few = with(4);
+        let turned = upright(&few);
+        assert!(matches!(turned, Cow::Owned(_)), "a few chunks are an ordinary photo");
+        assert_eq!(jfif_density_dpi(&turned), Some((72.0, 144.0)), "JFIF density is preserved past stray bytes, fill bytes, and preceding segments");
         assert!(matches!(upright(&with(5_000)), Cow::Borrowed(_)));
         assert_eq!(DECODES.with(std::cell::Cell::get), 1, "only the ordinary photo reached the decoder");
     }
