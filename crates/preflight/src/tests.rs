@@ -384,7 +384,7 @@ fn standards_identification_uses_namespace_not_prefix() {
         let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
         build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "")
     }
-    let attribute = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:a="http://www.aiim.org/pdfa/ns/id/" xmlns:u="http://www.aiim.org/pdfua/ns/id/" a:part="2" a:conformance="b" u:part="1"/></rdf:RDF>"#;
+    let attribute = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:a="http://www.aiim.org/pdfa/ns/id/" xmlns:u="http://www.aiim.org/pdfua/ns/id/" a:part="2" a:conformance="B" u:part="1"/></rdf:RDF>"#;
     let element = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description><part xmlns="http://www.aiim.org/pdfa/ns/id/">2</part><x:conformance xmlns:x="http://www.aiim.org/pdfa/ns/id/" >B</x:conformance></rdf:Description></rdf:RDF>"#;
     for xml in [attribute, element] {
         let doc = with_xmp(xml);
@@ -398,6 +398,35 @@ fn standards_identification_uses_namespace_not_prefix() {
     assert!(verify(&doc, Level::A2b).iter().any(|i| i.clause == "6.6.4"));
     let nested = format!("{}{}", "<n>".repeat(1100), "</n>".repeat(1100));
     assert_eq!(declared(&with_xmp(&nested)).pdfa, None);
+}
+
+#[test]
+fn level_a_and_u_files_are_identified_at_level_b_of_their_part() {
+    fn identifies(part: &str, conformance: Option<&str>, level: Level) -> bool {
+        let conformance = conformance.map(|c| format!("<pdfaid:conformance>{c}</pdfaid:conformance>")).unwrap_or_default();
+        let xmp = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"><pdfaid:part>{part}</pdfaid:part>{conformance}</rdf:Description></rdf:RDF>"#
+        );
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        !verify(&doc, level).iter().any(|i| i.clause == "6.6.4")
+    }
+    // ISO 19005-2/-3 §6.6.4: the conformance is A, B or U, and a level A or U file meets level B.
+    for (part, level) in [("2", Level::A2b), ("3", Level::A3b)] {
+        for conformance in ["A", "B", "U"] {
+            assert!(identifies(part, Some(conformance), level), "part {part}, conformance {conformance}");
+        }
+        // The value is a capital letter: lower case does not identify the file.
+        for conformance in [None, Some(""), Some("a"), Some("b"), Some("u"), Some("C"), Some("E"), Some("F"), Some("AU")] {
+            assert!(!identifies(part, conformance, level), "part {part}, conformance {conformance:?}");
+        }
+    }
+    // The part must still be the one checked.
+    for (part, level) in [("3", Level::A2b), ("2", Level::A3b), ("1", Level::A2b), ("4", Level::A3b)] {
+        for conformance in ["A", "B", "U"] {
+            assert!(!identifies(part, Some(conformance), level), "part {part} at {level:?}, conformance {conformance}");
+        }
+    }
 }
 
 #[test]
