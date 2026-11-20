@@ -3,7 +3,7 @@
 Layer L4 (may use `edit`): redaction, architecture §11.2.
 
 ```rust
-// Marks are Redact annotations (pdfcraft-annot: Shape::Redact { quads, overlay }).
+// Marks are Redact annotations (pdfcraft-annot: Shape::Redact { quads, overlay, look }).
 let marks: Vec<Mark> = marks(&doc);                 // page, areas (user space), fill, overlay text
 let report = apply(&mut doc, None)?;                 // everything, or Some(&[pages])
 clear_marks(&mut doc, None)?;                        // remove marks without applying
@@ -210,5 +210,4 @@ Patterns are heuristic: dates, protocol identifiers and longer number runs are r
 `CodeSet::from_id("foia")?.overlay(&["(b)(6)"])` gives the overlay text for the picked codes.
 Custom code sets aren't supported yet.
 
-Not yet: pattern locales, struct-tree/alt-text cleanup, re-encoding of DCT images (they are removed
-instead).
+Not yet: pattern locales and re-encoding of DCT images (they are removed instead).
