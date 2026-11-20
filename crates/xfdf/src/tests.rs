@@ -2801,7 +2801,8 @@ fn xfdf_annotation_formatting_round_trips_via_shared_grammar() {
     )
     .unwrap();
     let page = pdfcraft_model::pages(&src)[0].obj;
-    let annot_ref = src.get(page).as_dict().unwrap().get(b"Annots").map(|a| src.resolve(a)).unwrap().as_array().unwrap()[0].as_ref().unwrap();
+    let annot_ref =
+        src.get(page).as_dict().unwrap().get(b"Annots").map(|a| src.resolve(a)).unwrap().as_array().unwrap().last().unwrap().as_ref().unwrap();
     let mut bs = Dict::new();
     bs.set(b"W".to_vec(), Object::Real(2.5));
     bs.set(b"S".to_vec(), Object::name("D"));
