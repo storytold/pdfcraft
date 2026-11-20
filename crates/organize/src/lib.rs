@@ -541,7 +541,8 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
 
 /// Put the pages in a new order: `order[k]` is the current index of the page that goes at
 /// position `k`. It must list every page exactly once; anything else is refused before the
-/// document changes. One pass over the page tree, however many pages move.
+/// document changes. One pass over the page tree, however many pages move. Page labels move
+/// with their pages; a document without `/PageLabels` gets none.
 pub fn reorder_pages(doc: &mut Document, order: &[usize]) -> Result<(), OrganizeError> {
     let all = walk(doc)?;
     if order.len() != all.len() {
@@ -559,7 +560,11 @@ pub fn reorder_pages(doc: &mut Document, order: &[usize]) -> Result<(), Organize
         }
     }
     let reordered: Vec<(ObjRef, Dict)> = order.iter().filter_map(|i| all.get(*i).cloned()).collect();
-    rebuild(doc, &reordered)
+    // Each page's label, read in the new order before the tree changes, then written over it.
+    let (mut ranges, mut labelled) = (Vec::new(), false);
+    labels::collect_page_labels(doc, order, 0, &mut ranges, &mut labelled)?;
+    rebuild(doc, &reordered)?;
+    labels::finish_page_labels(doc, &ranges, labelled)
 }
 
 /// Reverse the order of the pages at `indices` among the positions they occupy; every other

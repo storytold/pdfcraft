@@ -417,6 +417,25 @@ fn reorder_pages_puts_every_page_where_the_order_says() {
     reorder_pages(&mut doc, &[2, 1, 0]).unwrap();
     let doc = save_and_reopen(&doc);
     assert_eq!(labels(&doc), ["Page 3", "Page 2", "Page 1"]);
+    assert!(crate::page_label_ranges(&doc).is_empty(), "an unlabelled document stays unlabelled");
+}
+
+/// #4922: page labels move with their pages, as a shuffle of two labelled files needs: fronts
+/// A1, A2 and backs B1, B2 interleaved read A1, B1, A2, B2, after a save too.
+#[test]
+fn reorder_pages_moves_page_labels_with_their_pages() {
+    use crate::{LabelRange, LabelStyle::Decimal};
+    let mut doc = open(fixture());
+    crate::insert_blank_page(&mut doc, 3, 300.0, 400.0).unwrap();
+    let ranges = [
+        LabelRange { start: 0, style: Decimal, prefix: "A".into(), first: 1 },
+        LabelRange { start: 2, style: Decimal, prefix: "B".into(), first: 1 },
+    ];
+    crate::set_page_label_ranges(&mut doc, &ranges).unwrap();
+    reorder_pages(&mut doc, &[0, 2, 1, 3]).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(labels(&doc)[..3], ["Page 1", "Page 3", "Page 2"]);
+    assert_eq!(crate::page_labels(&doc).unwrap(), ["A1", "B1", "A2", "B2"]);
 }
 
 #[test]
