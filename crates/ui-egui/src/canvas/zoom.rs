@@ -343,7 +343,7 @@ impl DocView {
         Some(info.pages.iter().skip(first).take(last - first + 1).map(|p| self.display_size(p)).collect())
     }
 
-    pub(super) fn fit_zoom(&mut self, info: &DocInfo) {
+    pub(super) fn effective_zoom(&self, info: &DocInfo) -> f32 {
         let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().map(|p| side(self.display_size(p))).fold(1.0, f32::max);
         let max_w = largest(|s| s.0);
         // A single page shown on its own fits that page, and full screen filling the screen in
@@ -370,16 +370,36 @@ impl DocView {
         let avail_w = (self.viewport_w - 2.0 * self.side()).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         let zw = (avail_w - self.page_gap() * (per_row - 1.0)) / (spread_w.unwrap_or(w * per_row) * PT);
-        match self.fit {
-            Fit::Width => self.zoom = zw,
+        let z = match self.fit {
+            Fit::Width => zw,
             Fit::Page => {
                 let zh = (self.viewport_h - 2.0 * self.margin()) / (h * PT);
-                self.zoom = zw.min(zh);
+                zw.min(zh)
             }
-            Fit::Height => self.zoom = (self.viewport_h - 2.0 * self.margin()) / (h * PT),
-            Fit::None => {}
+            Fit::Height => (self.viewport_h - 2.0 * self.margin()) / (h * PT),
+            Fit::None => self.zoom,
+        };
+        z.clamp(0.08, 64.0)
+    }
+
+    pub(super) fn fit_zoom(&mut self, info: &DocInfo) {
+        self.zoom = self.effective_zoom(info);
+    }
+
+    pub(super) fn scaled_page_height(&self, h: f32, zoom: f32) -> f32 {
+        let s = zoom * PT;
+        if self.show_page_gaps {
+            h * s
+        } else {
+            let ppp = self.screen_ppp.max(1.0);
+            device_pixels(h, s * ppp) as f32 / ppp
         }
-        self.zoom = self.zoom.clamp(0.08, 64.0);
+    }
+
+    pub(super) fn pending_page_height(&self, page: usize, info: &DocInfo) -> f32 {
+        let Some(p) = info.pages.get(page) else { return 0.0 };
+        let (_, h) = self.display_size(p);
+        self.scaled_page_height(h, self.effective_zoom(info))
     }
 
     /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
