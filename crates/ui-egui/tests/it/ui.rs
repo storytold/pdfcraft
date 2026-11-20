@@ -1048,8 +1048,7 @@ fn dropping_an_open_pdf_again_focuses_its_tab() {
 
 #[test]
 fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
-    // The grid's drop reads a file from its path when its turn to be inserted comes, and inserts it
-    // at the end when the pointer doesn't say where it went (about a second).
+    // The positional drop waits for a pointer; a drop outside the grid appends the file from disk.
     let dir = std::env::temp_dir().join(format!("pdfcraft-grid-drop-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("dropped.pdf");
@@ -1075,6 +1074,8 @@ fn a_file_dropped_on_the_page_grid_is_read_from_disk_and_inserted() {
     assert_eq!(pages(&h), 1);
     let file: egui::DroppedFileHandle = std::sync::Arc::new(Dropped { path: path.clone(), bytes: Vec::new() });
     support::input::drop_files(&mut h, [file]);
+    assert_eq!(pages(&h), 1, "the drop waits for the pointer");
+    h.hover_at(egui::pos2(10.0, 400.0));
     for _ in 0..300 {
         h.run_steps(1);
         if pages(&h) == 2 {
