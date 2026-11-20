@@ -137,6 +137,22 @@ fn printer_label(name: &str) -> String {
     if name == crate::web_print::BROWSER_PRINTER { crate::web_print::browser_printer_label().to_string() } else { name.to_string() }
 }
 
+/// What the dialog says when the spooler listed no printers at all. On Windows a missing print
+/// DLL is a cause of its own (#7227): `windows.data.pdf.dll` or `prntvpt.dll` absent from
+/// `system32` makes the spooler list nothing while the spooler itself is running, so the
+/// message names the DLL instead of sending the user to check it.
+pub(crate) fn no_printers_message(missing_dll: Option<&str>) -> String {
+    match missing_dll {
+        Some(dll) => crate::i18n::fmt(
+            tl!("No printers were found: printing needs {dll}, which this Windows installation lacks. Restore it or use Save as PDF."),
+            &[("dll", dll)],
+        ),
+        None => {
+            tl!("No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.").to_string()
+        }
+    }
+}
+
 /// A job being spooled: its printer, the sheets sent so far of how many, and its worker's news.
 #[cfg(not(target_arch = "wasm32"))]
 struct PrintJob {
@@ -911,6 +927,18 @@ pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #7227: when the spooler lists no printers because a Windows print DLL is missing, the
+    /// message names the DLL instead of sending the user to check the spooler.
+    #[test]
+    fn missing_print_dll_names_itself_in_the_no_printers_message() {
+        let message = no_printers_message(Some("windows.data.pdf.dll"));
+        assert!(message.contains("windows.data.pdf.dll"), "{message}");
+        assert!(!message.contains("spooler"), "{message}");
+        let generic = no_printers_message(None);
+        assert!(generic.contains("No printers were found"), "{generic}");
+        assert!(generic.contains("spooler"), "{generic}");
+    }
 
     #[test]
     fn current_page_preview_uses_positions_and_selection_guards() {

@@ -34,8 +34,10 @@ thread_local! {
 }
 
 /// The first print DLL this Windows installation lacks. `None` when all are there, and when the
-/// system folder is unknown (the loader then decides, as before).
-fn missing_print_dll() -> Option<&'static str> {
+/// system folder is unknown (the loader then decides, as before). The Print dialog reads it to
+/// name the real cause when no printers are listed (#7227), rather than sending the user to
+/// check a spooler that is fine.
+pub fn missing_print_dll() -> Option<&'static str> {
     #[cfg(windows)]
     {
         #[cfg(test)]
