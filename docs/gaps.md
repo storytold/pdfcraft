@@ -241,7 +241,7 @@ update the numbers.
 - **Impact:** government and legal users sign with tokens and need B-LT/B-LTA.
 - **Estimate:** 40–70 h; tokens need hardware to test. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
-### 11. Accessibility: only text-only automatic structure creation
+### 11. Accessibility: automatic structure creation covers text and images only
 
 - **Missing:** apply auto-tag proposals to marked content and a valid parent tree, tag fields
   into structure trees with unusual layouts (only a direct Document root with a direct
