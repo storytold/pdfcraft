@@ -287,13 +287,32 @@ pub fn parse_da(da: &str) -> Da {
     for (i, t) in toks.iter().enumerate() {
         match *t {
             "Tf" if i >= 2 => {
-                out.font = toks[i - 2].trim_start_matches('/').to_string();
+                // A `/DA` is a string, so a name written in it keeps the `#xx` escapes a name in a
+                // dictionary loses: `Da::font` is the name itself, as the `/DR` lists it. A name
+                // whose bytes are not text is kept as written.
+                let written = toks[i - 2].trim_start_matches('/');
+                out.font = String::from_utf8(crate::name_bytes(written)).unwrap_or_else(|_| written.to_string());
                 out.size = toks[i - 1].parse::<f64>().ok().filter(|s| s.is_finite() && *s >= 0.0).unwrap_or(0.0).min(300.0);
             }
             "g" if i >= 1 && toks[i - 1].parse::<f64>().is_ok() => out.color = format!("{} g", toks[i - 1]),
             "rg" if i >= 3 && toks[i - 3..i].iter().all(|x| x.parse::<f64>().is_ok()) => out.color = format!("{} rg", toks[i - 3..i].join(" ")),
             "k" if i >= 4 && toks[i - 4..i].iter().all(|x| x.parse::<f64>().is_ok()) => out.color = format!("{} k", toks[i - 4..i].join(" ")),
             _ => {}
+        }
+    }
+    out
+}
+
+/// `name` as it is written after a `/` in a content stream or a `/DA`: every byte that is not a
+/// regular character escaped as `#xx` (ISO 32000-2 §7.3.5), which [`crate::name_bytes`] reads
+/// back. A font resource named `F x_1` must be written `/F#20x_1`, or its space ends the name.
+pub(crate) fn name_token(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for &b in name.as_bytes() {
+        if b.is_ascii_graphic() && !b"#()<>[]{}/%".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("#{b:02X}"));
         }
     }
     out
@@ -396,8 +415,9 @@ pub(crate) fn button_caption(doc: &Document, da: &str, caption: &str, width: f64
     let missing = enc.first_unencodable(caption);
     let size = if da.size > 0.0 { da.size } else { auto };
     let tw = enc.width(caption, size);
+    let token = name_token(&name);
     let mut out =
-        format!("BT /{name} {size:.2} Tf {} 1 0 0 1 {:.3} {:.3} Tm ", da.color, (width - tw) / 2.0, (height - size * 0.7) / 2.0).into_bytes();
+        format!("BT /{token} {size:.2} Tf {} 1 0 0 1 {:.3} {:.3} Tm ", da.color, (width - tw) / 2.0, (height - size * 0.7) / 2.0).into_bytes();
     out.extend(literal(&enc.encode(caption)));
     out.extend_from_slice(b" Tj ET\n");
     (out, name, font, missing)
@@ -988,7 +1008,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         n(bw),
         n(width - 2.0 * bw),
         n(height - 2.0 * bw),
-        font_name,
+        name_token(&font_name),
         n(size),
         da.color
     )
@@ -1029,10 +1049,12 @@ fn draw_lines(
     } else {
         (lines.into_iter().map(|l| vec![Piece::Latin(l)]).collect(), ShapedFonts::default())
     };
+    // The `/DR` name as a resource key is the name itself; the content stream writes it escaped.
+    let token = name_token(font_name);
     let mut body = Vec::new();
     let mut current = None;
     for ((x, y, _), pieces) in shown.iter().zip(&pieces) {
-        shaped.show_line(&mut body, pieces, *x, *y, size, font_name, |s| enc.encode(s), |s| enc.width(s, size), &mut current);
+        shaped.show_line(&mut body, pieces, *x, *y, size, &token, |s| enc.encode(s), |s| enc.width(s, size), &mut current);
     }
     let unencodable = pieces.iter().flatten().find_map(|p| match p {
         Piece::Latin(s) => enc.first_unencodable(s),
@@ -1265,6 +1287,8 @@ mod tests {
         assert_eq!(parse_da("/Helv 0 Tf 0 g"), Da { font: "Helv".into(), size: 0.0, color: "0 g".into() });
         assert_eq!(parse_da("0.1 0.2 0.3 rg /F1 11 Tf"), Da { font: "F1".into(), size: 11.0, color: "0.1 0.2 0.3 rg".into() });
         assert_eq!(parse_da("/Cour 9 Tf 0 0 0 1 k").color, "0 0 0 1 k");
+        // A `/DA` is a string, so a name in it keeps the `#xx` escapes a dictionary name loses.
+        assert_eq!(parse_da("/F#20x_1 12 Tf 0 g").font, "F x_1");
         assert_eq!(parse_da("garbage").font, "Helv");
         assert_eq!(stroke_op("1 0 0 rg"), "1 0 0 RG");
     }
