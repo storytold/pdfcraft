@@ -1312,9 +1312,11 @@ fn schema_without(drop: &str) -> String {
 #[test]
 fn xmp_extension_schema_descriptions_are_complete() {
     assert_eq!(extension(&schema_without(""), OWN), (vec![], vec![]));
-    // The property and value type lists of a schema are optional.
+    // The property and value type lists of a schema are optional, and so is a value type's field
+    // list (TechNote 0009, 4.5).
     assert_eq!(extension(&schema_without("pdfaSchema:property"), OWN), (vec![], vec![]));
     assert_eq!(extension(&schema_without("pdfaSchema:valueType"), OWN), (vec![], vec![]));
+    assert_eq!(extension(&schema_without("pdfaType:field"), OWN), (vec![], vec![]));
     // Every other entry is required.
     for required in [
         "pdfaSchema:schema",
@@ -1328,7 +1330,6 @@ fn xmp_extension_schema_descriptions_are_complete() {
         "pdfaType:namespaceURI",
         "pdfaType:prefix",
         "pdfaType:description",
-        "pdfaType:field",
         "pdfaField:name",
         "pdfaField:valueType",
         "pdfaField:description",
@@ -1399,6 +1400,185 @@ fn xmp_extension_schema_descriptions_are_complete() {
     assert_eq!(issues[0].message, "The XMP extension schema #1 in metadata stream 3 0 R has no pdfaSchema:namespaceURI entry");
     assert_eq!(issues[0].object, Some(ObjRef::new(3, 0)));
     assert!(!issues[0].fixable);
+}
+
+/// A packet whose extension schema describes the property `t:p` (namespace `http://t.example/`)
+/// with the value type `property_type` and the value types `types`, and whose own properties are
+/// `values`, with `c:` bound to `http://c.example/`; its findings as if from the stream `3 0 R`.
+fn described_values(property_type: &str, types: &str, values: &str) -> xmp_extension::Findings {
+    let xmp = format!(
+        concat!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+            r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+            r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#" "#,
+            r#"xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#" xmlns:pdfaField="http://www.aiim.org/pdfa/ns/field#">"#,
+            r#"<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+            r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://t.example/</pdfaSchema:namespaceURI>"#,
+            r#"<pdfaSchema:prefix>t</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource">"#,
+            r#"<pdfaProperty:name>p</pdfaProperty:name><pdfaProperty:valueType>{property_type}</pdfaProperty:valueType>"#,
+            r#"<pdfaProperty:category>internal</pdfaProperty:category><pdfaProperty:description>d</pdfaProperty:description>"#,
+            r#"</rdf:li></rdf:Seq></pdfaSchema:property><pdfaSchema:valueType><rdf:Seq>{types}</rdf:Seq></pdfaSchema:valueType>"#,
+            r#"</rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description>"#,
+            r#"<rdf:Description rdf:about="" xmlns:t="http://t.example/" xmlns:c="http://c.example/">{values}</rdf:Description>"#,
+            r#"</rdf:RDF></x:xmpmeta>"#
+        ),
+        property_type = property_type,
+        types = types,
+        values = values
+    );
+    let mut found = xmp_extension::Findings::default();
+    found.add(ObjRef::new(3, 0), &xmp::parse(&xmp).expect("parses"));
+    found
+}
+
+/// A value type description: `C` in the namespace `http://c.example/`, with the fields `fields`.
+fn custom_type(fields: &[&str]) -> String {
+    let fields: String = fields
+        .iter()
+        .map(|f| {
+            format!(
+                r#"<rdf:li rdf:parseType="Resource"><pdfaField:name>{f}</pdfaField:name><pdfaField:valueType>Text</pdfaField:valueType><pdfaField:description>d</pdfaField:description></rdf:li>"#
+            )
+        })
+        .collect();
+    let list = if fields.is_empty() { String::new() } else { format!("<pdfaType:field><rdf:Seq>{fields}</rdf:Seq></pdfaType:field>") };
+    format!(
+        r#"<rdf:li rdf:parseType="Resource"><pdfaType:type>C</pdfaType:type><pdfaType:namespaceURI>http://c.example/</pdfaType:namespaceURI><pdfaType:prefix>c</pdfaType:prefix><pdfaType:description>d</pdfaType:description>{list}</rdf:li>"#
+    )
+}
+
+/// PDF/A-2 6.6.2.3.1: a structure value of a property an extension schema describes has only the
+/// fields its value type describes. A value type needs no field list (TechNote 0009, 4.5), and a
+/// description of a predefined type, such as Part or Font, changes nothing.
+#[test]
+fn xmp_extension_value_types_describe_the_fields_of_values_clause_6_6_2_3_1() {
+    let undescribed = |found: xmp_extension::Findings| -> Vec<(String, String, String)> {
+        assert!(found.missing.is_empty(), "{:?}", found.missing);
+        found.undescribed.into_iter().map(|u| (u.property, u.field, u.value_type)).collect()
+    };
+    let one = |field: &str| vec![("t:p".to_owned(), field.to_owned(), "C".to_owned())];
+    let structure = r#"<t:p rdf:parseType="Resource"><c:f1>v</c:f1></t:p>"#;
+    // Described fields.
+    assert_eq!(undescribed(described_values("C", &custom_type(&["f1"]), structure)), []);
+    // A type without a field list: its structure's fields aren't described.
+    assert_eq!(undescribed(described_values("C", &custom_type(&[]), structure)), one("c:f1"));
+    // Another field, in an rdf:Description, as an attribute, or in another namespace.
+    let in_description = r#"<t:p><rdf:Description><c:f2>v</c:f2></rdf:Description></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &custom_type(&["f1"]), in_description)), one("c:f2"));
+    assert_eq!(undescribed(described_values("C", &custom_type(&["f1"]), r#"<t:p c:f1="v" c:f3="v"/>"#)), one("c:f3"));
+    let other_namespace = r#"<t:p rdf:parseType="Resource"><t:f1>v</t:f1></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &custom_type(&["f1"]), other_namespace)), one("t:f1"));
+    // The items of an array of the type, its kind written as TechNote 0009 or the XMP Specification
+    // writes it.
+    let items = r#"<t:p><rdf:Bag><rdf:li rdf:parseType="Resource"><c:f1>v</c:f1></rdf:li><rdf:li rdf:parseType="Resource"><c:f9>v</c:f9></rdf:li></rdf:Bag></t:p>"#;
+    for kind in ["bag", "Bag", "seq"] {
+        assert_eq!(undescribed(described_values(&format!("{kind} C"), &custom_type(&["f1"]), items)), one("c:f9"), "{kind}");
+    }
+    // An item written as an rdf:Description.
+    let described_item = r#"<t:p><rdf:Seq><rdf:li><rdf:Description><c:f1>v</c:f1><c:f9>v</c:f9></rdf:Description></rdf:li></rdf:Seq></t:p>"#;
+    assert_eq!(undescribed(described_values("seq C", &custom_type(&["f1"]), described_item)), one("c:f9"));
+    // Each field once per property.
+    let twice = r#"<t:p><rdf:Bag><rdf:li c:f2="v"/><rdf:li c:f2="w"/></rdf:Bag></t:p>"#;
+    assert_eq!(undescribed(described_values("bag C", &custom_type(&["f1"]), twice)), one("c:f2"));
+    // A simple value, RDF and XML syntax, a qualified value, a type the packet doesn't describe and
+    // a property it doesn't describe have no fields to check.
+    assert_eq!(undescribed(described_values("C", &custom_type(&[]), "<t:p>text</t:p>")), []);
+    assert_eq!(undescribed(described_values("C", &custom_type(&[]), r#"<t:p xml:lang="en" rdf:resource="http://x/"/>"#)), []);
+    let qualified = r#"<t:p rdf:parseType="Resource"><rdf:value>v</rdf:value><c:q>v</c:q></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &custom_type(&[]), qualified)), []);
+    // A qualified structure's fields are those of its rdf:value (ISO 16684-1 7.9.2.5), not its
+    // qualifiers; a qualified array's items are in its rdf:value too.
+    let qualified_structure =
+        r#"<t:p rdf:parseType="Resource"><rdf:value rdf:parseType="Resource"><c:f1>v</c:f1><c:f9>v</c:f9></rdf:value><c:q>v</c:q></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &custom_type(&["f1"]), qualified_structure)), one("c:f9"));
+    let qualified_items = r#"<t:p><rdf:Description><rdf:value><rdf:Bag><rdf:li rdf:parseType="Resource"><c:f9>v</c:f9></rdf:li></rdf:Bag></rdf:value><c:q>v</c:q></rdf:Description></t:p>"#;
+    assert_eq!(undescribed(described_values("bag C", &custom_type(&["f1"]), qualified_items)), one("c:f9"));
+    let qualified_resource = r#"<t:p rdf:parseType="Resource"><rdf:value><rdf:Seq><rdf:li c:f9="v"/></rdf:Seq></rdf:value><c:q>v</c:q></t:p>"#;
+    assert_eq!(undescribed(described_values("seq C", &custom_type(&["f1"]), qualified_resource)), one("c:f9"));
+    // A type the XMP Specification defines keeps its fields when the packet describes it without
+    // them: Dimensions (XMP Specification Part 2, stDim).
+    let dimensions = r#"<rdf:li rdf:parseType="Resource"><pdfaType:type>Dimensions</pdfaType:type><pdfaType:namespaceURI>http://ns.adobe.com/xap/1.0/sType/Dimensions#</pdfaType:namespaceURI><pdfaType:prefix>stDim</pdfaType:prefix><pdfaType:description>d</pdfaType:description></rdf:li>"#;
+    let sized = r#"<t:p rdf:parseType="Resource" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#"><stDim:w>1</stDim:w><stDim:h>2</stDim:h><stDim:unit>inch</stDim:unit></t:p>"#;
+    assert_eq!(undescribed(described_values("Dimensions", dimensions, sized)), []);
+    let oversized = sized.replace("<stDim:unit>", "<stDim:depth>3</stDim:depth><stDim:unit>");
+    assert_eq!(
+        undescribed(described_values("Dimensions", dimensions, &oversized)),
+        [("t:p".to_owned(), "stDim:depth".to_owned(), "Dimensions".to_owned())]
+    );
+    assert_eq!(undescribed(described_values("Text", &custom_type(&[]), structure)), []);
+    let other_property = r#"<t:other rdf:parseType="Resource"><c:f1>v</c:f1></t:other>"#;
+    assert_eq!(undescribed(described_values("C", &custom_type(&[]), other_property)), []);
+    // A predefined type described without fields, as writers describe Part and Font, for a property
+    // of a predefined namespace, which keeps the XMP Specification's types: nothing to report.
+    let fonts = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#" "#,
+        r#"xmlns:pdfaType="http://www.aiim.org/pdfa/ns/type#"><pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>Paged-Text</pdfaSchema:schema><pdfaSchema:namespaceURI>http://ns.adobe.com/xap/1.0/t/pg/</pdfaSchema:namespaceURI>"#,
+        r#"<pdfaSchema:prefix>xmpTPg</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaProperty:name>Fonts</pdfaProperty:name><pdfaProperty:valueType>Bag Font</pdfaProperty:valueType>"#,
+        r#"<pdfaProperty:category>internal</pdfaProperty:category><pdfaProperty:description>d</pdfaProperty:description>"#,
+        r#"</rdf:li></rdf:Seq></pdfaSchema:property><pdfaSchema:valueType><rdf:Seq><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaType:description>A font</pdfaType:description><pdfaType:namespaceURI>http://ns.adobe.com/xap/1.0/sType/Font#</pdfaType:namespaceURI>"#,
+        r#"<pdfaType:prefix>stFnt</pdfaType:prefix><pdfaType:type>Font</pdfaType:type></rdf:li></rdf:Seq></pdfaSchema:valueType>"#,
+        r#"</rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description>"#,
+        r#"<rdf:Description rdf:about="" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" xmlns:stFnt="http://ns.adobe.com/xap/1.0/sType/Font#">"#,
+        r#"<xmpTPg:Fonts><rdf:Bag><rdf:li rdf:parseType="Resource"><stFnt:fontName>Inter</stFnt:fontName></rdf:li></rdf:Bag></xmpTPg:Fonts>"#,
+        r#"</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let verified = |xmp: &str| -> Vec<Issue> {
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause.starts_with("6.6.2.3")).collect()
+    };
+    assert_eq!(verified(fonts), []);
+    // The same packet in a namespace of its own: the fields the XMP Specification gives Font are
+    // described by that, and only a field it doesn't give is reported. Through verify, under
+    // 6.6.2.3.1, located in its stream and not fixable.
+    let own = fonts.replace("http://ns.adobe.com/xap/1.0/t/pg/", "http://t.example/");
+    assert_ne!(own, fonts);
+    assert_eq!(verified(&own), []);
+    let own = own.replace("<stFnt:fontName>Inter</stFnt:fontName>", "<stFnt:fontName>Inter</stFnt:fontName><stFnt:weight>Bold</stFnt:weight>");
+    let issues = verified(&own);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].clause, "6.6.2.3.1");
+    assert_eq!(
+        issues[0].message,
+        "The XMP property xmpTPg:Fonts in metadata stream 3 0 R has the field stFnt:weight, which its value type Font doesn't describe"
+    );
+    assert_eq!(issues[0].object, Some(ObjRef::new(3, 0)));
+    assert!(!issues[0].fixable);
+}
+
+/// PDF/A-2 6.6.2.3.1: the value of a field whose value type the packet describes has only the
+/// fields that type describes, however deep.
+#[test]
+fn xmp_extension_field_values_have_their_types_fields_clause_6_6_2_3_1() {
+    let undescribed = |found: xmp_extension::Findings| -> Vec<(String, String, String)> {
+        assert!(found.missing.is_empty(), "{:?}", found.missing);
+        found.undescribed.into_iter().map(|u| (u.property, u.field, u.value_type)).collect()
+    };
+    // C's child is a D, and D describes only ok, also for the items of an array of D, and a D
+    // inside a D.
+    let typed = |name: &str, fields: &[(&str, &str)]| {
+        let fields: String = fields
+            .iter()
+            .map(|(f, t)| format!(r#"<rdf:li rdf:parseType="Resource"><pdfaField:name>{f}</pdfaField:name><pdfaField:valueType>{t}</pdfaField:valueType><pdfaField:description>d</pdfaField:description></rdf:li>"#))
+            .collect();
+        format!(
+            r#"<rdf:li rdf:parseType="Resource"><pdfaType:type>{name}</pdfaType:type><pdfaType:namespaceURI>http://c.example/</pdfaType:namespaceURI><pdfaType:prefix>c</pdfaType:prefix><pdfaType:description>d</pdfaType:description><pdfaType:field><rdf:Seq>{fields}</rdf:Seq></pdfaType:field></rdf:li>"#
+        )
+    };
+    let nested = |child_type: &str| format!("{}{}", typed("C", &[("child", child_type)]), typed("D", &[("ok", "Text"), ("inner", "D")]));
+    let d = |field: &str| vec![("t:p".to_owned(), field.to_owned(), "D".to_owned())];
+    let child = r#"<t:p rdf:parseType="Resource"><c:child rdf:parseType="Resource"><c:ok>v</c:ok><c:bad>v</c:bad></c:child></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &nested("D"), child)), d("c:bad"));
+    assert_eq!(undescribed(described_values("C", &nested("Text"), child)), []);
+    let children = r#"<t:p rdf:parseType="Resource"><c:child><rdf:Bag><rdf:li c:ok="v"/><rdf:li c:bad="v"/></rdf:Bag></c:child></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &nested("bag D"), children)), d("c:bad"));
+    let deeper = r#"<t:p rdf:parseType="Resource"><c:child rdf:parseType="Resource"><c:inner rdf:parseType="Resource"><c:bad>v</c:bad></c:inner></c:child></t:p>"#;
+    assert_eq!(undescribed(described_values("C", &nested("D"), deeper)), d("c:bad"));
 }
 
 /// PDF/A-2 6.6.2.3.3: an entry that names something is incomplete when it is empty, while the

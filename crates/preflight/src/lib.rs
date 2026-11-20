@@ -162,6 +162,7 @@ pub const WORDINGS: &[&str] = &[
     "The title in the metadata and the document information differ",
     "The XMP property {property} in metadata stream {object} should have the value type {type}",
     "The XMP property {property} in metadata stream {object}, written {written}, should have the value type {type}",
+    "The XMP property {property} in metadata stream {object} has the field {field}, which its value type {type} doesn't describe",
     "The XMP extension schema {schema} in metadata stream {object} has no {entry} entry",
     "The XMP extension schema {schema} in metadata stream {object} describes {item} without a {entry} entry",
     "The XMP extension schema {schema} in metadata stream {object} has an empty {entry} entry",
@@ -745,8 +746,8 @@ fn check_identification(doc: &Document, level: Level, issue: &mut impl FnMut(&'s
     }
 }
 
-/// 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types and extension schema descriptions, in
-/// every metadata stream.
+/// 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types, the fields of extension value types and
+/// extension schema descriptions, in every metadata stream.
 fn check_xmp_packets(
     objs: &[(ObjRef, std::sync::Arc<Object>)],
     located_issue: &impl Fn(&'static str, &'static str, Vec<(&'static str, String)>, ObjRef, bool),
@@ -776,6 +777,16 @@ fn check_xmp_packets(
                 false,
             );
         }
+    }
+    for u in std::mem::take(&mut extension.undescribed) {
+        let values = vec![("{property}", u.property), ("{object}", u.object.to_string()), ("{field}", u.field), ("{type}", u.value_type)];
+        located_issue(
+            "6.6.2.3.1",
+            "The XMP property {property} in metadata stream {object} has the field {field}, which its value type {type} doesn't describe",
+            values,
+            u.object,
+            false,
+        );
     }
     report_xmp_extension(extension, located_issue);
 }
