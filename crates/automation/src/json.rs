@@ -198,9 +198,10 @@ pub(crate) fn nest_rows(rows: &[pdfcraft_engine::BookmarkRow], pages: &[pdfcraft
 }
 
 /// Where on its page a bookmark or link goes, in points from the top-left of the displayed page
-/// like every `rect`: the destination type (`XYZ`, `Fit`, `FitH`, `FitV`, `FitR`) and its
-/// position, `null` where the destination leaves it unspecified (`/XYZ null null null` keeps the
-/// reader's position and zoom). `None` for a destination without a type.
+/// like every `rect`: the destination type (`XYZ`, `Fit`, `FitH`, `FitV`, `FitR`, `FitB`,
+/// `FitBH`, `FitBV`) and its position, `null` where the destination leaves it unspecified
+/// (`/XYZ null null null` keeps the reader's position and zoom). `None` for a destination without
+/// a type.
 pub(crate) fn destination(view: &pdfcraft_render::DestView, page: &pdfcraft_render::PageInfo) -> Option<Value> {
     use pdfcraft_render::DestView;
     let points = |left: Option<f32>, top: Option<f32>| {
@@ -215,13 +216,22 @@ pub(crate) fn destination(view: &pdfcraft_render::DestView, page: &pdfcraft_rend
             json!({ "fit": "XYZ", "left": x, "top": y, "zoom": zoom.map(f64::from) })
         }
         DestView::Fit => json!({ "fit": "Fit" }),
+        DestView::FitB => json!({ "fit": "FitB" }),
         DestView::FitH { top } => {
             let (x, y) = points(None, *top);
             json!({ "fit": "FitH", "left": x, "top": y })
         }
+        DestView::FitBH { top } => {
+            let (x, y) = points(None, *top);
+            json!({ "fit": "FitBH", "left": x, "top": y })
+        }
         DestView::FitV { left } => {
             let (x, y) = points(*left, None);
             json!({ "fit": "FitV", "left": x, "top": y })
+        }
+        DestView::FitBV { left } => {
+            let (x, y) = points(*left, None);
+            json!({ "fit": "FitBV", "left": x, "top": y })
         }
         DestView::FitR { rect } => json!({ "fit": "FitR", "rect": comments::rect_to_view(page, *rect) }),
     })

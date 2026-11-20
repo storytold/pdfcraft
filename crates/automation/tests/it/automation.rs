@@ -2159,6 +2159,54 @@ fn destinations_are_listed_with_their_position() {
     assert_eq!((links["links"][2]["url"].clone(), links["links"][2].get("destination")), (json!("https://example.com"), None));
 }
 
+#[test]
+fn boxed_fit_destinations_report_distinct_variants() {
+    let (_base, root) = sandbox("boxed-fit-dests");
+    std::fs::write(root.join("target.pdf"), fixture(3)).unwrap();
+    let dests_pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /OpenAction [4 0 R /FitB] >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 612 792] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R 10 0 R 11 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>",
+        "<< /Title (B) /Parent 5 0 R /Next 7 0 R /Dest [4 0 R /FitB] >>",
+        "<< /Title (BH) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /Dest [4 0 R /FitBH 400] >>",
+        "<< /Title (BV) /Parent 5 0 R /Prev 7 0 R /Dest [4 0 R /FitBV 72] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 700 300 716] /Border [0 0 0] /Dest [4 0 R /FitB] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 670 300 686] /Border [0 0 0] /Dest [4 0 R /FitBH 400] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [72 640 300 656] /Border [0 0 0] /Dest [4 0 R /FitBV 72] >>",
+    ]);
+    std::fs::write(root.join("dests.pdf"), dests_pdf).unwrap();
+    std::fs::write(root.join("gotor-b.pdf"), remote_link_pdf("target.pdf", Some("[1 /FitB]"))).unwrap();
+    std::fs::write(root.join("gotor-bh.pdf"), remote_link_pdf("target.pdf", Some("[2 /FitBH 180]"))).unwrap();
+    std::fs::write(root.join("gotor-bv.pdf"), remote_link_pdf("target.pdf", Some("[0 /FitBV 45]"))).unwrap();
+
+    let mut a = auto(&root);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "dests.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["open_destination"]["destination"], json!({ "fit": "FitB" }), "{info}");
+
+    let marks = ok(&mut a, "bookmark_list", json!({ "doc": doc }));
+    assert_eq!(marks["bookmarks"][0]["destination"], json!({ "fit": "FitB" }), "{marks}");
+    assert_eq!(marks["bookmarks"][1]["destination"], json!({ "fit": "FitBH", "left": null, "top": 392.0 }), "{marks}");
+    assert_eq!(marks["bookmarks"][2]["destination"], json!({ "fit": "FitBV", "left": 72.0, "top": null }), "{marks}");
+
+    let links = ok(&mut a, "link_list", json!({ "doc": doc }));
+    assert_eq!(links["links"][0]["destination"], json!({ "fit": "FitB" }), "{links}");
+    assert_eq!(links["links"][1]["destination"], json!({ "fit": "FitBH", "left": null, "top": 392.0 }), "{links}");
+    assert_eq!(links["links"][2]["destination"], json!({ "fit": "FitBV", "left": 72.0, "top": null }), "{links}");
+
+    for (file, expected) in [
+        ("gotor-b.pdf", json!({ "kind": "fit_b" })),
+        ("gotor-bh.pdf", json!({ "kind": "fit_bh", "top": 180.0 })),
+        ("gotor-bv.pdf", json!({ "kind": "fit_bv", "left": 45.0 })),
+    ] {
+        let src = ok(&mut a, "doc_open", json!({ "path": file }))["doc"].as_u64().unwrap();
+        let opened = ok(&mut a, "link_open", json!({ "doc": src, "page": 1, "index": 1 }));
+        assert_eq!(opened["destination"]["view"], expected, "{file}: {opened}");
+    }
+}
+
 /// Web, `www.` and email addresses written as plain page text, which the viewer opens on a click
 /// (#4207), are listed by link_list with text_links: true; one under a link annotation is not.
 #[test]

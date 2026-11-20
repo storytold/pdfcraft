@@ -1891,11 +1891,15 @@ fn destination_operands_become_views() {
     assert_eq!(v(b"XYZ", &[Some(0.0), Some(420.0), Some(0.0)]), Xyz { left: Some(0.0), top: Some(420.0), zoom: None });
     assert_eq!(v(b"XYZ", &[Some(72.0), Some(500.0), Some(1.5)]), Xyz { left: Some(72.0), top: Some(500.0), zoom: Some(1.5) });
     assert_eq!(v(b"Fit", &[]), Fit);
-    assert_eq!(v(b"FitB", &[]), Fit);
+    assert_eq!(v(b"FitB", &[]), FitB);
     assert_eq!(v(b"FitH", &[Some(250.0)]), FitH { top: Some(250.0) });
-    assert_eq!(v(b"FitBH", &[None]), FitH { top: None });
+    assert_eq!(v(b"FitBH", &[None]), FitBH { top: None });
+    assert_eq!(v(b"FitBH", &[Some(250.0)]), FitBH { top: Some(250.0) });
+    assert_eq!(v(b"FitBH", &[Some(f32::NAN)]), FitBH { top: None });
     assert_eq!(v(b"FitV", &[Some(120.0)]), FitV { left: Some(120.0) });
-    assert_eq!(v(b"FitBV", &[Some(5.0)]), FitV { left: Some(5.0) });
+    assert_eq!(v(b"FitBV", &[Some(5.0)]), FitBV { left: Some(5.0) });
+    assert_eq!(v(b"FitBV", &[None]), FitBV { left: None });
+    assert_eq!(v(b"FitBV", &[Some(f32::INFINITY)]), FitBV { left: None });
     // FitR's corners are normalized.
     assert_eq!(v(b"FitR", &[Some(110.0), Some(220.0), Some(10.0), Some(20.0)]), FitR { rect: [10.0, 20.0, 110.0, 220.0] });
     // Missing operands are null; so are non-finite ones, and a zoom that isn't positive.
@@ -1965,10 +1969,35 @@ fn bookmarks_and_links_keep_their_destination_view() {
         [
             LinkTarget::Page(1, Xyz { left: Some(72.0), top: Some(500.0), zoom: Some(1.5) }),
             LinkTarget::Page(1, Xyz { left: None, top: Some(300.0), zoom: Some(2.0) }),
-            LinkTarget::Page(1, FitH { top: Some(100.0) }),
+            LinkTarget::Page(1, FitBH { top: Some(100.0) }),
             LinkTarget::Page(1, Fit),
         ]
     );
+}
+
+#[test]
+fn boxed_fit_destinations_keep_distinct_variants() {
+    use DestView::*;
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R /OpenAction [4 0 R /FitB] /Names << /Dests 30 0 R >> >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Annots [20 0 R 21 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 13 0 R /Count 3 >> endobj
+11 0 obj << /Title (fitb) /Parent 10 0 R /Next 12 0 R /Dest [4 0 R /FitB] >> endobj
+12 0 obj << /Title (fitbh) /Parent 10 0 R /Next 13 0 R /Dest [4 0 R /FitBH 240] >> endobj
+13 0 obj << /Title (fitbv) /Parent 10 0 R /Prev 12 0 R /Dest (bv) >> endobj
+20 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /Dest [4 0 R /FitB] >> endobj
+21 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /Dest [4 0 R /FitBV 45] >> endobj
+30 0 obj << /Names [(bv) [4 0 R /FitBV 80]] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    assert_eq!(info.open_dest, Some((1, FitB)));
+    let outline: Vec<_> = info.outline.iter().map(|o| (o.title.as_str(), o.page, o.view)).collect();
+    assert_eq!(outline, [("fitb", Some(1), FitB), ("fitbh", Some(1), FitBH { top: Some(240.0) }), ("fitbv", Some(1), FitBV { left: Some(80.0) })]);
+    let links: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+    assert_eq!(links, [LinkTarget::Page(1, FitB), LinkTarget::Page(1, FitBV { left: Some(45.0) })]);
 }
 
 #[test]
