@@ -1428,16 +1428,6 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
     if cx.tool == QuickTool::Link {
         crate::link_ui::link_outlines(ui, body, &session.links, cx.doc.links(), cx.info);
     }
-    if !cx.comments_hidden {
-        // The comment under the pointer is hit as the page's parts hit it: within the theme's reach, with its markers
-        // at the icon size. The redaction hover is the user's setting, passed as a data colour (L-90).
-        let env = Env::of(ui);
-        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
-        let pick = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
-        let pointer = ui.input(|i| i.pointer.hover_pos().filter(|_| !i.pointer.any_down()));
-        let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed };
-        comments::show(ui, body, session, cx.rotation, cx.info, cx.prefs, cx.tool, hover);
-    }
     // The comment being dragged, drawn from its own layers where it goes, over the page that still shows it where it
     // was. A page whose picture is of this revision has the released move: its layer settles.
     {
@@ -1469,6 +1459,16 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
             signature_drag::DragLayer::new(&session.signature_drag, &pcx, &map, cx.tool, &session.comments, session.pending_edit.as_ref())
                 .show_at(ui, body.rect);
         }
+    }
+    if !cx.comments_hidden {
+        // The comment under the pointer is hit as the page's parts hit it: within the theme's reach, with its markers
+        // at the icon size. The redaction hover is the user's setting, passed as a data colour (L-90).
+        let env = Env::of(ui);
+        let map = comments::PageMap::new(cx.info, body.pages, cx.rotation, body.view);
+        let pick = (map.doc_len(env.hit_reach()), map.doc_len(env.tokens.size.icon.md));
+        let pointer = ui.input(|i| i.pointer.hover_pos().filter(|_| !i.pointer.any_down()));
+        let hover = comments::Hover { pointer, redact: cx.redact_hover, pick, allowed: cx.allowed };
+        comments::show(ui, body, session, cx.rotation, cx.info, cx.prefs, cx.tool, hover);
     }
     if cx.calc_order {
         let hovered = match &parts_out.hovered {
