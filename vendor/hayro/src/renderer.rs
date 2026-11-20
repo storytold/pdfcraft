@@ -700,14 +700,16 @@ fn paints_canvas(device: Rect, width: u16, height: u16) -> bool {
 /// fill; for a stroke, half its width times the larger of its miter limit (kurbo draws a miter
 /// only when its tip is within `limit × width / 2` of the vertex) and √2 (square caps). The box
 /// of the path's points and control points (a curve stays inside their hull) grown by that and
-/// [`DRAW_SLACK`], mapped to the device and grown by 2 pixels for antialiasing, contains
-/// everything it paints: a path whose box misses the canvas is skipped without changing a pixel,
-/// so a tile of a large page no longer strokes and fills every path on the page. Bounds that
-/// aren't finite (an empty path) are drawn as before.
+/// [`DRAW_SLACK`], mapped to the device and grown by 2 pixels for antialiasing and `pad` more,
+/// contains everything it paints: a path whose box misses the canvas is skipped without changing
+/// a pixel, so a tile of a large page no longer strokes and fills every path on the page. Bounds
+/// that aren't finite (an empty path) are drawn as before. `pad` is 0 except for a hairline about
+/// to be snapped, which can move by less than a pixel (see [`snap_hairline`]).
 fn may_paint_canvas(
     path: &BezPath,
     transform: Affine,
     reach: f64,
+    pad: f64,
     width: u16,
     height: u16,
 ) -> bool {
@@ -736,8 +738,127 @@ fn may_paint_canvas(
     let grow = reach + DRAW_SLACK;
     let device = transform
         .transform_rect_bbox(points.inflate(grow, grow))
-        .inflate(2.0, 2.0);
+        .inflate(2.0 + pad, 2.0 + pad);
     paints_canvas(device, width, height)
+}
+
+/// PdfCraft patch (#7097): `path` with each point moved, on the device, to the centre of the pixel
+/// it falls in, for a stroke widened to the one-pixel hairline. Such a stroke is one pixel wide,
+/// so where its centre line runs along a pixel edge it covered the two pixels beside it by half
+/// each: thin lines of a drawing turned grey and blurred, and lines two pixels apart merged into
+/// one grey band, while a zoom step that put them on pixel centres showed them sharp. Snapped,
+/// every horizontal and vertical hairline covers one whole row or column at any zoom (what the
+/// PDF specification calls automatic stroke adjustment). Points on or within 0.01 px of the
+/// visible device `bounds` edges snap onto the boundary pixel instead of being pushed outside it
+/// (e.g. a stroke along the right or bottom page edge), while genuine half-pixel overhangs stay
+/// unmoved so their partial coverage is kept. A curve's control points move with the end beside
+/// them, so its tangents keep their direction. Each point moves less than a pixel. A subpath
+/// that snapping would shrink to a single point keeps its own points: a stroke of no length with
+/// butt caps draws nothing, and a short stroke or small mark must still draw. `None` when the
+/// transform can't be inverted or a point isn't finite (the path is drawn as given).
+fn snap_hairline(path: &BezPath, transform: Affine, bounds: Rect) -> Option<BezPath> {
+    let det = transform.determinant();
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let inverse = transform.inverse();
+    let mut out = BezPath::new();
+    // Snap one device coordinate to a pixel centre without pushing a visible hairline off
+    // `lo..hi`: on the right/bottom edge (`hi`, where `floor + 0.5` lands outside) or within
+    // float noise of an edge, snap onto the edge pixel; further into the half-pixel overhang,
+    // leave the coordinate unmoved so its partial coverage is kept without jumping inward.
+    const BOUNDARY_EPS: f64 = 0.01;
+    let snap_axis = |v: f64, lo: f64, hi: f64| {
+        let c = v.floor() + 0.5;
+        if hi > lo {
+            if v >= hi && v - 0.5 < hi {
+                return if v <= hi + BOUNDARY_EPS { hi.ceil() - 0.5 } else { v };
+            }
+            if v <= lo && v + 0.5 > lo {
+                return if v >= lo - BOUNDARY_EPS { lo.floor() + 0.5 } else { v };
+            }
+        }
+        c
+    };
+    // The current subpath, as given and snapped, and its on-curve points' pixel centres.
+    let mut given: Vec<kurbo::PathEl> = Vec::new();
+    let mut snapped: Vec<kurbo::PathEl> = Vec::new();
+    let mut ends: Vec<Point> = Vec::new();
+    // The device offset that moves `p` to the centre of its pixel; that centre is kept in `ends`.
+    let offset = |p: Point, ends: &mut Vec<Point>| {
+        let d = transform * p;
+        let centre = Point::new(
+            snap_axis(d.x, bounds.x0, bounds.x1),
+            snap_axis(d.y, bounds.y0, bounds.y1),
+        );
+        ends.push(centre);
+        centre - d
+    };
+    let moved = |p: Point, by: Vec2| inverse * (transform * p + by);
+    let flush = |out: &mut BezPath,
+                 given: &mut Vec<kurbo::PathEl>,
+                 snapped: &mut Vec<kurbo::PathEl>,
+                 ends: &mut Vec<Point>| {
+        let collapsed = ends.windows(2).all(|w| w[0] == w[1]);
+        let els = if collapsed { &*given } else { &*snapped };
+        for el in els {
+            out.push(*el);
+        }
+        given.clear();
+        snapped.clear();
+        ends.clear();
+    };
+    // The offset of the last on-curve point, which a curve's first control point moves by.
+    let mut last = Vec2::ZERO;
+    for el in path.elements() {
+        let el = *el;
+        let snapped_el = match el {
+            kurbo::PathEl::MoveTo(p) => {
+                flush(&mut out, &mut given, &mut snapped, &mut ends);
+                last = offset(p, &mut ends);
+                kurbo::PathEl::MoveTo(moved(p, last))
+            }
+            kurbo::PathEl::LineTo(p) => {
+                last = offset(p, &mut ends);
+                kurbo::PathEl::LineTo(moved(p, last))
+            }
+            kurbo::PathEl::QuadTo(c, p) => {
+                let by = offset(p, &mut ends);
+                let c = moved(c, (last + by) * 0.5);
+                last = by;
+                kurbo::PathEl::QuadTo(c, moved(p, by))
+            }
+            kurbo::PathEl::CurveTo(c1, c2, p) => {
+                let by = offset(p, &mut ends);
+                let c1 = moved(c1, last);
+                last = by;
+                kurbo::PathEl::CurveTo(c1, moved(c2, by), moved(p, by))
+            }
+            kurbo::PathEl::ClosePath => kurbo::PathEl::ClosePath,
+        };
+        given.push(el);
+        snapped.push(snapped_el);
+    }
+    flush(&mut out, &mut given, &mut snapped, &mut ends);
+    out.is_finite().then_some(out)
+}
+
+/// PdfCraft patch (#7097): the path to stroke — `snapped` when snapping happened and the dash
+/// pattern still fits it, else `given`. Snapping can lengthen a path: two points on opposite
+/// sides of a pixel edge move to centres a whole pixel apart, so a stroke of many tiny straddling
+/// segments grows by a pixel each. A pattern that fits `given` (checked in
+/// [`set_stroke_properties`]) could then cut `snapped` into more than [`MAX_DASHES_PER_STROKE`]
+/// pieces, so the pattern is checked again and `given`, which passed, is stroked instead.
+fn stroked_path<'a>(
+    given: &'a BezPath,
+    snapped: Option<&'a BezPath>,
+    dashes: &[f32],
+) -> &'a BezPath {
+    let Some(snapped) = snapped else { return given };
+    if dashes.is_empty() || !usable_dash_pattern(snapped, dashes).is_empty() {
+        return snapped;
+    }
+    given
 }
 
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
@@ -873,6 +994,9 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// PdfCraft patch (#7097): the full scaled page's visible device box in this renderer's
+    /// coordinates, so [`snap_hairline`] keeps strokes on page edges visible across tiles.
+    snap_bounds: Rect,
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -996,6 +1120,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        snap_bounds: Rect,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -1015,16 +1140,18 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            snap_bounds,
         }
     }
 
-    /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`].
+    /// PdfCraft patch: returns the stroke's reach for [`may_paint_canvas`], and whether the
+    /// stroke was widened to the one-pixel hairline (for [`snap_hairline`]).
     fn set_stroke_properties(
         &mut self,
         stroke_props: &StrokeProps,
         is_text: bool,
         path: &BezPath,
-    ) -> f64 {
+    ) -> (f64, bool) {
         let threshold = if is_text { 0.25 } else { 1.0 };
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
@@ -1035,7 +1162,8 @@ impl Renderer {
         let transformed_width = line_width * min_factor;
 
         // Only enforce line width if not inside of pattern or type 3 glyph.
-        if transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph {
+        let widened = transformed_width < threshold && !self.inside_pattern && !self.in_type3_glyph;
+        if widened {
             line_width /= transformed_width;
             line_width *= threshold;
         }
@@ -1065,7 +1193,7 @@ impl Renderer {
 
         let reach = stroke_reach(&stroke);
         self.ctx.set_stroke(stroke);
-        reach
+        (reach, widened && !is_text)
     }
 
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, mut alpha_data: LumaData) {
@@ -1122,6 +1250,7 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                snap_bounds: self.snap_bounds,
             };
             let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1662,6 +1791,7 @@ impl Renderer {
             preview: self.preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            snap_bounds: Rect::ZERO,
         };
         t.interpret(&mut renderer, initial_transform, is_stroke);
         let mut pix = offscreen_pixmap(size.0, size.1, true);
@@ -1735,6 +1865,12 @@ impl Renderer {
             erasing: false,
             erase_groups: 0,
             knockout_passes: Vec::new(),
+            snap_bounds: Rect::new(
+                self.snap_bounds.x0 - offset.0,
+                self.snap_bounds.y0 - offset.1,
+                self.snap_bounds.x1 - offset.0,
+                self.snap_bounds.y1 - offset.1,
+            ),
         };
         // The pass draws inside a layer of its own. On the bare canvas, vello_cpu fills a tile
         // that a paint covers completely without the blend mode, so the middle of a group wider
@@ -2126,9 +2262,23 @@ impl Renderer {
         is_text: bool,
     ) {
         self.ctx.set_transform(transform);
-        let reach = self.set_stroke_properties(stroke_props, is_text, path);
+        let (reach, hairline) = self.set_stroke_properties(stroke_props, is_text, path);
+        // PdfCraft patch: see `may_paint_canvas`. A hairline that cannot paint the canvas even
+        // once snapped is rejected before `snap_hairline` builds its buffers for every tile of a
+        // large page. Snapping moves a point by less than a pixel, so one pixel of padding
+        // keeps this exact; the check on the snapped path below still decides what is drawn.
+        if hairline
+            && !may_paint_canvas(path, transform, reach, 1.0, self.ctx.width(), self.ctx.height())
+        {
+            return;
+        }
+        // PdfCraft patch: see `snap_hairline` and `stroked_path`.
+        let snapped = hairline
+            .then(|| snap_hairline(path, transform, self.snap_bounds))
+            .flatten();
+        let path = stroked_path(path, snapped.as_ref(), &stroke_props.dash_array);
         // PdfCraft patch: see `may_paint_canvas`.
-        if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
+        if !may_paint_canvas(path, transform, reach, 0.0, self.ctx.width(), self.ctx.height()) {
             return;
         }
 
@@ -2157,7 +2307,7 @@ impl Renderer {
         self.ctx.set_fill_rule(convert_fill_rule(fill_rule));
         self.ctx.set_transform(transform);
         // PdfCraft patch: see `may_paint_canvas`.
-        if !may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+        if !may_paint_canvas(path, transform, 0.0, 0.0, self.ctx.width(), self.ctx.height()) {
             return;
         }
 
@@ -2199,9 +2349,12 @@ impl Renderer {
                 // PdfCraft patch: a type 3 glyph's content stream keeps painting as line art
                 // (its internal ops reach `fill_path`/`stroke_path` with `is_text: false`), so
                 // reading colours remap it only when line-art replacement is on.
-                self.in_type3_glyph = true;
+                // PdfCraft patch: saved and restored, not cleared: a glyph's content may itself
+                // show text in a Type 3 font, and what it draws after that is still inside this
+                // glyph, which keeps its strokes unwidened and unsnapped.
+                let in_type3_glyph = std::mem::replace(&mut self.in_type3_glyph, true);
                 s.interpret(self, transform, glyph_transform, paint);
-                self.in_type3_glyph = false;
+                self.in_type3_glyph = in_type3_glyph;
             }
         }
     }
@@ -2564,7 +2717,9 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| {
+                        draw_soft_mask(&m, settings, width, height, self.preview, self.snap_bounds)
+                    })
                     .clone()
             }),
             None,
@@ -2693,7 +2848,9 @@ impl<'a> Device<'a> for Renderer {
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| {
+                    draw_soft_mask(&m, settings, width, height, self.preview, self.snap_bounds)
+                })
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2743,7 +2900,7 @@ impl<'a> Device<'a> for Renderer {
                 self.ctx.set_fill_rule(convert_fill_rule(*fill_rule));
                 self.ctx.set_transform(transform);
                 // PdfCraft patch: see `may_paint_canvas`.
-                if !may_paint_canvas(&path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+                if !may_paint_canvas(&path, transform, 0.0, 0.0, self.ctx.width(), self.ctx.height()) {
                     return;
                 }
 
@@ -2878,7 +3035,14 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn draw_soft_mask(
+    mask: &SoftMask<'_>,
+    settings: RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    snap_bounds: Rect,
+) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
@@ -2899,6 +3063,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        snap_bounds,
     };
 
     let bg_color = mask.background_color().to_rgba();
@@ -3158,6 +3323,113 @@ mod snap_tests {
         assert!(snap_minified_image(&noisy, source, planned).is_some());
         let turned_noisy = Affine::new([1e-9, 0.5, -0.5, 0.0, 200.3, 0.3]);
         assert!(snap_minified_image(&turned_noisy, source, (20_000, 200)).is_some());
+    }
+}
+
+/// PdfCraft patch (#7097): snapping a hairline can lengthen it, so the dash budget is checked
+/// again on the snapped path.
+#[cfg(test)]
+mod hairline_dash_tests {
+    use super::{Affine, BezPath, Point, Rect, may_paint_canvas, snap_hairline, stroked_path};
+
+    /// A hairline zigzag along y = 20 whose points straddle the pixel edge at x = 11: snapping
+    /// moves each one to the centre of its own pixel, a whole pixel from its neighbours, so each
+    /// `0.0002` pt segment becomes one device pixel long.
+    fn straddling_zigzag(segments: usize) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(10.9999, 20.0));
+        for i in 0..segments {
+            let x = if i % 2 == 0 { 11.0001 } else { 10.9999 };
+            path.line_to(Point::new(x, 20.0));
+        }
+        path
+    }
+
+    /// A dash pattern that fits a hairline can cut the snapped one into a billion pieces: 1,000
+    /// segments of `0.0002` pt are 0.2 pt and 200,002 pieces of `[0.000001]`, under the budget,
+    /// but 1,000 px once snapped, over it. The given path is stroked instead. A solid stroke, and
+    /// a pattern that still fits after snapping, keep the snapped path.
+    #[test]
+    fn a_dash_pattern_that_fits_a_hairline_is_not_applied_to_the_snapped_one() {
+        let given = straddling_zigzag(1_000);
+        let snapped =
+            snap_hairline(&given, Affine::IDENTITY, Rect::new(0.0, 0.0, 40.0, 40.0))
+                .expect("a hairline snaps");
+        assert_eq!(stroked_path(&given, Some(&snapped), &[0.000001]), &given);
+        assert_eq!(stroked_path(&given, Some(&snapped), &[]), &snapped);
+        assert_eq!(stroked_path(&given, Some(&snapped), &[10.0]), &snapped);
+        assert_eq!(stroked_path(&given, None, &[0.000001]), &given);
+    }
+
+    /// The precheck that rejects a hairline before snapping it is conservative: a path that
+    /// snapping could pull onto the canvas is kept, and one it cannot is rejected.
+    #[test]
+    fn a_hairline_snapping_could_pull_onto_the_canvas_is_not_rejected_first() {
+        let hairline = |x: f64| {
+            let mut path = BezPath::new();
+            path.move_to(Point::new(x, 10.0));
+            path.line_to(Point::new(x, 30.0));
+            path
+        };
+        // Half a pixel outside the canvas: snapping can pull it in, so it is kept.
+        assert!(may_paint_canvas(&hairline(40.4), Affine::IDENTITY, 0.5, 1.0, 40, 40));
+        // Well outside it: no snap can reach the canvas, so it is rejected before snapping.
+        assert!(!may_paint_canvas(&hairline(45.0), Affine::IDENTITY, 0.5, 1.0, 40, 40));
+    }
+
+    /// Strokes on the page's outer edges snap onto the boundary pixel instead of stepping outside
+    /// `bounds`, float noise within 0.01 px snaps to the boundary, genuine half-pixel overhangs
+    /// keep their position, and tile offsets leave interior seams snapping identically to full
+    /// renders.
+    #[test]
+    fn snap_hairline_keeps_boundary_strokes_visible_and_tile_consistent() {
+        let snap_vertical = |x: f64, bounds: Rect| {
+            let mut path = BezPath::new();
+            path.move_to(Point::new(x, 10.0));
+            path.line_to(Point::new(x, 30.0));
+            let snapped = snap_hairline(&path, Affine::IDENTITY, bounds).expect("vertical hairline snaps");
+            let kurbo::PathEl::MoveTo(p) = snapped.elements()[0] else {
+                panic!("expected MoveTo");
+            };
+            p.x
+        };
+        let snap_horizontal = |y: f64, bounds: Rect| {
+            let mut path = BezPath::new();
+            path.move_to(Point::new(10.0, y));
+            path.line_to(Point::new(30.0, y));
+            let snapped = snap_hairline(&path, Affine::IDENTITY, bounds).expect("horizontal hairline snaps");
+            let kurbo::PathEl::MoveTo(p) = snapped.elements()[0] else {
+                panic!("expected MoveTo");
+            };
+            p.y
+        };
+        let page = Rect::new(0.0, 0.0, 130.0, 70.0);
+        // Interior hairline stays snapped to pixel centre.
+        assert_eq!(snap_vertical(10.0, page), 10.5);
+        // Right and bottom page edges snap inward onto the last pixel instead of outside.
+        assert_eq!(snap_vertical(130.0, page), 129.5);
+        assert_eq!(snap_horizontal(70.0, page), 69.5);
+        // Tiny float noise within 0.01 px of left or right edge snaps onto the edge pixel.
+        assert_eq!(snap_vertical(-1e-12, page), 0.5);
+        assert_eq!(snap_vertical(130.005, page), 129.5);
+        // Genuine half-pixel overhangs stay unmoved.
+        assert_eq!(snap_vertical(130.2, page), 130.2);
+        assert_eq!(snap_vertical(-0.2, page), -0.2);
+        // Half a pixel or more outside stays outside.
+        assert_eq!(snap_vertical(130.5, page), 130.5);
+        assert_eq!(snap_vertical(-0.5, page), -0.5);
+        // Tile offset (50, 40) on the 130x70 page: tile-local x=80 is page right edge, while
+        // tile-local x=0 is an interior tile seam at page x=50 and still snaps to 0.5.
+        let tile = Rect::new(-50.0, -40.0, 80.0, 30.0);
+        assert_eq!(snap_vertical(80.0, tile), 79.5);
+        assert_eq!(snap_vertical(0.0, tile), 0.5);
+        // Fractional right edge: interior and boundary noise snap onto the last pixel, while a
+        // genuine half-pixel overhang stays unmoved so its partial coverage is kept.
+        let fractional = Rect::new(0.0, 0.0, 130.25, 70.0);
+        assert_eq!(snap_vertical(130.0, fractional), 130.5);
+        assert_eq!(snap_vertical(130.25, fractional), 130.5);
+        assert_eq!(snap_vertical(130.255, fractional), 130.5);
+        assert_eq!(snap_vertical(130.375, fractional), 130.375);
     }
 }
 

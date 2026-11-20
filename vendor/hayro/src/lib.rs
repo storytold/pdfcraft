@@ -256,6 +256,31 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
+    // PdfCraft patch (#7097): the full scaled page's visible device box in this render's
+    // coordinates, so `snap_hairline` keeps strokes on the page's outer edges visible without
+    // treating a tile seam as a page edge.
+    let (page_width, page_height) = page.render_dimensions();
+    let full_side = |pt: f32, scale: f32, pix: u16| {
+        let scaled = f64::from(pt) * f64::from(scale);
+        if !scaled.is_finite() || scaled <= 0.0 {
+            0.0
+        } else if pix == ((pt * scale) as f64).floor() as u16 {
+            f64::from(pix)
+        } else {
+            // Matches pdfcraft-render's 0.01 px tolerance in `device_pixels`, while depending
+            // only on the page and scale so every tile shares the same outer edge.
+            scaled.min((scaled - 0.01).ceil().max(1.0))
+        }
+    };
+    let x0 = -f64::from(render_settings.x_offset);
+    let y0 = -f64::from(render_settings.y_offset);
+    let snap_bounds = Rect::new(
+        x0,
+        y0,
+        x0 + full_side(page_width, x_scale, pix_width),
+        y0 + full_side(page_height, y_scale, pix_height),
+    );
+
     let mut device = Renderer::new(
         pix_width,
         pix_height,
@@ -263,6 +288,7 @@ pub fn render_into<'a>(
         cache,
         render_settings.color_replacement,
         interpreter_settings.preview,
+        snap_bounds,
     );
 
     if let Some(max) = render_settings.max_coverage {
@@ -840,5 +866,56 @@ mod mesh_extent_tests {
         let p = render_at(fixture("/Sh0 sh", (195, 100, 205, 110)), 1.0);
         assert_eq!(px(&p, 196, 98), [255, 0, 0, 255]);
         assert_eq!(px(&p, 150, 50), [255, 255, 255, 255]);
+    }
+}
+
+/// PdfCraft patch (#7097): equivalent automatic and explicit viewport dimensions share the
+/// same snapping extent on a fractional-sized page.
+#[cfg(test)]
+mod hairline_viewport_tests {
+    use super::{InterpreterSettings, Pdf, RenderCache, RenderSettings, render};
+    use vello_cpu::color::palette::css::WHITE;
+
+    fn fractional_page_hairline_pdf() -> Vec<u8> {
+        let body = b"0 w 0 0 0 RG 130 5 m 130 35 l S";
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 130.25 40] /Contents 4 0 R >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", body.len()).as_bytes(), body, b"\nendstream"].concat(),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objs.len());
+        for (i, obj) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(obj);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn hairline_snapping_matches_for_equivalent_auto_and_explicit_viewports() {
+        let pdf = Pdf::new(fractional_page_hairline_pdf()).unwrap();
+        let page = pdf.pages().get(0).expect("the fixture has one page");
+        let cache = RenderCache::new();
+        let interpreter = InterpreterSettings::default();
+        let auto = render(page, &cache, &interpreter, &RenderSettings { bg_color: WHITE, ..RenderSettings::default() });
+        let explicit = render(
+            page,
+            &cache,
+            &interpreter,
+            &RenderSettings { width: Some(130), height: Some(40), bg_color: WHITE, ..RenderSettings::default() },
+        );
+        assert_eq!(auto.data_as_u8_slice(), explicit.data_as_u8_slice());
+        let px = explicit.sample(129, 20);
+        assert_ne!([px.r, px.g, px.b, px.a], [255, 255, 255, 255]);
     }
 }
