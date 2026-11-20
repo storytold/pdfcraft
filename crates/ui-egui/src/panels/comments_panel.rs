@@ -199,10 +199,10 @@ fn threads(doc: &pdfcraft_engine::Document, prefs: &CommentPrefs) -> (Vec<Commen
         let key = (a.page, a.index);
         let id = thread_id(key.0, key.1);
         let replies = replies.get(&key).map(Vec::as_slice).unwrap_or(&[]);
-        let mut messages = vec![message(a, doc.annotation_deletable(a.page, a.index))];
+        let mut messages = vec![message(a, false)];
         let mut members = vec![key];
         for r in replies {
-            messages.push(message(r, doc.annotation_deletable(r.page, r.index)));
+            messages.push(message(r, false));
             members.push((r.page, r.index));
         }
         list.push(CommentThread {
@@ -281,7 +281,7 @@ pub(crate) fn show(
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
     let info = &doc.info;
-    let (list, map) = threads(doc, prefs);
+    let (mut list, map) = threads(doc, prefs);
     // Keep the panel's selection in step with the page's (clicks on the page, or newly added comments),
     // without disturbing an open inline editor.
     let mut selected_threads = Vec::new();
@@ -312,6 +312,15 @@ pub(crate) fn show(
                 view.session.comments.panel.editing = Some((thread, index, text));
             }
             _ => {}
+        }
+    }
+    // Only the lead card exposes message menus. Checking every annotation would repeatedly scan the PDF's
+    // annotation list for every row, making a large comments panel quadratic even when its pages are folded.
+    if let Some(lead) = view.session.comments.panel.selected.lead
+        && let Some(thread) = list.iter_mut().find(|thread| thread.id == lead)
+    {
+        for (index, message) in thread.messages.iter_mut().enumerate() {
+            message.deletable = map.key(lead, index).is_some_and(|(page, at)| doc.annotation_deletable(page, at));
         }
     }
     let output = CommentsPanel::new(tl!("Comments"), &list, &mut view.session.comments.panel)
