@@ -974,6 +974,8 @@ fn redact_page_content(
             },
             pi,
         )?;
+        // The ExtGState copies whose soft-mask group was rewritten, in place of the originals.
+        interp::install_ext_gstates(doc, &mut budget, &mut res, &out.ext_gstates, &out.replaced_gstates, &cleaned_data)?;
         // A pattern this page selected but no surviving paint draws leaves its resources, so
         // its cell -- a content stream this pass does not enter -- cannot stay in the file.
         // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.

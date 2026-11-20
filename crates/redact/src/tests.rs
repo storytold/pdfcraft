@@ -6406,6 +6406,7 @@ mod metadata_fail_closed;
 mod metadata_matching;
 mod operands_from_the_end;
 mod property_retirement;
+mod soft_mask;
 mod surviving_references;
 mod text_state;
 mod unparsed;
