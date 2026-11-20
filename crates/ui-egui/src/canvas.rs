@@ -13,7 +13,7 @@ use craft::host::queue::{JobQueue, QueueOptions};
 use craft::pages::ui::{PageBody, PageView, PageViewOutput, PageViewState, PlacedPage, TextMark, TextMarks, TextSelectState, TextSelection};
 use craft::review::ui::annotate::AnnotateWords;
 use craft::ui::canvas::{ContextRequest, Momentary, NavigationOptions, PageBorder, ToolHost};
-use craft::ui::contract::Show as _;
+use craft::ui::contract::{Props as _, Show as _};
 use craft::ui::display::Text;
 use craft::ui::list::OpenSet;
 use craft::ui::primitives::TextureStatistics;
@@ -564,6 +564,7 @@ impl DocView {
     pub(crate) fn cancel_pointer_gestures(&mut self, ctx: &egui::Context) {
         self.session.comments.tool.cancel_drawing();
         self.cancel_page_drags(ctx);
+        craft::ui::primitives::cancel_press_of(ctx, page_parts::control_id(self.view_key()));
     }
 
     /// A view of a newly opened document, shown as `defaults` say, with fields highlighted when `highlight_fields`
@@ -1260,7 +1261,7 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
         session.forms.focus = None;
     }
     let focus = crate::forms_ui::focus_owner(&session.forms, cx.form);
-    let parts_out = PageParts::new(&parts).focus(focus).show_at(ui, body.rect);
+    let parts_out = PageParts::new(&parts).id(page_parts::control_id(cx.view_key)).focus(focus).show_at(ui, body.rect);
     if session.forms.refocus
         && let Some(at) = focus.and_then(|owner| page_parts::focus_stop(&parts, owner))
     {
