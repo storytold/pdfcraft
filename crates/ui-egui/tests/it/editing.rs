@@ -8389,12 +8389,10 @@ fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
     h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(3);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    // Above the top edge, or below the bottom one when the view has no room above.
-    let knob = [egui::pos2(r.center().x, r.top() - 22.0), egui::pos2(r.center().x, r.bottom() + 22.0)]
-        .into_iter()
-        .find(|p| cursor_over(&mut h, *p) == egui::CursorIcon::Grab)
-        .expect("the knob past the page's edge");
+    // The framework names and positions the knob for the current theme.
+    let knob = h.get_by_label("Rotate").rect().center();
     assert!(!r.contains(knob));
+    assert_eq!(cursor_over(&mut h, knob), egui::CursorIcon::Grab);
     let to = egui::pos2(r.right() + 60.0, r.center().y);
     h.hover_at(knob);
     h.run_steps(1);
