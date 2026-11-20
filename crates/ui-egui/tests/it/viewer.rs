@@ -2221,7 +2221,7 @@ fn going_to_a_page_in_view_leaves_the_pages_panel_still() {
     let clip = h.state().views[0].pages_panel.expect("the Pages panel is shown");
     // The topmost thumbnail wholly in view, other than the current page's.
     let (n, before) =
-        (1..=30).map(|n| (n, thumbnail_rect(&h, n))).find(|(n, r)| *n != 15 && in_panel_view(&h, *r)).expect("another thumbnail in view");
+        (1..=30).filter(|n| *n != 15 && thumbnail_in_view(&h, *n)).map(|n| (n, thumbnail_rect(&h, n))).next().expect("another thumbnail in view");
     assert!(
         (before.center().y - clip.center().y).abs() > 50.0,
         "page {n} at {before:?} is away from the middle of {clip:?}, where centring would move it"
