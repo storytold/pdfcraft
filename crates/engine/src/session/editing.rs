@@ -323,12 +323,16 @@ impl Session {
         if !signed && deletes_pages(&edit) {
             next.require_full_save();
         }
+        // A content list the edit rewrote keeps its streams only: an entry naming none (a missing
+        // object, a `null`) would be written as `null` in the array. Said, not silent.
+        let left_out = crate::page_contents::after_edit(scope, &editor.cos, &mut next).inspect_err(|_| discard_edit_callbacks(&cx))?;
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             discard_edit_callbacks(&cx);
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
+        notices.extend(left_out);
         // Places applied redactions left that still hold the removed text, and what became of
         // the PDF/A or PDF/UA identification in the XMP they removed: said, not silent.
         notices.extend(cx.redaction_elsewhere.filter(|e| e.total() > 0 || e.unsearched).map(EditNotice::RedactionElsewhere));

@@ -121,6 +121,7 @@ impl PdfCraftApp {
             flatten_fill_sign_on_save: false,
             ask_to_lock_signatures: true,
             placed_signatures: Default::default(),
+            bake_notice: None,
             pending_lock: None,
             lock_answered: None,
             lock_remember: false,
@@ -471,6 +472,19 @@ impl PdfCraftApp {
         self.script_messages_dropped = self.script_messages_dropped.saturating_add(std::mem::take(&mut self.toast_dropped));
         self.toast = Some((msg.into(), 0.0));
         self.toast_script = None;
+    }
+
+    /// Add `msg` to the toast on a line of its own, after what it shows now, or show it alone
+    /// when it shows nothing.
+    pub(crate) fn notify_after_toast(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        match self.toast.as_ref().map(|(shown, _)| shown.clone()) {
+            Some(shown) => self.notify(format!(
+                "{shown}
+{msg}"
+            )),
+            None => self.notify(msg),
+        }
     }
 
     /// Notify with a static message in the UI language.
