@@ -111,6 +111,15 @@ fn calculate_action(c: &crate::af::Calculate) -> Option<Object> {
 
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
+    set_props_target(doc, name, None, props)
+}
+
+/// An exact script target can share its name with another field.
+pub(crate) fn set_props_object(doc: &mut Document, name: &str, object: ObjRef, props: &FieldProps) -> Result<String, FormError> {
+    set_props_target(doc, name, Some(object), props)
+}
+
+fn set_props_target(doc: &mut Document, name: &str, object: Option<ObjRef>, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
         return invalid("font size must be a finite, non-negative number");
     }
@@ -127,7 +136,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         return invalid(crate::af::NOTATION_NOT_STORABLE);
     }
     let all = fields(doc);
-    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
+    let f = all.iter().find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj)).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
         return invalid("give export_value or options, not both");
@@ -140,6 +149,15 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         if f.widgets.get(*wi).is_none() {
             return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
         }
+    }
+    if props.caption_all.is_some() && f.kind != FieldKind::PushButton {
+        return invalid("only push buttons have a caption");
+    }
+    if props.caption_all.is_some() && f.widgets.is_empty() {
+        return invalid(format!("{name} has no widgets"));
+    }
+    if props.caption_all.is_some() && props.caption.is_some() {
+        return invalid("give a field caption or a widget caption, not both");
     }
     // Validated before anything is written, so a refused rotation leaves the document unchanged.
     if let Some(rotation) = props.rotation {
@@ -503,7 +521,7 @@ fn redraw_or_join(doc: &mut Document, f: &Field, name: &str, new_name: &str, joi
         }
         Ok(())
     } else {
-        redraw_widgets(doc, new_name, only)
+        super::look::redraw_widgets_target(doc, new_name, Some(f.obj), only)
     }
 }
 
@@ -576,6 +594,13 @@ fn apply_late_widget_props(doc: &mut Document, f: &Field, props: &FieldProps, ne
         let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
         mk.set(b"CA".to_vec(), PdfString::text(caption));
         doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+    }
+    if let Some(caption) = &props.caption_all {
+        for w in &f.widgets {
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            mk.set(b"CA".to_vec(), PdfString::text(caption));
+            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
     }
     // A label-only edit must not replace another widget's custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);

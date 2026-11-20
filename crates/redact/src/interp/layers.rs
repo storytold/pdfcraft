@@ -136,20 +136,15 @@ impl<'a> Scope<'a> {
             return false;
         }
         *budget -= 1;
-        let reference = if expression.as_ref().is_some() {
-            let Some(r) = target_ref(doc, expression) else {
-                return false;
-            };
-            if !path.insert(r) {
-                return false;
-            }
-            Some(r)
-        } else {
-            None
-        };
-        let resolved = resolve(doc, expression);
-        let complete = match &resolved {
-            Object::Dict(d) if dict_name(doc, d, b"Type").as_deref() == Some(b"OCG") || reference.is_some_and(|r| hidden_layers.contains(&r)) => {
+        let reference = expression.as_ref();
+        if let Some(r) = reference
+            && !path.insert(r)
+        {
+            return false;
+        }
+        let resolved = doc.resolve(expression);
+        let complete = match &*resolved {
+            Object::Dict(d) if has_type(doc, d, b"OCG") => {
                 if let Some(r) = reference
                     && hidden_layers.contains(&r)
                 {
@@ -190,22 +185,20 @@ impl<'a> Scope<'a> {
             return None;
         }
         *budget -= 1;
-        let reference = if expression.as_ref().is_some() {
-            let r = target_ref(doc, expression)?;
-            if !path.insert(r) {
-                return None;
-            }
-            Some(r)
-        } else {
-            None
-        };
-        let resolved = resolve(doc, expression);
-        let result = match &resolved {
-            Object::Dict(d)
-                if dict_name(doc, d, b"Type").as_deref() == Some(b"OCG") || reference.is_some_and(|r| self.hidden_layers.contains(&r)) =>
-            {
-                reference.map(|r| !self.hidden_layers.contains(&r))
-            }
+        let reference = expression.as_ref();
+        // A reference to a reference is no listed group: the renderer rejects the alias, so it
+        // is not taken as visible because the object it names isn't hidden.
+        if reference.is_some_and(|r| matches!(*doc.get(r), Object::Ref(_))) {
+            return None;
+        }
+        if let Some(r) = reference
+            && !path.insert(r)
+        {
+            return None;
+        }
+        let resolved = doc.resolve(expression);
+        let result = match &*resolved {
+            Object::Dict(d) if has_type(doc, d, b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
             Object::Array(items) if (2..=4097).contains(&items.len()) => {
                 let operator = items.first().and_then(|op| resolve(doc, op).as_name().map(<[u8]>::to_vec))?;
                 match operator.as_slice() {
@@ -242,11 +235,11 @@ impl<'a> Scope<'a> {
             return true;
         }
         *budget -= 1;
-        let reference = if expression.as_ref().is_some() {
-            let Some(r) = target_ref(doc, expression) else {
-                return true;
-            };
+        let reference = if let Some(r) = expression.as_ref() {
             if self.hidden_layers.contains(&r) {
+                return true;
+            }
+            if matches!(*doc.get(r), Object::Ref(_)) {
                 return true;
             }
             if !path.insert(r) {
@@ -259,7 +252,7 @@ impl<'a> Scope<'a> {
         let resolved = resolve(doc, expression);
         let found = match &resolved {
             Object::Array(items) => items.iter().any(|item| self.expression_mentions_hidden(doc, item, depth + 1, path, budget)),
-            Object::Dict(d) if dict_name(doc, d, b"Type").as_deref() == Some(b"OCG") => reference.is_none_or(|r| self.hidden_layers.contains(&r)),
+            Object::Dict(d) if has_type(doc, d, b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
             Object::Dict(_) => true,
             _ => false,
         };
@@ -282,8 +275,10 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         match op.op.as_slice() {
             b"BDC" | b"BMC" => {
                 let this = op.is("BDC")
-                    && op.name(0) == Some(b"OC")
-                    && match op.operands.get(1) {
+                    // The tag and the property list are the last two operands, as the renderer
+                    // reads them: `(x) /OC /MC0 BDC` is a layer's block too.
+                    && op.name_back(1) == Some(b"OC")
+                    && match op.back(0) {
                         Some(Object::Name(n)) => props.get(n).is_some_and(|o| scope.layer_hidden(doc, o)),
                         Some(o) => scope.layer_hidden(doc, o),
                         None => false,
@@ -310,6 +305,12 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         }
     }
     (out, removed)
+}
+
+/// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer
+/// follows it: a group or membership dictionary must not escape classification through one.
+fn has_type(doc: &Document, d: &Dict, name: &[u8]) -> bool {
+    d.get(b"Type").is_some_and(|t| crate::resolve_chain(doc, t).as_name() == Some(name))
 }
 
 #[cfg(test)]
