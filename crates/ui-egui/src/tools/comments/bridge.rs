@@ -13,7 +13,7 @@ use craft::review::annotate::{marker_rect, pick_at};
 use craft::review::ui::AnnotateTool;
 use craft::review::{Annotation as Marked, AnnotationEdit, AnnotationId, AnnotationKind, HandleRule, Placement, ThreadId};
 
-use super::geometry::{CARET_SIZE, frame, is_callout, on_text, reshapable, resizable};
+use super::geometry::{CARET_SIZE, frame, on_text, reshapable, resizable};
 use super::popups::has_popup;
 use super::state::{CommentView, Composer, ComposerKind, PageCx};
 use super::{
@@ -559,20 +559,14 @@ fn moved(ids: &[AnnotationId], delta: Vec2, map: &PageMap<'_>, info: &DocInfo) -
         .filter_map(|(page, index)| {
             // Text markup and a Replace Text caret are where their text is, a locked comment stays, and a reply is
             // moved with its comment.
-            let a = engine(info, page, index).filter(|a| !a.is_reply() && !on_text(a) && !a.locked)?;
-            let p = info.pages.get(page)?;
+            engine(info, page, index).filter(|a| !a.is_reply() && !on_text(a) && !a.locked)?;
+            info.pages.get(page)?;
             // The delta is in document space: the map takes it back to user space, the view's turn included.
             let (dx, dy) = map.user_delta(page, delta);
             if !(dx.is_finite() && dy.is_finite()) {
                 return None;
             }
-            // A callout is pressed in its text box: the box moves alone and its arrow point stays.
-            Some(if is_callout(a) && resizable(a) {
-                let f = frame(a, p.rotation).map(f64::from);
-                Edit::ResizeAnnotation { page, index, rect: [f[0] + dx, f[1] + dy, f[2] + dx, f[3] + dy] }
-            } else {
-                Edit::MoveAnnotation { page, index, dx, dy }
-            })
+            Some(Edit::MoveAnnotation { page, index, dx, dy })
         })
         .collect();
     match edits.len() {
