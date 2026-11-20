@@ -274,6 +274,7 @@ impl PdfCraftApp {
             combine_view: Default::default(),
             combine_zoom: 1.0,
             organize_zoom: 1.0,
+            combine_file_bookmarks: true,
             combine_thumbs: Default::default(),
             image_import: None,
             custom_stamps: Vec::new(),

@@ -200,11 +200,12 @@ pub(super) fn write_outline_level(
             d.set(b"Prev".to_vec(), Object::Ref(*prev));
             dst.update_dict(*prev, |p| p.set(b"Next".to_vec(), Object::Ref(new)))?;
         }
-        if let Some((f, l, n)) = write_outline_level(dst, new, &node.children)? {
+        if let Some((f, l, _)) = write_outline_level(dst, new, &node.children)? {
             d.set(b"First".to_vec(), Object::Ref(f));
             d.set(b"Last".to_vec(), Object::Ref(l));
             // Keep the source's open/closed state.
-            d.set(b"Count".to_vec(), Object::Int(if node.open { n as i64 } else { -(n as i64) }));
+            let shown = shown_count(&node.children);
+            d.set(b"Count".to_vec(), Object::Int(if node.open { shown } else { -shown }));
         }
         dst.set(new, Object::Dict(d));
         made.push(new);
@@ -216,8 +217,14 @@ pub(super) fn write_outline_level(
 }
 
 /// Replace the outline with one bookmark per source (title → its first page), each holding a collapsed
-/// copy of that source's own bookmarks with destinations mapped to the copied pages.
-pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), OrganizeError> {
+/// copy of that source's own bookmarks with destinations mapped to the copied pages. Without
+/// `file_bookmarks`, the sources' own bookmarks are the top level instead, in source order, and a
+/// combine of files without bookmarks gets no outline.
+pub(super) fn add_outline(doc: &mut Document, marks: Vec<Mark>, file_bookmarks: bool) -> Result<(), OrganizeError> {
+    if !file_bookmarks {
+        let nodes: Vec<OutlineNode> = marks.into_iter().flat_map(|m| m.outline).collect();
+        return add_flat_outline(doc, &nodes);
+    }
     if marks.is_empty() {
         return Ok(());
     }
@@ -235,18 +242,37 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
         if let Some(next) = items.get(i + 1) {
             d.set(b"Next".to_vec(), Object::Ref(*next));
         }
-        if let Some((f, l, n)) = write_outline_level(doc, *r, &mark.outline)? {
+        if let Some((f, l, _)) = write_outline_level(doc, *r, &mark.outline)? {
             d.set(b"First".to_vec(), Object::Ref(f));
             d.set(b"Last".to_vec(), Object::Ref(l));
-            d.set(b"Count".to_vec(), Object::Int(-(n as i64))); // collapsed
+            d.set(b"Count".to_vec(), Object::Int(-shown_count(&mark.outline))); // collapsed
         }
         doc.set(*r, Object::Dict(d));
     }
+    // Each file's bookmark starts collapsed, so only they show.
+    set_outline_root(doc, outlines, (first_item, last_item), i64::try_from(items.len()).unwrap_or(i64::MAX))
+}
+
+/// Replace the outline with `nodes` as its top level, each keeping its open or closed state.
+/// Nothing is written when there are no nodes.
+fn add_flat_outline(doc: &mut Document, nodes: &[OutlineNode]) -> Result<(), OrganizeError> {
+    if nodes.is_empty() {
+        return Ok(());
+    }
+    let outlines = doc.add(Object::Null);
+    let Some((first, last, _)) = write_outline_level(doc, outlines, nodes)? else { return Ok(()) };
+    // The root counts every item shown: the top level and what open items show below them.
+    set_outline_root(doc, outlines, (first, last), shown_count(nodes))
+}
+
+/// Write the outline root `outlines` over its top-level items `ends` (first, last), with `count`
+/// items shown, and make it the document's outline, opened beside the pages.
+fn set_outline_root(doc: &mut Document, outlines: ObjRef, ends: (ObjRef, ObjRef), count: i64) -> Result<(), OrganizeError> {
     let mut o = Dict::new();
     o.set(b"Type".to_vec(), Object::name("Outlines"));
-    o.set(b"First".to_vec(), Object::Ref(first_item));
-    o.set(b"Last".to_vec(), Object::Ref(last_item));
-    o.set(b"Count".to_vec(), Object::Int(items.len() as i64));
+    o.set(b"First".to_vec(), Object::Ref(ends.0));
+    o.set(b"Last".to_vec(), Object::Ref(ends.1));
+    o.set(b"Count".to_vec(), Object::Int(count));
     doc.set(outlines, Object::Dict(o));
     let root = doc.root().ok_or(OrganizeError::NoPageTree)?;
     doc.update_dict(root, |c| {
@@ -254,6 +280,21 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
         c.set(b"PageMode".to_vec(), Object::name("UseOutlines"));
     })?;
     Ok(())
+}
+
+/// The `/Count` magnitude for an item whose children are `nodes`: every item that shows below it
+/// when it is open, at all levels, not just its children (ISO 32000-2 §12.3.3, Table 152).
+pub(super) fn shown_count(nodes: &[OutlineNode]) -> i64 {
+    i64::try_from(visible_items(nodes)).unwrap_or(i64::MAX)
+}
+
+/// How many of `nodes` and their descendants are shown: each node, and below an open one its own
+/// shown items. Bounded like the tree, which [`outline_level`] reads at most 32 levels deep.
+fn visible_items(nodes: &[OutlineNode]) -> usize {
+    nodes.iter().fold(0usize, |n, node| {
+        let below = if node.open { visible_items(&node.children) } else { 0 };
+        n.saturating_add(1).saturating_add(below)
+    })
 }
 
 #[cfg(test)]

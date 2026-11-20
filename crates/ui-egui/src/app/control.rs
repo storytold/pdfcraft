@@ -440,6 +440,14 @@ impl PdfCraftApp {
                 }
                 self.set_combine_zoom(percent / 100.0);
             }
+            // `--combine-file-bookmarks false`: Combine files adds no bookmark per file.
+            ("combine-file-bookmarks", _) => {
+                self.combine_file_bookmarks = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("combine-file-bookmarks must be true or false".into()),
+                };
+            }
             (k, None)
                 if [
                     "page",
