@@ -247,7 +247,9 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
         };
         ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
         if a.kind == 0 {
-            ui.add(crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            // A long script scrolls in its box, so it cannot push the dialog's buttons off screen (#7294).
+            let edit = crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text");
+            egui::ScrollArea::vertical().id_salt("action-script").max_height(180.0).show(ui, |ui| ui.add(edit));
         } else {
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
         }
