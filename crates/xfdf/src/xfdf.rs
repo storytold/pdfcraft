@@ -717,8 +717,20 @@ pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> 
 
 // ── import ──────────────────────────────────────────────────────────────────────────────────
 
-/// Set the values of fields named in `values` (full names), counting what took.
-pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &mut Report) {
+/// What an import does with the file's field values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Values {
+    /// Leaves them out (comments placed as copies).
+    Leave,
+    /// Writes each, running the built-in calculations after it.
+    Calculate,
+    /// Writes them all and runs no calculation: the caller runs them once afterwards.
+    Write,
+}
+
+/// Set the values of fields named in `values` (full names), counting what took; with
+/// `calculate`, the built-in calculations run after each value.
+pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &mut Report, calculate: bool) {
     let all = pdfcraft_forms::fields(doc);
     // The first field of a name, as the scan it replaces found it.
     let mut by_name: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -745,7 +757,8 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
         if ro {
             let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int((f.flags & !pdfcraft_forms::flags::READ_ONLY) as i64)));
         }
-        match pdfcraft_forms::set_value(doc, name, &v) {
+        let set = if calculate { pdfcraft_forms::set_value(doc, name, &v) } else { pdfcraft_forms::set_value_without_calculation(doc, name, &v) };
+        match set {
             Ok(()) => report.fields += 1,
             Err(_) => report.rejected.push(name.clone()),
         }
@@ -1107,18 +1120,18 @@ pub fn import_comments(
         fresh,
         offset.filter(|o| o.iter().all(|v| v.is_finite())),
         super::appearance::MAX_IMPORT_APPEARANCE_BYTES,
-        true,
+        Values::Leave,
     )?;
     *doc = work;
     Ok(report)
 }
 
-pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
-    import_xfdf_with(doc, text, None, None, None, super::appearance::MAX_IMPORT_APPEARANCE_BYTES, false)
+pub(crate) fn import_xfdf(doc: &mut Document, text: &str, values: Values) -> Result<Report, DataError> {
+    import_xfdf_with(doc, text, None, None, None, super::appearance::MAX_IMPORT_APPEARANCE_BYTES, values)
 }
 
 /// The import, with `appearance_budget` decoded bytes of appearance for all of its comments;
-/// `comments_only` leaves the file's field values out (comments placed as copies).
+/// `values` says what becomes of the file's field values.
 pub(crate) fn import_xfdf_with(
     doc: &mut Document,
     text: &str,
@@ -1126,7 +1139,7 @@ pub(crate) fn import_xfdf_with(
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
     mut appearance_budget: usize,
-    comments_only: bool,
+    values: Values,
 ) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let root = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
@@ -1220,14 +1233,14 @@ pub(crate) fn import_xfdf_with(
         }
     }
     // Comments placed as copies: the file's field values are not part of the paste.
-    if comments_only {
+    if values == Values::Leave {
         return Ok(report);
     }
     // Fields.
     if let Some(fields) = root.child(craft_xml::Local("fields")) {
-        let mut values = Vec::new();
-        walk_xfdf(fields, "", &mut values, 0, &mut 0)?;
-        apply_values(doc, &values, &mut report);
+        let mut found = Vec::new();
+        walk_xfdf(fields, "", &mut found, 0, &mut 0)?;
+        apply_values(doc, &found, &mut report, values == Values::Calculate);
     }
     Ok(report)
 }

@@ -40,6 +40,7 @@ pub(crate) fn uses_scripts(edit: &Edit) -> bool {
     match edit {
         Edit::SetFieldValue { .. }
         | Edit::ResetForm { .. }
+        | Edit::ImportData { .. }
         | Edit::ApplyScriptChanges { .. }
         | Edit::SetFieldScript { .. }
         | Edit::SetCalculationOrder { .. } => true,
