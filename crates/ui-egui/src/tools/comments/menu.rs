@@ -341,10 +341,12 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
-pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-    ui.painter().circle_filled(r.center(), 9.0, color32(current));
-    ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
+pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb, size: f32) -> Option<Rgb> {
+    // The swatch's ink scales with the toolbar size, so it matches the icon buttons around it.
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let radius = 9.0 * size / 32.0;
+    ui.painter().circle_filled(r.center(), radius, color32(current));
+    ui.painter().circle_stroke(r.center(), radius, Stroke::new(1.0 * size / 32.0, Color32::from_black_alpha(50)));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Colour")));
     let resp = resp.on_hover_text(tl!("Colour"));
     let mut picked = None;
@@ -358,17 +360,17 @@ pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
 }
 
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
-pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
+pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs, size: f32) -> Option<Rgb> {
     let style = prefs.style(tool);
-    if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
+    if icons::button(ui, "pin", size, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
-    let selected_color = quick_bar_colour(ui, style.color);
+    let selected_color = quick_bar_colour(ui, style.color, size);
     if let Some(c) = selected_color {
         prefs.set_color(tool, c);
     }
     if tool.has_fill() {
-        let resp = fill_button(ui, style.fill);
+        let resp = fill_button(ui, style.fill, size);
         egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.label(egui::RichText::new(tl!("Fill colour")).font(theme::semibold(12.0)));
             if let Some(f) = fill_picker(ui, style.fill) {
@@ -377,7 +379,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             }
         });
     }
-    let resp = icons::button(ui, "blend", 32.0, false, tl!("Opacity"));
+    let resp = icons::button(ui, "blend", size, false, tl!("Opacity"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(180.0);
         let mut percent = (style.opacity * 100.0).round();
@@ -389,7 +391,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         }
     });
     if tool.has_width() {
-        let resp = icons::button(ui, "sliders-horizontal", 32.0, false, tl!("Line thickness"));
+        let resp = icons::button(ui, "sliders-horizontal", size, false, tl!("Line thickness"));
         egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_min_width(180.0);
             let mut w = style.width;
@@ -405,10 +407,10 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
 /// A border-colour button: a hollow square in the border's colour (`current`, else the text's,
 /// `text`), with a menu of "Same as text" and the swatches. Returns the choice (`Some(None)`:
 /// the text's colour again).
-pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text: Rgb) -> Option<Option<Rgb>> {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-    let sq = Rect::from_center_size(r.center(), vec2(15.0, 15.0));
-    ui.painter().rect_stroke(sq, 1.0, Stroke::new(3.0, color32(current.unwrap_or(text))), egui::StrokeKind::Inside);
+pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text: Rgb, size: f32) -> Option<Option<Rgb>> {
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(15.0 * size / 32.0, 15.0 * size / 32.0));
+    ui.painter().rect_stroke(sq, 1.0, Stroke::new(3.0 * size / 32.0, color32(current.unwrap_or(text))), egui::StrokeKind::Inside);
     if resp.hovered() {
         ui.painter().rect_stroke(r.shrink(2.0), 4.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
     }
@@ -431,10 +433,10 @@ pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text
 
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline
 /// for no fill.
-fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-    let sq = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
-    let edge = Stroke::new(1.0, Color32::from_black_alpha(90));
+fn fill_button(ui: &mut egui::Ui, fill: Option<Rgb>, size: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(16.0 * size / 32.0, 16.0 * size / 32.0));
+    let edge = Stroke::new(1.0 * size / 32.0, Color32::from_black_alpha(90));
     match fill {
         Some(c) => {
             ui.painter().rect_filled(sq, 2.0, color32(c));
