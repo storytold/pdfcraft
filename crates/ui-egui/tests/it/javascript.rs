@@ -151,10 +151,11 @@ fn texts(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
 
 /// The user's close action on every card, then the passes that act on it.
 fn dismiss_all(h: &mut Harness<'static, PdfCraftApp>) {
-    for card in toast::cards(&h.ctx, &WindowKey::main()) {
-        toast::dismiss(&h.ctx, card.id);
+    // Programmatic removal emits no close event; use the user's dismiss control.
+    for button in h.query_all_by(|node| !node.is_hidden() && node.label().as_deref() == Some("Dismiss")) {
+        button.click();
     }
-    h.run_steps(2);
+    h.run_steps(3);
 }
 
 /// One run's messages are all shown, in order (#4294): the first is a card with its title and tone
@@ -196,6 +197,7 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     // have been shown.
     let many: Vec<_> = (0..105).map(|i| pdfcraft_engine::js::Message::plain(format!("Message {i}"))).collect();
     h.state_mut().show_script_messages(many);
+    h.run_steps(2);
     assert_eq!(texts(&h), ["Message 0"]);
     for i in 1..100 {
         dismiss_all(&mut h);
