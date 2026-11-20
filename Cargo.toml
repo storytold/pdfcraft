@@ -86,6 +86,7 @@ pdfcraft-xfa = { path = "crates/xfa", version = "0.21.0" }
 pdfcraft-render = { path = "crates/render", version = "0.21.0" }
 pdfcraft-engine = { path = "crates/engine", version = "0.21.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.21.0" }
+wayland-tablet = { path = "crates/wayland-tablet", version = "0.21.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.21.0" }
 pdfcraft-automation = { path = "crates/automation", version = "0.21.0", default-features = false }
 pdfcraft-prc = { package = "craft-prc", git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e2dc681a3" }

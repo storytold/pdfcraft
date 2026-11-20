@@ -12,6 +12,8 @@ pub(super) mod pickers;
 pub mod portable;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod system_fonts;
+#[cfg(target_os = "linux")]
+pub(super) mod tablet;
 pub mod ui_scale;
 pub mod updates;
 pub mod window_controls;

@@ -3626,3 +3626,54 @@ fn waiting_marks_are_dropped_when_their_pages_change() {
     assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &now), ToolMarks::None, "nothing marked");
     assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
 }
+
+/// The tool `page_tool` hands the pages: the eraser end of a pen outranks the placing
+/// state and the chosen tool (Acrobat's behaviour, #3650) — the eraser end erases ink
+/// even while a comment bundle hangs on the pointer — and off it, the placing state
+/// shows Select and otherwise the chosen tool comes through.
+#[test]
+fn the_eraser_end_outranks_the_placing_state_and_the_chosen_tool() {
+    let mut v = view(1, PageLayout::Single, true);
+    assert_eq!(page_tool(&v, QuickTool::Hand, false), (QuickTool::Hand, false));
+    v.comments.gesture = Some(comments::Gesture::Place { xfdf: String::new(), bounds: [0.0; 4], count: 1, outlines: Vec::new() });
+    assert_eq!(page_tool(&v, QuickTool::Hand, false), (QuickTool::Select, true));
+    // The eraser end erases whatever hangs on the pointer; placing stays pending.
+    assert_eq!(page_tool(&v, QuickTool::Hand, true), (QuickTool::Comment(comments::CommentTool::Eraser), true));
+    v.comments.gesture = None;
+    assert_eq!(page_tool(&v, QuickTool::Hand, true), (QuickTool::Comment(comments::CommentTool::Eraser), false));
+}
+
+/// A live eraser stroke keeps the eraser the pages see even when the eraser end's own
+/// latch is gone — the pen flipped mid-stroke and egui keeps the drag across the
+/// `PointerGone`, so the stroke's release must still reach the eraser dispatch (#3650
+/// review). A live stroke of another drawing tool holds nothing, and once the stroke
+/// has ended the chosen tool comes through again.
+#[test]
+fn a_live_eraser_stroke_keeps_the_eraser_the_pages_see() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.comments.gesture = Some(comments::Gesture::Draw { page: 0, tool: comments::CommentTool::Eraser, points: Vec::new() });
+    assert_eq!(
+        page_tool(&v, QuickTool::Select, false),
+        (QuickTool::Comment(comments::CommentTool::Eraser), false),
+        "the pen flipped mid-stroke: the stroke runs on as the eraser"
+    );
+    // The eraser end's own latch, the same while it lasts.
+    assert_eq!(page_tool(&v, QuickTool::Select, true), (QuickTool::Comment(comments::CommentTool::Eraser), false));
+    // A live non-eraser stroke holds nothing.
+    v.comments.gesture = Some(comments::Gesture::Draw { page: 0, tool: comments::CommentTool::Ink, points: Vec::new() });
+    assert_eq!(page_tool(&v, QuickTool::Select, false), (QuickTool::Select, false));
+    // Ended, the chosen tool comes through again.
+    v.comments.gesture = None;
+    assert_eq!(page_tool(&v, QuickTool::Select, false), (QuickTool::Select, false));
+}
+
+/// The hand tool pans, and the eraser end of a pen never does — the eraser end erases
+/// ink, so it must not pan the view through either path that resolves a `hand` (the
+/// scroll setup and the page input both go through `pan_hand`, #3650).
+#[test]
+fn the_hand_tool_pans_and_the_eraser_end_never_does() {
+    assert!(pan_hand(QuickTool::Hand, false));
+    assert!(!pan_hand(QuickTool::Hand, true), "the eraser end erases, it never pans");
+    assert!(!pan_hand(QuickTool::Select, false));
+    assert!(!pan_hand(QuickTool::Select, true));
+}

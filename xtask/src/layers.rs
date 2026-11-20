@@ -83,6 +83,10 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-common", Class::Layer(7)),
     ("ui-egui", Class::Layer(7)),
     ("automation", Class::Layer(7)),
+    // The W28 pen-tablet sidecar: platform-grade Wayland plumbing beside the
+    // windowing library (winit stays stock; this binds tablet-v2 on its display).
+    // Task 1 wires it into ui-egui over a SIDEWAYS edge.
+    ("wayland-tablet", Class::Layer(7)),
     // test support
     ("testkit", Class::Testkit),
     ("oracle", Class::Testkit),
@@ -107,6 +111,9 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("sign", "security"),
     ("ui-egui", "ui-common"),
     ("ui-egui", "platform"),
+    // The Wayland pen sidecar (#3650): ui-egui binds it beside winit and converts its
+    // events (platform/tablet.rs); platform-grade plumbing, both L7.
+    ("ui-egui", "wayland-tablet"),
     ("automation", "platform"),
 ];
 

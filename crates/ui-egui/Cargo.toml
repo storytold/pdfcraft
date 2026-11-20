@@ -63,6 +63,13 @@ arboard = { version = "3.6", default-features = false, features = ["image-data"]
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).
 pollster = "1.0"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native Wayland pen input (#3650): tablet-v2 bound on winit's own wl_display, forwarded
+# to egui. X11/XWayland sessions fail its spawn with NotWayland and log once instead.
+wayland-tablet = { workspace = true }
+# The display handle the pen sidecar binds to; already in the tree through eframe/winit.
+raw-window-handle = "0.6"
+
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
 # Discover configured font directories without linking libfontconfig or running a subprocess.
 fontconfig-parser = "0.5.8"

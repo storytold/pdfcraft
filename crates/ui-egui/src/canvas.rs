@@ -3146,13 +3146,42 @@ fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> V
     glide
 }
 
+/// A live comment Draw gesture with the eraser: an eraser stroke in progress. It
+/// erases like the eraser end (see `page_tool`), so it never pans either.
+fn live_eraser_stroke(view: &DocView) -> bool {
+    matches!(view.comments.gesture, Some(comments::Gesture::Draw { tool: comments::CommentTool::Eraser, .. }))
+}
+
+/// Whether the hand tool pans: the chosen tool is Hand and the pen's eraser end is
+/// not active — the eraser end erases, it never pans (see `page_tool`). Both the
+/// scroll geometry and the page input resolve their `hand` through this, so the two
+/// cannot disagree (the eraser end must never pan through either path).
+fn pan_hand(chosen: QuickTool, eraser_end: bool) -> bool {
+    chosen == QuickTool::Hand && !eraser_end
+}
+
 /// The tool the page sees this frame, and whether copied comments hang on the pointer. Those
 /// take the next click whatever tool is on: the page sees the Select tool until the bundle is
 /// placed or let go, and no form field, added content or field being prepared takes the click
-/// either.
-fn page_tool(view: &DocView, chosen: QuickTool) -> (QuickTool, bool) {
+/// either. The eraser end of a pen outranks both (Acrobat's behaviour, #3650): while it is
+/// over the app the page sees the eraser — ink erases whatever hangs on the pointer — and
+/// the tool the user picked stays untouched. A live eraser stroke does the same
+/// ([`live_eraser_stroke`]): the pages keep seeing the eraser until the stroke ends, even
+/// when the eraser end's own latch is gone (the pen flipped mid-stroke; egui keeps the drag
+/// across the `PointerGone`), because the stroke's release must reach the eraser dispatch in
+/// `draw_shape`, which only the eraser tool routes to — with the chosen tool the stroke
+/// would hang, never erasing.
+fn page_tool(view: &DocView, chosen: QuickTool, eraser_end: bool) -> (QuickTool, bool) {
     let placing = matches!(view.comments.gesture, Some(comments::Gesture::Place { .. }));
-    (if placing { QuickTool::Select } else { chosen }, placing)
+    let erasing = eraser_end || live_eraser_stroke(view);
+    let tool = if erasing {
+        QuickTool::Comment(comments::CommentTool::Eraser)
+    } else if placing {
+        QuickTool::Select
+    } else {
+        chosen
+    };
+    (tool, placing)
 }
 
 /// Text selection runs for the Select tool and for the markup tools (highlight…).
@@ -3293,6 +3322,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         && app.placed_signatures.contains(&app.views[index].id)
         && doc.info.annotations.iter().any(|a| a.fill_sign)
         && !doc.is_signed();
+    // Whether the pen's eraser end is over the app (Linux + pen sidecar). Read before
+    // `view` borrows into the app; the effective tool below follows it.
+    #[cfg(target_os = "linux")]
+    let eraser_end = app.pen_eraser_end();
+    #[cfg(not(target_os = "linux"))]
+    let eraser_end = false;
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
@@ -3369,11 +3404,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let (y_shift, content_h) =
         vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), view.margin(), ui.ctx().pixels_per_point());
 
-    let mut scroll = page_scroll_area(
-        ui,
-        view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
-    );
+    // The eraser end of a pen never pans (it erases; see `page_tool`), and neither does a
+    // live eraser stroke — the same rule through both paths, so the scroll setup and the
+    // page input cannot disagree — while a comment bundle hanging on the pointer keeps the
+    // chosen tool's pan. Computed before the scroll geometry so the scroll setup and the
+    // page input below resolve the same value — the eraser end must never pan through
+    // either path.
+    let hand = pan_hand(app.quick_tool, eraser_end) && !live_eraser_stroke(view);
+    let mut scroll = page_scroll_area(ui, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
     let tag = scale_tag(scale);
@@ -3384,8 +3422,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // sharp request goes out once the zoom settles.
     let sharp_held = hold_sharp_renders(ui, view, scale);
     view.current_scale_tag = tag;
-    let hand = app.quick_tool == QuickTool::Hand;
-    let (tool, placing) = page_tool(view, app.quick_tool);
+    let (tool, placing) = page_tool(view, app.quick_tool, eraser_end);
     // Text selection runs for the Select tool and for the markup tools (highlight…).
     let selects_text = tool_selects_text(tool, preparing);
     let prefs = &app.comment_prefs;

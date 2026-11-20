@@ -388,6 +388,10 @@ pub struct PdfCraftApp {
     desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,
     #[cfg(target_os = "linux")]
     desktop_theme_enabled: bool,
+    /// The native Wayland pen (#3650), via `platform::tablet`: `None` off Wayland, or
+    /// where the compositor has no tablet-v2 — then nothing here changes.
+    #[cfg(target_os = "linux")]
+    tablet: Option<platform::tablet::Tablet>,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the

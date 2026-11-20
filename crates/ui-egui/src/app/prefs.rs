@@ -68,6 +68,58 @@ impl PdfCraftApp {
         self.desktop_theme_enabled = true;
     }
 
+    /// Start the native Wayland pen sidecar (#3650) on the running display, so pen
+    /// input reaches egui where the compositor does not emulate it.
+    ///
+    /// Every failure is logged once and the app continues exactly as before — on X11
+    /// or XWayland (`NotWayland`), or where the compositor advertises no tablet-v2
+    /// (`NoTabletManager`), that is the normal case, not a problem; unexpected
+    /// failures (the Wayland machinery itself) are warnings. Mouse and touch input
+    /// are untouched either way.
+    #[cfg(target_os = "linux")]
+    pub fn enable_wayland_pen(&mut self, ctx: &egui::Context, display: &impl raw_window_handle::HasDisplayHandle) {
+        if self.tablet.is_some() {
+            return; // Idempotent: a second call (a second renderer start) must not spawn again.
+        }
+        match platform::tablet::Tablet::start(ctx, display) {
+            Ok(tablet) => {
+                log::info!("wayland pen sidecar started (tablet-v2)");
+                self.tablet = Some(tablet);
+            }
+            // The compositor's ordinary no-tablet answers are not problems.
+            Err(
+                err @ (wayland_tablet::SidecarError::NotWayland
+                | wayland_tablet::SidecarError::NoTabletManager
+                | wayland_tablet::SidecarError::NoSeat
+                | wayland_tablet::SidecarError::SeatTooOld),
+            ) => {
+                log::info!("no pen sidecar on this display: {err}; the pointer path is unchanged");
+            }
+            Err(err) => {
+                log::warn!("pen sidecar failed to start: {err}; the pointer path is unchanged");
+            }
+        }
+    }
+
+    /// The latest pen state (tool kind incl. the eraser end, pressure 0..1, tilt in
+    /// degrees), when the Wayland pen sidecar runs. `None` elsewhere: off Wayland,
+    /// without tablet-v2, and before the first pen event.
+    #[cfg(target_os = "linux")]
+    pub fn pen_snapshot(&self) -> Option<platform::tablet::PenSnapshot> {
+        self.tablet.as_ref().map(platform::tablet::Tablet::snapshot)
+    }
+
+    /// Whether the pen's eraser end is over the app's surfaces: the canvas maps it to the
+    /// eraser tool, so the eraser end erases ink whatever tool is selected (Acrobat's
+    /// behaviour, #3650). Resolved from the frame's drained batch (see
+    /// [`platform::tablet::Tablet::eraser_end_for_frame`]), not the reader's snapshot —
+    /// the snapshot may already be past the events this frame processes. Never true off
+    /// Linux, without the pen sidecar, or before the first pen event.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn pen_eraser_end(&self) -> bool {
+        self.tablet.as_ref().map(platform::tablet::Tablet::eraser_end_for_frame).unwrap_or(false)
+    }
+
     /// Today in `fmt` (or Preferences ▸ Date format), with month and weekday names in the date
     /// language, or the interface language when it follows that.
     pub fn date_text(&self, fmt: Option<&str>) -> Result<String, String> {

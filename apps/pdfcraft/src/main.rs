@@ -466,6 +466,12 @@ fn app_creator<'a>(
         app.units = pdfcraft_ui_egui::units::Unit::system();
         #[cfg(target_os = "linux")]
         app.enable_desktop_theme();
+        // Native Wayland pen input (#3650); on X11/XWayland this logs once and changes nothing.
+        #[cfg(target_os = "linux")]
+        match raw_window_handle::HasDisplayHandle::display_handle(cc) {
+            Ok(display) => app.enable_wayland_pen(&cc.egui_ctx, &display),
+            Err(err) => log::info!("no pen sidecar: no display handle: {err}"),
+        }
         // The system's reopen-windows choice (macOS) starts the preference; a saved choice replaces it.
         app.reopen_last_session = reopen::system_default();
         if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
