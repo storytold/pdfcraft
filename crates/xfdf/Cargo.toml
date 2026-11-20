@@ -9,11 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-xfdf = { git = "https://github.com/storytold/craft-libs", rev = "1546550b0d4b79b8156a1fefaac8b3b317a4aee0", version = "0.1.0" }
 pdfcraft-cos = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-forms = { workspace = true }
 pdfcraft-model = { workspace = true }
-roxmltree = "0.21"
+craft-csv = { workspace = true }
+craft-xml = { workspace = true }
 base64 = "0.23"
 thiserror = { workspace = true }
 

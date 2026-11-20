@@ -27,9 +27,9 @@ fn photo(w: u32, h: u32) -> Vec<u8> {
 }
 
 fn rgb_jpeg(px: &[u8], w: u32, h: u32) -> Vec<u8> {
-    let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 100).encode(px, w, h, image::ExtendedColorType::Rgb8).unwrap();
-    out
+    let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, px.to_vec()).unwrap();
+    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: 100, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &opts).unwrap()
 }
 
 /// The JPEG's segments before its first scan: (marker, start of the marker, end of the segment).

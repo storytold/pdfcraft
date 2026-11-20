@@ -22,6 +22,7 @@ pub mod script;
 pub mod text;
 mod traverse;
 pub mod usage_rights;
+mod xml;
 
 use pdfcraft_cos::Document;
 

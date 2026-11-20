@@ -83,11 +83,11 @@ pub fn can_preserve_usage_rights(doc: &Document) -> bool {
             let missing_packet = find_array_packet(doc, &items, "datasets").is_none() || find_array_packet(doc, &items, "form").is_none();
             !missing_packet || check_array_envelope_possible(doc, &items).is_ok()
         }
-        Object::Stream(s) => s
-            .decoded_within(MAX_PACKET_BYTES)
-            .ok()
-            .and_then(|b| decode(&b))
-            .is_some_and(|(xdp, _)| xml_nesting_depth(&xdp) <= MAX_XML_DEPTH && roxmltree::Document::parse_with_options(&xdp, xml_opts()).is_ok()),
+        Object::Stream(s) => {
+            s.decoded_within(MAX_PACKET_BYTES).ok().and_then(|b| decode(&b)).is_some_and(|(xdp, _)| {
+                xml_nesting_depth(&xdp) <= MAX_XML_DEPTH && crate::xml::Document::parse_with_options(&xdp, xml_opts()).is_ok()
+            })
+        }
         _ => false,
     }
 }
@@ -138,19 +138,19 @@ pub fn sync_form_into_shell(shell: &mut Document, source: &Document) -> Result<b
     Ok(true)
 }
 
-fn xml_opts<'a>() -> roxmltree::ParsingOptions<'a> {
-    roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() }
+fn xml_opts() -> crate::xml::ParsingOptions {
+    crate::xml::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES }
 }
 
 fn parse_packet_xml(text: &str) -> Result<(), XfaError> {
     if xml_nesting_depth(text) > MAX_XML_DEPTH {
         return Err(XfaError::TooLarge("the XFA packet nests XML elements deeper than the reader accepts".into()));
     }
-    if roxmltree::Document::parse_with_options(text, xml_opts()).is_ok() {
+    if crate::xml::Document::parse_with_options(text, xml_opts()).is_ok() {
         return Ok(());
     }
     let wrapped = format!("{WRAP_OPEN}{}{WRAP_CLOSE}", strip_xml_decl(text));
-    roxmltree::Document::parse_with_options(&wrapped, xml_opts()).map(|_| ()).map_err(|e| XfaError::Malformed(e.to_string()))
+    crate::xml::Document::parse_with_options(&wrapped, xml_opts()).map(|_| ()).map_err(|e| XfaError::Malformed(e.to_string()))
 }
 
 fn decode_stream_exact(doc: &Document, obj: &Object) -> Result<(String, Encoding), XfaError> {
@@ -200,7 +200,7 @@ fn extract_named_packet(doc: &Document, name: &str) -> Result<Option<String>, Xf
             if xml_nesting_depth(&xdp) > MAX_XML_DEPTH {
                 return Err(XfaError::TooLarge("the XFA stream nests XML elements deeper than the reader accepts".into()));
             }
-            let parsed = roxmltree::Document::parse_with_options(&xdp, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
+            let parsed = crate::xml::Document::parse_with_options(&xdp, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
             let found = find_xdp_element(&parsed, name);
             Ok(found.and_then(|n| xdp.get(n.range())).map(str::to_owned))
         }
@@ -208,7 +208,7 @@ fn extract_named_packet(doc: &Document, name: &str) -> Result<Option<String>, Xf
     }
 }
 
-fn is_template_element(n: &roxmltree::Node<'_, '_>) -> bool {
+fn is_template_element(n: &crate::xml::Node<'_>) -> bool {
     n.is_element()
         && n.tag_name().name() == "template"
         && (n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-template"))
@@ -220,13 +220,13 @@ fn extract_template_element(doc: &Document) -> Result<Option<String>, XfaError> 
     if xml_nesting_depth(&raw) > MAX_XML_DEPTH {
         return Err(XfaError::TooLarge("the XFA template nests XML elements deeper than the reader accepts".into()));
     }
-    let parsed = roxmltree::Document::parse_with_options(&raw, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
+    let parsed = crate::xml::Document::parse_with_options(&raw, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
     let root = parsed.root_element();
     let tpl = if is_template_element(&root) { Some(root) } else { root.children().find(is_template_element) };
     Ok(tpl.and_then(|n| raw.get(n.range())).map(str::to_owned))
 }
 
-fn find_xdp_element<'a, 'input>(parsed: &'a roxmltree::Document<'input>, name: &str) -> Option<roxmltree::Node<'a, 'input>> {
+fn find_xdp_element<'a>(parsed: &'a crate::xml::Document, name: &str) -> Option<crate::xml::Node<'a>> {
     let root = parsed.root_element();
     if name == "template" {
         return if is_template_element(&root) { Some(root) } else { root.children().find(is_template_element) };
@@ -748,7 +748,7 @@ fn splice_into_xdp(xdp: &str, ds_xml: Option<&str>, form_xml: Option<&str>) -> R
     if xml_nesting_depth(xdp) > MAX_XML_DEPTH {
         return Err(XfaError::TooLarge("the XFA stream nests XML elements deeper than the reader accepts".into()));
     }
-    let parsed = roxmltree::Document::parse_with_options(xdp, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
+    let parsed = crate::xml::Document::parse_with_options(xdp, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
     let root = parsed.root_element();
     if root.tag_name().name() == "template" {
         let mut out = String::new();
@@ -815,7 +815,7 @@ fn write_xdp_stream(
     if updated.len() > MAX_PACKET_WRITE {
         return Err(XfaError::TooLarge("the XFA stream exceeds the write limit".into()));
     }
-    roxmltree::Document::parse_with_options(&updated, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
+    crate::xml::Document::parse_with_options(&updated, xml_opts()).map_err(|e| XfaError::Malformed(e.to_string()))?;
     let r = shell.add(Object::Stream(Stream::flate(Dict::new(), &encode(&updated, enc))));
     acro.set(b"XFA".to_vec(), Object::Ref(r));
     write_acroform(shell, root, acro_entry, acro)

@@ -29,30 +29,91 @@ pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<Stri
     }
 }
 
+/// Namespace scope tracking for `craft_xml::El` trees.
+#[derive(Clone)]
+pub(crate) struct NsScope<'a>(Vec<(&'a str, &'a str)>);
+
+impl<'a> NsScope<'a> {
+    pub(crate) fn root() -> Self {
+        Self(vec![("xml", "http://www.w3.org/XML/1998/namespace")])
+    }
+
+    pub(crate) fn child(&self, el: &'a craft_xml::El) -> Self {
+        let mut next = self.0.clone();
+        next.extend(el.ns_decls());
+        Self(next)
+    }
+
+    pub(crate) fn el_ns(&self, el: &craft_xml::El) -> Option<&'a str> {
+        let prefix = el.prefix();
+        self.0.iter().rfind(|(p, _)| *p == prefix).map(|(_, u)| *u).filter(|u| !u.is_empty())
+    }
+
+    pub(crate) fn attr_ns(&self, attr_name: &str) -> Option<&'a str> {
+        let (prefix, _) = attr_name.split_once(':')?;
+        if prefix == "xmlns" {
+            return None;
+        }
+        self.0.iter().rfind(|(p, _)| *p == prefix).map(|(_, u)| *u).filter(|u| !u.is_empty())
+    }
+
+    pub(crate) fn attr(&self, el: &'a craft_xml::El, ns: &str, local: &str) -> Option<&'a str> {
+        el.attrs.iter().find_map(|(k, v)| {
+            let (_, l) = k.split_once(':')?;
+            (l == local && self.attr_ns(k) == Some(ns)).then_some(v.as_str())
+        })
+    }
+
+    pub(crate) fn is(&self, el: &craft_xml::El, ns: &str, local: &str) -> bool {
+        el.local() == local && self.el_ns(el) == Some(ns)
+    }
+}
+
 /// `xmp` parsed within the depth, attribute and node limits; `None` when it can't be.
-pub(crate) fn parse(xmp: &str) -> Option<roxmltree::Document<'_>> {
+pub(crate) fn parse(xmp: &str) -> Option<craft_xml::El> {
     if !xml_limits_ok(xmp) {
         return None;
     }
-    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000, ..Default::default() };
-    roxmltree::Document::parse_with_options(xmp, options).ok()
+    let options = craft_xml::Options { doctype: craft_xml::Doctype::Reject, ..craft_xml::Options::default() }
+        .strict()
+        .with_limits(craft_xml::Limits { max_depth: 1024, max_nodes: 100_000, max_attrs_total: 100_000, ..craft_xml::Limits::DEFAULT });
+    options.parse(xmp.as_bytes()).ok()
 }
 
 /// [`identifier`] through an XML parser; `Err` when the packet can't be parsed within the limits.
 fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
-    let doc = parse(xmp).ok_or(())?;
-    for node in doc.descendants().filter(roxmltree::Node::is_element) {
-        if let Some(value) = node.attribute((namespace, local)) {
+    fn walk<'a>(el: &'a craft_xml::El, parent: &NsScope<'a>, namespace: &str, local: &str) -> Result<Option<String>, ()> {
+        let scope = parent.child(el);
+        let el_prefix = el.prefix();
+        if !el_prefix.is_empty() && el_prefix != "xml" && scope.el_ns(el).is_none() {
+            return Err(());
+        }
+        for (k, _) in &el.attrs {
+            if let Some((prefix, _)) = k.split_once(':')
+                && !matches!(prefix, "xml" | "xmlns")
+                && scope.attr_ns(k).is_none()
+            {
+                return Err(());
+            }
+        }
+        if let Some(value) = scope.attr(el, namespace, local) {
             return Ok(Some(value.trim().to_owned()));
         }
-        if node.tag_name().namespace() == Some(namespace) && node.tag_name().name() == local {
-            return Ok(node.text().map(|value| value.trim().to_owned()));
+        if scope.is(el, namespace, local) {
+            return Ok(Some(el.text().trim().to_owned()));
         }
+        for child in el.elements() {
+            if let Some(found) = walk(child, &scope, namespace, local)? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
     }
-    Ok(None)
+    let root = parse(xmp).ok_or(())?;
+    walk(&root, &NsScope::root(), namespace, local)
 }
 
-/// Reject deep XML and start tags with too many attributes before roxmltree checks duplicates.
+/// Reject deep XML and start tags with too many attributes before parsing.
 /// Each unquoted `=` in a valid start tag introduces an attribute, including namespace bindings.
 /// Every `b[i]` and `hay[p..]` below is guarded by `i < b.len()` / `p < hay.len()`.
 fn xml_limits_ok(text: &str) -> bool {

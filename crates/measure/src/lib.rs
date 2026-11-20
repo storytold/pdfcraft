@@ -3,7 +3,9 @@
 //! annotations use the measurement intents of line, polygon and polyline annotations (§12.5.6).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod number_format;
 pub mod snap;
+use number_format::{Formats, NumberFormat};
 use pdfcraft_annot::{Meta, NewAnnotation, Shape, Style};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 use serde::Serialize;
@@ -67,8 +69,17 @@ pub struct Scale {
     pub distance_factor: f64,
     pub area_factor: f64,
     pub area_unit: String,
+    /// Decimal places of a distance. With [`Scale::formats`], those of the last distance unit
+    /// when it shows decimals (0 otherwise); the formats, not this, label the readings.
     pub precision: u8,
     pub ratio: String,
+    /// The number format arrays of an imported scale whose units are compound (feet and inches)
+    /// or whose values show as fractions or cut off to whole units (ISO 32000-2 §12.9.2):
+    /// readings are labelled with them, and a measurement added with this scale writes them
+    /// back. `unit`, `area_unit` and the factors are their first units'. `None` for single-unit
+    /// decimal scales, which `unit`, `area_unit` and `precision` describe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formats: Option<Formats>,
 }
 impl Default for Scale {
     fn default() -> Self {
@@ -81,6 +92,7 @@ impl Default for Scale {
             area_unit: "in^2".into(),
             precision: 2,
             ratio: "1 in = 1 in".into(),
+            formats: None,
         }
     }
 }
@@ -95,6 +107,7 @@ impl Scale {
             area_unit: format!("{unit}^2"),
             precision,
             ratio: format!("1 pt = {units_per_user_unit} {unit}"),
+            formats: None,
         };
         out.validate()?;
         Ok(out)
@@ -142,6 +155,15 @@ impl Scale {
         if self.ratio.len() > 256 || self.ratio.chars().any(char::is_control) {
             return Err(invalid("invalid scale ratio"));
         }
+        if let Some(formats) = &self.formats {
+            formats.validate().map_err(invalid)?;
+            if formats.y.is_some() {
+                let yf = self.y / formats.cyx;
+                if !yf.is_finite() || !(1e-12..=1e12).contains(&yf) {
+                    return Err(invalid("scale factors must be finite and between 1e-12 and 1e12"));
+                }
+            }
+        }
         Ok(())
     }
     pub fn dictionary(&self) -> Result<Dict> {
@@ -159,10 +181,34 @@ impl Scale {
             d.set(b"SS".to_vec(), PdfString::text(""));
             Object::Array(vec![Object::Dict(d)])
         };
+        // An imported array is written as read, its first unit given this scale's label and factor.
+        let imported = |formats: &[NumberFormat], unit: &str, factor: f64| {
+            let first = formats.first().map(|f| NumberFormat { unit: unit.into(), factor, ..f.clone() });
+            Object::Array(first.iter().chain(formats.iter().skip(1)).map(NumberFormat::dictionary).collect())
+        };
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("Measure"));
         d.set(b"Subtype".to_vec(), Object::name("RL"));
         d.set(b"R".to_vec(), PdfString::text(&self.ratio));
+        if let Some(f) = &self.formats {
+            d.set(b"X".to_vec(), imported(&f.x, &self.unit, self.x));
+            match &f.y {
+                // Y keeps its own units, and the CYX that converts them to X's.
+                Some(ys) => {
+                    let unit = ys.first().map_or(self.unit.as_str(), |f| f.unit.as_str());
+                    d.set(b"Y".to_vec(), imported(ys, unit, self.y / f.cyx));
+                    d.set(b"CYX".to_vec(), Object::Real(f.cyx));
+                }
+                None if self.x != self.y => {
+                    d.set(b"Y".to_vec(), imported(&f.x, &self.unit, self.y));
+                    d.set(b"CYX".to_vec(), Object::Real(1.0));
+                }
+                None => {}
+            }
+            d.set(b"D".to_vec(), imported(&f.distance, &self.unit, self.distance_factor));
+            d.set(b"A".to_vec(), imported(&f.area, &self.area_unit, self.area_factor));
+            return Ok(d);
+        }
         d.set(b"X".to_vec(), format(&self.unit, self.x));
         if self.x != self.y {
             d.set(b"Y".to_vec(), format(&self.unit, self.y));
@@ -172,50 +218,51 @@ impl Scale {
         d.set(b"A".to_vec(), format(&self.area_unit, self.area_factor));
         Ok(d)
     }
-    /// Single-unit decimal scales are editable. Compound/fractional and non-rectilinear
-    /// imports are refused explicitly; their dictionaries and appearance remain untouched.
+    /// Single-unit decimal scales are editable. Compound units (feet and inches), fractions and
+    /// values cut off to whole units read too, keeping their number format arrays in
+    /// [`Scale::formats`] (ISO 32000-2 §12.9.2). Non-rectilinear scales and formats that can't be
+    /// shown are refused explicitly; their dictionaries and appearance remain untouched.
     pub fn read(doc: &Document, object: &Object) -> Result<Self> {
         let o = doc.resolve(object);
         let d = o.as_dict().ok_or_else(|| invalid("invalid measure dictionary"))?;
         if d.get(b"Subtype").map(|o| doc.resolve(o)).is_some_and(|o| !matches!(*o, Object::Null) && o.as_name() != Some(b"RL")) {
             return Err(invalid("only rectilinear measurement scales are supported"));
         }
-        let format = |key: &[u8]| -> Result<(String, f64, u8)> {
-            let a = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?);
-            let a = a.as_array().ok_or_else(|| invalid("invalid measurement number format"))?;
-            if a.len() != 1 {
-                return Err(invalid("compound measurement units are not supported yet"));
+        let format = |key: &[u8]| -> Result<Vec<NumberFormat>> {
+            let a = d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?;
+            number_format::read(doc, a).map_err(invalid)
+        };
+        // The unit and factor a number format array converts to first.
+        let first = |a: &[NumberFormat]| a.first().map(|f| (f.unit.clone(), f.factor)).ok_or_else(|| invalid("empty number format"));
+        let xs = format(b"X")?;
+        let (unit, x) = first(&xs)?;
+        let ys = if d.contains(b"Y") { Some(format(b"Y")?) } else { None };
+        let (y, cyx) = match &ys {
+            Some(ys) => {
+                let cyx = d.get(b"CYX").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?;
+                (first(ys)?.1 * cyx, cyx)
             }
-            let o = doc.resolve(a.first().ok_or_else(|| invalid("empty number format"))?);
-            let f = o.as_dict().ok_or_else(|| invalid("invalid number format dictionary"))?;
-            let fmt = f.get(b"F").map(|o| doc.resolve(o));
-            let precision = match fmt.as_deref().and_then(Object::as_name) {
-                Some(b"R") => 0,
-                None | Some(b"D") => {
-                    let denom = f.get(b"D").and_then(|o| doc.resolve(o).as_int()).unwrap_or(100);
-                    (0..=6).find(|p| 10_i64.pow(*p) == denom).ok_or_else(|| invalid("unsupported measurement precision"))?
-                }
-                _ => return Err(invalid("fractional measurement formats are not supported yet")),
-            };
-            Ok((
-                text(doc, f, b"U"),
-                f.get(b"C").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("missing conversion factor"))?,
-                precision as u8,
-            ))
+            None => (x, 1.0),
         };
-        let (unit, x, _) = format(b"X")?;
-        let y = if d.contains(b"Y") {
-            let (_, y, _) = format(b"Y")?;
-            y * d.get(b"CYX").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
-        } else {
-            x
-        };
-        let (distance_unit, distance_factor, precision) = format(b"D")?;
+        let distances = format(b"D")?;
+        let (distance_unit, distance_factor) = first(&distances)?;
         if unit != distance_unit {
             return Err(invalid("different coordinate and distance units are not supported yet"));
         }
-        let (area_unit, area_factor, _) = format(b"A")?;
-        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(doc, d, b"R") };
+        let areas = format(b"A")?;
+        let (area_unit, area_factor) = first(&areas)?;
+        let plain = [&xs, &distances, &areas].into_iter().chain(ys.as_ref()).all(|a| number_format::plain_precision(a).is_some());
+        // The decimals a distance shows: of its only unit, or of its last one when compound.
+        let precision = number_format::plain_precision(&distances)
+            .or_else(|| {
+                distances
+                    .last()
+                    .filter(|f| f.remainder == number_format::Remainder::Decimal)
+                    .and_then(|f| u8::try_from(f.denominator.max(1).ilog10()).ok())
+            })
+            .unwrap_or(0);
+        let formats = (!plain).then_some(Formats { x: xs, y: ys, cyx, distance: distances, area: areas });
+        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(doc, d, b"R"), formats };
         out.validate()?;
         Ok(out)
     }
@@ -319,10 +366,13 @@ pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     length *= scale.distance_factor;
     let value = if kind == Kind::Area { area } else { length };
     let unit = if kind == Kind::Area { scale.area_unit.clone() } else { scale.unit.clone() };
-    let label = format!("{value:.precision$} {unit}", precision = usize::from(scale.precision));
     if !value.is_finite() {
         return Err(invalid("measurement overflows its scale"));
     }
+    let label = match &scale.formats {
+        Some(f) => number_format::format(value, if kind == Kind::Area { &f.area } else { &f.distance }),
+        None => format!("{value:.precision$} {unit}", precision = usize::from(scale.precision)),
+    };
     Ok(Reading { kind, value, unit, label, delta_x: delta[0], delta_y: delta[1], angle: delta[1].atan2(delta[0]).to_degrees(), length, area })
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -479,7 +529,7 @@ const MAX_LISTED_BYTES: usize = 32 << 20;
 /// The bytes a listed measurement keeps in points and text.
 fn retained(m: &Measurement) -> usize {
     let s = &m.scale;
-    [m.id.len(), m.author.len(), m.label.len(), s.unit.len(), s.area_unit.len(), s.ratio.len()]
+    [m.id.len(), m.author.len(), m.label.len(), s.unit.len(), s.area_unit.len(), s.ratio.len(), s.formats.as_ref().map_or(0, Formats::held_bytes)]
         .into_iter()
         .fold(m.points.len().saturating_mul(std::mem::size_of::<Point>()), usize::saturating_add)
 }
