@@ -1,8 +1,9 @@
 //! Create a valid, reviewable structure tree for untagged PDFs.
 //!
 //! Each text object becomes a paragraph, or a heading when its size or weight sets it apart from
-//! the body text ([`crate::autotag_roles`]); either can be retagged with the existing tag-property
-//! tool after human review. Painted paths, shadings and images outside text objects
+//! the body text ([`crate::autotag_roles`]). Consecutive paragraphs that start with list markers of
+//! one kind become a list ([`crate::autotag_lists`]). Any of these can be retagged with the
+//! existing tag-property tool after human review. Painted paths, shadings and images outside text objects
 //! are wrapped in `/Artifact BMC … EMC` so the resulting page passes the tagged-content check.
 
 use std::collections::{HashMap, HashSet};
@@ -10,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::{Op, Pieces, serialize_ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
+use crate::autotag_lists::{self, Block};
 use crate::autotag_roles::{self, Evidence};
 
 const MAX_PAGES: usize = 1_000;
@@ -26,6 +28,8 @@ pub struct AutoTagResult {
     pub pages: usize,
     pub paragraphs: usize,
     pub headings: usize,
+    /// Lists (`L`); their items are not counted as paragraphs.
+    pub lists: usize,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -372,43 +376,133 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let mut next = doc.clone();
     let catalog = next.root().ok_or(AutoTagError::NoCatalog)?;
     let (root, document) = (next.add(Object::Null), next.add(Object::Null));
-    let (mut children, mut numbers, mut tagged_pages, mut paragraphs, mut headings) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
-    for page in plans {
+    let (mut children, mut numbers, mut tagged_pages) = (Vec::new(), Vec::new(), 0usize);
+    let (mut paragraphs, mut headings, mut lists) = (0usize, 0usize, 0usize);
+    for (index, page) in plans.into_iter().enumerate() {
         if page.spans.is_empty() && page.artifacts.is_empty() {
             continue;
         }
-        let (mut starts, mut ends) = (HashMap::new(), HashSet::new());
+        let mut tags = PageTags::new(index, page.page, &page.spans);
         if !page.spans.is_empty() {
             let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
-            let mut parents = Vec::with_capacity(page.spans.len());
-            for (mcid, (first, last)) in page.spans.iter().enumerate() {
-                let role = roles.next().unwrap_or("P");
-                let mut element = Dict::new();
-                element.set(b"Type".to_vec(), Object::name("StructElem"));
-                element.set(b"S".to_vec(), Object::name(role));
-                element.set(b"P".to_vec(), Object::Ref(document));
-                element.set(b"Pg".to_vec(), Object::Ref(page.page));
-                element.set(b"K".to_vec(), Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
-                let reference = next.add(element);
-                parents.push(Object::Ref(reference));
-                children.push(Object::Ref(reference));
-                starts.insert(*first, (mcid, role));
-                ends.insert(*last);
-                if role == "P" {
-                    paragraphs = paragraphs.saturating_add(1);
-                } else {
-                    headings = headings.saturating_add(1);
+            let page_roles: Vec<&'static str> = page.spans.iter().map(|_| roles.next().unwrap_or("P")).collect();
+            for block in autotag_lists::blocks(&page.evidence, &page_roles) {
+                match block {
+                    Block::Text(span) => {
+                        let role = page_roles.get(span).copied().unwrap_or("P");
+                        children.push(Object::Ref(tags.leaf(&mut next, span, role, document)?));
+                        if role == "P" {
+                            paragraphs = paragraphs.saturating_add(1);
+                        } else {
+                            headings = headings.saturating_add(1);
+                        }
+                    }
+                    Block::List { numbering, items } => {
+                        let list = next.add(Object::Null);
+                        let mut list_items = Vec::with_capacity(items.len());
+                        for item in items {
+                            let entry = next.add(Object::Null);
+                            let mut kids = Vec::with_capacity(2);
+                            let shown_label = page.evidence.get(item.body).and_then(|e| e.label_op);
+                            match (item.label, shown_label) {
+                                (Some(label), _) => {
+                                    kids.push(Object::Ref(tags.leaf(&mut next, label, "Lbl", entry)?));
+                                    kids.push(Object::Ref(tags.leaf(&mut next, item.body, "LBody", entry)?));
+                                }
+                                // The marker's own show operator, inside the item's text object.
+                                (None, Some(at)) => {
+                                    let (lbl, body) = tags.split(&mut next, item.body, at, entry)?;
+                                    kids.extend([Object::Ref(lbl), Object::Ref(body)]);
+                                }
+                                (None, None) => kids.push(Object::Ref(tags.leaf(&mut next, item.body, "LBody", entry)?)),
+                            }
+                            next.set(entry, element("LI", list, Object::Array(kids)));
+                            list_items.push(Object::Ref(entry));
+                        }
+                        let mut attributes = Dict::new();
+                        attributes.set(b"O".to_vec(), Object::name("List"));
+                        attributes.set(b"ListNumbering".to_vec(), Object::name(numbering.attribute()));
+                        let mut list_element = element("L", document, Object::Array(list_items));
+                        list_element.set(b"A".to_vec(), Object::Dict(attributes));
+                        next.set(list, list_element);
+                        children.push(Object::Ref(list));
+                        lists = lists.saturating_add(1);
+                    }
                 }
             }
             next.update_dict(page.page, |d| d.set(b"StructParents".to_vec(), Object::Int(key)))?;
-            numbers.extend([Object::Int(key), Object::Array(parents)]);
+            numbers.extend([Object::Int(key), Object::Array(std::mem::take(&mut tags.parents))]);
             tagged_pages += 1;
         }
+        let PageTags { starts, ends, .. } = tags;
         let marked = mark_ops(page.ops, &starts, &ends, &page.artifacts)?;
         let stream = next.add(Stream::flate(Dict::new(), &serialize_ops(&marked)));
         next.update_dict(page.page, |d| d.set(b"Contents".to_vec(), Object::Ref(stream)))?;
     }
     write_structure(&mut next, catalog, root, document, children, numbers, tagged_pages)?;
     *doc = next;
-    Ok(AutoTagResult { pages: tagged_pages, paragraphs, headings })
+    Ok(AutoTagResult { pages: tagged_pages, paragraphs, headings, lists })
+}
+
+/// A structure element of type `role` under `parent`, with kids `kids`.
+fn element(role: &str, parent: ObjRef, kids: Object) -> Dict {
+    let mut element = Dict::new();
+    element.set(b"Type".to_vec(), Object::name("StructElem"));
+    element.set(b"S".to_vec(), Object::name(role));
+    element.set(b"P".to_vec(), Object::Ref(parent));
+    element.set(b"K".to_vec(), kids);
+    element
+}
+
+/// The marked content and parent-tree entries of one page's text objects. MCIDs are given in the
+/// order elements are added; the parent tree array is indexed by them.
+struct PageTags<'a> {
+    index: usize,
+    page: ObjRef,
+    spans: &'a [(usize, usize)],
+    starts: HashMap<usize, (usize, &'static str)>,
+    ends: HashSet<usize>,
+    parents: Vec<Object>,
+}
+
+impl<'a> PageTags<'a> {
+    fn new(index: usize, page: ObjRef, spans: &'a [(usize, usize)]) -> Self {
+        Self { index, page, spans, starts: HashMap::new(), ends: HashSet::new(), parents: Vec::with_capacity(spans.len()) }
+    }
+
+    fn span(&self, span: usize) -> Result<(usize, usize), AutoTagError> {
+        self.spans.get(span).copied().ok_or_else(|| unsupported(self.index, "a planned text object is missing"))
+    }
+
+    /// Add the element of type `role`, under `parent`, that owns text object `span`.
+    fn leaf(&mut self, next: &mut Document, span: usize, role: &'static str, parent: ObjRef) -> Result<ObjRef, AutoTagError> {
+        let (first, last) = self.span(span)?;
+        self.mark(next, first, last, role, parent)
+    }
+
+    /// Split text object `span` at its marker's show operator `at`: an `Lbl` from after `BT`
+    /// through `at`, and an `LBody` from after `at` up to `ET`, both under `parent`.
+    fn split(&mut self, next: &mut Document, span: usize, at: usize, parent: ObjRef) -> Result<(ObjRef, ObjRef), AutoTagError> {
+        let (first, last) = self.span(span)?;
+        // `Evidence::label_op` is a show operator with another after it, so both parts hold one.
+        if at <= first || at.saturating_add(1) >= last {
+            return Err(unsupported(self.index, "a list marker is outside its text object"));
+        }
+        let label = self.mark(next, first + 1, at, "Lbl", parent)?;
+        let body = self.mark(next, at + 1, last - 1, "LBody", parent)?;
+        Ok((label, body))
+    }
+
+    /// Add the element of type `role`, under `parent`, owning operators `first..=last` as one
+    /// marked-content sequence.
+    fn mark(&mut self, next: &mut Document, first: usize, last: usize, role: &'static str, parent: ObjRef) -> Result<ObjRef, AutoTagError> {
+        let mcid = self.parents.len();
+        let mut leaf = element(role, parent, Object::Int(i64::try_from(mcid).map_err(|_| AutoTagError::TooManyPages)?));
+        leaf.set(b"Pg".to_vec(), Object::Ref(self.page));
+        let reference = next.add(leaf);
+        self.parents.push(Object::Ref(reference));
+        self.starts.insert(first, (mcid, role));
+        self.ends.insert(last);
+        Ok(reference)
+    }
 }

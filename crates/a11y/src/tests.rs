@@ -50,7 +50,7 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1 });
+    assert_eq!(result, AutoTagResult { pages: 2, paragraphs: 2, headings: 1, lists: 0 });
     let catalog = doc.get(doc.root().unwrap());
     let root = catalog.as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
     let tree = doc.get(root);
@@ -108,7 +108,7 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
     let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
     predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
     doc.set(ObjRef::new(4, 0), predicted);
-    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1, headings: 0, lists: 0 });
     let page = &pdfcraft_model::pages(&doc)[0];
     let written = doc.resolve(page.dict.get(b"Contents").unwrap());
     let Object::Stream(written) = &*written else { panic!("page content") };
@@ -146,6 +146,81 @@ fn autotag_text_says_why_it_cannot_read_a_page() {
 }
 
 #[test]
+fn autotag_text_tags_typed_lists_and_leaves_lone_or_interrupted_markers_as_paragraphs() {
+    // From the top: a paragraph; a numbered list; a bulleted list whose bullets are drawn apart
+    // from their text; "1." and "2." with a paragraph between them; a paragraph; a bulleted list
+    // whose bullets are shown apart inside each item's text object; a lone "1." line.
+    let lines = [
+        (20, 280, "Shopping:"),
+        (20, 260, "1. Apples"),
+        (20, 245, "2. Pears"),
+        (20, 230, "3. Plums"),
+        (20, 210, "\\225"),
+        (32, 210, "Milk"),
+        (20, 195, "\\225"),
+        (32, 195, "Bread"),
+        (20, 170, "1. One"),
+        (20, 155, "Some prose between them."),
+        (20, 140, "2. Two"),
+        (20, 120, "Another paragraph."),
+    ];
+    let mut content: String = lines.iter().map(|(x, y, text)| format!("BT /F1 12 Tf {x} {y} Td ({text}) Tj ET ")).collect();
+    content.push_str("BT /F1 12 Tf 20 100 Td (\\225) Tj 12 0 Td (Eggs) Tj ET BT /F1 12 Tf 20 85 Td (\\225) Tj 12 0 Td (Jam) Tj ET ");
+    content.push_str("BT /F1 12 Tf 20 60 Td (1. Introduction) Tj ET");
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream(&content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!((result.lists, result.paragraphs), (3, 6), "{result:?}");
+
+    let tags = crate::tags(&doc);
+    let tree: Vec<(&str, usize)> = tags.iter().map(|t| (t.kind.as_str(), t.depth)).collect();
+    let item = [("LI", 2), ("LBody", 3)];
+    let labelled = [("LI", 2), ("Lbl", 3), ("LBody", 3)];
+    let mut expected = vec![("Document", 0), ("P", 1), ("L", 1)];
+    expected.extend(item.repeat(3));
+    expected.push(("L", 1));
+    expected.extend(labelled.repeat(2));
+    expected.extend([("P", 1); 4]);
+    expected.push(("L", 1));
+    expected.extend(labelled.repeat(2));
+    expected.push(("P", 1));
+    assert_eq!(tree, expected);
+
+    // Each label and body owns its own text, and the lists say how they are numbered.
+    let text = |kind: &str, nth: usize| {
+        let tag = tags.iter().filter(|t| t.kind == kind).nth(nth).unwrap();
+        crate::tag_content(&doc, tag.object).unwrap().into_iter().map(|c| c.text).collect::<String>()
+    };
+    assert_eq!((text("Lbl", 1), text("LBody", 4)), ("•".to_string(), "Bread".to_string()));
+    assert_eq!((text("Lbl", 3), text("LBody", 6)), ("•".to_string(), "Jam".to_string()));
+    let numbering: Vec<Vec<u8>> = tags
+        .iter()
+        .filter(|t| t.kind == "L")
+        .map(|t| {
+            let list = doc.get(t.object);
+            let attributes = list.as_dict().unwrap().get(b"A").unwrap().as_dict().unwrap().clone();
+            attributes.name(b"ListNumbering").unwrap().to_vec()
+        })
+        .collect();
+    assert_eq!(numbering, [b"Decimal".to_vec(), b"Disc".to_vec(), b"Disc".to_vec()]);
+
+    let report = checked(&doc, &[Rule::ListItems, Rule::LblLBody, Rule::TaggedContent]);
+    assert!(failed(&report).is_empty(), "{:?}", failed(&report));
+    // The list elements are reserved before they are written; they must survive a save.
+    let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(crate::tags(&reopened).iter().map(|t| (t.kind.as_str(), t.depth)).collect::<Vec<_>>(), expected);
+}
+
+#[test]
 fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
     let mut doc = pdf(
         &[
@@ -161,7 +236,7 @@ fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
         "",
     );
     let result = autotag_text(&mut doc).unwrap();
-    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0 });
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1, headings: 0, lists: 0 });
     let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
     assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
     assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);

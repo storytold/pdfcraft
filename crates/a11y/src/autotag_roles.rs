@@ -14,6 +14,8 @@ use pdfcraft_content::{Matrix, Op};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_fonts::pdf::Metrics;
 
+use crate::autotag_lists::{self, Marker};
+
 /// A line this much larger than body text reads as a heading.
 const HEADING_SIZE_RATIO: f64 = 1.15;
 /// Bold text this much of the body size or more can be a heading by weight.
@@ -25,6 +27,12 @@ const MAX_CHARS: usize = 200;
 const MAX_SAVED: usize = 64;
 /// Distinct fonts measured per document; text in any further font counts as unstyled.
 const MAX_FONTS: usize = 256;
+/// Characters of an object's text kept to find a list marker: enough for `(viii)` and the space
+/// after it, and to tell a marker alone from one followed by text.
+const MAX_PREFIX: usize = 16;
+/// A `TJ` adjustment at least this far right, in thousandths of the text size, reads as a space
+/// between words (`[(1.)-250(Apples)] TJ`).
+const WORD_GAP: f64 = 150.0;
 
 /// What one text object shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -37,6 +45,14 @@ pub(crate) struct Evidence {
     /// Characters shown, whitespace excluded.
     pub chars: usize,
     pub letters: bool,
+    /// The list marker the text starts with ([`crate::autotag_lists`]).
+    pub marker: Option<Marker>,
+    /// The operator that shows only the object's list marker, when more text follows in later
+    /// show operators of the same object: that part can be tagged apart as the item's label.
+    pub label_op: Option<usize>,
+    /// Where the first shown glyph starts, in default user space.
+    pub x: f64,
+    pub y: f64,
 }
 
 /// The structure type for each text object, in document order: `H1`–`H6` or `P`.
@@ -136,10 +152,26 @@ struct Shown {
     shown: bool,
     moved: bool,
     letters: bool,
+    /// The start of the text, without leading white space, up to [`MAX_PREFIX`] characters.
+    /// Show operators, and wide `TJ` gaps, are separated by a space.
+    prefix: String,
+    start: Option<(f64, f64)>,
+    /// The first operator that shows something, and the start of what it shows.
+    first_show: Option<(usize, String)>,
+    /// A later operator shows something too.
+    shown_after: bool,
 }
 
 impl Shown {
-    fn show(&mut self, state: &State, bytes: &[u8]) {
+    /// Text shown from here on is a separate word in the prefix.
+    fn separate(&mut self) {
+        if !self.prefix.is_empty() && !self.prefix.ends_with(' ') && self.prefix.chars().count() < MAX_PREFIX {
+            self.prefix.push(' ');
+        }
+    }
+
+    /// `bytes` shown by operator `at`.
+    fn show(&mut self, state: &State, at: usize, bytes: &[u8]) {
         let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else { return };
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
@@ -147,6 +179,21 @@ impl Shown {
             return;
         }
         self.letters |= text.chars().any(char::is_alphabetic);
+        if self.start.is_none() {
+            let [.., e, f] = state.tm.then(&state.ctm).0;
+            self.start = Some((e, f));
+        }
+        let shown = if self.prefix.is_empty() { text.trim_start() } else { text.as_str() };
+        let kept = self.prefix.chars().count();
+        self.prefix.extend(shown.chars().take(MAX_PREFIX.saturating_sub(kept)));
+        match &mut self.first_show {
+            None => self.first_show = Some((at, shown.chars().take(MAX_PREFIX).collect())),
+            Some((first, text)) if *first == at => {
+                let kept = text.chars().count();
+                text.extend(shown.chars().take(MAX_PREFIX.saturating_sub(kept)));
+            }
+            Some(_) => self.shown_after = true,
+        }
         if !self.shown {
             (self.shown, self.lines) = (true, 1);
         } else if self.moved {
@@ -175,7 +222,18 @@ impl Shown {
         let Some((size, (count, bold))) = self.by_size.into_iter().max_by_key(|&(s, (n, _))| (n, s)) else {
             return Evidence::default();
         };
-        Evidence { size: size as f64 / 2.0, bold: bold.saturating_mul(2) > count, lines: self.lines, chars, letters: self.letters }
+        let (x, y) = self.start.unwrap_or_default();
+        Evidence {
+            size: size as f64 / 2.0,
+            bold: bold.saturating_mul(2) > count,
+            lines: self.lines,
+            chars,
+            letters: self.letters,
+            marker: autotag_lists::marker(&self.prefix),
+            label_op: self.first_show.filter(|(_, text)| self.shown_after && autotag_lists::marker(text).is_some_and(|m| m.alone)).map(|(at, _)| at),
+            x,
+            y,
+        }
     }
 }
 
@@ -248,20 +306,25 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     if op.op != b"T*"
                         && let Some(Object::String(s)) = op.operands.last()
                     {
-                        o.show(&state, &s.bytes);
+                        o.separate();
+                        o.show(&state, at, &s.bytes);
                     }
                 }
             }
             b"Tj" => {
                 if let (Some(o), Some(Object::String(s))) = (object, op.operands.first()) {
-                    o.show(&state, &s.bytes);
+                    o.separate();
+                    o.show(&state, at, &s.bytes);
                 }
             }
             b"TJ" => {
                 if let (Some(o), Some(Object::Array(items))) = (object, op.operands.first()) {
+                    o.separate();
                     for item in items {
-                        if let Object::String(s) = item {
-                            o.show(&state, &s.bytes);
+                        match item {
+                            Object::String(s) => o.show(&state, at, &s.bytes),
+                            other if other.as_f64().is_some_and(|n| n <= -WORD_GAP) => o.separate(),
+                            _ => {}
                         }
                     }
                 }
@@ -283,7 +346,7 @@ mod tests {
     use super::*;
 
     fn text(size: f64, chars: usize) -> Evidence {
-        Evidence { size, bold: false, lines: 1, chars, letters: true }
+        Evidence { size, bold: false, lines: 1, chars, letters: true, ..Evidence::default() }
     }
 
     fn bold(e: Evidence) -> Evidence {
@@ -363,8 +426,8 @@ mod tests {
         let found = walk(
             b"q 2 0 0 2 0 0 cm BT /F1 1 Tf 9 0 0 9 10 10 Tm (Title) Tj ET Q BT /F1 12 Tf 10 50 Td (one) Tj T* (two) ' 0 -14 Td (three) Tj ET BT ET",
         );
-        assert_eq!(found[0], Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true });
-        assert_eq!(found[1], Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true });
+        assert_eq!(found[0], Evidence { size: 18.0, bold: true, lines: 1, chars: 5, letters: true, marker: None, label_op: None, x: 20.0, y: 20.0 });
+        assert_eq!(found[1], Evidence { size: 12.0, bold: true, lines: 3, chars: 11, letters: true, marker: None, label_op: None, x: 10.0, y: 50.0 });
         assert_eq!(found[2], Evidence::default());
         assert_eq!(found.len(), 3);
     }
@@ -378,5 +441,20 @@ mod tests {
         assert_eq!(found[1].lines, 4, "\" and TD each start a line, and T* uses TD's leading");
         assert_eq!(found[2].chars, 5, "render mode 3 and 7 text is not counted");
         assert_eq!(found[3], Evidence::default(), "a size past 1e6 is dropped");
+    }
+
+    #[test]
+    fn a_list_marker_is_read_across_kerning_and_leading_space_and_its_own_show_is_found() {
+        let found = walk(
+            b"BT /F1 12 Tf [(1)-15(.)-250(Apples)] TJ ET \
+              BT /F1 12 Tf (                    2. Pears) Tj ET \
+              BT /F1 12 Tf (3.) Tj 14 0 Td (Plums) Tj ET \
+              BT /F1 12 Tf [(4.)-250(Figs)] TJ ET",
+        );
+        let markers: Vec<Option<u32>> = found.iter().map(|e| e.marker.filter(|m| !m.alone).map(|m| m.value)).collect();
+        assert_eq!(markers, [Some(1), Some(2), Some(3), Some(4)]);
+        // Only the marker shown by an operator of its own can be tagged apart: the `(3.) Tj`.
+        let labels: Vec<bool> = found.iter().map(|e| e.label_op.is_some()).collect();
+        assert_eq!(labels, [false, false, true, false]);
     }
 }
