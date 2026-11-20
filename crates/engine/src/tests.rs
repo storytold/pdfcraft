@@ -9752,6 +9752,159 @@ fn a_value_a_script_sets_reaches_every_field_bound_to_the_same_data_node() {
     );
 }
 
+/// A form with `/NeedAppearances` whose stored appearance is stale (`Old` while the value is
+/// `Ada`): PdfCraft shows the field drawn from its value, so flattening bakes `Ada`, not `Old`.
+/// A hidden field's widget stays, with its own appearance and nothing drawn for it left behind.
+fn stale_appearance_form(need_appearances: bool) -> Arc<Vec<u8>> {
+    let flag = if need_appearances { "/NeedAppearances true " } else { "" };
+    let old = "/Tx BMC BT /Helv 10 Tf 2 5 Td (Old) Tj ET EMC";
+    Arc::new(
+        pdfcraft_testkit::Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << {flag}/Fields [5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>"))
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Annots [5 0 R 6 0 R] >>")
+            .stream("", "")
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /DA (/Helv 10 Tf 0 g) /Rect [20 150 200 170] /P 3 0 R /AP << /N 7 0 R >> >>")
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /V (Ada) /F 2 /DA (/Helv 10 Tf 0 g) /Rect [20 100 200 120] /P 3 0 R /AP << /N 7 0 R >> >>")
+            .stream("/Type /XObject /Subtype /Form /BBox [0 0 180 20] /Resources << /Font << /Helv 8 0 R >> >>", old)
+            .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+            .build(),
+    )
+}
+
+#[test]
+fn flattening_a_form_that_needs_appearances_bakes_the_fields_as_shown() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("need.pdf", None, stale_appearance_form(true), None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    let texts = page_texts(&s, id).join("\n");
+    assert!(texts.contains("Ada") && !texts.contains("Old"), "the value as shown is baked: {texts}");
+    let d = s.get(id).unwrap();
+    assert_eq!(d.form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["secret"], "the hidden field stays");
+    let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let hidden = cos.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let ap = hidden.as_dict().and_then(|w| w.get(b"AP")).map(|ap| cos.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").cloned()));
+    assert_eq!(ap, Some(pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))), "the hidden widget keeps its own appearance");
+    // Without the flag the stored appearance is what every viewer shows, and what is baked.
+    let id = s.open("stored.pdf", None, stale_appearance_form(false), None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    let texts = page_texts(&s, id).join("\n");
+    assert!(texts.contains("Old") && !texts.contains("Ada"), "{texts}");
+}
+
+/// A one-page form with `/NeedAppearances` whose fields are the widgets `widgets` (objects 5,
+/// 6, …, each a merged field and widget on page 3 unless `listed` leaves it out of `/Annots`),
+/// drawn with Helvetica (the object after them), and the `streams` (dictionary, data) after that.
+fn needs_appearances(widgets: &[&str], listed: &[usize], streams: &[(&str, &str)]) -> Arc<Vec<u8>> {
+    let font = 5 + widgets.len();
+    let fields: Vec<String> = (0..widgets.len()).map(|i| format!("{} 0 R", 5 + i)).collect();
+    let annots: Vec<String> = listed.iter().map(|i| format!("{} 0 R", 5 + i)).collect();
+    let mut pdf = pdfcraft_testkit::Pdf::new()
+        .obj(format!(
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /NeedAppearances true /Fields [{}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv {font} 0 R >> >> >> >>",
+            fields.join(" ")
+        ))
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Annots [{}] >>", annots.join(" ")))
+        .stream("", "");
+    for w in widgets {
+        pdf = pdf.obj(format!("<< /Type /Annot /Subtype /Widget /FT /Tx /DA (/Helv 10 Tf 0 g) /P 3 0 R {w} >>"));
+    }
+    pdf = pdf.obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+    for (dict, data) in streams {
+        pdf = pdf.stream(dict, *data);
+    }
+    Arc::new(pdf.build())
+}
+
+/// What the drawing of a `/NeedAppearances` field leaves out, flattening must not bake in either:
+/// a character Helvetica can't draw is drawn as `?`, and flattening refuses that as it does for a
+/// stored appearance carrying the `?` mark, while a stale mark from an earlier drawing doesn't
+/// refuse a value that is now drawn in full. A text field's value `Off` is text, not a button's
+/// off state, and is baked as it shows.
+#[test]
+fn flattening_a_drawn_field_carries_the_drawings_own_question_mark() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let emoji = needs_appearances(&["/T (name) /V <FEFF0041D83DDE00> /Rect [20 150 200 170]"], &[0], &[]);
+    let id = s.open("emoji.pdf", None, emoji, None).expect("opens");
+    let err = s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap_err();
+    assert!(err.to_string().contains("U+1F600"), "the ? for the emoji is not made permanent: {err}");
+    assert_eq!(s.get(id).unwrap().form.len(), 1, "nothing was flattened");
+
+    let stale = needs_appearances(&["/T (name) /V (Ada) /Rect [20 150 200 170] /PCUndrawn <FEFF6F22>"], &[0], &[]);
+    let id = s.open("stale.pdf", None, stale, None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    assert!(page_texts(&s, id).join("\n").contains("Ada"), "a value drawn in full is baked whatever an old mark says");
+
+    let off = needs_appearances(&["/T (name) /V (Off) /Rect [20 150 200 170]"], &[0], &[]);
+    let id = s.open("off.pdf", None, off, None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    assert!(page_texts(&s, id).join("\n").contains("Off"), "a text field's value Off is baked as text");
+}
+
+/// A drawn appearance is used only where flattening can put it. A valued widget whose `/Rect`
+/// is not four numbers can't be placed, so it stays a field with its value, as it did before it
+/// was drawn. A widget in `/Fields` but on no page is not flattened, and keeps its own
+/// appearance: the drawing written to it would otherwise stay in the file. Whatever was drawn for
+/// a widget that keeps its own (a hidden one too) leaves no new object behind in the working PDF.
+#[test]
+fn flattening_uses_a_drawn_appearance_only_where_it_is_baked() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let three = needs_appearances(&["/T (name) /V (Ada) /Rect [20 150 200]"], &[0], &[]);
+    let id = s.open("three.pdf", None, three, None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["name"], "the field stays with its value");
+
+    let thai = "ชื่อ";
+    let hex: String = thai.encode_utf16().map(|u| format!("{u:04X}")).collect();
+    let orphan = needs_appearances(
+        &[
+            "/T (shown) /V (Ada) /Rect [20 150 200 170]",
+            "/T (orphan) /V (Orphan) /Rect [20 100 200 120] /AP << /N 9 0 R >>",
+            &format!("/T (hidden) /V <FEFF{hex}> /F 2 /Rect [20 50 200 70] /AP << /N 9 0 R >>"),
+        ],
+        &[0, 2],
+        &[("/Type /XObject /Subtype /Form /BBox [0 0 180 20]", "")],
+    );
+    let id = s.open("orphan.pdf", None, orphan, None).expect("opens");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    let saved = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let normal = |doc: &pdfcraft_cos::Document, num: u32| {
+        let w = doc.get(pdfcraft_cos::ObjRef::new(num, 0));
+        w.as_dict().and_then(|w| w.get(b"AP")).map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().and_then(|ap| ap.get(b"N").cloned()))
+    };
+    let own = Some(pdfcraft_cos::Object::Ref(pdfcraft_cos::ObjRef::new(9, 0)));
+    assert_eq!(normal(&saved, 6), own, "the widget on no page keeps its own appearance");
+    assert_eq!(normal(&saved, 7), own, "the hidden widget keeps its own appearance");
+    // Every object added since the fixture's nine is one the working PDF still uses.
+    let working = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let mut reached = std::collections::HashSet::new();
+    let mut stack: Vec<pdfcraft_cos::Object> = working.trailer().iter().map(|(_, v)| v.clone()).collect();
+    while let Some(o) = stack.pop() {
+        match o {
+            pdfcraft_cos::Object::Ref(r) => {
+                if reached.insert(r.num) {
+                    stack.push((*working.get(r)).clone());
+                }
+            }
+            pdfcraft_cos::Object::Array(a) => stack.extend(a),
+            pdfcraft_cos::Object::Dict(d) => stack.extend(d.iter().map(|(_, v)| v.clone())),
+            pdfcraft_cos::Object::Stream(st) => stack.extend(st.dict.iter().map(|(_, v)| v.clone())),
+            _ => {}
+        }
+    }
+    let left: Vec<u32> = working
+        .object_numbers()
+        .into_iter()
+        .filter(|n| {
+            *n > 9
+                && !reached.contains(n)
+                && !matches!(*working.get(pdfcraft_cos::ObjRef::new(*n, working.generation(*n))), pdfcraft_cos::Object::Null)
+        })
+        .collect();
+    assert!(left.is_empty(), "new objects nothing uses: {left:?} (Thai face: {})", pdfcraft_fonts::document_thai_font().is_some());
+}
+
 #[test]
 fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     let data = "<form><page1><country>JP</country><langs>English\nSpanish</langs></page1></form>";
