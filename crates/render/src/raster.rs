@@ -462,7 +462,10 @@ fn render_page<'a>(
         };
         // Rendered straight into a buffer of whole pixels, which the GUI takes over as is.
         let [w, h] = shared_raster::dimensions(page, &options).map_err(|error| match error {
-            shared_raster::Error::OutputLimit => (format!("page {} raster size exceeds renderer pixel limit", req.page.saturating_add(1)), false),
+            shared_raster::Error::OutputLimit => {
+                let [rw, rh] = options.size.unwrap_or([0, 0]);
+                (format!("page {} raster size {rw}x{rh} exceeds renderer pixel limit", req.page.saturating_add(1)), false)
+            }
             other => (other.to_string(), false),
         })?;
         let (pw, ph) = (
