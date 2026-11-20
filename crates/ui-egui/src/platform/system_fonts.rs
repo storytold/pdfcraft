@@ -489,9 +489,7 @@ fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
     let insert_at = if let Some(first) = ordered.iter().position(|f| Path::new(f).extension().is_some_and(|e| e == "otf")) {
         let target = Path::new(ordered[first]).file_name();
         let mut end = first;
-        while end < ordered.len()
-            && Path::new(ordered[end]).extension().is_some_and(|e| e == "otf")
-            && Path::new(ordered[end]).file_name() == target
+        while end < ordered.len() && Path::new(ordered[end]).extension().is_some_and(|e| e == "otf") && Path::new(ordered[end]).file_name() == target
         {
             end += 1;
         }
@@ -919,49 +917,25 @@ mod tests {
         // Reproduce the Unix ordering through `unix_candidates`: the opposite-region
         // OTF is appended before the multi-language collection, so the collection's
         // preferred face is never tried first.
-        let files = &[
-            "NotoSansCJKsc-Regular.otf",
-            "NotoSansCJKtc-Regular.otf",
-            "NotoSansCJK-Regular.ttc",
-        ];
+        let files = &["NotoSansCJKsc-Regular.otf", "NotoSansCJKtc-Regular.otf", "NotoSansCJK-Regular.ttc"];
         let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKtc-Regular.otf")];
         let list = unix_candidates(files, installed);
-        let ttc: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"))
-            .map(|(i, _)| i)
-            .collect();
-        let opposite: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKtc-Regular.otf"))
-            .map(|(i, _)| i)
-            .collect();
+        let ttc: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc")).map(|(i, _)| i).collect();
+        let opposite: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKtc-Regular.otf")).map(|(i, _)| i).collect();
         assert!(
             ttc.iter().all(|i| opposite.iter().all(|j| i < j)),
             "Simplified Chinese candidates must try NotoSansCJK-Regular.ttc before NotoSansCJKtc-Regular.otf: {list:?}"
         );
 
-        let files = &[
-            "NotoSansCJKtc-Regular.otf",
-            "NotoSansCJKsc-Regular.otf",
-            "NotoSansCJK-Regular.ttc",
-        ];
+        let files = &["NotoSansCJKtc-Regular.otf", "NotoSansCJKsc-Regular.otf", "NotoSansCJK-Regular.ttc"];
         let installed = &[PathBuf::from("/custom/fonts/NotoSansCJKsc-Regular.otf")];
         let list = unix_candidates(files, installed);
-        let ttc: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc"))
-            .map(|(i, _)| i)
-            .collect();
-        let opposite: Vec<usize> = list
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf"))
-            .map(|(i, _)| i)
-            .collect();
+        let ttc: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJK-Regular.ttc")).map(|(i, _)| i).collect();
+        let opposite: Vec<usize> =
+            list.iter().enumerate().filter(|(_, p)| p.file_name().is_some_and(|n| n == "NotoSansCJKsc-Regular.otf")).map(|(i, _)| i).collect();
         assert!(
             ttc.iter().all(|i| opposite.iter().all(|j| i < j)),
             "Traditional Chinese candidates must try NotoSansCJK-Regular.ttc before NotoSansCJKsc-Regular.otf: {list:?}"
