@@ -432,8 +432,10 @@ fn a_version_held_under_preferences_is_dropped_when_reloading_is_turned_off_ther
     h.run_steps(2);
     file.rebuild(&fixture(4));
     h.run_steps(4);
-    h.state_mut().reload_changed_files = false;
-    h.get_by_label("Cancel").click();
+    h.get_by_label("Reload documents when their files change on disk").click();
+    h.run_steps(3);
+    assert!(!h.state().reload_changed_files);
+    h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(pages(&h), 2, "reloading was turned off before the dialog closed");
 }

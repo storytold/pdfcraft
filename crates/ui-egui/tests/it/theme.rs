@@ -227,8 +227,6 @@ fn preferences_theme_cards_and_use_system_setting_stay_in_sync() {
         h.run_steps(3);
         h.get_all_by_label(choice).last().expect("mode option").click();
         h.run_steps(3);
-        h.get_by_role_and_label(Role::Button, "Apply").click();
-        h.run_steps(3);
     }
     let (mut h, c) = harness();
     h.get_by_label("Display theme: Use system setting").click_secondary();
