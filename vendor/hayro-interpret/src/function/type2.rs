@@ -2,7 +2,7 @@ use crate::function::{Clamper, Values};
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Number;
 use hayro_syntax::object::dict::keys::{C0, C1, N};
-use smallvec::{SmallVec, smallvec};
+use smallvec::smallvec;
 
 /// A type 2 function (exponential function).
 #[derive(Debug)]
@@ -24,21 +24,21 @@ impl Type2 {
         Some(Self { c0, c1, clamper, n })
     }
 
-    /// Evaluate the function with the given input.
-    pub(crate) fn eval(&self, input: f32) -> Values {
+    /// Evaluate the function into `out` without allocating.
+    pub(crate) fn eval_into(&self, input: f32, out: &mut Values) {
         let mut input = [input];
         self.clamper.clamp_input(&mut input);
+        let factor = input[0].powf(self.n);
 
-        let mut out = self
-            .c0
-            .iter()
-            .zip(self.c1.iter())
-            .map(|(c0, c1)| *c0 + input[0].powf(self.n) * (*c1 - *c0))
-            .collect::<SmallVec<_>>();
+        out.clear();
+        out.extend(
+            self.c0
+                .iter()
+                .zip(self.c1.iter())
+                .map(|(c0, c1)| *c0 + factor * (*c1 - *c0)),
+        );
 
-        self.clamper.clamp_output(&mut out);
-
-        out
+        self.clamper.clamp_output(out);
     }
 }
 

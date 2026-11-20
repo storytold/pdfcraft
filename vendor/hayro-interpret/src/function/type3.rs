@@ -3,7 +3,6 @@ use hayro_syntax::object::Array;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Object;
 use hayro_syntax::object::dict::keys::{BOUNDS, ENCODE, FUNCTIONS};
-use smallvec::smallvec;
 
 /// A type 3 function (stitching function).
 #[derive(Debug)]
@@ -62,8 +61,8 @@ impl Type3 {
         })
     }
 
-    /// Evaluate the function with the given input.
-    pub(crate) fn eval(&self, input: f32) -> Option<Values> {
+    /// Evaluate the function into `out` without allocating.
+    pub(crate) fn eval_into(&self, input: f32, out: &mut Values) -> Option<()> {
         let mut input = [input];
         self.clamper.clamp_input(&mut input);
 
@@ -77,11 +76,11 @@ impl Type3 {
         let function = self.functions.get(index)?;
         let encoded = interpolate(input[0], bounds_i_minus_1, bounds_i, encoding.0, encoding.1);
 
-        let mut evaluated = function.eval(smallvec![encoded])?;
+        function.eval_into(&[encoded], out)?;
 
-        self.clamper.clamp_output(&mut evaluated);
+        self.clamper.clamp_output(out);
 
-        Some(evaluated)
+        Some(())
     }
 
     // PdfCraft patch (backport of hayro 0.8).
@@ -151,6 +150,7 @@ fn find_interval(bounds: &[f32], x: f32) -> Option<usize> {
 mod tests {
     use super::*;
     use hayro_syntax::object::FromBytes;
+    use smallvec::smallvec;
 
     #[test]
     fn simple() {

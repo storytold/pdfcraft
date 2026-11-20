@@ -6,7 +6,6 @@ use crate::pattern::ShadingPattern;
 use crate::shading::{ShadingFunction, ShadingType, Triangle, TriangleVertex};
 use kurbo::{Affine, Point};
 use rustc_hash::FxHashMap;
-use smallvec::{ToSmallVec, smallvec};
 
 /// A shading pattern that was encoded so it can be sampled.
 #[derive(Debug)]
@@ -524,7 +523,8 @@ impl EncodedShadingType {
                 if !domain.contains(pos) {
                     Some(bg_color)
                 } else {
-                    let out = function.eval(&smallvec![pos.x as f32, pos.y as f32])?;
+                    let mut out = crate::function::Values::new();
+                    function.eval_into(&[pos.x as f32, pos.y as f32], &mut out)?;
                     // TODO: Clamp out-of-range values.
                     Some(color_space.to_rgba(&out, 1.0, false))
                 }
@@ -564,7 +564,8 @@ impl EncodedShadingType {
 
                 let t = t0 + (t1 - t0) * t;
 
-                let val = function.eval(&smallvec![t])?;
+                let mut val = crate::function::Values::new();
+                function.eval_into(&[t], &mut val)?;
 
                 Some(color_space.to_rgba(&val, 1.0, false))
             }
@@ -573,7 +574,8 @@ impl EncodedShadingType {
 
                 if let Some(color) = samples.get(&sample_point) {
                     if let Some(function) = function {
-                        let val = function.eval(&color.to_smallvec())?;
+                        let mut val = crate::function::Values::new();
+                        function.eval_into(color, &mut val)?;
                         Some(color_space.to_rgba(&val, 1.0, false))
                     } else {
                         Some(color_space.to_rgba(color, 1.0, false))
