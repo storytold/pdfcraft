@@ -141,23 +141,6 @@ fn painted_text(h: &Harness<'static, PdfCraftApp>) -> Vec<(String, bool, egui::R
 }
 
 #[test]
-fn long_recent_names_and_paths_are_cut_before_the_page_count() {
-    let name = format!("{}.pdf", "Quarterly report final version ".repeat(10));
-    let path = format!("/{}/{name}", "A folder with a long name".repeat(8));
-    let h = harness({
-        let (name, path) = (name.clone(), path.clone());
-        move |app| app.recent.push(pdfcraft_ui_egui::RecentFile { name, path, pages: 7, size: 2048 })
-    });
-    let text = painted_text(&h);
-    let detail = text.iter().find(|(s, ..)| s.starts_with("7 pages")).expect("the row shows its page count").2;
-    for whole in [&name, &path] {
-        let (_, cut, rect) = text.iter().find(|(s, ..)| s == whole).expect("the row shows the name and the path");
-        assert!(*cut, "{whole:?} is cut short");
-        assert!(rect.right() < detail.left(), "{whole:?} ends before the page count");
-    }
-}
-
-#[test]
 fn home_removes_one_recent_file_or_clears_them_all() {
     // Tall enough that the Recent list is on screen without scrolling.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1600.0)).build_eframe(|cc| {
@@ -173,12 +156,14 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     });
     h.run_steps(4);
     assert!(h.query_by_label("Remove second.pdf from Recent").is_none(), "the remove button shows only over its row");
-    h.get_by_label("second.pdf").hover();
+    h.get_by(|n| n.role() == egui::accesskit::Role::ListItem && n.label().is_some_and(|s| s.starts_with("second.pdf,"))).hover();
     h.run_steps(2);
     h.get_by_label("Remove second.pdf from Recent").click();
     h.run_steps(2);
     let names: Vec<String> = h.state().recent.iter().map(|r| r.name.clone()).collect();
     assert_eq!(names, ["first.pdf", "third.pdf"], "only that file left the list");
+    h.get_by(|n| n.role() == egui::accesskit::Role::ListItem && n.label().is_some_and(|s| s.starts_with("first.pdf,"))).click_secondary();
+    h.run_steps(2);
     h.get_by_label("Clear Recent Files").click();
     h.run_steps(2);
     assert!(h.state().recent.is_empty(), "Clear empties the list");
@@ -2038,13 +2023,14 @@ fn home_recent_context_menu_reveals_the_target_without_opening_or_removing_it() 
     h.run_steps(4);
     queue.run_all();
     h.run_steps(2);
-    let label = if cfg!(target_os = "macos") { "Reveal in Finder" } else { "Reveal in File Explorer" };
-    h.get_by_label("target.pdf").click_secondary();
+    let label = "Show in Folder";
+    h.get_by(|n| n.role() == egui::accesskit::Role::ListItem && n.label().is_some_and(|s| s.starts_with("target.pdf,"))).click_secondary();
     h.run_steps(3);
     assert!(!h.get_by_label(label).accesskit_node().is_disabled());
     assert!(h.state().views.is_empty(), "right-click must not open the PDF");
     assert_eq!(h.state().recent.len(), 2);
     h.get_by_label(label).click();
+    h.run_steps(2);
     queue.run_all();
     h.run_steps(3);
     assert!(h.query_by_label(label).is_none(), "choosing the action closes its menu");

@@ -145,10 +145,17 @@ impl Rig {
         panic!("{method} was not answered while a job was held");
     }
 
-    /// Runs the oldest held job and shows its result.
+    /// Runs the next open, including any unrelated host jobs queued ahead of it, and shows its result.
     fn release(&mut self) {
-        assert!(self.jobs.run_next(), "a job is waiting");
-        self.h.run_steps(2);
+        let finished = self.h.state().opens.counts().finished;
+        for _ in 0..100 {
+            assert!(self.jobs.run_next(), "an open job is waiting");
+            if self.h.state().opens.counts().finished > finished {
+                self.h.run_steps(2);
+                return;
+            }
+        }
+        panic!("the open job did not finish");
     }
 
     fn tabs(&self) -> usize {
@@ -185,7 +192,11 @@ impl Rig {
 
     /// Types `password` into the dialog and presses Open; the retry waits for `release`.
     fn enter_password(&mut self, password: &str) {
-        self.h.get_all_by_label("Password").last().expect("the password dialog is on screen").type_text(password);
+        self.h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Password").focus();
+        self.h.run_steps(1);
+        self.h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        self.h.run_steps(1);
+        self.h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Password").type_text(password);
         self.h.run_steps(1);
         self.press("Open");
     }
@@ -557,12 +568,12 @@ fn launch_layout_waits_for_cli_opens_and_preserves_restored_tabs() {
         let restored = rig.layout_of("existing.pdf").expect("the restored tab");
         let (a, b) = (TempFile::new("layout-a", "pdf", &fixture(1)), TempFile::new("layout-b", "pdf", &fixture(1)));
         if layout_first {
-            rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
+            rig.h.state_mut().set_launch_layout("two-page").expect("a layout");
         }
         rig.h.state_mut().open_path_with_display(&a.path(), PageDisplay::Single, false);
         rig.h.state_mut().open_path_with_display(&b.path(), PageDisplay::Single, false);
         if !layout_first {
-            rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
+            rig.h.state_mut().set_launch_layout("two-page").expect("a layout");
         }
         rig.release();
         assert_eq!(rig.layout_of("existing.pdf"), Some(restored), "the restored tab is not targeted");
@@ -607,14 +618,14 @@ fn launch_layout_failed_or_cancelled_opens_do_not_target_existing_documents() {
 #[test]
 fn flagged_startup_opens_wait_for_password_ownership_before_the_first_frame() {
     let mut rig = Rig::empty();
-    rig.h.state_mut().set_launch_layout("two-up").expect("a layout");
+    rig.h.state_mut().set_launch_layout("two-page").expect("a layout");
     let locked = TempFile::new("flag-locked", "pdf", &encrypted_fixture());
     let plain = TempFile::new("flag-plain", "pdf", &fixture(1));
     rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
     // Naming the locked file again joins its open instead of queuing a second one.
     rig.h.state_mut().open_path_with_display(&locked.path(), PageDisplay::Single, false);
     rig.h.state_mut().open_path_with_display(&plain.path(), PageDisplay::Single, false);
-    assert_eq!(rig.jobs.waiting(), 2);
+    assert_eq!(rig.h.state().pending_opens.len(), 2);
     rig.release();
     assert!(rig.password_dialog());
     rig.release();

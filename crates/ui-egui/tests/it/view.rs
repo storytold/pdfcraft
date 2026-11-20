@@ -585,6 +585,8 @@ fn the_rail_zoom_field_sets_a_typed_zoom() {
     let type_zoom = |h: &mut Harness<'static, PdfCraftApp>, typed: &str, key: Key| {
         h.get_by_role_and_label(Role::SpinButton, "Zoom").click();
         h.run_steps(2);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
         h.get_by_role_and_label(Role::SpinButton, "Zoom").type_text(typed);
         h.run_steps(1);
         h.key_press(key);

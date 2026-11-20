@@ -531,10 +531,12 @@ impl PdfCraftApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.pick_first(PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")), None, move |app, _, path| {
                     match app.host.files().write(&path, &bytes, craft::host::WriteIntent::SaveAs) {
-                        Ok(_) => {
+                        Ok(taken_by_host) => {
                             // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
                             // effort: a volume without alternate data streams can't carry it.
-                            let _ = pdfcraft_platform::zone::mark_from(&path, source.as_deref().map(std::path::Path::new));
+                            if !taken_by_host {
+                                let _ = pdfcraft_platform::zone::mark_from(&path, source.as_deref().map(std::path::Path::new));
+                            }
                             app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())])
                         }
                         Err(e) => app.notify_fmt("Couldn't save: {e}", &[("e", &e.to_string())]),
@@ -921,7 +923,10 @@ impl PdfCraftApp {
     pub fn set_launch_layout(&mut self, value: &str) -> Result<(), String> {
         let (layout, continuous) = canvas::parse_display_token(value).ok_or("layout must be single, continuous, two-up or two-page")?;
         self.launch_layout = Some((layout, continuous));
-        self.settle_launch_layout();
+        // The option may arrive before any flagged open; don't consume it before it has a target.
+        if self.launch_display_target.is_some() {
+            self.settle_launch_layout();
+        }
         Ok(())
     }
 

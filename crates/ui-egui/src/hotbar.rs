@@ -179,6 +179,19 @@ pub(crate) fn panel_spec(app: &PdfCraftApp, ctx: &egui::Context) -> PanelSpec {
         .command(CommandRef::with_params("view.panel", serde_json::json!({ "panel": "toolbar" })))
 }
 
+/// Measures the toolbar and active tool controls so the dock gives the rail its full height.
+pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &egui::Ui, width: f32) -> f32 {
+    app.hotbar.normalize();
+    let toolbar = slots(app);
+    let current = current_tool(app);
+    let last_used = last_used(app);
+    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
+    if app.hotbar.drawer_open {
+        rail = rail.editing();
+    }
+    rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y
+}
+
 // Every conversion between the engine's `f64` colour and the framework's goes through these two.
 fn to_srgba(color: Rgb) -> Srgba {
     Srgba::rgb(color[0] as f32, color[1] as f32, color[2] as f32)
@@ -196,20 +209,6 @@ fn open_picker(
     then: impl FnOnce(&mut PdfCraftApp, &egui::Context, Srgba) + 'static,
 ) {
     app.open_colour_picker(crate::colour_picker::PickerHost::App, request, then);
-}
-
-/// Measures the toolbar's rail at `width`, with the active tool's controls under it, so the dock gives the rail its
-/// full height.
-pub(crate) fn measure_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui, width: f32) -> f32 {
-    app.hotbar.normalize();
-    let toolbar = slots(app);
-    let current = current_tool(app);
-    let last_used = last_used(app);
-    let mut rail = ToolRail::new(tl!("Toolbar").to_string(), &toolbar, &current, &last_used).edit_toolbar(tl!("Edit toolbar").to_string());
-    if app.hotbar.drawer_open {
-        rail = rail.editing();
-    }
-    rail.measure_rail(ui, width, |ui, _footer| footer_controls(ui, app)).y
 }
 
 /// Shows the toolbar's rail in the width `ui` has left, with the active tool's controls under it, and applies what

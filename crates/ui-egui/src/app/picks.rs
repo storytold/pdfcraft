@@ -90,6 +90,6 @@ impl PdfCraftApp {
 
     /// A picker is on screen or waiting: opens and full-screen prompts hold back meanwhile.
     pub(crate) fn picks_pending(&self) -> bool {
-        self.host.files().pick_pending()
+        !self.picks.waiting.is_empty() || self.host.files().pick_pending()
     }
 }
