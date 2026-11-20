@@ -46,27 +46,30 @@ pub fn kind_label(a: &Annotation) -> &str {
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",
+        Some("FreehandHighlight") if a.subtype == "Ink" => "Freehand highlight",
         _ => subtype_label(&a.subtype),
     }
 }
 
-pub fn subtype_icon(s: &str) -> &'static str {
-    match s {
-        "Text" => "message-square-text",
-        "Highlight" => "highlighter",
-        "Underline" => "underline",
-        "StrikeOut" => "strikethrough",
-        "Squiggly" => "spline",
-        "FreeText" => "type",
-        "Ink" => "pencil",
-        "Square" => "square",
-        "Circle" => "circle",
-        "Line" => "move-right",
-        "Polygon" | "PolyLine" => "pen-tool",
-        "Stamp" => "stamp",
-        "FileAttachment" => "paperclip",
-        "Caret" => "text-select",
-        "Redact" => "rectangle-horizontal",
+pub fn subtype_icon(s: &str, intent: Option<&str>) -> &'static str {
+    match (s, intent) {
+        ("Ink", Some("FreehandHighlight")) => "freehand-highlighter",
+        ("Text", _) => "message-square-text",
+        ("Highlight", _) => "highlighter",
+        ("Underline", _) => "underline",
+        ("StrikeOut", _) => "strikethrough",
+        ("Squiggly", _) => "spline",
+        ("FreeText", _) => "type",
+        // A freehand highlight is ink with the FreehandHighlight intent; the plain ink tool keeps the pencil.
+        ("Ink", _) => "pencil",
+        ("Square", _) => "square",
+        ("Circle", _) => "circle",
+        ("Line", _) => "move-right",
+        ("Polygon" | "PolyLine", _) => "pen-tool",
+        ("Stamp", _) => "stamp",
+        ("FileAttachment", _) => "paperclip",
+        ("Caret", _) => "text-select",
+        ("Redact", _) => "rectangle-horizontal",
         _ => "message-square-text",
     }
 }
@@ -438,7 +441,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             let mut buttons_left = f32::INFINITY;
             let mut above = egui::Rect::NOTHING;
             let head = ui.horizontal(|ui| {
-                above = avatar(ui, t, Some(subtype_icon(&a.subtype)), None, color);
+                above = avatar(ui, t, Some(subtype_icon(&a.subtype, a.intent.as_deref())), None, color);
                 // The catalogue and author names stay logical: egui lays out RTL text itself.
                 let author = a.author.as_deref().map_or_else(|| tl!("Unknown author"), |name| name);
                 ui.label(egui::RichText::new(author).font(theme::semibold(12.5)).color(t.text));
@@ -888,8 +891,52 @@ pub(crate) fn header_controls(ui: &mut egui::Ui, info: &DocInfo, view: &mut DocV
 }
 
 #[cfg(test)]
-mod filter {
-    use super::any_contains;
+mod tests {
+    use pdfcraft_render::Annotation;
+
+    use super::*;
+
+    fn mock_annotation(subtype: &str, intent: Option<&str>) -> Annotation {
+        Annotation {
+            page: 0,
+            subtype: subtype.into(),
+            author: None,
+            contents: None,
+            modified: None,
+            name: None,
+            in_reply_to: None,
+            parent: None,
+            grouped: false,
+            rect: [0.0; 4],
+            color: None,
+            index: 0,
+            state: None,
+            quads: Vec::new(),
+            locked: false,
+            intent: intent.map(str::to_owned),
+            fill_sign: false,
+            no_rotate: false,
+            points: Vec::new(),
+            text_box: None,
+            popup: None,
+        }
+    }
+
+    #[test]
+    fn freehand_highlight_subtype_icon_and_kind_label() {
+        assert_eq!(subtype_icon("Ink", Some("FreehandHighlight")), "freehand-highlighter");
+        assert_eq!(subtype_icon("Ink", None), "pencil");
+        assert_eq!(subtype_icon("Square", Some("FreehandHighlight")), "square");
+
+        let freehand = mock_annotation("Ink", Some("FreehandHighlight"));
+        assert_eq!(kind_label(&freehand), "Freehand highlight");
+
+        let plain_ink = mock_annotation("Ink", None);
+        assert_eq!(kind_label(&plain_ink), "Drawing");
+
+        let non_ink = mock_annotation("Square", Some("FreehandHighlight"));
+        assert_eq!(kind_label(&non_ink), "Rectangle");
+    }
 
     #[test]
     fn comments_match_in_any_case_with_turkish_i() {

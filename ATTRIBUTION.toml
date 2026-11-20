@@ -891,6 +891,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "f0d92b94b797a8ab7d4c4ae33c3236c47f64068351b4e14bdb5014ee42898a39"
 
 [[asset]]
+path = "assets/icons/freehand-highlighter.svg"
+title = "Freehand highlighter"
+author = "Combiler01"
+source = "https://github.com/Combiler01/pdfcraft/blob/3fa2312a36ddb6804d38763b1660db40eae64a0b/assets/icons/freehand-highlighter.svg"
+licence = "CC0-1.0"
+licence_file = "assets/icons/LICENSE-freehand-highlighter.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "6198c9cbdb182132b00ad25e8782ac7c7d237d0736c1d1c1f2f94dd6b8b87132"
+
+[[asset]]
 path = "assets/icons/gauge.svg"
 title = "Lucide icon \"gauge\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
