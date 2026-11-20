@@ -9002,8 +9002,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["a11y.check"]
 tools = ["accessibility_check"]
-evidence = ["crates/a11y/src/tests.rs::structure_problems_are_found"]
-notes = "rule figures-alt-text: Figure elements need Alt or ActualText (or an ancestor's)"
+evidence = ["crates/a11y/src/tests.rs::structure_problems_are_found", "crates/a11y/src/tests.rs::figures_with_placeholder_alternate_text_need_a_description", "crates/automation/tests/it/automation.rs::placeholder_alternate_text_fails_the_figure_check_until_described"]
+notes = "rule figures-alt-text: Figure elements need Alt or ActualText (or an ancestor's). A figure's own Alt that is a file name (an image extension), a generic word such as Picture 1, or one or two ASCII characters is reported too, quoting it (WCAG F30, #7730); Acrobat's rule checks presence only. The generic words are English, so placeholders in other languages are caught only as file names or short text, and whether a real-looking description is accurate is not judged."
 
 [[feature]]
 id = "a11y.rule-nested-alt"

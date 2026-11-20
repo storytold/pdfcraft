@@ -672,6 +672,44 @@ fn findings_are_listed_in_document_order_not_in_the_order_they_close() {
     assert_eq!(kinds, ["Sect", "P", "Div"]);
 }
 
+/// #7730: alternate text that describes nothing (a file name, "Picture 1", a single character) is
+/// reported like missing alternate text (WCAG F30), quoting what is there; real descriptions and
+/// other elements pass. Describing a figure through the tools clears it
+/// (`placeholder_alternate_text_fails_the_figure_check_until_described`).
+#[test]
+fn figures_with_placeholder_alternate_text_need_a_description() {
+    let long = format!("{}.png", "a".repeat(70));
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K 3 0 R /RoleMap << /Picture /Figure >> >>".into(),
+            "<< /S /Document /K [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R] >>".into(),
+            "<< /S /Figure /Alt (IMG_2041.png) >>".into(),
+            "<< /S /Picture /Alt (Picture 1) >>".into(),
+            "<< /S /Figure /Alt ( x ) >>".into(),
+            "<< /S /Figure /Alt (A red square on a white page) >>".into(),
+            format!("<< /S /Figure /Alt ({long}) >>"),
+            "<< /S /Formula /Alt (x) >>".into(),
+            "<< /S /Figure /Alt (Picture of the team at the offsite) >>".into(),
+        ],
+        "",
+    );
+    let r = checked(&doc, &[Rule::FiguresAltText, Rule::OtherElementsAltText]);
+    assert_eq!(r.result(Rule::OtherElementsAltText).unwrap().status, Status::Passed, "only figures are checked for placeholders");
+    let figures = r.result(Rule::FiguresAltText).unwrap();
+    assert_eq!(figures.status, Status::Failed);
+    let objects: Vec<u32> = figures.findings.iter().filter_map(|f| f.object.map(|o| o.num)).collect();
+    assert_eq!(objects, [4, 5, 6, 8], "the placeholders, role-mapped too; not the descriptions");
+    let value = |f: &Finding, hole: &str| f.values.iter().find(|(h, _)| *h == hole).map(|(_, v)| v.clone()).unwrap();
+    let quoted: Vec<String> = figures.findings.iter().map(|f| value(f, "{alt}")).collect();
+    assert_eq!(quoted[..3], ["IMG_2041.png", "Picture 1", "x"], "each finding quotes the document's text, trimmed");
+    assert!(long.starts_with(quoted[3].trim_end_matches('…')) && quoted[3].chars().count() < long.chars().count(), "a long one is cut");
+    assert!(figures.findings.iter().all(|f| f.message.contains(&value(f, "{alt}"))));
+    let kinds: Vec<String> = figures.findings.iter().map(|f| value(f, "{what}")).collect();
+    assert!(kinds[0] != kinds[1] && kinds[1] != kinds[2] && kinds[0] != kinds[2], "each kind says what it is: {kinds:?}");
+    assert_eq!(kinds[0], kinds[3], "both file names are said the same way");
+}
+
 #[test]
 fn a_rule_lists_its_first_findings_and_counts_the_rest() {
     let figures = vec!["<< /S /Figure >>".to_string(); 300].join(" ");
