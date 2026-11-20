@@ -238,7 +238,12 @@ fn page_gaps_comparison_harness() -> Harness<'static, PdfCraftApp> {
     });
     h.run_steps(4);
     let at = h.state().views[0].viewport_rect().center();
-    h.event(egui::Event::PointerMoved(at));
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
     h.run_steps(2);
     assert_eq!(h.state().compare.as_ref().unwrap().views.lead, craft::pages::ui::Lead::Left);
     assert_eq!(h.state().active, Some(1));
@@ -2388,7 +2393,7 @@ fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_p
     crate::support::open_menu(&mut h, "View");
     h.hover_at(thumb);
     h.run_steps(1);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the menu is open");
+    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_some(), "the menu is open");
     h.key_press(Key::Delete);
     h.run_steps(3);
     let pages = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().info.pages.len();
@@ -2396,7 +2401,7 @@ fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_p
     assert_eq!(h.state().views[0].selected, selected, "Delete with a menu open dropped the page selection");
     h.key_press(Key::Escape);
     h.run_steps(3);
-    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the menu");
+    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_none(), "Escape closed the menu");
     // The thumbnail's own context menu, the panel keeping the keyboard: Escape closes the menu.
     h.hover_at(thumb);
     h.run_steps(1);
@@ -2405,11 +2410,11 @@ fn delete_with_a_menu_open_and_escape_closing_a_thumbnail_menu_leave_the_pages_p
         h.run_steps(1);
     }
     h.run_steps(2);
-    assert!(egui::Popup::is_any_open(&h.ctx), "the thumbnail's menu is open");
+    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_some(), "the thumbnail's menu is open");
     assert_eq!(h.state().views[0].selected, selected, "the right-click kept the page selection");
     h.key_press(Key::Escape);
     h.run_steps(3);
-    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the thumbnail's menu");
+    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_none(), "Escape closed the thumbnail's menu");
     assert_eq!(h.state().views[0].selected, selected, "the Escape that closed the thumbnail's menu dropped the page selection");
     assert_eq!(pages(&h), 3);
 }
@@ -2684,12 +2689,12 @@ fn full_screen_takes_no_page_input_until_the_page_is_on_screen() {
     click_with(&mut h, on_field, Modifiers::NONE);
     h.run_steps(2);
     assert!(h.state().views[0].presenting_a_transition(), "the Wipe is still playing");
-    assert!(!h.ctx.egui_wants_keyboard_input(), "the field behind the transition isn't opened");
+    assert!(h.state().views[0].session.forms.focus.is_none(), "the field behind the transition isn't opened");
     frames_until(&mut h, |a| !a.views[0].presenting_a_transition());
     h.run_steps(1);
     click_with(&mut h, on_field, Modifiers::NONE);
     h.run_steps(4);
-    assert!(h.ctx.egui_wants_keyboard_input(), "once page 2 is in, the field opens");
+    assert_eq!(h.state().views[0].session.forms.focus.as_ref().map(|f| f.name.as_str()), Some("name"), "once page 2 is in, the field opens");
 }
 
 /// [`FIELD_BEHIND_TRANSITION`] with a Wipe of 0.3 s, shorter than a click may be held.
@@ -2724,7 +2729,7 @@ fn full_screen_press_made_during_a_transition_opens_nothing_when_released() {
     assert!(frames <= 4, "the Wipe ends within a click's time ({frames} frames of 0.1 s)");
     h.event(egui::Event::PointerButton { pos: on_field, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(4);
-    assert!(!h.ctx.egui_wants_keyboard_input(), "released on the field once page 2 is in: nothing opens");
+    assert!(h.state().views[0].session.forms.focus.is_none(), "released on the field once page 2 is in: nothing opens");
 }
 
 /// In full screen a double-click on a note opens its pop-up, and turns no page: the pointer stays
