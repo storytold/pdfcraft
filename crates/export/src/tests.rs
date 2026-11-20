@@ -1830,6 +1830,31 @@ fn text_reads_right_to_left_by_its_first_strong_character() {
     assert!(!paragraph_rtl(&runs(&[])));
 }
 
+/// #4653: the shared word model also gives RTF each paragraph's direction.
+#[test]
+fn rtf_marks_right_to_left_paragraphs() {
+    fn paragraph<'a>(text: &'a str, needle: &str) -> &'a str {
+        text.split(r"\pard\plain").skip(1).find(|p| p.contains(needle)).unwrap_or_else(|| panic!("no paragraph with {needle}: {text}"))
+    }
+
+    let text = rtf(&[bidi_page()]);
+    assert!(paragraph(&text, "1850").contains(r"\rtlpar"), "Arabic body: {text}");
+    assert!(!paragraph(&text, "written in English").contains(r"\rtlpar"), "English body: {text}");
+    assert!(!paragraph(&text, "mixed paragraph").contains(r"\rtlpar"), "mixed paragraph starting in English: {text}");
+
+    let mut table = table_page();
+    for b in &mut table.blocks {
+        if b.text == "Unit" {
+            b.text = "\u{0627}\u{0644}\u{0648}\u{062d}\u{062f}\u{0629}".into();
+        }
+    }
+    let text = rtf(&[table]);
+    let arabic = paragraph(&text, r"\u1575?\u1604?\u1608?");
+    assert!(arabic.contains(r"\intbl") && arabic.contains(r"\rtlpar"), "Arabic cell: {arabic}");
+    let latin = paragraph(&text, "Meter");
+    assert!(latin.contains(r"\intbl") && !latin.contains(r"\rtlpar"), "Latin cell: {latin}");
+}
+
 /// #4653: a paragraph, heading, table cell or text box that reads right to left is a
 /// right-to-left Word paragraph (`w:bidi`), its Arabic is marked `w:rtl` and a number inside it
 /// is not, and its formatting is also the complex-script one; English and mixed text that starts
@@ -1842,7 +1867,7 @@ fn word_marks_right_to_left_paragraphs_cells_and_text_boxes() {
     let arabic = find("\u{0645}\u{0646}\u{0630}");
     assert!(arabic.contains("<w:bidi/>"), "{arabic}");
     assert!(arabic.contains("<w:rtl/>") && arabic.contains("<w:szCs w:val=\"22\"/>"), "{arabic}");
-    let number = arabic.split("<w:r>").find(|r| r.contains("1850")).unwrap_or_default();
+    let number = arabic.split("<w:r>").find(|r| r.contains("1850")).expect("the Arabic paragraph retains the digits 1850");
     assert!(!number.contains("<w:rtl/>"), "the number keeps its own order: {arabic}");
     let english = find("written in English");
     assert!(!english.contains("<w:bidi/>") && !english.contains("<w:rtl/>"), "{english}");

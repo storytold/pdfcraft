@@ -5,7 +5,7 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-20 | **Last updated:** 2026-11-20 | **Change:** patch (M10 #4653: Word export marks right-to-left paragraphs, headings, cells and text boxes on the shared word model, with complex-script size, bold and italic; estimates unchanged)
+> **Last reviewed:** 2026-11-20 | **Last updated:** 2026-11-20 | **Change:** patch (M10 #4653: Word and RTF mark right-to-left paragraphs, headings and table cells on the shared word model, with positioned text boxes and complex-script formatting in Word; estimates unchanged)
 
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
@@ -267,7 +267,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-20 (M10, #4653):** Word export marks right-to-left paragraphs, headings, table cells and positioned text boxes (`w:bidi`) by the first strong Unicode bidi class, and gives every run the complex-script size, bold and italic; craft-docx marks the right-to-left pieces `w:rtl` by the bidi algorithm, so numbers inside Arabic keep their order. HTML direction waits on the shared HTML writer; extracted character order, table column order and PowerPoint direction remain outside this change.
+- **2026-11-20 (M10, #4653):** Word and RTF mark right-to-left paragraphs, headings and table cells by their first strong Unicode bidi class. Word also marks positioned text boxes and uses complex-script size, bold and italic. Its writer applies `w:rtl` to the right-to-left parts of runs, so numbers inside Arabic keep their order. The RTF writer emits `\rtlpar` for right-to-left paragraphs and keeps its existing run formatting. HTML direction waits on the shared HTML writer. Extracted character order, table column order and PowerPoint direction remain outside this change.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
@@ -915,7 +915,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-20 | patch | M10 #4653: Word export marks right-to-left paragraphs, headings, cells and text boxes on the shared word model, with complex-script size, bold and italic; HTML direction waits on the shared HTML writer; estimates unchanged. |
+| 2026-11-20 | patch | M10 #4653: Word and RTF mark right-to-left paragraphs, headings and table cells on the shared word model, with positioned text boxes and complex-script formatting in Word; HTML direction waits on the shared HTML writer; estimates unchanged. |
 | 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
