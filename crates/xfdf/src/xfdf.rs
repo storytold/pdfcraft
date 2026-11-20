@@ -233,25 +233,8 @@ fn read_format(node: &craft_xml::El, d: &mut Dict) {
     if let Some(t) = fmt.overlay_text {
         d.set(b"OverlayText".to_vec(), PdfString::text(&t));
     }
-}
-
-/// A `<contents-richtext>` element's plain text, a line per paragraph: what `/Contents` gets
-/// when the element comes without `<contents>`.
-fn walk_rich_plain(node: &craft_xml::El, out: &mut String) {
-    for n in &node.children {
-        match n {
-            craft_xml::Node::El(el) => {
-                if el.local() == "br" || (matches!(el.local(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\r')) {
-                    out.push('\r');
-                }
-                walk_rich_plain(el, out);
-            }
-            // Indentation between elements is not text.
-            craft_xml::Node::Text(t) if !(t.trim().is_empty() && t.contains('\n')) => {
-                out.push_str(&t.replace("\r\n", "\r").replace('\n', "\r"));
-            }
-            _ => {}
-        }
+    if let Some(repeat) = fmt.overlay_text_repeat {
+        d.set(b"Repeat".to_vec(), Object::Bool(repeat));
     }
 }
 
