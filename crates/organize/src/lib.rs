@@ -204,8 +204,8 @@ fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeE
     Ok(())
 }
 
-/// Gather the document's `/Type /Page` objects into a new page tree when the catalog leads to no
-/// page (its `/Pages` is missing or points at a lost object). Readers then find the pages by
+/// Gather the document's `/Type /Page` objects that have `/Contents` into a new page tree when the
+/// catalog leads to no page (its `/Pages` is missing or points at a lost object). Readers then find the pages by
 /// scanning the file, in file order, and edits must address those same pages. Returns how many
 /// pages were gathered; 0 leaves the document unchanged.
 pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
@@ -223,7 +223,9 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
     };
     let mut found: Vec<((u64, u32), ObjRef)> = doc
         .scan_objects()
-        .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page")))
+        // As the renderer's scan takes them: a page dictionary with content. A page without
+        // `/Contents` isn't shown, so gathering it would give a tree of more pages than are shown.
+        .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page") && d.get(b"Contents").is_some()))
         .map(|(r, _)| (position(r.num), r))
         .collect();
     if found.is_empty() {
@@ -232,9 +234,107 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
     found.sort();
     let root = doc.add(Dict::new());
     doc.update_dict(catalog, |d| d.set(b"Pages".to_vec(), Object::Ref(root)))?;
-    let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, Dict::new())).collect();
+    let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, inherited_through_parents(doc, r))).collect();
+    for (page, inherited) in &order {
+        let unusable = unusable_own_entries(doc, *page, inherited);
+        if !unusable.is_empty() {
+            doc.update_dict(*page, |d| {
+                for k in unusable {
+                    d.remove(k);
+                }
+            })?;
+        }
+    }
     rebuild(doc, &order)?;
     Ok(order.len())
+}
+
+/// The page's own `/MediaBox`, `/CropBox` and `/Rotate` entries that give way to the ones it
+/// inherits, for [`recover_page_tree`]: a media box without area, or a crop box with no area in the
+/// media box, is read as missing when the inherited one has area (ISO 32000-2 §14.11.2, Table 33;
+/// the renderer's hayro-syntax patch 38 does the same), and so is a value the renderer can't read
+/// as a box or an integer when the inherited one reads. Detached from its old parent, the page
+/// would otherwise lose the inherited value it is shown with. Boxes are read as the renderer reads
+/// them ([`boxes::renderer_rect`]), so `[0 0 400 300 0]` stays. A usable own value is kept, and so
+/// is an unusable one when the inherited value is no better.
+fn unusable_own_entries(doc: &Document, page: ObjRef, inherited: &Dict) -> Vec<&'static [u8]> {
+    let own = doc.get(page);
+    let Some(own) = own.as_dict() else { return Vec::new() };
+    let mut out: Vec<&'static [u8]> = Vec::new();
+    let with_area = |o: Option<&Object>| boxes::renderer_rect(o, doc).filter(|r| boxes::renderer_has_area(*r));
+    let own_media = with_area(own.get(b"MediaBox"));
+    let inherited_media = with_area(inherited.get(b"MediaBox"));
+    if own.contains(b"MediaBox") && own_media.is_none() && inherited_media.is_some() {
+        out.push(b"MediaBox");
+    }
+    let media = own_media.or(inherited_media).unwrap_or(boxes::LETTER);
+    let shows = |o: Option<&Object>| boxes::renderer_rect(o, doc).is_some_and(|c| boxes::renderer_shows(c, media));
+    if own.contains(b"CropBox") && !shows(own.get(b"CropBox")) && shows(inherited.get(b"CropBox")) {
+        out.push(b"CropBox");
+    }
+    if own.contains(b"Rotate") && renderer_int(own.get(b"Rotate"), doc).is_none() && renderer_int(inherited.get(b"Rotate"), doc).is_some() {
+        out.push(b"Rotate");
+    }
+    out
+}
+
+/// Reads an integer as the renderer's page reading does (hayro-syntax `i32`): a number, a real one
+/// truncated, that fits an `i32`.
+fn renderer_int(o: Option<&Object>, doc: &Document) -> Option<i32> {
+    match *doc.resolve(o?) {
+        Object::Int(i) => i32::try_from(i).ok(),
+        // `as` saturates (NaN to 0), and the range check then rejects what doesn't fit.
+        Object::Real(r) => i32::try_from(r as i64).ok(),
+        _ => None,
+    }
+}
+
+/// Whether an inherited `key` value is one the renderer's page reading takes from that node: a box
+/// it reads as a rectangle, a rotation it reads as an integer. `/Resources` is taken as it is
+/// (§7.7.3.4: the first one found is used in its entirety).
+fn renderer_reads_inherited(key: &[u8], value: &Object, doc: &Document) -> bool {
+    match key {
+        b"MediaBox" | b"CropBox" => boxes::renderer_rect(Some(value), doc).is_some(),
+        b"Rotate" => renderer_int(Some(value), doc).is_some(),
+        _ => true,
+    }
+}
+
+/// What page `page` inherits from the nodes its `/Parent` entries lead to, nearest first (ISO
+/// 32000-2 §7.7.3.3 Table 31, §7.7.3.4), for a page gathered by [`recover_page_tree`]: a page the
+/// tree no longer reaches still names its parent, and its size and resources may be there. The
+/// renderer's scan reads the same chain (hayro-syntax patch 59). Stops at a node already seen, at
+/// one that is not a dictionary, and after 256 nodes, as that scan does. A box or rotation that scan
+/// can't read is passed over, so a farther node's readable one is taken instead. A rotation the
+/// renderer reads from a real number is copied as the integer it reads, so [`page_rotation`] and
+/// later rotations start from the angle the page is shown at.
+fn inherited_through_parents(doc: &Document, page: ObjRef) -> Dict {
+    let mut inherited = Dict::new();
+    let mut seen = std::collections::HashSet::from([page]);
+    let mut next = doc.get(page).as_dict().and_then(|d| d.reference(b"Parent"));
+    let mut depth = 0usize;
+    while let Some(node) = next {
+        if depth >= 256 || !seen.insert(node) {
+            break;
+        }
+        depth += 1;
+        let obj = doc.get(node);
+        let Some(d) = obj.as_dict() else { break };
+        for k in INHERITABLE {
+            if !inherited.contains(k)
+                && let Some(v) = d.get(k)
+                && renderer_reads_inherited(k, v, doc)
+            {
+                let value = match (k, &*doc.resolve(v)) {
+                    (b"Rotate", Object::Real(_)) => renderer_int(Some(v), doc).map_or_else(|| v.clone(), |r| Object::Int(i64::from(r))),
+                    _ => v.clone(),
+                };
+                inherited.set(k.to_vec(), value);
+            }
+        }
+        next = d.reference(b"Parent");
+    }
+    inherited
 }
 
 fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {
