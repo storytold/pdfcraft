@@ -46,6 +46,12 @@ impl PdfCraftApp {
         if chords {
             self.registry_shortcuts(ctx);
         }
+        // Files copied in Finder or a file manager open from Home (#1289), unless a menu holds
+        // the keys.
+        #[cfg(not(target_arch = "wasm32"))]
+        if !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx) {
+            self.paste_files_key(ctx);
+        }
         // Esc closes one thing at a time: a Combine file shown large, an open menu, or the camera,
         // a selection or the find bar on the page go first, and full screen stays (#5302). With
         // the Esc leaves full screen preference off, only ⌘L / Ctrl+L leaves it.
