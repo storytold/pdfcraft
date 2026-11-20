@@ -146,15 +146,16 @@ pub(super) fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
         return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
     }
     match item {
-        Item::Fill { rect, color } => {
+        Item::Fill { rect, color, gradient } => {
             if rect.bottom() <= cut + 0.01 {
-                (Some(Item::Fill { rect, color }), None)
+                (Some(Item::Fill { rect, color, gradient }), None)
             } else if rect.y >= cut - 0.01 {
-                (None, Some(Item::Fill { rect, color }))
+                (None, Some(Item::Fill { rect, color, gradient }))
             } else {
+                // Both parts keep the whole box's gradient, so they carry on one sweep.
                 let above = Rect::new(rect.x, rect.y, rect.w, cut - rect.y);
                 let below = Rect::new(rect.x, cut, rect.w, rect.bottom() - cut);
-                (Some(Item::Fill { rect: above, color }), Some(Item::Fill { rect: below, color }))
+                (Some(Item::Fill { rect: above, color, gradient }), Some(Item::Fill { rect: below, color, gradient }))
             }
         }
         Item::Line { from, to, width, color, dashed } => {
@@ -224,7 +225,7 @@ pub(super) fn split_widget(item: Item, cut: f64) -> (Option<Item>, Option<Item>,
 pub(super) fn widget_box(rect: Rect, border: &WidgetBorder) -> Vec<Item> {
     let mut items = Vec::new();
     if let Some(color) = border.fill {
-        items.push(Item::Fill { rect, color });
+        items.push(Item::Fill { rect, color, gradient: None });
     }
     if let Some(color) = border.color {
         let width = border.width.max(0.0);
@@ -250,13 +251,25 @@ pub(super) fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
         return Item::Only { views, item: Box::new(moved(*inner, dx, dy)) };
     }
     match &mut item {
-        Item::Fill { rect, .. } | Item::Image { rect, .. } => {
+        Item::Fill { rect, gradient, .. } => {
+            rect.x += dx;
+            rect.y += dy;
+            if let Some(g) = gradient {
+                g.area.x += dx;
+                g.area.y += dy;
+            }
+        }
+        Item::Image { rect, .. } => {
             rect.x += dx;
             rect.y += dy;
         }
         Item::Rounded(r) => {
             r.rect.x += dx;
             r.rect.y += dy;
+            if let Some(g) = &mut r.gradient {
+                g.area.x += dx;
+                g.area.y += dy;
+            }
         }
         Item::Line { from, to, .. } => {
             *from = (from.0 + dx, from.1 + dy);
