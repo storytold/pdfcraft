@@ -2103,3 +2103,31 @@ fn a_range_typed_into_the_pages_field_is_what_prints() {
     let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(saved)).unwrap();
     assert_eq!(pdfcraft_model::pages(&doc).len(), 2);
 }
+
+/// Tabbing onto and past the Pages field is not choosing Pages: an empty range would print every
+/// page instead of the Selected pages or Current page that was picked.
+#[test]
+fn tabbing_past_the_pages_field_keeps_the_earlier_choice() {
+    use pdfcraft_ui_egui::PrintWhich;
+    for start in [PrintWhich::Selected, PrintWhich::Current] {
+        let mut h = harness();
+        let bytes = h.state().session.create_blank(200.0, 300.0, 5).unwrap();
+        h.state_mut().open_bytes("five.pdf", None, bytes.as_ref().clone()).unwrap();
+        h.run_steps(3);
+        let tab = h.state().views.len() - 1;
+        h.state_mut().views[tab].select_pages(&[1, 3]);
+        assert!(h.state_mut().execute("print.dialog"));
+        h.run_steps(3);
+        h.state_mut().print_draft.which = start;
+        h.run_steps(2);
+        let mut reached = false;
+        for _ in 0..40 {
+            h.key_press(egui::Key::Tab);
+            h.run_steps(2);
+            reached |= h.get_by_role_and_label(Role::TextInput, "Pages").accesskit_node().is_focused();
+            assert_eq!(h.state().print_draft.which, start);
+        }
+        assert!(reached, "Tab never reached the Pages field");
+        assert_eq!(h.state().print_draft.range, "");
+    }
+}

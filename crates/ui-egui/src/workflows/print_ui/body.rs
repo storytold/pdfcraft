@@ -376,11 +376,12 @@ pub(crate) fn body(
                 let pages = widgets::radio_value(ui, &mut d.which, Which::Range, tl!("Pages"));
                 // Always enabled: a disabled field never takes the keyboard, so clicking into it
                 // left All chosen and a range typed there was not printed. Clicking or typing in
-                // it chooses Pages.
+                // it chooses Pages; Tabbing past it does not, so a Selected pages or Current page
+                // choice survives keyboard navigation.
                 let r = ui
                     .add(crate::widgets::line(&mut d.range).hint_text(format!("1-{}", sizes.len())).desired_width(110.0))
                     .labelled_by(pages.id);
-                if r.gained_focus() || r.changed() {
+                if r.clicked() || r.changed() {
                     d.which = Which::Range;
                 }
             });
