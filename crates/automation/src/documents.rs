@@ -289,7 +289,7 @@ impl Automation {
             Some(_) => return Err(bad("magnification is a name or a percentage".into())),
         }
         if let Some(p) = a.opt_int("page")? {
-            v.page = (p.max(1) - 1) as usize;
+            v.page = usize::try_from(p).ok().and_then(|p| p.checked_sub(1)).ok_or_else(|| bad("page must be 1 or more".into()))?;
         }
         for (k, f) in [
             ("fit_window", &mut v.fit_window),
