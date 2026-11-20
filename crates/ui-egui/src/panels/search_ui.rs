@@ -3,6 +3,7 @@
 
 use egui::text::LayoutJob;
 use egui::{Color32, FontId, TextFormat};
+use pdfcraft_render::PageInfo;
 
 use crate::canvas::DocView;
 use crate::theme::{self, Tokens};
@@ -12,7 +13,8 @@ use crate::widgets;
 const CONTEXT: usize = 36;
 
 /// Draw the Search panel with its query, options, progress and clickable result excerpts.
-pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize) {
+pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, page_info: &[PageInfo]) {
+    let pages = page_info.len();
     crate::widgets::begin_dialog(ui);
     let searched = view.texts.len() + view.text_failed.len();
     let Some(find) = view.find.as_mut() else { return };
@@ -61,7 +63,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     for (i, (p, range)) in find.matches.iter().enumerate().take(2000) {
         if last_page != Some(*p) {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &(p + 1).to_string())])).small().color(t.text_faint));
+            // The page's label (iv, A-1), as the page box and the other panels show it.
+            let label = page_info.get(*p).map_or_else(|| (p + 1).to_string(), |info| info.label.clone());
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &label)])).small().color(t.text_faint));
             last_page = Some(*p);
         }
         let Some(text) = view.texts.get(p) else { continue };
