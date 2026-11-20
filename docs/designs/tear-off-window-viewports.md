@@ -86,6 +86,7 @@ The multi-window system maintains strict state synchronization across all viewpo
   app.move_tab(from, to_view_index);
   ```
 - The drag tear-off boundary threshold requires a minimum vertical displacement (15 points above or below the tab strip bounds) before initiating tear-off state. While tearing off, a visual drag badge indicates the document name and detaching action.
+- Tear-off triggers when leaving the tab strip bounds vertically while the pointer is at or to the right of the strip's left edge (pos.x >= strip.left()), with no right-edge bound. Dragging to the left of the strip (pos.x < strip.left()) remains a tab reorder, ensuring off-strip drops to the left reorder to the front of the strip without falsely detaching.
 
 ### 5. Sole Tab Detachment Rule
 - When only a single document tab exists across the application (`self.views.len() == 1`), detaching is disallowed:
