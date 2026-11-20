@@ -54,6 +54,28 @@ fn rects_for_words(words: &[pdfcraft_compare::Word]) -> (Vec<[f64; 4]>, Vec<usiz
     (out, pages)
 }
 
+fn rects_overlap(a: [f64; 4], b: [f64; 4]) -> bool {
+    a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]
+}
+
+fn change_matches_position(
+    word: &pdfcraft_compare::Word,
+    page: usize,
+    rects: &[[f64; 4]],
+    near: Option<[f64; 4]>,
+) -> bool {
+    if word.page != page {
+        return false;
+    }
+    if !rects.is_empty() {
+        rects_overlap(word.rect, rects[0])
+    } else if let Some(rect) = near {
+        rects_overlap(word.rect, rect)
+    } else {
+        true
+    }
+}
+
 impl crate::Document {
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
     pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
@@ -229,6 +251,7 @@ impl Session {
                         .iter()
                         .zip(ch.new.text.split_whitespace())
                         .all(|(word, text)| word.text == text)
+                        && change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
                     {
                         start = Some(candidate);
                         break;
@@ -240,6 +263,7 @@ impl Session {
                             .iter()
                             .zip(ch.new.text.split_whitespace())
                             .all(|(word, text)| word.text == text)
+                            && change_matches_position(&new_words[candidate], ch.new.page, &ch.new.rects, ch.new.near)
                         {
                             start = Some(candidate);
                             break;
@@ -259,6 +283,7 @@ impl Session {
                         .iter()
                         .zip(ch.old.text.split_whitespace())
                         .all(|(word, text)| word.text == text)
+                        && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
                     {
                         start = Some(candidate);
                         break;
@@ -270,6 +295,7 @@ impl Session {
                             .iter()
                             .zip(ch.old.text.split_whitespace())
                             .all(|(word, text)| word.text == text)
+                            && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
                         {
                             start = Some(candidate);
                             break;
@@ -292,6 +318,7 @@ impl Session {
                             .iter()
                             .zip(ch.old.text.split_whitespace())
                             .all(|(word, text)| word.text == text)
+                            && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
                         {
                             start = Some(candidate);
                             break;
@@ -303,6 +330,7 @@ impl Session {
                                 .iter()
                                 .zip(ch.old.text.split_whitespace())
                                 .all(|(word, text)| word.text == text)
+                                && change_matches_position(&old_words[candidate], ch.old.page, &ch.old.rects, ch.old.near)
                             {
                                 start = Some(candidate);
                                 break;
@@ -607,5 +635,65 @@ impl crate::Document {
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         OfficeExport { bytes, truncated_pages }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_differences_marks_each_occurrence() {
+        let build = |second: &str| -> Vec<u8> {
+            let first_text = "Rate 950";
+            let second_text = second;
+            let c1 = format!("BT /F1 12 Tf 100 700 Td ({first_text}) Tj ET");
+            let c2 = format!("BT /F1 12 Tf 100 700 Td ({second_text}) Tj ET");
+            let o1 = "<< /Type /Catalog /Pages 2 0 R >>".to_string();
+            let o2 = "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_string();
+            let o3 = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>".to_string();
+            let o4 = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>".to_string();
+            let o5 = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string();
+            let o6 = format!("<< /Length {} >>\nstream\n{}\nendstream", c1.len(), c1);
+            let o7 = format!("<< /Length {} >>\nstream\n{}\nendstream", c2.len(), c2);
+            let objects = [o1, o2, o3, o4, o5, o6, o7];
+            let mut pdf = String::new();
+            pdf.push_str("%PDF-1.4\n");
+            let mut offsets = Vec::new();
+            for obj in &objects {
+                offsets.push(pdf.len());
+                pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", offsets.len(), obj));
+            }
+            let xref = pdf.len();
+            pdf.push_str("xref\n0 8\n0000000000 65535 f \n");
+            for off in offsets {
+                pdf.push_str(&format!("{:010} 00000 n \n", off));
+            }
+            pdf.push_str(&format!("trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", xref));
+            pdf.into_bytes()
+        };
+
+        let old_bytes = build("Rate 900");
+        let new_bytes = build("Rate 950");
+
+        let dir = std::env::temp_dir();
+        let old_path = dir.join(format!("pdfcraft-mark-differences-old-{}.pdf", std::process::id()));
+        let new_path = dir.join(format!("pdfcraft-mark-differences-new-{}.pdf", std::process::id()));
+        std::fs::write(&old_path, &old_bytes).unwrap();
+        std::fs::write(&new_path, &new_bytes).unwrap();
+
+        let mut session = Session::new();
+        let old = session.open(old_path.file_name().unwrap().to_string_lossy().into_owned(), Some(old_path.to_string_lossy().into_owned()), Arc::new(old_bytes), None).unwrap();
+        let new = session.open(new_path.file_name().unwrap().to_string_lossy().into_owned(), Some(new_path.to_string_lossy().into_owned()), Arc::new(new_bytes), None).unwrap();
+
+        let marked = session.mark_differences_of(old, new, &[]).unwrap();
+        assert_eq!(marked, 1);
+
+        let doc = session.get(new).unwrap();
+        assert!((0..2).any(|i| doc.comment_props(1, i).is_some()));
+        assert!((0..2).all(|i| doc.comment_props(0, i).is_none()));
+
+        let _ = std::fs::remove_file(old_path);
+        let _ = std::fs::remove_file(new_path);
     }
 }
