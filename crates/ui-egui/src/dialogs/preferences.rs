@@ -1,5 +1,4 @@
-//! Preferences: the draft the window edits, the model that maps its rows to the app, and the live
-//! effects an OK applies.
+//! Preferences: the draft the window edits and the model that applies each change to the app.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +11,9 @@ use craft::theme_store::ui::AppearancePage;
 use craft::ui::contract::{Bind, Entry, Props as _, SaveKey, Show as _};
 use craft::ui::dialog::DialogHost;
 use craft::ui::notices::{Notice, NoticeLayout};
-use craft::ui::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec};
+use craft::ui::patterns::preferences::{
+    GroupSpec, PageSpec, PrefValue, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec,
+};
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
 use craft::window::policy::TitleBarPref;
@@ -54,8 +55,7 @@ impl PreferencesSession {
     }
 }
 
-/// Every setting the window edits, copied from the app when the window opens. Nothing reaches the
-/// app before OK or Apply.
+/// Every setting the window edits, copied from the app when the window opens and applied as it changes.
 #[derive(Clone, PartialEq)]
 struct PrefsDraft {
     language: String,
@@ -189,7 +189,7 @@ impl PdfCraftApp {
         let ctx = ui.ctx().clone();
         let output = {
             let mut prefs = Prefs::new(self, draft, selection, host, answers, &ctx);
-            PreferencesWindow::new(Bind::bound(state)).remember(SaveKey::new("pdfcraft.preferences")).show(ui, &mut prefs)
+            PreferencesWindow::new(Bind::bound(state)).mode(PreferencesMode::Live).remember(SaveKey::new("pdfcraft.preferences")).show(ui, &mut prefs)
         };
         if let Some(request) = output.pick_color {
             let answers = Arc::clone(answers);

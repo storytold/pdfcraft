@@ -1,4 +1,4 @@
-//! Preferences rows apply on OK and change nothing on Cancel.
+//! Preferences rows apply as they change and persist when the window closes.
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -11,7 +11,7 @@ const PDF: &[u8] = include_bytes!("../data/form.pdf");
 
 type H = Harness<'static, PdfCraftApp>;
 
-/// One row edit and the app state it must produce after OK; the same state must be absent after Cancel.
+/// One row edit and the app state it must produce immediately.
 struct Case {
     name: &'static str,
     page: &'static str,
@@ -45,17 +45,18 @@ fn preferences_shown(h: &H) -> bool {
 }
 
 fn click(h: &mut H, label: &str) {
-    h.get_by_label(label).click();
+    h.get_by(|node| !node.is_hidden() && node.role() != egui::accesskit::Role::Label && node.label().as_deref() == Some(label)).click();
     h.run_steps(3);
 }
 
 /// Replaces the text of the field named `label` through the keyboard, as a user would.
 fn type_into(h: &mut H, label: &str, text: &str) {
-    h.get_by_label(label).click();
+    let role = if label == "Recent files to keep" { egui::accesskit::Role::SpinButton } else { egui::accesskit::Role::TextInput };
+    h.get_by_role_and_label(role, label).click();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(1);
-    h.get_by_label(label).type_text(text);
+    h.get_by_role_and_label(role, label).type_text(text);
     h.run_steps(3);
 }
 
@@ -145,26 +146,26 @@ fn edited(case: &Case) -> H {
     h.state_mut().open_preferences();
     h.run_steps(4);
     // The page list's row, not the heading of the page it shows.
-    h.get_by_role_and_label(egui::accesskit::Role::ListItem, case.page).click();
+    h.get_by(|node| !node.is_hidden() && node.role() == egui::accesskit::Role::ListItem && node.label().as_deref() == Some(case.page)).click();
     h.run_steps(3);
     (case.edit)(&mut h);
     h
 }
 
 #[test]
-fn preference_rows_apply_on_ok_and_nothing_changes_on_cancel() {
+fn preference_rows_apply_live_and_survive_closing() {
     for case in cases() {
         let mut h = edited(&case);
-        assert!(!(case.applied)(h.state()), "{}: a row edits the draft, not the app", case.name);
+        assert!((case.applied)(h.state()), "{}: a row applies immediately", case.name);
         click(&mut h, "OK");
         h.run_steps(3);
         assert!(!preferences_shown(&h), "{}: OK closes the window", case.name);
-        assert!((case.applied)(h.state()), "{}: OK applies the draft", case.name);
+        assert!((case.applied)(h.state()), "{}: OK keeps the change", case.name);
 
         let mut h = edited(&case);
-        click(&mut h, "Cancel");
+        h.key_press(egui::Key::Escape);
         h.run_steps(3);
-        assert!(!preferences_shown(&h), "{}: Cancel closes the window", case.name);
-        assert!(!(case.applied)(h.state()), "{}: Cancel leaves the app as it was", case.name);
+        assert!(!preferences_shown(&h), "{}: Escape closes the window", case.name);
+        assert!((case.applied)(h.state()), "{}: Escape keeps the change", case.name);
     }
 }
