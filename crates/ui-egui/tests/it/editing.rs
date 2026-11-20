@@ -2768,6 +2768,15 @@ fn password_prompt_opens_and_security_tab_reports_the_details() {
 /// off the buttons' centre line.
 #[test]
 fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
+    fn message_rect(shape: &egui::Shape) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(message_rect),
+            egui::Shape::Text(text) if text.galley.text().starts_with("This document is secured") => {
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        }
+    }
     // Wide: one line. Narrower: wrapped. Narrowest: cut short (the full text is on hover).
     for (width, wraps) in [(1700.0, false), (1250.0, true), (900.0, false)] {
         let mut h = Harness::builder().with_size(egui::vec2(width, 800.0)).build_eframe(|cc| {
@@ -2781,7 +2790,7 @@ fn the_security_notice_wraps_beside_its_buttons_and_lines_up_with_them() {
             }
         });
         h.run_steps(4);
-        let msg = h.get_by_label_contains("This document is secured").rect();
+        let msg = h.output().shapes.iter().find_map(|shape| message_rect(&shape.shape)).expect("the security message is painted");
         let button = h.get_by_label("Security settings").rect();
         let dismiss = h.get_by_label("Dismiss").rect();
         assert!(msg.right() <= button.left() + 0.5, "{width}: the message stops before the buttons: {msg:?} vs {button:?}");
