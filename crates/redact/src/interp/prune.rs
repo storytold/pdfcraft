@@ -577,24 +577,31 @@ pub(super) fn extgstate_font(
     Some((metrics, vertical, size))
 }
 
-/// Drop every `/Pattern` entry this scope saw selected but no surviving painting operator drew
-/// with. The `scn` that selected it stays in the content, so the page names a pattern its
-/// resources no longer hold; nothing surviving paints with that colour, and
-/// `a_page_whose_pruned_pattern_is_still_selected_renders` pins that the page still renders and
-/// that operators after the stale selector still draw. A pattern's cell is a content stream of its own which
-/// this pass does not enter, so a pattern whose only painting was redacted would otherwise keep
-/// its drawing -- text included -- in the saved file (#3647). A pattern some surviving paint
-/// still uses, or one the scope never saw, is left alone.
+/// Empty every `/Pattern` entry this scope saw selected but no surviving painting operator drew
+/// with. A pattern's cell is a content stream of its own which this pass does not enter, so a
+/// pattern whose only painting was redacted would otherwise keep its drawing -- text included --
+/// in the saved file (#3647). The `scn` that selected it stays in the content, so the name stays
+/// too: it now names an empty tiling pattern ([`empty_pattern`]) of the original's `/PaintType`,
+/// since an `scn` selecting an uncoloured pattern (`/PaintType 2`) also gives colour components
+/// (ISO 32000-2 8.7.3.3); names of the same `/PaintType` share one stand-in. A name selected more
+/// than once is emptied, and counted, once. A name the content uses must be in the resources (ISO 32000-2 7.8.3; for
+/// PDF/A, ISO 19005-2 and -4 6.2.2), and nothing surviving paints with it, so what the page shows
+/// is the same. A pattern some surviving paint still uses, or one the scope never saw, is left
+/// alone.
 /// `/Pattern` may be an indirect object like any other value, so it is resolved: reading the
 /// reference itself as a dictionary found none and pruned nothing, leaving the cell in the file.
 /// What is written back is a dictionary of this page's own, so pruning never reaches through a
 /// `/Pattern` dictionary another page shares. The pattern objects dropped are added to `pruned`,
 /// for [`unlink_pruned_patterns`].
-pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
+pub(crate) fn prune_patterns(doc: &mut Document, res: &mut Dict, seen: &[Vec<u8>], painted: &[Vec<u8>], pruned: &mut Vec<ObjRef>) -> usize {
     let Some(mut pat) = res.get(b"Pattern").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return 0 };
     let mut dropped = 0;
+    // One stand-in per /PaintType: coloured (1) and uncoloured (2).
+    let (mut coloured, mut uncoloured_stand_in): (Option<ObjRef>, Option<ObjRef>) = (None, None);
+    let mut emptied: HashSet<&[u8]> = HashSet::new();
     for n in seen {
         if !painted.contains(n)
+            && emptied.insert(n.as_slice())
             && let Some(value) = pat.get(n)
         {
             // Every object along the reference chain: a name can lead to a reference-valued
@@ -608,18 +615,35 @@ pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], p
                     _ => None,
                 };
             }
-            pat.remove(n);
+            // A shading pattern has no /PaintType and is selected like a coloured one.
+            // /PaintType can be an indirect integer (ISO 32000-2 7.3.10): resolve it first.
+            let uncoloured = doc.resolve(value).as_dict().and_then(|d| d.get(b"PaintType").and_then(|p| doc.resolve(p).as_int())) == Some(2);
+            let slot = if uncoloured { &mut uncoloured_stand_in } else { &mut coloured };
+            let stand_in = *slot.get_or_insert_with(|| doc.add(Object::Stream(empty_pattern(if uncoloured { 2 } else { 1 }))));
+            pat.set(n.clone(), Object::Ref(stand_in));
             dropped += 1;
         }
     }
     if dropped > 0 {
-        if pat.is_empty() {
-            res.remove(b"Pattern");
-        } else {
-            res.set(b"Pattern".to_vec(), Object::Dict(pat));
-        }
+        res.set(b"Pattern".to_vec(), Object::Dict(pat));
     }
     dropped
+}
+
+/// A tiling pattern of `paint_type` (1 coloured, 2 uncoloured) whose cell draws nothing and uses
+/// no resources, colours or fonts: what an emptied pattern name points to.
+fn empty_pattern(paint_type: i64) -> pdfcraft_cos::Stream {
+    let dict = Dict::from_iter([
+        (b"Type".to_vec(), Object::Name(b"Pattern".to_vec())),
+        (b"PatternType".to_vec(), Object::Int(1)),
+        (b"PaintType".to_vec(), Object::Int(paint_type)),
+        (b"TilingType".to_vec(), Object::Int(1)),
+        (b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(1), Object::Int(1)])),
+        (b"XStep".to_vec(), Object::Int(1)),
+        (b"YStep".to_vec(), Object::Int(1)),
+        (b"Resources".to_vec(), Object::Dict(Dict::new())),
+    ]);
+    pdfcraft_cos::Stream::from_raw(dict, Vec::new())
 }
 
 /// Unlink the patterns a page's rewrite pruned (`pruned`) from page-tree nodes whose

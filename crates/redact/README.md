@@ -143,8 +143,11 @@ hidden information refuses a page for both too, in whatever content it walks. A 
 `/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
 skipping that mark. The count covers the marks on the pages being applied.
 
-Tiling-pattern cells are separate streams. Applying a mark removes a pattern resource when no
-surviving paint uses it. If a cell remains reachable after rewriting the selected pages and may
+Tiling-pattern cells are separate streams. Applying a mark removes a pattern's cell when no
+surviving paint uses it. The name stays in the page's `/Pattern`, pointing to an empty tiling
+pattern of the original's `/PaintType` (an uncoloured one is selected with colour components too,
+ISO 32000-2 8.7.3.3), because the `scn` that selected it is still in the content and a content
+stream may only name what its resources define (ISO 32000-2 7.8.3). If a cell remains reachable after rewriting the selected pages and may
 contain text, images, replacement descriptions, or unreadable content, Apply refuses with a
 `RedactError::Pattern` and restores the document and pending marks. This includes patterns owned
 by Forms and patterns inherited by Forms. Vector-only retained cells remain supported. The
