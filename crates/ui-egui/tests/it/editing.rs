@@ -1721,7 +1721,7 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
     let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1)]);
     let size = h.get_by_label("Size").rect();
     // The separator after Size: drag it right by 60 points.
-    let edge = egui::pos2(size.right() + 2.0, size.center().y);
+    let edge = egui::pos2(size.right() - 2.0, size.center().y);
     drag(&mut h, edge, edge + egui::vec2(60.0, 0.0));
     let widths = h.state().combine_columns.widths.clone();
     let size_key = craft::behavior::ColumnKey::new("size");
@@ -4753,7 +4753,7 @@ fn image_right_click_context_menu_items_and_actions() {
         "Create Link",
         "Recognize Text",
     ] {
-        if item == "Paste" {
+        if item == "Paste" || item == "Draw freehand" {
             h.get_by_role_and_label(Role::MenuItem, item);
         } else {
             h.get_by_label_contains(item);
@@ -6402,6 +6402,9 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
     h.drop_at(point);
     h.run_steps(6);
     assert_eq!(h.state().views[0].session.line_editor.as_ref().unwrap().text, "Heading\nPlain bold words\nLast row");
+    // Unchanged text is painted by the page. An edit makes the editor paint its styled layout.
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.push('!');
+    h.run_steps(3);
     let galley = h
         .output()
         .shapes
@@ -6415,6 +6418,7 @@ fn one_editor_contains_mixed_styles_and_visual_rows() {
     assert!(galley.job.sections.iter().any(|s| s.format.color == egui::Color32::BLACK));
     assert!(galley.job.sections.iter().any(|s| s.format.color == egui::Color32::from_rgb(0, 51, 128)));
     assert!(galley.job.sections.iter().any(|s| s.format.font_id.size > galley.job.sections.last().unwrap().format.font_id.size));
+    h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.pop();
     let original_text = h.state().views[0].session.line_editor.as_ref().unwrap().text.clone();
     h.state_mut().views[0].session.line_editor.as_mut().unwrap().text.push_str("\nAdditional row\nAnother row");
     h.run_steps(3);
@@ -8398,12 +8402,10 @@ fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
     h.state_mut().views[0].session.image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
     h.run_steps(3);
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    // Above the top edge, or below the bottom one when the view has no room above.
-    let knob = [egui::pos2(r.center().x, r.top() - 22.0), egui::pos2(r.center().x, r.bottom() + 22.0)]
-        .into_iter()
-        .find(|p| cursor_over(&mut h, *p) == egui::CursorIcon::Grab)
-        .expect("the knob past the page's edge");
+    // The framework names and positions the knob for the current theme.
+    let knob = h.get_by_label("Rotate").rect().center();
     assert!(!r.contains(knob));
+    assert_eq!(cursor_over(&mut h, knob), egui::CursorIcon::Grab);
     let to = egui::pos2(r.right() + 60.0, r.center().y);
     h.hover_at(knob);
     h.run_steps(1);

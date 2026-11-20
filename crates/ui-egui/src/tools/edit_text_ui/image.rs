@@ -275,7 +275,8 @@ fn box_controls(
     let view = &body.view;
     let quad = picture_quad(xf, info, page, image).map(|p| view.to_doc(p));
     let bounds = bounds_of(&quad);
-    let pivot = bounds.center();
+    let visible = image.visible_rect.unwrap_or(image.rect);
+    let pivot = view.to_doc(user_to_screen(xf, info, page, (visible[0] + visible[2]) * 0.5, (visible[1] + visible[3]) * 0.5));
     let rules = BoxRules::in_mode(TransformMode::Free)
         .with_scale(ScaleRule::Proportional)
         .with_allow(BoxAllow::new(true, false, false))

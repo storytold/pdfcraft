@@ -976,7 +976,7 @@ fn page_parts_of(
         let cropping = session.image_selection.as_ref().filter(|s| s.crop.is_some()).map(|s| s.page);
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
             if cx.can_modify && matches!(cx.tool, QuickTool::EditText | QuickTool::AddText) {
-                parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo));
+                parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo, cx.tool == QuickTool::AddText));
             }
         }
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
