@@ -1999,6 +1999,22 @@ fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing()
     assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
 }
 
+/// A document whose objects could not be read (opened read-only) was not measured for print, so
+/// print readiness says so instead of "every referenced font is embedded" and "no problems found".
+#[test]
+fn print_readiness_of_a_document_without_an_editor_is_not_a_clean_report() {
+    let (mut s, id) = session_with(1);
+    // Read normally, the fixture has a page to measure and no XMP metadata (PDF/A-2b 6.6.2.1).
+    let report = s.get(id).unwrap().print_readiness().unwrap();
+    assert_eq!(report.pages.len(), 1, "{report:?}");
+    assert!(report.pdfa_issues.iter().any(|i| i.clause == "6.6.2.1"), "{report:?}");
+    let d = s.doc_mut(id).unwrap();
+    d.editor = None;
+    d.read_only_reason = Some("syntax error at byte 9".into());
+    let err = s.get(id).unwrap().print_readiness().unwrap_err().to_string();
+    assert!(err.contains("fonts and PDF/A-2b were not checked") && err.contains("syntax error at byte 9"), "{err}");
+}
+
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead
 /// of refusing once the dialog is confirmed. Low-resolution printing (bit 3 on, bit 12 off) is
 /// still printing, and the owner password lifts the restriction.
