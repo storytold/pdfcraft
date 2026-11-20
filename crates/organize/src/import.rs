@@ -31,8 +31,8 @@ mod combine;
 mod copy;
 mod fields;
 
-pub(crate) use carry::set_attachments;
 use carry::{Mark, source_outline, write_outline_level};
+pub(crate) use carry::{set_attachments, set_attachments_exact};
 pub use combine::{
     CombineOutcome, Combiner, Run, SplitBy, combine, combine_grouped, combine_grouped_with, combine_selected, combine_selected_with, combine_with,
     extract_pages, split, split_ranges,
@@ -41,6 +41,7 @@ pub(crate) use copy::{Copier, copy_object};
 use copy::{MAX_COPY_DEPTH, SKIP_ON_PAGE};
 use fields::{add_kid, field_and_widget, register_fields, resolve_field_conflicts, split_own_field};
 pub use fields::{combine_field_conflicts, field_name_conflicts};
+pub(crate) use fields::{listed_fields, share_fields_with_originals};
 
 /// How colliding fully-qualified field names are resolved when pages are imported.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

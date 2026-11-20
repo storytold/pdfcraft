@@ -9,10 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+log = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.
-rustix = { version = "1", features = ["fs"] }
+# Atomic saves use explicit xattr size queries and fall back to plain fsync if F_FULLFSYNC is refused.
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Already in the dependency graph through the accessibility integration. The portal watcher

@@ -486,3 +486,37 @@ fn destructured_for_of_targets_keep_regex_iterables_opaque() {
         }
     }
 }
+
+/// A custom calculation script (#6630) is written as given, a blank one as no script; it reads the
+/// fields it names, and running it is the JavaScript engine's, not the AF calculator's.
+#[test]
+fn a_custom_calculation_script_is_kept_as_written() {
+    let js = "event.value = this.getField(\"a\").value * getField(\"b\").value; // getField(\"c\")";
+    let c = Calculate::Custom(js.into());
+    assert_eq!(calculate_js(&c).as_deref(), Some(js));
+    for blank in ["", " \r\n\t"] {
+        assert_eq!(calculate_js(&Calculate::Custom(blank.into())), None, "{blank:?}");
+    }
+    assert_eq!(c.reads(), ["a", "b"]);
+    assert_eq!(calculate(&c, &|_| vec!["2".into()]), None);
+}
+
+#[test]
+fn simple_calculations_fold_a_repeated_group_without_collecting_it() {
+    let group = |_: &str| vec!["2".to_string(); 3];
+    let list = |op, n: usize| Calculate::Simple { op, fields: vec!["g".to_string(); n] };
+    assert_eq!(calculate(&list(CalcOp::Sum, 4), &group).as_deref(), Some("24"));
+    assert_eq!(calculate(&list(CalcOp::Average, 4), &group).as_deref(), Some("2"));
+    assert_eq!(calculate(&list(CalcOp::Product, 2), &group).as_deref(), Some("64"));
+    assert_eq!(calculate(&list(CalcOp::Maximum, 2), &group).as_deref(), Some("2"));
+    assert_eq!(calculate(&list(CalcOp::Sum, 0), &group).as_deref(), Some("0"));
+}
+
+#[test]
+fn a_simple_calculation_that_expands_past_the_allowance_is_not_calculated() {
+    let thousand = |_: &str| vec!["1".to_string(); 1000];
+    let within = Calculate::Simple { op: CalcOp::Sum, fields: vec!["g".to_string(); 1000] };
+    let past = Calculate::Simple { op: CalcOp::Sum, fields: vec!["g".to_string(); 2000] };
+    assert_eq!(calculate(&within, &thousand).as_deref(), Some("1000000"));
+    assert_eq!(calculate(&past, &thousand), None);
+}
