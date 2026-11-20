@@ -2240,3 +2240,188 @@ fn a_camera_click_released_off_its_page_moves_nothing() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0));
 }
+
+/// Delete and Escape with a dialog open are the dialog's: the link selected behind it with the Link
+/// tool stays and stays selected. Delete removed it, and Escape deselected it as it closed the
+/// dialog.
+#[test]
+fn delete_and_escape_under_a_dialog_leave_the_selected_link() {
+    for key in [egui::Key::Delete, egui::Key::Escape] {
+        let mut h = open(link_pdf(), "150", false);
+        link_tool(&mut h);
+        let on_link = at(&h, 150.0, 325.0);
+        mouse_click(&mut h, on_link);
+        assert_eq!(h.state().views[0].links.selected, Some((0, 0)));
+        h.state_mut().dialog = Some(Dialog::Shortcuts);
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().links().len(), 1, "{key:?} under a dialog deletes nothing");
+        assert_eq!(s.views[0].links.selected, Some((0, 0)), "{key:?}: still selected");
+        assert_eq!(s.dialog.is_none(), key == egui::Key::Escape, "{key:?}: only Escape closes it");
+    }
+}
+
+/// Escape with a dialog open over Edit text objects that an area selected closes the dialog, and
+/// the objects stay selected: Delete then removes them. Escape went to the objects instead, and the
+/// dialog stayed open.
+#[test]
+fn escape_under_a_dialog_closes_it_over_selected_edit_text_objects() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
+    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
+    let blocks = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(1).len()
+    };
+    assert_eq!(blocks(&h), 1, "page 2's line is there");
+    h.state_mut().dialog = Some(Dialog::Shortcuts);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "Escape closes the dialog");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(blocks(&h), 0, "the objects stayed selected: Delete removes them");
+}
+
+/// With a menu of the menu bar open, V and H are the menu's: the tool stays. V picked Select.
+#[test]
+fn the_tool_letters_with_a_menu_open_leave_the_tool() {
+    for letter in [egui::Key::V, egui::Key::H] {
+        let mut h = open(link_pdf(), "150", false);
+        link_tool(&mut h);
+        crate::support::open_menu(&mut h, "Edit");
+        h.key_press(letter);
+        h.run_steps(3);
+        assert_eq!(h.state().quick_tool, QuickTool::Link, "{letter:?} with a menu open");
+    }
+}
+
+/// With a menu of the menu bar open, Delete leaves Edit text objects that an area selected: the key
+/// is the menu's. It deleted them.
+#[test]
+fn delete_with_a_menu_open_leaves_selected_edit_text_objects() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    mouse_click(&mut h, egui::pos2(one.min.x + 60.0, one.max.y - 8.0));
+    mouse_drag(&mut h, egui::pos2(one.min.x + 60.0, two.min.y + 3.0), egui::vec2(200.0, 30.0));
+    let blocks = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().text_blocks(1).len()
+    };
+    assert_eq!(blocks(&h), 1, "page 2's line is there");
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(blocks(&h), 1, "Delete with a menu open deletes nothing");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closed the menu");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(blocks(&h), 0, "the objects stayed selected, and Delete with the menu closed removes them");
+}
+
+/// With a menu of the menu bar open, End is the menu's: the view stays on its page. It went to the
+/// last page.
+#[test]
+fn end_with_a_menu_open_turns_no_page() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    let current = h.state().views[0].current;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::End);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, current, "End with a menu open turns no page");
+}
+
+/// With a menu of the menu bar open, Delete leaves the picture selected with Edit text: the key is
+/// the menu's. It deleted the picture.
+#[test]
+fn delete_with_a_menu_open_leaves_the_selected_picture() {
+    let mut h = open(linked_picture_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.run_steps(3);
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), None, "nothing was deleted");
+    assert!(s.views[0].image_selection.is_some(), "and the picture is still selected");
+}
+
+/// The Hotbar tools window, left open when full screen hides it, holds no keys there: the arrows
+/// still turn the page. It held every page key until the window was drawn again.
+#[test]
+fn a_hotbar_window_hidden_by_full_screen_holds_no_keys() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    let before = h.state().views[0].current;
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
+}
+
+/// Full screen entered as a native menu's click is, between passes, closes the Hotbar tools window
+/// on the pass it hides it: → on that pass turns the page. The window, drawn on the pass before,
+/// held it.
+#[test]
+fn full_screen_from_a_native_menu_with_the_hotbar_window_open_leaves_the_keys_to_the_page() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "the Hotbar tools window is open");
+    let before = h.state().views[0].current;
+    assert!(h.state_mut().execute("view.full_screen"));
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    assert!(h.state().full_screen, "full screen");
+    assert_eq!(h.state().views[0].current, before + 1, "→ turns the page");
+}
+
+/// With a menu of the menu bar open, the view's chords wait, as the registered commands' do: ⌘=
+/// zooms nothing. It zoomed the view behind the menu.
+#[test]
+fn a_view_chord_with_a_menu_open_waits() {
+    // (A chord on the OCR Verify screen: comments::chords_on_the_ocr_verify_screen_leave_the_hidden_page.)
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    let before = h.state().views[0].zoom;
+    crate::support::open_menu(&mut h, "View");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Equals);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].zoom, before, "⌘= with a menu open zooms nothing");
+}
+
+/// In Organize Pages, a Cut with a menu of the menu bar open is the menu's: the pages stay. It cut
+/// the current page.
+#[test]
+fn a_cut_with_a_menu_open_leaves_organize_pages_alone() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].organize = true;
+    h.run_steps(4);
+    crate::support::open_menu(&mut h, "View");
+    h.event(egui::Event::Cut);
+    h.run_steps(4);
+    let s = h.state();
+    assert_eq!(s.session.get(s.views[0].id).unwrap().info.pages.len(), 2, "no page was cut");
+}
