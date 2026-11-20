@@ -131,6 +131,8 @@ pub(crate) struct TypingHistory {
     history: EditHistory<Typed>,
     /// The box as of its last record, the `before` of the next one.
     current: Typed,
+    /// The text before the first provisional IME composition update.
+    composition_before: Option<Typed>,
     run: Option<OpenRun>,
     next_gesture: GestureId,
     /// Each text the box has shown through its own typing, with its rows' alignments then, oldest
@@ -141,7 +143,14 @@ pub(crate) struct TypingHistory {
 impl TypingHistory {
     /// A history that starts at `text`.
     pub(crate) fn new(text: Typed) -> Self {
-        TypingHistory { history: EditHistory::new(&text), current: text, run: None, next_gesture: GestureId::new(0), seen: Vec::new() }
+        TypingHistory {
+            history: EditHistory::new(&text),
+            current: text,
+            composition_before: None,
+            run: None,
+            next_gesture: GestureId::new(0),
+            seen: Vec::new(),
+        }
     }
 
     /// The box went to `now` through an edit of `kind`. Its aligns are already followed to the new
@@ -152,6 +161,7 @@ impl TypingHistory {
         self.remember(&now.text, &now.aligns);
         match kind {
             EditKind::Typed | EditKind::Deleted => {
+                self.composition_before = None;
                 if self.run.as_ref().is_none_or(|run| run.kind != kind) {
                     self.end_run(&before);
                     let id = self.next_gesture;
@@ -162,9 +172,18 @@ impl TypingHistory {
                 }
             }
             // The marked text of a composition is in the box but no step: its commit is the one.
-            EditKind::Composing => self.end_run(&before),
+            EditKind::Composing => {
+                self.end_run(&before);
+                self.composition_before.get_or_insert(before);
+            }
             _ => {
                 self.end_run(&before);
+                let before = if kind == EditKind::Committed {
+                    self.composition_before.take().unwrap_or(before)
+                } else {
+                    self.composition_before = None;
+                    before
+                };
                 self.history.record(&EditEvent::set(Mixed::Same(before), now, Arc::from(""), None));
             }
         }
@@ -182,6 +201,7 @@ impl TypingHistory {
         }
         self.follow_rows(&before, now);
         self.current = now.clone();
+        self.composition_before = None;
         true
     }
 
@@ -196,6 +216,7 @@ impl TypingHistory {
     pub(crate) fn restart(&mut self, now: Typed) {
         self.history = EditHistory::new(&now);
         self.current = now;
+        self.composition_before = None;
         self.run = None;
         self.seen.clear();
     }
