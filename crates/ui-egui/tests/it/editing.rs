@@ -6325,6 +6325,145 @@ fn deleting_pages_from_the_pages_panel_menu() {
 }
 
 #[test]
+fn duplicating_pages_from_the_pages_panel_menu_preserves_targets_and_undo() {
+    for (selection, clicked, before, after) in [
+        (vec![], "Page 1", vec!["Page 1", "Page 1", "Page 2", "Page 3"], vec!["Page 1", "Page 1", "Page 2", "Page 3"]),
+        (vec![], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+        (vec![], "Page 3", vec!["Page 1", "Page 2", "Page 3", "Page 3"], vec!["Page 1", "Page 2", "Page 3", "Page 3"]),
+        (vec![0, 2], "Page 3", vec!["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
+        (vec![0, 2], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+    ] {
+        for (label, expected) in [("Duplicate & insert before", &before), ("Duplicate & insert after", &after)] {
+            let mut h = pages_panel(3);
+            h.state_mut().views[0].select_pages(&selection);
+            h.run_steps(2);
+            let at = panel_thumb(&h, clicked);
+            right_click_at(&mut h, at);
+            for label in ["Extract pages", "Split document…", "Replace pages…", "Cut", "Copy", "Paste after", "Delete pages"] {
+                h.get_by_label(label);
+            }
+            h.get_by_label(label).click();
+            h.run_steps(4);
+            assert_eq!(&page_texts(h.state()), expected);
+            assert!(h.state_mut().execute("edit.undo"));
+            h.run_steps(3);
+            assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"]);
+            assert!(h.state_mut().execute("edit.redo"));
+            h.run_steps(3);
+            assert_eq!(&page_texts(h.state()), expected);
+        }
+    }
+}
+
+#[test]
+fn the_pages_menu_duplicates_before_and_after_the_selection() {
+    for (label, command, expected) in [
+        ("Duplicate & insert before", "page.duplicate_before", vec!["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"]),
+        ("Duplicate & insert after", "page.duplicate", vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
+    ] {
+        let mut h = pages_panel(3);
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        support::open_menu(&mut h, "Edit");
+        support::menu_row(&h, "Pages").hover();
+        h.run_steps(3);
+        support::menu_row(&h, label).click();
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected);
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(3);
+        // Existing command callers keep the same placement as the menu, including page.duplicate.
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        assert!(h.state_mut().execute(command));
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected);
+    }
+}
+
+fn restricted_pages_panel(changes: pdfcraft_engine::Changes) -> Harness<'static, PdfCraftApp> {
+    harness(3, move |app| {
+        app.apply_edit(pdfcraft_engine::Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes,
+            // Allow text extraction for page-order assertions without granting modification.
+            copy: changes == pdfcraft_engine::Changes::Pages,
+            ..Default::default()
+        }));
+        let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+        app.close_tab(0);
+        app.open_bytes("restricted.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.set_option("panel", "pages").unwrap();
+    })
+}
+
+#[test]
+fn the_pages_panel_duplicate_menu_allows_assembly_without_modification() {
+    let original = ["Page 1", "Page 2", "Page 3"];
+    for (label, expected) in [
+        ("Duplicate & insert before", ["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"]),
+        ("Duplicate & insert after", ["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
+    ] {
+        let mut h = restricted_pages_panel(pdfcraft_engine::Changes::Pages);
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        assert!(doc.allows_assembly());
+        assert!(!doc.allows_modification());
+
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        h.run_steps(2);
+        let at = panel_thumb(&h, "Page 1");
+        right_click_at(&mut h, at);
+        let item = h.get_by_label(label);
+        assert!(!item.accesskit_node().is_disabled(), "{label}");
+        item.click();
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected, "thumbnail: {label}");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(3);
+        assert_eq!(page_texts(h.state()), original);
+
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        support::open_menu(&mut h, "Edit");
+        support::menu_row(&h, "Pages").hover();
+        h.run_steps(3);
+        let item = support::menu_row(&h, label);
+        assert!(!item.accesskit_node().is_disabled(), "{label}");
+        item.click();
+        h.run_steps(4);
+        assert_eq!(page_texts(h.state()), expected, "top menu: {label}");
+        assert!(h.state_mut().execute("edit.undo"));
+        h.run_steps(3);
+        assert_eq!(page_texts(h.state()), original);
+    }
+}
+
+#[test]
+fn the_pages_panel_duplicate_menu_respects_assembly_permissions() {
+    let mut h = restricted_pages_panel(pdfcraft_engine::Changes::None);
+    let at = panel_thumb(&h, "Page 1");
+    right_click_at(&mut h, at);
+    for label in ["Duplicate & insert before", "Duplicate & insert after", "Cut", "Replace pages…", "Delete pages"] {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
+    }
+    assert!(!h.get_by_label("Copy").accesskit_node().is_disabled());
+    assert!(!h.state_mut().execute("page.duplicate"));
+    assert!(!h.state_mut().execute("page.duplicate_before"));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Pages").hover();
+    h.run_steps(3);
+    for label in ["Duplicate & insert before", "Duplicate & insert after"] {
+        assert!(support::menu_row(&h, label).accesskit_node().is_disabled());
+    }
+    h.run_steps(2);
+    let app = h.state();
+    let doc = app.session.get(app.views[app.active.unwrap()].id).unwrap();
+    assert_eq!(doc.info.pages.len(), 3);
+    assert!(!doc.dirty);
+    assert!(doc.can_undo().is_none());
+}
+
+#[test]
 fn the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page() {
     let mut h = pages_panel(3);
     // ⌘-click picks pages 2 and 3 (and the current page, 1: the first ⌘-click keeps it).
