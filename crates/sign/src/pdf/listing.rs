@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::types::{Detail, Modification, Status, TrustStore};
+use super::types::{Detail, Fill, Modification, Status, TrustStore};
 use super::validate::{is_doc_timestamp, validate_doc_timestamp, validate_into};
 use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo};
 
@@ -197,6 +197,15 @@ impl Field {
         self.dict.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned())
     }
 
+    /// Why /V can't be read, when it names an object that is there but fails to parse. A
+    /// signature dictionary whose /Contents is not a hexadecimal string (ISO 32000-2 §7.3.4.3,
+    /// §12.8.1 Table 255), or whose string never ends, fails to load as a whole and would
+    /// otherwise read as null, which makes the field look unsigned. A reference to a free or
+    /// unknown object is null (§7.3.10) and stays unsigned.
+    pub(super) fn unreadable_value(&self, doc: &Document) -> Option<String> {
+        unreadable_value(doc, &self.dict)
+    }
+
     /// True when /V holds something that is neither null nor a signature dictionary: signing the
     /// field would overwrite a value we can't read as a signature.
     pub(super) fn has_foreign_value(&self, doc: &Document) -> bool {
@@ -379,9 +388,28 @@ fn slot(entry: &Object, array: Option<ObjRef>, i: usize) -> Option<(ObjRef, Opti
     array.filter(|_| entry.as_ref().is_none()).map(|a| (a, Some(i)))
 }
 
-/// Whether `d`'s own /V is a signature dictionary.
+/// Whether `d`'s own /V is a signature dictionary, or names one that can't be read
+/// ([`Field::unreadable_value`]).
 fn holds_signature(doc: &Document, d: &Dict) -> bool {
-    d.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some())
+    d.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some()) || unreadable_value(doc, d).is_some()
+}
+
+/// [`Field::unreadable_value`] of the field or widget dictionary `d`.
+fn unreadable_value(doc: &Document, d: &Dict) -> Option<String> {
+    let r = d.get(b"V").and_then(Object::as_ref)?;
+    if !doc.accepted_generations(r.num).contains(&r.generation) {
+        return None;
+    }
+    let failed = doc.try_get(r.num).err()?;
+    // A body the reader gave up on after searching reads as missing. Parsed again where its
+    // entry puts it, it says what is wrong with it: an invalid hex digit, an unterminated string.
+    let why = match doc.xref_entry(r.num) {
+        Some(pdfcraft_cos::XrefEntry::InFile { offset, .. }) => {
+            usize::try_from(offset).ok().and_then(|at| pdfcraft_cos::parse_indirect(doc.bytes(), at, &|_| None).err()).unwrap_or(failed)
+        }
+        _ => failed,
+    };
+    Some(why.to_string())
 }
 
 /// Take one from a budget; false once it is spent.
@@ -457,9 +485,12 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             continue;
         }
         let v = f.signature(doc);
+        // A value that names a signature dictionary this reader can't parse is a signature all
+        // the same: listed as one that can't be checked, never as an empty field.
+        let unreadable = if v.is_none() { f.unreadable_value(doc) } else { None };
         let mut info = SignatureInfo {
             field: f.name.clone(),
-            signed: v.is_some(),
+            signed: v.is_some() || unreadable.is_some(),
             page,
             rect,
             visible,
@@ -487,6 +518,9 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
         };
         if let Some(v) = v {
             validate_into(doc, bytes, trust, &v, &mut info, cache);
+        } else if let Some(why) = unreadable {
+            info.status = Status::Invalid;
+            info.details.push(Detail::of("The signature dictionary could not be read ({}), so the signature cannot be checked.", Fill::Reason(why)));
         }
         if let Some(r) = shared {
             judged.insert(r, out.len());
