@@ -220,7 +220,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));
                         }
                     }
-                    RightPanel::Pages => pages(ui, &t, info, view, modal, keys, bm_editable, &mut nav),
+                    RightPanel::Pages => pages(ui, &t, info, doc.edit_generation(), view, modal, keys, bm_editable, &mut nav),
                     RightPanel::Fields => {
                         field_properties = fields(
                             ui,

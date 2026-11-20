@@ -865,7 +865,7 @@ pub struct DocView {
 }
 
 /// Organize-toolbar actions that need the app (file pickers, new tabs, dialogs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewAction {
     InsertFromFile,
     /// Insert files at a gap of the page grid (0 = before the first page).
@@ -902,6 +902,12 @@ pub enum ViewAction {
     },
     /// Lock now, on the notice shown after a signature is placed (#2149).
     LockSignatures,
+    /// Ask before deleting the pages the panel picked, captured with the document's edit
+    /// generation when the ask was made.
+    ConfirmDeletePages {
+        pages: Vec<usize>,
+        generation: u64,
+    },
 }
 
 /// Default page right-click menu actions.
@@ -3869,7 +3875,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
             app.add_image_dialog();
         }
         Some(PageMenuAction::DeletePage(page)) => {
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
+            app.request_delete_pages(index, vec![page]);
         }
         Some(PageMenuAction::ExportPdf) => {
             app.select_tool("export");
