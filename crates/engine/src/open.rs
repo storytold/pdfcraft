@@ -204,16 +204,18 @@ impl Session {
             }
             (_, cos) => (bytes, info, cos, None),
         };
-        // A laid-out XFA form: its initialize and calculate scripts run now, as on opening in
-        // Acrobat; what they change is one more revision, still nothing to save.
+        // A laid-out or static XFA form: its initialize and calculate scripts run now, as on
+        // opening in Acrobat; what they change is one more revision, still nothing to save. A
+        // dynamic form that could not be laid out runs none: its fields are only a placeholder.
         let mut script_output = js::JsOutput::default();
         let mut ran_away = false;
-        let xfa_template = match (&xfa, &cos) {
-            (Some(_), Ok(Ok(c))) => xfa::template(c),
+        let scripted = xfa.is_some() || info.xfa == Some(pdfcraft_render::Xfa::Static);
+        let xfa_template = match &cos {
+            Ok(Ok(c)) if scripted => xfa::template(c),
             _ => None,
         };
-        let (bytes, info, cos) = match (&xfa, cos) {
-            (Some(_), Ok(Ok(cos))) if !context.js_off => match xfa_template.clone() {
+        let (bytes, info, cos) = match cos {
+            Ok(Ok(cos)) if scripted && !context.js_off => match xfa_template.clone() {
                 Some(tpl) => {
                     let mut work = cos.clone();
                     let pages = info.pages.len();
@@ -236,6 +238,12 @@ impl Session {
                     match ran {
                         Ok(changes) if work.is_modified() => match rebase(&work) {
                             Ok((b, mut i, c)) => {
+                                // What opening noted before the scripts ran (values taken from
+                                // a static form's data) stays noted: the new reading of the
+                                // file does not repeat it.
+                                let mut warnings = info.warnings.clone();
+                                warnings.extend(i.warnings.drain(..).filter(|w| !info.warnings.contains(w)));
+                                i.warnings = warnings;
                                 // The file as saved differs from what opening shows: say so.
                                 if !changes.is_empty() {
                                     i.warnings.push(format!(
@@ -259,7 +267,7 @@ impl Session {
                 }
                 None => (bytes, info, Ok(Ok(cos))),
             },
-            (_, cos) => (bytes, info, cos),
+            cos => (bytes, info, cos),
         };
         // The catalog leads to no page, but the reader found pages by scanning: gather the page
         // objects into a page tree as one more revision, or page edits address none of them

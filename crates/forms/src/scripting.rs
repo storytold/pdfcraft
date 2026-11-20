@@ -42,6 +42,9 @@ pub struct FieldChange {
     pub value: Option<Vec<String>>,
     /// This value came from a Calculate script; redraw it through the field's Format script.
     pub formatted: bool,
+    /// The value is a static XFA form's script result: the widget's `/MaxLen`, which Designer
+    /// may write where the template sets no `maxChars`, limits what is typed, not this.
+    pub ignore_max_len: bool,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
@@ -311,7 +314,7 @@ pub(crate) fn apply_changes(
                 let mut tmp = f.clone();
                 tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
                 tmp.actions = Default::default();
-                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+                crate::write_script_value(doc, &tmp, &value, &mut NoScripts, c.ignore_max_len)?;
                 if c.formatted {
                     crate::redraw_calculated_value(doc, f, v, scripts)?;
                 }
