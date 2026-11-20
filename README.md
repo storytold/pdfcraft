@@ -542,6 +542,10 @@ RISC-V (riscv64) builds come as tarballs only: `pdfcraft-<ver>-linux-riscv64.tar
 
 Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10).
 
+Printing goes through CUPS's `lpstat` and `lp`. If **Printer properties…** says the printer offers
+no settings although other applications show them, see
+[docs/linux-printing.md](docs/linux-printing.md).
+
 ### FreeBSD
 
 | Build | File |
