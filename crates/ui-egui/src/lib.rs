@@ -768,6 +768,11 @@ pub struct PdfCraftApp {
     /// Recovered documents whose path came from a recovery sidecar and no save has confirmed
     /// yet: their first Save asks where, starting at that path, instead of writing it (#3923).
     recovered_paths: std::collections::HashSet<DocId>,
+    /// The "Recognize text" steps Edit ran by itself, in any open document. Undoing one says how
+    /// to get the text back, since Edit won't read the page again and the user never asked for it
+    /// (#6655). Kept by the step's identity, which stays the same while older steps are dropped
+    /// and in every view of the document; steps no longer in any history are let go.
+    pub(crate) auto_ocr_steps: Vec<pdfcraft_engine::HistoryStep>,
     last_autosave: Option<web_time::Instant>,
     allow_quit: bool,
     /// Shortcuts pressed while a text field had the keyboard, run on the next frame (see
