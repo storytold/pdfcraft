@@ -163,6 +163,25 @@ pub(crate) fn appearance_matrix(doc: &Document, form: &Dict, rect: [f64; 4]) -> 
     Some(a)
 }
 
+/// Appearance stream `ap` as a Form XObject a `Do` can draw. Some existing annotation
+/// appearances omit `/Subtype`, but `Do` dispatch needs a Form XObject: such a stream is copied
+/// once (`promoted` remembers the copy) with `/Subtype /Form`, the original kept intact because
+/// other document objects can share it.
+pub(crate) fn form_xobject(doc: &mut Document, ap: ObjRef, promoted: &mut std::collections::HashMap<ObjRef, ObjRef>) -> ObjRef {
+    let stream = match &*doc.get(ap) {
+        Object::Stream(stream) if !stream.dict.contains(b"Subtype") => stream.clone(),
+        _ => return ap,
+    };
+    if let Some(&cached) = promoted.get(&ap) {
+        return cached;
+    }
+    let mut stream = stream;
+    stream.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    let copy = doc.add(Object::Stream(stream));
+    promoted.insert(ap, copy);
+    copy
+}
+
 /// Resolve optional-content resources without turning a loading failure or reference cycle
 /// into an absent entry. Keep the terminal object's identity for catalog OCG state.
 fn optional_object(doc: &Document, value: &Object) -> Result<(Option<ObjRef>, std::sync::Arc<Object>), PrintError> {
@@ -237,6 +256,19 @@ pub(crate) fn page_form(
     content: Content,
     promoted: &mut std::collections::HashMap<ObjRef, ObjRef>,
 ) -> Result<ObjRef, PrintError> {
+    page_form_where(doc, pages, index, content, &|_| true, promoted)
+}
+
+/// [`page_form`], drawing only the annotations whose position in the page's `/Annots` `keep`
+/// accepts: a comment summary leaves out the comments it puts on the sheet as annotations.
+pub(crate) fn page_form_where(
+    doc: &mut Document,
+    pages: &[pdfcraft_model::Page],
+    index: usize,
+    content: Content,
+    keep: &dyn Fn(usize) -> bool,
+    promoted: &mut std::collections::HashMap<ObjRef, ObjRef>,
+) -> Result<ObjRef, PrintError> {
     let page = pages.get(index).ok_or_else(|| PrintError::Invalid(format!("there is no page {}", index.saturating_add(1))))?;
     let crop = page.crop(doc);
     let resources = page.dict.get(b"Resources").map(|value| optional_object(doc, value)).transpose();
@@ -259,9 +291,9 @@ pub(crate) fn page_form(
     let mut properties = None;
     let mut property_index = 0usize;
     let mut k = 0usize;
-    for a in annots {
+    for (i, a) in annots.into_iter().enumerate() {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
-        if !prints(doc, &d, content) {
+        if !keep(i) || !prints(doc, &d, content) {
             continue;
         }
         // A rectangle has four numbers, and each can be an indirect object (ISO 32000-2 §7.3.10).
@@ -310,23 +342,7 @@ pub(crate) fn page_form(
         } else {
             None
         };
-        let ap = if !form.contains(b"Subtype")
-            && let Object::Stream(stream) = &*doc.get(ap)
-        {
-            // Some existing annotation appearances omit Subtype, but Do dispatch needs a Form XObject.
-            // Keep the original intact: other document objects can share this appearance.
-            if let Some(&cached) = promoted.get(&ap) {
-                cached
-            } else {
-                let mut stream = stream.clone();
-                stream.dict.set(b"Subtype".to_vec(), Object::name("Form"));
-                let copy = doc.add(Object::Stream(stream));
-                promoted.insert(ap, copy);
-                copy
-            }
-        } else {
-            ap
-        };
+        let ap = form_xobject(doc, ap, promoted);
         // Keep the page's own XObjects, including names previous print operations generated.
         // Check the growing map so each appearance also keeps the name just assigned to it.
         let name = loop {

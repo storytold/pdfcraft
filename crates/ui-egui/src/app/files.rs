@@ -23,7 +23,7 @@ impl PdfCraftApp {
     /// page and the place on it (Document Properties ▸ Initial View, `/OpenAction`). With Always
     /// use my default zoom and page layout on, the layout and magnification stay at the defaults
     /// the view opened with, and the view goes to the opening page's top.
-    fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
+    pub(crate) fn apply_initial_view(&mut self, index: usize, v: &pdfcraft_engine::InitialView) {
         use pdfcraft_engine::{InitialLayout as L, Magnification as M, Navigation as N};
         let pages = self.session.get(self.views[index].id).map_or(0, |d| d.info.pages.len());
         // A right panel the user closed stays closed, whatever the document asks for (#2884).
