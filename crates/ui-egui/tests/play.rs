@@ -229,7 +229,8 @@ impl Step {
 /// The text of the open paragraph editor: the focused multiline input's line runs, in order.
 fn open_editor_text(h: &Harness<'static, PdfCraftApp>) -> Option<String> {
     let editor = h.query_by(|n| n.role() == Role::MultilineTextInput && n.is_focused())?;
-    Some(editor.children().filter_map(|line| line.value()).collect())
+    // Text runs describe the laid-out pieces; the editor's value preserves line breaks.
+    editor.value()
 }
 
 fn type_into_paragraph(h: &mut Harness<'static, PdfCraftApp>, text: &str) -> Result<(), String> {

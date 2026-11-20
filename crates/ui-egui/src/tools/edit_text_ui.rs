@@ -682,6 +682,14 @@ fn reach_of(boxes: &[Rect], i: usize, upright: bool) -> Rect {
             reach.max.y = reach.max.y.min((b.bottom() + other.top()) / 2.0);
         } else if other.bottom() <= b.top() {
             reach.min.y = reach.min.y.max((other.bottom() + b.top()) / 2.0);
+        } else {
+            // An overlapping box owns points inside its height ahead of this box's extended reach.
+            if other.top() < b.top() {
+                reach.min.y = reach.min.y.max(b.top());
+            }
+            if other.bottom() > b.bottom() {
+                reach.max.y = reach.max.y.min(b.bottom());
+            }
         }
     }
     reach
