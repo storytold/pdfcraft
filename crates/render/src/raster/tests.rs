@@ -10845,7 +10845,8 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
 }
 
 /// A reference whose generation number does not fit 32 bits still names its object, so a page's
-/// content streams drawn that way are drawn (hayro-syntax patch 48).
+/// content streams drawn that way are drawn (hayro-syntax patch 48). One whose generation is no
+/// integer (`58 4285904753.5 R`) is still no reference.
 ///
 /// `GHOSTSCRIPT-691345-0.pdf`, attached to PDFBOX-5456, is a fax cover whose last update draws
 /// black boxes over parts of its text, through `/Contents [4 0 R 58 4285904753 R …]` and objects
@@ -10859,13 +10860,16 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
 fn a_reference_whose_generation_is_past_32_bits_still_draws_its_stream() {
     for (header, contents) in [
         // As in the reported file: the header and the reference both carry the generation.
-        ("4285904753", "[4 0 R 5 4285904753 R]"),
-        ("4285904753", "5 4285904753 R"),
+        ("4285904753", "[4 0 R 58 4285904753 R]"),
+        ("4285904753", "58 4285904753 R"),
         // A header with generation 0 and a reference with one past 32 bits.
-        ("0", "[4 0 R 5 4285904753 R]"),
+        ("0", "[4 0 R 58 4285904753 R]"),
         // Past 64 bits too.
-        ("18446744073709551616", "[4 0 R 5 18446744073709551616 R]"),
+        ("18446744073709551616", "[4 0 R 58 18446744073709551616 R]"),
+        // A generation that is no integer is still no reference: the box is not drawn.
+        ("4285904753", "[4 0 R 58 4285904753.5 R]"),
     ] {
+        let drawn = !contents.contains('.');
         // No table, so the objects are recovered by scanning the file, as in the reported file.
         let pdf = format!(
             "%PDF-1.4\n\
@@ -10873,7 +10877,7 @@ fn a_reference_whose_generation_is_past_32_bits_still_draws_its_stream() {
              2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
              3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {contents} >> endobj\n\
              4 0 obj << /Length 8 >> stream\n1 0 0 rg\nendstream endobj\n\
-             5 {header} obj << /Length 25 >> stream\n0 0 0 rg 0 0 200 100 re f\nendstream endobj\n\
+             58 {header} obj << /Length 25 >> stream\n0 0 0 rg 0 0 200 100 re f\nendstream endobj\n\
              trailer << /Root 1 0 R >>\n\
              %%EOF\n"
         );
@@ -10881,7 +10885,8 @@ fn a_reference_whose_generation_is_past_32_bits_still_draws_its_stream() {
         let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
         assert!(page.error.is_none(), "{header} / {contents}: {:?}", page.error);
         let start = (50 * page.width as usize + 100) * 4;
-        assert_eq!(page.rgba.get(start..start + 4), Some(&[0, 0, 0, 255][..]), "{header} / {contents}: the box is drawn");
+        let black = page.rgba.get(start..start + 4) == Some(&[0, 0, 0, 255][..]);
+        assert_eq!(black, drawn, "{header} / {contents}: the box is drawn only through a reference");
     }
 }
 
