@@ -47,6 +47,7 @@ impl Automation {
             Stop::Cancelled => "cancelled",
             Stop::MatchLimit => "match_limit",
             Stop::TooManySlowFiles => "too_many_slow_files",
+            Stop::TimeLimit => "time_limit",
         });
         Ok(json!({
             "found": summary.found,
