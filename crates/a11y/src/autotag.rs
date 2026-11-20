@@ -2,8 +2,11 @@
 //!
 //! Each text object becomes a paragraph, or a heading when its size or weight sets it apart from
 //! the body text ([`crate::autotag_roles`]); either can be retagged with the existing tag-property
-//! tool after human review. Painted paths, shadings and images outside text objects
-//! are wrapped in `/Artifact BMC … EMC` so the resulting page passes the tagged-content check.
+//! tool after human review. Each image outside a text object (an image XObject or an inline
+//! image) becomes a `Figure` with its own marked content and no alternate text, in content order,
+//! so the figures-alt-text check lists it until a person describes it or marks it decorative.
+//! Painted paths and shadings are wrapped in `/Artifact BMC … EMC` so the resulting page passes
+//! the tagged-content check.
 
 use std::collections::{HashMap, HashSet};
 
@@ -26,6 +29,8 @@ pub struct AutoTagResult {
     pub pages: usize,
     pub paragraphs: usize,
     pub headings: usize,
+    /// Images tagged `Figure` without alternate text, for a person to describe.
+    pub figures: usize,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -49,6 +54,8 @@ struct Plan {
     ops: Vec<Op>,
     spans: Vec<(usize, usize)>,
     evidence: Vec<Evidence>,
+    /// The operator index of each image painted outside a text object, in content order.
+    figures: Vec<usize>,
     artifacts: HashMap<usize, usize>,
 }
 
@@ -149,9 +156,15 @@ fn harmless_outside(op: &[u8]) -> bool {
     )
 }
 
-fn painted_outside(doc: &Document, xobjects: &Dict, op: &Op) -> bool {
+/// Painted paths and shadings, which become artifacts.
+fn painted_outside(op: &[u8]) -> bool {
+    matches!(op, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh")
+}
+
+/// An inline image, or an image XObject, which becomes a figure.
+fn image_outside(doc: &Document, xobjects: &Dict, op: &Op) -> bool {
     match op.op.as_slice() {
-        b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s" | b"sh" | b"BI" => true,
+        b"BI" => true,
         b"Do" => op
             .name(0)
             .and_then(|n| xobjects.get(n))
@@ -223,7 +236,7 @@ fn plan_page(
         return Err(unsupported(index, "the document has too much content to auto-tag in one edit"));
     }
     let xobjects = page_xobjects(doc, &page.dict);
-    let (mut start, mut has_text, mut spans, mut artifacts) = (None, false, Vec::new(), HashMap::new());
+    let (mut start, mut has_text, mut spans, mut figures, mut artifacts) = (None, false, Vec::new(), Vec::new(), HashMap::new());
     // Marked-content boundaries must enclose the whole path, not just its paint operator.
     let mut path = None;
     for (at, op) in parsed.ops.iter().enumerate() {
@@ -236,8 +249,8 @@ fn plan_page(
                 let Some(first) = start.take() else { return Err(unsupported(index, "unmatched ET operator")) };
                 if has_text {
                     spans.push((first, at));
-                    if spans.len() > MAX_TEXT_OBJECTS {
-                        return Err(unsupported(index, "too many text objects (maximum 4096)"));
+                    if spans.len().saturating_add(figures.len()) > MAX_TEXT_OBJECTS {
+                        return Err(unsupported(index, "too many text objects and images (maximum 4096)"));
                     }
                 }
             }
@@ -250,12 +263,14 @@ fn plan_page(
                 b"n" => path = None,
                 _ => {}
             },
-            _ if start.is_none() && painted_outside(doc, &xobjects, op) => {
-                let first = if matches!(op.op.as_slice(), b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"S" | b"s") {
-                    path.take().unwrap_or(at)
-                } else {
-                    at
-                };
+            _ if start.is_none() && image_outside(doc, &xobjects, op) => {
+                figures.push(at);
+                if spans.len().saturating_add(figures.len()) > MAX_TEXT_OBJECTS {
+                    return Err(unsupported(index, "too many text objects and images (maximum 4096)"));
+                }
+            }
+            name if start.is_none() && painted_outside(name) => {
+                let first = if name == b"sh" { at } else { path.take().unwrap_or(at) };
                 artifacts.insert(first, at);
             }
             _ => return Err(unsupported(index, format!("unsupported or painted operator {}", String::from_utf8_lossy(&op.op)))),
@@ -269,7 +284,7 @@ fn plan_page(
     }
     let resources = page_fonts(doc, &page.dict);
     let evidence = autotag_roles::evidence(doc, fonts, &resources, &parsed.ops, &spans);
-    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, artifacts })
+    Ok(Plan { page: page.obj, ops: parsed.ops, spans, evidence, figures, artifacts })
 }
 
 fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
@@ -361,9 +376,10 @@ fn write_structure(
     Ok(())
 }
 
-/// Tag every text object in an untagged PDF as a paragraph or a heading and mark painted paths, shadings and
-/// images outside text objects as artifacts. The full structure tree, parent tree and
-/// marked-content IDs are written together. Unsupported operators are refused before any
+/// Tag every text object in an untagged PDF as a paragraph or a heading, tag every image outside a
+/// text object as a figure without alternate text, and mark painted paths and shadings as
+/// artifacts. Marked-content IDs and the Document's children follow content order. The full
+/// structure tree, parent tree and marked-content IDs are written together. Unsupported operators are refused before any
 /// mutation. On success the caller can use tag-property edits to correct the roles after review.
 pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let plans = plan(doc)?;
@@ -372,17 +388,22 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     let mut next = doc.clone();
     let catalog = next.root().ok_or(AutoTagError::NoCatalog)?;
     let (root, document) = (next.add(Object::Null), next.add(Object::Null));
-    let (mut children, mut numbers, mut tagged_pages, mut paragraphs, mut headings) = (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
+    let (mut children, mut numbers, mut tagged_pages) = (Vec::new(), Vec::new(), 0usize);
+    let (mut paragraphs, mut headings, mut figures) = (0usize, 0usize, 0usize);
     for page in plans {
-        if page.spans.is_empty() && page.artifacts.is_empty() {
+        if page.spans.is_empty() && page.figures.is_empty() && page.artifacts.is_empty() {
             continue;
         }
+        // Text objects (`true`) and images in content order, each with its first and last operator.
+        let mut items: Vec<(usize, usize, bool)> = page.spans.iter().map(|&(first, last)| (first, last, true)).collect();
+        items.extend(page.figures.iter().map(|&at| (at, at, false)));
+        items.sort_unstable_by_key(|&(first, _, _)| first);
         let (mut starts, mut ends) = (HashMap::new(), HashSet::new());
-        if !page.spans.is_empty() {
+        if !items.is_empty() {
             let key = i64::try_from(tagged_pages).map_err(|_| AutoTagError::TooManyPages)?;
-            let mut parents = Vec::with_capacity(page.spans.len());
-            for (mcid, (first, last)) in page.spans.iter().enumerate() {
-                let role = roles.next().unwrap_or("P");
+            let mut parents = Vec::with_capacity(items.len());
+            for (mcid, (first, last, text)) in items.into_iter().enumerate() {
+                let role = if text { roles.next().unwrap_or("P") } else { "Figure" };
                 let mut element = Dict::new();
                 element.set(b"Type".to_vec(), Object::name("StructElem"));
                 element.set(b"S".to_vec(), Object::name(role));
@@ -392,13 +413,14 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
                 let reference = next.add(element);
                 parents.push(Object::Ref(reference));
                 children.push(Object::Ref(reference));
-                starts.insert(*first, (mcid, role));
-                ends.insert(*last);
-                if role == "P" {
-                    paragraphs = paragraphs.saturating_add(1);
-                } else {
-                    headings = headings.saturating_add(1);
-                }
+                starts.insert(first, (mcid, role));
+                ends.insert(last);
+                let count = match (text, role) {
+                    (false, _) => &mut figures,
+                    (true, "P") => &mut paragraphs,
+                    (true, _) => &mut headings,
+                };
+                *count = count.saturating_add(1);
             }
             next.update_dict(page.page, |d| d.set(b"StructParents".to_vec(), Object::Int(key)))?;
             numbers.extend([Object::Int(key), Object::Array(parents)]);
@@ -410,5 +432,5 @@ pub fn autotag_text(doc: &mut Document) -> Result<AutoTagResult, AutoTagError> {
     }
     write_structure(&mut next, catalog, root, document, children, numbers, tagged_pages)?;
     *doc = next;
-    Ok(AutoTagResult { pages: tagged_pages, paragraphs, headings })
+    Ok(AutoTagResult { pages: tagged_pages, paragraphs, headings, figures })
 }

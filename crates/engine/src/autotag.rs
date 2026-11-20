@@ -22,7 +22,8 @@ pub struct Candidate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preview {
     pub candidates: Vec<Candidate>,
-    /// Raster or grouped artwork requires separate figure/artifact review.
+    /// Images on the page. The preview does not propose roles for them; Apply tags each image
+    /// painted outside a text object `Figure` without alternate text, for a person to describe.
     pub unclassified_images: usize,
     /// Text blocks omitted because their geometry or font size was invalid.
     pub unclassified_text_blocks: usize,
@@ -35,8 +36,8 @@ const MAX_TEXT_CHARS: usize = 512;
 
 impl Document {
     /// Propose text tags for one 0-based page. This reads the current working PDF and does not
-    /// alter it. Every result needs review before tags are written; image and table semantics
-    /// are outside this text-only proposal.
+    /// alter it. Every result needs review before tags are written; images (counted, not proposed)
+    /// and table semantics are outside this text-only proposal.
     pub fn autotag_preview(&self, page: usize) -> Result<Preview, String> {
         if self.info.pages.get(page).is_none() {
             return Err(format!("page {} is outside the document", page.saturating_add(1)));
