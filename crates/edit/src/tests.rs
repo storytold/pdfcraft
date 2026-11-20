@@ -10547,6 +10547,35 @@ fn vertical_text_lines_are_columns_and_editing_one_keeps_its_neighbour() {
     }
 }
 
+/// Colouring part of a vertical column is refused before anything changes: the styled layout
+/// set the column out as a squeezed row on one baseline (#7280). Colouring all of it still works.
+#[test]
+fn formatting_part_of_a_vertical_column_is_refused_and_keeps_it() {
+    let mut doc = vertical_page("BT /V1 20 Tf 500 720 Td <004100420043> Tj ET");
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let range = text::RangeStyle {
+        range: 1..2,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([0.8, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let style = text::BlockStyle { ranges: vec![range], ..Default::default() };
+    let error = text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap_err();
+    assert!(error.to_string().contains("vertical text"), "{error}");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "the refused edit changed the document");
+    let whole = text::BlockStyle { color: Some([0.8, 0.0, 0.0]), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, None, &whole).unwrap();
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let r = lines[0].rect;
+    assert!((r[0] - 490.0).abs() < 0.5 && (r[2] - 510.0).abs() < 0.5, "{r:?}");
+    assert!((r[1] - 660.0).abs() < 0.5 && (r[3] - 720.0).abs() < 0.5, "{r:?}");
+}
+
 /// Gives `/V1` an embedded CMap that uses itself: which way its glyphs advance can't be known.
 fn make_cmap_cyclic(doc: &mut Document) {
     let cmap = doc.add(Object::Null);
