@@ -384,7 +384,7 @@ impl DocView {
 
     /// Width of the scroll content. Single-page view sizes it to the page it shows, so a
     /// wider page elsewhere in the document can't push the shown one off-centre.
-    pub(super) fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
+    pub(crate) fn content_width(&self, info: &DocInfo, avail_w: f32) -> f32 {
         // Full screen in two-page view is as wide as the spread it shows, as `fit_zoom` sized it:
         // two pages side by side, or a page alone with the room of a spread (a cover keeps its
         // blank slot). Room for twice the document's widest page would centre a narrower spread
@@ -405,7 +405,7 @@ impl DocView {
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
-    pub(super) fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
+    pub(crate) fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
         let s = self.zoom * PT;
         let gap = self.page_gap();
         let page_size = |p: &pdfcraft_render::PageInfo| {
