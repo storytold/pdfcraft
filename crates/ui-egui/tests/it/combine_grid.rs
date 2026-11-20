@@ -157,13 +157,16 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&PdfCraftApp) -> 
 }
 
 /// What the grid's thumbnails are read at.
-fn request() -> ThumbRequest {
-    ThumbRequest::for_cell(256.0, 1.0)
+fn request(h: &Harness<'static, PdfCraftApp>, name: &str, stacked: bool) -> ThumbRequest {
+    let env = craft::ui::runtime::env::Env::of_root(&h.ctx);
+    let tokens = &env.tokens;
+    let side = card(h, name).width() - 2.0 * tokens.space.pad.control - if stacked { 2.0 * tokens.space.gap.tight } else { 0.0 };
+    ThumbRequest::for_cell(side, h.ctx.pixels_per_point())
 }
 
 /// Each file's grid thumbnail, as the harness's frames have stored them.
-fn thumbnails(h: &Harness<'static, PdfCraftApp>) -> Vec<TextureState> {
-    h.state().combine_thumbnails(&h.ctx, &request())
+fn thumbnails(h: &Harness<'static, PdfCraftApp>, request: &ThumbRequest) -> Vec<TextureState> {
+    h.state().combine_thumbnails(&h.ctx, request)
 }
 
 fn ready(t: &TextureState) -> bool {
@@ -289,46 +292,55 @@ fn thumbnails_show_the_first_page_each_file_takes() {
     let pages = fixture_pages(&[(200.0, 300.0), (200.0, 300.0), (300.0, 200.0)]);
     let mut h = grid_of(vec![("three.pdf", pages), ("one.pdf", fixture(1))], vec2(1400.0, 900.0));
     h.state_mut().combine_draft[0].range = "3, 1".into();
+    h.run_steps(2);
     let ctx = h.ctx.clone();
+    let stacked = request(&h, "three.pdf", true);
+    let single = request(&h, "one.pdf", false);
     assert!(
         settle(&mut h, |app| {
-            let thumbs = app.combine_thumbnails(&ctx, &request());
-            thumbs.iter().all(ready) && landscape(&thumbs[0])
+            let first = app.combine_thumbnails(&ctx, &stacked);
+            let second = app.combine_thumbnails(&ctx, &single);
+            landscape(&first[0]) && ready(&second[1])
         }),
         "{:?}",
-        thumbnails(&h)
+        thumbnails(&h, &stacked)
     );
-    let thumbs = thumbnails(&h);
+    let thumbs = thumbnails(&h, &stacked);
     assert!(landscape(&thumbs[0]), "\"3, 1\" starts with page 3: {:?}", thumbs[0]);
-    assert!(portrait(&thumbs[1]), "{:?}", thumbs[1]);
-    let (width, height) = shape(&thumbs[1]).unwrap();
+    let other = thumbnails(&h, &single);
+    assert!(portrait(&other[1]), "{:?}", other[1]);
+    let (width, height) = shape(&other[1]).unwrap();
     // Within the thumbnails' longest side, which is not visible from here.
     assert!(width > 0.0 && height > 0.0 && width <= 1536.0 && height <= 1536.0, "{width}×{height}");
     // A new range is a new thumbnail, never the old page.
     h.state_mut().combine_draft[0].range = "2".into();
-    assert!(settle(&mut h, |app| portrait(&app.combine_thumbnails(&ctx, &request())[0])), "{:?}", thumbnails(&h));
+    h.run_steps(2);
+    let single_first = request(&h, "three.pdf", false);
+    assert!(settle(&mut h, |app| portrait(&app.combine_thumbnails(&ctx, &single_first)[0])), "{:?}", thumbnails(&h, &single_first));
     // A range that can't be used shows no page at all.
     h.state_mut().combine_draft[0].range = "9".into();
     h.run_steps(2);
-    assert_eq!(thumbnails(&h)[0], TextureState::Missing);
+    assert_eq!(thumbnails(&h, &single_first)[0], TextureState::Missing);
 }
 
 #[test]
 fn a_locked_file_shows_no_page_until_unlocked_and_undo_locks_it_again() {
     let mut h = grid_of(vec![("one.pdf", fixture(1)), ("secret.pdf", protected("pw", "owner"))], vec2(1400.0, 900.0));
     let ctx = h.ctx.clone();
-    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &request())[0])));
-    assert_eq!(thumbnails(&h)[1], TextureState::Missing, "nothing is drawn of a locked file");
+    let single = request(&h, "one.pdf", false);
+    let stacked = request(&h, "one.pdf", true);
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &single)[0])));
+    assert_eq!(thumbnails(&h, &stacked)[1], TextureState::Missing, "nothing is drawn of a locked file");
     assert!(h.state_mut().combine_unlock_rows(&[1], "pw"));
-    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &request())[1])), "{:?}", thumbnails(&h));
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &stacked)[1])), "{:?}", thumbnails(&h, &stacked));
     // Undo brings back the locked file: its unlocked thumbnail goes with the password.
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);
     assert!(h.state().combine_draft[1].lock.is_some());
-    assert_eq!(thumbnails(&h)[1], TextureState::Missing);
+    assert_eq!(thumbnails(&h, &stacked)[1], TextureState::Missing);
     // Unlocked again (a new branch of the history): drawn again, from this unlock.
     assert!(h.state_mut().combine_unlock_rows(&[1], "pw"));
-    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &request())[1])), "{:?}", thumbnails(&h));
+    assert!(settle(&mut h, |app| ready(&app.combine_thumbnails(&ctx, &stacked)[1])), "{:?}", thumbnails(&h, &stacked));
 }
 
 #[test]
@@ -625,11 +637,12 @@ fn expanding_a_file_shows_the_pages_it_adds_in_order_with_their_numbers() {
     assert!(h.query_by_label(&page_card(2, "b.pdf")).is_none(), "page 2 isn't added, so isn't shown");
     // Each renders its own page.
     let ctx = h.ctx.clone();
+    let page_request = request(&h, &page_card(3, "b.pdf"), false);
     assert!(settle(&mut h, |app| {
-        let pages = app.combine_page_thumbnails(&ctx, 1, &request());
+        let pages = app.combine_page_thumbnails(&ctx, 1, &page_request);
         pages.len() == 3 && pages.iter().all(|(_, t)| ready(t))
     }));
-    let shapes: Vec<(usize, TextureState)> = h.state().combine_page_thumbnails(&ctx, 1, &request());
+    let shapes: Vec<(usize, TextureState)> = h.state().combine_page_thumbnails(&ctx, 1, &page_request);
     assert_eq!(shapes.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [2, 0, 3]);
     assert!(landscape(&shapes[0].1) && portrait(&shapes[1].1), "{shapes:?}");
     let (w, h4) = shape(&shapes[2].1).unwrap();
