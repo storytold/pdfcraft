@@ -3493,10 +3493,99 @@ fn cloudy_borders_are_drawn_on_squares_circles_polygons_and_text_boxes() {
         built("<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /C [1 0 0] /Vertices [10 10 90 10 90 90 10 90] /BE << /S /C /I 1 >> >>")
             .unwrap();
     assert!(cloudy_polygon.contains(" c\n"));
-    // A cloudy callout is still left to its own appearance.
-    assert!(
-        built(&format!("<< {base} /Subtype /FreeText /DA (0 g /Helv 10 Tf) /CL [10 10 100 100] /RD [5 5 5 5] /BE << /S /C /I 1 >> >>")).is_none()
-    );
+}
+
+/// ISO 32000-2 Table 169 honours the `/BS` width and dashes and leaves the bumps' size open.
+/// A cloudy square whose bumps, at their nominal size for a thick line and intensity 2, would
+/// fill its `/Rect` was not drawn at all (an 8-pt square 164 by 71, as a LaTeX pdfcomment file
+/// has it); its bumps now shrink so the cloud keeps half the box, dashed and filled, inside
+/// `/Rect`.
+#[test]
+fn a_cloudy_dashed_square_too_small_for_its_bumps_is_drawn() {
+    let ops = built(
+        "<< /Type /Annot /Subtype /Square /Rect [117.638 218.681 282.047 289.547] /C [1 .7 0] /IC [.392 .585 .93] \
+         /BS << /W 7.9701 /S /D /D [3 3] >> /BE << /S /C /I 2.5 >> >>",
+    )
+    .expect("the square is drawn");
+    let bumps = |ops: &str| ops.lines().filter(|l| l.ends_with(" c")).count();
+    assert!(ops.contains("[3 3] 0 d") && bumps(&ops) > 8 && ops.lines().any(|l| l == "B"), "dashed, cloudy, filled: {ops}");
+    let e = extent(&ops);
+    assert!(e[0] >= 117.0 && e[1] >= 218.0 && e[2] <= 283.0 && e[3] <= 290.0, "inside /Rect: {e:?}");
+    // The cloud's inner rectangle (its path's start, the lower-left corner) leaves half the height.
+    let start: Vec<f64> = ops.lines().find(|l| l.ends_with(" m")).unwrap().split_whitespace().take(2).map(|n| n.parse().unwrap()).collect();
+    assert!(start[1] <= 218.681 + 70.866 / 4.0 + 0.01, "the bumps take at most a quarter of the height: {start:?}");
+    let circle = built("<< /Type /Annot /Subtype /Circle /Rect [0 0 60 30] /C [0 0 1] /BS << /W 6 >> /BE << /S /C /I 2 >> >>").expect("drawn");
+    assert!(bumps(&circle) >= 8, "a small cloudy circle too: {circle}");
+}
+
+/// ISO 32000-2 Table 181: a border effect is "meaningful only for polygon annotations", so a
+/// polyline with a cloudy `/BE` is drawn as without one, through its vertices (Table 181
+/// `/Vertices`) even where its `/Rect` is a point beside them. It was not drawn at all; a line
+/// (no `/BE` entry in Table 178) the same.
+#[test]
+fn a_cloudy_polyline_with_a_point_rect_is_drawn_through_its_vertices() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /PolyLine /Rect [100.2 298.051 100.2 298.051] /C [0 1 0] /IC [0 0 1] \
+          /Vertices [150 120 260 120 300 150 400 80] /LE [/Slash /Diamond] /BS << /W 3 /S /S /D [3 3] >> /BE << /S /C /I 1 >> >>",
+        b"<< /Type /Annot /Subtype /Line /Rect [10 10 10 10] /C [1 0 0] /L [50 500 250 500] /BE << /S /C /I 1 >> >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("both are drawn");
+    let shown = list(&display, 0);
+    let polyline = ap_content(&display, &shown[0]);
+    assert!(polyline.contains("150 120 m\n260 120 l\n300 150 l\n400 80 l\nS"), "straight through the vertices: {polyline}");
+    let r = nums_of(&shown[0], b"Rect");
+    assert!(r[0] <= 150.0 && r[1] <= 80.0 && r[2] >= 400.0 && r[3] >= 298.051, "the box takes in the vertices: {r:?}");
+    assert!(ap_content(&display, &shown[1]).contains("50 500 m"), "the line too");
+}
+
+/// ISO 32000-2 Table 177 `/RD`: "Any border styles and/or border effects specified by BS and BE
+/// entries, respectively, shall be applied to the border of the inner rectangle", the text box
+/// of a callout too. A cloudy callout was not drawn at all; it now gets its callout line
+/// (`/CL`, arrowhead at the first point) and a cloud round its text.
+#[test]
+fn a_cloudy_callout_is_drawn_with_its_callout_line() {
+    let ops = built(
+        "<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 100 400 300] /RD [110 60 10 60] /C [1 .7 0] \
+         /DA (/Helv 9 Tf 1 0 0 rg) /Contents (Look here) /BS << /W 2 /S /D /D [3 3] >> /BE << /S /C /I 1.3 >> \
+         /CL [170 280 120 200 210 200] /LE /ClosedArrow >>",
+    )
+    .expect("the callout is drawn");
+    assert!(ops.contains("170 280 m\n120 200 l\n210 200 l\nS"), "the callout line: {ops}");
+    assert!(ops.lines().any(|l| l.starts_with("210 160 m")), "a cloud round the text box /RD leaves: {ops}");
+    assert!(ops.lines().filter(|l| l.ends_with(" c")).count() > 8 && ops.contains("[3 3] 0 d"), "a dashed cloud: {ops}");
+    assert!(ops.contains("(Look here) Tj"), "the text: {ops}");
+    // With `/RD`, the cloud goes round the text box it leaves.
+    let rd = built(
+        "<< /Type /Annot /Subtype /FreeText /Rect [100 100 400 200] /DA (/Helv 9 Tf 0 g) /Contents (x) /RD [40 10 10 10] \
+         /BE << /S /C /I 1 >> /CL [50 50 60 60] >>",
+    )
+    .expect("drawn");
+    let cloud: Vec<&str> = rd.lines().skip_while(|l| !l.contains(" w 1 j")).take_while(|l| !l.ends_with('h')).collect();
+    assert!(cloud.contains(&"140 111.75 m"), "the bumps start at the text box's corner, 40 in from the left: {rd}");
+    let e = extent(&cloud.join("\n"));
+    assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 400.0 && e[3] <= 200.0, "inside /Rect: {e:?}");
+}
+
+/// A cloudy callout's cloud goes round the same text box as its leader line and text: `/RD`
+/// [110 20 10 80] is read left, bottom, right, top for a callout, so the text box is
+/// [210 120 390 220]. The cloud was built from `/RD` read left, top, right, bottom, round
+/// [210 180 390 280], away from the text box the leader line ends at.
+#[test]
+fn a_cloudy_callout_with_an_uneven_rd_goes_round_its_text_box() {
+    let ops = built(
+        "<< /Type /Annot /Subtype /FreeText /IT /FreeTextCallout /Rect [100 100 400 300] /RD [110 20 10 80] /C [1 1 0] \
+         /DA (/Helv 9 Tf 0 g) /Contents (Look here) /BS << /W 1 >> /BE << /S /C /I 1 >> /CL [120 290 150 250 210 170] >>",
+    )
+    .expect("the callout is drawn");
+    let cloud: Vec<&str> = ops.lines().skip_while(|l| !l.contains(" w 1 j")).take_while(|l| !l.ends_with('h')).collect();
+    assert!(cloud.contains(&"210 120 m"), "the bumps start at the text box's lower-left corner: {ops}");
+    let e = extent(&cloud.join("\n"));
+    assert!(e[0] <= 210.0 && e[1] <= 120.0 && e[2] >= 390.0 && e[3] >= 220.0, "round the text box: {e:?}");
+    assert!(e[0] >= 100.0 && e[1] >= 100.0 && e[2] <= 400.0 && e[3] <= 300.0, "inside /Rect: {e:?}");
+    assert!(e[3] < 240.0, "not round the box /RD read left, top, right, bottom leaves: {e:?}");
 }
 
 /// Table 180: `/RD` gives the differences between "the left, top, right, and bottom coordinates

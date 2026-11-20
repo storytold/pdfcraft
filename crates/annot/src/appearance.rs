@@ -4,9 +4,9 @@
 //! objects it points at, so the same code serves new comments and restyled ones. Drawings are in page space with
 //! `/BBox = /Rect` (identity matrix), except note icons, which are drawn in a 20 × 20 box.
 //! It returns `None` for anything it cannot draw faithfully (unknown line endings, a cloudy
-//! callout), so callers never replace an appearance with a worse one. It resolves `/QuadPoints`
-//! itself; for the other values, callers that hold the document follow references first
-//! (`draw::with_direct_values`).
+//! border with no room inside `/Rect`), so callers never replace an appearance with a worse
+//! one. It resolves `/QuadPoints` itself; for the other values, callers that hold the document
+//! follow references first (`draw::with_direct_values`).
 //!
 //! The note icons are PdfCraft's own drawings (clean-room.md and licences.md). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
@@ -232,24 +232,38 @@ fn rect_less_rd(d: &Dict, rect: [f64; 4]) -> Option<[f64; 4]> {
     (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
 }
 
-/// The shape a cloudy square, circle or text box draws its bumps around: `/Rect` less `/RD`
-/// (Table 180: the differences between "the left, top, right, and bottom coordinates of Rect and
-/// those of the square or circle, respectively"), but at least the bumps' greatest reach and half
-/// the line from each side, so they stay inside `/Rect`; without a usable `/RD`, that margin.
-fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<[f64; 4]> {
+/// The shape a cloudy square, circle or text box draws its bumps around, and the bumps' radius:
+/// `/Rect` less `/RD` (Table 180: the differences between "the left, top, right, and bottom
+/// coordinates of Rect and those of the square or circle, respectively"), but at least the bumps'
+/// greatest reach and half the line from each side, so they stay inside `/Rect`; without a usable
+/// `/RD`, that margin. Table 169 leaves the bumps' size open: where bumps of radius `bump` would
+/// take more than a quarter of the shorter side from each edge, they are drawn smaller, so the
+/// cloud keeps at least half the box inside it rather than the comment going undrawn. `None`
+/// when `/RD` leaves no shape inside `/Rect` (Table 180: its sums "shall be less than" the width
+/// and height) or even the smaller bumps leave no room (a line wider than half the box).
+fn cloud_inner(d: &Dict, rect: [f64; 4], bump: f64, w: f64) -> Option<([f64; 4], f64)> {
+    cloud_round(rect, rd_of(d).map(|rd| less_rd(rect, &rd)), bump, w)
+}
+
+/// [`cloud_inner`] around `wanted`, the shape inside `rect` the bumps go round (`rect` less
+/// `/RD`), or the margin alone without one.
+fn cloud_round(rect: [f64; 4], wanted: Option<[f64; 4]>, bump: f64, w: f64) -> Option<([f64; 4], f64)> {
+    let perimeter = 2.0 * ((rect[2] - rect[0]) + (rect[3] - rect[1]));
+    let fit = (((rect[2] - rect[0]).min(rect[3] - rect[1]) / 4.0) - w / 2.0) / 1.5;
+    let bump = bump.min(fit);
+    // NaN fails this too.
+    if bump.is_nan() || bump <= 0.0 {
+        return None;
+    }
     // The cloud's reach and half the line keep it inside `/Rect`; an `/RD` leaving more is
     // followed, one leaving less is not.
-    let perimeter = 2.0 * ((rect[2] - rect[0]) + (rect[3] - rect[1]));
     let m = cloud_reach(perimeter, bump) + w / 2.0;
     let safe = [rect[0] + m, rect[1] + m, rect[2] - m, rect[3] - m];
-    let inner = match rd_of(d) {
-        Some(rd) => {
-            let r = less_rd(rect, &rd);
-            [r[0].max(safe[0]), r[1].max(safe[1]), r[2].min(safe[2]), r[3].min(safe[3])]
-        }
+    let inner = match wanted {
+        Some(r) => [r[0].max(safe[0]), r[1].max(safe[1]), r[2].min(safe[2]), r[3].min(safe[3])],
         None => safe,
     };
-    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some(inner)
+    (inner[2] - inner[0] >= 1.0 && inner[3] - inner[1] >= 1.0).then_some((inner, bump))
 }
 
 /// Points around the ellipse inscribed in `r`, counter-clockwise, one per bump of radius `bump`
@@ -694,11 +708,10 @@ fn appearance_context<'a>(doc: &'a Document, d: &'a Dict, page: Option<[f64; 4]>
     // width apart: nothing is drawn rather than "inf" written into the appearance (review on #4195).
     let rect = normalised_rect(d).filter(|r| r.iter().all(|x| x.is_finite()) && (r[2] - r[0]).is_finite() && (r[3] - r[1]).is_finite())?;
     let rect = page.and_then(|page| point_reach(doc, d, rect, page)).unwrap_or(rect);
-    // Cloudy borders (§12.5.4, Table 169) apply to squares, circles, polygons and text boxes.
-    let cloud = cloud_intensity(d);
-    if cloud.is_some() && !matches!(subtype, b"Square" | b"Circle" | b"Polygon" | b"FreeText") {
-        return None;
-    }
+    // Cloudy borders (§12.5.4) apply to squares, circles, polygons and text boxes; for the rest
+    // a `/BE` means nothing (Table 181: "meaningful only for polygon annotations", not a
+    // polyline's), so they are drawn as without one.
+    let cloud = cloud_intensity(d).filter(|_| matches!(subtype, b"Square" | b"Circle" | b"Polygon" | b"FreeText"));
     Some(AppearanceContext {
         doc,
         dict: d,
@@ -1050,8 +1063,7 @@ fn draw_box(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) ->
         c.push_str(&format!("{}{} w\n{}", rg_stroke(s), n(w), dash(d)));
     }
     if let Some(intensity) = context.cloud {
-        let bump = cloud_bump(w, intensity);
-        let inner = cloud_inner(d, rect, bump, w)?;
+        let (inner, bump) = cloud_inner(d, rect, cloud_bump(w, intensity), w)?;
         let pts = if subtype == b"Square" {
             vec![(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])]
         } else {
@@ -1508,19 +1520,20 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     // `/RD` and keeps its place: background and border take the shape, the text is laid out
     // in the text box as in a rectangle.
     let shape = crate::BorderShape::of(d);
-    // A cloudy box (not a callout): its background and border follow the cloud around
-    // the text, which keeps to the cloud's inner rectangle.
-    if let Some(intensity) = context.cloud.filter(|_| !d.contains(b"CL")) {
+    // A cloudy box: its background and border follow the cloud around the text, which keeps to
+    // the cloud's inner rectangle. A callout's cloud goes round its text box too (Table 177
+    // `/RD`: border effects "shall be applied to the border of the inner rectangle"): the text
+    // box the `/CL` branch above reads from `/RD`, so the cloud, the text and the leader line
+    // agree when `/RD` differs at the top and the bottom.
+    if let Some(intensity) = context.cloud {
         let cw = if bw > 0.0 { bw } else { 1.0 };
         let bump = cloud_bump(cw, intensity);
-        let inner = cloud_inner(d, rect, bump, cw)?;
+        let (inner, bump) = if d.contains(b"CL") { cloud_round(full, Some(rect), bump, cw) } else { cloud_inner(d, full, bump, cw) }?;
         let pts = [(inner[0], inner[1]), (inner[2], inner[1]), (inner[2], inner[3]), (inner[0], inner[3])];
         c.push_str(&format!("{}{}{} w 1 j\n{}", rg_stroke(line_color), rg(bg.unwrap_or([1.0; 3])), n(cw), dash(d)));
         c.push_str(&cloud_path(&pts, bump));
         c.push_str(if bg.is_some() { "B\n[] 0 d\n" } else { "S\n[] 0 d\n" });
         rect = inner;
-    } else if context.cloud.is_some() {
-        return None;
     } else if shape != crate::BorderShape::Rectangle {
         rect = shaped_border(d, shape, full, turn, bw, bg, line_color, &mut c)?;
     } else {
