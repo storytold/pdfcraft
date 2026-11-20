@@ -63,15 +63,11 @@ fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
 /// Returns `((width, height), media_name)`.
 fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64), Option<String>)> {
     if let Some(p) = name {
-        // 1. Match standard PAPERS presets.
-        for (index, (n, size)) in PAPERS.iter().enumerate() {
-            if n.eq_ignore_ascii_case(p)
-                || n.replace("US ", "").eq_ignore_ascii_case(p)
-                || n.split(" (").next().is_some_and(|label| label.eq_ignore_ascii_case(p))
-            {
-                let media = print::cups_media(index).map(String::from);
-                return Ok((*size, media));
-            }
+        // 1. Match standard PAPERS presets: labels, short names ("ARCH D"), and the
+        // punctuation- and case-insensitive forms find_paper accepts ("b5jis").
+        if let Some(index) = print::find_paper(p) {
+            let media = print::cups_media(index).map(String::from);
+            return Ok((PAPERS[index].1, media));
         }
         // 2. Match detected driver papers for the given printer.
         if let Some(printer_name) = printer {
@@ -580,5 +576,21 @@ mod tests {
         for spec in ["0x0mm", "-5x10cm", "5x-10cm", "10x15"] {
             assert_eq!(paper_size(spec), None, "{spec}");
         }
+    }
+    /// The job names the sheet the PDF was laid out on, so the queue does not fall back to its
+    /// own default paper. It comes after the caller's `printer_options`, so the laid-out paper
+    /// wins over a `media` the caller also named.
+    #[test]
+    fn job_media_follows_the_callers_options_and_names_the_laid_out_paper() {
+        let postcard = print::find_paper("Japanese Postcard").expect("Japanese Postcard is a paper");
+        let media = print::cups_media(postcard).expect("the postcard has a CUPS name").to_string();
+        assert_eq!(media, "Custom.100x148mm");
+        let job = |args: Value| spool_job(&Args(&args), "Office", String::new(), None, Some(media.as_str()), None, &[]).unwrap().options;
+        assert_eq!(
+            job(json!({ "options": { "InputSlot": "Tray2" } })),
+            vec![("InputSlot".to_string(), "Tray2".to_string()), ("media".to_string(), media.clone())]
+        );
+        // A `media` from `printer_options` stays, but the laid-out paper follows it and wins.
+        assert_eq!(job(json!({ "options": { "Media": "A4" } })), vec![("Media".to_string(), "A4".to_string()), ("media".to_string(), media.clone())]);
     }
 }
