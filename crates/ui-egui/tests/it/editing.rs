@@ -6298,7 +6298,7 @@ fn resized_pages_panel_thumbnails_reorder_multiple_pages_and_undo() {
     h.state_mut().views[0].select_pages(&[1, 2]);
     h.run_steps(2);
     let from = panel_thumb_rect(&h, "Page 2").center();
-    let to = panel_thumb_rect(&h, "Page 1").left_center() + egui::vec2(4.0, 0.0);
+    let to = panel_thumb_rect(&h, "Page 1").center_top() + egui::vec2(0.0, 4.0);
     drag(&mut h, from, to);
     h.run_steps(4);
     assert_eq!(page_texts(h.state()), vec![before[1].clone(), before[2].clone(), before[0].clone(), before[3].clone()]);
