@@ -23,7 +23,7 @@ description: |-
   organize, combine, split, edit, redact, protect and export PDFs.
   Includes pdfcraft-cli, a headless command runner and opt-in MCP server.
 
-# The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
+# The binaries link glibc, libgcc_s and ALSA (local speech playback) directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
 # rather than ELF NEEDED entries. Printing likewise shells out to CUPS's lpstat/lp (cups-client);
 # without it the Print dialog still offers Save as PDF, so it is a recommendation, not a hard
@@ -33,9 +33,11 @@ overrides:
     depends:
       - libc6 (>= 2.35)
       - libgcc-s1
+      - libasound2t64 | libasound2
       - libxkbcommon0
       - libvulkan1 | libegl1
     recommends:
+      - espeak-ng
       - cups-client
       - libwayland-client0
       - libx11-6
@@ -56,7 +58,9 @@ overrides:
       - libgcc_s.so.1()(64bit)
       - libxkbcommon.so.0()(64bit)
       - (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
+      - libasound.so.2()(64bit)
     recommends:
+      - espeak-ng
       - cups-client
       - libwayland-client
       - libX11

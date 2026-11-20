@@ -76,6 +76,7 @@ mod print_custom_paper_names;
 mod print_late_printer_list;
 mod properties_session;
 mod protect;
+mod read_aloud;
 mod reading_colors;
 mod recent_files;
 mod recovery;

@@ -92,6 +92,7 @@ mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
+pub mod read_aloud;
 #[cfg(not(target_arch = "wasm32"))]
 mod script_dialog;
 mod state;
@@ -307,6 +308,7 @@ struct PendingDestination {
 }
 
 pub struct PdfCraftApp {
+    pub read_aloud: read_aloud::ReadAloud,
     /// Split view (`panes`); which pane shows each tab is its view's.
     pub panes: panes::Panes,
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.

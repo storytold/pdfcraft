@@ -1,5 +1,7 @@
 # Hardware and platform parity
 
+> **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M12 #1476: integrate current main while preserving local Read out loud and lazy inactive controls; platform validation remains partial. Estimates unchanged.)
+
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (web OCR shipped: Web Workers with SIMD, checked in a browser; earlier: web printing through the browser's print dialog; earlier: shared craft-print spooler with passing Windows CI; Windows printers row and 1:1 touchpad scrolling, #756, #759) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Each hardware feature Acrobat Pro uses, per platform, ours against Acrobat's. Acrobat runs on macOS
@@ -23,7 +25,7 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 | Pen and touch | Touch mode, pen ink, Windows Ink | trackpad pinch zoom; ink from pointer, no pressure | ink from pointer, no pressure or touch mode | as macOS | pointer | touchpad scrolling 1:1 (#759, PR #868) |
 | Keyboard input methods (IME) | yes | yes; Japanese and Korean IME fixes patched into winit | yes (Microsoft Korean cursor fix) | X11 and Wayland IME fixes | browser | `vendor/README.md` winit patches 2–10 |
 | Screen readers | VoiceOver, NVDA, JAWS | AccessKit labels (partial) | AccessKit (partial) | AccessKit (partial) | partial | `a11y.app-screen-reader` partial |
-| Text to speech (Read Out Loud) | yes | none | none | none | none | `a11y.read-aloud` planned |
+| Text to speech (Read Out Loud) | yes | system say voices + WAV playback candidate; physical audio validation open | local installed WinRT voices, same-position pause/resume, Stop, page/range and speed controls | Linux espeak-ng + WAV playback verified on a physical CachyOS/PipeWire desktop, English/Italian controls and listener confirmation; voice naturalness reported poor / FreeBSD none | none | `a11y.read-aloud` partial; [Read out loud](read-aloud.md); explicit muted native audio check |
 | Apple Silicon / ARM64 | native | native | ARM64 build (#61) | ARM64 builds | n/a | `release.yml` |
 
 ## Platforms
@@ -40,6 +42,7 @@ printing are counted in their feature areas). **Platforms ≈ 70% ready, 15–30
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | patch | M12 #1476: integrate main, preserve local Read out loud, lazy inactive controls and shared-document split views; platform validation remains partial. Estimates unchanged. |
 | 2026-10-12 | minor | Web OCR (`ocr.ocr-web`) shipped after a browser check |
 | 2026-10-12 | minor | Web platform row: OCR downloads its models on first use and reads in Web Workers with SIMD (`ocr.ocr-web`, partial); what's left is speed |
 | 2026-10-11 | minor | Web printers row: printing through the browser's print dialog (gap 4 closed); Web platform row no longer lists printing |
