@@ -116,11 +116,11 @@ fn a_fill_after_an_unclosed_array_is_painted() {
 #[test]
 fn an_array_nested_past_the_cap_still_ends_the_stream() {
     let (red, blue, white) = ([255, 0, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]);
-    for (depth, closed) in [(128, true), (129, true), (129, false)] {
+    for (depth, closed) in [(64, true), (65, true), (65, false)] {
         let close = if closed { "]".repeat(depth) } else { String::new() };
         let content = format!("1 0 0 rg 0 0 4 4 re f {}{close} discard 0 0 1 rg 100 40 10 10 re f", "[".repeat(depth));
         assert_eq!(pixel(&content, 1, 58), red, "depth {depth}, closed {closed}");
-        let expected = if depth <= 128 { blue } else { white };
+        let expected = if depth <= 64 { blue } else { white };
         assert_eq!(pixel(&content, 104, 15), expected, "depth {depth}, closed {closed}");
     }
 }
@@ -157,16 +157,16 @@ fn the_reader_returns_the_operators_after_an_unclosed_array() {
 /// ends at the next unclosed `[`, as it did before, instead of taking quadratic time.
 #[test]
 fn unclosed_arrays_share_a_bounded_recovery_budget() {
-    // 100 unclosed brackets (within the nesting cap), each with a `q` and 64 KiB of operands:
-    // about 6.4 MiB, so the first few brackets alone spend the budget of about 51 MiB.
-    let filler = "0 ".repeat(32 * 1024);
-    let data: String = (0..100).map(|_| format!("[ q {filler}")).collect();
+    // 60 unclosed brackets (within the nesting cap), each with a `q` and 128 KiB of operands:
+    // about 7.7 MiB, so the first brackets alone spend the budget of about 61 MiB.
+    let filler = "0 ".repeat(64 * 1024);
+    let data: String = (0..60).map(|_| format!("[ q {filler}")).collect();
     let read = operators(data.as_bytes()).len();
     assert!(read > 0, "the first brackets are recovered from");
-    assert!(read < 100, "recovery stops once its budget is spent ({read} of 100 read)");
+    assert!(read < 60, "recovery stops once its budget is spent ({read} of 60 read)");
 
     // A short stream gets the floor, so a handful of brackets is always recovered from.
-    assert_eq!(operators("[ q ".repeat(100).as_bytes()).len(), 100);
+    assert_eq!(operators("[ q ".repeat(60).as_bytes()).len(), 60);
 }
 
 /// Random runs of brackets, strings, numbers, names and operators: the reader never panics, ends,
