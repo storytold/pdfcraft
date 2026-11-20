@@ -1,4 +1,4 @@
-//! The bookmark list.
+//! The bookmark list and the named destinations list.
 
 /// A bookmark as the bookmark list shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +16,17 @@ pub struct BookmarkRow {
     pub color: Option<[f32; 3]>,
     pub italic: bool,
     pub bold: bool,
+}
+
+/// A named destination as the Destinations panel lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DestinationRow {
+    /// The name, as text: what the destination edits take.
+    pub name: String,
+    /// The 0-based page it goes to; `None` when it names no page of this document.
+    pub page: Option<usize>,
+    /// Where on that page it goes ([`pdfcraft_render::DestView::Top`] when it doesn't say).
+    pub view: pdfcraft_render::DestView,
 }
 
 /// One page of the bookmark list, in outline order.

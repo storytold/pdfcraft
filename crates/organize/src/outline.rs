@@ -293,7 +293,7 @@ fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
 }
 
 /// The view an explicit destination array asks for: its type and the numbers after it.
-fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
+pub(crate) fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
     let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec))?;
     // At most the four numbers of /FitR.
     let numbers = dest.iter().skip(2).take(4).map(|n| doc.resolve(n).as_f64().filter(|v| v.is_finite())).collect();
@@ -532,7 +532,7 @@ fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f6
 /// reader's zoom; a coordinate that is left out keeps the reader's position. With neither,
 /// `/XYZ null null null` goes to the page, keeping the reader's zoom (what Acrobat writes for a
 /// new bookmark when the view has no specific position).
-fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
+pub(crate) fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
     let coordinate = |v: Option<f64>| v.map_or(Object::Null, Object::Real);
     Object::Array(vec![Object::Ref(page), Object::name("XYZ"), coordinate(left), coordinate(top), Object::Null])
 }
