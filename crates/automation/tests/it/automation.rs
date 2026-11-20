@@ -8720,6 +8720,46 @@ fn optimizing_discards_form_actions_through_tools() {
     assert_eq!(actions["actions"], json!([{ "trigger": "mouse_enter", "javascript": "app.alert(1);" }]), "{actions}");
 }
 
+/// #7693: a submit button that emails the form gives the message the app opens, and sends nothing.
+#[test]
+fn form_submit_reads_an_email_submission_and_sends_nothing() {
+    let dir = workdir("form-submit-email");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let button = |a: &mut Automation, name: &str, submit: &str| {
+        ok(a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "button", "rect": [20, 20, 120, 42], "name": name }));
+        ok(a, "form_set_actions", json!({ "doc": doc, "field": name, "actions": [{ "trigger": "mouse_up", "submit": submit }] }));
+    };
+    let mail =
+        "mailto:forms@example.org?subject=Ref%2042%20Form%20Response&cc=office@example.org&body=Please%20find%20the%20completed%20form%20attached.";
+    button(&mut a, "Email", mail);
+    button(&mut a, "Web", "https://example.org/submit");
+    button(&mut a, "Attach", "mailto:forms@example.org?attach=/etc/passwd");
+    ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 60, 120, 82], "name": "Name" }));
+
+    let r = ok(&mut a, "form_submit", json!({ "doc": doc, "field": "Email" }));
+    assert_eq!(r["submit"], mail, "{r}");
+    assert_eq!(
+        r["email"],
+        json!({ "url": mail, "to": ["forms@example.org"], "cc": ["office@example.org"], "bcc": [], "subject": "Ref 42 Form Response", "body": "Please find the completed form attached." }),
+        "{r}"
+    );
+    assert_eq!(r["unsaved"], true, "the new buttons aren't saved yet: {r}");
+    assert_eq!(r["attach"], "a.pdf");
+    ok(&mut a, "doc_save", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "form_submit", json!({ "doc": doc, "field": "Email" }))["unsaved"], false);
+
+    let web = ok(&mut a, "form_submit", json!({ "doc": doc, "field": "Web" }));
+    assert_eq!(web["email"], Value::Null, "{web}");
+    assert!(web["reason"].as_str().unwrap().contains("doesn't send form data"), "{web}");
+
+    assert!(matches!(err(&mut a, "form_submit", json!({ "doc": doc, "field": "Attach" })), ToolError::Failed(m) if m.contains("attach")));
+    for field in ["Name", "Missing"] {
+        assert!(matches!(err(&mut a, "form_submit", json!({ "doc": doc, "field": field })), ToolError::InvalidArgs(_)), "{field}");
+    }
+    assert!(!a.session().get(pdfcraft_engine::DocId(doc)).unwrap().dirty, "pressing the buttons changes nothing");
+}
+
 /// #3227 review: retaining the version, a catalog `/Version` below the 1.5 an object stream
 /// needs is not what viewers read: the header is raised, and the later of the two is reported.
 #[test]

@@ -4675,7 +4675,7 @@ status = "partial"
 commands = ["form.fields"]
 tools = []
 evidence = ["crates/ui-egui/tests/it/buttons.rs::buttons_reset_navigate_and_print", "crates/forms/src/af.rs::common_button_scripts_are_recognised", "crates/ui-egui/tests/it/javascript.rs::button_scripts_run_and_alert"]
-notes = "Reset form, Named (print, page navigation), URI, Go to, and any JavaScript (run in the sandboxed engine); submit explained, not sent"
+notes = "Reset form, Named (print, page navigation), URI, Go to, and any JavaScript (run in the sandboxed engine); submit by email opens a draft in the email app (form.submit-form), to a web address explained, not sent"
 
 [[feature]]
 id = "form.field-navigation"
@@ -4887,11 +4887,11 @@ title = "Submit form to a URL or email (with a prompt)"
 area = "F"
 tier = "P1"
 milestone = "M6"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["form_submit"]
+evidence = ["crates/engine/src/links/tests.rs::an_email_address_reads_as_the_message_it_starts", "crates/engine/src/links/tests.rs::an_email_draft_shows_hidden_characters_and_keeps_only_body_line_breaks", "crates/ui-egui/tests/it/form_email.rs::an_email_submission_shows_who_gets_the_form_and_offers_to_save_it_first", "crates/ui-egui/tests/it/form_email.rs::save_and_open_writes_the_form_before_the_email_opens", "crates/ui-egui/tests/it/form_email.rs::a_saved_form_opens_the_email_without_offering_to_save", "crates/ui-egui/tests/it/form_email.rs::a_saved_form_with_unsaved_changes_offers_to_save_first", "crates/ui-egui/tests/it/form_email.rs::a_web_submission_is_only_explained", "crates/ui-egui/tests/it/form_email.rs::an_email_submission_that_attaches_a_local_file_is_refused", "crates/ui-egui/tests/it/form_email.rs::a_script_submitting_by_email_asks_the_same_way", "crates/automation/tests/it/automation.rs::form_submit_reads_an_email_submission_and_sends_nothing"]
+notes = "Email (mailto:) only, from a submit button or a script's submitForm: a prompt shows the recipients, subject and message, offers to save the document first when it has unsaved changes or no file, then opens the email app with the document's address unchanged and says to attach the saved PDF. Nothing is sent and nothing is attached for the user: an address asking to attach or insert a file is refused, as a link's is. Missing: attaching the form data (FDF, XFDF, HTML or the PDF) to the message, and any submission to a web address, which is still explained, not sent."
 
 [[feature]]
 id = "form.import-data"

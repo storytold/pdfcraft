@@ -166,10 +166,36 @@ impl PdfCraftApp {
     /// (#90, #91). While one request is waiting, further ones are dropped, so a script can't
     /// queue up a stream of dialogs.
     pub fn request_document_url(&mut self, url: &str, origin: LinkOrigin) {
+        self.request_url(url, origin, None);
+    }
+
+    /// The form of document `id` asks to be submitted to `url` (a submit button's action, or a
+    /// script's `submitForm`, which `button` doesn't name). PdfCraft never sends form data. An
+    /// email address (`mailto:`) is offered as a new message in the user's email app, as an email
+    /// link is, after saving the document for them to attach (#7693); any other address is only
+    /// explained.
+    pub fn request_form_submit(&mut self, id: DocId, url: &str, origin: LinkOrigin, button: Option<&str>) {
+        if pdfcraft_engine::links::is_mail_address(url) {
+            self.request_url(url, origin, Some(id));
+            return;
+        }
+        match button {
+            Some(name) => self.notify_fmt(
+                "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
+                &[("name", name), ("url", url)],
+            ),
+            None => self.notify_fmt(
+                "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
+                &[("u", url)],
+            ),
+        }
+    }
+
+    fn request_url(&mut self, url: &str, origin: LinkOrigin, submit: Option<DocId>) {
         match pdfcraft_engine::links::document_url(url) {
             Ok(url) => {
                 if self.pending_link.is_none() && self.pending_remote_link.is_none() {
-                    self.pending_link = Some(PendingLink { url, origin });
+                    self.pending_link = Some(PendingLink { url, origin, submit });
                 }
             }
             Err(e) => {
@@ -190,6 +216,50 @@ impl PdfCraftApp {
             && open
         {
             self.open_url(&p.url);
+            if let Some(id) = p.submit {
+                self.form_email_opened(id, None);
+            }
+        }
+    }
+
+    /// The answer "Save and open email app" to a form's email submission
+    /// ([`PendingLink::submit`]): save the document, then open the email, only once it is written
+    /// (which may be on a later frame, when the user chooses where). A failed or cancelled save
+    /// opens nothing.
+    pub fn save_and_resolve_form_email(&mut self) {
+        let Some(id) = self.pending_link.as_ref().and_then(|p| p.submit) else { return };
+        let Some(p) = self.pending_link.take() else { return };
+        let Some(index) = self.asking_tab(id) else { return };
+        self.save_then(index, crate::SaveTarget::InPlace, move |app, written| {
+            app.open_url(&p.url);
+            app.form_email_opened(id, Some(written));
+        });
+    }
+
+    /// Whether document `id` should be saved before its form is emailed: it has unsaved work (in
+    /// any of its tabs), or no file of its own to attach yet: none, an email app's temporary copy,
+    /// or a path read back from recovery, where Save asks where to keep it.
+    pub(crate) fn form_email_needs_save(&self, id: DocId) -> bool {
+        let Some(doc) = self.session.get(id) else { return false };
+        let no_file = doc.path.as_deref().is_none_or(crate::editing::is_mail_temp_copy) || self.recovered_paths.contains(&id);
+        doc.dirty || no_file || self.views.iter().enumerate().any(|(i, v)| v.id == id && self.has_unsaved_typing(i))
+    }
+
+    /// Say what to attach once a form's email has opened. The file isn't attached for the user:
+    /// an email address that attaches a local file is what
+    /// [`pdfcraft_engine::links::document_url`] refuses. `saved`: the name of the file the document
+    /// was just saved to for it, which a web download after Apply redactions names differently
+    /// from the document.
+    fn form_email_opened(&mut self, id: DocId, saved: Option<&str>) {
+        if let Some(written) = saved {
+            self.notify_fmt("Attach {name} to the new email before you send it.", &[("name", written)]);
+            return;
+        }
+        let Some(name) = self.session.get(id).map(|d| d.name.clone()) else { return };
+        if self.form_email_needs_save(id) {
+            self.notify_fmt("Save {name}, then attach it to the new email before you send it.", &[("name", &name)]);
+        } else {
+            self.notify_fmt("Attach {name} to the new email before you send it.", &[("name", &name)]);
         }
     }
 }
@@ -200,5 +270,25 @@ fn found_destination(found: Option<(usize, pdfcraft_render::DestView)>, name: St
     match found {
         Some((page, view)) => pdfcraft_render::RemoteDestination::Page { page, view },
         None => pdfcraft_render::RemoteDestination::Named(name),
+    }
+}
+
+#[cfg(test)]
+mod form_email_tests {
+    use crate::PdfCraftApp;
+
+    /// A web save after Apply redactions delivers `form_Redacted.pdf` while the document keeps
+    /// its name: the notice names the file delivered, so the unredacted original isn't the one
+    /// the user is told to attach.
+    #[test]
+    fn the_attach_notice_names_the_file_written_not_the_document() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+        let id = app.views[0].id;
+        app.form_email_opened(id, Some("form_Redacted.pdf"));
+        let said = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(said.contains("Attach form_Redacted.pdf to the new email"), "{said}");
+        assert_eq!(app.session.get(id).unwrap().name, "form.pdf", "the document keeps its name");
     }
 }

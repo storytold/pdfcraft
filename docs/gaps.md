@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-19 | **Last updated:** 2026-11-19 | **Change:** minor (gap 15: #7693 a form submitted by email opens a draft in the email app; estimates unchanged)
 > **Last reviewed:** 2026-11-11 | **Last updated:** 2026-11-11 | **Change:** minor (gap 8: known residual risk for the LibreOffice sidecar, sandbox tracked in #6953; estimates unchanged)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
@@ -351,9 +352,10 @@ update the numbers.
 ### 15. Forms: JavaScript object model, actions, submit, XFA depth
 
 - **Missing:** the wider Acrobat JavaScript object model (annotations, layers, dialogs), document
-  actions, the Actions tab triggers that run JavaScript, form submission, the debugger, barcode
-  fields, rich-text values; XFA flattening and complete dynamic-form fidelity.
-- **Evidence:** `form.js-host` partial, `form.document-actions`, `form.submit-form`,
+  actions, the Actions tab triggers that run JavaScript, form submission to a web address (by
+  email it opens a draft for the user to attach the PDF), the debugger, barcode fields, rich-text
+  values; XFA flattening and complete dynamic-form fidelity.
+- **Evidence:** `form.js-host` and `form.submit-form` partial; `form.document-actions`,
   `edit.action-javascript`, `form.js-debugger`, `form.xfa-flatten` planned; XFA layout, FormCalc
   and data partial.
 - **Estimate:** 40–75 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
