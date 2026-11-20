@@ -22,7 +22,8 @@ fn main() {
         _ => pdfcraft_cos::Algorithm::Aes256,
     };
     let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(input).unwrap())).unwrap();
-    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+    // `rc4-40` and `rc4-128` are the legacy schemes, which `set_encryption` refuses.
+    doc.set_encryption_legacy(&pdfcraft_cos::NewEncryption {
         algorithm,
         user_password: user,
         owner_password: owner,
