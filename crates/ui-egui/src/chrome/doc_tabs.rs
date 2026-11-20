@@ -2,7 +2,9 @@
 //! [`DocView`](crate::DocView) keyed by its view key, since split view can show one document in two
 //! tabs; the Combine files tab sits last in the main strip and is never moved.
 
+use craft::behavior::IconId;
 use craft::platform::open::CAN_REVEAL;
+use craft::ui::buttons::Button;
 use craft::ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft::ui::menu::{Menu, MenuItem};
 use craft::ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
@@ -45,6 +47,11 @@ pub(crate) fn strip(app: &mut PdfCraftApp, ui: &mut egui::Ui, place: Place) {
     };
     let label = if place == Place::Main { tl!("Documents") } else { tl!("Split view documents") };
     let mut strip = DocumentTabs::new(label.to_string(), &tabs).reorderable(true);
+    if place == Place::Main {
+        strip = strip.trailing(|ui| {
+            Button::command("file.open").icon(IconId::new("plus")).show(ui);
+        });
+    }
     if let Some(selected) = selected {
         strip = strip.selected(selected);
     }

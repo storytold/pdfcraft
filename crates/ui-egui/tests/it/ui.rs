@@ -708,7 +708,7 @@ fn tabs_shrink_to_fit_then_arrows_step_through_them_and_open_stays_in_sight() {
     assert!(open.right() <= discord.left(), "Open {open:?} must not run under Discord {discord:?}");
     let mut previous_right = f32::MIN;
     for i in 0..5 {
-        let tab = h.get_by_label(&name(i)).rect();
+        let tab = h.get_by_role_and_label(egui::accesskit::Role::Tab, &name(i)).rect();
         assert!(tab.left() >= previous_right - 0.5, "tabs must not overlap: {i} at {tab:?}");
         assert!(tab.right() <= open.left() + 0.5, "every tab fits before Open: {i} at {tab:?}, Open at {open:?}");
         previous_right = tab.right();
