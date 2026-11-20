@@ -1704,13 +1704,14 @@ fn dragging_a_tab_moves_it_and_keeps_the_same_document_active() {
     let ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
     let tab = |h: &Harness<'static, PdfCraftApp>, name: &str| h.get_by_role_and_label(Role::Tab, name).rect();
     // Pressing first.pdf selects it; dragging moves it without changing that selection.
-    let to = tab(&h, "last.pdf").right_center() + egui::vec2(20.0, 0.0);
+    // The strip's between-tab drop zones are inside the tabs, not over the trailing Open button.
+    let to = tab(&h, "last.pdf").right_center() - egui::vec2(10.0, 0.0);
     drag_named_tab(&mut h, "first.pdf", to, true);
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[1], ids[2], ids[0]]);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[0]));
     assert!(tab(&h, "first.pdf").left() > tab(&h, "last.pdf").right(), "the strip draws the new order");
     // last.pdf, now in the middle, to the front.
-    let to = tab(&h, "middle.pdf").left_center() - egui::vec2(10.0, 0.0);
+    let to = tab(&h, "middle.pdf").left_center() + egui::vec2(10.0, 0.0);
     drag_named_tab(&mut h, "last.pdf", to, true);
     assert_eq!(h.state().views.iter().map(|view| view.id).collect::<Vec<_>>(), [ids[2], ids[1], ids[0]]);
     assert_eq!(h.state().active_ids().map(|(_, id)| id), Some(ids[2]));
