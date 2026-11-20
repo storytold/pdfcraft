@@ -56,6 +56,14 @@ pub(crate) fn drop_structure_of(doc: &mut Document, gone: &[ObjRef]) -> Result<(
             doc.update_dict(*r, |e| e.set(b"Ref".to_vec(), Object::Array(left)))?;
         }
     }
+    // So would a bookmark's `/SE` (ISO 32000-2 12.3.3) naming a dropped element.
+    for item in crate::outline::items(doc) {
+        if doc.get(item).as_dict().and_then(|b| b.reference(b"SE")).is_some_and(|e| p.dropped.contains(&e)) {
+            doc.update_dict(item, |b| {
+                b.remove(b"SE");
+            })?;
+        }
+    }
     Ok(())
 }
 
@@ -136,11 +144,16 @@ impl Pruner<'_> {
     /// by one of `keys` and those naming only dropped elements.
     fn tree(&mut self, doc: &mut Document, node: &Object, list: &[u8], keys: &HashSet<i64>, depth: usize) -> Result<(), OrganizeError> {
         check_depth(depth)?;
-        let Some(r) = node.as_ref().filter(|r| self.nodes.insert(*r)) else { return Ok(()) };
-        let Some(d) = doc.get(r).as_dict().cloned() else { return Ok(()) };
+        let r = node.as_ref();
+        if r.is_some_and(|r| !self.nodes.insert(r)) {
+            return Ok(());
+        }
+        let Some(d) = r.map_or_else(|| node.as_dict().cloned(), |r| doc.get(r).as_dict().cloned()) else { return Ok(()) };
         for kid in d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default() {
             self.tree(doc, &kid, list, keys, depth + 1)?;
         }
+        // A root written directly in the structure tree root keeps its own entries; its kids are cleaned.
+        let Some(r) = r else { return Ok(()) };
         let Some(pairs) = d.get(list).map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) else { return Ok(()) };
         let dropped = |o: &Object| o.as_ref().is_some_and(|r| self.dropped.contains(&r));
         let names_dropped = |v: &Object| match doc.resolve(v).as_array() {

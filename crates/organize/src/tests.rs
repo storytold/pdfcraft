@@ -256,6 +256,30 @@ fn deleting_a_page_drops_tags_the_tree_reaches_another_way() {
     assert_eq!((p.get(b"Pg"), p.get(b"Ref").and_then(Object::as_array).map(Vec::len)), (None, Some(0)), "{p:?}");
 }
 
+/// Neither a bookmark's `/SE` nor a parent tree written in the structure tree root, with its kids
+/// in objects of their own, keeps the deleted page's tags. The bookmark stays.
+#[test]
+fn deleting_a_page_drops_tags_a_bookmark_or_a_direct_parent_tree_names() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R /Outlines 9 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 0 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /StructParents 1 >>".into(),
+        "<< /Type /StructTreeRoot /K [7 0 R 8 0 R] /ParentTree << /Kids [6 0 R] >> >>".into(),
+        "<< /Limits [0 1] /Nums [0 [7 0 R] 1 [8 0 R]] >>".into(),
+        "<< /Type /StructElem /S /P /P 5 0 R /Pg 3 0 R /K 0 >>".into(),
+        "<< /Type /StructElem /S /Note /P 5 0 R /Pg 4 0 R /K 0 >>".into(),
+        "<< /Type /Outlines /First 10 0 R /Last 10 0 R /Count 1 >>".into(),
+        "<< /Title (Note) /Parent 9 0 R /SE 8 0 R >>".into(),
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    delete_pages(&mut doc, &[1]).unwrap();
+    let saved = open(write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap());
+    let dicts: Vec<Dict> = saved.scan_objects().filter_map(|(_, o)| o.as_dict().cloned()).collect();
+    assert!(!dicts.iter().any(|d| d.name(b"S") == Some(b"Note")), "the deleted page's note is still in the file");
+    assert!(dicts.iter().any(|d| d.contains(b"Title") && !d.contains(b"SE")), "the bookmark is gone");
+}
+
 /// A structure tree nested deeper than Delete Pages follows is refused rather than left with the
 /// deleted page's tags below that depth.
 #[test]
