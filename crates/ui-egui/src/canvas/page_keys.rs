@@ -41,6 +41,20 @@ impl PageKeys {
         !self.over && ctx.input(|i| i.key_pressed(key))
     }
 
+    /// The modifiers of `key`'s first press for the pages this frame: the press going down, not
+    /// its repeats while it is held. It stays for whatever reads it next.
+    pub(crate) fn first_press(self, ctx: &Context, key: Key) -> Option<Modifiers> {
+        if self.over {
+            return None;
+        }
+        ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                Event::Key { key: k, pressed: true, repeat: false, modifiers, .. } if *k == key => Some(*modifiers),
+                _ => None,
+            })
+        })
+    }
+
     /// Take `key`, pressed without ⌘ or Ctrl (egui lets an extra Shift or Alt through), for the
     /// pages: nothing after reads it.
     pub(crate) fn take(self, ctx: &Context, key: Key) -> bool {

@@ -1890,6 +1890,156 @@ fn v_h_and_space_pick_the_quick_tools() {
     assert_eq!(h.state().quick_tool, QuickTool::Select, "typing a space in the find bar");
 }
 
+#[test]
+fn space_scrolls_a_screen_as_page_down_does() {
+    // #7483: Space only showed the Hand for as long as it was down. In Acrobat it scrolls a screen
+    // on, and Shift+Space a screen back.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::QuickTool;
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    // Page 1's top on screen, if any of it shows.
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+        top(h)
+    };
+    let start = top(&h);
+    let screen = press(&mut h, Modifiers::NONE, Key::PageDown);
+    assert!(screen.zip(start).is_some_and(|(s, t)| s < t - 100.0), "Page Down scrolls a screen: {screen:?} from {start:?}");
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::PageUp), start);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), screen, "Space goes a screen on");
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "and leaves the tool");
+    assert_eq!(press(&mut h, Modifiers::SHIFT, Key::Space), start, "Shift+Space goes a screen back");
+    // Held for the Hand and used with the pointer, Space is no tap: letting it go scrolls nothing.
+    let at = h.state().views[0].viewport_rect().center();
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "Space held");
+    h.hover_at(at);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+    h.key_up(Key::Space);
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "Space released");
+    assert_eq!(top(&h), start, "the Hand's press is no tap");
+    // Let go under a dialog, Space is no tap: closing the dialog scrolls nothing.
+    h.key_down(Key::Space);
+    h.run_steps(2);
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+    h.run_steps(2);
+    h.key_up(Key::Space);
+    h.run_steps(2);
+    h.state_mut().dialog = None;
+    h.run_steps(4);
+    assert_eq!(top(&h), start, "a Space let go under a dialog");
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    // Shift+Space held goes back once, not once per repeat: from two screens down, to one.
+    let down = press(&mut h, Modifiers::NONE, Key::PageDown);
+    assert!(down.is_some(), "page 1 still shows one screen down");
+    press(&mut h, Modifiers::NONE, Key::PageDown);
+    let key = |pressed, repeat| egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat, modifiers: Modifiers::SHIFT };
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    h.event(key(true, false));
+    h.run_steps(2);
+    for _ in 0..3 {
+        h.event(key(true, true));
+        h.run_steps(2);
+    }
+    h.event(key(false, false));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(4);
+    assert_eq!(top(&h), down, "one screen back for a held Shift+Space");
+    // Typing a space in the find bar scrolls nothing either.
+    h.state_mut().views[0].open_find();
+    h.run_steps(4);
+    let at = top(&h);
+    assert_eq!(press(&mut h, Modifiers::NONE, Key::Space), at, "a space typed in the find bar");
+}
+
+#[test]
+fn space_held_through_a_dialog_steps_nothing_more_on_its_repeats() {
+    // #7483 review: a dialog that opened while Space was down cancelled its press outright, so once
+    // it closed with the key still held, the key's next repeat counted as a new press: Shift+Space
+    // stepped back a second time, and Space started a tap that scrolled on release.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let key = |pressed, repeat, modifiers| egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat, modifiers };
+    // Held through a dialog that opens and closes, repeating after it, then let go.
+    let through_a_dialog = |h: &mut Harness<'static, PdfCraftApp>, modifiers| {
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(key(true, false, modifiers));
+        h.run_steps(2);
+        h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::Shortcuts);
+        h.run_steps(2);
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+        for _ in 0..3 {
+            h.event(key(true, true, modifiers));
+            h.run_steps(2);
+        }
+        h.event(key(false, false, modifiers));
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(4);
+        top(h)
+    };
+    let start = top(&h);
+    // Two screens down, so that a second step back would still show.
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    let one = top(&h);
+    assert!(one.is_some() && one != start, "Page Down scrolls a screen: {one:?} from {start:?}");
+    h.key_press(Key::PageDown);
+    h.run_steps(4);
+    assert_eq!(through_a_dialog(&mut h, Modifiers::SHIFT), one, "Shift+Space goes back one screen, not two");
+    assert_eq!(through_a_dialog(&mut h, Modifiers::NONE), one, "Space held through the dialog is no tap");
+}
+
+#[test]
+fn space_repeating_after_ctrl_is_let_go_scrolls_nothing() {
+    // #7566 review: Ctrl+Space started no tap, but once Ctrl was let go with Space still held, the
+    // key's next repeat (a plain Space now) started one, and letting go of Space scrolled.
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::canvas::Fit;
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].fit = Fit::Width;
+    h.run_steps(4);
+    let top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).map(|r| r.top());
+    let key = |pressed, repeat, modifiers| egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat, modifiers };
+    let start = top(&h);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    h.event(key(true, false, Modifiers::CTRL));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    for _ in 0..3 {
+        h.event(key(true, true, Modifiers::NONE));
+        h.run_steps(2);
+    }
+    h.event(key(false, false, Modifiers::NONE));
+    h.run_steps(4);
+    assert_eq!(top(&h), start, "no tap: the press that went down was Ctrl+Space");
+    // A plain press and release still goes a screen on.
+    h.event(key(true, false, Modifiers::NONE));
+    h.run_steps(2);
+    h.event(key(false, false, Modifiers::NONE));
+    h.run_steps(4);
+    assert_ne!(top(&h), start, "Space goes a screen on");
+}
+
 /// Like [`fixture`], with each page's size given.
 fn sized_fixture(sizes: &[(u32, u32)]) -> Vec<u8> {
     let n = sizes.len();
