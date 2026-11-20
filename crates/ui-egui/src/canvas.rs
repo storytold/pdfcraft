@@ -862,6 +862,8 @@ struct PageBodyCx<'a> {
     /// Full screen: the page, display and rotation it shows, captured before the page view holds the view state;
     /// `None` outside full screen.
     present_at: Option<presenter::PresentAt>,
+    /// The incoming page cannot take input until its transition finishes.
+    veiled: bool,
     preparing: bool,
     calc_order: bool,
     editing_content: bool,
@@ -944,7 +946,7 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
     let mut parts = Vec::new();
     // Copied comments hanging on the pointer take the next click anywhere on a page, even over an
     // existing comment, link or field, so no page part may steal it from the paste tool.
-    if session.comments.paste.is_some() {
+    if cx.veiled || session.comments.paste.is_some() {
         return parts;
     }
     if cx.editing_content {
@@ -1656,6 +1658,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let find_marks: Vec<TextMark> = view.find.as_ref().map(Find::marks).unwrap_or_default();
     let present_at =
         presenting.then_some(presenter::PresentAt { current: view.view.current, display: view.view.display, rotation: view.view.rotation });
+    let veiled = page_overlays::veiled(view);
     // Shadows only with the preference on, and only between gaps: they would darken the page before when pages touch.
     let border = if view.view.page_gaps && app.show_page_edge_shadows { PageBorder::DropShadow } else { PageBorder::None };
     let keep = view.session.presenter.keep_pages();
@@ -1732,6 +1735,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
         tools,
         animates: !app.animation_effects.reduced(None),
         present_at,
+        veiled,
         preparing,
         calc_order,
         editing_content,
