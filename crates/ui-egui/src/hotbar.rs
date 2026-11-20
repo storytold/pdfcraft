@@ -324,8 +324,11 @@ fn fill_text_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
         tl!("Font size"),
         |ui| IconButton::new(IconId::new("a-large-small")).label(tl!("Font size")).show(ui).response,
         |ui| {
-            let field =
-                SliderField::new(tl!("Font size"), Bind::bound(&mut size), min..=max).scale(SliderScale::Log).unit_kind(UnitKind::Points).show(ui);
+            let field = SliderField::new(tl!("Font size"), Bind::bound(&mut size), min..=max)
+                .scale(SliderScale::Log)
+                .typed_decimals(12)
+                .unit_kind(UnitKind::Points)
+                .show(ui);
             committed |= field.edit.events.committed().is_some();
             false
         },
