@@ -1000,6 +1000,18 @@ pub fn tools() -> Vec<ToolDef> {
         t("sign_list", "List and validate signatures", "Every signature field with its validation: status (valid, unknown = intact but the signer isn't trusted, invalid, unsigned), signer and certificate, date, reason, location, certification level, page and rect, whether PdfCraft draws that state into the signature's own appearance as displayed (verdict_shown; never written to the file), the revision it covers and changes made after signing (none, allowed, disallowed), with Acrobat-style explanations.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),
+        t("sign_compare_signed_version", "Compare signed version", "Compare the version a signature signed (the file up to the end of its /ByteRange) with the document as it is now: the signed version is the older side, the current document the newer. Name the signature by field, as sign_list gives it, or by index, its 1-based position in sign_list (needed when several share a field name, such as document timestamps). Returns what doc_compare returns (counts, each change with old and new text, pages and rectangles, and with visual the regions that look different) plus signature: field, index, the revision it signed, the revisions now, signed_bytes, bytes and covers_current (nothing was added after it). An unsigned field, or a signature whose byte range is malformed, overflows or does not fit the file, is refused. With keep_open the signed version stays open as a new, unsaved document (signed_doc), for doc_compare_report or doc_compare_mark with other set to it; otherwise it is closed again.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "field": { "type": "string", "minLength": 1, "description": "The signature's field, as sign_list gives it." },
+                    "index": { "type": "integer", "minimum": 1, "description": "The signature's 1-based position in sign_list, instead of field." },
+                    "limit": { "type": "integer", "minimum": 1, "description": "List at most this many changes (default 500)." },
+                    "visual": { "type": "boolean", "description": "Also compare how pages look (page n with page n): regions that differ visually." },
+                    "keep_open": { "type": "boolean", "description": "Leave the signed version open and return it as signed_doc (default false)." }
+                }),
+                &["doc"],
+            )),
         t("sign_id_create", "Create a digital ID", "Create a self-signed digital ID and save it as a password-protected .p12 file (Acrobat: Configure a new digital ID ▸ Create a new digital ID ▸ Save to file). Default key: 2048-bit RSA, valid 5 years.").with(schema(
             json!({
                 "name": { "type": "string", "minLength": 1 },

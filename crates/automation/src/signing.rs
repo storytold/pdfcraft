@@ -141,6 +141,72 @@ impl Automation {
         Ok(json!({ "count": list.len(), "signed": signed, "all_valid": all_valid, "signatures": list }))
     }
 
+    /// The signature `field` or `index` (1-based, in `sign_list`'s order) names: its 0-based
+    /// position in the document's signature list.
+    fn signature_index(&self, a: &Args) -> Result<usize> {
+        let doc = self.doc(a)?;
+        let sigs = &doc.signatures;
+        match (a.opt_str("field")?, a.opt_int("index")?) {
+            (Some(_), Some(_)) => Err(bad("pass field or index, not both")),
+            (None, None) => Err(bad("pass field (a signature's field as sign_list gives it) or index (its 1-based position in sign_list)")),
+            (None, Some(i)) => usize::try_from(i)
+                .ok()
+                .and_then(|i| i.checked_sub(1))
+                .filter(|i| *i < sigs.len())
+                .ok_or_else(|| bad(format!("index {i} is out of range: sign_list lists {} signature field(s)", sigs.len()))),
+            (Some(field), None) => {
+                let hits: Vec<usize> = sigs.iter().enumerate().filter(|(_, s)| s.field == field).map(|(i, _)| i).collect();
+                match hits.as_slice() {
+                    [i] => Ok(*i),
+                    [] => {
+                        let names: Vec<&str> = sigs.iter().map(|s| s.field.as_str()).collect();
+                        Err(bad(if names.is_empty() {
+                            format!("no signature field {field:?}: the document has no signatures")
+                        } else {
+                            format!("no signature field {field:?} (sign_list lists: {})", names.join(", "))
+                        }))
+                    }
+                    many => Err(bad(format!(
+                        "{} signatures are listed as {field:?}: pass index (their positions in sign_list are {})",
+                        many.len(),
+                        many.iter().map(|i| (i + 1).to_string()).collect::<Vec<_>>().join(", ")
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// `sign_compare_signed_version`: compare the version a signature signed with the document as
+    /// it is now, reported as `doc_compare` reports a comparison.
+    pub(crate) fn sign_compare_signed_version(&mut self, a: &Args) -> Result<Value> {
+        let index = self.signature_index(a)?;
+        let id = self.doc(a)?.id;
+        let keep_open = a.opt_bool("keep_open")?.unwrap_or(false);
+        // Read before anything is opened, so a bad argument leaves nothing behind.
+        a.opt_int("limit")?;
+        a.opt_bool("visual")?;
+        let version = self.doc(a)?.signed_version(index).map_err(failed)?;
+        let old = self.session.open_signed_version(id, index).map_err(failed)?;
+        let report = self.session.compare(old, id).map_err(failed).and_then(|c| self.comparison_json(a, old, id, &c));
+        if !keep_open || report.is_err() {
+            self.session.close(old);
+        }
+        let mut out = report?;
+        out["signature"] = json!({
+            "field": version.field,
+            "index": index + 1,
+            "revision": version.revision,
+            "revisions": version.revisions,
+            "signed_bytes": version.len,
+            "bytes": version.current_len,
+            "covers_current": version.is_current(),
+        });
+        if keep_open {
+            out["signed_doc"] = json!(old.0);
+        }
+        Ok(out)
+    }
+
     pub(crate) fn sign_id_create(&mut self, a: &Args) -> Result<Value> {
         let name = a.str("name")?.trim().to_string();
         if name.is_empty() {

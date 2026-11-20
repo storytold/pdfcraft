@@ -174,9 +174,21 @@ impl Automation {
     }
 
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::compare::Kind;
         let (old, new) = self.compare_ids(a)?;
         let c = self.session.compare(old, new).map_err(failed)?;
+        self.comparison_json(a, old, new, &c)
+    }
+
+    /// `doc_compare`'s report of comparison `c` from `old` to `new`: counts, the first `limit`
+    /// changes and, with `visual`, the regions that look different.
+    pub(crate) fn comparison_json(
+        &self,
+        a: &Args,
+        old: pdfcraft_engine::DocId,
+        new: pdfcraft_engine::DocId,
+        c: &pdfcraft_engine::compare::Comparison,
+    ) -> Result<Value> {
+        use pdfcraft_engine::compare::Kind;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
         let r2 = |r: &[f64; 4]| r.map(|v| (v * 100.0).round() / 100.0);
         let side =

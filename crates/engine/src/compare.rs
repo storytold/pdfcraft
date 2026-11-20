@@ -26,7 +26,62 @@ pub fn colour(kind: Kind) -> crate::Rgb {
     }
 }
 
+/// What one signature signed: the start of the file up to the end of its `/ByteRange`
+/// ([`crate::Document::signed_version`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignedVersion {
+    /// The signature's field name, as the Signatures panel and `sign_list` give it.
+    pub field: String,
+    /// The 1-based revision it signed, and how many revisions the file has now.
+    pub revision: usize,
+    pub revisions: usize,
+    /// Bytes it covers from the start of the file, and the file's length now.
+    pub len: usize,
+    pub current_len: usize,
+}
+
+impl SignedVersion {
+    /// The signature covers the whole file as it is now: nothing was added after it.
+    pub fn is_current(&self) -> bool {
+        self.len == self.current_len
+    }
+}
+
+/// Why a signature's signed version can't be cut out of the file.
+fn byte_range_refusal(field: &str) -> String {
+    format!(
+        "the byte range of signature {field:?} is malformed, overflows or does not fit the file, so the version it signed can't be told apart from later changes; its validation details say what is wrong"
+    )
+}
+
 impl crate::Document {
+    /// The version signature `index` (into [`Self::signatures`], as listed) signed. Validation
+    /// sets a signature's signed length only once its `/ByteRange` is four non-negative numbers
+    /// starting at 0, whose gap holds exactly its hexadecimal `/Contents` and whose end lies
+    /// inside the file, so a length of 0 (or one past the file) means the range was refused.
+    pub fn signed_version(&self, index: usize) -> Result<SignedVersion, EditError> {
+        let n = self.signatures.len();
+        let sig = self.signatures.get(index).ok_or_else(|| {
+            EditError::Invalid(match n {
+                0 => "the document has no signatures".to_string(),
+                n => format!("signature {} doesn't exist: the document lists {n} signature field(s)", index.saturating_add(1)),
+            })
+        })?;
+        if !sig.signed {
+            return Err(EditError::Sign(format!("signature field {:?} is not signed, so there is no signed version to compare", sig.field)));
+        }
+        if sig.signed_len == 0 || sig.signed_len > self.bytes.len() {
+            return Err(EditError::Sign(byte_range_refusal(&sig.field)));
+        }
+        Ok(SignedVersion {
+            field: sig.field.clone(),
+            revision: sig.revision,
+            revisions: self.revision_ends().len(),
+            len: sig.signed_len,
+            current_len: self.bytes.len(),
+        })
+    }
+
     /// Standards ▸ Verify PDF/A: the rules the document breaks for `level`.
     pub fn pdfa_verify(&self, level: pdfcraft_preflight::Level) -> Vec<pdfcraft_preflight::Issue> {
         self.editor.as_ref().map(|e| pdfcraft_preflight::verify(&e.cos, level)).unwrap_or_default()
@@ -112,6 +167,32 @@ impl Session {
         let c = self.compare_pages(old, new, pages)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
         self.create_report("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
+    }
+
+    /// Open the version of document `id` that its signature `index` (into
+    /// [`Document::signatures`](crate::Document::signatures), as listed) signed: the file up to the
+    /// end of the signature's `/ByteRange`, as a new, unsaved document named "<name> (signed
+    /// version)". Refused, naming the signature and why, when it is unsigned or its byte range is
+    /// malformed, overflows or doesn't fit the file ([`crate::Document::signed_version`]).
+    pub fn open_signed_version(&mut self, id: DocId, index: usize) -> Result<DocId, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let version = doc.signed_version(index)?;
+        let bytes = doc.bytes.get(..version.len).ok_or_else(|| EditError::Sign(byte_range_refusal(&version.field)))?.to_vec();
+        let name = format!("{} (signed version).pdf", doc.name.trim_end_matches(".pdf"));
+        let password = doc.password.clone();
+        self.open(name, None, Arc::new(bytes), password.as_deref())
+            .map_err(|e| EditError::Sign(format!("the version signature {:?} signed could not be opened: {e}", version.field)))
+    }
+
+    /// Compare signed version: the text differences from the version signature `index` of
+    /// document `id` signed ([`Session::open_signed_version`]) to the document as it is now. The
+    /// signed version is opened only for the comparison and closed again.
+    pub fn compare_signed_version(&mut self, id: DocId, index: usize) -> Result<(SignedVersion, Comparison), EditError> {
+        let version = self.get(id).ok_or(EditError::NoDocument)?.signed_version(index)?;
+        let old = self.open_signed_version(id, index)?;
+        let compared = self.compare(old, id);
+        self.close(old);
+        Ok((version, compared?))
     }
 
     /// Mark the differences in `new` as comments: highlights over replaced and inserted text
@@ -354,3 +435,7 @@ impl crate::Document {
         OfficeExport { bytes, truncated_pages }
     }
 }
+
+#[cfg(test)]
+#[path = "signed_version_tests.rs"]
+mod signed_version_tests;
