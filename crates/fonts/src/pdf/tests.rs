@@ -2165,3 +2165,42 @@ fn a_dropped_codespace_range_is_reported() {
     assert!(parse_cmap(b"1 begincodespacerange <00> <FFFF> endcodespacerange").2);
     assert!(!parse_cmap(b"2 begincodespacerange <0000> <FFFF> <0000> <FFFF> endcodespacerange").2);
 }
+
+#[test]
+fn widths_the_font_declares_are_told_from_fallbacks() {
+    let mut doc = Document::new_empty();
+    let simple = |doc: &mut Document, base: &str, widths: Option<Vec<Object>>| {
+        let mut entries = vec![("Subtype", Object::name("Type1")), ("BaseFont", Object::name(base))];
+        if let Some(w) = widths {
+            entries.extend([("FirstChar", Object::Int(65)), ("Widths", Object::Array(w))]);
+        }
+        let dict = font(doc, entries);
+        Metrics::from_dict(doc, &dict)
+    };
+    let listed = simple(&mut doc, "HouseFont", Some(vec![Object::Int(500)]));
+    assert!(listed.width_declared(65));
+    assert!(!listed.width_declared(66), "a code past /Widths takes /MissingWidth");
+    assert!(simple(&mut doc, "Helvetica", None).width_declared(65));
+    assert!(simple(&mut doc, "Arial", None).width_declared(65), "a common alias names the face");
+    assert!(!simple(&mut doc, "HouseSerif", None).width_declared(65), "Times is a guess from the name");
+    assert!(!simple(&mut doc, "HouseFont", None).width_declared(65), "Helvetica is a guess");
+    let cid = |doc: &mut Document, dw: Option<i64>| {
+        let mut desc = Dict::new();
+        desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+        desc.set(b"W".to_vec(), Object::Array(vec![Object::Int(1), Object::Array(vec![Object::Int(600)])]));
+        if let Some(dw) = dw {
+            desc.set(b"DW".to_vec(), Object::Int(dw));
+        }
+        let entries = vec![
+            ("Subtype", Object::name("Type0")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+        ];
+        let dict = font(doc, entries);
+        Metrics::from_dict(doc, &dict)
+    };
+    let implied = cid(&mut doc, None);
+    assert!(implied.width_declared(1));
+    assert!(!implied.width_declared(2), "a CID /W leaves out, with no /DW, takes the implied 1000");
+    assert!(cid(&mut doc, Some(500)).width_declared(2));
+}
