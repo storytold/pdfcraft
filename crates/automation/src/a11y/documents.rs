@@ -103,8 +103,22 @@ impl Automation {
     pub(crate) fn pdfa_convert(&mut self, a: &Args) -> Result<Value> {
         let level = self.pdfa_level(a)?;
         let id = self.doc(a)?.id;
-        let warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
-        Ok(with_warnings(self.pdfa_verify(a)?, warnings))
+        let mut warnings = self.apply_with_warnings(id, pdfcraft_engine::Edit::ConvertPdfA { level })?;
+        let out = self.pdfa_verify(a)?;
+        // Problems conversion can't fix keep the file from gaining a new identification as PDF/A
+        // (#6845). One that already declared this level keeps that identification, so the warning
+        // says so rather than saying the file isn't identified.
+        if out["compliant"] == false {
+            warnings.push(if out["declared"]["pdfa"] == level.label() {
+                format!("kept its earlier {} identification: the file still has problems conversion can't fix", level.label())
+            } else {
+                format!(
+                    "not identified as {}: the file still has problems conversion can't fix, so conversion added no PDF/A identification",
+                    level.label()
+                )
+            });
+        }
+        Ok(with_warnings(out, warnings))
     }
 
     pub(crate) fn action_list(&self) -> Result<Value> {
