@@ -106,6 +106,12 @@ impl Exceeded {
     }
 }
 
+/// A page's `/Contents` streams, in order, as the scan reads them: for other scans of content that
+/// read a page's parts as one stream.
+pub(crate) fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    contents(doc, page)
+}
+
 /// The limits that the trailer, the indirect objects `objs` and the content streams go past.
 /// `content` holds the content streams only a reference identifies (a page's `/Contents`, Type 3
 /// glyph procedures), besides form XObjects and appearance streams, which say so themselves.
