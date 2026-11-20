@@ -188,6 +188,7 @@ impl Session {
     }
 
     /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
+    #[allow(clippy::cognitive_complexity)]
     pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
         let c = self.compare_pages(old, new, pages)?;
         let old_words = {
