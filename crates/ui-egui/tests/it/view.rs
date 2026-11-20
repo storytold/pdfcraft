@@ -2853,6 +2853,9 @@ fn full_screen_every_key_and_click_goes_where_it_says() {
                 }
                 h.run_steps(6);
                 h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+                if button == Secondary {
+                    assert!(h.query_by_role(egui::accesskit::Role::Menu).is_none(), "a full-screen right-click does not open a page menu");
+                }
             }
         }
         assert_eq!(h.state().views[0].current(), to, "{input:?} from page {}", from + 1);

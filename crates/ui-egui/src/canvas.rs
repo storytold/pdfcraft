@@ -1886,30 +1886,34 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let prepare = body_out.prepare.take().unwrap_or_default();
     let field_props = prepare.properties.then(|| view.session.prepare.selected.clone()).flatten();
     let (clicked_link, javascript_link) = body_out.link.take().map_or((None, None), |(target, js)| (Some(target), js));
-    // The page's menu, opened by the context request of this pass or still open from an earlier one.
+    // In full screen a secondary click turns the page, so the page menu must not open on it.
     let menu_for = view.session.menu_for.as_ref().map(|(_, owner)| owner.clone());
-    let pick = page_menu::show(
-        ui,
-        body_out.context.as_ref(),
-        &out.canvas.response,
-        menu_for,
-        &mut app.views[index],
-        &page_menu::PageMenuCx {
-            doc,
-            info,
-            prefs: &app.comment_prefs,
-            rights: comments::MenuRights { allowed, can_modify },
-            recent: &app.recent_colours,
-            tool,
-            preparing,
-            form: &form,
-            can_copy: doc.allows_copying(),
-            can_paste_image,
-            can_paste_comments: app.comment_clipboard.is_some(),
-            jobs: app.host.jobs_shared(),
-            wake: &app.wake,
-        },
-    );
+    let pick = if presenting {
+        page_menu::PageMenuPick::default()
+    } else {
+        page_menu::show(
+            ui,
+            body_out.context.as_ref(),
+            &out.canvas.response,
+            menu_for,
+            &mut app.views[index],
+            &page_menu::PageMenuCx {
+                doc,
+                info,
+                prefs: &app.comment_prefs,
+                rights: comments::MenuRights { allowed, can_modify },
+                recent: &app.recent_colours,
+                tool,
+                preparing,
+                form: &form,
+                can_copy: doc.allows_copying(),
+                can_paste_image,
+                can_paste_comments: app.comment_clipboard.is_some(),
+                jobs: app.host.jobs_shared(),
+                wake: &app.wake,
+            },
+        )
+    };
     let mut open_props: Option<(usize, usize)> = None;
     let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     let mut image_action = pick.image;
