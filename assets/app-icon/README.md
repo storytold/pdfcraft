@@ -18,6 +18,9 @@ a full-bleed colour field, no frame or roundel, the animal looking at the viewer
 **Tile:** `viewBox="0 0 512 512"`, a rounded square with `rx=112` that clips everything. Windows and Linux
 icons use the full-bleed tile. macOS icons put it on Apple's grid (an 824 px body centred on a transparent
 1024 px canvas).
+iPhone and iPad reuse the macOS lion artwork as an opaque 1024 px square: the
+desktop inset is removed and the corners are filled with PdfCraft red before iOS
+applies its own system mask. There is no separate mobile logo or copied community mark.
 
 **Provenance:** the project owner's original drawing, made in ArtCraft (2880 px, keyed to the palette), then
 vectorised (potrace; no filtering or warping).
@@ -31,6 +34,7 @@ Licence: [LICENSE.txt](LICENSE.txt) (`MIT OR Apache-2.0`, like the repo).
 | `pdfcraft-small.svg` | a lighter vector (traced at 1024 px) for places where size matters, such as this README |
 | `pdfcraft-1024.png` | 1024 px on Apple's grid; also the runtime Dock icon on macOS |
 | `pdfcraft.icns` | macOS icon (16–1024 px) |
+| `../../apps/ios/PdfCraftMobilePOC/Assets.xcassets/AppIcon.appiconset/AppIcon.png` | universal iPhone/iPad icon, derived from the macOS PNG by `packaging/ios-icon.swift` |
 | `pdfcraft.ico` | Windows icon (16–256 px), embedded in `pdfcraft.exe` by `apps/pdfcraft/build.rs` |
 | `pdfcraft-document.svg` | Windows PDF file icon master: a Lucide document outline, red badge and outlined PDF lettering; no font dependency |
 | `pdfcraft-document.ico` | Windows PDF file icon (16–256 px), embedded as resource 2 in `pdfcraft.exe` |
@@ -53,3 +57,14 @@ sidecar. This provides a file type icon; first-page thumbnails still need a thum
 packaging/icons.sh        # needs resvg and python3; iconutil (macOS) for the .icns
 cargo xtask assets        # then update the sha256 values in ATTRIBUTION.toml and run with --write
 ```
+
+On macOS, `packaging/icons.sh` also runs the Swift/CoreGraphics iOS conversion.
+To refresh only the mobile derivative from the committed macOS PNG:
+
+```sh
+xcrun swift packaging/ios-icon.swift assets/app-icon/pdfcraft-1024.png \
+  apps/ios/PdfCraftMobilePOC/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+```
+
+Update its manifest hash and regenerate `ATTRIBUTION.md` as above after changing it.
+Normal app builds use committed icons and do not need the conversion tools.

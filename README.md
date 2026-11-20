@@ -73,6 +73,10 @@
 
 ## Community
 
+**Experimental fork work:** the Blackout Secure `blackout-secure-ios-poc` branch contains a
+[native iOS/iPadOS proof of concept](apps/ios/README.md) using the existing Rust engine and
+a small SwiftUI shell. It is not an official ArtCraft mobile release or an endorsed product.
+
 PdfCraft is part of [ArtCraft](https://getartcraft.com). Come say hello, get help and follow development:
 
 - **Discord: [discord.gg/artcraft](https://discord.gg/artcraft)**. This is the fastest way to get help and share feedback. The app has a Discord button in its title bar.

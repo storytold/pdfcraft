@@ -1,0 +1,2 @@
+#include "Debug.xcconfig"
+RUST_PROFILE = release

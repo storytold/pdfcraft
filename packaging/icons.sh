@@ -3,8 +3,8 @@
 # from assets/app-icon/pdfcraft-document.svg. Both are master vectors.
 #
 # Needs: resvg (brew install resvg / cargo install resvg) and python3 (stdlib only, for the .ico).
-# On macOS, iconutil also writes the .icns. The outputs are committed, so building and packaging
-# never need these tools. After running it, update the sha256 values in ATTRIBUTION.toml, then
+# On macOS, iconutil writes the .icns and Swift derives the iOS app icon. Outputs are committed,
+# so building and packaging never need these tools. Update the sha256 values in ATTRIBUTION.toml, then
 # `cargo xtask assets --write`.
 #
 #   packaging/icons.sh
@@ -34,6 +34,13 @@ render() {
 
 # 1024 px PNG on Apple's grid (also the runtime Dock icon on macOS, see apps/pdfcraft/src/main.rs).
 render "$MAC" 1024 "$DIR/pdfcraft-1024.png"
+
+if [[ "$(uname -s)" = Darwin ]]; then
+  xcrun swift "$ROOT/packaging/ios-icon.swift" "$DIR/pdfcraft-1024.png" \
+    "$ROOT/apps/ios/PdfCraftMobilePOC/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+else
+  echo "warning: Swift/CoreGraphics on macOS required; iOS icon not regenerated" >&2
+fi
 
 # Linux hicolor theme (full bleed; hicolor/256x256 is also the runtime icon on Windows and Linux).
 for s in 16 24 32 48 64 128 256 512; do

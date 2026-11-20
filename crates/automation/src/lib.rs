@@ -113,6 +113,12 @@ impl Default for Automation {
 }
 
 impl Automation {
+    /// Choose whether document-provided scripts execute, before opening any documents.
+    pub fn with_javascript(mut self, enabled: bool) -> Self {
+        self.session.set_javascript(enabled);
+        self
+    }
+
     pub fn new() -> Self {
         Self {
             session: Session::new(),

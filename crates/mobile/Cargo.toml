@@ -1,0 +1,28 @@
+[package]
+name = "pdfcraft-mobile"
+description = "Small, local-only mobile boundary over the PdfCraft engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+swift = ["dep:swift-bridge", "dep:swift-bridge-build"]
+
+[dependencies]
+pdfcraft-automation = { workspace = true, default-features = false }
+pdfcraft-engine.workspace = true
+serde_json.workspace = true
+tempfile = "3.27"
+swift-bridge = { version = "=0.1.59", optional = true }
+
+[build-dependencies]
+swift-bridge-build = { version = "=0.1.59", optional = true }
+
+[dev-dependencies]
+pdfcraft-testkit.workspace = true

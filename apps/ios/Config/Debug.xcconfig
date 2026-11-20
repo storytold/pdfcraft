@@ -1,0 +1,8 @@
+RUST_TARGET[sdk=iphonesimulator*] = aarch64-apple-ios-sim
+RUST_TARGET[sdk=iphoneos*] = aarch64-apple-ios
+RUST_PROFILE = debug
+RUST_LIBRARY_ROOT = $(SRCROOT)/../../target
+LIBRARY_SEARCH_PATHS = $(inherited) "$(RUST_LIBRARY_ROOT)/$(RUST_TARGET)/$(RUST_PROFILE)"
+OTHER_LDFLAGS = $(inherited) -lpdfcraft_mobile -lc++ -liconv -framework Security -framework CoreFoundation
+ARCHS = arm64
+ENABLE_BITCODE = NO
