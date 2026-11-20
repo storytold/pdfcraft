@@ -3617,7 +3617,7 @@ fn a_callouts_arrow_knee_and_text_box_are_dragged_on_their_own() {
     assert!(near_pt(c.points[0], 40.0, 30.0) && near_pt(c.points[1], 130.0, 130.0), "{:?}", c.points);
 
     // Dragged by its leader line, the whole callout moves.
-    drag_pt(&mut h, (85.0, 75.0), (95.0, 75.0));
+    drag_pt(&mut h, (85.0, 80.0), (95.0, 80.0));
     let c = callout(&h);
     assert!(near_pt(c.points[0], 50.0, 30.0) && near_pt(c.points[1], 140.0, 130.0), "{:?}", c.points);
     assert_eq!(last_edit(&h).as_deref(), Some("Move comment"));
@@ -3898,7 +3898,9 @@ fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move comment pop-up"));
 
     // Close it.
-    h.get_by_label("Close").click();
+    let window = popup_rect(&h, "Tester");
+    let close = h.query_all_by_label("Close").map(|n| n.rect().center()).find(|c| window.contains(*c)).expect("the window's ×");
+    click(&mut h, close);
     h.run_steps(4);
     let note = comments(&h).into_iter().find(|a| a.subtype == "Text").expect("the note");
     assert_eq!(note.popup.map(|p| p.open), Some(false));
