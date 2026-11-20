@@ -369,6 +369,24 @@ fn user_unit_is_read_as_acrobat_reads_it() {
     }
 }
 
+/// #7680: the true-size scale of a `/UserUnit 2` page stores twice the factor per user-space
+/// unit, but a point on the page is still 1/72 in and the ratio says so.
+#[test]
+fn the_ratio_of_a_scale_is_worded_per_point_on_a_user_unit_page() {
+    let (plain, doubled) = (fixture("", "", &[]), fixture("", "/UserUnit 2", &[]));
+    let (one, two) = (scale_at(&plain, 0, [50.0, 50.0]).unwrap(), scale_at(&doubled, 0, [50.0, 50.0]).unwrap());
+    close(two.x, 2.0 * one.x);
+    assert_eq!(one.ratio, format!("1 pt = {} in", 1.0 / 72.0));
+    assert_eq!(two.ratio, one.ratio);
+    let scale = Scale::new(4.0, "in", 2).unwrap();
+    let worded = scale.clone().worded_per_point(2.0).unwrap();
+    assert_eq!(worded.ratio, "1 pt = 2 in");
+    assert_eq!(Scale { ratio: scale.ratio.clone(), ..worded }, scale, "only the wording changes");
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(scale.clone().worded_per_point(bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn a_scale_ratio_converts_its_page_side_to_points() {
     // #2752: a plan drawn at 1:50 is "1 mm = 50 mm", so a line 10 mm long on the page is 500 mm.

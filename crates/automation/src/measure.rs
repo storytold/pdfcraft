@@ -90,7 +90,11 @@ impl Automation {
                 return Err(failed("scale calibration needs exactly two points"));
             };
             let length = a.opt_num("distance")?.ok_or_else(|| failed("calibration needs a real-world distance"))?;
-            Scale::calibrate(*from, *to, length, unit, precision).map_err(failed)?
+            // The factor is per user-space unit; the ratio is worded per display point, which
+            // spans `1 / UserUnit` of them.
+            let scale = Scale::calibrate(*from, *to, length, unit, precision).map_err(failed)?;
+            let per_point = scale.x / self.doc(a)?.page_user_unit(page);
+            scale.worded_per_point(per_point).map_err(failed)?
         } else if let Some(page_distance) = a.opt_num("page_distance")? {
             // A ratio, "page_distance page_unit on the page = distance unit"; the page unit
             // defaults to the real-world one, as "1:50" means 1 mm = 50 mm.
@@ -106,7 +110,7 @@ impl Automation {
             {
                 let from = self.doc(a)?.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;
                 let to = self.doc(a)?.measurement_to_user(page, [1.0, 0.0]).map_err(failed)?;
-                Scale::calibrate(from, to, factor, unit, precision).map_err(failed)?
+                Scale::calibrate(from, to, factor, unit, precision).and_then(|scale| scale.worded_per_point(factor)).map_err(failed)?
             }
         } else {
             let at = a.nums::<2>("at")?.unwrap_or([0.0, 0.0]);
