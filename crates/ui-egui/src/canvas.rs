@@ -967,13 +967,15 @@ fn page_parts_of(
         return (parts, tabs);
     }
     if cx.editing_content {
-        for placed in body.pages {
-            parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
+        if cx.tool != QuickTool::AddText {
+            for placed in body.pages {
+                parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
+            }
         }
         // A picture being cropped holds every press on its page: its paragraphs and added text take none there.
         let cropping = session.image_selection.as_ref().filter(|s| s.crop.is_some()).map(|s| s.page);
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
-            parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo));
+            parts.extend(crate::edit_text_ui::page_parts(session, cx.doc, placed.page, placed, geo, cx.tool == QuickTool::AddText));
         }
         for placed in body.pages.iter().filter(|placed| Some(placed.page) != cropping) {
             parts.extend(crate::content_ui::page_parts(session, cx.doc, placed.page, placed));

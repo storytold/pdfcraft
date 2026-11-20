@@ -1721,7 +1721,7 @@ fn columns_resize_and_the_layout_is_kept_in_the_settings() {
     let mut h = combine_of(&[("a.pdf", 1), ("b.pdf", 1)]);
     let size = h.get_by_label("Size").rect();
     // The separator after Size: drag it right by 60 points.
-    let edge = egui::pos2(size.right() + 2.0, size.center().y);
+    let edge = egui::pos2(size.right() - 2.0, size.center().y);
     drag(&mut h, edge, edge + egui::vec2(60.0, 0.0));
     let widths = h.state().combine_columns.widths.clone();
     let size_key = craft::behavior::ColumnKey::new("size");
