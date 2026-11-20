@@ -105,58 +105,7 @@ pub(crate) fn el_text(el: &craft_xml::El) -> String {
         .collect()
 }
 
-pub(crate) const SUBTYPES: [(&str, &str); 17] = [
-    ("Text", "text"),
-    ("FreeText", "freetext"),
-    ("Line", "line"),
-    ("Square", "square"),
-    ("Circle", "circle"),
-    ("Polygon", "polygon"),
-    ("PolyLine", "polyline"),
-    ("Highlight", "highlight"),
-    ("Underline", "underline"),
-    ("Squiggly", "squiggly"),
-    ("StrikeOut", "strikeout"),
-    ("Stamp", "stamp"),
-    ("Caret", "caret"),
-    ("Ink", "ink"),
-    ("FileAttachment", "fileattachment"),
-    ("Sound", "sound"),
-    ("Redact", "redact"),
-];
-
-pub(crate) const FLAGS: [(i64, &str); 9] = [
-    (1, "invisible"),
-    (2, "hidden"),
-    (4, "print"),
-    (8, "nozoom"),
-    (16, "norotate"),
-    (32, "noview"),
-    (64, "readonly"),
-    (128, "locked"),
-    (256, "togglenoview"),
-];
-
-pub(crate) fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            // XML 1.0 §3.3.3 normalizes literal attribute whitespace, but not references.
-            '\t' => o.push_str("&#9;"),
-            '\n' => o.push_str("&#10;"),
-            '\r' => o.push_str("&#13;"),
-            c if (c as u32) < 0x20 && c != '\n' && c != '\t' => {}
-            // XML 1.0 noncharacters are not allowed even as raw text.
-            '\u{FFFE}' | '\u{FFFF}' => {}
-            c => o.push(c),
-        }
-    }
-    o
-}
+pub(crate) use craft_xml::esc_attr as esc;
 
 pub(crate) fn n(v: f64) -> String {
     let s = format!("{v:.4}");
