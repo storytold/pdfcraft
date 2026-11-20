@@ -100,6 +100,14 @@ fn select_after_edit(
                 view.comments.open_editor(a.page, n, String::new());
             }
         }
+        Edit::DeleteAnnotations { .. } => {
+            // Replies on other pages go with their thread, so no open editor can be trusted to still point at its comment.
+            view.comments.clear_selection();
+            view.comments.editing = None;
+            if view.comments.composer.as_ref().is_some_and(|c| matches!(c.kind, crate::comments::ComposerKind::Edit(_))) {
+                view.comments.composer = None;
+            }
+        }
         // Markup on a text selection across pages (marked so when it was made,
         // [`crate::DocView::selection_marks_edit`]; other batches of comments, such as Redact's
         // page range or search, are not) is followed up as one markup is: on the page the
@@ -1241,6 +1249,7 @@ fn one_page_changed(
     }
 }
 
+/// The single page whose raster a comment edit invalidates, or `None` when more than one page may change.
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
