@@ -81,6 +81,12 @@ pub(super) fn resolve_strict(doc: &Document, o: &Object) -> Result<Arc<Object>, 
     }
 }
 
+/// A font's or XObject's `/Subtype`, followed through a reference: the renderer follows one, so
+/// a font or XObject named that way is still drawn and must still be classified (#6770).
+pub(super) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
+    d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
+}
+
 pub(super) fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
         let _ = write!(s, "{b:02x}");

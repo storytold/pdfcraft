@@ -7,7 +7,7 @@ use pdfcraft_content::{Matrix, contains, overlaps, parse};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use super::extract::{appearance_matrix, bbox_of, matrix_of, page_content, res_dict};
-use super::util::{Ctx, image_codec};
+use super::util::{Ctx, image_codec, subtype};
 use crate::verify::limits::{MAX_CLIP_SUBPATHS, MAX_DEPTH, MAX_GS_STACK, MAX_HOLES, MAX_PIXELS};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -128,6 +128,9 @@ impl Geo<'_> {
         !gs.holes.iter().any(|h| contains(*h, reach, 0.01))
     }
 
+    /// Sweep one content stream (`data`, with resources `res`, drawn at `ctm` through a clip with
+    /// `holes`) and the forms it draws, reporting what it paints over each region. Past
+    /// [`MAX_DEPTH`] nested forms every region is unverifiable.
     fn run(&mut self, data: &[u8], res: &Dict, ctm: Matrix, holes: Vec<[f64; 4]>, depth: usize) {
         if depth > MAX_DEPTH {
             for i in 0..self.regions.len() {
@@ -191,7 +194,7 @@ impl Geo<'_> {
                     let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
                     let obj = self.doc.resolve(entry);
                     let Object::Stream(s) = &*obj else { continue };
-                    match s.dict.name(b"Subtype") {
+                    match subtype(self.doc, &s.dict).as_deref() {
                         Some(b"Image") => {
                             for i in self.touching(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
                                 let Some(region) = self.regions.get(i) else { continue };
@@ -203,7 +206,21 @@ impl Geo<'_> {
                             }
                         }
                         Some(b"Form") => self.form(s, &gs, res, depth),
-                        _ => {}
+                        // No `/Subtype`, or one the proof does not read: what it draws is unknown,
+                        // so a placement under a region can't be called clean (#6770). Its place is
+                        // the unit square an image fills or, with a `/BBox`, the box a form would
+                        // draw in; a malformed `/Matrix` or `/BBox` leaves the unit square.
+                        _ => {
+                            let mut touched = self.touching(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0]));
+                            if let (Ok(m), Ok(Some(bb))) = (matrix_of(self.doc, &s.dict), bbox_of(self.doc, &s.dict)) {
+                                touched.extend(self.touching(m.then(&gs.ctm).bbox(bb)));
+                            }
+                            touched.sort_unstable();
+                            touched.dedup();
+                            for i in touched {
+                                self.report(i, Finding::Unverifiable("an XObject of unknown type under the region can't be checked"));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -308,7 +325,7 @@ impl Geo<'_> {
         }
         for (_, f) in res_dict(doc, res, b"Font").iter() {
             let Some(font) = doc.resolve(f).as_dict().cloned() else { continue };
-            if font.name(b"Subtype") != Some(b"Type3") {
+            if subtype(doc, &font).as_deref() != Some(b"Type3") {
                 continue;
             }
             if let Some(procs) = font.get(b"CharProcs").and_then(|c| doc.resolve(c).as_dict().cloned()) {
@@ -346,7 +363,7 @@ impl Geo<'_> {
                 b"Do" => {
                     let Some(entry) = op.last_name().and_then(|n| xobjects.get(n)) else { continue };
                     let Object::Stream(x) = &*self.doc.resolve(entry) else { continue };
-                    match x.dict.name(b"Subtype") {
+                    match subtype(self.doc, &x.dict).as_deref() {
                         Some(b"Image") => return Ok(true),
                         Some(b"Form") => {
                             if let Some(r) = entry.as_ref()
