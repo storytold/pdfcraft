@@ -1,6 +1,6 @@
 use super::{
-    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
-    is_vertical, num, overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, is_vertical,
+    num, overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
@@ -550,30 +550,19 @@ pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, re
 }
 
 /// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
-/// would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The metrics are cached with the
-/// fonts `Tf` names, under a key no resource name can take (a name cannot hold a null byte).
-pub(super) fn extgstate_font(
-    doc: &Document,
-    scope: &mut Scope<'_>,
-    ext_gstates: &Dict,
-    name: &[u8],
-    fallback: &Rc<Metrics>,
-) -> Option<(Rc<Metrics>, bool, f64)> {
-    let state = doc.resolve(ext_gstates.get(name)?).as_dict().cloned()?;
-    let entry = doc.resolve(state.get(b"Font")?).as_array().cloned()?;
-    let [font, size] = entry.as_slice() else { return None };
+/// would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The walk reads it once for each
+/// name (`Walk::state_sets`).
+pub(super) fn extgstate_font(doc: &Document, ext_gstates: &Dict, name: &[u8], fallback: &Rc<Metrics>) -> Option<(Rc<Metrics>, bool, f64)> {
+    // Borrowed where held by reference, not copied: a state, its `/Font` array or its font may be
+    // large. (`resolve` copies one written in place.)
+    let state = doc.resolve(ext_gstates.get(name)?);
+    let entry = doc.resolve(state.as_dict()?.get(b"Font")?);
+    let [font, size] = entry.as_array()?.as_slice() else { return None };
     let size = doc.resolve(size).as_f64()?;
-    let font_dict = doc.resolve(font).as_dict().cloned();
-    let vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-    let key = [b"\0".as_slice(), name].concat();
-    let metrics = match scope.fonts.get(&key) {
-        Some(m) => m.clone(),
-        None => {
-            let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
-            scope.fonts.insert(key, m.clone());
-            m
-        }
-    };
+    let held = doc.resolve(font);
+    let font_dict = held.as_dict();
+    let vertical = font_dict.is_some_and(|d| is_vertical(doc, d));
+    let metrics = font_dict.map_or_else(|| fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, d)));
     Some((metrics, vertical, size))
 }
 
