@@ -48,7 +48,7 @@ pub const ADOBE_DATA_ALLOWED: &[(&str, &str)] = &[("hayro-cmap", "assets/cmaps.b
 /// technical data we hold ourselves rather than through a dependency. Each still needs an
 /// `[[asset]]` entry with `adobe_data = true`, so its SHA-256 is checked and any change to the
 /// table has to be re-attested deliberately.
-pub const ADOBE_DATA_FILES: &[&str] = &["crates/fonts/src/std14_metrics.rs"];
+pub const ADOBE_DATA_FILES: &[&str] = &[];
 
 /// File extensions that count as assets wherever they appear in the repository.
 const ASSET_EXTENSIONS: &[&str] = &[
@@ -594,23 +594,21 @@ mod tests {
     #[test]
     fn first_party_adobe_data_only_on_the_closed_list() {
         let l = lock(&[]);
-        // The generated standard-14 table is on the list, as `kind = "data"`.
-        let mut ok = asset("crates/fonts/src/std14_metrics.rs", "Adobe (Core14 AFM metrics); tables by the PdfCraft contributors", "data", "MIT");
-        ok.adobe_data = true;
-        let m = Manifest { asset: vec![ok], ..Default::default() };
-        assert!(check(&root(), &m, &[], &l).is_empty(), "{:?}", check(&root(), &m, &[], &l));
+        assert!(ADOBE_DATA_FILES.is_empty());
 
-        // Any other first-party file claiming it is refused.
+        // Any first-party file claiming adobe_data is refused now that the closed list is empty.
         let mut sneaky = asset("Cargo.toml", "Adobe", "data", "MIT");
         sneaky.adobe_data = true;
         let m = Manifest { asset: vec![sneaky], ..Default::default() };
         assert!(check(&root(), &m, &[], &l).iter().any(|p| p.contains("closed list")));
 
-        // Even on the list, it may only be data — never a typeface.
-        let mut wrong_kind = asset("crates/fonts/src/std14_metrics.rs", "Adobe", "font", "MIT");
+        // A visual asset from Adobe is also forbidden.
+        let mut wrong_kind = asset("Cargo.toml", "Adobe", "font", "MIT");
         wrong_kind.adobe_data = true;
         let m = Manifest { asset: vec![wrong_kind], ..Default::default() };
-        assert!(!check(&root(), &m, &[], &l).is_empty());
+        let problems = check(&root(), &m, &[], &l);
+        assert!(problems.iter().any(|p| p.contains("forbidden")));
+        assert!(problems.iter().any(|p| p.contains("closed list")));
     }
 
     #[test]
