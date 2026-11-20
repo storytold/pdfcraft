@@ -13,7 +13,8 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   circle, polygon, polyline, markup, stamp, caret, ink, attachments, sound, redact) with rect,
   name, author, subject, dates, flags, colours, opacity, width, icon, quads, line ends, ink,
   default appearance, callouts (`callout`, `fringe`, `intent`, `head`), pop-ups and reply threads
-  (`inreplyto`); field values nested by name, with text preserved across XML comments and processing instructions.
+  (`inreplyto`); field values nested by name. Annotation contents and field values retain text
+  across XML comments and processing instructions, including CDATA and character references.
   Formatting travels both ways as XFDF 3.0 names it: rich text (`<contents-richtext>`, the `/RC`
   XHTML as markup; plain text in it is the comment's text), default style (`<defaultstyle>`),
   border width, style and dash pattern (`width`, `style`, `dashes`; also from an older `/Border`
