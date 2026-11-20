@@ -56,7 +56,7 @@ never been measured side by side with Acrobat, and the first public releases (0.
 
 - **Target identified from the installed app.** `/Applications/Adobe Acrobat DC/Adobe Acrobat.app`,
   `CFBundleShortVersionString` 26.002.21931. Inspected without launching it and without opening
-  anything inside `Contents/Resources/JavaScripts/` (clean-room rules, `AGENTS.md` §2): the
+  anything inside `Contents/Resources/JavaScripts/` (clean-room rules, clean-room.md): the
   `Info.plist` `CFBundleDocumentTypes` (the formats it opens: see
   [file-format-parity.md](file-format-parity.md)), the `.lproj` folder names (24 localizations,
   plus the MEA/MEH/NAF Middle East and North Africa editions named in `Resources/Sequences/`), the
