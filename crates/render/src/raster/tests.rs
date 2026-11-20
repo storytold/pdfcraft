@@ -6815,6 +6815,76 @@ fn a_form_that_reaches_itself_through_a_pattern_or_a_glyph_is_drawn_once() {
     }
 }
 
+/// A Type 3 glyph procedure that shows its own glyph is drawn once: the drawing inside itself
+/// is skipped and reported. A fuzzed 2.6 KB file whose glyph showed itself three times per
+/// level took 30 s to draw, spending the page's whole nested-paint budget. A glyph built from
+/// another glyph of the same font still draws. Vendored patch: hayro-interpret
+/// `glyph_proc_drawing` (107).
+#[test]
+fn a_type3_glyph_that_shows_itself_is_drawn_once() {
+    // Glyph `a` paints a blue 10 x 10 square, then shows `a` again 20 units to its right
+    // (a chain) or `b` there (an ordinary composite glyph; `b` paints a red square).
+    let font = |a: &str| {
+        let b = "0 0 d0 1 0 0 rg 0 0 10 10 re f";
+        format!(
+            "5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 200 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R /b 7 0 R >> /Encoding << /Type /Encoding /Differences [97 /a /b] >> /FirstChar 97 /LastChar 98 /Widths [10 10] /Resources << /Font << /T3 5 0 R >> >> >> endobj\n6 0 obj << /Length {} >> stream\n{a}\nendstream endobj\n7 0 obj << /Length {} >> stream\n{b}\nendstream endobj\n",
+            a.len(),
+            b.len()
+        )
+    };
+    let cases = [
+        ("a glyph that shows itself", "0 0 d0 0 0 1 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (a) Tj ET", [255, 255, 255], true),
+        ("a glyph that shows another glyph of its font", "0 0 d0 0 0 1 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (b) Tj ET", [255, 0, 0], false),
+    ];
+    for (what, glyph_a, next, skipped) in cases {
+        let content = "BT /T3 1 Tf (a) Tj ET";
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+            content.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(font(glyph_a).as_bytes());
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{what}: {:?}", page.error);
+        assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "{what}: the glyph draws");
+        assert_eq!(rgb_at(&page.rgba, 200, 25, 35), next, "{what}: one glyph in");
+        assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [255, 255, 255], "{what}: nothing two glyphs in");
+        assert_eq!(page.warnings.contains(&RenderWarning::ContentTruncated), skipped, "{what}: a skipped drawing is reported");
+    }
+}
+
+/// A glyph procedure's refused drawings of itself don't spend the page's nested-paint budget,
+/// so the glyphs after it still draw. Glyph `a` shows `b`, whose procedure shows `b` 50,000
+/// times, then `a` shows `c`. When each refused `b` was charged to the budget first, the
+/// 50,000 of them spent it all and `c` was skipped. Vendored patch: hayro-interpret
+/// `glyph_proc_drawing` (107).
+#[test]
+fn a_glyph_showing_itself_does_not_spend_the_budget_of_the_glyphs_after_it() {
+    let a = "0 0 d0 0 0 1 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td (b) Tj ET BT /T3 1 Tf 40 0 Td (c) Tj ET";
+    let b = format!("0 0 d0 1 0 0 rg 0 0 10 10 re f BT /T3 1 Tf 20 0 Td ({}) Tj ET", "b".repeat(50_000));
+    let c = "0 0 d0 0 1 0 rg 0 0 10 10 re f";
+    let content = "BT /T3 1 Tf (a) Tj ET";
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 40] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+        content.len()
+    );
+    pdf.push_str(&format!(
+        "5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 200 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R /b 7 0 R /c 8 0 R >> /Encoding << /Type /Encoding /Differences [97 /a /b /c] >> /FirstChar 97 /LastChar 99 /Widths [10 10 10] /Resources << /Font << /T3 5 0 R >> >> >> endobj\n6 0 obj << /Length {} >> stream\n{a}\nendstream endobj\n7 0 obj << /Length {} >> stream\n{b}\nendstream endobj\n8 0 obj << /Length {} >> stream\n{c}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+        a.len(),
+        b.len(),
+        c.len()
+    ));
+    let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!(rgb_at(&page.rgba, 200, 5, 35), [0, 0, 255], "glyph a draws");
+    assert_eq!(rgb_at(&page.rgba, 200, 25, 35), [255, 0, 0], "glyph b draws once");
+    assert_eq!(rgb_at(&page.rgba, 200, 45, 35), [0, 255, 0], "glyph c, shown after b, still draws");
+    assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "b's drawings of itself are reported");
+}
+
 /// The page content budget counts what is held at once, not everything decoded: a form
 /// with 2 MiB of content painted three hundred times (600 MiB in all) draws every time.
 #[test]
