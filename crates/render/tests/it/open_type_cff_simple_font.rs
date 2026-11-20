@@ -14,8 +14,15 @@
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest};
 use std::sync::Arc;
 
-const CFF: &[u8] = include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb");
 const TRUE_TYPE: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
+
+fn foxit_fixed() -> Vec<u8> {
+    use craft_pdf::interpret::InterpreterSettings;
+    use craft_pdf::interpret::font::{FontQuery, StandardFont};
+    let (data, _) =
+        (InterpreterSettings::default().font_resolver)(&FontQuery::Standard(StandardFont::Courier)).expect("bundled Courier stand-in font");
+    (*data).as_ref().to_vec()
+}
 
 /// `cff` in the smallest OpenType wrapper: an `OTTO` table directory with one `CFF ` table.
 fn open_type(cff: &[u8]) -> Vec<u8> {
@@ -86,9 +93,10 @@ fn inked(rgba: &[u8]) -> usize {
 
 #[test]
 fn an_open_type_wrapped_cff_program_draws_like_the_bare_program() {
-    let bare = pixels(page(Some((CFF, "Type1C"))));
+    let cff = foxit_fixed();
+    let bare = pixels(page(Some((&cff, "Type1C"))));
     assert!(inked(&bare) > 200, "the bare CFF program drew no text");
-    let wrapped = pixels(page(Some((&open_type(CFF), "OpenType"))));
+    let wrapped = pixels(page(Some((&open_type(&cff), "OpenType"))));
     assert!(wrapped == bare, "the OpenType-wrapped program drew a different face: the font fell back");
 }
 
@@ -96,12 +104,13 @@ fn an_open_type_wrapped_cff_program_draws_like_the_bare_program() {
 /// gets, rather than failing the page or reading the program anyway.
 #[test]
 fn a_wrapper_without_a_cff_table_falls_back() {
-    let mut broken = open_type(CFF);
+    let cff = foxit_fixed();
+    let mut broken = open_type(&cff);
     broken.get_mut(12..16).unwrap().copy_from_slice(b"glyf");
     let rgba = pixels(page(Some((&broken, "OpenType"))));
     assert!(inked(&rgba) > 200, "the stand-in drew no text");
     assert!(rgba == pixels(page(None)), "the broken wrapper drew another face than the stand-in");
-    assert!(rgba != pixels(page(Some((CFF, "Type1C")))), "the broken wrapper drew the embedded program");
+    assert!(rgba != pixels(page(Some((&cff, "Type1C")))), "the broken wrapper drew the embedded program");
 }
 
 /// PDFBOX-5463: a `/Subtype /OpenType` font dictionary with an `OTTO` (CFF) `FontFile3 /OpenType`
@@ -109,12 +118,13 @@ fn a_wrapper_without_a_cff_table_falls_back() {
 /// TrueType, which reads only a `FontFile2`, and drew the stand-in.
 #[test]
 fn an_open_type_font_dictionary_with_a_cff_program_draws_it_as_a_type1_font() {
-    let wrapped = open_type(CFF);
+    let cff = foxit_fixed();
+    let wrapped = open_type(&cff);
     let type1 = pixels(font_page("Type1", Some((&wrapped, "FontFile3", "OpenType"))));
     assert!(inked(&type1) > 200, "the Type1 font drew no text");
     let open_type_dict = pixels(font_page("OpenType", Some((&wrapped, "FontFile3", "OpenType"))));
     assert!(open_type_dict == type1, "the /OpenType font drew another face than its CFF program");
-    let bare = pixels(font_page("OpenType", Some((CFF, "FontFile3", "Type1C"))));
+    let bare = pixels(font_page("OpenType", Some((&cff, "FontFile3", "Type1C"))));
     assert!(bare == type1, "the /OpenType font drew another face than its bare CFF program");
     assert!(type1 != pixels(font_page("OpenType", None)), "the program and the stand-in look alike");
 }
@@ -168,7 +178,7 @@ fn a_predicted_true_type_program_is_still_read_as_true_type() {
 /// a stand-in rather than failing the page.
 #[test]
 fn an_open_type_font_dictionary_without_a_usable_program_falls_back() {
-    let mut broken = open_type(CFF);
+    let mut broken = open_type(&foxit_fixed());
     broken.get_mut(12..16).unwrap().copy_from_slice(b"glyf");
     for program in [Some((&broken[..], "FontFile3", "OpenType")), Some((&[][..], "FontFile3", "OpenType")), None] {
         assert!(inked(&pixels(font_page("OpenType", program))) > 200, "the stand-in drew no text");
