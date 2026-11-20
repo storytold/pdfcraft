@@ -60,11 +60,13 @@ mod home;
 mod hotbar;
 mod panels;
 pub mod panes;
+pub mod tab_group;
 pub use print_ui::{
     DefaultPaperSource, Handling as PrintHandling, OptionsSource, PrintDraft, PrinterPapersSource, PrinterSetup, PrinterSource, Spooler,
     TwoSidedSource, Which as PrintWhich, system_printers, system_two_sided,
 };
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
+pub use tab_group::{TabGroup, TabGroupColor, TabGroupId};
 pub mod i18n;
 pub mod theme;
 pub mod viewer_prefs;
@@ -81,7 +83,7 @@ pub use editing::download_mime_type;
 /// 1440-wide screen at 150 % scaling, the tightest common half-screen split on Windows; the mode
 /// bar, tab strip and notice bars adapt below the old 820 minimum (#1913).
 pub const MIN_WINDOW_SIZE: [f32; 2] = [480.0, 520.0];
-pub use editing::{CloseRequest, SaveTarget};
+pub use editing::{CloseRequest, QueuedClose, SaveTarget};
 pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft, SplitMode, SplitPlan};
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore, default_dictionary_dir};
 use theme::{ThemeKind, ThemePreference};
@@ -315,6 +317,11 @@ pub struct PdfCraftApp {
     pub(crate) status_captions_lang: Option<i18n::Lang>,
     pub views: Vec<DocView>,
     pub(crate) closed_tabs: Vec<String>,
+    /// Browser-styled tab groups for document tabs.
+    pub tab_groups: Vec<tab_group::TabGroup>,
+    pub next_group_id: u64,
+    pub editing_group: Option<tab_group::TabGroupId>,
+    pub group_title_draft: String,
     /// `None` shows the Home tab.
     pub active: Option<usize>,
     pub mode: Mode,
@@ -576,6 +583,10 @@ pub struct PdfCraftApp {
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
+    /// When a close prompt is asking about a specific tab, records its view key.
+    pub(crate) asking_view_key: Option<u64>,
+    /// Documents waiting to be closed once the current close prompt is resolved.
+    pub pending_close_queue: Vec<QueuedClose>,
     /// The button of the "save changes?" question the keyboard has chosen; Save when it opens.
     pub(crate) save_prompt_button: dialogs::PromptButton,
     /// `attend_save_prompt` has seen the pending "save changes?" question. It is false again once

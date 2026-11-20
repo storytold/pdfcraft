@@ -9,7 +9,7 @@ use crate::PdfCraftApp;
 mod close;
 mod save;
 
-pub use close::CloseRequest;
+pub use close::{CloseRequest, QueuedClose};
 pub use save::PendingLock;
 #[cfg(not(target_arch = "wasm32"))]
 pub use save::PendingOverwrite;
