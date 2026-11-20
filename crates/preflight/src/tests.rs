@@ -62,7 +62,8 @@ fn verify_reports_what_breaks_pdfa() {
     ] {
         assert!(msgs.contains(&want), "missing {want:?} in {msgs:#?}");
     }
-    assert!(issues.iter().find(|i| i.message.starts_with("The font")).is_some_and(|i| !i.fixable));
+    // Helvetica is a standard font, so converting embeds a substitute for it (#7658).
+    assert!(issues.iter().find(|i| i.message.starts_with("The font")).is_some_and(|i| i.fixable));
     assert!(clauses(&issues).contains(&"6.6.2.1"));
     // Each problem is also worded separately from what the document calls things, so an interface
     // can say it in another language; in English the two come to the same sentence.
@@ -102,12 +103,12 @@ fn wordings_are_complete() {
 }
 
 #[test]
-fn convert_fixes_all_but_fonts() {
+fn convert_fixes_everything_in_a_messy_file() {
     let mut doc = messy();
     let r = convert(&mut doc, Level::A2b).unwrap();
     assert!(r.fixed.iter().any(|f| f.contains("output intent")), "{:?}", r.fixed);
-    let left: Vec<&str> = r.remaining.iter().map(|i| i.message.as_str()).collect();
-    assert_eq!(left, ["The font Helvetica isn't embedded"], "{:#?}", r.remaining);
+    assert!(r.fixed.iter().any(|f| f.contains("substitute font programs for Helvetica")), "{:?}", r.fixed);
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
     let d = declared(&doc);
     assert_eq!(d.pdfa, Some((2, "B".into())));
     assert_eq!(d.output_intents, ["sRGB IEC61966-2.1"]);
@@ -118,7 +119,312 @@ fn convert_fixes_all_but_fonts() {
     // It survives a save.
     let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
-    assert_eq!(verify(&back, Level::A2b).len(), 1);
+    assert!(verify(&back, Level::A2b).is_empty());
+}
+
+/// The program, widths and descriptor that converting gave the font dictionary `r`.
+fn embedded_font(doc: &Document, r: u32) -> (Vec<u8>, Vec<f64>, Dict) {
+    let font = doc.get(ObjRef::new(r, 0)).as_dict().cloned().unwrap();
+    let widths = font.get(b"Widths").and_then(Object::as_array).unwrap().iter().map(|w| w.as_f64().unwrap()).collect();
+    assert_eq!((font.int(b"FirstChar"), font.int(b"LastChar")), (Some(0), Some(255)));
+    let fd = doc.resolve(font.get(b"FontDescriptor").unwrap()).as_dict().cloned().unwrap();
+    assert_eq!(fd.get(b"FontName"), font.get(b"BaseFont"), "the descriptor names the font");
+    let Object::Stream(file) = &*doc.resolve(fd.get(b"FontFile3").unwrap()) else { panic!("no FontFile3") };
+    assert_eq!(file.dict.name(b"Subtype"), Some(&b"Type1C"[..]));
+    (file.decoded().unwrap().to_vec(), widths, fd)
+}
+
+/// #7658: converting a form that draws with Helvetica and Times it doesn't embed left "The font
+/// Helvetica isn't embedded" (and the same for Times-Roman, Helvetica-Bold, Times-Bold), so it
+/// could never become PDF/A. A standard Latin font now gets the substitute PdfCraft draws it with,
+/// with widths taken from that program; one convert can't embed is still reported, not fixable.
+#[test]
+fn convert_embeds_the_standard_fonts_a_document_does_not() {
+    let content = "BT /F1 12 Tf (Hi) Tj /F2 12 Tf (Hi) Tj /F3 12 Tf (A) Tj /F4 12 Tf (Hi) Tj /F5 12 Tf (a) Tj /F6 12 Tf (A) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R /F5 9 0 R /F6 11 0 R >> >> >>",
+            stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding /FontDescriptor 10 0 R >>",
+            // A € through /Differences, and codes out of a simple font's range that name nothing.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [-5 /A 300 /B 128 /Euro 255 /ydieresis /z] >> >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Garamond >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>",
+            "<< /Type /FontDescriptor /FontName /Times-Bold /Flags 34 /CharSet (/H/i) /ItalicAngle 0 /FontBBox [0 0 1 1] >>",
+            // A glyph the substitute doesn't have.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding << /Differences [65 /uni0416] >> >>",
+        ],
+        "",
+    );
+    let fonts = |issues: &[Issue]| -> Vec<(String, bool)> {
+        issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect()
+    };
+    let not_fixable = [
+        ("The font Garamond isn't embedded".to_string(), false),
+        ("The font Symbol isn't embedded".to_string(), false),
+        ("The font Helvetica-Oblique isn't embedded".to_string(), false),
+    ];
+    let mut before = fonts(&verify(&doc, Level::A2b));
+    before.sort();
+    let mut want: Vec<(String, bool)> =
+        ["Helvetica", "Times-Bold", "Times-Roman"].iter().map(|n| (format!("The font {n} isn't embedded"), true)).collect();
+    want.extend(not_fixable.clone());
+    want.sort();
+    assert_eq!(before, want);
+
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Helvetica, Times-Bold, Times-Roman".to_string()), "{:?}", r.fixed);
+    let mut after = fonts(&r.remaining);
+    after.sort();
+    let mut left = not_fixable.to_vec();
+    left.sort();
+    assert_eq!(after, left);
+
+    // Helvetica: no encoding, so the program's built-in StandardEncoding, whose 'A' is 667 wide.
+    let (program, widths, fd) = embedded_font(&doc, 5);
+    assert_eq!(program, pdfcraft_render::standard_font_program(pdfcraft_fonts::Std14::Helvetica));
+    assert_eq!(widths.len(), 256);
+    assert_eq!(widths[usize::from(b'A')], 667.0);
+    assert_eq!(fd.int(b"Flags"), Some(32), "nonsymbolic, sans serif, upright");
+    // Times-Bold keeps the flags its own descriptor gave, loses the character set that described
+    // no program, and its old descriptor is left as it was.
+    let (_, widths, fd) = embedded_font(&doc, 6);
+    assert_eq!(widths[usize::from(b'A')], 722.0);
+    assert_eq!(fd.int(b"Flags"), Some(34));
+    assert!(fd.get(b"CharSet").is_none());
+    assert!(doc.get(ObjRef::new(10, 0)).as_dict().unwrap().get(b"FontFile3").is_none());
+    // Times-Roman's €, through /Differences, is the substitute's own: 722, where the standard
+    // metrics say 500. The widths follow the program, as PDF/A asks (6.2.11.5); the page draws no
+    // €, so no text moves.
+    let (_, widths, _) = embedded_font(&doc, 7);
+    assert_eq!(widths[128], 722.0);
+    assert_eq!(widths[255], 500.0, "ÿ; the /z after it would be code 256 and names nothing");
+    assert_eq!(widths[0], 250.0, "code 0 is undefined (-5 /A named nothing), so .notdef");
+
+    // It survives a save.
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    let mut saved = fonts(&verify(&back, Level::A2b));
+    saved.sort();
+    assert_eq!(saved, left);
+}
+
+/// #7663 review: `Helvetica-Narrow` and `Helvetica-Condensed` read as aliases of Helvetica, so
+/// convert embedded regular Helvetica and replaced their own narrower `/Widths` with its advances,
+/// and every line set in them grew 15–22% wider. A font is now embedded only when the widths it
+/// gives are the substitute's or the standard face's; any other stays not fixable, as it was.
+#[test]
+fn a_font_whose_own_widths_are_not_the_standard_ones_is_not_embedded() {
+    use pdfcraft_fonts::Std14;
+    let widths = |face: Std14, scale: f64, change: Option<(u8, f64)>| -> String {
+        let w = (32..=255u8).map(|c| match change {
+            Some((code, w)) if code == c => w,
+            _ => (face.width(c) * scale).round(),
+        });
+        format!("/FirstChar 32 /LastChar 255 /Widths [{}]", w.map(|w| w.to_string()).collect::<Vec<_>>().join(" "))
+    };
+    let font = |name: &str, widths: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name} /Encoding /WinAnsiEncoding {widths} >>");
+    let fonts = [
+        // The reviewer's files: narrow and condensed widths, under names that alias Helvetica.
+        font("Helvetica-Narrow", &widths(Std14::Helvetica, 0.82, None)),
+        font("Helvetica-Condensed-Bold", &widths(Std14::HelveticaBold, 0.85, None)),
+        // One glyph that is neither the substitute's width nor the standard one.
+        font("Times-Roman", &widths(Std14::TimesRoman, 1.0, Some((b'e', 520.0)))),
+        // Widths that can't be read can't be compared.
+        font("Times-Bold", "/FirstChar 32 /Widths [250 (x)]"),
+        // The standard metrics, € (556, where the substitute's is 667, but the page draws none)
+        // and zeros for unused codes included, are Helvetica's and Times-Italic's own, so they're
+        // embedded.
+        font("Helvetica", &widths(Std14::Helvetica, 1.0, None)),
+        font("Times-Italic", &widths(Std14::TimesItalic, 1.0, Some((b'Q', 0.0)))),
+    ];
+    let content = "BT /F1 12 Tf (a) Tj /F2 12 Tf (a) Tj /F3 12 Tf (a) Tj /F4 12 Tf (a) Tj /F5 12 Tf (a) Tj /F6 12 Tf (a) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R /F5 9 0 R /F6 10 0 R >> >> >>"
+            .to_string(),
+        stream,
+    ];
+    objects.extend(fonts);
+    let mut doc = build(&objects.iter().map(String::as_str).collect::<Vec<_>>(), "");
+    let original = |r: u32| doc.get(ObjRef::new(r, 0)).as_dict().cloned().unwrap();
+    let kept: Vec<Dict> = (5..=8).map(original).collect();
+
+    let not_fixable: Vec<String> = ["Helvetica-Narrow", "Helvetica-Condensed-Bold", "Times-Roman", "Times-Bold"]
+        .iter()
+        .map(|n| format!("The font {n} isn't embedded"))
+        .collect();
+    let fixable = |issues: &[Issue]| -> Vec<(String, bool)> {
+        let mut f: Vec<_> = issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect();
+        f.sort();
+        f
+    };
+    let mut want: Vec<(String, bool)> = not_fixable.iter().map(|m| (m.clone(), false)).collect();
+    want.extend(["Helvetica", "Times-Italic"].iter().map(|n| (format!("The font {n} isn't embedded"), true)));
+    want.sort();
+    assert_eq!(fixable(&verify(&doc, Level::A2b)), want);
+
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Helvetica, Times-Italic".to_string()), "{:?}", r.fixed);
+    let mut left: Vec<(String, bool)> = not_fixable.iter().map(|m| (m.clone(), false)).collect();
+    left.sort();
+    assert_eq!(fixable(&r.remaining), left);
+    for (r, before) in (5..=8).zip(kept) {
+        assert_eq!(doc.get(ObjRef::new(r, 0)).as_dict().cloned().unwrap(), before, "object {r} is left as it was");
+    }
+    let (_, widths, _) = embedded_font(&doc, 9);
+    assert_eq!(widths[128], 667.0, "Helvetica's € is the substitute's, as PDF/A asks (6.2.11.5)");
+}
+
+/// #7663 review: a font with no `/Widths` is laid out with the standard metrics, and the
+/// substitutes' advances differ from those for a few glyphs (`@` in Helvetica-Oblique, 1015
+/// against 1116; € in Times-Roman and Times-BoldItalic, 500 against 722 and 667). Embedding
+/// writes the substitute's widths, so the text after such a glyph moved (on page 2 of
+/// PDFBOX-816's `TaxReturn-1.pdf`, after an `@`). A font that draws one is now left unembedded;
+/// one that could draw it, but doesn't, is embedded.
+#[test]
+fn a_font_that_draws_a_glyph_the_substitute_widens_is_not_embedded() {
+    // The form XObject's /F1 is Times-BoldItalic, not the page's Times-Bold: names are read per
+    // resource dictionary.
+    let page = "BT /F1 12 Tf 10 100 Td (ab) Tj /F2 12 Tf 0 20 Td (a@b) Tj /F3 12 Tf 0 20 Td [(a) -20 <80>] TJ ET /Fm0 Do";
+    let form = "BT /F1 12 Tf 10 10 Td <80> Tj ET";
+    let page_stream = format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len());
+    let form_stream = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /Font << /F1 9 0 R >> >> /Length {} >>\nstream\n{form}\nendstream",
+        form.len()
+    );
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> /XObject << /Fm0 8 0 R >> >> >>",
+            page_stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+            form_stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-BoldItalic /Encoding /WinAnsiEncoding >>",
+        ],
+        "",
+    );
+    let fonts = |issues: &[Issue]| -> Vec<(String, bool)> {
+        let mut f: Vec<_> = issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect();
+        f.sort();
+        f
+    };
+    let left: Vec<(String, bool)> =
+        ["Helvetica-Oblique", "Times-BoldItalic", "Times-Roman"].iter().map(|n| (format!("The font {n} isn't embedded"), false)).collect();
+    let mut want = left.clone();
+    want.push(("The font Times-Bold isn't embedded".to_string(), true));
+    want.sort();
+    assert_eq!(fonts(&verify(&doc, Level::A2b)), want);
+
+    let render = |doc: &Document| {
+        let bytes = pdfcraft_cos::write_full(doc, &Default::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), Default::default());
+        r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() }).rgba
+    };
+    let before = render(&doc);
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Times-Bold".to_string()), "{:?}", r.fixed);
+    assert_eq!(fonts(&r.remaining), left);
+    let (_, widths, _) = embedded_font(&doc, 5);
+    assert_eq!(widths[128], 722.0, "Times-Bold could draw a €, but doesn't");
+    assert!(render(&doc) == before, "the page changed when its fonts were embedded");
+}
+
+/// #7663 review: a code the font draws is laid out with the width the font gives it, even zero,
+/// or `/MissingWidth` outside `/FirstChar`..`/LastChar`; and WinAnsi's unassigned 0x7F names no
+/// glyph the substitute has. Embedding would write the substitute's advance (or `.notdef`'s) for
+/// each, moving the text after it, so a font that draws one stays unembedded.
+#[test]
+fn a_drawn_code_with_a_zero_missing_or_unassigned_width_is_not_embedded() {
+    use pdfcraft_fonts::Std14;
+    let standard = |face: Std14, zero: u8| -> String {
+        let w = (32..=255u8).map(|c| if c == zero { 0.0 } else { face.width(c) });
+        format!("/FirstChar 32 /LastChar 255 /Widths [{}]", w.map(|w| w.to_string()).collect::<Vec<_>>().join(" "))
+    };
+    let zero_a = format!("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding {} >>", standard(Std14::Helvetica, b'A'));
+    let content = "BT /F1 12 Tf 10 100 Td (AA) Tj /F2 12 Tf 0 20 Td (AA) Tj /F3 12 Tf 0 20 Td <7F41> Tj /F4 12 Tf 0 20 Td (AA) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R >> >> >>",
+            stream.as_str(),
+            // Draws an `A` its /Widths gives zero.
+            zero_a.as_str(),
+            // Draws an `A` outside /FirstChar../LastChar, so /MissingWidth.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 32 /Widths [278] /FontDescriptor 9 0 R >>",
+            // Draws WinAnsi 0x7F, which Annex D leaves unassigned.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+            // Draws only what keeps its width.
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
+            "<< /Type /FontDescriptor /FontName /Helvetica-Bold /Flags 32 /MissingWidth 100 /FontBBox [0 0 1 1] /ItalicAngle 0 /Ascent 718 /Descent -207 /CapHeight 718 /StemV 140 >>",
+        ],
+        "",
+    );
+    let fonts = |issues: &[Issue]| -> Vec<(String, bool)> {
+        let mut f: Vec<_> = issues.iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message.clone(), i.fixable)).collect();
+        f.sort();
+        f
+    };
+    let left: Vec<(String, bool)> =
+        ["Helvetica", "Helvetica-Bold", "Times-Roman"].iter().map(|n| (format!("The font {n} isn't embedded"), false)).collect();
+    let mut want = left.clone();
+    want.push(("The font Times-Bold isn't embedded".to_string(), true));
+    want.sort();
+    assert_eq!(fonts(&verify(&doc, Level::A2b)), want);
+
+    let render = |doc: &Document| {
+        let bytes = pdfcraft_cos::write_full(doc, &Default::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), Default::default());
+        r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() }).rgba
+    };
+    let before = render(&doc);
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Embedded PdfCraft's substitute font programs for Times-Bold".to_string()), "{:?}", r.fixed);
+    assert_eq!(fonts(&r.remaining), left);
+    assert!(render(&doc) == before, "the page changed when its fonts were embedded");
+}
+
+/// #7663 review: `Q` restores the font the matching `q` saved. Past the 1,024 saved states the
+/// scan keeps, a `Q` couldn't, so after selecting Helvetica-Oblique, nesting 1,025 `q`, selecting
+/// Garamond and closing one `Q`, the `@` drawn next was put down to Garamond, and Helvetica-Oblique
+/// (whose substitute widens `@`) was embedded. Nesting that deep now leaves every code drawn.
+#[test]
+fn a_font_restored_past_the_saved_state_limit_counts_as_drawing_anything() {
+    let doc = |depth: usize| {
+        let content = format!("BT /F1 12 Tf ET {}BT /F2 12 Tf ET Q BT 10 100 Td (a@b) Tj ET {}", "q ".repeat(depth), "Q ".repeat(depth - 1));
+        let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+                stream.as_str(),
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Garamond >>",
+            ],
+            "",
+        )
+    };
+    let oblique =
+        |doc: &Document| verify(doc, Level::A2b).into_iter().find(|i| i.message == "The font Helvetica-Oblique isn't embedded").map(|i| i.fixable);
+    // Within the limit, `Q` restores Helvetica-Oblique and the `@` is its: not fixable.
+    assert_eq!(oblique(&doc(10)), Some(false));
+    // Past it, the scan can't say which font drew the `@`, so it can't embed Helvetica-Oblique.
+    let mut deep = doc(1025);
+    assert_eq!(oblique(&deep), Some(false));
+    let r = convert(&mut deep, Level::A2b).unwrap();
+    assert!(r.remaining.iter().any(|i| i.message == "The font Helvetica-Oblique isn't embedded" && !i.fixable), "{:?}", r.remaining);
 }
 
 #[test]
@@ -2366,4 +2672,147 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
+}
+
+/// #7658: the program converting embeds for a standard font is the one PdfCraft drew it with
+/// before, so the page looks the same after converting (here in Helvetica and Times-Bold, whose
+/// letters keep their standard widths).
+#[test]
+fn embedding_standard_fonts_leaves_the_page_looking_the_same() {
+    let content = "BT /F1 18 Tf 10 150 Td (Oral Screening) Tj /F2 18 Tf 0 -40 Td (Record, page 1) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+            stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>",
+        ],
+        "",
+    );
+    let render = |doc: &Document| {
+        let bytes = pdfcraft_cos::write_full(doc, &Default::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes), Default::default());
+        let page = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    };
+    let before = render(&doc);
+    assert!(before.rgba.iter().any(|&p| p != before.rgba[0]), "the text must draw something");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    let after = render(&doc);
+    assert_eq!((after.width, after.height), (before.width, before.height));
+    assert!(after.rgba == before.rgba, "the page changed when its fonts were embedded");
+}
+
+/// #7658: a form Reader-enabled with Adobe's signing toolkit carries usage rights whose signature
+/// records the toolkit's build number past 32 bits (`/Prop_Build /App /R 202310270710265`), so
+/// converting it left "An integer is outside the 32-bit range", not fixable. Converting voids
+/// usage rights anyway (they are signed over the file as it was), so it takes them off, keeping a
+/// certification, and the number goes with them. A number past the limit elsewhere still stays.
+#[test]
+fn convert_removes_usage_rights_and_the_build_number_they_carry() {
+    let with = |perms: &str, extra: &str| {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R /Perms {perms} {extra} >>");
+        build(
+            &[
+                catalog.as_str(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R >>",
+                "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /Reference [<< /Type /SigRef /TransformMethod /UR3 >>] \
+                 /Prop_Build << /App << /Name /AdobePDFJavaToolkit /R 202310270710265 >> >> /ByteRange [0 10 20 5] /Contents <00> >>",
+                "<< /Type /Sig /Reference [<< /Type /SigRef /TransformMethod /DocMDP >>] /ByteRange [0 10 20 5] /Contents <00> >>",
+                "<< /UR3 4 0 R >>",
+            ],
+            "",
+        )
+    };
+    let int_issue = |issues: &[Issue]| issues.iter().find(|i| i.message == "An integer is outside the 32-bit range").map(|i| i.fixable);
+    let perms = |doc: &Document| doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Perms").map(|p| (*doc.resolve(p)).clone());
+
+    // Usage rights beside a certification: the certification stays.
+    let mut doc = with("<< /UR3 4 0 R /DocMDP 5 0 R >>", "");
+    assert_eq!(int_issue(&verify(&doc, Level::A2b)), Some(true), "only the usage rights hold it, so converting fixes it");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.contains(&"Removed the Reader usage rights, which converting voids".to_string()), "{:?}", r.fixed);
+    assert_eq!(int_issue(&r.remaining), None, "{:#?}", r.remaining);
+    let kept = perms(&doc).unwrap();
+    let kept = kept.as_dict().unwrap();
+    assert!(kept.get(b"UR3").is_none() && kept.get(b"DocMDP").is_some());
+    assert!(matches!(*doc.get(ObjRef::new(4, 0)), Object::Null));
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let back = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(int_issue(&verify(&back, Level::A2b)), None);
+
+    // Usage rights alone, in a /Perms of its own: /Perms goes, and its object with it.
+    let mut doc = with("6 0 R", "");
+    convert(&mut doc, Level::A2b).unwrap();
+    assert!(perms(&doc).is_none());
+    assert!(matches!(*doc.get(ObjRef::new(6, 0)), Object::Null));
+
+    // The same number somewhere else is not the usage rights' to take away.
+    let mut doc = with("<< /UR3 4 0 R >>", "/PieceInfo << /X << /LastModified (D:2024) /Private << /N 202310270710265 >> >> >>");
+    assert_eq!(int_issue(&verify(&doc, Level::A2b)), Some(false));
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(int_issue(&r.remaining), Some(false));
+}
+
+/// Font dictionaries of one face share one embedded program: a generator that writes a
+/// `/Helvetica` per page would otherwise get a copy of the program per page.
+#[test]
+fn fonts_of_one_face_share_one_embedded_program() {
+    let content = "BT /F1 12 Tf (a) Tj /F2 12 Tf (b) Tj /F3 12 Tf (c) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>",
+            stream.as_str(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+        ],
+        "",
+    );
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.remaining.is_empty(), "{:#?}", r.remaining);
+    let program = |n: u32| {
+        let font = doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+        let fd = doc.resolve(font.get(b"FontDescriptor").unwrap()).as_dict().cloned().unwrap();
+        fd.get(b"FontFile3").and_then(Object::as_ref).unwrap()
+    };
+    assert_eq!(program(5), program(6), "both Helveticas point to one program");
+    assert_ne!(program(5), program(7), "Times has its own");
+}
+
+/// Two fonts of one name report one problem, which is fixable only if converting can embed
+/// both: here one names a glyph the substitute lacks, so it stays, whichever comes first.
+#[test]
+fn a_problem_repeated_by_several_fonts_is_fixable_only_if_all_are() {
+    let embeddable = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+    let not = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Differences [65 /uni0416] >> >>";
+    for (first, second) in [(embeddable, not), (not, embeddable)] {
+        let content = "BT /F1 12 Tf (A) Tj /F2 12 Tf (A) Tj ET";
+        let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+        let mut doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+                stream.as_str(),
+                first,
+                second,
+            ],
+            "",
+        );
+        let font = |issues: &[Issue]| -> Vec<bool> {
+            issues.iter().filter(|i| i.message == "The font Helvetica isn't embedded").map(|i| i.fixable).collect()
+        };
+        assert_eq!(font(&verify(&doc, Level::A2b)), [false]);
+        assert_eq!(font(&convert(&mut doc, Level::A2b).unwrap().remaining), [false]);
+    }
 }

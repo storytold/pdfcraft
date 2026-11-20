@@ -15,7 +15,13 @@ craft-cms-v2 = { package = "craft-cms", version = "0.1.0", git = "https://github
 craft-xml = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+# Standard-14 font names, and the encodings a substitute is measured under.
+pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
+# The substitute programs PDF/A conversion embeds for standard fonts a document doesn't embed.
+pdfcraft-render = { workspace = true }
+# Reads those (CFF) programs' glyph names and advances; the version pdfcraft-fonts already uses.
+skrifa = "0.44"
 
 [dev-dependencies]
 flate2 = { workspace = true }

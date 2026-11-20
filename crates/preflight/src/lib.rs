@@ -23,6 +23,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod embed;
 mod gstate;
 mod header;
 pub mod icc;
@@ -453,20 +454,25 @@ fn type3_procs_within(
     }
 }
 
+/// The streams of the page dictionary `page`'s `/Contents`, in order.
+fn page_contents(doc: &Document, page: &Dict) -> Vec<ObjRef> {
+    let contents = match page.get(b"Contents") {
+        Some(Object::Ref(r)) => match &*doc.get(*r) {
+            Object::Array(a) => a.clone(),
+            _ => vec![Object::Ref(*r)],
+        },
+        Some(Object::Array(a)) => a.clone(),
+        _ => Vec::new(),
+    };
+    contents.iter().filter_map(Object::as_ref).collect()
+}
+
 /// The content streams that only a reference identifies, their dictionaries saying nothing: the
 /// pages' `/Contents` and Type 3 glyph procedures.
 fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
     let mut out = std::collections::HashSet::new();
     for p in pdfcraft_model::pages(doc) {
-        let contents = match p.dict.get(b"Contents") {
-            Some(Object::Ref(r)) => match &*doc.get(*r) {
-                Object::Array(a) => a.clone(),
-                _ => vec![Object::Ref(*r)],
-            },
-            Some(Object::Array(a)) => a.clone(),
-            _ => Vec::new(),
-        };
-        out.extend(contents.iter().filter_map(Object::as_ref));
+        out.extend(page_contents(doc, &p.dict));
     }
     let mut read = std::collections::HashSet::new();
     for (_, o) in objs {
@@ -694,15 +700,30 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     check_transparency(doc, &pages, &mut issue);
     let drawing = drawing_fonts(doc, &objs);
+    let drawn = embed::Drawn::read(doc, &objs, &drawing);
+    // Each font the document draws with, and whether [`convert`] can embed a substitute for it.
+    let drawing: std::collections::HashMap<ObjRef, bool> =
+        drawing.into_iter().map(|r| (r, doc.get(r).as_dict().is_some_and(|d| embed::plan(doc, r, d, &drawn).is_some()))).collect();
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
-    // One message per kind of problem is enough for repeated ones (as preflight summaries do).
-    let mut out = out.into_inner();
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
-    out
+    // One message per kind of problem is enough for repeated ones (as preflight summaries do). A
+    // repeated problem is fixable only if every occurrence is: two fonts both named Helvetica
+    // say the same thing, and converting may embed one and not the other.
+    let mut kept: Vec<Issue> = Vec::new();
+    let mut index = std::collections::HashMap::new();
+    for i in out.into_inner() {
+        let key = (i.clause, i.message.clone(), i.page);
+        match index.get(&key).and_then(|&k: &usize| kept.get_mut(k)) {
+            Some(first) => first.fixable &= i.fixable,
+            None => {
+                index.insert(key, kept.len());
+                kept.push(i);
+            }
+        }
+    }
+    kept
 }
 
 /// 6.1.2, 6.1.3 and 6.6: identification and metadata, the file header, the file identifier and
@@ -961,27 +982,78 @@ fn check_limits(
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     // 6.1.13: the implementation limits of ISO 32000-1 Annex C.
-    let over = limits::exceeded(doc, objs, &referenced_content(doc, objs));
+    let content = referenced_content(doc, objs);
+    let over = limits::exceeded(doc, objs, &content);
+    // A value only usage-rights signatures hold goes with them when converting (#7658: Adobe's
+    // signing toolkit writes its build number, `/Prop_Build /App /R 202310270710265`, past 32
+    // bits). The rest is scanned again only when there is something to tell apart.
+    let rights = usage_rights_signatures(doc);
+    let rest = if (over.int || over.real || over.string || over.name) && !rights.is_empty() {
+        let kept: Vec<_> = objs.iter().filter(|(r, _)| !rights.contains(r)).cloned().collect();
+        limits::exceeded(doc, &kept, &content)
+    } else {
+        over
+    };
     if over.int {
-        issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
+        issue("6.1.13", "An integer is outside the 32-bit range", None, None, !rest.int);
     }
     if over.real {
-        issue("6.1.13", "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸", None, None, false);
+        issue("6.1.13", "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸", None, None, !rest.real);
     }
     if over.string {
-        issue("6.1.13", "A string is longer than 32767 bytes", None, None, false);
+        issue("6.1.13", "A string is longer than 32767 bytes", None, None, !rest.string);
     }
     if limits::cid_over_limit(doc, objs) {
         issue("6.1.13", "A CMap maps a character code to a CID above 65535", None, None, false);
     }
     if over.name {
-        issue("6.1.13", "A name is longer than 127 bytes", None, None, false);
+        issue("6.1.13", "A name is longer than 127 bytes", None, None, !rest.name);
     }
     for (i, p) in pages.iter().enumerate() {
         if limits::page_box_out_of_range(doc, &p.dict) {
             issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
         }
     }
+}
+
+/// The usage-rights entries of the catalog's `/Perms` (ISO 32000-2 12.8.4.3): `/UR3`, and the
+/// older `/UR` some files still carry.
+const USAGE_RIGHTS: [&[u8]; 2] = [b"UR3", b"UR"];
+
+/// The signature objects of the document's usage rights.
+fn usage_rights_signatures(doc: &Document) -> std::collections::HashSet<ObjRef> {
+    let perms = doc.root().map(|r| doc.get(r)).and_then(|c| c.as_dict().and_then(|c| c.get(b"Perms")).map(|p| doc.resolve(p)));
+    let Some(perms) = perms.as_deref().and_then(Object::as_dict) else { return Default::default() };
+    USAGE_RIGHTS.iter().filter_map(|k| perms.get(k)).filter_map(Object::as_ref).collect()
+}
+
+/// Take the usage rights off the catalog `cat`, keeping the rest of `/Perms` (a certification's
+/// `/DocMDP`), and empty their signature objects. They are signed over the file as it was, so
+/// converting it voids them, and a viewer may lock every field of a form whose usage rights are
+/// void; the XFA layout drops them for the same reason (`pdfcraft_xfa`, `drop_usage_rights`).
+/// Whether there were any.
+fn drop_usage_rights(doc: &mut Document, cat: &mut Dict) -> Result<bool, pdfcraft_cos::CosError> {
+    let Some(entry) = cat.get(b"Perms").cloned() else { return Ok(false) };
+    let Some(mut perms) = doc.resolve(&entry).as_dict().cloned() else { return Ok(false) };
+    let signatures: Vec<Object> = USAGE_RIGHTS.iter().filter_map(|k| perms.remove(k)).collect();
+    if signatures.is_empty() {
+        return Ok(false);
+    }
+    match entry {
+        Object::Ref(r) if perms.is_empty() => {
+            cat.remove(b"Perms");
+            doc.set(r, Object::Null);
+        }
+        _ if perms.is_empty() => {
+            cat.remove(b"Perms");
+        }
+        Object::Ref(r) => doc.set_existing(r, Object::Dict(perms))?,
+        _ => cat.set(b"Perms".to_vec(), Object::Dict(perms)),
+    }
+    for r in signatures.iter().filter_map(Object::as_ref) {
+        doc.set(r, Object::Null);
+    }
+    Ok(true)
 }
 
 fn check_spots(
@@ -1038,13 +1110,13 @@ fn check_objects(
     doc: &Document,
     level: Level,
     objects: &[(ObjRef, std::sync::Arc<Object>)],
-    drawing: &std::collections::HashSet<ObjRef>,
+    drawing: &std::collections::HashMap<ObjRef, bool>,
     page_of: &impl Fn(ObjRef) -> Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, d, o, drawing.contains(r), page_of(*r), issue);
+        check_one_object(doc, level, d, o, drawing.get(r).copied(), page_of(*r), issue);
     }
     for (i, p) in pdfcraft_model::pages(doc).into_iter().enumerate() {
         if let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a))
@@ -1052,7 +1124,7 @@ fn check_objects(
         {
             for entry in a {
                 if let Object::Dict(d) = entry {
-                    check_one_object(doc, level, d, entry, false, Some(i), issue);
+                    check_one_object(doc, level, d, entry, None, Some(i), issue);
                 }
             }
         }
@@ -1065,7 +1137,8 @@ fn check_one_object(
     level: Level,
     dict: &Dict,
     object: &Object,
-    draws: bool,
+    // `Some` for a font the document draws with, saying whether [`convert`] can embed it.
+    draws: Option<bool>,
     page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
@@ -1083,8 +1156,10 @@ fn check_one_object(
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
     // A Type 0 font's descendant is checked through it.
-    if draws && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some()) {
-        check_font(doc, dict, issue);
+    if let Some(fixable) = draws
+        && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some())
+    {
+        check_font(doc, dict, fixable, issue);
     }
     if let Object::Stream(stream) = object {
         check_stream(doc, stream, subtype, issue);
@@ -1203,13 +1278,23 @@ fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'stati
     }
 }
 
-fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    let sub = d.name(b"Subtype");
-    if sub == Some(b"Type3") {
+/// Report the font dictionary `d` if it isn't embedded: `fixable` when [`convert`] can embed a
+/// substitute for it.
+fn check_font(doc: &Document, d: &Dict, fixable: bool, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
+    if d.name(b"Subtype") == Some(b"Type3") || font_embedded(doc, d) {
         return;
     }
-    let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned());
-    let descriptor = if sub == Some(b"Type0") {
+    // A font the document doesn't name gets a sentence of its own, rather than the word for
+    // "a font" put where a name goes, which read badly even in English.
+    match d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned()) {
+        Some(n) => issue("6.2.11.4", "The font {} isn't embedded", Some(n), None, fixable),
+        None => issue("6.2.11.4", "A font isn't embedded", None, None, fixable),
+    }
+}
+
+/// Whether the font dictionary `d` (a Type 0 font through its descendant) has a font program.
+fn font_embedded(doc: &Document, d: &Dict) -> bool {
+    let descriptor = if d.name(b"Subtype") == Some(b"Type0") {
         d.get(b"DescendantFonts")
             .map(|x| doc.resolve(x))
             .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
@@ -1218,18 +1303,10 @@ fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'s
     } else {
         d.get(b"FontDescriptor").cloned()
     };
-    let embedded = descriptor
+    descriptor
         .map(|fd| doc.resolve(&fd))
         .and_then(|fd| fd.as_dict().cloned())
-        .is_some_and(|fd| fd.get(b"FontFile").is_some() || fd.get(b"FontFile2").is_some() || fd.get(b"FontFile3").is_some());
-    if !embedded {
-        // A font the document doesn't name gets a sentence of its own, rather than the word for
-        // "a font" put where a name goes, which read badly even in English.
-        match name {
-            Some(n) => issue("6.2.11.4", "The font {} isn't embedded", Some(n), None, false),
-            None => issue("6.2.11.4", "A font isn't embedded", None, None, false),
-        }
-    }
+        .is_some_and(|fd| fd.get(b"FontFile").is_some() || fd.get(b"FontFile2").is_some() || fd.get(b"FontFile3").is_some())
 }
 
 fn info(doc: &Document, key: &str) -> Option<String> {
@@ -1463,6 +1540,30 @@ fn convert_direct_page_annots(
     Ok(())
 }
 
+/// Give the standard fonts the document draws with but doesn't embed the program PdfCraft draws
+/// them with (#7658). Only fonts that draw are checked, so only those are embedded. What it did,
+/// as a line for the report.
+fn embed_standard_fonts(doc: &mut Document) -> Result<Option<String>, pdfcraft_cos::CosError> {
+    let objs = objects(doc);
+    let drawing = drawing_fonts(doc, &objs);
+    // Embedding a font changes no content, so what the fonts draw is read once, beforehand.
+    let drawn = embed::Drawn::read(doc, &objs, &drawing);
+    let mut fonts: Vec<ObjRef> = drawing.into_iter().collect();
+    fonts.sort_by_key(|r| (r.num, r.generation));
+    let mut embedded = Vec::new();
+    let mut programs = embed::Programs::new();
+    for r in fonts {
+        let font = doc.get(r);
+        let Some(plan) = font.as_dict().and_then(|d| embed::plan(doc, r, d, &drawn)) else { continue };
+        let name = font.as_dict().and_then(|d| d.name(b"BaseFont")).map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default();
+        embed::embed(doc, r, plan, &mut programs)?;
+        if !embedded.contains(&name) {
+            embedded.push(name);
+        }
+    }
+    Ok((!embedded.is_empty()).then(|| format!("Embedded PdfCraft's substitute font programs for {}", embedded.join(", "))))
+}
+
 /// Make `doc` conform to `level` as far as possible, then re-check it.
 pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos::CosError> {
     let mut fixed = Vec::new();
@@ -1491,6 +1592,9 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     {
         cat.set(b"Names".to_vec(), Object::Dict(names));
         fixed.push("Removed document-level JavaScript".into());
+    }
+    if drop_usage_rights(doc, &mut cat)? {
+        fixed.push("Removed the Reader usage rights, which converting voids".into());
     }
     if let Some(Object::Ref(af)) = cat.get(b"AcroForm").cloned() {
         let mut changed = false;
@@ -1605,6 +1709,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             actions += 1;
         }
     }
+    fixed.extend(embed_standard_fonts(doc)?);
     for (n, what) in [
         (actions, "removed forbidden or additional actions"),
         (flags, "set annotations to print and show"),
