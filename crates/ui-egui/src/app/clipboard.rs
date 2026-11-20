@@ -51,46 +51,20 @@ impl PdfCraftApp {
         false
     }
 
-    /// Hands the pastes this frame's raw input carries to the clipboard, once per frame, so the
-    /// Paste command reads them. A frame's input is applied once, in the pass that receives it.
-    pub(crate) fn offer_pasted(&mut self, input: &egui::RawInput) {
-        let flavors: Vec<Flavor> = input
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                egui::Event::Paste(text) => Some(Flavor::text(text)),
-                egui::Event::PasteImage(image) => {
-                    let (width, height) = (u32::try_from(image.size[0]).ok()?, u32::try_from(image.size[1]).ok()?);
-                    // The layout of an `RGBA8` flavour: width and height as little-endian words, then
-                    // straight RGBA.
-                    let mut data = Vec::with_capacity(8 + image.pixels.len() * 4);
-                    data.extend_from_slice(&width.to_le_bytes());
-                    data.extend_from_slice(&height.to_le_bytes());
-                    data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
-                    Some(Flavor::new(RGBA8, data))
-                }
-                _ => None,
-            })
-            .collect();
-        if !flavors.is_empty() {
-            self.clipboard.offer_paste(flavors);
-        }
-    }
-
-    /// Hands the paste content carried by a fired paste command (F-89) to the clipboard before the command runs.
+    /// Offer the content delivered with the fired paste in the frame that runs it.
     pub(crate) fn offer_clip_content(&mut self, content: &craft::ui::runtime::commands::ClipContent) {
         let mut flavors = Vec::new();
         if let Some(text) = &content.text {
             flavors.push(Flavor::text(text.as_ref()));
         }
-        if let Some(image) = &content.image
-            && let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1]))
-        {
-            let mut data = Vec::with_capacity(8 + image.pixels.len() * 4);
-            data.extend_from_slice(&width.to_le_bytes());
-            data.extend_from_slice(&height.to_le_bytes());
-            data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
-            flavors.push(Flavor::new(RGBA8, data));
+        if let Some(image) = &content.image {
+            if let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1])) {
+                let mut data = Vec::new();
+                data.extend_from_slice(&width.to_le_bytes());
+                data.extend_from_slice(&height.to_le_bytes());
+                data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+                flavors.push(Flavor::new(RGBA8, data));
+            }
         }
         if !flavors.is_empty() {
             self.clipboard.offer_paste(flavors);
@@ -134,44 +108,44 @@ impl PdfCraftApp {
 
     /// Copy on the canvas: with objects selected in Edit a PDF, those; with no text selected, the
     /// selected comments with their replies; else the text; else the selected image.
-    pub(crate) fn copy_from_canvas(&mut self, ctx: &egui::Context, i: usize) {
+    pub(crate) fn copy_from_canvas(&mut self, ctx: &egui::Context, i: usize) -> bool {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
-            return;
+            return false;
         }
         // Objects selected together in Edit a PDF take the copy.
         if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
-            self.copy_objects(ctx, i, false);
-            return;
+            return self.copy_objects(ctx, i, false);
         }
         // A selection across pages still being read has no text yet, but is selected all the
         // same: its copy starts rather than copying the selected comments.
         let text_selected =
             self.views.get(i).is_some_and(|v| v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()));
-        if (text_selected || !self.copy_selected_comments(i))
-            && !self.copy_selected_text(i)
-            && let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
-            && let Some(id) = self.views.get(i).map(|v| v.id)
-            && self.may_copy(id)
-        {
-            self.copy_page_image(sel.page, sel.index);
+        if !text_selected && self.copy_selected_comments(i) {
+            return true;
         }
+        if self.copy_selected_text(i) || self.copy_picked_image(i) {
+            return true;
+        }
+        let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone()) else { return false };
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return false };
+        self.may_copy(id) && self.copy_page_image(sel.page, sel.index)
     }
 
     /// Cut on the canvas: objects selected in Edit a PDF, else the selected image.
-    pub(crate) fn cut_from_canvas(&mut self, ctx: &egui::Context, i: usize) {
+    pub(crate) fn cut_from_canvas(&mut self, ctx: &egui::Context, i: usize) -> bool {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
-            return;
+            return false;
         }
         if self.quick_tool == QuickTool::EditText && self.views.get(i).is_some_and(|v| v.session.objects.count() > 0) {
-            self.copy_objects(ctx, i, true);
-            return;
+            return self.copy_objects(ctx, i, true);
         }
         if let Some(sel) = self.views.get(i).and_then(|v| v.session.image_selection.clone())
             && let Some(id) = self.views.get(i).map(|v| v.id)
             && self.may_copy(id)
         {
-            self.cut_page_image(ctx, sel.page, sel.index);
+            return self.cut_page_image(ctx, sel.page, sel.index);
         }
+        false
     }
 
     /// Paste on the canvas, in this order: the objects copied in Edit a PDF while the clipboard
@@ -472,7 +446,15 @@ mod review_tests {
 
     /// One frame's paste events offered, then Paste run as its command; the images on page 1.
     fn paste(app: &mut PdfCraftApp, events: Vec<egui::Event>) -> usize {
-        app.offer_pasted(&egui::RawInput { events, ..Default::default() });
+        let mut content = craft::ui::runtime::commands::ClipContent::default();
+        for event in events {
+            match event {
+                egui::Event::Paste(text) => content.text = Some(text.into()),
+                egui::Event::PasteImage(image) => content.image = Some(image),
+                _ => {}
+            }
+        }
+        app.offer_clip_content(&content);
         assert!(app.execute(&egui::Context::default(), "edit.paste"));
         app.session.get(app.views[0].id).unwrap().page_images(0).len()
     }

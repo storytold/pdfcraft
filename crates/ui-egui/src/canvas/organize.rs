@@ -212,7 +212,10 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
     };
     let middle = if cfg!(target_os = "linux") { MiddleButton::AutoScroll } else { MiddleButton::Pan };
     let current = view.view.current;
-    let reveal = view.grid_reveal.take();
+    let reveal = view.grid_reveal;
+    if reveal.is_some() {
+        cx.ui.ctx().data_mut(|data| data.insert_temp(organize_grid_id(view).with("reveal-drawn"), true));
+    }
     let id = organize_grid_id(view);
     // PLAN: assumed `PageThumbnails::invert_middle(bool)` beside `middle_button` (pdf-canvas-w6).
     let out = PageThumbnails::new(tl!("Pages"), &pages, &mut view.selected, current, DataColor::new(egui::Color32::WHITE))
@@ -276,5 +279,14 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         if !open {
             cx.ui.data_mut(|d| d.insert_temp::<Option<Pos2>>(menu_id, None));
         }
+    }
+}
+
+/// Retire a reveal only after the pass that drew it is known to have survived.
+pub(crate) fn finish_reveal(view: &mut DocView, ctx: &egui::Context) {
+    let id = organize_grid_id(view).with("reveal-drawn");
+    let drawn = ctx.data_mut(|data| data.remove_temp::<bool>(id)).unwrap_or(false);
+    if drawn && !ctx.will_discard() {
+        view.grid_reveal = None;
     }
 }

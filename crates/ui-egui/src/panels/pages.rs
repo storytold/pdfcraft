@@ -4,6 +4,7 @@ use craft::behavior::GesturePhase;
 use craft::keymap::CommandRef;
 use craft::pages::ui::{PageThumbnails, ThumbnailEvent, moved_page};
 use craft::ui::contract::{Props, Show, ShowContainer};
+use craft::ui::display::Text;
 use craft::ui::menu::{Menu, MenuItem, PanelRow};
 use craft::ui::style::DataColor;
 
@@ -29,6 +30,11 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let count = doc.info.pages.len();
     let Some(view) = app.views.get_mut(index) else { return result };
 
+    if view.selected.items.len() > 1 {
+        let count = view.selected.items.len().to_string();
+        Text::new(crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &count)])).show(ui);
+    }
+
     let source = crate::canvas::pictures::DocPages::new(&app.session, id);
     let before = view.thumbnail_zoom();
     let mut zoom = f64::from(before);
@@ -39,6 +45,7 @@ pub(super) fn body(app: &mut PdfCraftApp, ui: &mut egui::Ui) -> PanelResult {
     let grid_id = crate::canvas::organize::pages_panel_grid_id(view);
     let output = PageThumbnails::new(tl!("Pages"), &source, &mut view.selected, current, DataColor::new(egui::Color32::WHITE))
         .id(grid_id)
+        .picks_beside_current(true)
         .editable(editable)
         .picks_beside_current(true)
         .reveal(reveal)

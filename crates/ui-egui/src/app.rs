@@ -803,6 +803,9 @@ impl PdfCraftApp {
         // Dialogs and notices show in full screen too: a refused field value or a failed save must be seen.
         dialogs::show(self, ui);
         crate::notices::show(self, ui);
+        for view in &mut self.views {
+            crate::canvas::organize::finish_reveal(view, &ctx);
+        }
         // Screenshots are issued only after a settled pass that really drew the window.
         self.control_ui_pass(&ctx);
         // Addresses `open_url` queued: the runtime opens them in the browser.

@@ -11,7 +11,7 @@ use craft::behavior::dock::{
 use craft::behavior::{Axis, DockSide, IconId};
 use craft::keymap::CommandRef;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Bind, BodyCx, Show as _};
+use craft::ui::contract::{Bind, BodyCx, Props as _, Show as _};
 use craft::ui::docking::{DockConfig, DockPanels, GroupAt, HidePanels, IconicMode, PanelSpec};
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::DockArea;
@@ -364,6 +364,9 @@ impl DockPanels<PanelId> for Panels<'_> {
             PanelId::Tools => {
                 if self.app.left == LeftPanel::CalculationOrder {
                     crate::calc_order_ui::header(ui);
+                } else if crate::organize_panel::showing(self.app) {
+                    IconButton::command(IconSpec::svg(IconId::new("chevron-left")), CommandRef::new("tools.all")).show(ui);
+                    IconButton::command(IconSpec::svg(IconId::new("x")), CommandRef::new("page.organize")).label(tl!("Close panel")).show(ui);
                 } else if self.app.left == LeftPanel::AllTools {
                     IconButton::command(IconSpec::svg(IconId::new("maximize-2")), CommandRef::new("tools.expand")).show(ui);
                 }
