@@ -40,6 +40,7 @@ fn prepare_ocr_text_edit(editor: &mut crate::history::Editor, info: &pdfcraft_re
 fn deletes_pages(edit: &Edit) -> bool {
     match edit {
         Edit::DeletePages { .. } => true,
+        Edit::ReplacePages { pages, src_pages, .. } => src_pages.len() < pages.len(),
         Edit::Batch { edits, .. } => edits.iter().any(deletes_pages),
         _ => false,
     }
@@ -234,14 +235,21 @@ impl Session {
         if let Some(note) = renamed_note(&cx.renamed_fields) {
             next.note_repair(note);
         }
-        // Only Insert from File renames fields; its label says so in a wording the interface
-        // translates (the count lives in the repair note).
+        // Insert from File and Replace Pages (when extra replacement pages are inserted) rename
+        // colliding fields; their labels say so in a wording the interface translates (the count
+        // lives in the repair note).
         let label = match (&edit, cx.renamed_fields.len()) {
             (_, 0) => edit.label(),
             (Edit::InsertPagesFrom { name, .. }, n) => Label::with(
                 if n == 1 { "Insert pages from {name} — 1 field renamed" } else { "Insert pages from {name} — fields renamed" },
                 name.as_str(),
             ),
+            (Edit::ReplacePages { pages, .. }, n) => Label::of(match (pages.len(), n) {
+                (1, 1) => "Replace page — 1 field renamed",
+                (1, _) => "Replace page — fields renamed",
+                (_, 1) => "Replace pages — 1 field renamed",
+                (_, _) => "Replace pages — fields renamed",
+            }),
             _ => edit.label(),
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then

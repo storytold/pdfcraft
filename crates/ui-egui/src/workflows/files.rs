@@ -115,11 +115,15 @@ pub struct ReplaceDraft {
     pub from: usize,
     pub to: usize,
     pub src_from: usize,
+    /// Last page (1-based, inclusive) of the replacement range.
+    pub src_to: usize,
     /// The selection when the dialog opened (0-based). OK replaces these pages until the
     /// original range is edited, so a gap between selected pages is left alone.
     pub pages: Vec<usize>,
     /// The user changed the original from/to range, so OK uses that span.
     pub range_edited: bool,
+    /// The user changed the replacement end page, so `src_to` no longer follows the target count.
+    pub src_range_edited: bool,
     /// The document whose pages are replaced, as it was when the dialog opened: OK replaces
     /// nothing if another document is active by then (a file opened meanwhile), or it changed.
     pub(crate) target: Option<PickTarget>,
@@ -630,8 +634,10 @@ impl PdfCraftApp {
         };
         let pages = self.views[i].target_pages();
         let (from, to) = (pages.first().map_or(1, |p| p + 1), pages.last().map_or(1, |p| p + 1));
+        let src_to = pages.len().max(1).min(src_pages.max(1));
         let target = self.pick_target(self.active_ids().map(|(_, id)| id));
-        self.replace_draft = Some(ReplaceDraft { name, bytes, src_pages, from, to, src_from: 1, pages, range_edited: false, target });
+        self.replace_draft =
+            Some(ReplaceDraft { name, bytes, src_pages, from, to, src_from: 1, src_to, pages, range_edited: false, src_range_edited: false, target });
         self.dialog = Some(crate::Dialog::ReplacePages);
     }
 
