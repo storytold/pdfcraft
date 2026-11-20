@@ -539,6 +539,34 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
     rebuild(doc, &rest)
 }
 
+/// Put the pages in a new order: `order[k]` is the current index of the page that goes at
+/// position `k`. It must list every page exactly once; anything else is refused before the
+/// document changes. One pass over the page tree, however many pages move. Page labels move
+/// with their pages; a document without `/PageLabels` gets none.
+pub fn reorder_pages(doc: &mut Document, order: &[usize]) -> Result<(), OrganizeError> {
+    let all = walk(doc)?;
+    if order.len() != all.len() {
+        return Err(OrganizeError::Invalid(format!("the new order lists {} pages, the document has {}", order.len(), all.len())));
+    }
+    check(order, all.len())?;
+    let mut seen = vec![false; all.len()];
+    for &i in order {
+        // `check` has bounded every index, so `get_mut` always finds its slot.
+        if let Some(slot) = seen.get_mut(i) {
+            if *slot {
+                return Err(OrganizeError::Invalid(format!("page {} is listed twice in the new order", i + 1)));
+            }
+            *slot = true;
+        }
+    }
+    let reordered: Vec<(ObjRef, Dict)> = order.iter().filter_map(|i| all.get(*i).cloned()).collect();
+    // Each page's label, read in the new order before the tree changes, then written over it.
+    let (mut ranges, mut labelled) = (Vec::new(), false);
+    labels::collect_page_labels(doc, order, 0, &mut ranges, &mut labelled)?;
+    rebuild(doc, &reordered)?;
+    labels::finish_page_labels(doc, &ranges, labelled)
+}
+
 /// Reverse the order of the pages at `indices` among the positions they occupy; every other
 /// page stays where it is. Fewer than two distinct pages is refused, since nothing would change.
 pub fn reverse_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {

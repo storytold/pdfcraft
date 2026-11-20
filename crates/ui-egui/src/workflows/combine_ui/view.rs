@@ -72,6 +72,14 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.combine_tab.zoom_request = None;
     }
     let mut combine = false;
+    let mut interleave = false;
+    // Interleaving takes whole files, none left out: one that can't be read stops it, as it
+    // stops Combine until the user has chosen to leave it out.
+    let interleave_blocker = blocker.clone().or_else(|| {
+        app.combine_draft.iter().find(|f| f.unreadable()).map(|f| {
+            crate::i18n::fmt(tl!("{name} can't be combined: {why}"), &[("name", &f.name), ("why", f.problem.as_deref().unwrap_or_default())])
+        })
+    });
 
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(28, 20)).show(ui, |ui| {
         // Title and Combine.
@@ -84,6 +92,21 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 if response.clicked() {
                     combine = true;
+                }
+                // Alternate the files' pages, as a scan made front sides first and backs second needs (#4922).
+                let shuffle = ui
+                    .add_enabled_ui(interleave_blocker.is_none(), |ui| widgets::icon_pill(ui, "arrow-left-right", tl!("Interleave pages"), false))
+                    .inner;
+                match &interleave_blocker {
+                    Some(why) => {
+                        shuffle.clone().on_disabled_hover_text(why);
+                    }
+                    None => {
+                        shuffle.clone().on_hover_text(tl!("Alternate the pages of the files: page 1 of each, then page 2 of each, and so on."));
+                    }
+                }
+                if shuffle.clicked() {
+                    interleave = true;
                 }
             });
         });
@@ -264,6 +287,9 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     unlock_prompt(app, ui.ctx());
     if let Some(action) = events.action {
         app.combine_apply(action);
+    }
+    if interleave && interleave_blocker.is_none() {
+        app.interleave_staged();
     }
     if combine && blocker.is_none() {
         if app.combine_draft.iter().any(CombineFile::unreadable) {
