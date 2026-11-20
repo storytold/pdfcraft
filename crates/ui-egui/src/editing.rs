@@ -167,33 +167,91 @@ fn form_edit_pages(
     }
     (changed_pages, unbaked)
 }
+/// The single-object tool's selection before a restack, identified by what does not change when
+/// only the page's painting order does. Its index is remapped afterwards, so the paragraph,
+/// picture or added item stays selected for the next level button.
+struct RestackSelection {
+    page: usize,
+    kind: pdfcraft_engine::ObjectKind,
+    content_type: &'static str,
+    text: Option<String>,
+    rect: [f64; 4],
+}
+
+fn restack_selection(view: &crate::DocView, doc: &pdfcraft_engine::Document, edit: &Edit) -> Option<RestackSelection> {
+    use pdfcraft_engine::{ObjectKind, ObjectTarget};
+    let page = match edit {
+        Edit::RestackObject { page, .. } | Edit::RestackObjects { page, .. } => *page,
+        _ => return None,
+    };
+    let target = if let Some(editor) = view.line_editor.as_ref().filter(|e| e.page == page) {
+        ObjectTarget { kind: ObjectKind::Text, index: editor.block }
+    } else if let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) {
+        ObjectTarget { kind: ObjectKind::Image, index: selection.index }
+    } else {
+        let (at, index) = view.content.selected.filter(|(at, _)| *at == page)?;
+        debug_assert_eq!(at, page);
+        ObjectTarget { kind: ObjectKind::Added, index }
+    };
+    let object = doc.editable_objects(page).ok()?.into_iter().find(|o| o.target == target)?;
+    Some(RestackSelection { page, kind: object.target.kind, content_type: object.content_type, text: object.text, rect: object.rect })
+}
+
+/// Follows the single tool's selection to the index a restack moved it to.
+fn re_resolve_restacked_selection(view: &mut crate::DocView, doc: &pdfcraft_engine::Document, old: RestackSelection) {
+    // Restacking keeps an object's text, type and box, so those identify it at its new index.
+    let remapped = doc.editable_objects(old.page).ok().and_then(|objects| {
+        objects.into_iter().find(|o| {
+            o.target.kind == old.kind
+                && o.content_type == old.content_type
+                && o.text == old.text
+                && o.rect.iter().zip(old.rect).all(|(a, b)| (a - b).abs() < 0.01)
+        })
+    });
+    match old.kind {
+        pdfcraft_engine::ObjectKind::Text => match remapped {
+            Some(object) => {
+                if let Some(editor) = view.line_editor.as_mut().filter(|e| e.page == old.page) {
+                    editor.block = object.target.index;
+                }
+            }
+            None => view.line_editor = None,
+        },
+        pdfcraft_engine::ObjectKind::Image => match remapped {
+            Some(object) => {
+                if let Some(selection) = view.image_selection.as_mut().filter(|s| s.page == old.page) {
+                    selection.index = object.target.index;
+                }
+            }
+            None => view.image_selection = None,
+        },
+        pdfcraft_engine::ObjectKind::Added if view.content.selected.is_some_and(|(page, _)| page == old.page) => {
+            view.content.selected = remapped.map(|object| (old.page, object.target.index));
+        }
+        _ => {}
+    }
+}
 
 impl PdfCraftApp {
+    /// The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
+    /// their places still name them (pages may move, come or go).
+    fn popups_before_edit(&self, i: usize, id: pdfcraft_engine::DocId) -> Vec<pdfcraft_render::Annotation> {
+        match (self.views.get(i), self.session.get(id)) {
+            (Some(v), Some(d)) => {
+                let keys = v.comments.popup_keys();
+                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         // Taken whatever happens to this edit, so it never carries over to another.
         let across_pages = std::mem::take(&mut self.views[i].marks_across_pages).filter(|_| annotated_pages(&edit).is_some());
         let label = edit.label();
-        let target_arrange_image = match &edit {
-            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
-                let doc = self.session.get(id);
-                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
-                let ambiguous = doc.is_some_and(|d| {
-                    if let Some(t) = &target {
-                        d.page_images(*page)
-                            .iter()
-                            .filter(|img| img.name == t.name && img.object == t.object && rect_matches(img.rect, t.rect))
-                            .count()
-                            > 1
-                    } else {
-                        false
-                    }
-                });
-                target.map(|t| (t, ambiguous))
-            }
-            _ => None,
-        };
+        let target_arrange_image = arrange_image_target(self.session.get(id), &edit);
         let (form_before, page_count_before, had_xfa, signatures_before) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some(), Some(std::sync::Arc::clone(&d.signatures)))
         } else {
@@ -208,21 +266,21 @@ impl PdfCraftApp {
             }
             _ => Vec::new(),
         };
-        // The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
-        // their places still name them (pages may move, come or go).
-        let popups_before: Vec<pdfcraft_render::Annotation> = match (self.views.get(i), self.session.get(id)) {
-            (Some(v), Some(d)) => {
-                let keys = v.comments.popup_keys();
-                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
-            }
-            _ => Vec::new(),
-        };
+        // A restack changes indexes by reordering the page's content: note the single tool's
+        // selection first, and follow it to its new index below.
+        let restacked = self.views.get(i).zip(self.session.get(id)).and_then(|(view, doc)| restack_selection(view, doc, &edit));
+        let popups_before = self.popups_before_edit(i, id);
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
+                // A restack only reorders the page's content, so the selected objects stay
+                // selected: note them here, after this frame's selection refresh, for the next.
+                if matches!(edit, Edit::RestackObject { .. } | Edit::RestackObjects { .. }) {
+                    view.objects.keep_after_restack();
+                }
                 // A picture picked with the Select tool may be the one this edit removed or moved:
                 // drop its highlight now, not on the next frame (which only comes with the next input).
                 view.picked_image = None;
@@ -276,6 +334,9 @@ impl PdfCraftApp {
                 if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
                     let page_images = doc.page_images(*page);
                     re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);
+                }
+                if let Some(old) = restacked {
+                    re_resolve_restacked_selection(view, doc, old);
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
@@ -1135,6 +1196,17 @@ impl PdfCraftApp {
 
 fn rect_matches(a: [f64; 4], b: [f64; 4]) -> bool {
     a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
+/// The picture an arrange edit moves, and whether another picture on its page looks the same
+/// (same name, object and box), before the edit is applied.
+fn arrange_image_target(doc: Option<&pdfcraft_engine::Document>, edit: &Edit) -> Option<(pdfcraft_engine::PageImage, bool)> {
+    let Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } = edit else { return None };
+    let images = doc?.page_images(*page);
+    let target = images.get(*index).cloned()?;
+    let ambiguous =
+        images.iter().filter(|img| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect)).count() > 1;
+    Some((target, ambiguous))
 }
 
 fn re_resolve_image_selection(

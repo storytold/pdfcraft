@@ -149,6 +149,7 @@ fn delete_one(page: usize, t: ObjectTarget) -> Edit {
     match t.kind {
         ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
         ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
+        ObjectKind::Graphic => Edit::DeletePageGraphic { page, index: t.index },
         ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
     }
 }
@@ -166,7 +167,9 @@ pub(crate) fn delete(
 ) -> Result<(), EditError> {
     use crate::ObjectKind;
     let mut targets = objects.to_vec();
-    targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
+    // Graphics go before text and images: removing the text from a shared scope can regroup its
+    // paths, which would move the graphic index the selection still names.
+    targets.sort_by_key(|t| (t.kind != ObjectKind::Graphic, t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
     targets.dedup();
     let blocks = pdfcraft_edit::text_blocks(doc, page)?;
     for t in targets {
