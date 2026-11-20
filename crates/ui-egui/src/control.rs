@@ -121,7 +121,10 @@ impl PdfCraftApp {
         let host = WindowHost::of(ctx);
         if let Some(queued) = input_method(method, params, &host, ViewportId::ROOT, &|_| None) {
             return match queued {
-                Ok(()) => Reply::AfterInput,
+                Ok(()) => {
+                    self.control_epoch = self.capture_epoch();
+                    Reply::AfterInput
+                }
                 Err(e) => Reply::from_result(Err(e)),
             };
         }

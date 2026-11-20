@@ -25,7 +25,7 @@ fn pending_pages_use_document_reading_background() {
         (ReadingColors::GREEN_ON_BLACK, Color32::BLACK),
         (custom, Color32::from_rgb(0x18, 0x24, 0x30)),
     ] {
-        let mut app = crate::control::new_app();
+        let (mut app, _jobs) = crate::control::app_with_manual_jobs();
         app.set_option(&egui::Context::default(), "language", "en").unwrap();
         app.open_bytes(&egui::Context::default(), "pending.pdf", None, crate::support::fixtures::pdf_pages(3)).unwrap();
         let id = app.views[0].id;
@@ -38,20 +38,33 @@ fn pending_pages_use_document_reading_background() {
             app.views[0].go_to_page(page);
             // Draw the real canvas without finishing the render frame, so no texture can
             // race the assertion or hide the pending-page background.
+            let mut raw = RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() };
+            <PdfCraftApp as eframe::App>::raw_input_hook(&mut app, &ctx, &mut raw);
             let mut textures = usize::MAX;
-            let mut output =
-                ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0))), ..Default::default() }, |ui| {
-                    let rect = ui.max_rect();
-                    textures = pdfcraft_ui_egui::canvas::document_area_at(&mut app, 0, rect, ui).expect("the page view runs").textures.entries;
-                });
+            let mut output = ctx.run_ui(raw, |ui| {
+                let rect = ui.max_rect();
+                textures = pdfcraft_ui_egui::canvas::document_area_at(&mut app, 0, rect, ui).expect("the page view runs").textures.entries;
+            });
             output.textures_delta.clear();
             let view = &app.views[0];
             assert_eq!(textures, 0, "the page must still be waiting for its picture");
             let rect = view.page_screen_rect(page).expect("target page visible");
-            let fill = output.shapes.iter().find_map(|s| match &s.shape {
-                Shape::Rect(r) if r.rect == rect && r.stroke.width == 0.0 => Some(r.fill),
-                _ => None,
-            });
+            fn find_fill(shape: &Shape, rect: Rect) -> Option<Color32> {
+                match shape {
+                    Shape::Rect(r) if r.rect == rect && r.stroke.width == 0.0 => Some(r.fill),
+                    Shape::Mesh(mesh) if !mesh.vertices.is_empty() => {
+                        let bounds = mesh.calc_bounds();
+                        let matches = (bounds.min.x - rect.min.x).abs() <= 2.0
+                            && (bounds.min.y - rect.min.y).abs() <= 2.0
+                            && (bounds.max.x - rect.max.x).abs() <= 2.0
+                            && (bounds.max.y - rect.max.y).abs() <= 2.0;
+                        matches.then(|| mesh.vertices.iter().find(|v| v.color.a() == 255).map(|v| v.color)).flatten()
+                    }
+                    Shape::Vec(shapes) => shapes.iter().find_map(|child| find_fill(child, rect)),
+                    _ => None,
+                }
+            }
+            let fill = output.shapes.iter().find_map(|s| find_fill(&s.shape, rect));
             assert_eq!(fill, Some(expected), "page {page}, reading mode {}", colors.mode_name());
         }
     }

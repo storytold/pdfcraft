@@ -139,7 +139,7 @@ enum Gesture {
     /// size with its top-left there).
     Draw { drag: PageBoxDrag, origin: Pos2 },
     /// Selecting fields inside a dragged rectangle.
-    Marquee(MarqueeSelect<(String, usize)>),
+    Marquee { marquee: MarqueeSelect<(String, usize)>, dragged: bool },
     /// Moving a field; the gesture runs in screen points.
     Move { page: usize, gesture: MoveGesture, widget: (String, usize) },
 }
@@ -153,6 +153,8 @@ pub(crate) struct PrepareOutcome {
     pub placed: bool,
     /// A table of text fields was drawn: open its window for this page and area (view space).
     pub table: Option<(usize, [f64; 4])>,
+    /// An edit produced by the tool (adding, moving, nudging or deleting fields).
+    pub edit: Option<Edit>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -387,9 +389,13 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 /// or one copy of a duplicated field, deletes only that one, as in Acrobat (#4609); a field's
 /// last widget takes the field with it.
 pub(crate) fn delete_selected(session: &mut PageSession) -> Option<Edit> {
-    let first = session.prepare.selected.take()?;
+    delete_selected_from(&mut session.prepare)
+}
+
+pub(crate) fn delete_selected_from(prepare: &mut PrepareView) -> Option<Edit> {
+    let first = prepare.selected.take()?;
     let mut picked = vec![first];
-    for w in std::mem::take(&mut session.prepare.also) {
+    for w in std::mem::take(&mut prepare.also) {
         if !picked.contains(&w) {
             picked.push(w);
         }

@@ -79,14 +79,27 @@ impl PdfCraftApp {
                 if level == 0 { param } else { param.enabled_when_in(level_key(level - 1), style_ids.clone()) }
             })
             .collect();
-        let dialog = HostedParamDialog::new(ctx, KEY, DialogFields::new(), move |_| {
-            ParamDialog::new(KEY, tl!("New bookmarks from text styles"), params.clone()).ok_label(tl!("Create").into())
+        let mut fields = DialogFields::new();
+        for (level, slot) in draft.levels.iter().enumerate() {
+            let value = slot.map_or_else(|| NONE.to_string(), |i| i.to_string());
+            fields.set(level_key(level), value);
+        }
+        let dialog = HostedParamDialog::new(ctx, KEY, fields, move |fields| {
+            ParamDialog::new(KEY, tl!("New bookmarks from text styles"), params.clone())
+                .ok_label(tl!("Create").into())
+                .values(craft::ui::contract::Bind::bound(fields))
         });
         self.dialogs.open(dialog);
     }
 
     /// One pass over the dialog: Create makes the bookmarks and shows them in the Bookmarks panel.
     pub(crate) fn bookmarks_from_styles_pass(&mut self, ctx: &egui::Context, _ctx: &egui::Context) {
+        if let Some(dialog) = self.dialogs.get_by_id::<HostedParamDialog>(dialog_id(KEY)) {
+            let fields = dialog.fields();
+            for (n, slot) in self.text_style_draft.levels.iter_mut().enumerate() {
+                *slot = fields.text(&level_key(n)).and_then(|id| id.parse::<usize>().ok());
+            }
+        }
         let Some(result) = self.dialogs.take_by_id::<HostedParamDialog>(dialog_id(KEY)) else { return };
         let mut draft = std::mem::take(&mut self.text_style_draft);
         let DialogResult::Ok(result) = result else { return };

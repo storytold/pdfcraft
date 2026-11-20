@@ -227,6 +227,7 @@ pub(super) fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document,
         .invert_middle(cx.invert_middle)
         .reveal(reveal)
         .show(cx.ui);
+    view.middle_scrolling = out.auto_scrolling;
 
     // The menu is open from the request until a row runs or it is dismissed.
     // PLAN: assumed the open anchor needs a remembered slot; egui's temp data keyed by the grid stands in for it.

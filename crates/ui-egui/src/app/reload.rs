@@ -57,7 +57,15 @@ impl PdfCraftApp {
         if self.holds_reload() {
             return;
         }
+        let mut latest: Vec<Changed<DocId>> = Vec::new();
         for change in self.watch.take_changes() {
+            if let Some(slot) = latest.iter_mut().find(|c| c.key == change.key) {
+                *slot = change;
+            } else {
+                latest.push(change);
+            }
+        }
+        for change in latest {
             self.file_changed(ctx, change);
         }
     }

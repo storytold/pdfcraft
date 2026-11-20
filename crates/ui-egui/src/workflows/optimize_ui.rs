@@ -734,10 +734,8 @@ impl PdfCraftApp {
 
     /// Stop a running optimization: its result is discarded and nothing is saved.
     pub fn cancel_optimize(&mut self) {
-        let Some(run) = self.optimize_run.take() else { return };
-        self.optimize_jobs.reprioritize(|key, priority| (*key != run.doc).then_some(priority));
-        notices::end_progress(self, ProgressKey::Optimize);
-        self.notify_tr("Optimization cancelled");
+        let Some(run) = &self.optimize_run else { return };
+        run.progress.cancel();
     }
 
     /// Show progress; save the copy once the job is done.

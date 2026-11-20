@@ -64,8 +64,10 @@ impl DocView {
         let top = self.viewport_rect().top();
         let xforms = self.page_xforms();
         // A page showing less than a sliver is rounding, not what the reader is looking at: a jump
-        // to the next page leaves the previous one's bottom edge within a pixel of the top. Such a
+        // to the next page leaves the previous one's bottom edge within a pixel of the top (or,
+        // when `PageView`'s top margin exceeds its page gap, peeking into that top margin). Such a
         // sliver still counts when nothing else shows (the last page at the very end).
+        let peek = self.spacing.as_ref().map_or(0.0, |s| (s.margin - s.gap).max(0.0) as f32);
         let pick = |slack: f32| {
             let showing = || xforms.iter().filter(move |(_, xf)| xf.rect.bottom() > top + slack);
             showing()
@@ -73,7 +75,7 @@ impl DocView {
                 .min_by_key(|(p, _)| *p)
                 .or_else(|| showing().min_by(|a, b| a.1.rect.top().total_cmp(&b.1.rect.top()).then(a.0.cmp(&b.0))))
         };
-        let (page, xf) = pick(SLIVER).or_else(|| pick(0.0))?;
+        let (page, xf) = pick(peek + SLIVER).or_else(|| pick(SLIVER)).or_else(|| pick(0.0))?;
         let p = info.pages.get(*page)?;
         // Above the page (in the gap before it) is the page's own top. The window's vertical is
         // the view's y, or its x when the view is turned a quarter.

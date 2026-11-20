@@ -1253,6 +1253,15 @@ impl PdfCraftApp {
         let Some((i, id)) = self.active_ids() else { return };
         let current = self.views[i].current();
         let parent_of = |p: &[usize]| p[..p.len() - 1].to_vec();
+        let refresh_open = matches!(action, A::FromStructure | A::Indent(_));
+        let indent_parent = match &action {
+            A::Indent(path) if !path.is_empty() => {
+                let mut to_parent = parent_of(path);
+                to_parent.push(path[path.len() - 1].saturating_sub(1));
+                Some(to_parent)
+            }
+            _ => None,
+        };
         let edit = match action {
             A::New => {
                 let n = self.session.get(id).map_or(0, |d| d.info.outline.len());
@@ -1321,7 +1330,15 @@ impl PdfCraftApp {
                 return;
             }
         };
-        self.apply_edit(ctx, edit);
+        if self.apply_edit(ctx, edit) && refresh_open {
+            if let Some(parent) = indent_parent {
+                if let Some(view) = self.views.get_mut(i) {
+                    view.bookmarks_open.set(&parent, true);
+                }
+            } else if let (Some(doc), Some(view)) = (self.session.get(id), self.views.get_mut(i)) {
+                view.bookmarks_open = crate::panels::bookmarks::opened_as_filed(&doc.info.outline);
+            }
+        }
     }
 }
 

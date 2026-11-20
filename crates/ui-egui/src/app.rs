@@ -539,7 +539,7 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
-        !self.dialogs.is_empty()
+        self.has_non_recovery_dialog()
             || self.password_prompt.is_some()
             || self.unlock_prompt.is_some()
             || self.pending_link.is_some()
@@ -724,13 +724,12 @@ impl PdfCraftApp {
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
-        if blocked {
-            let thread = std::thread::current();
-            let name = thread.name().unwrap_or("").rsplit("::").next().unwrap_or("");
-        }
         for (index, view) in self.views.iter_mut().enumerate() {
             let shut = blocked || self.active != Some(index);
             view.session.objects.set_input_blocked(shut);
+            if shut {
+                view.left_screen();
+            }
             // Edit text and Add text's drags end while their input is blocked rather than wait, to
             // land wherever the pointer is once it opens again.
             if shut && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
