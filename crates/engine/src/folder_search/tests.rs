@@ -196,6 +196,29 @@ fn a_folder_that_is_a_link_is_refused() {
     assert!(error.contains("is a link"), "a link folder is named as a link, not just \"not a folder\": {error}");
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_junctions_are_skipped_without_following_their_targets() {
+    let outside = Folder::new();
+    outside.write("secret.pdf", &pdf(&["needle"]));
+    let folder = Folder::new();
+    folder.write("inside.pdf", &pdf(&["needle"]));
+    let junction = folder.0.join("junction");
+
+    // Creating a directory junction does not require developer mode on Windows.
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside.0)
+        .status()
+        .unwrap();
+    assert!(status.success(), "the Windows junction fixture could not be created");
+    let found = run(&Options::new(&folder.0, "needle"));
+    assert_eq!(found.summary.matches, 1, "a junction must not be traversed");
+    assert_eq!(reasons(&found, &junction), [&Skip::LinkOrSpecialFile]);
+    fs::remove_dir(&junction).unwrap();
+}
+
 #[test]
 fn the_listing_stops_collecting_as_soon_as_it_is_cancelled() {
     let folder = Folder::new();
