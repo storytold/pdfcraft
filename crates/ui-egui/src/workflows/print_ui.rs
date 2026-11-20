@@ -234,6 +234,7 @@ impl PdfCraftApp {
             poster_scale: fresh.poster_scale,
             overlap: fresh.overlap,
             cut_marks: fresh.cut_marks,
+            poster_labels: fresh.poster_labels,
             label_flip: fresh.label_flip,
             orientation: fresh.orientation,
             crops: Vec::new(),

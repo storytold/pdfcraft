@@ -45,7 +45,8 @@ pub use settings::{
 #[cfg(test)]
 use sheets::text_direction;
 pub use sheets::{
-    LABEL_MARGIN, MARGIN, MAX_CREEP, Placement, Sheet, add_cups_orientation, cups_orientation, layout, matching_paper, text_reads_up, texts_read_up,
+    LABEL_MARGIN, MARGIN, MAX_CREEP, Placement, Sheet, SheetText, add_cups_orientation, cups_orientation, layout, matching_paper, poster_tile_label,
+    text_reads_up, texts_read_up,
 };
 pub use spool::{open_printer_preferences, printer_default_paper, printer_paper_info, printer_papers, show_printer_properties};
 
