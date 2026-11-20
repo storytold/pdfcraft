@@ -267,7 +267,7 @@ fn a_new_signature_field_is_added_only_where_the_walk_reads_it_back() {
     let (fields, whole) = walk_sig_fields(&Document::open(Arc::new(signed)).unwrap());
     assert!(whole && fields.iter().any(|f| f.name == "Signature1"), "the new field is read back");
     let refused = sign(&form_with_text_fields(MAX_FIELDS - 1), &id, &opts);
-    assert!(matches!(&refused, Err(SignError::Pdf(m)) if m.contains("too many fields")), "{:?}", refused.as_ref().err());
+    assert!(matches!(&refused, Err(SignError::Pdf(m)) if m.contains("could not read all of this form's fields")), "{:?}", refused.as_ref().err());
     let existing = SignOptions { field: Some("s".into()), ..opts };
     assert!(sign(&form_with_text_fields(MAX_FIELDS), &id, &existing).is_ok(), "a field the walk reads is signed as before");
 }
@@ -325,13 +325,23 @@ fn a_walk_cut_short_is_listed_as_a_signed_row_of_unknown_validity() {
     assert_eq!(rows, [("UnreadFields".to_string(), true, Status::Unknown)]);
 }
 
-/// The row says why it is there, in a sentence an interface can translate.
+/// The row says why it is there, in a sentence an interface can translate. The sentence names no
+/// cause: a cap reached and a `/Kids` the walk cannot read (a dictionary, here, with no cap near)
+/// both leave fields unread.
 #[test]
 fn the_row_for_a_walk_cut_short_says_why() {
-    let (doc, bytes) = signed_field_past_the_cap();
-    let rows = list(&doc, &bytes, &TrustStore::default());
-    let said: Vec<&str> = rows.iter().flat_map(|r| &r.details).map(|d| d.message.as_str()).collect();
-    assert!(matches!(said.as_slice(), [s] if s.starts_with("This form has too many fields")), "{said:?}");
+    let malformed = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+        .obj("<< /T (a) /Kids << /T (b) /FT /Sig >> >>")
+        .build();
+    let malformed = (Document::open(Arc::new(malformed.clone())).unwrap(), malformed);
+    for (doc, bytes) in [signed_field_past_the_cap(), malformed] {
+        let rows = list(&doc, &bytes, &TrustStore::default());
+        let said: Vec<&str> = rows.iter().flat_map(|r| &r.details).map(|d| d.message.as_str()).collect();
+        assert!(matches!(said.as_slice(), [s] if s.starts_with("PdfCraft could not read all of this form's fields.")), "{said:?}");
+        assert!(!said.iter().any(|s| s.contains("too many") || s.contains("too long")), "no cause it cannot vouch for: {said:?}");
+    }
 }
 
 /// A walk that reads the whole form adds no such row: a name at the cap is read.
@@ -365,13 +375,15 @@ fn a_signed_field_without_a_name_cuts_the_walk_short() {
 }
 
 /// A form that is there but of the wrong type, an `/AcroForm` that isn't a dictionary or a
-/// `/Fields` that isn't an array, may hold any field, signed ones too: the walk counts as cut
-/// short. A form that isn't there, or is null, holds none.
+/// `/Fields` that is neither an array nor a field, may hold any field, signed ones too: the walk
+/// counts as cut short. A form that isn't there, or is null, holds none. A `/Fields` that is one
+/// field dictionary is read as a list of that field (see
+/// [`a_fields_entry_that_is_one_field_is_read_as_a_list_of_it`]).
 #[test]
 fn a_form_of_the_wrong_type_cuts_the_walk_short() {
     for (form, whole) in [
         ("/AcroForm [3 0 R]", false),
-        ("/AcroForm << /Fields 3 0 R >>", false),
+        ("/AcroForm << /Fields 3 0 R >>", true),
         ("/AcroForm << /Fields (3 0 R) >>", false),
         ("/AcroForm << /Fields null >>", true),
         ("/AcroForm << /Fields 9 0 R >>", true),
@@ -385,6 +397,68 @@ fn a_form_of_the_wrong_type_cuts_the_walk_short() {
             .obj("<< /T (a) /FT /Sig >>")
             .build();
         assert_eq!(walk_sig_fields(&Document::open(Arc::new(pdf)).unwrap()).1, whole, "{form}");
+    }
+}
+
+/// A `/Fields` entry that is one field dictionary instead of an array of them (written so by some
+/// static XFA forms): its tree is walked as the form, so a signature in it is listed and a form
+/// with none is read whole, not taken to hide one.
+#[test]
+fn a_fields_entry_that_is_one_field_is_read_as_a_list_of_it() {
+    let doc = |fields: &str, objects: &[&str]| {
+        let pdf = Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields {fields} >> >>"))
+            .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+            .objs(objects);
+        Document::open(Arc::new(pdf.build())).unwrap()
+    };
+    let field = ["<< /T (top) /Kids [5 0 R] >>", "<< /Type /Sig >>", "<< /T (s) /FT /Sig /V 4 0 R >>"];
+    for fields in ["3 0 R", "<< /T (top) /Kids [5 0 R] >>"] {
+        let (listed, whole) = walk_sig_fields(&doc(fields, &field));
+        assert!(whole, "{fields}");
+        assert_eq!(listed.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["top.s"], "{fields}");
+    }
+    let (listed, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids [4 0 R] >>", "<< /T (name) /FT /Tx >>"]));
+    assert!(listed.is_empty() && whole);
+    // Its `/Kids` a dictionary (here the signature field itself), not an array: the walk does not
+    // read it, so it is not whole. A null `/Kids` holds no kid.
+    let (_, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids 5 0 R >>", "<< /Type /Sig >>", "<< /T (s) /FT /Sig /V 4 0 R >>"]));
+    assert!(!whole, "a /Kids dictionary may hold a signature");
+    let (_, whole) = walk_sig_fields(&doc("3 0 R", &["<< /T (top) /Kids null >>"]));
+    assert!(whole, "a null /Kids holds none");
+}
+
+/// A new signature field joins a `/Fields` that is one field dictionary, by reference or written
+/// in place, without taking its place: the saved form still lists the field tree it had.
+#[test]
+fn a_new_signature_field_keeps_a_fields_entry_that_is_one_field() {
+    let (id, opts) = signer();
+    for fields in ["4 0 R", "<< /T (top) /Kids [5 0 R] >>"] {
+        let pdf = Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields {fields} >> >>"))
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+            .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R] >>")
+            .obj("<< /T (top) /Kids [5 0 R] >>")
+            .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [10 10 110 60] /P 3 0 R /Parent 4 0 R >>");
+        let signed = sign(&Document::open(Arc::new(pdf.build())).unwrap(), &id, &opts).unwrap();
+        let doc = Document::open(Arc::new(signed)).unwrap();
+        let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap();
+        let form = catalog.get(b"AcroForm").map(|f| doc.resolve(f).as_ref().clone()).unwrap();
+        let list = form.as_dict().and_then(|f| f.get(b"Fields")).map(|l| doc.resolve(l).as_ref().clone()).unwrap();
+        let names: Vec<Vec<u8>> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| {
+                doc.resolve(f).as_dict().and_then(|d| {
+                    d.get(b"T").and_then(|t| match t {
+                        Object::String(s) => Some(s.bytes.clone()),
+                        _ => None,
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(names, [b"top".to_vec(), b"Signature1".to_vec()], "{fields}");
     }
 }
 

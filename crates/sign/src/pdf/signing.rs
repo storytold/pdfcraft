@@ -302,9 +302,16 @@ fn sign_inner(
                 Some(Object::Dict(d)) => (None, d.clone()),
                 _ => (None, Dict::new()),
             };
+            // A `/Fields` that is one field dictionary, as the walk reads it, stays as the first
+            // entry of the list the new field joins: the form keeps its field tree.
             let mut fields = match af.get(b"Fields") {
-                Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_default(),
+                Some(Object::Ref(r)) => match &*doc.get(*r) {
+                    Object::Array(a) => a.clone(),
+                    Object::Dict(_) => vec![Object::Ref(*r)],
+                    _ => Vec::new(),
+                },
                 Some(Object::Array(a)) => a.clone(),
+                Some(one @ Object::Dict(_)) => vec![one.clone()],
                 _ => Vec::new(),
             };
             fields.push(Object::Ref(wr));
@@ -318,10 +325,7 @@ fn sign_inner(
             // The walk has to read the whole form, the new field included: past its caps the
             // signature would be listed as unread fields, and its name could repeat an unread one.
             if !walk_sig_fields(&doc).1 {
-                return Err(SignError::Pdf(
-                    "this form has too many fields, or a field name too long, for PdfCraft to read them all, so it can't add a signature field"
-                        .into(),
-                ));
+                return Err(SignError::Pdf("PdfCraft could not read all of this form's fields, so it can't add a signature field".into()));
             }
             (wr, rect, turn)
         }

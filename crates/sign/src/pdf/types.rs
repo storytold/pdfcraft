@@ -224,7 +224,7 @@ pub const WORDINGS: &[&str] = &[
     "The timestamp token is valid and its authority is trusted.",
     "The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.",
     // What the list itself could not read.
-    "This form has too many fields, or a field name too long, for PdfCraft to read them all. Any signature among the rest is not listed, so the document is treated as signed.",
+    "PdfCraft could not read all of this form's fields. Any signature among the rest is not listed, so the document is treated as signed.",
     // The one line that stands for all of it.
     "Unsigned signature field",
     "Signature is valid",
