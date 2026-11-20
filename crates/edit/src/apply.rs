@@ -1,14 +1,14 @@
 use pdfcraft_fonts::shaped_text::{is_thai, thai_refusal, thai_width};
 
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, MarkText, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb,
-    shrink_matrix,
+    Background, Context, HeaderFooter, HeaderFooterMark, MarkKind, MarkText, SETTINGS_KEY, Watermark, add_picture_resource, bates_start, expand,
+    matrix_number, n, picture, read, rgb, shrink_matrix,
 };
 use super::place::{
-    END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
-    place_inside_wrapper, stream_tag, undrawable, wrapper_role,
+    END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, content_list, contents, free_font_name, isolation, page_fonts,
+    page_list, place, place_inside_wrapper, stream_tag, undrawable, wrapper_role,
 };
-use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+use super::{Document, EditError, ObjRef, Object, added, backdrop, helvetica_width};
 
 /// Commit one complete mark operation only after every selected page succeeds. The snapshot
 /// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
@@ -25,24 +25,155 @@ fn apply_mark_transaction(doc: &mut Document, apply: impl FnOnce(&mut Document) 
 /// those pages are removed first (Acrobat's Replace Existing). The whole call is atomic:
 /// on error, the document (including earlier selected pages) is unchanged.
 pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
-    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replace, cx))
+    let replacing = if replace { Replacing::OnThosePages } else { Replacing::Nothing };
+    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replacing, cx))
 }
 
-fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
+/// Replace one header and footer: `old` (settings from [`header_footers`]) goes from every page
+/// it is on and `hf` is added to `pages`. Any other header or footer stays, on those pages too
+/// (#5785). The whole call is atomic.
+pub fn update_header_footer(doc: &mut Document, old: &HeaderFooter, pages: &[usize], hf: &HeaderFooter, cx: &Context) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, Replacing::Only(old), cx))
+}
+
+/// How many different headers and footers [`header_footers`] lists: enough for any real document,
+/// and a limit on the work a file with a different one in every stream can ask for.
+const MAX_HEADER_FOOTERS: usize = 256;
+
+/// The settings a content stream records for its header and footer, if it records any.
+fn recorded_settings(doc: &Document, stream: &Object) -> Option<HeaderFooter> {
+    if stream_tag(doc, stream).as_deref() != Some(MarkKind::HeaderFooter.tag()) {
+        return None;
+    }
+    read(doc, stream, |s| HeaderFooter::from_object(doc, s.as_dict()?.get(SETTINGS_KEY)?))
+}
+
+/// The most bytes of recorded text one scan of a document converts: the text of hundreds of
+/// thousands of real headers, yet a bound on a file that repeats a large one in every stream.
+const MAX_SCAN_TEXT: usize = 16 * 1024 * 1024;
+
+/// One scan of a document's headers and footers. A stream, or a settings entry, given by reference
+/// is read once however many pages share it, and the text converted in all is bounded
+/// ([`MAX_SCAN_TEXT`]): a file repeating its settings can't make listing them slow.
+struct Scan {
+    found: Vec<HeaderFooterMark>,
+    streams: std::collections::HashMap<ObjRef, Recorded>,
+    settings: std::collections::HashMap<ObjRef, Recorded>,
+    budget: usize,
+}
+
+/// What a content stream records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recorded {
+    /// No header and footer, or one whose settings can't be read (from before they were recorded,
+    /// another tool's, unreadable, or past the scan's text budget).
+    Nothing,
+    /// Settings, listed as `found[k]`, or not listed (`None`) past [`MAX_HEADER_FOOTERS`].
+    Settings(Option<usize>),
+}
+
+impl Scan {
+    fn of(doc: &Document) -> Self {
+        let mut scan = Self { found: Vec::new(), streams: Default::default(), settings: Default::default(), budget: MAX_SCAN_TEXT };
+        for (i, page) in page_list(doc).iter().enumerate() {
+            for o in content_list(doc, page).iter() {
+                if let Recorded::Settings(Some(k)) = scan.stream(doc, o)
+                    && let Some(mark) = scan.found.get_mut(k)
+                    && mark.pages.last() != Some(&i)
+                {
+                    mark.pages.push(i);
+                }
+            }
+        }
+        scan
+    }
+
+    fn stream(&mut self, doc: &Document, o: &Object) -> Recorded {
+        let Object::Ref(r) = o else { return self.read_stream(doc, o) };
+        if let Some(known) = self.streams.get(r) {
+            return *known;
+        }
+        let recorded = self.read_stream(doc, o);
+        self.streams.insert(*r, recorded);
+        recorded
+    }
+
+    fn read_stream(&mut self, doc: &Document, o: &Object) -> Recorded {
+        if stream_tag(doc, o).as_deref() != Some(MarkKind::HeaderFooter.tag()) {
+            return Recorded::Nothing;
+        }
+        read(doc, o, |s| Some(self.entry(doc, s.as_dict()?.get(SETTINGS_KEY)?))).unwrap_or(Recorded::Nothing)
+    }
+
+    /// A stream's [`SETTINGS_KEY`] entry.
+    fn entry(&mut self, doc: &Document, value: &Object) -> Recorded {
+        let Object::Ref(r) = value else { return self.read_settings(doc, value) };
+        if let Some(known) = self.settings.get(r) {
+            return *known;
+        }
+        let recorded = self.read_settings(doc, value);
+        self.settings.insert(*r, recorded);
+        recorded
+    }
+
+    fn read_settings(&mut self, doc: &Document, value: &Object) -> Recorded {
+        let Some(settings) = HeaderFooter::from_object_within(doc, value, &mut self.budget) else { return Recorded::Nothing };
+        if let Some(k) = self.found.iter().position(|m| m.settings == settings) {
+            return Recorded::Settings(Some(k));
+        }
+        if self.found.len() >= MAX_HEADER_FOOTERS {
+            return Recorded::Settings(None);
+        }
+        self.found.push(HeaderFooterMark { pages: Vec::new(), settings });
+        Recorded::Settings(Some(self.found.len() - 1))
+    }
+}
+
+/// The headers and footers that record their settings, in page order, each with the pages it is
+/// on. Marks from before settings were recorded, or from another tool, are not listed.
+pub fn header_footers(doc: &Document) -> Vec<HeaderFooterMark> {
+    Scan::of(doc).found
+}
+
+/// The header and footer added last to page `page` (0-based): `Some(None)` when it records no
+/// settings (from before they were recorded, or another tool), `None` when the page has none.
+/// Each mark's own stream goes on top of the page's content, so the last one is the newest; a
+/// shrink goes underneath, inside the wrapper, and is never last.
+pub fn newest_header_footer(doc: &Document, page: usize) -> Option<Option<HeaderFooter>> {
+    let page = page_list(doc).into_iter().nth(page)?;
+    let content = content_list(doc, &page);
+    let newest = content.iter().rev().find(|o| stream_tag(doc, o).as_deref() == Some(MarkKind::HeaderFooter.tag()))?;
+    Some(recorded_settings(doc, newest))
+}
+
+/// Pages (0-based) with a header and footer that records no settings: Update can only replace
+/// those page-wide, as it did before settings were recorded.
+pub fn unrecorded_header_footer_pages(doc: &Document) -> Vec<usize> {
+    let tagged = |o: &Object| stream_tag(doc, o).as_deref() == Some(MarkKind::HeaderFooter.tag());
+    let mut scan = Scan::of(doc);
+    page_list(doc)
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| content_list(doc, page).iter().any(|o| tagged(o) && scan.stream(doc, o) == Recorded::Nothing))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Which existing headers and footers an added one takes the place of.
+#[derive(Clone, Copy)]
+enum Replacing<'a> {
+    Nothing,
+    OnThosePages,
+    Only(&'a HeaderFooter),
+}
+
+fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replacing: Replacing, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
-    if hf.text.iter().all(|t| t.trim().is_empty()) {
-        return Err(EditError::Invalid("type the header or footer text first".into()));
-    }
     if let Some(why) = hf.text.iter().find_map(|t| thai_refusal(t)) {
         return Err(EditError::Invalid(why));
     }
-    if let Some(c) = hf.first_undrawable() {
-        return Err(undrawable(c));
-    }
-    if !(hf.font_size.is_finite() && hf.font_size > 0.0 && hf.font_size <= 200.0 && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)) {
-        return Err(EditError::Invalid("invalid font size or margins".into()));
-    }
+    hf.check()?;
     // Page numbers count up from start_number, so the last selected page needs the most room.
     // Refuse the whole run before drawing anything: headers applied to some pages and then a
     // failed page number would leave the document half changed.
@@ -74,9 +205,18 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     for &i in pages {
         check_on_top(doc, &all[i])?;
     }
-    if replace {
-        remove_marks(doc, pages, MarkKind::HeaderFooter)?;
+    match replacing {
+        Replacing::Nothing => {}
+        Replacing::OnThosePages => {
+            remove_marks(doc, pages, MarkKind::HeaderFooter)?;
+        }
+        Replacing::Only(old) => {
+            let on = header_footers(doc).into_iter().find(|m| m.settings == *old).map(|m| m.pages);
+            let on = on.ok_or_else(|| EditError::Invalid("that header and footer is no longer in the document".into()))?;
+            remove_matching(doc, &on, MarkKind::HeaderFooter, |doc, o| recorded_settings(doc, o).as_ref() == Some(old))?;
+        }
     }
+    let settings = hf.to_object();
     let all = page_list(doc);
     let count = all.len();
     let number_of = |k: usize| {
@@ -147,11 +287,15 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         }
         thai.add_to(doc, &page_list(doc)[i])?;
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        let mark = place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        doc.update_dict(mark, |d| d.set(SETTINGS_KEY.to_vec(), settings.clone()))?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
             let page = &page_list(doc)[i];
-            place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())?;
+            // The shrink goes with its header: it records the same settings, so Update takes it too.
+            if let Some(shrink) = place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())? {
+                doc.update_dict(shrink, |d| d.set(SETTINGS_KEY.to_vec(), settings.clone()))?;
+            }
         }
     }
     Ok(())
@@ -301,6 +445,11 @@ fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background,
 /// turns a backdrop [`add_background`] replaced back on where that is still safe; the pages where
 /// it isn't are [`backdrops_left_off`].
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
+    remove_matching(doc, pages, kind, |_, _| true)
+}
+
+/// [`remove_marks`], only for the mark streams `matches` accepts.
+fn remove_matching(doc: &mut Document, pages: &[usize], kind: MarkKind, matches: impl Fn(&Document, &Object) -> bool) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let mut removed = 0;
@@ -311,7 +460,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         }
         let list = contents(doc, page)?;
         let before = list.len();
-        let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
+        let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag()) || !matches(doc, o)).collect();
         removed += before - kept.len();
         // Strip only wrapper pairs whose close ends the list (after stripping the pairs after
         // it): nothing comes after them to need the state they restore. Pairs come from the

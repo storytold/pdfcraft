@@ -83,10 +83,13 @@ mod apply;
 mod marks;
 mod place;
 
-pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
+pub use apply::{
+    add_background, add_header_footer, add_watermark, header_footers, marks_present, newest_header_footer, remove_marks,
+    unrecorded_header_footer_pages, update_header_footer,
+};
 #[cfg(test)]
 use marks::bates_start;
-pub use marks::{Background, Context, HeaderFooter, MarkKind, MarkSource, Watermark, expand};
+pub use marks::{Background, Context, HeaderFooter, HeaderFooterMark, MarkKind, MarkSource, Watermark, expand, recorded_header_footer};
 use marks::{matrix_number, n};
 pub(crate) use place::undrawable;
 #[cfg(test)]

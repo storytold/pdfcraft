@@ -300,6 +300,190 @@ fn replace_and_remove_restore_the_original_content() {
     assert_eq!(streams(&reopen(&doc), 0), original, "back to exactly the original content");
 }
 
+fn with_text(text: &str) -> HeaderFooter {
+    let mut hf = HeaderFooter::default();
+    hf.text[1] = text.into();
+    hf
+}
+
+/// #5785: Update could only reach the newest header and footer, and took every other one on
+/// those pages with it.
+#[test]
+fn update_changes_one_header_and_footer_and_leaves_the_others() {
+    let mut doc = fixture();
+    let (header, footer) = (with_text("Héader <<1>>"), with_text("Footer"));
+    add_header_footer(&mut doc, &[0], &header, false, &cx()).unwrap();
+    add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap();
+    // Listed after a save too, in the document's own words: tokens unexpanded, accents kept.
+    let doc = &mut reopen(&doc);
+    let found = header_footers(doc);
+    assert_eq!(found.iter().map(|m| (&m.settings, &m.pages[..])).collect::<Vec<_>>(), [(&header, &[0][..]), (&footer, &[0][..])]);
+    // "Héader 1" is drawn with its é as an escape: what follows it is the old header's drawing.
+    assert!(streams(doc, 0).iter().any(|x| x.contains("ader 1)")), "{:?}", streams(doc, 0));
+
+    update_header_footer(doc, &found[0].settings, &[0], &with_text("New"), &cx()).unwrap();
+    let s = streams(doc, 0);
+    assert!(s.iter().any(|x| x.contains("(New)")) && s.iter().any(|x| x.contains("(Footer)")), "{s:?}");
+    assert!(!s.iter().any(|x| x.contains("ader 1)")), "the old header is gone: {s:?}");
+    assert_eq!(header_footers(doc).len(), 2);
+
+    let gone = update_header_footer(doc, &header, &[0], &with_text("Again"), &cx());
+    assert!(matches!(gone, Err(EditError::Invalid(_))), "{gone:?}");
+    assert!(streams(doc, 0).iter().any(|x| x.contains("(New)")), "a refused update changes nothing");
+}
+
+#[test]
+fn updating_a_shrinking_header_takes_its_shrink_away_too() {
+    let mut doc = fixture();
+    let original = streams(&doc, 0);
+    let shrunk = HeaderFooter { shrink: true, ..with_text("Small") };
+    add_header_footer(&mut doc, &[0], &shrunk, false, &cx()).unwrap();
+    update_header_footer(&mut doc, &shrunk, &[0], &with_text("Plain"), &cx()).unwrap();
+    let s = streams(&doc, 0);
+    assert_eq!(s.iter().filter(|x| x.contains("/PCMark")).count(), 1);
+    assert!(original.iter().all(|o| s.contains(o)), "{s:?}");
+    assert_eq!(s.len(), original.len() + 3, "the original, one wrapper and the new mark: {s:?}");
+}
+
+/// A document with one header "Real" on page 1, and that header's stream.
+fn one_recorded_header() -> (Document, pdfcraft_cos::ObjRef) {
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0], &with_text("Real"), false, &cx()).unwrap();
+    let page = crate::page_list(&doc).swap_remove(0);
+    let marks: Vec<_> = crate::contents(&mut doc, &page)
+        .unwrap()
+        .iter()
+        .filter_map(Object::as_ref)
+        .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(b"PCHeaderFooter")))
+        .collect();
+    assert_eq!(marks.len(), 1);
+    (doc, marks[0])
+}
+
+/// A change made to recorded settings, for [`settings_a_file_makes_up_are_not_listed`].
+type Change = Box<dyn FnOnce(&mut Document, &mut Dict)>;
+
+/// The recorded settings of `with_text("Real")`, changed by `change`.
+fn real_settings_with(doc: &mut Document, change: impl FnOnce(&mut Document, &mut Dict)) -> Object {
+    let mut d = with_text("Real").to_object().as_dict().cloned().unwrap();
+    change(doc, &mut d);
+    Object::Dict(d)
+}
+
+#[test]
+fn settings_a_file_makes_up_are_not_listed() {
+    let texts = |entries: Vec<&[u8]>| Object::Array(entries.into_iter().map(|t| Object::String(pdfcraft_cos::PdfString::literal(t))).collect());
+    let long = vec![b'x'; 16 * 1024 + 1];
+    let cases: Vec<(&str, Change)> = vec![
+        ("not text", Box::new(|_, d| d.set(b"Text".to_vec(), Object::Array(vec![Object::Int(1); 6])))),
+        ("five boxes", Box::new(move |_, d| d.set(b"Text".to_vec(), texts(vec![&b"a"[..]; 5])))),
+        ("a million boxes", Box::new(|_, d| d.set(b"Text".to_vec(), Object::Array(vec![Object::Null; 1_000_000])))),
+        ("a box too long", Box::new(move |_, d| d.set(b"Text".to_vec(), texts(vec![&b""[..], &long[..], &b""[..], &b""[..], &b""[..], &b""[..]])))),
+        ("no text", Box::new(move |_, d| d.set(b"Text".to_vec(), texts(vec![&b""[..]; 6])))),
+        ("undrawable", Box::new(|_, d| d.set(b"Text".to_vec(), Object::Array(vec![Object::String(pdfcraft_cos::PdfString::text("中")); 6])))),
+        ("size not a number", Box::new(|_, d| d.set(b"Size".to_vec(), Object::Real(f64::NAN)))),
+        ("size too big", Box::new(|_, d| d.set(b"Size".to_vec(), Object::Real(300.0)))),
+        ("a negative margin", Box::new(|_, d| d.set(b"Margins".to_vec(), Object::Array(vec![Object::Real(-1.0); 4])))),
+        ("three margins", Box::new(|_, d| d.set(b"Margins".to_vec(), Object::Array(vec![Object::Real(1.0); 3])))),
+        ("a colour out of range", Box::new(|_, d| d.set(b"Color".to_vec(), Object::Array(vec![Object::Real(2.0); 3])))),
+        ("an unknown face", Box::new(|_, d| d.set(b"Font".to_vec(), Object::name("Comic")))),
+        ("a negative start", Box::new(|_, d| d.set(b"Start".to_vec(), Object::Int(-1)))),
+    ];
+    for (what, change) in cases {
+        let (mut doc, mark) = one_recorded_header();
+        let hostile = real_settings_with(&mut doc, change);
+        doc.update_dict(mark, |d| d.set(b"PCHeaderFooter".to_vec(), hostile)).unwrap();
+        assert!(header_footers(&doc).is_empty(), "{what}");
+        assert_eq!(marks_present(&doc), [MarkKind::HeaderFooter], "{what}: still a mark: Remove and page-wide Update reach it");
+        assert_eq!(unrecorded_header_footer_pages(&doc), [0], "{what}");
+        assert_eq!(newest_header_footer(&doc, 0), Some(None), "{what}");
+    }
+}
+
+/// #6352 review: listing read a header's settings again for every stream that recorded them, so a
+/// file repeating one shared entry (or one stream) across its pages could make it slow. A scan now
+/// reads each stream and each settings entry given by reference once, and still finds every page.
+#[test]
+fn settings_shared_by_many_streams_are_read_once_in_a_scan() {
+    let (mut doc, mark) = one_recorded_header();
+    let settings = doc.get(mark).as_dict().unwrap().get(b"PCHeaderFooter").cloned().unwrap();
+    let shared = Object::Ref(doc.add(settings));
+    doc.update_dict(mark, |d| d.set(b"PCHeaderFooter".to_vec(), shared)).unwrap();
+    let Object::Stream(copy) = (*doc.get(mark)).clone() else { panic!("a stream") };
+    // Page 0 draws the header's own stream 500 times; page 1 has 200 streams of its own, each
+    // recording the same settings by reference.
+    let mut first = vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))];
+    first.extend(std::iter::repeat_n(Object::Ref(mark), 500));
+    let mut second = vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0))];
+    second.extend((0..200).map(|_| Object::Ref(doc.add(Object::Stream(copy.clone())))));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| d.set(b"Contents".to_vec(), Object::Array(first))).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(4, 0), |d| d.set(b"Contents".to_vec(), Object::Array(second))).unwrap();
+    crate::marks::DECODED.with(|n| n.set(0));
+    let found = header_footers(&doc);
+    assert_eq!(crate::marks::DECODED.with(std::cell::Cell::get), 1, "the shared entry is read once");
+    assert_eq!(found.len(), 1);
+    assert_eq!((found[0].pages.as_slice(), found[0].settings.text[1].as_str()), (&[0, 1][..], "Real"));
+    assert!(unrecorded_header_footer_pages(&doc).is_empty());
+}
+
+#[test]
+fn settings_a_rewriting_tool_made_indirect_are_still_listed() {
+    let (mut doc, mark) = one_recorded_header();
+    let indirect = real_settings_with(&mut doc, |doc, d| {
+        for key in [&b"Font"[..], b"Size", b"Start", b"Underline", b"Text"] {
+            let value = d.get(key).cloned().unwrap();
+            d.set(key.to_vec(), Object::Ref(doc.add(value)));
+        }
+        let half = Object::Ref(doc.add(Object::Real(0.5)));
+        d.set(b"Color".to_vec(), Object::Array(vec![half.clone(), half.clone(), half]));
+        let margins = Object::Array(vec![Object::Ref(doc.add(Object::Real(36.0))), Object::Real(36.0), Object::Real(72.0), Object::Real(72.0)]);
+        d.set(b"Margins".to_vec(), Object::Ref(doc.add(margins)));
+    });
+    doc.update_dict(mark, |d| d.set(b"PCHeaderFooter".to_vec(), indirect)).unwrap();
+    let found = header_footers(&doc);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].settings, HeaderFooter { color: [0.5; 3], ..with_text("Real") });
+    assert!(unrecorded_header_footer_pages(&doc).is_empty());
+}
+
+#[test]
+fn a_header_too_long_to_be_listed_is_not_added() {
+    // Every header add accepts is one the listing can name, so Update never has to fall back to
+    // replacing it page-wide.
+    let mut doc = fixture();
+    let too_long = with_text(&"x".repeat(16 * 1024 + 1));
+    assert!(matches!(add_header_footer(&mut doc, &[0], &too_long, false, &cx()), Err(EditError::Invalid(_))));
+    assert!(marks_present(&doc).is_empty(), "nothing drawn");
+    let longest = with_text(&"x".repeat(16 * 1024));
+    add_header_footer(&mut doc, &[0], &longest, false, &cx()).unwrap();
+    assert_eq!(header_footers(&doc).len(), 1, "the longest box add accepts is listed");
+}
+
+#[test]
+fn a_header_added_with_an_out_of_range_colour_can_be_updated() {
+    let mut doc = fixture();
+    let bright = HeaderFooter { color: [2.0, -1.0, 0.5], ..with_text("Bright") };
+    add_header_footer(&mut doc, &[0], &bright, false, &cx()).unwrap();
+    let found = header_footers(&doc);
+    assert_eq!(found.len(), 1, "listed with the colour it is drawn in");
+    assert_eq!(found[0].settings.color, [1.0, 0.0, 0.5]);
+    update_header_footer(&mut doc, &found[0].settings, &[0], &with_text("Calm"), &cx()).unwrap();
+    assert_eq!(header_footers(&doc).iter().map(|m| m.settings.text[1].as_str()).collect::<Vec<_>>(), ["Calm"]);
+}
+
+#[test]
+fn the_newest_header_on_a_page_is_the_one_added_last() {
+    let mut doc = fixture();
+    assert_eq!(newest_header_footer(&doc, 0), None);
+    let (first, second) = (HeaderFooter { shrink: true, ..with_text("First") }, HeaderFooter { shrink: true, ..with_text("Second") });
+    add_header_footer(&mut doc, &[0, 1], &first, false, &cx()).unwrap();
+    add_header_footer(&mut doc, &[0], &second, false, &cx()).unwrap();
+    // The second shrink goes in ahead of the first, so content order alone would say First.
+    assert_eq!(newest_header_footer(&doc, 0), Some(Some(second)));
+    assert_eq!(newest_header_footer(&doc, 1), Some(Some(first)));
+    assert_eq!(newest_header_footer(&doc, 9), None);
+}
+
 /// The six numbers of the first `… cm` in `content`.
 fn first_cm(content: &str) -> [f64; 6] {
     let line = content.lines().find(|l| l.ends_with(" cm")).unwrap_or_else(|| panic!("no cm in {content:?}"));
