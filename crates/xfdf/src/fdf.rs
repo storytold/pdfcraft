@@ -1,6 +1,7 @@
-use super::common::{MAX_DEPTH, SUBTYPES, rect_strict, text_of};
+use super::common::{MAX_DEPTH, rect_strict, text_of};
 use super::xfdf::{add_popup, apply_values, find_by_name, place};
 use super::*;
+use craft_xfdf::grammar::fdf_annot_skip_key;
 
 fn pdf_string(s: &str) -> Vec<u8> {
     let mut v = Vec::new();
@@ -105,7 +106,7 @@ impl<'a> FdfCopy<'a> {
         let stamp = dict.name(b"Subtype") == Some(b"Stamp".as_slice());
         let mut out = Dict::new();
         for (key, value) in dict.iter() {
-            if matches!(key.as_slice(), b"P" | b"Popup" | b"IRT" | b"Parent" | b"FS" | b"Sound") || (key.as_slice() == b"AP" && !stamp) {
+            if fdf_annot_skip_key(key.as_slice(), stamp) {
                 continue;
             }
             self.dict_entry(&mut out, key, value, 1)?;
