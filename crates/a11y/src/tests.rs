@@ -1010,6 +1010,60 @@ fn figures_doc() -> Document {
     )
 }
 
+/// #7452: figure tag 7 owns MCID 0 and, through `kids` (its `/K`), the link annotation 11, whose
+/// `/StructParent 1` maps to tag 7 in the parent tree. `extra` is object 12, for the shapes that
+/// need one.
+fn figure_owning_a_link_doc(kids: &str, extra: &str) -> Document {
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 /Annots [11 0 R] /Resources << /XObject << /Im 10 0 R >> >> >>"
+                .into(),
+            stream(
+                "/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC \
+                 /Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC",
+            ),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 9 0 R /RoleMap << /Photo /Figure >> >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R 8 0 R] >>".into(),
+            format!("<< /S /Figure /P 6 0 R /Pg 3 0 R /K {kids} >>"),
+            "<< /S /Photo /P 6 0 R /Pg 3 0 R /Alt (A bar) /K 1 >>".into(),
+            "<< /Nums [0 [7 0 R 8 0 R] 1 7 0 R] >>".into(),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+                .into(),
+            "<< /Type /Annot /Subtype /Link /Rect [10 10 50 50] /StructParent 1 >>".into(),
+            extra.into(),
+        ],
+        "",
+    )
+}
+
+/// #7452: a tag that owns an annotation, in each shape a tag can own one, is neither marked as an
+/// artifact nor marked decorative, and nothing changes, so no annotation is left pointing at a
+/// removed tag.
+#[test]
+fn a_tag_that_owns_an_annotation_is_not_retired() {
+    let saved = |doc: &Document| pdfcraft_cos::write_incremental(doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let tag = pdfcraft_cos::ObjRef::new(7, 0);
+    let objr = "<< /Type /OBJR /Obj 11 0 R >>";
+    let shapes = [
+        ("an OBJR among the kids", format!("[0 {objr}]"), "null".to_string(), ArtifactError::OwnsObject),
+        ("an indirect OBJR", "[0 12 0 R]".into(), objr.into(), ArtifactError::OwnsObject),
+        ("the whole /K, without /Type", "<< /Obj 11 0 R >>".into(), "null".into(), ArtifactError::OwnsObject),
+        ("an indirect /K array", "12 0 R".into(), format!("[0 {objr}]"), ArtifactError::OwnsObject),
+        // A tag with children is refused as an artifact anyway; marked decorative, the Link
+        // would leave the tree with it.
+        ("a Link tag inside the figure", "[0 12 0 R]".into(), format!("<< /S /Link /P 7 0 R /K {objr} >>"), ArtifactError::HasChildren),
+    ];
+    for (shape, kids, extra, as_artifact) in shapes {
+        let mut doc = figure_owning_a_link_doc(&kids, &extra);
+        let before = saved(&doc);
+        assert_eq!(mark_tag_artifact(&mut doc, tag), Err(as_artifact), "{shape}");
+        assert_eq!(mark_decorative(&mut doc, tag), Err(AltError::OwnsObject(7)), "{shape}");
+        assert_eq!(saved(&doc), before, "{shape}: nothing changed");
+    }
+}
+
 #[test]
 fn figures_are_listed_with_their_alt_text_and_place() {
     let doc = figures_doc();
