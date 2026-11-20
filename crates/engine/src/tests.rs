@@ -3144,7 +3144,7 @@ fn protect_fails_closed_when_randomness_is_unavailable() {
         let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
         let mut cx = EditCtx::new(None, 0);
         cx.rng = rng;
-        let err = run_edit(&mut doc, &Edit::Protect(protection(Some("secret"), None)), &mut cx);
+        let err = run_edit(&mut doc, &Edit::Protect(protection(Some("secret"), None)), &mut cx, None);
         assert!(matches!(err, Err(EditError::Protection(_))), "Protect must fail closed when CSPRNG fails: {err:?}");
         assert!(doc.output_handler().is_none(), "document must stay unprotected when CSPRNG fails");
     }
@@ -7377,6 +7377,7 @@ fn calculation_order_cache_refreshes_after_inserting_pages() {
             field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
         },
         &mut cx,
+        None,
     )
     .unwrap();
 
@@ -8532,15 +8533,20 @@ fn signed_xfa_manifest_keeps_calculated_values_and_warns_on_input_changes() {
  <subform layout="tb">
   <field name="A" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>1</integer></value></field>
   <field name="B" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>2</integer></value></field>
-  <field name="C" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>4</integer></value></field>
+  <field name="C" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>4</integer></value>
+   <event activity="enter"><script contentType="application/x-javascript">A.rawValue = 8;</script></event></field>
   <subform name="Subform1" layout="tb">
    <field name="D" w="1in" h="0.3in"><ui><numericEdit/></ui><value><integer>55</integer></value></field>
    <field name="Sum" w="1in" h="0.3in" access="readOnly"><ui><numericEdit/></ui>
     <calculate><script contentType="application/x-javascript">Number(A.rawValue) + Number(B.rawValue)</script></calculate></field>
+   <field name="Pick" w="1in" h="0.5in" access="readOnly"><ui><choiceList open="multiSelect"/></ui>
+    <items><text>x</text><text>y</text><text>z</text></items>
+    <calculate><script contentType="application/x-javascript">"x\n " + (Number(Sum.rawValue) == 3 ? "y " : "z ")</script></calculate></field>
    <field name="sign" w="2in" h="0.5in"><ui><signature type="PDF1.6"><manifest action="include" use="#locked"/></signature></ui></field>
   <variables><manifest id="locked">
    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].D[0]</ref>
    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].Sum[0]</ref>
+   <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].Pick[0]</ref>
    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].sign[0]</ref>
   </manifest></variables>
   </subform>
@@ -8585,6 +8591,8 @@ fn signed_xfa_manifest_keeps_calculated_values_and_warns_on_input_changes() {
     let signed = s.sign(id, &digital_id, SignOptions { field: Some(sign_name), rect: None, ..SignOptions::default() }).unwrap();
     s.mark_signed(id, signed, None).unwrap();
     let mdp = pdfcraft_sign::pdf::field_mdp(&s.get(id).unwrap().editor.as_ref().unwrap().cos);
+    assert!(mdp.complete);
+    let mdp = mdp.entries;
     assert_eq!(mdp.len(), 1);
     assert_eq!(mdp[0].action, pdfcraft_sign::pdf::FieldMdpAction::Include);
     assert!(mdp[0].fields.contains(&d));
@@ -8598,6 +8606,8 @@ fn signed_xfa_manifest_keeps_calculated_values_and_warns_on_input_changes() {
     let signed = s.sign(id, &digital_id, SignOptions { field: Some(sign2_name), rect: None, ..SignOptions::default() }).unwrap();
     s.mark_signed(id, signed, None).unwrap();
     let mdp = pdfcraft_sign::pdf::field_mdp(&s.get(id).unwrap().editor.as_ref().unwrap().cos);
+    assert!(mdp.complete);
+    let mdp = mdp.entries;
     assert_eq!(mdp.len(), 2);
     let second = mdp.iter().find(|rule| rule.action == pdfcraft_sign::pdf::FieldMdpAction::Exclude).unwrap();
     assert!(second.fields.contains(&a));
@@ -8667,6 +8677,12 @@ fn assert_manifest_calculation_edits(s: &mut Session, id: DocId, [a, b, c, d, su
     let cos = &reopened.editor.as_ref().unwrap().cos;
     let data = pdfcraft_xfa::data_of(cos).unwrap();
     assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form1[0].Subform1[0].Sum[0]")), original_data.as_deref());
+
+    assert!(s.field_focus(id, c, 0, crate::js::FieldFocus::Enter).unwrap());
+    assert_eq!(field(s, a).value, ["8"]);
+    assert_eq!(field(s, sum).value, before);
+    assert_eq!(dataset_value(s), original_data);
+    assert_eq!(s.get(id).unwrap().edit_notices, [EditNotice::SignedCalculationSkipped { fields: vec![sum.to_owned()] }]);
 }
 
 /// An unsigned XFA signature has no effect, but signing one without a manifest protects every
@@ -8682,6 +8698,7 @@ fn signed_xfa_signature_without_manifest_locks_all_fields() {
   <ref>form[0].B[0]</ref><ref>form[0].partial[0]</ref>
  </manifest></signature></ui></field>
  <field name="whole" w="2in" h="0.5in"><ui><signature/></ui></field>
+ <field name="third" w="2in" h="0.5in"><ui><signature/></ui></field>
 </subform></template></xdp:xdp>"#;
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
@@ -8690,7 +8707,7 @@ fn signed_xfa_signature_without_manifest_locks_all_fields() {
     let name = |leaf: &str| {
         session.get(id).unwrap().form.iter().find(|field| field.name == leaf || field.name.ends_with(&format!(".{leaf}[0]"))).unwrap().name.clone()
     };
-    let (a, b, partial, whole) = (name("A"), name("B"), name("partial"), name("whole"));
+    let (a, b, partial, whole, third) = (name("A"), name("B"), name("partial"), name("whole"), name("third"));
     let read_only = |session: &Session, name: &str| session.get(id).unwrap().form.iter().find(|field| field.name == name).unwrap().read_only();
     assert!(!read_only(&session, &a));
     assert!(!read_only(&session, &whole));
@@ -8700,15 +8717,19 @@ fn signed_xfa_signature_without_manifest_locks_all_fields() {
     assert!(read_only(&session, &b));
     assert!(!read_only(&session, &a));
     assert!(!read_only(&session, &whole), "an unsigned no-manifest signature must not lock fields");
+    assert!(!read_only(&session, &third));
+    assert!(session.sign(id, &digital_id, SignOptions { field: Some(third.clone()), ..SignOptions::default() }).is_ok());
 
     let signed = session.sign(id, &digital_id, SignOptions { field: Some(whole.clone()), ..SignOptions::default() }).unwrap();
     session.mark_signed(id, signed, None).unwrap();
     let mdp = pdfcraft_sign::pdf::field_mdp(&session.get(id).unwrap().editor.as_ref().unwrap().cos);
-    assert_eq!(mdp.len(), 1, "the PDF1.3 signature without a manifest does not add a FieldMDP transform");
-    for name in [&a, &b, &partial, &whole] {
+    assert!(mdp.complete);
+    assert_eq!(mdp.entries.len(), 1, "the PDF1.3 signature without a manifest does not add a FieldMDP transform");
+    for name in [&a, &b, &partial, &whole, &third] {
         assert!(read_only(&session, name), "{name} was not locked by the signature without a manifest");
     }
     assert!(session.apply(id, Edit::SetFieldValue { name: a, value: FieldValue::Text("3".into()) }).is_err());
+    assert!(session.sign(id, &digital_id, SignOptions { field: Some(third), ..SignOptions::default() }).is_err());
     assert!(session.sign(id, &digital_id, SignOptions::default()).is_err(), "the complete field lock also blocks adding a new signature field");
 }
 
@@ -11623,6 +11644,12 @@ fn signed_lock_without_field_mdp_blocks_only_selected_engine_fields() {
         blocked(session.apply(id, Edit::SetFieldValue { name: locked.into(), value: FieldValue::Text("changed".into()) }));
         blocked(session.apply(id, Edit::ResetForm { names: Some(vec![locked.into()]) }));
         blocked(session.apply(id, Edit::SetFieldScript { name: locked.into(), event: "validate".into(), script: Some("event.rc = false;".into()) }));
+        blocked(session.apply(
+            id,
+            Edit::ApplyScriptChanges {
+                changes: vec![pdfcraft_forms::FieldChange { name: locked.into(), rect: Some([30.0, 100.0, 100.0, 120.0]), ..Default::default() }],
+            },
+        ));
         session.apply(id, Edit::SetFieldValue { name: free.into(), value: FieldValue::Text("changed".into()) }).unwrap();
         session.apply(id, Edit::SetFieldScript { name: free.into(), event: "validate".into(), script: Some("event.rc = true;".into()) }).unwrap();
     }
@@ -11637,6 +11664,38 @@ fn signed_lock_without_field_mdp_blocks_only_selected_engine_fields() {
     let id = session.open("unreadable-lock.pdf", None, Arc::new(bytes), None).unwrap();
     assert!(session.get(id).unwrap().form.iter().filter(|field| field.name == "A" || field.name == "B").all(|field| field.read_only()));
     assert!(session.get(id).unwrap().info.warnings.iter().any(|warning| warning.contains("/Lock")));
+}
+
+#[test]
+fn unreadable_signed_lock_scope_protects_existing_and_new_fields() {
+    let bytes = signed_field_with_only_lock("Include", "/Fields [(A)]");
+    let cos = pdfcraft_cos::Document::open(Arc::new(bytes.clone())).unwrap();
+    let mut signatures = pdfcraft_sign::pdf::list(&cos, &bytes, &sign::TrustStore::default());
+    let fields = pdfcraft_forms::fields(&cos);
+    let mut added = cos.clone();
+    pdfcraft_forms::add_field(&mut added, 0, [20.0, 170.0, 100.0, 190.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("C")).unwrap();
+    let assert_locked = |locks: crate::signature_locks::SignatureLocks, warning: &str| {
+        assert!(locks.warning().unwrap().contains(warning));
+        assert!(locks.is_locked("A"));
+        assert!(locks.is_locked("B"));
+        assert!(locks.blocks_new_signature());
+        assert_eq!(locks.changed(&cos, &added).as_deref(), Some("C"));
+    };
+    for len in [0, 3, bytes.len() + 1] {
+        signatures[0].signed_len = len;
+        assert_locked(crate::signature_locks::SignatureLocks::read(&cos, &bytes, &fields, &signatures, None), "signed revision");
+    }
+
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] /XFA 4 0 R >> >>")
+        .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+        .obj("<< /FT /Sig /T (Approval) /Lock << /Action /Include /Fields [(A)] >> /V << >> >>")
+        .stream("/Filter 1", b"unreadable XFA stream")
+        .build();
+    let malformed = pdfcraft_cos::Document::open(Arc::new(bytes.clone())).unwrap();
+    assert!(pdfcraft_xfa::read_packets(&malformed).is_err());
+    signatures[0].signed_len = bytes.len();
+    assert_locked(crate::signature_locks::SignatureLocks::read(&cos, &bytes, &fields, &signatures, None), "XFA data");
 }
 
 /// A PDF of `objs`, numbered from 1, with a cross-reference table.

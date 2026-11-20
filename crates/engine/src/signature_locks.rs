@@ -28,30 +28,19 @@ pub(crate) fn signing_policy(doc: &Document, field_name: &str) -> Result<Option<
     if !packets.xdp.contains("<signature") && !packets.xdp.contains(":signature") {
         return Ok(None);
     }
-    let manifests = pdfcraft_xfa::signature::signature_manifests(&packets.xdp)?;
+    let (template, _) = pdfcraft_xfa::parse(&packets.xdp)?;
     let by_som = pdfcraft_xfa::script::fields_by_som(doc);
-    let matches: Vec<_> = manifests
-        .into_iter()
-        .filter(|m| {
-            by_som.get(&m.signature_field).is_some_and(|name| name == field_name) || canonical_som(&m.signature_field) == canonical_som(field_name)
-        })
-        .collect();
-    let [manifest] = matches.as_slice() else {
-        return if matches.is_empty() {
-            Ok(None)
-        } else {
-            Err(pdfcraft_xfa::XfaError::Malformed(format!("several XFA widgets match signature field {field_name:?}")))
-        };
+    let Some(manifest) = pdfcraft_xfa::signature::signature_manifest_for_field(&packets.xdp, &template, &by_som, field_name)? else {
+        return Ok(None);
     };
     let field_mdp = if manifest.explicit && manifest.action == ManifestAction::All {
         Some(FieldMdpPolicy { action: FieldMdpAction::All, fields: Vec::new() })
     } else if manifest.explicit {
-        let (template, _) = pdfcraft_xfa::parse(&packets.xdp)?;
         let data = pdfcraft_xfa::parse_datasets(&packets.xdp);
         let mut candidates = pdfcraft_xfa::signature::field_soms(&template, data.as_ref())?;
         let mut seen: HashSet<_> = candidates.iter().cloned().collect();
         candidates.extend(by_som.keys().filter(|som| seen.insert((**som).clone())).cloned());
-        let listed = pdfcraft_xfa::signature::referenced_field_soms(manifest, &candidates)?;
+        let listed = pdfcraft_xfa::signature::referenced_field_soms(&manifest, &candidates)?;
         let mut fields: Vec<String> = listed.into_iter().map(|som| by_som.get(&som).cloned().unwrap_or(som)).collect();
         fields.sort();
         fields.dedup();
@@ -76,6 +65,7 @@ pub(crate) struct SignatureLocks {
     calculated_soms: HashMap<String, String>,
     warning: Option<String>,
     block_new_signatures: bool,
+    unknown_scope: bool,
 }
 
 impl SignatureLocks {
@@ -138,6 +128,7 @@ impl SignatureLocks {
             let name = signature.field.as_str();
             let Some(signed_bytes) = bytes.get(..signature.signed_len).filter(|prefix| !prefix.is_empty()) else {
                 locks.warning.get_or_insert_with(|| "a signed revision could not be read to determine its field locks".into());
+                locks.unknown_scope = true;
                 continue;
             };
             if current_revision.as_ref().is_none_or(|(len, _)| *len != signature.signed_len) {
@@ -148,6 +139,7 @@ impl SignatureLocks {
             }
             let Some((_, Some(revision))) = &current_revision else {
                 locks.warning.get_or_insert_with(|| "a signed revision could not be read to determine its field locks".into());
+                locks.unknown_scope = true;
                 continue;
             };
             let pdf_rules = match signed_field_policies(revision, name) {
@@ -155,10 +147,7 @@ impl SignatureLocks {
                 Err(error) => {
                     locks.warning.get_or_insert_with(|| format!("the signed field's lock scope could not be read: {error}"));
                     // Its scope is unknown, so no form field can be assumed safe to edit.
-                    for field in form {
-                        locks.add(&field.name, by_obj.get(&field.obj).copied(), template);
-                    }
-                    locks.block_new_signatures = true;
+                    locks.unknown_scope = true;
                     FieldMdpRules::default()
                 }
             };
@@ -167,6 +156,7 @@ impl SignatureLocks {
                 Ok(packets) => packets,
                 Err(error) => {
                     locks.warning.get_or_insert_with(|| format!("the signed XFA data could not be read: {error}"));
+                    locks.unknown_scope = true;
                     None
                 }
             };
@@ -174,6 +164,7 @@ impl SignatureLocks {
                 Ok(scope) => scope,
                 Err(error) => {
                     locks.warning.get_or_insert_with(|| format!("the signed XFA manifest could not be resolved: {error}"));
+                    locks.unknown_scope = true;
                     None
                 }
             });
@@ -194,7 +185,8 @@ impl SignatureLocks {
                 }
             }
         }
-        if whole_document {
+        locks.block_new_signatures |= locks.unknown_scope;
+        if whole_document || locks.unknown_scope {
             for field in form {
                 locks.add(&field.name, by_obj.get(&field.obj).copied(), template);
             }
@@ -222,27 +214,41 @@ impl SignatureLocks {
         self.calculated_soms.get(&canonical_som(som)).map(String::as_str)
     }
 
-    pub(crate) fn calculated_names(&self) -> impl Iterator<Item = &str> {
-        self.calculated_soms.values().map(String::as_str)
+    pub(crate) fn has_calculations(&self) -> bool {
+        !self.calculated_soms.is_empty()
     }
 
-    /// Name the first protected field whose value changed. Called after XFA calculations and
+    /// Name the first protected field whose value or widgets changed. Called after XFA calculations and
     /// dataset sync, while the candidate edit is still an isolated copy.
     pub(crate) fn changed(&self, before: &Document, after: &Document) -> Option<String> {
-        if self.names.is_empty() {
+        if self.names.is_empty() && !self.unknown_scope {
             return None;
         }
-        let values = |doc: &Document| {
+        let fields = |doc: &Document| {
             pdfcraft_forms::fields(doc)
                 .into_iter()
-                .filter(|f| self.names.contains(&f.name))
-                .map(|f| (f.name, (f.value, f.selected)))
+                .filter(|f| self.unknown_scope || self.names.contains(&f.name))
+                .map(|f| (f.name.clone(), f))
                 .collect::<HashMap<_, _>>()
         };
-        let before_values = values(before);
-        let after_values = values(after);
+        let before_fields = fields(before);
+        let after_fields = fields(after);
+        if self.unknown_scope
+            && let Some(name) = after_fields.keys().find(|name| !before_fields.contains_key(*name))
+        {
+            return Some(name.clone());
+        }
         for name in &self.names {
-            if before_values.get(name) != after_values.get(name) {
+            let changed = match (before_fields.get(name), after_fields.get(name)) {
+                (Some(old), Some(new)) if self.unknown_scope => old != new,
+                (Some(old), Some(new)) => {
+                    old.value != new.value
+                        || old.selected != new.selected
+                        || old.widgets.iter().map(|widget| widget.rect).ne(new.widgets.iter().map(|widget| widget.rect))
+                }
+                (old, new) => old.is_some() != new.is_some(),
+            };
+            if changed {
                 return Some(name.clone());
             }
         }

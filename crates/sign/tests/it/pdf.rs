@@ -494,6 +494,8 @@ fn signed_field_mdp_allows_unlisted_values_and_rejects_protected_values() {
     let signed =
         pdfcraft_sign::sign(&open(&unsigned), &id, &SignOptions { field: Some("Approval".into()), field_mdp: Some(policy), ..opts() }).unwrap();
     let mdp = pdfcraft_sign::pdf::field_mdp(&open(&signed));
+    assert!(mdp.complete);
+    let mdp = mdp.entries;
     assert_eq!(mdp.len(), 1);
     assert_eq!(mdp[0].fields, ["A"]);
     let verdict = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Approval").unwrap();
@@ -520,6 +522,8 @@ fn signing_copies_an_existing_field_lock_into_field_mdp() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let signed = pdfcraft_sign::sign(&doc, &id, &SignOptions { field: Some("Approval".into()), ..opts() }).unwrap();
     let mdp = pdfcraft_sign::pdf::field_mdp(&open(&signed));
+    assert!(mdp.complete);
+    let mdp = mdp.entries;
     assert_eq!(mdp.len(), 1);
     assert_eq!(mdp[0].action, pdfcraft_sign::pdf::FieldMdpAction::Include);
     assert_eq!(mdp[0].fields, ["A"]);

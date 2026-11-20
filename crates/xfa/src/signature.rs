@@ -230,6 +230,44 @@ pub fn signature_manifests(xml: &str) -> Result<Vec<SignatureManifest>, XfaError
     Ok(out)
 }
 
+/// Match an AcroForm signature name to the template declaration of its XFA instance.
+/// Relative manifest references resolve from the actual instance, not the template path.
+pub fn signature_manifest_for_field(
+    xml: &str,
+    template: &Template,
+    names: &HashMap<String, String>,
+    field: &str,
+) -> Result<Option<SignatureManifest>, XfaError> {
+    if !xml.contains("<signature") && !xml.contains(":signature") {
+        return Ok(None);
+    }
+    let mut widgets = names.iter().filter(|(_, name)| name.as_str() == field).map(|(som, _)| som.as_str());
+    let widget = widgets.next().unwrap_or(field);
+    let ambiguous = || XfaError::Malformed(format!("several XFA widgets match signature field {field:?}"));
+    if widgets.next().is_some() {
+        return Err(ambiguous());
+    }
+    let som = canonical_som(widget);
+    let mut manifests = signature_manifests(xml)?;
+    let mut exact = manifests.iter().enumerate().filter(|(_, manifest)| manifest.signature_field == som);
+    if let Some((index, _)) = exact.next() {
+        if exact.next().is_some() {
+            return Err(ambiguous());
+        }
+        return Ok(Some(manifests.swap_remove(index)));
+    }
+    let Some(node) = crate::data::template_object(template, &som) else { return Ok(None) };
+    let mut matches = manifests
+        .into_iter()
+        .filter(|manifest| crate::data::template_object(template, &manifest.signature_field).is_some_and(|declared| std::ptr::eq(declared, node)));
+    let Some(mut manifest) = matches.next() else { return Ok(None) };
+    if matches.next().is_some() {
+        return Err(ambiguous());
+    }
+    manifest.signature_field = som;
+    Ok(Some(manifest))
+}
+
 /// Every instantiated XFA field, including fields without a visible PDF widget. The live form
 /// already applies repeat counts and data binding; a truncated walk cannot define a safe scope.
 pub fn field_soms(template: &Template, data: Option<&DataNode>) -> Result<Vec<String>, XfaError> {
@@ -370,6 +408,9 @@ pub fn referenced_field_soms(manifest: &SignatureManifest, candidates: &[String]
                 break;
             }
         }
+        if manifest.action == ManifestAction::Include && out.len() == previous_matches {
+            return Err(XfaError::Malformed(format!("unresolved signature manifest reference {reference:?}")));
+        }
     }
     Ok(out)
 }
@@ -455,5 +496,28 @@ mod tests {
         assert_eq!(manifest.certify, Some(2));
         assert_eq!(manifest.lock_document, Some(true));
         assert_eq!(manifest.action, ManifestAction::Include);
+    }
+
+    #[test]
+    fn repeated_signature_manifest_resolves_relative_refs_from_the_instance() {
+        let xml = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form">
+            <subform name="row"><occur min="2" max="3" initial="2"/>
+            <field name="amount"><ui><numericEdit/></ui></field>
+            <field name="sign"><ui><signature type="PDF1.6"><filter><mdp signatureType="author" permissions="2"/>
+            <lockDocument type="required">0</lockDocument></filter><manifest action="include"><ref>amount</ref></manifest>
+            </signature></ui></field></subform></subform></template>"#;
+        let (template, _) = crate::parse(xml).unwrap();
+        let names = HashMap::from([("form[0].row[1].sign[0]".into(), "Second approval".into())]);
+        let mut manifest = signature_manifest_for_field(xml, &template, &names, "Second approval").unwrap().unwrap();
+        let candidates = field_soms(&template, None).unwrap();
+        assert_eq!(manifest.signature_field, "form[0].row[1].sign[0]");
+        assert_eq!(manifest.certify, Some(2));
+        assert_eq!(manifest.lock_document, Some(true));
+        assert_eq!(referenced_field_soms(&manifest, &candidates).unwrap(), ["form[0].row[1].amount[0]"]);
+
+        manifest.refs.push("missing".into());
+        assert!(referenced_field_soms(&manifest, &candidates).unwrap_err().to_string().contains("missing"));
+        manifest.action = ManifestAction::Exclude;
+        assert_eq!(referenced_field_soms(&manifest, &candidates).unwrap(), ["form[0].row[1].amount[0]"]);
     }
 }

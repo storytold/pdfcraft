@@ -40,7 +40,7 @@ pub(crate) use listing::MAX_FIELD_NAME_BYTES;
 use listing::{DISCOVERY_CACHE_LIMIT, Field, MAX_ENTRIES, MAX_FIELDS, MAX_NAME_BYTES, is_document_timestamp, sig_fields};
 pub use listing::{DigestCache, list, list_cached};
 pub(crate) use listing::{walk_sig_fields, widget_shown};
-pub use locks::{FieldMdp, FieldMdpAction, FieldMdpPolicy, field_mdp, signature_field_lock, signed_field_policies};
+pub use locks::{FieldMdp, FieldMdpAction, FieldMdpListing, FieldMdpPolicy, field_mdp, signature_field_lock, signed_field_policies};
 pub(crate) use signing::fmt;
 pub use signing::{Appearance, AppearanceLabels, SignOptions, display_date, has_signatures, sign, sign_with_timestamp, timestamp_document};
 pub use types::{Detail, Fill, Modification, Status, TrustStore, WORDINGS, Words, in_english, kind};

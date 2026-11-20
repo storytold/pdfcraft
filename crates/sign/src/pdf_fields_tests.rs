@@ -22,8 +22,10 @@ fn field_mdp_reads_include_exclude_and_all_actions() {
             "<< /T (three) /FT /Sig /V << /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Action /All >> >>] >> >>".into(),
         ],
     );
+    let listing = field_mdp(&doc);
+    assert!(listing.complete);
     assert_eq!(
-        field_mdp(&doc),
+        listing.entries,
         [
             FieldMdp { signature_field: "one".into(), action: FieldMdpAction::Include, fields: vec!["form.C".into(), "form.D".into()] },
             FieldMdp { signature_field: "two".into(), action: FieldMdpAction::Exclude, fields: vec!["form.A".into()] },

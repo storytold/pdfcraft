@@ -47,8 +47,13 @@ fn deletes_pages(edit: &Edit) -> bool {
 }
 
 /// Keep edits to the working copy until both the operation and its script callbacks succeed.
-fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
-    let result = guard(|| run_edit(next, edit, cx))
+fn run_checked_edit(
+    next: &mut pdfcraft_cos::Document,
+    edit: &Edit,
+    cx: &mut EditCtx,
+    locks: &crate::signature_locks::SignatureLocks,
+) -> Result<(), EditError> {
+    let result = guard(|| run_edit(next, edit, cx, Some(locks)))
         .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
     let refusal = cx.js.as_mut().and_then(|runner| runner.refused.take());
     if refusal.is_some() || result.is_err() {
@@ -192,7 +197,7 @@ impl Session {
         cx.redaction_overlays.clear();
         cx.redaction_marks.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
-        run_checked_edit(&mut next, &edit, &mut cx)?;
+        run_checked_edit(&mut next, &edit, &mut cx, &doc.signature_locks)?;
         // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
         // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
         // a batch keeps the other edits it holds.
@@ -252,7 +257,6 @@ impl Session {
         // every calculation (and a reset recalculates). They read the data, so it is brought up
         // to date first. The fields whose exit scripts ran are noted once the edit is kept.
         let mut exited: Vec<String> = Vec::new();
-        let mut suppressed_calculations = Vec::new();
         if let Some(tpl) = cx.xfa.clone() {
             if is_xfa && matches!(scope_of(&edit), Scope::Form | Scope::Full | Scope::Content) {
                 let datasets = &mut cx.xfa_datasets;
@@ -293,7 +297,11 @@ impl Session {
                         &changed,
                         &mut run,
                         &mut exited,
-                        Some(xfa::SignedCalculation { before: &editor.cos, locks: &doc.signature_locks, suppressed: &mut suppressed_calculations }),
+                        Some(xfa::SignedCalculation {
+                            before: &editor.cos,
+                            locks: &doc.signature_locks,
+                            suppressed: &mut cx.xfa_suppressed_calculations,
+                        }),
                     )
                 })
                 .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
@@ -344,13 +352,11 @@ impl Session {
         }
         if let Some(name) = doc.signature_locks.changed(&editor.cos, &next) {
             discard_edit_callbacks(&cx);
-            return Err(EditError::Invalid(format!(
-                "the signature locks {name}; this change would alter its value, so the document was not changed"
-            )));
+            return Err(EditError::Invalid(format!("the signature locks {name}; the document was not changed")));
         }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
-        if !suppressed_calculations.is_empty() {
-            notices.insert(0, EditNotice::SignedCalculationSkipped { fields: suppressed_calculations });
+        if !cx.xfa_suppressed_calculations.is_empty() {
+            notices.insert(0, EditNotice::SignedCalculationSkipped { fields: std::mem::take(&mut cx.xfa_suppressed_calculations) });
         }
         // Places applied redactions left that still hold the removed text, and what became of
         // the PDF/A or PDF/UA identification in the XMP they removed: said, not silent.
