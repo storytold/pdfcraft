@@ -116,8 +116,11 @@ struct LegacyFace {
     space: f64,
 }
 
-/// What one edit may decode, and so keep, of the font programs of its THSarabunPSK subsets
-/// (each at most 16 MiB): a page may name many of them.
+/// What one edit may decode of its THSarabunPSK subsets' font data: their programs (each at most
+/// 16 MiB), which it keeps, and the streams of the metrics read to measure them and to adapt their
+/// programs' cmaps: their CMaps and glyph maps, and a subset's program again, for which of its
+/// glyphs have outlines. A page may name many of them. The metrics read to find the subsets among
+/// the page's fonts aren't charged to it.
 const MAX_THAI_PROGRAMS: usize = 64 << 20;
 
 struct PreparedCharacters {
@@ -367,6 +370,8 @@ fn styled_run_end(items: &[StyledChar], start: usize) -> usize {
 
 type StyledRows = Vec<Vec<StyledChar>>;
 type RowRanges = Vec<std::ops::Range<usize>>;
+/// Which rows a line break in the draft started, as against wrapping.
+type ExplicitRows = Vec<bool>;
 enum ShapedFont {
     Existing(Vec<(String, Vec<u8>)>),
     Program { bytes: Vec<u8>, family: String },
@@ -704,7 +709,10 @@ fn page_font_metrics(
 }
 
 fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextBlock, style: &BlockStyle) -> Result<(f64, f64, f64), EditError> {
-    if [style.size, style.line_spacing, style.char_spacing, style.scale, style.width].iter().flatten().any(|value| !value.is_finite())
+    if [style.size, style.line_spacing, style.paragraph_spacing, style.char_spacing, style.scale, style.width]
+        .iter()
+        .flatten()
+        .any(|value| !value.is_finite())
         || style.color.is_some_and(|color| color.iter().any(|value| !value.is_finite()))
     {
         return Err(EditError::Invalid("the paragraph's formatting must use finite numbers".into()));
@@ -731,7 +739,7 @@ fn row_step(style: &BlockStyle, size: f64, source_leading: f64) -> f64 {
     }
 }
 
-type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
+type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>, ExplicitRows);
 
 /// For each of `chars`, whether a row may end just before it inside a run of non-space characters
 /// (Chinese, Japanese and Thai), worked out once per run: Thai words need the whole run, not just
@@ -775,6 +783,9 @@ fn wrap_styled_rows(
     let mut row_lines: Vec<usize> = Vec::new();
     let mut draft_line = 0usize;
     let mut row_start = 0;
+    // Which rows a line break in the draft started, as against wrapping: the paragraph spacing,
+    // when one is set, goes before those.
+    let mut explicit: ExplicitRows = vec![false];
     let mut row = Vec::new();
     let mut row_width = 0.0;
     let mut at = 0;
@@ -793,6 +804,7 @@ fn wrap_styled_rows(
             row_lines.push(draft_line);
             draft_line = draft_line.saturating_add(1);
             rows.push(std::mem::take(&mut row));
+            explicit.push(true);
             row_width = 0.0;
             at += 1;
             row_start = at;
@@ -820,6 +832,7 @@ fn wrap_styled_rows(
             row_ranges.push(row_start..row_start + row.len());
             row_lines.push(draft_line);
             rows.push(std::mem::take(&mut row));
+            explicit.push(false);
             row_width = 0.0;
             row_start = at;
         }
@@ -834,14 +847,13 @@ fn wrap_styled_rows(
         row_lines.push(draft_line);
         rows.push(row);
     }
-    Ok((rows, row_ranges, row_lines, row_soft, row_gap))
+    Ok((rows, row_ranges, row_lines, row_soft, row_gap, explicit))
 }
 
 fn apply_range_styles<'a>(
     first: &TextLine,
-    block: &TextBlock,
     lines: &[TextLine],
-    draft: &str,
+    sources: Vec<(std::ops::Range<usize>, usize)>,
     ranges: &[&'a RangeStyle],
     style: &BlockStyle,
 ) -> StyledLines<'a> {
@@ -849,7 +861,7 @@ fn apply_range_styles<'a>(
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
     let mut overrides = HashMap::new();
-    for (span, source) in block.edited_spans(draft) {
+    for (span, source) in sources {
         let mut edges = vec![span.start, span.end];
         for range in ranges {
             for edge in [range.range.start, range.range.end] {
@@ -935,6 +947,9 @@ fn legacy_thai_font(
     }
     let family = pdfcraft_fonts::embedding::face_key(&source.base_font);
     let mut candidates = vec![source.font.clone()];
+    // Every name on the page is read here for its face name alone, aliases of one font and other
+    // faces' fonts too, with no total, as before: charged to the edit's allowance, each alias would
+    // pay again and other faces would spend what the face's subsets need.
     candidates.extend(fonts.iter().filter_map(|(name, font)| {
         let font = doc.dict(font)?;
         (pdfcraft_fonts::embedding::face_key(&Metrics::from_dict(doc, &font).base_font) == family).then(|| String::from_utf8_lossy(name).into_owned())
@@ -949,9 +964,15 @@ fn legacy_thai_font(
         let face = match object.and_then(|o| cache.values().find(|face| face.object == Some(o))) {
             Some(alias) => LegacyFace { glyphs: alias.glyphs.clone(), metrics: alias.metrics.clone(), object, ..*alias },
             None => {
-                let metrics = Metrics::from_dict(doc, &font);
-                let space = source_space(doc, fonts, &metrics);
-                let glyphs = pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new);
+                // Read within the edit's allowance; past it the subset goes unread, and the edit is
+                // refused below.
+                let metrics = Metrics::from_dict_within(doc, &font, budget);
+                let (space, glyphs) = if metrics.past_allowance {
+                    (0.0, None)
+                } else {
+                    let space = source_space(doc, fonts, &metrics);
+                    (space, pdfcraft_fonts::pdf::LegacyThaiFont::from_pdf(doc, &font, space, budget).ok().flatten().map(std::rc::Rc::new))
+                };
                 let style = FontStyle::of(doc, &font, &metrics);
                 LegacyFace { glyphs, metrics, style, object, space }
             }
@@ -959,9 +980,11 @@ fn legacy_thai_font(
         cache.insert(name, face);
     }
     // A subset left unread would count as unusable, silently changing which subset draws the text.
-    if budget.remaining() == 0 {
+    // A read refused for want of the allowance is what refuses the edit: reads that spent it to the
+    // byte refused nothing.
+    if budget.refused() > 0 {
         return Err(EditError::Invalid(format!(
-            "the page's {} subsets need more than {} MiB of font programs for one edit; choose a replacement font for this text",
+            "the page's {} subsets need more than {} MiB of font data for one edit; choose a replacement font for this text",
             source.base_font.rsplit('+').next().unwrap_or(&source.base_font),
             MAX_THAI_PROGRAMS >> 20
         )));
@@ -1304,23 +1327,104 @@ fn shape_source(doc: &Document, fonts: &Dict, thai: &ThaiShaping, name: &str, te
     )))
 }
 
+/// Where a paragraph spacing puts each row. The space before a paragraph, when a paragraph
+/// spacing is set: the draft breaks every source row, so a break starts a paragraph only where
+/// the edit inserted it, or at a source break whose row was already set apart from the row above
+/// by more than the ordinary row step; there the set spacing replaces the space it had. A row
+/// that starts a source row keeps that row's step from the row drawn above it, so the rows below
+/// an inserted break or spacing move down with it instead of being drawn over it.
+struct RowSpacing<'a> {
+    block: &'a TextBlock,
+    lines: &'a [TextLine],
+    first: &'a TextLine,
+    gap: f64,
+    /// Whether the spacing was asked for. Unset, the default gap goes only before a paragraph the
+    /// page did not have: a row it already had, whether set apart or not, keeps where it was, so
+    /// choosing a family or applying the draft again moves no source row.
+    set: bool,
+    row_step: f64,
+    /// The source row each output row starts, if any.
+    sources: Vec<Option<usize>>,
+    explicit: ExplicitRows,
+    /// Rows keep their source baselines unless the size or the line spacing is changed.
+    follow_source: bool,
+    /// The baseline the row above was drawn on.
+    previous: Option<f64>,
+}
+
+impl<'a> RowSpacing<'a> {
+    fn new(
+        block: &'a TextBlock,
+        lines: &'a [TextLine],
+        first: &'a TextLine,
+        style: &BlockStyle,
+        row_ranges: &[std::ops::Range<usize>],
+        draft: &str,
+        explicit: ExplicitRows,
+    ) -> Result<Self, EditError> {
+        let (gap, set) = match style.paragraph_spacing {
+            Some(p) if p.is_finite() => (p.clamp(0.0, 14_400.0), true),
+            Some(_) => return Err(EditError::Invalid("the paragraph spacing must be a number".into())),
+            // Half the size, for a paragraph the page did not have (see `set`).
+            None => (style.size.unwrap_or(first.size) / 2.0, false),
+        };
+        let row_step = source_row_step(block, lines, first.size * 1.5);
+        let sources = row_sources(block, draft, row_ranges, &explicit);
+        Ok(Self {
+            block,
+            lines,
+            first,
+            gap,
+            set,
+            row_step,
+            sources,
+            explicit,
+            follow_source: style.line_spacing.is_none() && style.size.is_none(),
+            previous: None,
+        })
+    }
+
+    fn run_of(&self, row: usize) -> Option<&'a TextLine> {
+        self.block.rows.get(row).and_then(|r| r.first()).and_then(|i| self.lines.get(*i))
+    }
+
+    /// The baseline of output row `row_index`, given the one the row above ended on (`baseline`),
+    /// and the source run the row is styled from.
+    fn place(&mut self, row_index: usize, mut baseline: f64) -> (f64, &'a TextLine) {
+        let source_row = self.sources.get(row_index).copied().flatten();
+        let anchor = source_row.and_then(|j| self.run_of(j));
+        // The baseline of the source row above the source row this row starts.
+        let above = source_row.and_then(|j| self.run_of(j.checked_sub(1)?)).map(|l| l.origin.baseline);
+        // The space this row already had above it, beyond the ordinary row step.
+        let existing = source_row.map_or(0.0, |j| existing_gap(self.block, self.lines, self.row_step, j));
+        let starts_paragraph =
+            row_index > 0 && self.explicit.get(row_index).copied().unwrap_or(false) && (anchor.is_none() || (self.set && existing > 0.5));
+        let paragraph = starts_paragraph.then_some(self.gap);
+        if self.follow_source {
+            match (anchor, above, self.previous) {
+                // The source's step down from the row above, kept from where that row was drawn;
+                // written `here - (above - previous)` so a row below unmoved rows lands exactly
+                // on its source baseline.
+                (Some(a), Some(above), Some(previous)) => {
+                    baseline = a.origin.baseline - (above - previous) - paragraph.map_or(0.0, |gap| gap - existing);
+                }
+                (Some(a), _, None) => baseline = a.origin.baseline,
+                _ => baseline -= paragraph.unwrap_or(0.0),
+            }
+        } else {
+            baseline -= paragraph.unwrap_or(0.0);
+        }
+        self.previous = Some(baseline);
+        (baseline, anchor.or_else(|| self.run_of(row_index)).unwrap_or(self.first))
+    }
+}
+
 /// For each output row (a range of the draft's characters), whether it is exactly the source row
 /// at the same position: the same characters, none of them inserted or changed by the edit.
 fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>]) -> Vec<bool> {
     let old: Vec<char> = block.editor_text.chars().collect();
     let new: Vec<char> = draft.chars().collect();
-    let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
-    let suffix = old.iter().rev().zip(new.iter().rev()).take(old.len().min(new.len()).saturating_sub(prefix)).take_while(|(a, b)| a == b).count();
-    // The source character a draft character is, if the edit left it alone.
-    let origin = |i: usize| {
-        if i < prefix {
-            Some(i)
-        } else if i >= new.len().saturating_sub(suffix) {
-            (old.len() + i).checked_sub(new.len())
-        } else {
-            None
-        }
-    };
+    let origins = Origins::new(&old, &new);
     let mut source_rows = Vec::new();
     let mut start = 0;
     for (i, ch) in old.iter().enumerate() {
@@ -1338,7 +1442,7 @@ fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>
         .enumerate()
         .map(|(r, range)| {
             source_rows.get(r).is_some_and(|source| {
-                !range.is_empty() && range.len() == source.len() && range.clone().zip(source.clone()).all(|(i, j)| origin(i) == Some(j))
+                !range.is_empty() && range.len() == source.len() && range.clone().zip(source.clone()).all(|(i, j)| origins.of(i) == Some(j))
             })
         })
         .collect()
@@ -1536,6 +1640,159 @@ fn rewrite_anchor<'a>(
     RewriteAnchor { lead, drop, start, split }
 }
 
+/// Which source character each draft character is, where the edit left it alone. The text is
+/// aligned a line at a time first: the lines the source and the draft share at their start and
+/// at their end are the same lines, so a whole line inserted exactly at a line boundary is
+/// attributed to the lines between them, whatever the characters around it are (a character
+/// prefix and suffix cannot tell `Two\nNew\nThree` from `Two\nThree` where the break is). Between
+/// them, what is left of each is aligned by its common character prefix and suffix.
+struct Origins {
+    of: Vec<Option<usize>>,
+}
+
+/// The lines of `text` as character ranges, each with its line break (the last has none).
+fn line_ranges(text: &[char]) -> Vec<std::ops::Range<usize>> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, ch) in text.iter().enumerate() {
+        if *ch == '\n' {
+            lines.push(start..i + 1);
+            start = i + 1;
+        }
+    }
+    lines.push(start..text.len());
+    lines
+}
+
+impl Origins {
+    fn new(old: &[char], new: &[char]) -> Self {
+        let (old_lines, new_lines) = (line_ranges(old), line_ranges(new));
+        // A line's text without its break, and whether it has one: lines are the same when the
+        // text is, and a break is shared only when both have it.
+        let text = |chars: &'_ [char], r: &std::ops::Range<usize>| -> (usize, usize) {
+            let end = if r.end > r.start && chars[r.end - 1] == '\n' { r.end - 1 } else { r.end };
+            (r.start, end)
+        };
+        let same = |o: &std::ops::Range<usize>, n: &std::ops::Range<usize>| {
+            let ((os, oe), (ns, ne)) = (text(old, o), text(new, n));
+            old[os..oe] == new[ns..ne]
+        };
+        let mut of = vec![None; new.len()];
+        let mut pair = |o: &std::ops::Range<usize>, n: &std::ops::Range<usize>, with_break: bool| {
+            let ((os, oe), (ns, ne)) = (text(old, o), text(new, n));
+            for k in 0..oe - os {
+                of[ns + k] = Some(os + k);
+            }
+            if with_break && o.end > oe && n.end > ne {
+                of[ne] = Some(oe);
+            }
+        };
+        let (ol, nl) = (old_lines.len(), new_lines.len());
+        let limit = ol.min(nl);
+        let head = (0..limit).take_while(|&k| same(&old_lines[k], &new_lines[k])).count();
+        let tail = (0..limit - head).take_while(|&k| same(&old_lines[ol - 1 - k], &new_lines[nl - 1 - k])).count();
+        let (old_gap, new_gap) = (ol - head - tail, nl - head - tail);
+        for k in 0..head {
+            // The break after the last of them is the source's only when nothing lies between.
+            let last = k + 1 == head;
+            pair(&old_lines[k], &new_lines[k], !last || (old_gap == 0 && new_gap == 0));
+        }
+        for k in 1..=tail {
+            pair(&old_lines[ol - k], &new_lines[nl - k], true);
+        }
+        let from_here = |lines: &[std::ops::Range<usize>], at: usize, len: usize| lines.get(at).map_or(len, |r| r.start);
+        if old_gap > 0 && new_gap > 0 {
+            // Lines the edit changed: aligned by the characters they share at their start and
+            // at their end, from the break before them to the break after.
+            let before = |lines: &[std::ops::Range<usize>]| if head > 0 { lines[head - 1].end - 1 } else { 0 };
+            let old_mid = before(&old_lines)..from_here(&old_lines, ol - tail, old.len());
+            let new_mid = before(&new_lines)..from_here(&new_lines, nl - tail, new.len());
+            let (om, nm) = (&old[old_mid.clone()], &new[new_mid.clone()]);
+            let prefix = om.iter().zip(nm).take_while(|(a, b)| a == b).count();
+            let suffix = om.iter().rev().zip(nm.iter().rev()).take(om.len().min(nm.len()) - prefix).take_while(|(a, b)| a == b).count();
+            for k in 0..prefix {
+                of[new_mid.start + k] = Some(old_mid.start + k);
+            }
+            for k in 1..=suffix {
+                of[new_mid.end - k] = Some(old_mid.end - k);
+            }
+            // The same number of lines on both sides: each is the line at its own position, so
+            // the breaks between them are the source's (an edited row is still that row).
+            if old_gap == new_gap {
+                for k in 0..old_gap {
+                    let (o, n) = (&old_lines[head + k], &new_lines[head + k]);
+                    if old[o.end - 1] == '\n' && new[n.end - 1] == '\n' {
+                        of[n.end - 1] = Some(o.end - 1);
+                    }
+                }
+            }
+        } else if tail > 0 {
+            // A whole line (or lines) inserted or removed: the break before the first line that
+            // follows is the same break in both, and no other break in between is the source's.
+            if let (Some(n), Some(o)) = (new_lines[nl - tail].start.checked_sub(1), old_lines[ol - tail].start.checked_sub(1)) {
+                of[n] = Some(o);
+            }
+        }
+        Self { of }
+    }
+
+    /// The source character the draft character `i` is, if the edit left it alone.
+    fn of(&self, i: usize) -> Option<usize> {
+        self.of.get(i).copied().flatten()
+    }
+}
+
+/// The baseline of source row `row`'s first run.
+fn source_baseline(block: &TextBlock, lines: &[TextLine], row: usize) -> Option<f64> {
+    block.rows.get(row).and_then(|r| r.first()).and_then(|i| lines.get(*i)).map(|l| l.origin.baseline)
+}
+
+/// The ordinary step between the block's source rows: the smallest, or `fallback` for one row.
+pub(crate) fn source_row_step(block: &TextBlock, lines: &[TextLine], fallback: f64) -> f64 {
+    (1..block.rows.len())
+        .filter_map(|r| Some(source_baseline(block, lines, r - 1)? - source_baseline(block, lines, r)?))
+        .filter(|v| *v > 0.0)
+        .fold(None, |min: Option<f64>, v| Some(min.map_or(v, |m| m.min(v))))
+        .unwrap_or(fallback)
+}
+
+/// The space source row `row` already had above it, beyond the ordinary `row_step`.
+pub(crate) fn existing_gap(block: &TextBlock, lines: &[TextLine], row_step: f64, row: usize) -> f64 {
+    match (source_baseline(block, lines, row), row.checked_sub(1).and_then(|r| source_baseline(block, lines, r))) {
+        (Some(here), Some(above)) => (above - here - row_step).max(0.0),
+        _ => 0.0,
+    }
+}
+
+/// For each output row (a range of the draft's characters), the source row it starts: row 0
+/// starts row 0, and a row the draft's line break started (`explicit`) starts the source row
+/// after that break when the break is one of the source's, left alone by the edit. A wrapped
+/// row, or one after a break the edit inserted, starts none. When the source rows can't be told
+/// apart by their line breaks, each row is paired with the source row at its own position.
+pub(crate) fn row_sources(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>], explicit: &[bool]) -> Vec<Option<usize>> {
+    let old: Vec<char> = block.editor_text.chars().collect();
+    let breaks: Vec<usize> = old.iter().enumerate().filter(|(_, c)| **c == '\n').map(|(i, _)| i).collect();
+    if breaks.len().saturating_add(1) != block.rows.len() {
+        return (0..rows.len()).map(Some).collect();
+    }
+    let new: Vec<char> = draft.chars().collect();
+    let origins = Origins::new(&old, &new);
+    rows.iter()
+        .enumerate()
+        .map(|(r, range)| {
+            if r == 0 {
+                return Some(0);
+            }
+            if !explicit.get(r).copied().unwrap_or(false) {
+                return None;
+            }
+            // The draft's line break is the character just before the row.
+            let source = origins.of(range.start.checked_sub(1)?)?;
+            breaks.binary_search(&source).ok().map(|k| k + 1)
+        })
+        .collect()
+}
+
 /// Open (`op` is `"BMC"`) or close (`"EMC"`) the `/P` marker that wraps the whole rewrite when
 /// `marked` (every row is in this rewrite, see [`rewrite_styled_block`]), so the paragraph
 /// cannot be mistaken for a neighbour by geometry alone (#2517).
@@ -1567,7 +1824,8 @@ fn push_row_break_marker(block_ops: &mut Vec<Op>, row_soft: &[bool], row_gap: &[
 /// [`splice`] with the rewritten rows spliced in at `at`, and (when `marker` names one) a `/P`
 /// marker opened at its start and closed at its `next` line or, when nothing follows, after the
 /// paragraph's own last `ET` (appended past the stream's last operator when that close is at or
-/// beyond `ops.len()`, since `splice`'s callback never visits that index).
+/// beyond `ops.len()`, since `splice`'s callback never visits that index). A dropped operator
+/// `i` leaves `left_behind(i, keep)` in its place: its line move, spacing and advance.
 fn splice_with_marker(
     pieces: &Pieces,
     ops: &[Op],
@@ -1575,6 +1833,7 @@ fn splice_with_marker(
     at: usize,
     mut block_ops: Vec<Op>,
     drop: &std::collections::HashSet<usize>,
+    mut left_behind: impl FnMut(usize, bool) -> Vec<Op>,
 ) -> Vec<Vec<u8>> {
     let data = splice(pieces, ops, |i| {
         let mut insert = Vec::new();
@@ -1592,7 +1851,9 @@ fn splice_with_marker(
         if i == at {
             insert.append(&mut block_ops);
         }
-        (insert, !drop.contains(&i))
+        let keep = !drop.contains(&i);
+        insert.extend(left_behind(i, keep));
+        (insert, keep)
     });
     if !marker.is_some_and(|(_, next, close)| next.is_none() && close >= ops.len()) {
         return data;
@@ -1606,6 +1867,25 @@ fn splice_with_marker(
         last.extend_from_slice(&pdfcraft_content::serialize_ops(&[Op::new("EMC", vec![])]));
     }
     data
+}
+
+/// The source run each part of the draft is styled from: the ones given, which must cover the draft
+/// in order, on character boundaries, from the block's runs, or else the edit's own.
+fn draft_sources(block: &TextBlock, draft: &str, style: &BlockStyle) -> Result<Vec<(std::ops::Range<usize>, usize)>, EditError> {
+    if style.sources.is_empty() {
+        return Ok(block.edited_spans(draft));
+    }
+    let mut at = 0;
+    for (range, source) in &style.sources {
+        if range.start != at || range.start >= range.end || draft.get(range.clone()).is_none() || !block.lines.contains(source) {
+            return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+        }
+        at = range.end;
+    }
+    if at != draft.len() {
+        return Err(EditError::Invalid("the text's style sources must cover it in order with the paragraph's own runs".into()));
+    }
+    Ok(style.sources.clone())
 }
 
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
@@ -1626,7 +1906,8 @@ pub(crate) fn rewrite_styled_block(
     }
     let ranges = validated_ranges(draft, style)?;
     let source_count = lines.len();
-    let styled = apply_range_styles(first, block, lines, draft, &ranges, style);
+    let sources = draft_sources(block, draft, style)?;
+    let styled = apply_range_styles(first, lines, sources, &ranges, style);
     let lines = styled.lines.as_slice();
     let styled_spans = styled.spans;
     let underlines = styled.underlines;
@@ -1720,7 +2001,7 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap, explicit) = wrap_styled_rows(&chars, width, measure)?;
     let space_styles: Vec<_> = rows.iter_mut().map(|row| assign_subset_space_fonts(row, &metrics)).collect();
     let streams = content_streams(doc, &p.dict)?;
     let pieces = crate::text::joined(&streams);
@@ -1728,7 +2009,7 @@ pub(crate) fn rewrite_styled_block(
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
-    let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let plain = BlockStyle { ranges: Vec::new(), sources: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
     let mut kept = if plain {
         untouched_rows(block, draft, &row_ranges)
             .into_iter()
@@ -1781,6 +2062,7 @@ pub(crate) fn rewrite_styled_block(
         })
         .rfind(|v| *v > 0.0)
         .unwrap_or(first.size * 1.5);
+    let mut spacing = RowSpacing::new(block, lines, first, style, &row_ranges, draft, explicit)?;
     // Revealed OCR text that something is painted over goes on top of the page, where it starts
     // from the initial state.
     let largest =
@@ -1796,14 +2078,8 @@ pub(crate) fn rewrite_styled_block(
     let drawn_from = if over { &initial } else { after };
     let mut baseline = first.origin.baseline;
     for (row_index, row) in rows.iter().enumerate() {
-        let anchor = block.rows.get(row_index).and_then(|r| r.first()).and_then(|i| lines.get(*i));
-        if style.line_spacing.is_none()
-            && style.size.is_none()
-            && let Some(anchor) = anchor
-        {
-            baseline = anchor.origin.baseline;
-        }
-        let anchor = anchor.unwrap_or(first);
+        let anchor;
+        (baseline, anchor) = spacing.place(row_index, baseline);
         if kept.get(row_index).copied().unwrap_or(false) {
             // Kept rows only occur without spacing or size changes, so this is the step below.
             baseline -= source_leading;
@@ -1917,14 +2193,21 @@ pub(crate) fn rewrite_styled_block(
     block_ops.extend(after.ops());
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
-        block_ops.push(Op::new("BT", vec![]));
-        block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| n(*v)).collect()));
+        block_ops.extend(crate::text::reopen_text_object(o.tlm, o.tm, after.font.as_ref().map(|(_, size)| *size), after.scale));
     }
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
     // safe. The close is not part of `block_ops`: that vector can end inside a text object
     // when the rewrite splits one, and a kept row's operators come later in the stream.
     let marker = if marked { None } else { paragraph_marker(block, lines, &ops) };
-    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop);
+    // A dropped `'` or `"` leaves its line move and spacing, and a dropped show its advance.
+    let mut advances = crate::text::dropped_advances(doc, &ops, &res, &drop);
+    let split_at = split.then_some(start);
+    let left_behind = |i: usize, keep: bool| {
+        let mut out = crate::text::dropped_side_effects(&ops, i, keep, split_at);
+        out.extend(advances.remove(&i));
+        out
+    };
+    let data = splice_with_marker(&pieces, &ops, marker, at, block_ops, &drop, left_behind);
     let contents = rewritten_contents(doc, &streams, data)?;
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| {
