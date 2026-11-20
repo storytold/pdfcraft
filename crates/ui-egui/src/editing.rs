@@ -1404,7 +1404,8 @@ fn step_typing(
     let mut now = crate::edit_text_ui::Typed::of(std::mem::take(text), selection.take(), std::mem::take(aligns));
     let stepped = history.step(&mut now, step);
     *text = now.text;
-    *selection = None;
+    // A restored byte range belonged to the old text; the editor will place a fresh caret.
+    *selection = if stepped { None } else { now.selection };
     *aligns = now.aligns;
     stepped
 }

@@ -11,7 +11,7 @@ use craft::ui::runtime::commands::{
 };
 use pdfcraft_engine::commands::{self as engine, CommandSpec};
 
-use crate::menus::{self, CUT, DELETE, DOCUMENT, EXTRA, NO_RECENT, PANEL, PANELS, PASTE, SELECT_ALL};
+use crate::menus::{self, CUT, DELETE, DOCUMENT, EXTRA, NO_RECENT, PANEL, PANELS, PASTE, QUIT, SELECT_ALL};
 use crate::{Mode, PdfCraftApp, QuickTool};
 use craft::pages::PageDisplay;
 use craft::theme::ModeChoice;
@@ -24,7 +24,7 @@ const CATALOG_ONLY: &[(&str, &str, &str)] = &[
     // Labels distinct from the Combine grid's Expand and Collapse, which can show beside them.
     ("tools.expand", "Expand all tools", "maximize-2"),
     ("tools.collapse", "Collapse all tools", "minimize-2"),
-    ("tools.all", "All tools", "layout-grid"),
+    ("tools.all", "Back to all tools", "layout-grid"),
     // The rail's button names the side it moves the rail to.
     ("view.rail.left", "Dock navigation rail on Left", "panel-left"),
     ("view.rail.right", "Dock navigation rail on Right", "panel-right"),
@@ -180,6 +180,7 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
     let edit_objects = app.quick_tool == QuickTool::EditText && !organize;
     let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
     text || match command.id.as_str() {
+        QUIT => true,
         NO_RECENT => false,
         "file.open_recent" => index.is_none_or(|i| i < app.recent.len()),
         "file.clear_recent" => !app.recent.is_empty(),
@@ -188,6 +189,9 @@ fn enabled(app: &PdfCraftApp, ctx: &egui::Context, command: &CommandRef) -> bool
         "file.close" if !has_doc && super::mac_shortcuts(ctx) && !cfg!(target_arch = "wasm32") => true,
         "edit.copy" if organize => enabled_id("page.copy"),
         "edit.copy" if view.is_some_and(|v| v.session.picked_image.is_some()) => doc.is_some_and(|d| d.allows_copying()),
+        "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.session.image_selection.is_some()) => {
+            doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
+        }
         "edit.copy" | CUT if edit_objects && view.is_some_and(|v| v.session.objects.count() > 0) => {
             doc.is_some_and(|d| d.allows_copying() && (command.id != CUT || d.allows_modification()))
         }

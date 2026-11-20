@@ -520,7 +520,8 @@ fn save_as_to_a_new_file_drops_earlier_revisions() {
     h.run_steps(3);
     queue_save(&out);
     let ctx_h = h.ctx.clone();
-    assert!(h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As));
+    assert!(!h.state_mut().save_active(&ctx_h, pdfcraft_ui_egui::SaveTarget::As), "Save As awaits the picker");
+    h.run_steps(3);
     let saved = saved_file(&out);
     let count = |needle: &[u8]| saved.windows(needle.len()).filter(|w| *w == needle).count();
     assert_eq!(count(b"%%EOF"), 1, "one revision only");
@@ -845,11 +846,14 @@ fn quitting_with_unsaved_changes_still_remembers_every_file() {
         h.run_steps(3);
     }
     assert!(h.state().views.is_empty());
-    let mut app = crate::control::new_app();
-    app.apply_settings(&h.state().settings_snapshot());
-    app.reopen_last_files(&[]);
-    assert_eq!(open_paths(&app), files, "both files come back");
-    assert_eq!(app.active, Some(1), "with b.pdf in front, as when the quit began");
+    let settings = h.state().settings_snapshot();
+    let mut h = session_harness(move |app| {
+        app.apply_settings(&settings);
+        app.reopen_last_files(&[]);
+    });
+    support::wait_until(&mut h, "reopened files", |app| app.views.len() == 2);
+    assert_eq!(open_paths(h.state()), files, "both files come back");
+    assert_eq!(h.state().active, Some(1), "with b.pdf in front, as when the quit began");
 }
 
 #[test]
@@ -1295,7 +1299,9 @@ fn add_stops_at_the_256_custom_properties_the_tab_lists() {
     type_into(&mut h, "Name:", "Other");
     type_into(&mut h, "Value:", "x");
     assert!(add_disabled(&h), "the draft holds 256");
-    h.get_by_label_contains("Client");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(custom_properties(&h).contains(&("Client".to_string(), "Acme".to_string())));
 
     // 257 in the file: after a Delete a new name would still be past the 256 listed.
     let mut h = with_props(257);
@@ -1482,7 +1488,7 @@ fn combine_files_opens_in_its_own_tab() {
     h.execute("page.combine");
     h.run_steps(3);
     assert!(h.state().combine_showing() && h.state().active.is_none());
-    h.get_by_label("Add the files to combine");
+    h.get_by_label_contains("Add the files to combine");
     // Back to the document, then to Combine through its tab.
     h.get_by_label("doc.pdf").click();
     h.run_steps(3);
@@ -1752,6 +1758,7 @@ fn a_folder_adds_its_pdfs_images_and_text_in_order_and_optionally_its_subfolders
     h.run_steps(4);
     assert_eq!(combine_names(&h), ["notes.txt", "page2.PDF", "page10.pdf"], "numbers by value");
     // The toolbar's menu: the folder and its subfolders, as one undo step.
+    queue_pick(&[dir.as_path()]);
     h.get_by_label("More ways to add files").click();
     h.run_steps(2);
     h.get_by_label("Add folder and subfolders…").click();
@@ -1811,8 +1818,8 @@ fn files_that_cannot_be_read_are_listed_and_left_out_once_the_user_agrees() {
     h.get_by_role_and_label(Role::Button, "Combine").click();
     h.run_steps(3);
     h.get_by_role_and_label(Role::Dialog, "Leave out files that can't be read?");
-    h.get_by_label("• broken.jpg");
-    h.get_by_label("• archive.zip");
+    h.get_by_label_contains("• broken.jpg");
+    h.get_by_label_contains("• archive.zip");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.query_all_by_label("Leave out files that can't be read?").next().is_none());
@@ -2075,12 +2082,14 @@ fn plus_between_pages_inserts_picked_files_there_in_order() {
     queue_pick(&[note.as_path()]);
     h.get_by_label("Insert a file before page 1").click();
     h.run_steps(4);
+    queue_pick(&[note.as_path()]);
     h.get_by_label("Insert a file at the end").click();
     h.run_steps(4);
     assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "Page 2", "Page 3", "a note"]);
     // The toolbar button still inserts after the selection, not at the last "+" used.
     h.get_by_label("Page 2").click();
     h.run_steps(2);
+    queue_pick(&[note.as_path()]);
     insert_menu(&mut h, "Insert pages from a file…");
     h.run_steps(4);
     assert_eq!(texts_of(h.state(), 0), ["a note", "Page 1", "a note", "Page 2", "Page 3", "a note"]);
@@ -2183,6 +2192,8 @@ fn files_dropped_on_the_pages_panel_are_inserted_there() {
     let thumb = panel_thumb_rect(&h, "Page 2");
     h.hover_at(thumb.center() - egui::vec2(0.0, thumb.height() * 0.25));
     h.run_steps(2);
+    h.input_mut().hovered_files = vec![egui::HoveredFile { path: Some("extra.pdf".into()), mime: String::new() }];
+    h.step();
     assert_eq!(h.state().views[0].panel_gap, Some(1));
     drop_files(&mut h, vec![Dropped("extra.pdf", fixture(2)), Dropped("note.txt", b"a note".to_vec())]);
     h.run_steps(4);
@@ -2424,17 +2435,18 @@ fn launch_display_override_survives_password_retry_without_changing_defaults() {
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
     file.write_all(&protected("reader", "owner", -4)).unwrap();
     drop(file);
-    let mut app = crate::control::new_app();
-    app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap();
-    app.open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
-    assert!(app.views.is_empty() && app.password_prompt.is_some());
-    app.submit_password(&egui::Context::default(), Some("wrong".into()));
-    assert!(app.views.is_empty() && app.password_prompt.is_some());
-    app.submit_password(&egui::Context::default(), Some("reader".into()));
-    assert_eq!(app.views.len(), 1);
-    assert_eq!(app.views[0].view.display, PageLayout::TwoUp);
-    assert!(!app.views[0].continuous());
-    assert_eq!(app.settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
+    let mut h = session_harness(|app| app.set_option(&egui::Context::default(), "default-layout", "continuous").unwrap());
+    h.state_mut().open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
+    support::wait_until(&mut h, "password prompt", |app| app.password_prompt.is_some());
+    assert!(h.state().views.is_empty());
+    h.state_mut().submit_password(&egui::Context::default(), Some("wrong".into()));
+    support::wait_until(&mut h, "wrong password", |app| app.password_prompt.as_ref().is_some_and(|p| p.error.is_some()));
+    assert!(h.state().views.is_empty());
+    h.state_mut().submit_password(&egui::Context::default(), Some("reader".into()));
+    support::wait_until(&mut h, "unlocked document", |app| app.views.len() == 1);
+    assert_eq!(h.state().views[0].view.display, PageLayout::TwoUp);
+    assert!(!h.state().views[0].continuous());
+    assert_eq!(h.state().settings_snapshot().layout.default_layout.as_deref(), Some("continuous"));
     std::fs::remove_file(path).unwrap();
 }
 
@@ -2956,14 +2968,13 @@ fn copying_out_of_a_document_honours_its_security() {
                 app.set_option(&egui::Context::default(), "language", "en").unwrap();
                 app.open_bytes(&egui::Context::default(), "no-copy.pdf", None, protected("pw", "owner", -1 ^ 0b1_0000)).unwrap();
                 app.submit_password(&cc.egui_ctx, Some(password.into()));
-                // One page at a time: Select All takes that page's text (scrolling continuously it would
-                // take both pages', #2639; what is tested here is the security of copying it).
-                if let Some(v) = app.views.first_mut() {
-                    v.view.continuous = false;
-                }
                 app
             }
         });
+        support::wait_until(&mut h, "unlocked document", |app| !app.views.is_empty());
+        // One page at a time: Select All takes that page's text (scrolling continuously it would
+        // take both pages', #2639; what is tested here is the security of copying it).
+        h.state_mut().views[0].view.continuous = false;
         // Select the page's text once its text layer is loaded (up to ~4 s: a loaded test machine
         // can take far longer than the 0.2 s this used to allow).
         for _ in 0..200 {
@@ -5160,9 +5171,13 @@ fn typed_small_coloured_text_size_survives_save_and_reopen() {
     h.event(egui::Event::Text("6.5".into()));
     h.key_press(Key::Enter);
     h.run_steps(4);
-    h.get_by_label("Colour").click();
+    h.get_by_label("Text color").click();
     h.run_steps(2);
-    h.get_by_label("Blue").click();
+    h.get_by_role_and_label(Role::SpinButton, "Blue").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("255".into()));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "OK").click();
     h.run_steps(4);
     let id = h.state().views[0].id;
     let lines = h.state().session.get(id).unwrap().text_lines(0);
@@ -6101,7 +6116,9 @@ fn pages_panel(pages: usize) -> Harness<'static, PdfCraftApp> {
 }
 
 fn picked(h: &Harness<'static, PdfCraftApp>) -> Vec<usize> {
-    h.state().views[0].selected.items.iter().copied().collect()
+    let mut pages = h.state().views[0].selected.items.clone();
+    pages.sort_unstable();
+    pages
 }
 
 #[test]
@@ -8422,7 +8439,7 @@ fn page_properties_sets_the_tab_order_of_the_selected_pages() {
     let mut h = organize(3);
     h.get_by_label("Page 1").click();
     h.run_steps(2);
-    h.get_by_label("Page 3").click();
+    h.get_by_label("Page 3").click_modifiers(Modifiers::COMMAND);
     h.run_steps(2);
     h.get_by_label("Page properties").click();
     h.run_steps(3);
@@ -9372,13 +9389,12 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
     set_crop_box(&mut h, smaller);
     h.run_steps(2);
 
-    let pill_y = smaller.max.y + 17.0;
-    let done_pos = egui::pos2(smaller.max.x - 20.0, pill_y);
+    let done_pos = h.get_by_role_and_label(Role::Button, "Done").rect().center();
     h.hover_at(done_pos);
     h.run_steps(1);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Done pill has PointingHand cursor");
 
-    let cancel_pos = egui::pos2(smaller.max.x - 85.0, pill_y);
+    let cancel_pos = h.get_by_role_and_label(Role::Button, "Cancel").rect().center();
     h.hover_at(cancel_pos);
     h.run_steps(1);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Cancel pill has PointingHand cursor");
@@ -9395,7 +9411,7 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
     h.run_steps(2);
 
     // Click "Remove Crop" pill
-    let reset_pos = egui::pos2(smaller.max.x - 170.0, pill_y);
+    let reset_pos = h.get_by_role_and_label(Role::Button, "Remove Crop").rect().center();
     h.hover_at(reset_pos);
     h.run_steps(1);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Remove Crop pill has PointingHand cursor");
@@ -9407,7 +9423,7 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
     // Re-set smaller crop and click "Done" pill to apply
     set_crop_box(&mut h, smaller);
     h.run_steps(2);
-    let done_pos_after = egui::pos2(smaller.max.x - 20.0, pill_y);
+    let done_pos_after = h.get_by_role_and_label(Role::Button, "Done").rect().center();
     click_at(&mut h, done_pos_after);
     h.run_steps(4);
 
@@ -10001,7 +10017,7 @@ fn shown_on_its_page_only(h: &mut Harness<'static, PdfCraftApp>, plain: &image::
 
 /// Where a mode bar tab is, by its label.
 fn mode_tab(h: &Harness<'static, PdfCraftApp>, label: &str) -> egui::Rect {
-    h.get_all_by_role_and_label(Role::Button, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
+    h.get_all_by_role_and_label(Role::Tab, label).map(|n| n.rect()).find(|r| r.bottom() < 120.0).expect("a mode tab")
 }
 
 /// The cursor over each mode bar tab that page 1's text lies under, once that text is scrolled
@@ -10312,10 +10328,10 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
         h.run_steps(1);
     }
     use egui::accesskit::Role;
-    let size_node = h.get_by_role_and_label(Role::TextInput, "Font size");
+    let size_node = h.get_by_role_and_label(Role::SpinButton, "Font size");
     assert_eq!(size_node.value().as_deref(), Some("12"), "size text input value is 12");
 
-    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
     assert_eq!(font_node.value().as_deref(), Some("Helvetica"), "initial font is Helvetica");
 
     // Apply Times to the selection
@@ -10325,7 +10341,7 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     h.run_steps(4);
 
     // Font combo box for the whole block is now Mixed because Heading is Helvetica and Paragraph is Times
-    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
     assert_eq!(font_node.value().as_deref(), Some("Mixed"), "whole block has mixed fonts");
 
     // Apply Times to the whole block
@@ -10335,7 +10351,7 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     h.run_steps(4);
 
     // Now all text is Times, so font combo box updates to Times
-    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font family");
     assert_eq!(font_node.value().as_deref(), Some("Times"), "font combo box updates to Times");
 }
 
@@ -10451,7 +10467,7 @@ fn whole_paragraph_alignment_stays_available_without_a_row_selection() {
     h.key_press(Key::End);
     h.run_steps(2);
     assert!(!h.get_by_label("Alignment").accesskit_node().is_disabled());
-    align_by_pointer(&mut h, "Align right");
+    align_by_pointer(&mut h, "Right align text");
     assert!(h.state().views[0].session.line_editor.is_some());
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(3);

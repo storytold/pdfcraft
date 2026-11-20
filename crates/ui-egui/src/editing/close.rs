@@ -337,15 +337,17 @@ impl PdfCraftApp {
     /// and finds nothing left at risk; a quit that ended cancelled or held is called off.
     fn end_close_guard(&mut self, ctx: &egui::Context, finished: bool) {
         self.close_guard_dialog = None;
+        // Keep the completed quit until the window closes: settings still need the session saved
+        // before the guard closed its documents.
+        if finished && self.close_guard.as_ref().is_some_and(|guard| guard.scope() == CloseScope::Quit) {
+            close_root_window(ctx);
+            return;
+        }
         let Some(guard) = self.close_guard.take() else { return };
         if guard.scope() != CloseScope::Quit {
             return;
         }
-        if finished {
-            close_root_window(ctx);
-        } else {
-            self.session_keeper.quit_cancelled();
-        }
+        self.session_keeper.quit_cancelled();
     }
 
     /// Whether leaving would lose work: a document with unsaved changes, or an OCR review not yet
