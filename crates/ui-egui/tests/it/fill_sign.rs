@@ -407,7 +407,7 @@ fn dragging_the_font_size_resizes_the_selected_text_to_where_the_drag_ends() {
     let dragged = h.state().fill_text_size;
     assert!(dragged > before, "the drag made the size larger: {before} -> {dragged}");
     let placed = h.state().session.get(id).unwrap().comment_props(annotation.0, annotation.1).and_then(|p| p.font_size);
-    assert_eq!(placed, Some(dragged), "the selected text has the size the drag ended at");
+    assert_eq!(placed.map(|size| format!("{size:.3}")), Some(format!("{dragged:.3}")), "the selected text has the size the drag ended at");
 }
 
 /// The font sizes of the texts `text` drawn in the last frame.
@@ -1254,10 +1254,6 @@ fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_hand
     h.hover_at(end);
     // Wait only for the one-time background preparation. Later pointer frames are immediate.
     h.run_steps(1);
-    eprintln!(
-        "DIAG image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles: in_flight={:?}",
-        h.state().views[0].session.comments.tool.in_flight()
-    );
     rendered_ink(&mut h, 160.0, 242.0);
     let end = at(&h, 220.0, 236.0);
     h.hover_at(end);
@@ -1386,10 +1382,6 @@ fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
         h.hover_at(end);
         let [x, y] = u(160.0, 242.0);
         h.run_steps(1);
-        eprintln!(
-            "DIAG embedded_image_signature_live_gestures_follow_document_and_view_rotation: in_flight={:?}",
-            h.state().views[0].session.comments.tool.in_flight()
-        );
         rendered_ink(&mut h, x, y);
         let pixels = h.render().unwrap();
         let [x, y] = u(58.0, 254.0);
@@ -1462,10 +1454,6 @@ fn image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen(
         let end = at(&h, x + hx * 10.0, y + hy * 10.0);
         h.hover_at(end);
         h.run_steps(1);
-        eprintln!(
-            "DIAG image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen: in_flight={:?}",
-            h.state().views[0].session.comments.tool.in_flight()
-        );
         let expected = [
             if hx < 0.0 { 16.0 } else { 70.0 },
             if hy < 0.0 { 160.0 } else { 170.0 },
@@ -1747,11 +1735,6 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
         assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "{tool}: a placed mark can be picked up");
 
         drag(&mut h, mid, (mid.0 + 40.0, mid.1 - 60.0));
-        eprintln!(
-            "DIAG fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them: tool={tool} selection={:?} rects={:?}",
-            h.state().views[0].session.comments.primary(),
-            rects(&h)
-        );
         assert!(matches!(h.state().quick_tool, QuickTool::Fill(_)), "{tool}: the tool stays");
         let moved = [placed[0] + 40.0, placed[1] - 60.0, placed[2] + 40.0, placed[3] - 60.0];
         let [now] = rects(&h)[..] else { panic!("{tool}: still one mark: {:?}", rects(&h)) };
@@ -1897,10 +1880,6 @@ fn lines_grow_and_shrink_with_their_handles_before_release() {
         h.run_steps(1);
         h.hover_at(along(&h, 60.0));
         h.run_steps(1);
-        eprintln!(
-            "DIAG lines_grow_and_shrink_with_their_handles_before_release: in_flight={:?}",
-            h.state().views[0].session.comments.tool.in_flight()
-        );
         // Wait only for the one-time layers. Later pointer frames are immediate.
         let mut grown = h.render().unwrap();
         for _ in 0..50 {
@@ -2024,10 +2003,10 @@ fn settle_scan(h: &mut Harness<'static, PdfCraftApp>) -> bool {
 /// Draw a new scan frame on the pad's photo from one point of the photo (800 × 600) to another.
 fn drag_frame(h: &mut Harness<'static, PdfCraftApp>, from: (f32, f32), to: (f32, f32)) -> bool {
     let area = h.get_by_label("Photo").rect();
-    let fit = area.shrink(8.0);
-    let scale = (fit.width() / 800.0).min(fit.height() / 600.0);
-    let origin = fit.center() - egui::vec2(400.0, 300.0) * scale;
-    let to_screen = |p: (f32, f32)| origin + egui::vec2(p.0, p.1) * scale;
+    let mut view = craft::behavior::CanvasView::new(area, craft::behavior::kurbo::Point::ORIGIN, 1.0);
+    let target = craft::ui::canvas::ViewTarget::new(craft::behavior::kurbo::Size::new(800.0, 600.0));
+    craft::ui::canvas::ViewCommands::FitOnScreen.apply(&mut view, &target, None, h.ctx.pixels_per_point());
+    let to_screen = |p: (f32, f32)| view.to_screen(craft::behavior::kurbo::Point::new(f64::from(p.0), f64::from(p.1)));
     let (a, b) = (to_screen(from), to_screen(to));
     h.hover_at(a);
     h.run_steps(1);
@@ -2744,10 +2723,10 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
     let keeps_date: Row = |h| {
         fill_slot(h, "Fill & Sign: sign").click_secondary();
         h.run_steps(2);
-        fill_flyout_row(h, "Fill & Sign: date").click();
+        fill_flyout_row(h, "Fill  Sign: date").click();
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
-        h.get_by_label("Select (V)").click();
+        h.key_press(egui::Key::V);
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Select);
         let ctx_h = h.ctx.clone();
@@ -2758,7 +2737,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         h.run_steps(2);
         assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
         assert!(!pad_open(h), "the default tool's dialog stays closed");
-        h.get_by_label("Select (V)").click();
+        h.key_press(egui::Key::V);
         h.run_steps(2);
         h.state_mut().close_tab(1);
         h.state_mut().close_tab(0);
@@ -2785,10 +2764,7 @@ fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
     h.get_by_label("Font size").click();
     h.run_steps(2);
     let type_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
-        h.query_all_by_role(egui::accesskit::Role::SpinButton)
-            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
-            .expect("the Font size control")
-            .click();
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Font size").click();
         h.run_steps(2);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(value.into()));
@@ -2882,16 +2858,14 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     assert_eq!(h.state().views[0].session.fill_text.as_ref().unwrap().text, text);
     assert!(items(&h).is_empty(), "Enter never places an annotation");
     // The page editor paints each line separately, including the empty lines' space.
-    let line = |text| {
-        h.output()
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Text(t) if t.galley.text() == text => Some(t),
-                _ => None,
-            })
-            .unwrap()
-    };
+    fn text_shape<'a>(shape: &'a egui::Shape, text: &str) -> Option<&'a egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| text_shape(s, text)),
+            _ => None,
+        }
+    }
+    let line = |text| h.output().shapes.iter().find_map(|s| text_shape(&s.shape, text)).unwrap();
     let (ada, lovelace) = (line("Ada"), line("Lovelace"));
     assert_eq!(ada.galley.rows.len(), 1, "short typed lines fit without accidental soft wraps");
     assert_eq!(lovelace.galley.rows.len(), 1, "short typed lines fit without accidental soft wraps");

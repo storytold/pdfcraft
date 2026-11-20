@@ -324,9 +324,14 @@ pub(crate) fn page_tool<'a>(
                 // part took goes on to the text. Highlight shares Redact's area-box mechanism off text (L-262).
                 _ => {
                     let snap = caret_snap(tool, &cx, &session.texts, session.comments.tool.page);
+                    let aspect = session
+                        .comments
+                        .primary()
+                        .and_then(|(page, index)| session.signature_drag.aspect_ratio(page, index).map(|r| (page, index, r)));
                     let view = &mut session.comments;
                     let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view);
                     let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
+                        .image_aspect(aspect)
                         .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
                         .outcome(&mut session.pending_edit, &mut view.notice);
                     let annotate = match snap {
@@ -365,6 +370,8 @@ pub(crate) fn page_tool<'a>(
         // A Fill & Sign tool runs the comments tool over its placing: its own marks already placed are picked up,
         // moved and resized (`bridge::annotations` reaches only them), and a press anywhere else places the mark.
         QuickTool::Fill(fill_tool) => {
+            let aspect =
+                session.comments.primary().and_then(|(page, index)| session.signature_drag.aspect_ratio(page, index).map(|r| (page, index, r)));
             let view = &mut session.comments;
             let input = FillInput {
                 tool: fill_tool,
@@ -381,6 +388,7 @@ pub(crate) fn page_tool<'a>(
             let place = FillSignTool::new(&cx, input, fill, *press);
             let map = comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view);
             let annotate = CommentsTool::new(&mut view.tool, &mut view.paste, map, &mut view.tool_done, &mut view.tool_pressed)
+                .image_aspect(aspect)
                 .settings(tool, cx.comment_prefs, cx.allowed, cx.doc.comments_hidden())
                 .outcome(&mut session.pending_edit, &mut view.notice)
                 .over(place);
