@@ -336,10 +336,7 @@ fn fill_text_size_resizes_the_selected_text() {
     let set_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
         h.run_steps(2);
-        h.query_all_by_role(egui::accesskit::Role::SpinButton)
-            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
-            .expect("the Font size control")
-            .click();
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Font size").click();
         h.run_steps(2);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(value.into()));
@@ -395,12 +392,7 @@ fn dragging_the_font_size_resizes_the_selected_text_to_where_the_drag_ends() {
     // The size is set in the Font size button's popup.
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
     h.run_steps(2);
-    let from = h
-        .query_all_by_role(egui::accesskit::Role::SpinButton)
-        .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
-        .expect("the Font size control")
-        .rect()
-        .center();
+    let from = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Font size").rect().center();
     let before = h.state().fill_text_size;
     h.hover_at(from);
     h.run_steps(1);
@@ -1261,6 +1253,11 @@ fn image_signature_live_resize_and_move_preserve_background_and_hide_moving_hand
     let end = at(&h, 184.0, 228.0);
     h.hover_at(end);
     // Wait only for the one-time background preparation. Later pointer frames are immediate.
+    h.run_steps(1);
+    eprintln!(
+        "DIAG image_signature_live_resize_and_move_preserve_background_and_hide_moving_handles: in_flight={:?}",
+        h.state().views[0].session.comments.tool.in_flight()
+    );
     rendered_ink(&mut h, 160.0, 242.0);
     let end = at(&h, 220.0, 236.0);
     h.hover_at(end);
@@ -1388,6 +1385,11 @@ fn embedded_image_signature_live_gestures_follow_document_and_view_rotation() {
         let end = at(&h, x, y);
         h.hover_at(end);
         let [x, y] = u(160.0, 242.0);
+        h.run_steps(1);
+        eprintln!(
+            "DIAG embedded_image_signature_live_gestures_follow_document_and_view_rotation: in_flight={:?}",
+            h.state().views[0].session.comments.tool.in_flight()
+        );
         rendered_ink(&mut h, x, y);
         let pixels = h.render().unwrap();
         let [x, y] = u(58.0, 254.0);
@@ -1459,6 +1461,11 @@ fn image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen(
         h.run_steps(1);
         let end = at(&h, x + hx * 10.0, y + hy * 10.0);
         h.hover_at(end);
+        h.run_steps(1);
+        eprintln!(
+            "DIAG image_signature_corners_restore_original_aspect_after_edge_resize_and_reopen: in_flight={:?}",
+            h.state().views[0].session.comments.tool.in_flight()
+        );
         let expected = [
             if hx < 0.0 { 16.0 } else { 70.0 },
             if hy < 0.0 { 160.0 } else { 170.0 },
@@ -1740,6 +1747,11 @@ fn fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them() {
         assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Move, "{tool}: a placed mark can be picked up");
 
         drag(&mut h, mid, (mid.0 + 40.0, mid.1 - 60.0));
+        eprintln!(
+            "DIAG fill_and_sign_tools_pick_up_placed_marks_to_move_and_resize_them: tool={tool} selection={:?} rects={:?}",
+            h.state().views[0].session.comments.primary(),
+            rects(&h)
+        );
         assert!(matches!(h.state().quick_tool, QuickTool::Fill(_)), "{tool}: the tool stays");
         let moved = [placed[0] + 40.0, placed[1] - 60.0, placed[2] + 40.0, placed[3] - 60.0];
         let [now] = rects(&h)[..] else { panic!("{tool}: still one mark: {:?}", rects(&h)) };
@@ -1884,6 +1896,11 @@ fn lines_grow_and_shrink_with_their_handles_before_release() {
         h.drag_at(along(&h, 18.0));
         h.run_steps(1);
         h.hover_at(along(&h, 60.0));
+        h.run_steps(1);
+        eprintln!(
+            "DIAG lines_grow_and_shrink_with_their_handles_before_release: in_flight={:?}",
+            h.state().views[0].session.comments.tool.in_flight()
+        );
         // Wait only for the one-time layers. Later pointer frames are immediate.
         let mut grown = h.render().unwrap();
         for _ in 0..50 {
@@ -2654,9 +2671,7 @@ fn fill_and_sign_bar_controls_pick_tools_and_restyle_the_selection() {
         h.state_mut().fill_text_size = 9.1;
         place_selected_text(h, "Keep me");
         let height = placed_height(h, "Keep me");
-        let holds_size = |h: &Harness<'static, PdfCraftApp>| {
-            h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.value().is_some_and(|v| v.ends_with(" pt"))).count()
-        };
+        let holds_size = |h: &Harness<'static, PdfCraftApp>| h.query_all_by_role_and_label(egui::accesskit::Role::SpinButton, "Font size").count();
         assert_eq!(holds_size(h), 0);
         h.get_by_label("Font size").click();
         h.run_steps(4);
@@ -2866,16 +2881,21 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     let text = "\nAda\n\nLovelace\n";
     assert_eq!(h.state().views[0].session.fill_text.as_ref().unwrap().text, text);
     assert!(items(&h).is_empty(), "Enter never places an annotation");
-    let galley = h
-        .output()
-        .shapes
-        .iter()
-        .find_map(|s| match &s.shape {
-            egui::Shape::Text(t) if t.galley.text() == text => Some(&t.galley),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(galley.rows.len(), 5, "short typed lines fit without accidental soft wraps");
+    // The page editor paints each line separately, including the empty lines' space.
+    let line = |text| {
+        h.output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (ada, lovelace) = (line("Ada"), line("Lovelace"));
+    assert_eq!(ada.galley.rows.len(), 1, "short typed lines fit without accidental soft wraps");
+    assert_eq!(lovelace.galley.rows.len(), 1, "short typed lines fit without accidental soft wraps");
+    assert!(lovelace.pos.y > ada.pos.y + ada.galley.size().y, "the empty line keeps its space");
     assert!(type_box_rect(&h).height() > initial_height * 3.0, "the editor grows with its lines");
     if shots {
         h.render().unwrap().save("/tmp/5850-multiline.png").unwrap();

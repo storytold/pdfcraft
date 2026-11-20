@@ -555,20 +555,12 @@ fn user_image_corners(xf: &PageXform, p: &PageInfo, rect: [f64; 4], turn: i64) -
     })
 }
 
-/// Paints `texture` over the quad `corners` (the texture's top-left, top-right, bottom-right and bottom-left
-/// on screen). `Draw::texture` paints an axis-aligned rectangle, so a quad turned a quarter is not drawn: a
-/// half turn or a mirror is a flip of the texture's coordinates.
-// PLAN: a view turned 90 or 270 degrees, or an image turned a quarter, has no preview here: `Draw::texture` has no
-// rotated quad. The frame alone follows the pointer there, as without layers.
+/// Paints `texture` over its four screen corners.
 fn paint_quad(draw: &Draw<'_>, corners: [Pos2; 4], texture: TextureId) {
-    let [top_left, top_right, _, bottom_left] = corners;
-    let (across, down) = (top_right - top_left, bottom_left - top_left);
-    if !corners.iter().all(|c| c.is_finite()) || across.x.abs() < across.y.abs() || down.y.abs() < down.x.abs() {
+    if !corners.iter().all(|c| c.is_finite()) {
         return;
     }
-    let (u0, u1) = if across.x < 0.0 { (1.0, 0.0) } else { (0.0, 1.0) };
-    let (v0, v1) = if down.y < 0.0 { (1.0, 0.0) } else { (0.0, 1.0) };
-    draw.texture(Rect::from_points(&corners), texture, Rect::from_min_max(pos2(u0, v0), pos2(u1, v1)));
+    draw.texture_quad(corners, texture, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
 }
 
 /// The scale and tile of the page raster that hold a stamp at `rect` (user space), a pixel to

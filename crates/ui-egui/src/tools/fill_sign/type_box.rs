@@ -214,6 +214,9 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSes
     let width = (natural + 2.0 * MARGIN_X + 1.0).max(8.0 * tb.size as f32 * 0.6 * zoom).clamp(60.0, 600.0);
     let height = host.line_ranges().len() as f32 * host.line_height() + 2.0 * MARGIN_Y;
     let rect = Rect::from_min_size(corner, vec2(width, height));
+    // A scrolled editor belongs to the page viewport, including its pointer hit area.
+    let clip = ui.clip_rect();
+    ui.set_clip_rect(clip.intersect(body.rect));
     // PLAN: the box and its border preview are document content on a page body; they go through the body's `Draw` as data colours once it hands one to the page code.
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 230));
@@ -258,6 +261,7 @@ pub(crate) fn show(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSes
     let fresh = std::mem::take(&mut tb.focus);
     let editor = TextEditor::new(tl!("Text to place"), &mut host, Bind::bound(fill_selection)).esc_commits(false);
     let out = if fresh { editor.request_focus(FocusRequest::Take) } else { editor }.show_at(ui, rect);
+    ui.set_clip_rect(clip);
     match out.ended.filter(|end| !(fresh && *end == EditorEnd::Commit))? {
         EditorEnd::Cancel => {
             *fill_text = None;
