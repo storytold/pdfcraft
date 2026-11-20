@@ -504,7 +504,7 @@ fn an_image_a_type3_glyph_with_parameters_by_reference_draws_is_kept() {
 }
 
 /// Whether `out` is the redaction refused with a syntax error whose detail holds `detail`.
-fn refused_for(out: &Result<Report, RedactError>, detail: &str) -> bool {
+pub(super) fn refused_for(out: &Result<Report, RedactError>, detail: &str) -> bool {
     matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail: d, .. })) if d.contains(detail))
 }
 
@@ -573,7 +573,7 @@ fn a_type3_glyphs_form_with_non_dictionary_resources_fails_closed() {
 }
 
 /// A Type 3 font with glyphs A, B and C, whose programs are objects `a`, `a + 1` and `a + 2`.
-fn type3_abc(a: u32) -> Vec<u8> {
+pub(super) fn type3_abc(a: u32) -> Vec<u8> {
     let (b, c) = (a + 1, a + 2);
     format!(
         "<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 67 /Widths [500 500 500] /Encoding << /Differences [65 /A /B /C] >> /CharProcs << /A {a} 0 R /B {b} 0 R /C {c} 0 R >> >>"
@@ -772,7 +772,7 @@ fn a_page_s_appearances_spend_what_its_content_left_of_the_allowance() {
 }
 
 /// Whether the first page of a full save of `doc` lists the font `name` in its resources.
-fn saved_first_page_lists_font(doc: &Document, name: &[u8]) -> bool {
+pub(super) fn saved_first_page_lists_font(doc: &Document, name: &[u8]) -> bool {
     let bytes = write_full(doc, &SaveOptions::default()).unwrap();
     let saved = Document::open(Arc::new(bytes)).unwrap();
     let page = pdfcraft_model::pages(&saved).swap_remove(0);

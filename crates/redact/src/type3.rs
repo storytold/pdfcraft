@@ -445,9 +445,21 @@ fn scan_appearances(ctx: &mut ScanContext<'_>, page: &Dict, page_ref: ObjRef, pa
     Ok(())
 }
 
+/// The object at the end of the chain of references `r` starts, where an object holds nothing but
+/// a reference to another: the one the renderer reads, as [`Document::resolve`] reads it (which
+/// follows 32 such links).
+fn chain_end(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..32 {
+        let Object::Ref(next) = &*doc.get(r) else { break };
+        r = *next;
+    }
+    r
+}
+
 /// The streams an annotation can show: its normal, rollover and down appearances (ISO 32000-2
 /// §12.5.5), each one stream or a dictionary of streams by appearance state. Readers draw no
-/// other `/AP` entry, so one can't keep a glyph the page no longer shows.
+/// other `/AP` entry, so one can't keep a glyph the page no longer shows. An entry naming an
+/// object that holds only a reference stands for the stream at the end of that chain.
 fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
     let Some(ap) = doc.resolve(annot).as_dict().and_then(|a| a.get(b"AP").cloned()) else { return Vec::new() };
     let Some(ap) = doc.resolve(&ap).as_dict().cloned() else { return Vec::new() };
@@ -459,7 +471,7 @@ fn appearance_streams(doc: &Document, annot: &Object) -> Vec<ObjRef> {
             _ => streams.extend(entry.as_ref()),
         }
     }
-    streams
+    streams.into_iter().map(|r| chain_end(doc, r)).collect()
 }
 
 /// The appearance streams of a page's annotations that have no resources of their own: they draw
@@ -692,17 +704,29 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
         }
     }
 
-    let form_holders = reachable_form_holders(doc, &holders)?;
+    // Annotation appearances with resources of their own list fonts too, which the page need not:
+    // a Type 3 font that two annotations' appearances alone list keeps, after one annotation goes,
+    // the glyph programs only that one showed unless it is cleaned like a page's.
+    let page_list = pdfcraft_model::pages(doc);
+    let appearances = appearance_holders(doc, &page_list)?;
+    // Those whose resources are written in the stream itself: no other annotation can reach a font
+    // written in them in turn.
+    let inline: HashSet<ObjRef> = appearances
+        .iter()
+        .filter(|(r, _)| matches!(&*doc.get(*r), Object::Stream(s) if matches!(s.dict.get(b"Resources"), Some(Object::Dict(_)))))
+        .map(|(r, _)| *r)
+        .collect();
+    let form_holders = reachable_form_holders(doc, &holders, appearances)?;
 
-    // Discover all Type 3 fonts in holders and forms.
+    // Discover all Type 3 fonts in holders, appearances and forms.
     let mut type3_fonts: HashMap<FontKey, Dict> = HashMap::new();
     for (node, _) in &holders {
         if let Some(res) = doc.get(*node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) {
-            collect_type3_fonts(doc, &res, &mut type3_fonts)?;
+            collect_type3_fonts(doc, &res, &mut type3_fonts, false)?;
         }
     }
-    for (_, form_res) in &form_holders {
-        collect_type3_fonts(doc, form_res, &mut type3_fonts)?;
+    for (form, form_res) in &form_holders {
+        collect_type3_fonts(doc, form_res, &mut type3_fonts, inline.contains(form))?;
     }
 
     if type3_fonts.is_empty() {
@@ -717,7 +741,6 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     }
 
     // Scan all page contents and reachable forms to discover surviving glyph usage.
-    let page_list = pdfcraft_model::pages(doc);
     let mut used_glyphs: HashMap<FontKey, HashSet<Vec<u8>>> = HashMap::new();
     let mut seen_drawn_forms = HashSet::new();
 
@@ -759,15 +782,47 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     Ok(())
 }
 
+/// The appearance streams of the pages' annotations that have resources of their own, each once,
+/// with those resources.
+fn appearance_holders(doc: &Document, pages: &[pdfcraft_model::Page]) -> Result<Vec<(ObjRef, Dict)>, CosError> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for page in pages {
+        for annot in crate::annots_of(doc, &page.dict) {
+            for r in appearance_streams(doc, &annot) {
+                if !seen.insert(r) {
+                    continue;
+                }
+                if seen.len() > MAX_HOLDERS {
+                    return Err(CosError::Syntax { offset: 0, detail: "redaction could not inspect so many annotation appearances".into() });
+                }
+                if let Object::Stream(s) = &*doc.get(r)
+                    && let Some(res) = s.dict.get(b"Resources").and_then(|ro| doc.resolve(ro).as_dict().cloned())
+                {
+                    out.push((r, res));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Every reachable Form XObject with resources of its own, with those resources, found by
-/// walking the resources of the holders and of the forms they draw.
-fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> Result<Vec<(ObjRef, Dict)>, CosError> {
-    let mut form_holders: Vec<(ObjRef, Dict)> = Vec::new();
+/// walking the resources of the holders and of the forms they draw, and the `appearances`
+/// (annotation appearance streams with resources of their own) with the forms they draw.
+fn reachable_form_holders(
+    doc: &Document,
+    holders: &[(ObjRef, Vec<ObjRef>)],
+    appearances: Vec<(ObjRef, Dict)>,
+) -> Result<Vec<(ObjRef, Dict)>, CosError> {
     let mut pending_res: Vec<Dict> = holders
         .iter()
         .filter_map(|(r, _)| doc.get(*r).as_dict().and_then(|d| d.get(b"Resources")).and_then(|ro| doc.resolve(ro).as_dict().cloned()))
         .collect();
-    let mut seen_forms = HashSet::new();
+    pending_res.extend(appearances.iter().map(|(_, res)| res.clone()));
+    // An appearance a page also draws as a form is listed once.
+    let mut seen_forms: HashSet<ObjRef> = appearances.iter().map(|(r, _)| *r).collect();
+    let mut form_holders = appearances;
     while let Some(res) = pending_res.pop() {
         for (_, value) in res_dict(doc, &res, b"XObject").iter() {
             let Some(reference) = value.as_ref() else { continue };
@@ -794,26 +849,37 @@ fn reachable_form_holders(doc: &Document, holders: &[(ObjRef, Vec<ObjRef>)]) -> 
 /// Record every Type 3 font named by a resource dictionary's `/Font` and `/ExtGState` entries.
 /// A Type 3 font held directly in a resource dictionary can neither be named reliably nor have its
 /// glyph programs rewritten, so redaction fails closed rather than leaving its glyphs unchecked.
-fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKey, Dict>) -> Result<(), CosError> {
+/// `inline` says `res` are an annotation appearance's own, written in its stream: a direct font
+/// reached from them without following a reference belongs to that appearance alone (PdfCraft
+/// writes the Type 3 fonts of the Thai it draws in an appearance so), so no annotation removed can
+/// leave glyphs in it that only it showed, and it is passed over rather than refused.
+fn collect_type3_fonts(doc: &Document, res: &Dict, t3_fonts: &mut HashMap<FontKey, Dict>, inline: bool) -> Result<(), CosError> {
     let direct = || CosError::Syntax {
         offset: 0,
         detail: "redaction could not establish safe Type 3 font cleanup: a Type 3 font is not an indirect object".into(),
     };
-    let mut consider = |font_obj: &Object| -> Result<(), CosError> {
+    let mut consider = |font_obj: &Object, own: bool| -> Result<(), CosError> {
         if let Some(dict) = doc.resolve(font_obj).as_dict().cloned()
             && dict.name(b"Subtype") == Some(b"Type3")
         {
-            let font_ref = font_obj.as_ref().ok_or_else(direct)?;
+            let Some(font_ref) = font_obj.as_ref() else {
+                return if own { Ok(()) } else { Err(direct()) };
+            };
             t3_fonts.entry(FontKey::Ref(font_ref)).or_insert(dict);
         }
         Ok(())
     };
+    let is_ref = |o: Option<&Object>| matches!(o, Some(Object::Ref(_)));
+    let fonts_own = inline && !is_ref(res.get(b"Font"));
     for (_, font_obj) in res_dict(doc, res, b"Font").iter() {
-        consider(font_obj)?;
+        consider(font_obj, fonts_own)?;
     }
+    let states_own = inline && !is_ref(res.get(b"ExtGState"));
     for (_, state_obj) in res_dict(doc, res, b"ExtGState").iter() {
+        // Each link on the way may be a reference another dictionary shares.
+        let own = states_own && !is_ref(Some(state_obj)) && !doc.resolve(state_obj).as_dict().is_some_and(|state| is_ref(state.get(b"Font")));
         if let Some(font_obj) = gs_font_object(doc, state_obj) {
-            consider(&font_obj)?;
+            consider(&font_obj, own)?;
         }
     }
     Ok(())
