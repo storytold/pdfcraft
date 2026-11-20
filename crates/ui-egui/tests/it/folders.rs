@@ -112,13 +112,21 @@ fn new_scans_appear_without_reopening_home() {
     let folder = dir.path();
     let pin = folder.clone();
     let mut h = harness(move |app| {
-        app.pin_folder(&pin);
+        app.restore(&serde_json::json!({ "pinned_folders": [pin] }).to_string());
     });
-    h.run_steps(2);
-    assert_eq!(listed(&h, &folder), ["first.pdf"]);
+    h.run();
+    h.get_by_label("first.pdf");
     dir.file("second.pdf", FIXTURE, Duration::from_secs(5));
-    // The listing is refreshed every few seconds while Home shows.
-    h.state_mut().refresh_pinned(1.0e6);
+
+    // Model an idle event loop: only process frames the app requests, with no input.
+    let deadline = h.ctx.input(|i| i.time) + 12.0;
+    while h.query_by_label("second.pdf").is_none() {
+        let delay = h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        let next = h.ctx.input(|i| i.time) + delay.as_secs_f64().max(1.0 / 60.0);
+        assert!(next <= deadline, "idle Home has no repaint scheduled to show the new PDF: {delay:?}");
+        h.input_mut().time = Some(next);
+        h.step();
+    }
     assert_eq!(listed(&h, &folder), ["second.pdf", "first.pdf"]);
 }
 
