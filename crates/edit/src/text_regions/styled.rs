@@ -60,12 +60,18 @@ impl FontResolver<'_> {
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
+        self.complete_source_font(source, text)
+    }
+
+    /// The complete program the document embeds for `source`, as a resource that encodes all of it,
+    /// when that program draws every row of `text`.
+    fn complete_source_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
         let Some(bytes) = self
             .programs
             .entry(source.font.clone())
             .or_insert_with(|| source_program(self.doc, self.fonts, &source.font).map(std::sync::Arc::new))
             .clone()
-            .filter(|bytes| pdfcraft_fonts::embedding::covers(bytes, text))
+            .filter(|bytes| covers_rows(bytes, text))
         else {
             return Ok(None);
         };
@@ -75,6 +81,48 @@ impl FontResolver<'_> {
         }
         let family = pdfcraft_fonts::embedding::names(&bytes).map_or_else(|_| source.base_font.clone(), |(family, _)| family);
         self.embed_face(key, &bytes, &family, "the source font could not be loaded").map(Some)
+    }
+
+    /// The one face a contextual span goes to when its source resource can't both encode and
+    /// shape it: the document's complete program for that resource, a resource of the same family
+    /// on the page, or else an approved full face of that family. Left to
+    /// [`Self::encodable_font`] character by character, the letters a resource can encode would
+    /// stay in it and the rest go elsewhere, so the span would split into runs shaped apart (#5114).
+    /// `None` keeps the span with the source font, also when no face shapes it.
+    fn shaping_font(&mut self, source: &TextLine, span: &str) -> Result<Option<String>, EditError> {
+        use pdfcraft_fonts::{embedding, source_shaping};
+        // Thai has its own choices (`legacy_thai_font`, the outline face, `shape_source`'s
+        // existing codes), which may keep a span in a subset that can't shape it.
+        if !source_shaping::required(span) || span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)) {
+            return Ok(None);
+        }
+        let rows = || span.split(row_break);
+        let shapes = |bytes: &[u8]| covers_rows(bytes, span) && rows().all(|row| source_shaping::shape(bytes, row).is_ok());
+        let program = |doc: &Document, fonts: &Dict, name: &str| {
+            fonts.get(name.as_bytes()).and_then(|font| doc.dict(font)).and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(doc, &font))
+        };
+        if program(self.doc, self.fonts, &source.font).is_some_and(|bytes| shapes(&bytes)) {
+            if self.metrics.get(&source.font).is_some_and(|metrics| rows().all(|row| source_encodes(metrics, row))) {
+                return Ok(None);
+            }
+            if let Some(name) = self.complete_source_font(source, span)? {
+                return Ok(Some(name));
+            }
+        }
+        let key = embedding::face_key(&source.base_font);
+        let loaded = self.metrics.iter().find(|(name, metrics)| {
+            **name != source.font
+                && embedding::face_key(&metrics.base_font) == key
+                && rows().all(|row| source_encodes(metrics, row))
+                && program(self.doc, self.fonts, name).is_some_and(|bytes| shapes(&bytes))
+        });
+        if let Some((name, _)) = loaded {
+            return Ok(Some(name.clone()));
+        }
+        match embedding::matching_faces(&source.base_font).into_iter().find(|face| shapes(face.bytes)) {
+            Some(face) => self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some),
+            None => Ok(None),
+        }
     }
 
     fn embed_face(&mut self, key: String, bytes: &[u8], family: &str, missing_message: &str) -> Result<String, EditError> {
@@ -253,6 +301,11 @@ impl CharacterPreparation<'_> {
                 None => (None, None),
             };
             let start = range.start;
+            // A span the Thai choices above didn't take, and no font was chosen for, goes whole to
+            // one face when its source can't shape it (#5114).
+            let thai_taken = outline_name.is_some() || program_name.is_some() || existing_thai.is_some();
+            let shaping = if selected_resource.is_none() && !thai_taken { resolver.shaping_font(source, span)? } else { None };
+            let requested = selected_resource.or(shaping.as_deref());
             for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
                 // A row break moves to the next row instead of asking a font for a glyph. The CR
                 // of a CRLF stays a `\r` the rows skip, so the pair is one break; every other break
@@ -265,7 +318,6 @@ impl CharacterPreparation<'_> {
                     continue;
                 }
                 let text = ch.to_string();
-                let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
                 let name = if let Some(name) = outline_name.as_ref().or(program_name.as_ref()) {
                     name.clone()
                 } else if let Some(name) = &existing_thai {
