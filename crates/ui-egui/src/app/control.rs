@@ -397,6 +397,13 @@ impl PdfCraftApp {
                 };
             }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
+            ("title-brand", _) => {
+                self.brand.show = brand::TitleBrand::from_token(value)
+                    .ok_or_else(|| format!("title-brand must be one of {}", brand::TitleBrand::ALL.map(|b| b.token()).join(", ")))?;
+            }
+            ("brand-name", _) => self.brand.name = value.chars().take(brand::MAX_NAME_CHARS).collect(),
+            // Empty: back to the app's own logo.
+            ("brand-logo", _) => self.brand.set_logo((!value.is_empty()).then(|| std::path::PathBuf::from(value)))?,
             // `--secured-notice false`: no notice above the pages that a document is secured.
             ("secured-notice", _) => {
                 self.show_secured_notice = match value {
