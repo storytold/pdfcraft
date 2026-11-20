@@ -1,4 +1,4 @@
-use pdfcraft_fonts::shaped_text::{Piece, ShapedFonts, clusters, first_undrawable_in_line, is_thai, thai_message, thai_pieces};
+use pdfcraft_fonts::shaped_text::{Piece, ShapedFonts, clusters, is_thai, thai_message, thai_pieces};
 
 use super::{Dict, Document, EditError, Object, Rgb, added};
 
@@ -104,6 +104,7 @@ pub struct HeaderFooter {
     /// (digits, start, prefix, suffix).
     pub text: [String; 6],
     /// The standard face the text is drawn in (#3754): Helvetica (the default), Times or Courier.
+    /// A line it can't draw is drawn in the bundled Inter face instead (#2013).
     pub font: added::Family,
     pub font_size: f64,
     pub color: Rgb,
@@ -135,13 +136,15 @@ impl Default for HeaderFooter {
 }
 
 impl HeaderFooter {
-    /// The first character [`add_header_footer`] would refuse, because neither the standard
-    /// fonts nor (for Thai) the Thai face can draw it (#125). Tokens only add ASCII (Bates
-    /// prefixes and suffixes are part of the template), so checking the templates, split as
-    /// `expand`'s output is, covers every page (and a `\r` that would be drawn is refused too).
-    /// The dialog asks this too, so its preview never offers text that applying refuses (#2013).
+    /// The first character [`add_header_footer`] would refuse (#125): a line with Thai is drawn
+    /// as Add text draws it, from the Thai face beside the standard one (#2354); another line the
+    /// standard fonts can't draw is drawn in the bundled Inter face, so only a character of such a
+    /// line that Inter can't draw either is refused (#2013). Tokens only add ASCII (Bates prefixes
+    /// and suffixes are part of the template), so checking the templates, split as `expand`'s
+    /// output is, covers every page (and a `\r` that would be drawn is refused too). The dialog asks
+    /// this too, so its preview never offers text that applying refuses (#2013).
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(first_undrawable_in_line)
+        self.text.iter().flat_map(|t| t.lines()).find_map(crate::mark_font::first_undrawable)
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -213,13 +216,13 @@ pub struct Watermark {
 }
 
 impl Watermark {
-    /// The first character of a text watermark [`add_watermark`] would refuse, because neither
-    /// the standard fonts nor (for Thai) the Thai face can draw it (#125). A picture watermark
-    /// draws no text.
+    /// The first character of a text watermark [`add_watermark`] would refuse (#125), as for
+    /// headers ([`HeaderFooter::first_undrawable`]): Thai from the Thai face, other lines Helvetica
+    /// can't draw from the bundled Inter face. A picture watermark draws no text.
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
             Some(_) => None,
-            None => self.text.trim().lines().find_map(first_undrawable_in_line),
+            None => self.text.trim().lines().find_map(crate::mark_font::first_undrawable),
         }
     }
 }
