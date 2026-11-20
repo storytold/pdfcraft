@@ -312,6 +312,8 @@ impl DestView {
 
 #[derive(Clone, Debug)]
 pub struct OutlineItem {
+    /// Indirect COS object identifier `(obj_num, gen_num)` when stored as an indirect object.
+    pub obj: Option<(u32, u16)>,
     pub title: String,
     pub page: Option<usize>,
     /// Where on `page` the bookmark goes ([`DestView::Top`] for a bookmark without a page).
