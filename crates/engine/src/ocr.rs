@@ -15,8 +15,8 @@ use pdfcraft_render::text::TextFilter;
 use pdfcraft_render::{PageInfo, PageRenderer, RenderConfig, RenderRequest, RequestKind};
 
 pub use pdfcraft_ocr::{
-    ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL, Recognizer,
-    StrategyOutcome, Word, band_for, is_suspect, lines_from_json, low_confidence,
+    Cell, ConfidenceBand, DETECTION_MODEL, LANGUAGES, Line, MergeStrategy, Models, Ocr, OcrError, OcrImage, PlacedWord, RECOGNITION_MODEL,
+    Recognizer, StrategyOutcome, Table, Word, band_for, is_suspect, lines_from_json, low_confidence,
 };
 
 use crate::{DocId, Edit, EditError, Session};
@@ -218,6 +218,13 @@ impl Default for OcrSettings {
 pub struct OcrPage {
     pub page: usize,
     pub words: Vec<PlacedWord>,
+    /// How many of `words` each recognised line holds, in reading order.
+    pub line_lengths: Vec<usize>,
+    /// How many of `line_lengths` each paragraph holds, in reading order. Without the layout
+    /// model the page is one paragraph.
+    pub paragraph_lengths: Vec<usize>,
+    /// The paragraphs that are tables (with the table structure model installed).
+    pub tables: Vec<OcrTable>,
     /// Words recognised but left out because the page's own text already has them there.
     pub already_on_page: usize,
     /// Why the page was not read, if it was skipped.
@@ -227,9 +234,54 @@ pub struct OcrPage {
     pub notes: Vec<String>,
 }
 
+/// A recognised table: which paragraph holds its cells, and its rows and cells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OcrTable {
+    /// The paragraph (an index into [`OcrPage::paragraph_lengths`]) whose lines are the cells'
+    /// text, a line a cell.
+    pub paragraph: usize,
+    pub table: Table,
+    /// For each cell, in row order, left to right: whether it has a line of the paragraph (a cell
+    /// without words has none).
+    pub filled: Vec<bool>,
+}
+
 impl OcrPage {
+    /// The words, a line of text per recognised line and a blank line between paragraphs; a table
+    /// is one line of HTML (`<table>`, its rows and cells with their spans). Words beyond
+    /// `line_lengths` make one more line, and lines beyond `paragraph_lengths` one more paragraph.
     pub fn text(&self) -> String {
-        self.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ")
+        let mut words = self.words.iter().map(|w| w.text.as_str());
+        let mut lines: Vec<String> = Vec::new();
+        for &n in &self.line_lengths {
+            let line: Vec<&str> = words.by_ref().take(n).collect();
+            if !line.is_empty() {
+                lines.push(line.join(" "));
+            }
+        }
+        let rest: Vec<&str> = words.collect();
+        if !rest.is_empty() {
+            lines.push(rest.join(" "));
+        }
+        let mut lines = lines.into_iter();
+        let mut paragraphs: Vec<String> = Vec::new();
+        for (i, &n) in self.paragraph_lengths.iter().enumerate() {
+            let paragraph: Vec<String> = lines.by_ref().take(n).collect();
+            if let Some(t) = self.tables.iter().find(|t| t.paragraph == i) {
+                // The filled cells take the paragraph's lines in turn; lengths that don't add up
+                // leave cells empty rather than losing the table.
+                let mut cells = paragraph.into_iter();
+                let texts: Vec<String> = t.filled.iter().map(|&f| if f { cells.next().unwrap_or_default() } else { String::new() }).collect();
+                paragraphs.push(t.table.html(&texts));
+            } else if !paragraph.is_empty() {
+                paragraphs.push(paragraph.join("\n"));
+            }
+        }
+        let rest: Vec<String> = lines.collect();
+        if !rest.is_empty() {
+            paragraphs.push(rest.join("\n"));
+        }
+        paragraphs.join("\n\n")
     }
 
     /// Mean of the confidences the page's words report (`None` when none do).
@@ -588,6 +640,18 @@ pub fn available() -> bool {
     ocrs_loaded() || Models::find().is_some() || tesseract_engine(configured.as_deref()).is_some()
 }
 
+/// Whether the layout model is installed too: recognised lines are then read region by region and
+/// broken into paragraphs.
+pub fn layout_available() -> bool {
+    Models::find_layout().is_some()
+}
+
+/// Whether the table structure model is installed too: with the layout model, a table is then read
+/// as rows and cells.
+pub fn tables_available() -> bool {
+    Models::find_tables().is_some()
+}
+
 /// Why `engine` cannot run right now, named for the UI's tooltips (the Engine dropdown
 /// disables the choice with this text); `None` when it can. The app UI has no Tesseract
 /// location field of its own, so this judges the environment variable, exactly like
@@ -782,9 +846,20 @@ impl OcrSteps {
         }
     }
 
+    // The `Err` side is a finished page rather than a rare failure, so it is not worth a `Box`.
+    #[allow(clippy::result_large_err)]
     fn prepare(&mut self, page: usize, info: PageInfo) -> Result<OcrShot, OcrPage> {
         let settings = &self.job.settings;
-        let skip = |why: &str| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(why.into()), notes: Vec::new() };
+        let skip = |why: &str| OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            page,
+            words: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            skipped: Some(why.into()),
+            notes: Vec::new(),
+        };
         let r = &mut self.renderer;
         // The boxes of all text on the page, in view space: an earlier OCR layer's, and words
         // only /ActualText names, so neither is read again.
@@ -900,7 +975,18 @@ impl OcrShot {
         let page = self.page;
         let outcome = match outcome {
             Ok(o) => o,
-            Err(e) => return OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: Some(e), notes: Vec::new() },
+            Err(e) => {
+                return OcrPage {
+                    paragraph_lengths: Vec::new(),
+                    tables: Vec::new(),
+                    page,
+                    words: Vec::new(),
+                    line_lengths: Vec::new(),
+                    already_on_page: 0,
+                    skipped: Some(e),
+                    notes: Vec::new(),
+                };
+            }
         };
         let (info, inverse, offset, scale) = (&self.info, self.inverse, self.offset, self.pixels_per_point);
         let to_user = |x: f32, y: f32| {
@@ -911,25 +997,68 @@ impl OcrShot {
             [u as f64, v as f64]
         };
         // Validate recognition geometry and compare against existing text in view space,
-        // undoing preprocessing and region offsets before testing overlap.
-        let (fresh, already): (Vec<_>, Vec<_>) = outcome.lines.iter().flat_map(|l| &l.words).filter(|w| box_writable(w)).partition(|w| {
-            let [l, t, r, b] = w.rect;
-            let bounds = [(l, t), (r, t), (r, b), (l, b)].into_iter().fold(
-                [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
-                |mut bounds, (x, y)| {
-                    let (x, y) = inverse.apply(f64::from(x), f64::from(y));
-                    let x = (x as f32 + offset[0]) / scale;
-                    let y = (y as f32 + offset[1]) / scale;
-                    bounds[0] = bounds[0].min(x);
-                    bounds[1] = bounds[1].min(y);
-                    bounds[2] = bounds[2].max(x);
-                    bounds[3] = bounds[3].max(y);
-                    bounds
-                },
-            );
-            covered(bounds, &self.existing) < ALREADY_ON_PAGE
-        });
-        let words = fresh.into_iter().map(|w| PlacedWord::place(w, to_user)).collect::<Vec<_>>();
+        // undoing preprocessing and region offsets before testing overlap. Line by line, so
+        // `line_lengths` can restore the recognised line breaks in `OcrPage::text`, grouped per
+        // paragraph. A line left with no words is dropped, and a paragraph left with no lines;
+        // lines past the paragraph lengths the engine gave make one last paragraph.
+        let mut words: Vec<PlacedWord> = Vec::new();
+        let mut line_lengths: Vec<usize> = Vec::new();
+        let mut paragraph_lengths: Vec<usize> = Vec::new();
+        let mut tables: Vec<OcrTable> = Vec::new();
+        let mut already = 0usize;
+        let mut rest = &outcome.lines[..];
+        for (i, &count) in outcome.paragraph_lengths.iter().chain(std::iter::repeat(&usize::MAX)).enumerate() {
+            // The cells of a table paragraph are its lines, so `filled` says per line whether the
+            // cell it stands for kept a word.
+            let table = outcome.tables.iter().find(|(p, _)| *p == i).map(|(_, t)| t);
+            if rest.is_empty() {
+                break;
+            }
+            let (group, tail) = rest.split_at(count.min(rest.len()));
+            rest = tail;
+            let lines_before = line_lengths.len();
+            let mut filled: Vec<bool> = Vec::new();
+            for line in group {
+                let before = words.len();
+                for w in &line.words {
+                    if !box_writable(w) {
+                        continue;
+                    }
+                    let [l, t, r, b] = w.rect;
+                    let bounds = [(l, t), (r, t), (r, b), (l, b)].into_iter().fold(
+                        [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
+                        |mut bounds, (x, y)| {
+                            let (x, y) = inverse.apply(f64::from(x), f64::from(y));
+                            let x = (x as f32 + offset[0]) / scale;
+                            let y = (y as f32 + offset[1]) / scale;
+                            bounds[0] = bounds[0].min(x);
+                            bounds[1] = bounds[1].min(y);
+                            bounds[2] = bounds[2].max(x);
+                            bounds[3] = bounds[3].max(y);
+                            bounds
+                        },
+                    );
+                    if covered(bounds, &self.existing) < ALREADY_ON_PAGE {
+                        words.push(PlacedWord::place(w, to_user));
+                    } else {
+                        already += 1;
+                    }
+                }
+                let kept = words.len() > before;
+                if kept {
+                    line_lengths.push(words.len() - before);
+                }
+                if table.is_some() {
+                    filled.push(kept);
+                }
+            }
+            if line_lengths.len() > lines_before {
+                paragraph_lengths.push(line_lengths.len() - lines_before);
+                if let Some(table) = table {
+                    tables.push(OcrTable { paragraph: paragraph_lengths.len() - 1, table: table.clone(), filled });
+                }
+            }
+        }
         let mut notes = outcome.notes;
         // Only visible editable output needs display glyphs. Searchable output preserves
         // every Unicode character with empty Type3 programs and ToUnicode maps.
@@ -939,7 +1068,7 @@ impl OcrShot {
                 notes.push(format!("{missing} characters had no font that could show them and appear as ? in the output"));
             }
         }
-        OcrPage { page, words, already_on_page: already.len(), skipped: None, notes }
+        OcrPage { page, words, line_lengths, paragraph_lengths, tables, already_on_page: already, skipped: None, notes }
     }
 }
 
@@ -1256,6 +1385,9 @@ impl FileJob {
                 .pages
                 .iter()
                 .map(|&page| OcrPage {
+                    tables: Vec::new(),
+                    paragraph_lengths: Vec::new(),
+                    line_lengths: Vec::new(),
                     already_on_page: 0,
                     page,
                     words: Vec::new(),
@@ -1338,6 +1470,76 @@ mod tests {
     fn printed_glyphs_count_as_own_text() {
         let mut r = PageRenderer::new(page("BT /F1 12 Tf 20 150 Td (Total) Tj ET"), RenderConfig::default());
         assert!(has_own_text(&mut r, 0));
+    }
+
+    #[test]
+    fn page_text_breaks_between_lines() {
+        let word =
+            |t: &str| PlacedWord { text: t.into(), origin: [0.0, 0.0], across: [1.0, 0.0], up: [0.0, 1.0], confidence: None, source: "test".into() };
+        let page = |words: &[&str], line_lengths: Vec<usize>| OcrPage {
+            paragraph_lengths: Vec::new(),
+            line_lengths,
+            page: 0,
+            words: words.iter().copied().map(word).collect(),
+            tables: Vec::new(),
+            already_on_page: 0,
+            skipped: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(page(&["a", "b", "c"], vec![2, 1]).text(), "a b\nc");
+        // Lengths that do not add up lose no word and make no empty line.
+        assert_eq!(page(&["a", "b", "c"], vec![0, 1, 9]).text(), "a\nb c");
+        assert_eq!(page(&["a", "b"], Vec::new()).text(), "a b");
+    }
+
+    /// Paragraphs are set apart by a blank line, their lines by a line break.
+    #[test]
+    fn page_text_sets_paragraphs_apart() {
+        let word =
+            |t: &str| PlacedWord { text: t.into(), origin: [0.0, 0.0], across: [1.0, 0.0], up: [0.0, 1.0], confidence: None, source: "test".into() };
+        let page = |line_lengths: Vec<usize>, paragraph_lengths: Vec<usize>| OcrPage {
+            page: 0,
+            words: ["a", "b", "c", "d", "e"].iter().copied().map(word).collect(),
+            line_lengths,
+            paragraph_lengths,
+            tables: Vec::new(),
+            already_on_page: 0,
+            skipped: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(page(vec![1, 2, 1, 1], vec![1, 2, 1]).text(), "a\n\nb c\nd\n\ne");
+        // Lengths that do not add up lose no line and make no empty paragraph.
+        assert_eq!(page(vec![1, 1, 1, 1, 1], vec![0, 2, 0, 9]).text(), "a\nb\n\nc\nd\ne");
+        assert_eq!(page(vec![1, 1, 1, 1, 1], vec![2]).text(), "a\nb\n\nc\nd\ne");
+    }
+
+    /// A table paragraph is one line of HTML: its cells take the paragraph's lines in turn, a cell
+    /// without a line is empty, and the paragraphs around it are text as before.
+    #[test]
+    fn page_text_writes_a_table_as_html() {
+        let word =
+            |t: &str| PlacedWord { text: t.into(), origin: [0.0, 0.0], across: [1.0, 0.0], up: [0.0, 1.0], confidence: None, source: "test".into() };
+        let table = Table { rows: vec![vec![Cell { colspan: 2, rowspan: 1 }], vec![Cell::default(), Cell::default()]] };
+        let page = |filled: Vec<bool>| OcrPage {
+            page: 0,
+            words: ["Title", "Name", "A&B", "Rest"].iter().copied().map(word).collect(),
+            line_lengths: vec![1, 1, 1, 1],
+            paragraph_lengths: vec![1, 2, 1],
+            tables: vec![OcrTable { paragraph: 1, table: table.clone(), filled }],
+            already_on_page: 0,
+            skipped: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(
+            page(vec![true, false, true]).text(),
+            "Title\n\n<table><tr><td colspan=\"2\">Name</td></tr><tr><td></td><td>A&amp;B</td></tr></table>\n\nRest"
+        );
+        // More filled cells than lines: the last stay empty, and no line of the next paragraph is
+        // taken.
+        assert_eq!(
+            page(vec![true, true, true]).text(),
+            "Title\n\n<table><tr><td colspan=\"2\">Name</td></tr><tr><td>A&amp;B</td><td></td></tr></table>\n\nRest"
+        );
     }
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
@@ -1540,6 +1742,9 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
             already_on_page: 0,
             page: 0,
             words: vec![word("a", Some(95.0)), word("b", Some(50.0)), word("c", None), word("d", Some(69.0))],
@@ -1923,6 +2128,9 @@ mod tests {
             source: "ocrs".into(),
         };
         let page = |n: usize, confs: &[f32], skipped: Option<&str>| OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
             already_on_page: 0,
             page: n,
             words: confs.iter().map(|c| word(*c)).collect(),
@@ -1949,7 +2157,20 @@ mod tests {
         let mut s = Session::new();
         let id = s.open("src.pdf", None, Arc::new(fixture(2)), None).unwrap();
         assert!(
-            s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new() }]).is_err(),
+            s.editable_ocr_bytes(
+                id,
+                &[OcrPage {
+                    tables: Vec::new(),
+                    paragraph_lengths: Vec::new(),
+                    line_lengths: Vec::new(),
+                    already_on_page: 0,
+                    page: 0,
+                    words: vec![],
+                    skipped: None,
+                    notes: Vec::new()
+                }]
+            )
+            .is_err(),
             "zero words are refused"
         );
         let info = s.get(id).unwrap().info.pages[0].clone();
@@ -1964,8 +2185,26 @@ mod tests {
             source: "ocrs".into(),
         };
         let found = vec![
-            OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() },
-            OcrPage { already_on_page: 0, page: 1, words: vec![], skipped: None, notes: Vec::new() },
+            OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page: 0,
+                words: vec![w],
+                skipped: None,
+                notes: Vec::new(),
+            },
+            OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page: 1,
+                words: vec![],
+                skipped: None,
+                notes: Vec::new(),
+            },
         ];
         let before = s.get(id).unwrap().bytes.clone();
         let bytes = s.editable_ocr_bytes(id, &found).unwrap();
@@ -2004,7 +2243,21 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(
+                id,
+                &[OcrPage {
+                    tables: Vec::new(),
+                    paragraph_lengths: Vec::new(),
+                    line_lengths: Vec::new(),
+                    already_on_page: 0,
+                    page: 0,
+                    words: vec![w],
+                    skipped: None,
+                    notes: Vec::new(),
+                }],
+            )
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let otext = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2101,7 +2354,16 @@ mod tests {
         let before = s.save_bytes(id).unwrap();
         let word =
             PlacedWord { text: "word".into(), origin: [20.0, 80.0], across: [30.0, 0.0], up: [0.0, 5.0], confidence: None, source: "test".into() };
-        let page = |page, words| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() };
+        let page = |page, words| OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page,
+            words,
+            skipped: None,
+            notes: Vec::new(),
+        };
         let mut invalid = word.clone();
         invalid.origin[0] = f64::INFINITY;
         let mut long = word.clone();
@@ -2130,7 +2392,21 @@ mod tests {
             confidence: None,
             source: "ocrs".into(),
         };
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words: vec![w], skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(
+                id,
+                &[OcrPage {
+                    tables: Vec::new(),
+                    paragraph_lengths: Vec::new(),
+                    line_lengths: Vec::new(),
+                    already_on_page: 0,
+                    page: 0,
+                    words: vec![w],
+                    skipped: None,
+                    notes: Vec::new(),
+                }],
+            )
+            .unwrap();
         let mut out = Session::new();
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let text = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2162,7 +2438,21 @@ mod tests {
             source: "ocrs".into(),
         };
         let words = vec![word("Привет", 250.0, 80.0), word("Hello", 100.0, 50.0)];
-        let bytes = s.editable_ocr_bytes(id, &[OcrPage { already_on_page: 0, page: 0, words, skipped: None, notes: Vec::new() }]).unwrap();
+        let bytes = s
+            .editable_ocr_bytes(
+                id,
+                &[OcrPage {
+                    tables: Vec::new(),
+                    paragraph_lengths: Vec::new(),
+                    line_lengths: Vec::new(),
+                    already_on_page: 0,
+                    page: 0,
+                    words,
+                    skipped: None,
+                    notes: Vec::new(),
+                }],
+            )
+            .unwrap();
         let mut out = Session::new().with_clock(|| 1_700_000_000);
         let oid = out.open("ocr.pdf", None, bytes, None).unwrap();
         let before = crate::tests::page_texts(&out, oid)[0].clone();
@@ -2214,8 +2504,26 @@ mod tests {
         // Different scripts, so each page's words live in different planned fonts (and page 2
         // would inherit page 1's codes under page-local indexing into the shared plan).
         let found = vec![
-            OcrPage { already_on_page: 0, page: 0, words: vec![word("日本語")], skipped: None, notes: Vec::new() },
-            OcrPage { already_on_page: 0, page: 1, words: vec![word("Привет")], skipped: None, notes: Vec::new() },
+            OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page: 0,
+                words: vec![word("日本語")],
+                skipped: None,
+                notes: Vec::new(),
+            },
+            OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                already_on_page: 0,
+                page: 1,
+                words: vec![word("Привет")],
+                skipped: None,
+                notes: Vec::new(),
+            },
         ];
         let bytes = s.editable_ocr_bytes(id, &found).unwrap();
         let mut out = Session::new();

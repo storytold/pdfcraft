@@ -96,6 +96,10 @@ mod worker {
         if u64::from(w).checked_mul(u64::from(h)).and_then(|n| n.checked_mul(4)) != Some(px.len() as u64) {
             return Err("the pixels don't match the page size".into());
         }
-        ocr.recognize(&px, w, h).map(|lines| pdfcraft_ocr::lines_to_json(&lines)).map_err(|e| e.to_string())
+        // The page comes back as flat lines, in reading order: the paragraph breaks are the
+        // layout model's, which this worker does not load.
+        ocr.recognize(&px, w, h)
+            .map(|paragraphs| pdfcraft_ocr::lines_to_json(&paragraphs.into_iter().flat_map(|p| p.lines).collect::<Vec<_>>()))
+            .map_err(|e| e.to_string())
     }
 }

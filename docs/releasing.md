@@ -71,7 +71,7 @@ deliberately.
 
 **OCR models:** desktop packaging stages the Scan & OCR models (#103).
 The packaging scripts call `stage_models` (`packaging/env.sh`; `package.ps1` on Windows), which runs `cargo xtask models` to fetch every `kind = "model"` file in `ATTRIBUTION.toml` and verify its SHA-256.
-The current detection and recognition files are `text-detection.onnx` and `text-recognition.onnx`.
+The current detection and recognition files are `text-detection.onnx` and `text-recognition.onnx`; `doclayout.onnx` (PP-DocLayoutV3, about 130 MB, Apache-2.0) is the optional layout model that orders recognised lines by region and breaks them into paragraphs, and grows each package by that much; `slanet-plus.onnx` (SLANet_plus, about 8 MB, Apache-2.0) is the optional table structure model that reads the layout model's table regions as rows and cells.
 Each model ships with its licence text and the directory's `ATTRIBUTION.txt`, so packaging needs the network.
 Upstream announced the legacy RTEN download URLs' brownout in [ocrs #282](https://github.com/robertknight/ocrs/issues/282) on 2026-10-27 and directs consumers to the ONNX models.
 
@@ -80,6 +80,8 @@ An incomplete ONNX update can therefore use an intact RTEN pair in the same dire
 Discovery never combines model formats or files from different directories.
 Directory precedence stays the same: `$PDFCRAFT_MODELS`, the release-package locations beside the executable, then the source tree's `assets/models/`.
 The first directory with a complete supported pair wins, even if an earlier legacy pair precedes a later ONNX pair.
+The layout model is looked up on its own in the same directories: the first that has `doclayout.onnx` wins, and without it recognition reads lines in their geometric order as one paragraph.
+The table structure model is looked up the same way (`slanet-plus.onnx`); it is used only with the layout model, and without it a table is read as a paragraph.
 
 The release-package locations are `models\` beside `pdfcraft.exe` (MSI, portable zip), `PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/` (deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD).
 The web build does not include these models, and OCR remains limited to the Latin alphabet without accents.

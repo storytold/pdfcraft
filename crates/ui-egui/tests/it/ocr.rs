@@ -395,8 +395,16 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
         let app = h.state_mut();
         let id = app.active_ids().unwrap().1;
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).unwrap();
-        let page =
-            OcrPage { already_on_page: 0, page: 0, words: vec![placed("Helo", 40.0), placed("wrold", 95.0)], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 0,
+            words: vec![placed("Helo", 40.0), placed("wrold", 95.0)],
+            skipped: None,
+            notes: Vec::new(),
+        };
         app.ocr_verify.load(id, job.guard.clone(), vec![page]);
     }
     h.run_steps(3);
@@ -446,7 +454,16 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
         let app = h.state_mut();
         let id = app.active_ids().unwrap().1;
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).unwrap();
-        let page = OcrPage { already_on_page: 0, page: 0, words: vec![placed("Fine", 95.0)], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            tables: Vec::new(),
+            paragraph_lengths: Vec::new(),
+            line_lengths: Vec::new(),
+            already_on_page: 0,
+            page: 0,
+            words: vec![placed("Fine", 95.0)],
+            skipped: None,
+            notes: Vec::new(),
+        };
         app.ocr_verify.load(id, job.guard.clone(), vec![page]);
     }
     h.run_steps(3);

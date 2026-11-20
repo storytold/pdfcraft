@@ -6897,6 +6897,59 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// The recognised text keeps its lines: `OcrPage::text` (what `ocr_recognize` returns) breaks
+/// between them instead of running a whole page together.
+#[test]
+fn recognised_text_keeps_its_lines() {
+    // `OcrSettings::default()` reads with ocrs, so Tesseract alone is not enough to run this.
+    if pdfcraft_ocr::Models::find().is_none() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let text = s.create_from_text("t", "The quick brown fox\n\nPack my box with jugs").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, SYNTHETIC_SCAN_DPI).unwrap();
+    let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], ImageResolution::Dpi(SYNTHETIC_SCAN_DPI)).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let text = found[0].text().to_lowercase();
+    // A blank line between them when the layout model makes them two paragraphs.
+    let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].contains("brown") && lines[1].contains("jugs"), "{text}");
+    assert_eq!(found[0].line_lengths.iter().sum::<usize>(), found[0].words.len());
+}
+
+/// With the layout model installed, the recognised text comes in paragraphs: the lines of one
+/// paragraph together, a blank line between two.
+#[test]
+fn recognised_text_comes_in_paragraphs() {
+    // The layout model is read on top of the ocrs models, which `OcrSettings::default()` selects.
+    if pdfcraft_ocr::Models::find().is_none() || !ocr::layout_available() {
+        eprintln!("skipped: OCR or layout model not installed");
+        return;
+    }
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let first = "The quick brown fox jumps over the lazy dog while the farmer sleeps in the barn and the hens keep watch over the yard until the sun sets behind the hills.";
+    let second = "Pack my box with five dozen liquor jugs before the market closes, then carry it down the long road to the harbour where the boats wait for the evening tide.";
+    let text = s.create_from_text("t", &format!("{first}\n\n{second}")).unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, SYNTHETIC_SCAN_DPI).unwrap();
+    let scan = s.create_from_images_with_resolution(&[("scan.png".into(), png)], ImageResolution::Dpi(SYNTHETIC_SCAN_DPI)).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    let found = s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
+    let page = &found[0];
+    let text = page.text().to_lowercase();
+    let paragraphs: Vec<&str> = text.split("\n\n").collect();
+    assert_eq!(paragraphs.len(), 2, "{text}");
+    assert!(paragraphs[0].contains("fox") && paragraphs[0].contains("hills"), "{text}");
+    assert!(paragraphs[1].contains("jugs") && paragraphs[1].contains("tide"), "{text}");
+    // Each paragraph wraps onto more than one line, and keeps its line breaks.
+    assert!(paragraphs.iter().all(|p| p.lines().count() >= 2), "{text}");
+    assert_eq!(page.paragraph_lengths.iter().sum::<usize>(), page.line_lengths.len());
+}
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]
@@ -10988,7 +11041,23 @@ fn ocr_words_refresh_only_the_page_content_they_add() {
     take_full_refreshes();
     let word =
         PlacedWord { text: "HELLO".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0], confidence: None, source: "ocrs".into() };
-    assert_eq!(s.apply_ocr(id, &[OcrPage { page: 1, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() }]).unwrap(), 1);
+    assert_eq!(
+        s.apply_ocr(
+            id,
+            &[OcrPage {
+                tables: Vec::new(),
+                paragraph_lengths: Vec::new(),
+                line_lengths: Vec::new(),
+                page: 1,
+                words: vec![word],
+                already_on_page: 0,
+                skipped: None,
+                notes: Vec::new()
+            }]
+        )
+        .unwrap(),
+        1
+    );
     assert_eq!(take_full_refreshes(), 0, "applying OCR words doesn't re-inspect the document");
     let after = s.get(id).unwrap();
     assert_eq!(format!("{:?}", (&after.info.pages, &after.info.annotations, &after.info.fields, &after.links, after.marks())), view);
