@@ -560,7 +560,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::InsertBlankPage { at, width, height } => {
             pdfcraft_organize::insert_blank_page(doc, *at, *width, *height)?;
         }
-        Edit::SetInfo { key, value } => pdfcraft_organize::set_info(doc, key, value)?,
+        Edit::SetInfo { key, value } => pdfcraft_organize::metadata::set_info_in(doc, crate::metadata::home(doc), key, value)?,
         Edit::DuplicatePages { pages, at } => {
             // A copy of a page cannot be tied back to the marks an earlier redaction of this edit
             // applied: text put back under a mark would sit on the copy, unchecked. Fail closed.

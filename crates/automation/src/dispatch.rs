@@ -43,7 +43,23 @@ fn view_transform_to_user(info: &pdfcraft_render::PageInfo, m: [f64; 6]) -> Resu
 
 impl Automation {
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
+    ///
+    /// When the call changes, opens or saves a document that declares PDF/A, the result says
+    /// what the document's changes break of that part (see `pdfa_gate`).
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
+        if self.calling {
+            return self.call_tool(name, args);
+        }
+        let before = self.before_call();
+        self.calling = true;
+        let result = self.call_tool(name, args);
+        self.calling = false;
+        let mut content = result?;
+        self.report_pdfa(&before, &mut content);
+        Ok(content)
+    }
+
+    fn call_tool(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
         let empty = json!({});
         let args = if args.is_null() { &empty } else { args };
         if !args.is_object() {
@@ -353,7 +369,11 @@ impl Automation {
                 if written {
                     write_atomic(&path, &bytes)?;
                 }
-                json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged, "images_refused": images_refused })
+                let mut out = json!({ "path": path.to_string_lossy(), "written": written, "bytes_before": before, "bytes_after": bytes.len(), "merged_objects": merged, "images_refused": images_refused });
+                if written {
+                    self.report_pdfa_copy(id, &bytes, &path.to_string_lossy(), &mut out);
+                }
+                out
             }
             "doc_optimize" => self.doc_optimize(&a)?,
             "doc_initial_view" => self.doc_initial_view(&a)?,

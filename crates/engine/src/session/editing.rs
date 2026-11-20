@@ -366,6 +366,9 @@ impl Session {
             runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
         }
         doc.generation += 1;
+        if let Some(editor) = doc.editor.as_ref() {
+            doc.pdfa_gate.edited(&editor.cos);
+        }
         doc.edit_notices = notices;
         // Only this edit's exits are skipped on the next focus loss: one an earlier change ran is
         // no reason to skip a later one.

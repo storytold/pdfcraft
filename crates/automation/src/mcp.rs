@@ -36,7 +36,7 @@ const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to ge
 (edit_undo) and stay in memory until doc_save. Page numbers are 1-based. Open documents are also \
 resources: pdfcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image. \
 command_list discovers command ids and tool schemas; command_run executes one, command_batch runs several. \
-doc_inspect returns open document state; render_preview returns a bounded PNG.";
+doc_inspect returns open document state; render_preview returns a bounded PNG. \nA result for a document that declares PDF/A lists, under pdfa, the rules of that part its changes break, and names each new one in warnings.";
 
 /// Appended to the instructions in compact mode.
 const COMPACT_INSTRUCTIONS: &str = " Only a core set of tools is listed. Every other tool is still available: find it with \

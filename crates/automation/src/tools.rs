@@ -197,7 +197,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_save",
             "Save a document",
-            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
+            "Save to its own file (an incremental update, which keeps signatures valid) or to a new path (a full rewrite). The write is atomic. The save time goes into the document information dictionary as /ModDate; a file that declares PDF/A-4 gets it as xmp:ModifyDate and xmp:MetadataDate in its XMP instead, and no document information dictionary (ISO 19005-4 6.1.3; with a catalog /PieceInfo, /ModDate as well). flatten_fill_sign bakes Fill & Sign text, marks and signatures into the page first and removes those annotations; other comments and form fields stay. Omit it, or pass false, to leave them editable.",
         )
         .destructive()
         .cmd("file.save")
@@ -217,7 +217,7 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .destructive()
         .with(schema(json!({ "doc": doc(), "name": { "type": "string", "description": "The new file name, with or without the extension." } }), &["doc", "name"])),
-        t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). Undoable.")
+        t("doc_set_info", "Set document metadata", "Set a document information entry such as Title, Author, Subject or Keywords, or a custom property under any other name (no spaces, delimiters, / or #; at most 127 bytes; doc_info lists them under custom); an empty value removes it. When the file has XMP metadata, the matching XMP property (dc:title, dc:creator, dc:description, pdf:Keywords, xmp:CreatorTool, pdf:Producer) is changed too, so viewers that read XMP first show the new value, and a custom property is kept there as pdfx:<name> when its name can be an XML name (in a PDF/A file only one already there is changed). A file that declares PDF/A-4 keeps its metadata in XMP alone (ISO 19005-4 6.1.3): only the XMP property is written, the entry is taken out of any document information dictionary the file already has, and keys XMP can't hold here (custom properties, CreationDate, ModDate, Trapped) are refused. Undoable.")
             .with(schema(json!({ "doc": doc(), "key": { "type": "string" }, "value": { "type": "string" } }), &["doc", "key", "value"])),
         t("page_render", "Render a page", "Render one page to a PNG image (default 96 dpi, at most 600). When the picture is incomplete or approximate (content cut at the page's safety budget, a picture left out because its JBIG2 mask is past a decoder limit, a colour painted in a fallback colour), a JSON part follows the image: { page, warnings: [sentence, ...] }.")
             .ro()
@@ -1480,10 +1480,10 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_export_office", "Export to Word, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. HTML uses rich styling by default; set html_mode to simple for CSS-free headings, paragraphs, emphasis and tables. Simple HTML keeps text and inline images but omits colour and layout styling. Word uses inferred tables, bordered only along the grid lines the page draws, and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit, or that have pictures past what one export may hold or decode, are listed in truncated_pages, with a warning; what was left out is missing.")
             .cmd("export.docx")
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "html_mode": { "type": "string", "enum": ["rich", "simple"], "default": "rich" } }), &["doc", "path"])),
-        t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
+        t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b, 3b, 4, 4e or 4f rules the document breaks (ISO 19005 clause of that part, message, page, whether Save as PDF/A can fix it; nothing is fixable for PDF/A-4), plus what it declares.")
             .ro()
             .cmd("standards.pdfa")
-            .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
+            .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b", "4", "4e", "4f"], "description": "Default: the level the document declares when it is one of these, else 2b." } }), &["doc"])),
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
             .with(schema(json!({ "doc": doc() }), &["doc"])),

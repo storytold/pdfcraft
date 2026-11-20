@@ -541,6 +541,7 @@ impl Automation {
         if let (Some(o), Some(e)) = (out.as_object_mut(), extra.as_object()) {
             o.extend(e.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        self.report_pdfa_copy(id, &bytes, &path.to_string_lossy(), &mut out);
         Ok(out)
     }
 
