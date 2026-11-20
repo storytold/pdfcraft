@@ -1,6 +1,7 @@
+use std::cell::OnceCell;
 use std::rc::Rc;
 
-use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, named_dest};
+use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, named_dests};
 
 /// Keys that must not be followed when copying: they point back up or across the source
 /// document, and following them would drag in unrelated objects.
@@ -62,11 +63,14 @@ pub(crate) struct Copier<'a> {
     /// only kids a copied field keeps (see `fields_on`). `None` keeps every kid. Shared, so the
     /// copiers made for a repeated page or an action don't each copy it.
     pub(super) kept: Option<Rc<HashSet<ObjRef>>>,
+    /// The source's named destinations, read at the first destination that names one (see
+    /// [`named_dests`]).
+    named: OnceCell<HashMap<Vec<u8>, Object>>,
 }
 
 impl<'a> Copier<'a> {
     pub(crate) fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
-        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None }
+        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new(), kept: None, named: OnceCell::new() }
     }
 
     /// Copy an indirect object (once), returning its destination reference.
@@ -219,8 +223,8 @@ impl<'a> Copier<'a> {
             return None;
         }
         match dest {
-            Object::Name(n) => self.map_dest_depth(&named_dest(self.src, n)?, depth + 1),
-            Object::String(s) => self.map_dest_depth(&named_dest(self.src, &s.bytes)?, depth + 1),
+            Object::Name(n) => self.map_dest_depth(&self.named_dest(n)?, depth + 1),
+            Object::String(s) => self.map_dest_depth(&self.named_dest(&s.bytes)?, depth + 1),
             Object::Ref(_) => self.map_dest_depth(&self.src.resolve(dest), depth + 1),
             Object::Dict(d) => self.map_dest_depth(d.get(b"D")?, depth + 1),
             Object::Array(a) => {
@@ -232,6 +236,12 @@ impl<'a> Copier<'a> {
             }
             _ => None,
         }
+    }
+
+    /// The source's destination named `name`.
+    fn named_dest(&self, name: &[u8]) -> Option<Object> {
+        let value = self.named.get_or_init(|| named_dests(self.src)).get(name)?;
+        Some(self.src.resolve(value).as_ref().clone())
     }
 
     /// Rewrite `/P`, `/Dest` and GoTo actions on copied annotations.
