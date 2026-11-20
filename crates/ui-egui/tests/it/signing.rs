@@ -397,6 +397,9 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
     let shape = pdfcraft_engine::Shape::Rectangle { rect: [200.0, 120.0, 260.0, 180.0] };
     let style = pdfcraft_engine::Style::default_for(&shape);
     let note = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: "Checked".into(), author: "Tester".into() };
+    // The first change to a signed document asks first (#2168); this one is confirmed.
+    let doc_id = h.state().views[0].id;
+    h.state_mut().signed_edits_confirmed.insert(doc_id);
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");

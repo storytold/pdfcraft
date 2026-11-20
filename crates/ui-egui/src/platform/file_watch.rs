@@ -476,6 +476,9 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
+                // The id stays, but its signatures are the new version's: its first change asks
+                // again (#2168).
+                self.signed_edits_confirmed.remove(&id);
                 // Whatever was unsaved is gone, so there is nothing left to recover, and no
                 // signature placed since the last save is left to ask about locking (#2149).
                 self.forget_recovery(id);

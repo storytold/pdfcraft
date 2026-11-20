@@ -2332,6 +2332,10 @@ fn placing_a_signature_offers_to_lock_it_now() {
     };
     let mut h = harness_bytes(&std::mem::take(&mut doc));
     place(&mut h, 300.0);
+    // The first change to a signed document asks first (#2168).
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::SignedEdit));
+    h.get_by_label("Change anyway").click();
+    h.run_steps(3);
     assert_eq!(marks(&h), 1);
     assert!(h.query_by_label(NOTICE).is_none(), "a signed document isn't offered the lock");
 }

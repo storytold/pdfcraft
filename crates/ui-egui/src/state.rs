@@ -150,6 +150,11 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// The first change to a signed document asks first (#2168); the edit waits in
+    /// `PdfCraftApp::pending_signed_edit`.
+    SignedEdit,
+    /// Protect ▸ Remove security confirmation (#2168).
+    RemoveSecurity,
     /// Saving a document with a signature just placed by Fill & Sign: lock it into the page
     /// first? (#2149)
     LockSignatures,
