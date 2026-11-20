@@ -242,13 +242,8 @@ fn typing_moving_styling_and_deleting_added_content() {
     h.run_steps(3);
     assert!(added(&h).is_empty());
     // An image lands in the middle of the page, selected.
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 30, 20);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[90u8; 1800]).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(30, 20, craft_image_codecs::ChannelLayout::Rgb, vec![90u8; 1800]).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     h.state_mut().add_image("logo.png".into(), png);
     h.run_steps(3);
     let a = added(&h);
@@ -709,9 +704,13 @@ fn format_text_rows_line_up_and_fit_the_panel() {
         assert!((middle(size) - middle(other)).abs() < 0.5, "the size list ({size:?}) is centred with {label} ({other:?})");
     }
     assert_eq!(size.height(), font.height(), "the font and size lists are the same height");
-    // Line and paragraph spacing; scale and character spacing with their lists.
-    let line = [combo(&h, "Auto"), combo(&h, "0")];
-    assert!((middle(line[0]) - middle(line[1])).abs() < 0.5, "{line:?}");
+    // Line spacing, and paragraph spacing, scale and character spacing with their lists.
+    let line = combo(&h, "Auto");
+    let paragraph: Vec<egui::Rect> = h.query_all_by_label("Paragraph spacing").map(|n| n.rect()).collect();
+    assert_eq!(paragraph.len(), 2, "the paragraph spacing field and its arrow: {paragraph:?}");
+    for r in &paragraph {
+        assert!((middle(line) - middle(*r)).abs() < 0.5, "{line:?} {paragraph:?}");
+    }
     // Each: its number field and the arrow that lists common values.
     let scale_row: Vec<egui::Rect> =
         ["Horizontal scale", "Character spacing"].iter().flat_map(|l| h.query_all_by_label(l).map(|n| n.rect())).collect();
@@ -719,7 +718,8 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     for r in &scale_row {
         assert!((middle(*r) - middle(scale_row[0])).abs() < 0.5, "{scale_row:?}");
     }
-    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row).chain([size, h.get_by_label("Font size").rect()]) {
+    for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row).chain(paragraph).chain([size, h.get_by_label("Font size").rect()])
+    {
         assert!(r.right() <= font.right() + 0.5, "{r:?} reaches past the panel ({font:?})");
     }
 }
@@ -993,13 +993,8 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     let mut h = harness();
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 60, 60);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(60, 60, craft_image_codecs::ChannelLayout::Rgb, [200u8, 30, 30].repeat(3600)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     h.state_mut().add_image("red.png".into(), png);
     h.run_steps(3);
     assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the picture is selected");
@@ -1049,13 +1044,8 @@ fn added_picture_resizes_repeatedly_and_drags_back_from_out_of_bounds_without_sm
     let mut h = harness();
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 60, 60);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(60, 60, craft_image_codecs::ChannelLayout::Rgb, [200u8, 30, 30].repeat(3600)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     h.state_mut().add_image("red.png".into(), png);
     h.run_steps(3);
     crate::support::settle(&mut h);
@@ -1162,13 +1152,8 @@ fn a_handle_in_the_viewport_below_a_short_page_starts_another_resize() {
     h.state_mut().set_option("zoom", "50").unwrap();
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
-    let mut png = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut png, 60, 60);
-        enc.set_color(png::ColorType::Rgb);
-        let mut w = enc.write_header().unwrap();
-        w.write_image_data(&[200u8, 30, 30].repeat(3600)).unwrap();
-    }
+    let img = craft_image_codecs::Image::from_u8(60, 60, craft_image_codecs::ChannelLayout::Rgb, [200u8, 30, 30].repeat(3600)).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
     h.state_mut().add_image("red.png".into(), png);
     h.run_steps(3);
     let img = match &added(&h)[0].content {
