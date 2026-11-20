@@ -14,11 +14,14 @@ use unicode_bidi::{Level, ParagraphBidiInfo};
 
 use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
 
+mod cjk;
 mod draw;
 mod layout;
 mod store;
 mod types;
 
+#[cfg(test)]
+pub(crate) use cjk::CJK_PLAN_CALLS;
 pub(crate) use draw::thai_glyph_resources;
 #[cfg(test)]
 use draw::{GLYPHS_PER_FONT, LaidLine, draw_laid_shaped};

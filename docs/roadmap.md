@@ -7,6 +7,8 @@
 
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
+> **2026-11-13 (M7, local candidate):** English/Simplified Chinese Add Text and existing-paragraph fallback reuse the pinned native Hans face and existing Type 3 writer. Regression coverage includes rejection without mutation, repeated edits, resource cleanup, undo/redo and incremental/full save/reopen. General CJK/RTL, emoji and native IME qualification remain partial; estimates unchanged.
+
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: vector printing preserves annotation optional-content membership; estimates unchanged)
 > **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M10 #5029: Text appearances have implicit NoRotate during vector printing even when the flag is clear; estimates unchanged)
 >
