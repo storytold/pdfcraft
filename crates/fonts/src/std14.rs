@@ -6,7 +6,7 @@
 //! estimate that generated appearances used before: that estimate had Times at 0.9 x Helvetica,
 //! which makes a capital A 600 where the specification says 722.
 //!
-//! **Generated.** The tables are data, not typefaces, and are the item AGENTS.md §1.1 permits as
+//! **Generated.** The tables are data, not typefaces, and are the item clean-room.md permits as
 //! Adobe-authored non-visual technical data; `ATTRIBUTION.toml` carries the entry with
 //! `adobe_data = true`. Each row is indexed by character **code**, not by Unicode: the twelve text
 //! fonts are indexed by WinAnsiEncoding, which is what PdfCraft writes into the appearance streams

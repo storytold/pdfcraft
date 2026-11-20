@@ -1,4 +1,4 @@
-//! 3D model tools (Acrobat: Rich Media ▸ Add 3D, AGENTS.md §3).
+//! 3D model tools (Acrobat: Rich Media ▸ Add 3D, app-agents.md rule 14).
 
 use std::path::Path;
 

@@ -110,6 +110,7 @@ impl PdfCraftApp {
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
+            full_screen_escape_exits: true,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -187,6 +188,7 @@ impl PdfCraftApp {
             script_messages_dropped: 0,
             toast_dropped: 0,
             integrated_titlebar: false,
+            titlebar_lights_right: None,
             window_controls: None,
             system_title_bar: false,
             app_frame_shown: None,
@@ -570,7 +572,7 @@ impl eframe::App for PdfCraftApp {
     /// Each frame's work before drawing: opens, operating-system and control-channel requests,
     /// the quit guard, shortcuts, and the background jobs' results.
     ///
-    /// Last-resort guard (AGENTS.md §4, #3914): a panic in a frame is reported and the app, with
+    /// Last-resort guard (app-agents.md rule 13, #3914): a panic in a frame is reported and the app, with
     /// every open tab, keeps running; see `frame_guard`.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.begin_logic();

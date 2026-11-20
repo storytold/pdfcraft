@@ -1,12 +1,10 @@
-use super::as_docx::{hex, rgb8};
-use super::layout::{Item, Page, Run, Table, items};
+use super::as_docx::{rgb8, room_for};
+use super::layout::{Image, Item, Page, items};
+#[cfg(test)]
+use super::layout::{Run, Table};
+use craft_html::standalone::{self as html, HtmlBlock, HtmlCell, HtmlRun, HtmlTable};
 
-/// Whether a character may appear in the output. XML 1.0 forbids the C0 controls other than tab,
-/// line feed and carriage return, and U+FFFE/U+FFFF. Text extracted from PDFs often holds them
-/// (fonts without a usable `/ToUnicode`), and Word refuses a whole document over one (#72).
-pub(crate) fn allowed(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\r') || !(c.is_ascii_control() || c == '\u{FFFE}' || c == '\u{FFFF}')
-}
+pub(crate) use craft_html::standalone::allowed;
 
 /// The longest language tag the exports write. BCP 47 sets no maximum (35 characters is only
 /// the least a protocol must hold), so this bounds only what a PDF's `/Lang` can put in a file.
@@ -43,33 +41,6 @@ pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
     (!singleton).then_some(tag)
 }
 
-pub(crate) fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars().filter(|c| allowed(*c)) {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            c => o.push(c),
-        }
-    }
-    o
-}
-
-pub(crate) fn base64(data: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut s = String::with_capacity(data.len().div_ceil(3) * 4);
-    for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        s.push(A[(n >> 18) as usize & 63] as char);
-        s.push(A[(n >> 12) as usize & 63] as char);
-        s.push(if c.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
-        s.push(if c.len() > 2 { A[n as usize & 63] as char } else { '=' });
-    }
-    s
-}
-
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
 pub fn html(pages: &[Page], title: &str) -> String {
@@ -94,92 +65,64 @@ pub fn html_simple_with_language(pages: &[Page], title: &str, language: Option<&
     html_with_mode(pages, title, true, language)
 }
 
-fn style_color(color: [f64; 3], simple: bool) -> String {
-    if simple { String::new() } else { hex(color).map_or(String::new(), |h| format!(" style=\"color:#{h}\"")) }
-}
-
-fn wrap_inline(mut text: String, bold: bool, italic: bool) -> String {
-    if text.trim().is_empty() {
-        return text;
-    }
-    if italic {
-        text = format!("<em>{text}</em>");
-    }
-    if bold {
-        text = format!("<strong>{text}</strong>");
-    }
-    text
-}
-
+#[cfg(test)]
 fn para_html(runs: &[Run<'_>], lvl: u8, simple: bool) -> Option<String> {
-    let non_empty: Vec<_> = runs.iter().map(|r| (r.block, esc(&r.text))).filter(|(_, text)| !text.is_empty()).collect();
-    let &(first, _) = non_empty.iter().find(|(_, text)| !text.trim().is_empty())?;
-    let mut t = String::new();
-    for (block, text) in non_empty {
-        if text.trim().is_empty() {
-            t.push_str(&text);
-            continue;
-        }
-        let mut run = wrap_inline(text, block.bold && lvl == 0, block.italic);
-        // The paragraph has its first visible run's colour; a run in another colour says so.
-        let colour = rgb8(block.color);
-        if !simple && colour != rgb8(first.color) {
-            let [red, green, blue] = colour;
-            run = format!("<span style=\"color:#{red:02X}{green:02X}{blue:02X}\">{run}</span>");
-        }
-        t.push_str(&run);
-    }
-    let style = style_color(first.color, simple);
-    Some(match lvl.min(6) {
-        0 => format!("<p{style}>{t}</p>\n"),
-        l => format!("<h{l}{style}>{t}</h{l}>\n"),
-    })
+    let html_runs: Vec<HtmlRun<'_>> =
+        runs.iter().map(|r| HtmlRun { text: &r.text, bold: r.block.bold, italic: r.block.italic, color: rgb8(r.block.color) }).collect();
+    html::render_para(&html_runs, lvl, simple)
 }
 
+#[cfg(test)]
 fn table_html(t: &Table, simple: bool) -> String {
-    let mut s = String::from("<table>\n");
-    for row in &t.rows {
-        s.push_str("<tr>");
-        for c in row {
-            let body = wrap_inline(esc(&c.text), c.bold, c.italic);
-            let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-            let style = style_color(c.color, simple);
-            s.push_str(&format!("<td{span}{style}>{body}</td>"));
-        }
-        s.push_str("</tr>\n");
-    }
-    s.push_str("</table>\n");
-    s
+    let table = HtmlTable {
+        rows: t
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|c| HtmlCell { text: &c.text, bold: c.bold, italic: c.italic, color: rgb8(c.color), span: c.span }).collect())
+            .collect(),
+    };
+    html::render_table(&table, simple)
 }
 
 fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&str>) -> String {
-    let lang = language_tag(language).map(|tag| format!(" lang=\"{}\"", esc(tag))).unwrap_or_default();
-    let mut s = format!(
-        "<!DOCTYPE html>\n<html{lang}>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n{}\n</head>\n<body>\n",
-        esc(title),
-        if simple {
-            ""
-        } else {
-            "<style>body{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}img{max-width:100%}hr{border:0;border-top:1px solid #ccc;margin:2em 0}table{border-collapse:collapse;margin:1em 0}td,th{border:1px solid #999;padding:2px 6px;vertical-align:top}</style>"
-        }
-    );
-    for it in items(pages) {
+    let mut embedded: Vec<(String, &Image)> = Vec::new();
+    let mut blocks: Vec<HtmlBlock<'_>> = Vec::new();
+    let items: Vec<Item<'_>> = items(pages);
+    for it in &items {
         match it {
             Item::Para(runs, lvl) => {
-                if let Some(p) = para_html(&runs, lvl, simple) {
-                    s.push_str(&p);
-                }
+                blocks.push(HtmlBlock::Para {
+                    runs: runs
+                        .iter()
+                        .map(|r| HtmlRun { text: &r.text, bold: r.block.bold, italic: r.block.italic, color: rgb8(r.block.color) })
+                        .collect(),
+                    level: *lvl,
+                });
             }
-            Item::Table(t) => s.push_str(&table_html(&t, simple)),
-            Item::Img(im) => {
+            Item::Table(t) => {
+                blocks.push(HtmlBlock::Table(HtmlTable {
+                    rows: t
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            row.iter()
+                                .map(|c| HtmlCell { text: &c.text, bold: c.bold, italic: c.italic, color: rgb8(c.color), span: c.span })
+                                .collect()
+                        })
+                        .collect(),
+                }));
+            }
+            // HTML embeds each placement in full, so repeated pictures also consume the budget.
+            Item::Img(im) if room_for(&embedded, im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
+                blocks.push(HtmlBlock::Image { mime, bytes: &im.bytes });
+                embedded.push((String::new(), im));
             }
-            Item::PageBreak => s.push_str("<hr>\n"),
+            Item::Img(_) => {}
+            Item::PageBreak => blocks.push(HtmlBlock::PageBreak),
         }
     }
-    s.push_str("</body>\n</html>\n");
-    s
+    html::render(&blocks, title, simple, language_tag(language))
 }
 
 #[cfg(test)]
