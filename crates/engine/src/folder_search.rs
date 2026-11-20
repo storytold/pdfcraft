@@ -194,19 +194,12 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
     if query.chars().count() > MAX_QUERY_CHARS {
         return Err(format!("the search text is longer than {MAX_QUERY_CHARS} characters"));
     }
-    let folder = options.folder.symlink_metadata().map_err(|e| format!("{}: {e}", options.folder.display()))?;
-    if linked(&folder) {
-        return Err(format!("{} is a link, which is not followed", options.folder.display()));
-    }
-    if !folder.is_dir() {
-        return Err(format!("{} is not a folder", options.folder.display()));
-    }
     if running(left) >= MAX_LEFT_RUNNING {
         return Err("files from earlier searches are still being read; wait for them to finish, or restart PdfCraft".into());
     }
     let deadline = Instant::now().checked_add(options.search_limit);
-    // Directory enumeration can block indefinitely in read_dir/next on a disconnected share.
-    // Keep it off the caller thread, so Stop and the overall deadline remain responsive.
+    // Both root metadata lookup and directory enumeration can block on a disconnected share.
+    // Keep them inside the same worker, after the deadline has been established.
     let walk = match list_folder(&options.folder, options.subfolders, cancel, deadline, left)? {
         Ok(walk) => walk,
         Err(stopped) => return Ok(Summary { stopped: Some(stopped), ..Summary::default() }),
@@ -274,9 +267,8 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
     Ok(summary)
 }
 
-/// Return a complete directory listing, or a reason the listing stopped before completion.
-/// A filesystem operation may not be interruptible: record any abandoned listing thread under
-/// the same process-wide cap as abandoned PDF workers, rather than blocking the caller.
+/// Validate the root and list its contents without allowing blocked filesystem calls to hold
+/// the caller. The metadata lookup and read_dir may both block on disconnected shares.
 fn list_folder(
     folder: &Path,
     subfolders: bool,
@@ -284,6 +276,23 @@ fn list_folder(
     deadline: Option<Instant>,
     left: &Mutex<Vec<Retiring>>,
 ) -> Result<Result<Walk, Stop>, String> {
+    list_folder_with(folder, subfolders, cancel, deadline, left, Path::symlink_metadata)
+}
+
+/// A testable metadata provider makes a blocked initial root lookup reproducible without a
+/// network share. A filesystem call cannot always be interrupted; its detached worker remains
+/// under the same cap as PDF workers until it exits.
+fn list_folder_with<F>(
+    folder: &Path,
+    subfolders: bool,
+    cancel: &AtomicBool,
+    deadline: Option<Instant>,
+    left: &Mutex<Vec<Retiring>>,
+    metadata: F,
+) -> Result<Result<Walk, Stop>, String>
+where
+    F: FnOnce(&Path) -> std::io::Result<std::fs::Metadata> + Send + 'static,
+{
     if cancel.load(Ordering::Relaxed) {
         return Ok(Err(Stop::Cancelled));
     }
@@ -297,9 +306,19 @@ fn list_folder(
     let thread = std::thread::Builder::new()
         .name("folder-search-list".into())
         .spawn(move || {
-            let mut walk = Walk::default();
-            walk.folder(&path, subfolders, 0, &worker_stop);
-            let _ = send.send(walk);
+            let result = (|| {
+                let root = metadata(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                if linked(&root) {
+                    return Err(format!("{} is a link, which is not followed", path.display()));
+                }
+                if !root.is_dir() {
+                    return Err(format!("{} is not a folder", path.display()));
+                }
+                let mut walk = Walk::default();
+                walk.folder(&path, subfolders, 0, &worker_stop);
+                Ok(walk)
+            })();
+            let _ = send.send(result);
         })
         .map_err(|e| format!("could not start folder listing: {e}"))?;
     loop {
@@ -316,7 +335,7 @@ fn list_folder(
             return Ok(Err(stop));
         }
         match recv.recv_timeout(Duration::from_millis(20)) {
-            Ok(walk) => return Ok(Ok(walk)),
+            Ok(result) => return result.map(Ok),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Err("folder listing stopped unexpectedly".into()),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
