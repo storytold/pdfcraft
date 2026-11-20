@@ -1050,6 +1050,109 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     assert_eq!(doc.bytes.as_ref(), &original);
 }
 
+/// A one-page PDF whose one attachment, `note.txt` holding `data`, is encrypted for `password`
+/// under an AES-256 handler whose only encrypting filter is `/AuthEvent /EFOpen` (ISO 32000-2
+/// §7.6.6, Table 25): the document opens without a password; the attachment needs it.
+fn efopen_attachment_pdf(password: &str, data: &[u8]) -> Vec<u8> {
+    let mut protected = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    protected
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: password,
+            owner_password: "owner pw",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [5; 32],
+        })
+        .unwrap();
+    let handler = protected.output_handler().unwrap();
+    // AES-256 encrypts strings and streams alike, with the file key and a random first block
+    // (ISO 32000-2 §7.6.3.2), so the string cipher gives what `/StdCF` (AESV3) decrypts.
+    let cipher = handler.encrypt_string(5, 0, data);
+    let d = handler.dict();
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+    let objs: [Vec<u8>; 6] = [
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>".to_vec(),
+        b"<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_vec(),
+        [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", cipher.len()).as_bytes(), &cipher, b"\nendstream"].concat(),
+        format!(
+            "<< /Filter /Standard /V 5 /R 6 /O <{}> /U <{}> /OE <{}> /UE <{}> /Perms <{}> /P {} /CF << /StdCF << /AuthEvent /EFOpen /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+            hex(&d.o),
+            hex(&d.u),
+            hex(&d.oe),
+            hex(&d.ue),
+            hex(&d.perms),
+            d.p
+        )
+        .into_bytes(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 7 /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+/// A document that encrypts only its file attachments opens without a password and asks for it
+/// when an encrypted attachment is saved (ISO 32000-2 §7.6.6, /AuthEvent /EFOpen). Cancelling
+/// does nothing; a wrong password asks again; the right one saves the attachment, decrypted.
+#[test]
+fn saving_an_encrypted_attachment_asks_for_its_password() {
+    let dir = AttachmentDir::new();
+    let chosen = dir.0.join("note.txt");
+    let mut h = harness(&[]);
+    h.state_mut().open_bytes("envelope.pdf", None, efopen_attachment_pdf("attach pw", b"sealed words")).unwrap();
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let ask = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().pick_override = Some(vec![chosen.to_string_lossy().into_owned()]);
+        h.state_mut().attachment_action(id, 0, false);
+        h.run_steps(2);
+        assert_eq!(h.state().unlock_prompt.as_ref().map(|p| p.attachment), Some(Some((0, false))), "asks for the password");
+        assert!(h.query_by_label("Password required").is_some(), "the prompt is shown");
+    };
+    // Cancel: nothing is saved, and the save picker isn't asked.
+    ask(&mut h);
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().unlock_prompt.is_none());
+    assert!(h.state().pick_override.is_some() && !chosen.exists(), "cancelling does nothing");
+    // A wrong password asks again.
+    ask(&mut h);
+    type_through_input_method(&mut h, "wrong");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    let prompt = h.state().unlock_prompt.as_ref().expect("asks again");
+    assert_eq!(prompt.error.as_deref(), Some("Incorrect password. Try again."));
+    assert!(!chosen.exists());
+    // The right one: the attachment is saved decrypted, and the document isn't changed.
+    type_through_input_method(&mut h, "attach pw");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(h.state().unlock_prompt.is_none(), "the password is accepted");
+    assert_eq!(std::fs::read(&chosen).unwrap(), b"sealed words");
+    assert!(!h.state().session.get(id).unwrap().dirty);
+    // Unlocked, the next save doesn't ask.
+    std::fs::remove_file(&chosen).unwrap();
+    h.state_mut().pick_override = Some(vec![chosen.to_string_lossy().into_owned()]);
+    h.state_mut().attachment_action(id, 0, false);
+    h.run_steps(2);
+    assert!(h.state().unlock_prompt.is_none());
+    assert_eq!(std::fs::read(&chosen).unwrap(), b"sealed words");
+}
+
 /// Windows: a saved attachment keeps the Mark-of-the-Web of the PDF it came from, and gets the
 /// Internet zone when that PDF has none or isn't a file (#3990).
 #[cfg(windows)]

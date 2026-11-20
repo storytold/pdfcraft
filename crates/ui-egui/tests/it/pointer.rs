@@ -647,7 +647,8 @@ fn tip_shown(h: &Harness<'_, PdfCraftApp>) -> bool {
 /// Opens the Unlock prompt, a dialog with a backdrop over the whole window, from the next frame.
 fn open_unlock_prompt(h: &mut Harness<'_, PdfCraftApp>) {
     let doc = h.state().views[0].id;
-    h.state_mut().unlock_prompt = Some(UnlockPrompt { doc, name: "test.pdf".into(), input: String::new(), error: None, then: None });
+    h.state_mut().unlock_prompt =
+        Some(UnlockPrompt { doc, name: "test.pdf".into(), input: String::new(), error: None, then: None, attachment: None });
 }
 
 /// Check that the link tip and pointing cursor disappear under the Unlock prompt.

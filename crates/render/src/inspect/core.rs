@@ -8,8 +8,9 @@ use super::{
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
 /// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and
-/// xref streams are far below this.
-const LOAD_STREAM_LIMIT: usize = 256 << 20;
+/// xref streams are far below this. The lazy reader ([`LazyStructure`]) and attachment reads
+/// open the document model with the same limit.
+pub(crate) const LOAD_STREAM_LIMIT: usize = 256 << 20;
 
 pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }

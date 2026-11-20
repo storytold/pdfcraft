@@ -37,6 +37,19 @@ impl Automation {
         Ok(json!({ "bookmarks": nest_rows(&page.rows, pages), "next": page.next, "truncated": page.truncated }))
     }
 
+    /// `doc_unlock`: give an open document a password it was opened without, as the app's password
+    /// prompts do ([`pdfcraft_engine::Session::unlock`]). The password is never echoed back.
+    pub(crate) fn doc_unlock(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        self.session.unlock(id, a.str("password")?)?;
+        let d = self.doc(a)?;
+        let mut security = security(d);
+        if let Some(s) = d.security_summary() {
+            security["opened_as_owner"] = json!(s.owner);
+        }
+        Ok(json!({ "doc": id.0, "security": security }))
+    }
+
     pub(crate) fn doc(&self, a: &Args) -> Result<&Document> {
         let id = a.int("doc")?;
         let id = u64::try_from(id).map_err(|_| ToolError::InvalidArgs("doc must be positive".into()))?;
