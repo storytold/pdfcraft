@@ -136,6 +136,11 @@ pub(super) fn notices(
     if view.cut_pages.iter().any(|p| !view.cut_notice_dismissed.contains(p)) {
         cut_pages_bar(view, ui, t);
     }
+    // A page with any other render warning is named too (#4340), so a fallback colour or a
+    // missing image isn't mistaken for the page's real appearance.
+    if view.warned_pages.keys().any(|p| !view.warn_notice_dismissed.contains(p)) {
+        warned_pages_bar(view, ui, t);
+    }
     // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
     // lock it into the page now. `lock_offer` is false for a digitally signed document.
     if lock_offer && !view.lock_offer_dismissed {
@@ -299,6 +304,47 @@ fn cut_pages_bar(view: &mut DocView, ui: &mut egui::Ui, t: &Tokens) {
     });
     if dismiss {
         view.cut_notice_dismissed.extend(view.cut_pages.iter().copied());
+    }
+}
+
+/// The bar naming pages with a render warning other than content truncation (#4340): a colour
+/// painted in a fallback colour, a malformed indexed image, or a Type 3 font spaced by its own
+/// procedures. Dismissing it covers the pages warned so far; a page warned later shows it again.
+fn warned_pages_bar(view: &mut DocView, ui: &mut egui::Ui, t: &Tokens) {
+    let Some((&first, kinds)) = view.warned_pages.iter().find(|(p, _)| !view.warn_notice_dismissed.contains(*p)) else { return };
+    let page = first.saturating_add(1).to_string();
+    let what = kinds
+        .iter()
+        .map(|kind| match kind {
+            pdfcraft_render::RenderWarning::ColourFallback => {
+                tl!("a colour couldn't be computed, so part of the page is painted in a fallback colour")
+            }
+            pdfcraft_render::RenderWarning::MalformedIndexedImage => {
+                tl!("an image's colour table is malformed, so it may be drawn wrongly or not at all")
+            }
+            pdfcraft_render::RenderWarning::Type3WidthsMissing => {
+                tl!("a Type 3 font has no widths, so its glyphs are spaced by their procedures")
+            }
+            // Content truncation has its own bar above, which also covers search and copy.
+            pdfcraft_render::RenderWarning::ContentTruncated => tl!("part of the content isn't drawn"),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let n = view.warned_pages.len();
+    let text = if n == 1 {
+        crate::i18n::fmt(tl!("Page {page}: {what}."), &[("page", &page), ("what", &what)])
+    } else {
+        crate::i18n::fmt(
+            tl!("{n} pages have render warnings, page {page} first: {what}."),
+            &[("n", &n.to_string()), ("page", &page), ("what", &what)],
+        )
+    };
+    let mut dismiss = false;
+    notice_bar(ui, t, "triangle-alert", t.accent_text, text, |ui| {
+        dismiss = icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked();
+    });
+    if dismiss {
+        view.warn_notice_dismissed.extend(view.warned_pages.keys().copied());
     }
 }
 

@@ -4,7 +4,7 @@
 //! Page images come from the engine's render pool as whole-page rasters at the current zoom;
 //! stale rasters are shown stretched until the sharp one arrives (tiling comes in M3.3).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -577,6 +577,11 @@ pub struct DocView {
     cut_pages: std::collections::BTreeSet<usize>,
     /// Cut pages whose notice the reader dismissed: a page cut later shows it again.
     cut_notice_dismissed: std::collections::BTreeSet<usize>,
+    /// Pages with a render warning other than content truncation (#4340), by kind: the picture
+    /// may be missing a colour or an image, or a Type 3 font's spacing may be approximate.
+    warned_pages: BTreeMap<usize, Vec<pdfcraft_render::RenderWarning>>,
+    /// Warned pages whose notice the reader dismissed: a page warning later shows it again.
+    warn_notice_dismissed: std::collections::BTreeSet<usize>,
     /// When each still-missing page was first shown, to flag unusually slow renders.
     waiting_since: HashMap<usize, f64>,
     thumbs: HashMap<usize, PageTex>,
@@ -1099,6 +1104,8 @@ impl DocView {
             errors: HashMap::new(),
             cut_pages: Default::default(),
             cut_notice_dismissed: Default::default(),
+            warned_pages: Default::default(),
+            warn_notice_dismissed: Default::default(),
             waiting_since: HashMap::new(),
             thumbs: HashMap::new(),
             thumb_demand: HashMap::new(),

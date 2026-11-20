@@ -2310,6 +2310,34 @@ fn a_cut_page_is_named_beside_an_xfa_form_notice() {
     h.get_by_label_contains("XFA data are kept in step");
 }
 
+/// Every render warning but content truncation is kept per page for the notice bar until the
+/// page's content is invalidated, so one silent render does not flicker it (#4340).
+#[test]
+fn render_warnings_are_kept_per_page_until_the_page_changes() {
+    use pdfcraft_render::{RenderRequest, RenderWarning, RenderedPage};
+
+    let mut v = view(1, PageLayout::Single, true);
+    let ctx = egui::Context::default();
+    let request = RenderRequest { page: 0, kind: RequestKind::Pixels, tag: 7, ..Default::default() };
+    let text_request = RenderRequest { page: 0, kind: RequestKind::Text, tag: TEXT_TAG, ..Default::default() };
+    v.last_queue = vec![request, text_request];
+    let result =
+        |request, warnings| RenderedPage { request, width: 0, height: 0, rgba: Default::default(), error: None, text: None, warnings, millis: 0 };
+    v.receive_result(&ctx, result(request, vec![RenderWarning::ColourFallback, RenderWarning::ContentTruncated]));
+    assert!(v.cut_pages.contains(&0), "content truncation keeps its own bar");
+    assert_eq!(v.warned_pages.get(&0), Some(&vec![RenderWarning::ColourFallback]), "the other warning is kept");
+    v.receive_result(&ctx, result(text_request, Vec::new()));
+    assert_eq!(v.warned_pages.get(&0), Some(&vec![RenderWarning::ColourFallback]), "a text result does not clear the page's warning");
+    v.receive_result(&ctx, result(request, Vec::new()));
+    assert_eq!(v.warned_pages.get(&0), Some(&vec![RenderWarning::ColourFallback]), "a silent render does not clear it");
+    v.warn_notice_dismissed.insert(0);
+    v.invalidate_content();
+    assert!(!v.warned_pages.contains_key(&0), "an edit or view change clears it with the page");
+    // The dismissal names page 0 by index; a page-list edit may put another page there, so it
+    // goes with the warning it dismissed rather than hiding that page's first warning.
+    assert!(v.warn_notice_dismissed.is_empty(), "a dismissed warning does not outlive its page list");
+}
+
 /// Dismissing another notice doesn't hide a page found cut later (#623), and dismissing the
 /// cut-page notice lasts until another page is found cut (review on #2113).
 #[test]

@@ -193,6 +193,11 @@ impl DocView {
         self.text_failed.clear();
         self.errors.clear();
         self.cut_pages.clear();
+        self.warned_pages.clear();
+        // The dismissals name pages by index, and a page-list edit (insert, delete, move) gives
+        // those indexes to other pages: drop them with the warnings they dismissed, so the next
+        // warning on a reused index is not hidden.
+        self.warn_notice_dismissed.clear();
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
@@ -239,6 +244,7 @@ impl DocView {
         self.text_failed.remove(&page);
         self.errors.remove(&page);
         self.cut_pages.remove(&page);
+        self.warned_pages.remove(&page);
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.pages().contains(&page)) {
             // With the marks a tool waits to make on it (#5017 review).
@@ -671,6 +677,20 @@ impl DocView {
         // Whether drawn or read for its text, a page cut at the limits is named (#623).
         if r.warnings.contains(&pdfcraft_render::RenderWarning::ContentTruncated) {
             self.cut_pages.insert(r.request.page);
+        }
+        // Every other warning is named too (#4340): a colour painted in a fallback colour, a
+        // malformed indexed image, or a Type 3 font whose spacing came from its procedures. The
+        // whole-page raster speaks for the page; a tile or a text result carries no page warnings.
+        // A warning is kept until the page's content or view settings change: a later render of the
+        // same page reports it again, so clearing on one silent result would only flicker the bar.
+        if r.request.kind == RequestKind::Pixels && r.request.tile.is_none() {
+            let page = r.request.page;
+            for kind in r.warnings.iter().copied().filter(|w| *w != pdfcraft_render::RenderWarning::ContentTruncated) {
+                let listed = self.warned_pages.entry(page).or_default();
+                if !listed.contains(&kind) {
+                    listed.push(kind);
+                }
+            }
         }
         if r.request.kind == RequestKind::Text {
             match r.text {
