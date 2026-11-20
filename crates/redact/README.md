@@ -64,8 +64,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
-- **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
-  widget under a mark;
+- **annotations** whose rectangle overlaps, or that a turned page shows upright over a mark (the NoRotate flag,
+  ISO 32000-2 §12.5.3, and text notes, which printing turns so), with their pop-ups and their replies (`/IRT`), and
+  **form fields** with a widget under a mark;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
   page as a `/PCMark /Redaction` stream;
 - **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly

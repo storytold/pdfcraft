@@ -498,6 +498,7 @@ pub(super) fn extract_page(doc: &Document, page: &Dict, ctx: &Ctx, regions: &[[f
     let res = page.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut ex = Extractor { doc, ctx, regions, out: Extracted { shown_in: vec![0; regions.len()], ..Extracted::default() }, stack: Vec::new() };
     ex.scope(&data, &res, Matrix::IDENTITY, 0, true)?;
+    let rotation = crate::rendered_rotation(doc, page);
     for a in annots_of(doc, page) {
         let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
         let Some(ap) = d.get(b"AP").and_then(|x| doc.resolve(x).as_dict().cloned()) else { continue };
@@ -513,7 +514,7 @@ pub(super) fn extract_page(doc: &Document, page: &Dict, ctx: &Ctx, regions: &[[f
             for (r, o) in streams {
                 if let Object::Stream(st) = o {
                     // Where the appearance lands on the page (ISO 32000-2 §12.5.5), if it can be told.
-                    let ctm = rect.as_deref().and_then(|r| appearance_matrix(doc, &st, r));
+                    let ctm = rect.as_deref().and_then(|r| drawn_appearance_matrix(doc, &d, &st, r, rotation));
                     // A font of the appearance is looked up in the appearance's own resources
                     // first (what the redaction itself does), then in the page's.
                     let own = st.dict.get(b"Resources").and_then(|x| doc.resolve(x).as_dict().cloned());
@@ -543,6 +544,18 @@ pub(crate) fn appearance_matrix(doc: &Document, ap: &Stream, rect: &[f64]) -> Op
     let (sx, sy) = ((rx1 - rx0) / tw, (ry1 - ry0) / th);
     let a = Matrix([sx, 0.0, 0.0, sy, rx0 - t[0] * sx, ry0 - t[1] * sy]);
     Some(m.then(&a))
+}
+
+/// [`appearance_matrix`], then the turn the renderer gives an annotation `annot` with the NoRotate
+/// flag on a page it shows turned `rotation` degrees ([`crate::rendered_rotation`], ISO 32000-2
+/// §12.5.3): where the appearance is drawn.
+pub(crate) fn drawn_appearance_matrix(doc: &Document, annot: &Dict, ap: &Stream, rect: &[f64], rotation: i64) -> Option<Matrix> {
+    let m = appearance_matrix(doc, ap, rect)?;
+    let [x0, y0, x1, y1] = rect[..] else { return None };
+    if !crate::turned_by_renderer(doc, annot) {
+        return Some(m);
+    }
+    Some(m.then(&crate::upright_turn(rotation, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])))
 }
 
 /// Text-state parameters that `q`/`Q` save and restore.
