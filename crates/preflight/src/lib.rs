@@ -14,7 +14,8 @@
 //!   NOP that ISO 32000-1 no longer defines); Named actions only for NextPage, PrevPage,
 //!   FirstPage and LastPage (ISO 32000-1 12.6.4.11, Table 212); no additional actions on the
 //!   catalog, pages, fields or widgets; `NeedAppearances` not true;
-//! - images: no `Interpolate`, no `Alternates`, no OPI; no PostScript XObjects;
+//! - images: no `Interpolate` (an inline image's `I` included), no `Alternates`, no OPI; no
+//!   PostScript XObjects;
 //! - embedded files: PDF/A-2 only allows embedded PDF/A files; PDF/A-3 needs `AFRelationship`.
 //!
 //! [`convert`] fixes what can be fixed without changing how pages look (XMP, the sRGB output
@@ -218,6 +219,8 @@ pub const WORDINGS: &[&str] = &[
     "A stream uses LZW compression",
     "A stream refers to an external file",
     "An image asks to be interpolated",
+    "An inline image asks to be interpolated",
+    "Some content could not be read for inline images",
     "An image has alternates or OPI information",
     "PostScript XObjects aren't allowed",
     "Embedded files must be PDF/A files themselves (use PDF/A-3 for others)",
@@ -595,6 +598,123 @@ fn mark_cs_object(doc: &Document, cs: &Object, used: &mut DeviceColour, depth: u
     }
 }
 
+/// Decoded bytes one verification reads looking for inline images, all content streams together.
+/// Past it, content is not inspected, and the report says so.
+const MAX_INLINE_DECODED: usize = 1 << 30;
+
+/// What [`inline_images`] found.
+#[derive(Default)]
+struct InlineImages {
+    /// An inline image asks to be interpolated.
+    interpolate: bool,
+    /// Content that could not be read (undecodable, or past [`MAX_INLINE_DECODED`]) may hold such
+    /// an image that was not seen.
+    incomplete: bool,
+}
+
+/// Whether an inline image in any content stream asks to be interpolated: its dictionary has `I`
+/// or `Interpolate` true (ISO 32000-2 8.9.7, Table 91), which PDF/A forbids as it does for image
+/// XObjects (ISO 19005-2 6.2.8, ISO 19005-4 6.2.7.1). The content streams are those the device
+/// colour scan reads: pages' `/Contents`, Type 3 glyph procedures, and streams whose dictionary
+/// says they hold content. A page's `/Contents` array is read as one stream, its parts joined in
+/// order, since a part may end anywhere between two tokens (ISO 32000-2 7.8.2), inside an inline
+/// image's dictionary too. Content is read operator by operator, so image data and strings are
+/// never taken for operators, and reading stops at the first such image. At most `max` decoded
+/// bytes are read ([`MAX_INLINE_DECODED`]).
+fn inline_images(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)], max: usize) -> InlineImages {
+    let mut found = InlineImages::default();
+    let mut budget = pdfcraft_cos::DecodeBudget::new(max, usize::MAX);
+    let interpolates = |image: &Dict| [b"I".as_slice(), b"Interpolate"].iter().any(|k| matches!(image.get(k), Some(Object::Bool(true))));
+    // Only content with the `BI` operator holds inline images: the rest isn't parsed. An inline
+    // image whose parameters the parser cannot read, or whose end it guesses, may be such an image
+    // (or hide one after it), so the content then counts as not read in full.
+    let holds = |data: &[u8], found: &mut InlineImages| {
+        if !data.windows(2).any(|w| w == b"BI") {
+            return false;
+        }
+        let mut ops = pdfcraft_content::ops(data);
+        let interpolated = ops.by_ref().any(|op| op.inline.as_ref().is_some_and(|(image, _)| interpolates(image)));
+        found.incomplete |= ops.ambiguous_images() > 0;
+        interpolated
+    };
+    // A part that is there but cannot be read may hold such an image; one that isn't there (a
+    // reference to a free or unknown object, or at a generation the object doesn't have) is
+    // null (ISO 32000-2 7.3.10) and holds nothing.
+    let part = |r: ObjRef| {
+        if doc.accepted_generations(r.num).contains(&r.generation) { doc.try_get(r.num) } else { Ok(std::sync::Arc::new(Object::Null)) }
+    };
+    // Each page's `/Contents`, its parts joined; pages sharing the same parts are read once.
+    let mut sequences = std::collections::HashSet::new();
+    for p in pdfcraft_model::pages(doc) {
+        let parts: Vec<ObjRef> = match p.dict.get(b"Contents") {
+            Some(Object::Ref(r)) => match &*doc.get(*r) {
+                Object::Array(a) => a.iter().filter_map(Object::as_ref).collect(),
+                _ => vec![*r],
+            },
+            Some(Object::Array(a)) => a.iter().filter_map(Object::as_ref).collect(),
+            _ => Vec::new(),
+        };
+        if !sequences.insert(parts.clone()) {
+            continue;
+        }
+        let mut data = Vec::new();
+        for r in parts {
+            let Ok(o) = part(r) else {
+                found.incomplete = true;
+                continue;
+            };
+            let Object::Stream(s) = &*o else { continue };
+            // The document's parameters, given by reference too; a stream damaged partway gives
+            // what decoded before the damage, and the rest may hold such an image.
+            match budget.decode_with_damage(doc, s, usize::MAX) {
+                Ok((part, damaged)) => {
+                    found.incomplete |= damaged;
+                    data.extend_from_slice(&part);
+                    // A space between parts, as between any two tokens, and as the content
+                    // library joins them: a comment that a part ends in goes on into the next.
+                    data.push(b' ');
+                }
+                Err(_) => found.incomplete = true,
+            }
+        }
+        if holds(&data, &mut found) {
+            found.interpolate = true;
+            return found;
+        }
+    }
+    // Type 3 glyph procedures, and streams whose dictionary says they hold content, each alone,
+    // also when a page lists them among its parts too. A part that is only a part was read above.
+    let mut glyphs = std::collections::HashSet::new();
+    let mut read = std::collections::HashSet::new();
+    for (_, o) in objs {
+        if let Some(d) = dict_of(o) {
+            type3_procs(doc, d, 0, &mut read, &mut glyphs);
+        }
+    }
+    // A glyph is matched by number when the document accepts the generation it is referred to at,
+    // as a page's parts are above: a damaged file's object header may give it a generation other
+    // than the one `objs` carries.
+    let glyphs: std::collections::HashSet<u32> =
+        glyphs.into_iter().filter(|g| doc.accepted_generations(g.num).contains(&g.generation)).map(|g| g.num).collect();
+    for (r, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        if !(glyphs.contains(&r.num) || is_content(&s.dict)) {
+            continue;
+        }
+        match budget.decode_with_damage(doc, s, usize::MAX) {
+            Ok((data, damaged)) => {
+                found.incomplete |= damaged;
+                if holds(&data, &mut found) {
+                    found.interpolate = true;
+                    return found;
+                }
+            }
+            Err(_) => found.incomplete = true,
+        }
+    }
+    found
+}
+
 /// Whether any content or object uses a device colour space.
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
@@ -696,6 +816,13 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     let drawing = drawing_fonts(doc, &objs);
     check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     check_limits(doc, &objs, &pages, &mut issue);
+    let inline = inline_images(doc, &objs, MAX_INLINE_DECODED);
+    if inline.interpolate {
+        // Content would have to be rewritten to change it, which `convert` doesn't do.
+        issue("6.2.8", "An inline image asks to be interpolated", None, None, false);
+    } else if inline.incomplete {
+        issue("6.2.8", "Some content could not be read for inline images", None, None, false);
+    }
     check_spots(doc, &objs, &mut issue);
     check_graphics_states(doc, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
