@@ -47,14 +47,26 @@ mod rules;
 pub use rules::page_rules;
 pub mod objects;
 pub use objects::{
-    CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, paste_objects,
+    CopiedObjects, EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, copy_objects, editable_objects, move_objects, move_objects_each,
+    paste_objects,
 };
+pub mod align;
+pub use align::{ObjectAlign, align_objects};
+pub mod arrange;
+pub use arrange::{ZOrder, arrange_object, arranged_target};
+pub mod delete;
+pub use delete::delete_objects;
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
+mod geometry;
 pub mod images;
 mod ungroup;
 pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub mod paths;
+pub use paths::{FillRule, PagePath, Paint, page_paths};
+pub mod path_edit;
+pub use path_edit::{PathChange, change_path, delete_paths, recolour_paths};
 pub mod bidi;
 pub mod indic;
 mod linebreak;

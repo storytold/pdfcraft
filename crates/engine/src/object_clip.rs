@@ -150,6 +150,8 @@ fn delete_one(page: usize, t: ObjectTarget) -> Edit {
         ObjectKind::Text => Edit::EditTextBlock { page, block: t.index, text: String::new(), style: crate::BlockStyle::default() },
         ObjectKind::Image => Edit::EditPageImage { page, index: t.index, change: crate::ImageEdit::Delete },
         ObjectKind::Added => Edit::DeleteContent { page, index: t.index },
+        // `delete` takes paths out together with the selected pictures, in one splice.
+        ObjectKind::Path => Edit::DeleteObjects { page, objects: vec![t] },
     }
 }
 
@@ -165,10 +167,24 @@ pub(crate) fn delete(
     mut run: impl FnMut(&mut pdfcraft_cos::Document, &Edit) -> Result<(), EditError>,
 ) -> Result<(), EditError> {
     use crate::ObjectKind;
+    if objects.is_empty() || objects.len() > crate::MAX_MOVE_OBJECTS {
+        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(format!(
+            "select between 1 and {} objects to delete",
+            crate::MAX_MOVE_OBJECTS
+        ))));
+    }
     let mut targets = objects.to_vec();
     targets.sort_by_key(|t| (t.kind == ObjectKind::Added, std::cmp::Reverse(t.index)));
     targets.dedup();
     let blocks = pdfcraft_edit::text_blocks(doc, page)?;
+    // Paths and pictures go first, in one splice (pdfcraft_edit::delete_objects), since deleting
+    // a path renumbers the paths and pictures after it; text is found again by its key below,
+    // and added content is numbered apart from both.
+    if targets.iter().any(|t| t.kind == ObjectKind::Path) {
+        let (drawn, rest): (Vec<_>, Vec<_>) = targets.into_iter().partition(|t| matches!(t.kind, ObjectKind::Path | ObjectKind::Image));
+        pdfcraft_edit::delete_objects(doc, page, &drawn)?;
+        targets = rest;
+    }
     for t in targets {
         let edit = match t.kind {
             ObjectKind::Text => {

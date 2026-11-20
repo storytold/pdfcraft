@@ -12,7 +12,7 @@ use super::{
 use crate::page_cursor::{Layer, Subject};
 use crate::page_keys::PageKeys;
 use crate::page_pointer::PagePointer;
-use crate::page_router::{Owner, PagePress, top};
+use crate::page_router::{Owner, PagePress, PicturePart, top};
 use crate::{QuickTool, comments, icons};
 
 /// What the page's tools did with the pointer this frame.
@@ -84,6 +84,11 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark, keys };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
+    // The vector paths' hit test reads the page's objects and paths, listed here for the page
+    // under the pointer or the press.
+    if tool == QuickTool::EditText && can_modify && ptr.pressed().or(pointer).is_some_and(|p| xf.rect.contains(p)) {
+        view.objects.cache_page(doc, i);
+    }
     let field_tool = match tool {
         QuickTool::Field(f) => Some(f),
         _ => None,
@@ -556,8 +561,9 @@ impl PageHits<'_> {
         Some(on_top)
     }
 
-    /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
-    /// on top of artwork takes the press), added content, the objects selected together and the
+    /// The hits at `p`, bottom up: links, comments; Edit text's pictures and vector paths (over a
+    /// page-sized background picture, under the others) under its paragraphs (text on top of artwork
+    /// takes the press), added content, the objects selected together and the
     /// open paragraph's frame, the selected picture's grips over them all; the camera tool's corners;
     /// then form fields (Prepare's, being moved, over the comments; filled ones under added content
     /// and the comments that move). For a press with Shift or ⌘ in Edit text, only the objects
@@ -596,7 +602,16 @@ impl PageHits<'_> {
         } = *self;
         // A press with Shift or ⌘ is the objects' (`object_ui::modified_hit`), off crop mode's page.
         if let Some(objects) = objects {
-            return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
+            // Outside the pages' visible area it takes nothing.
+            if !clip.contains(p) {
+                return Vec::new();
+            }
+            // It toggles the picture a plain press would find, by its visible shape.
+            let picture = crate::edit_text_ui::picture_hit(xf, page, info, images, view, p).and_then(|h| match h.owner {
+                Owner::Picture { index, .. } => Some(index),
+                _ => None,
+            });
+            return crate::object_ui::modified_hit(view, xf, info, page, objects, picture, p).into_iter().collect();
         }
         // Crop mode holds every press on its page (`edit_text_ui::crop_hit`). A right-click is the
         // crop's only on the picture being cropped, its box or its grips (#5835), where it keeps crop
@@ -622,7 +637,7 @@ impl PageHits<'_> {
         // With Add text, only the paragraphs and pictures not under added content.
         let editing =
             can_modify && (tool == QuickTool::EditText || tool == QuickTool::AddText && !crate::content_ui::hits_added(xf, info, page, added, p));
-        let (pictures, paragraphs, objects, grips) = if editing {
+        let (pictures, paths, paragraphs, objects, grips) = if editing {
             let open = view.line_editor.as_ref().filter(|e| e.page == page);
             let frame = open
                 .filter(|e| !e.has_changes())
@@ -633,15 +648,25 @@ impl PageHits<'_> {
             // not on pictures, nor beside a paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            let pictures = edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten();
             (
-                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
+                pictures,
+                edit_text.then(|| crate::object_ui::path_hit(view, xf, info, page, p)).flatten(),
                 on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
                 edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
                 edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
             )
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
+        // A vector path lies over a page-sized background picture, and under the other pictures.
+        let background = pictures.as_ref().is_some_and(|h| match h.owner {
+            Owner::Picture { index, part: PicturePart::Body } => {
+                images.get(index).and_then(|im| im.visible_rect).is_some_and(|r| crate::object_ui::covers_page(info, page, r))
+            }
+            _ => false,
+        });
+        let (lower, upper) = if background { (pictures, paths) } else { (paths, pictures) };
         // Added text and pictures, over the page's own paragraphs and under the objects selected
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
@@ -651,7 +676,7 @@ impl PageHits<'_> {
         let text_link = (text_links && link.is_none()).then(|| text_link_hit(view, info, xf, page, p)).flatten();
         let on_link = link.is_some() || text_link.is_some();
         let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, on_link) };
-        [link, text_link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
+        [link, text_link, comment, lower, upper, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
 }
 

@@ -10,6 +10,7 @@
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (gap 3: #2517 a partial rewrite inside one text object keeps the next paragraph; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (gap 3: #2517 a partial rewrite keeps a kept row inside the paragraph and leaves the next marked region closed; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 12: reading order is scored, not just word F1) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (gap 3: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged, #1540; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (M1: raw-deflate fallback preserves decoding-limit errors; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: find and replace in Edit text mode, partial; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -113,14 +114,25 @@ update the numbers.
   paragraphs that share one text object keep that boundary when the first is rewritten. A heading
   and smaller body lines (#1756) and cells in different columns (#1680, #2478) are still grouped
   by the same geometry. A row that a list item wraps onto stays with that item. Estimates are unchanged.
+- **Vector editing (2026-10-13, #1540):** vector paths are page objects in Edit text & images: a
+  click on a path's painted shape selects it, a drag moves it, corner handles resize it and Delete
+  removes it with images; Fill colour and Stroke colour swatches recolour it. Right-clicking the
+  selection arranges one path or image (Bring to front … Send to back) and aligns or distributes
+  any mix of objects. Each is one undo step, also through the `object_*` tools. Recolour writes
+  DeviceRGB, resizing scales the stroke with the path, pattern-painted paths don't move, and
+  clipping paths, paths in text objects and Form internals aren't selectable; text and image boxes
+  win clicks over paths drawn above them, and text and added items aren't arranged. Estimates are
+  unchanged.
 
 - **Missing:** robust in-place editing of text PdfCraft didn't write: subset fonts without the
   needed glyphs, CJK and right-to-left text, rotated text, lists, superscript/subscript, keeping
   structure tags, find and replace beyond plain paragraphs (form fields, comments, matches across
-  paragraphs); vector and object editing; arrange and align.
-- **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted);
-  `edit.rtl-cjk-editing`, `edit.rotated-text-editing`, `edit.keep-tags-on-edit`,
-  `edit.vector-edit`, `edit.edit-object-tool` are planned. Users:
+  paragraphs); objects inside Form artwork and inline images; rotating and restyling vector paths;
+  arranging text.
+- **Evidence:** `edit.text-edit` is partial (font reused or Helvetica substituted), as are
+  `edit.rtl-cjk-editing` and `edit.edit-object-tool`; `edit.rotated-text-editing` and
+  `edit.keep-tags-on-edit` are planned; `edit.vector-edit`, `edit.arrange-objects` and
+  `edit.align-distribute-objects` shipped with #1540. Users:
   [#766](https://github.com/storytold/pdfcraft/issues/766) (editing Arabic text),
   [#844](https://github.com/storytold/pdfcraft/issues/844) (several elements now move together on
   one page, not across pages),
@@ -446,6 +458,7 @@ update the numbers.
 | 2026-10-14 | minor | M1: raw-deflate fallback preserves decoding-limit errors in strict and tolerant decoding; synthetic filter and COS stream regressions. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: find and replace in Edit text mode (the Find box's Replace row, `text_replace`); each match is rewritten inside its own paragraph, and matches in form fields, comments or across paragraphs are left and counted. Estimates unchanged. |
 | 2026-10-15 | patch | Gap 24: record localization and installers as partial (unusable Chinese, Telugu and Arabic; unsigned Linux packages) |
+| 2026-10-13 | minor | Gap 3: vector paths are selected, moved, resized, recoloured and deleted, and page objects aligned, distributed and arranged, in Edit text & images and through the `object_*` tools (#1540); missing list and evidence updated (`edit.rtl-cjk-editing` and `edit.edit-object-tool` were already partial). Estimates unchanged. |
 | 2026-10-13 | minor | Gap 6: Organize Pages selects and reveals the current page on open, including after an earlier grid selection elsewhere (#1910). Estimates unchanged. |
 | 2026-10-12 | minor | Gap 6: rubber stamps, explicit image rectangles and PDF-page stamps read upright on rotated pages (#1398). Estimates unchanged. |
 | 2026-10-12 | minor | #1316: replacing a line or paragraph keeps a neighbouring line whose glyph box overlaps. Gap 3 remains. Estimates unchanged. |

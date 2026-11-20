@@ -226,3 +226,18 @@ fn copying_and_pasting_refuse_what_they_cannot_do_and_change_nothing() {
     let mut work = stray.clone();
     paste_objects(&mut work, 1, &copied, [0.0, 0.0]).unwrap();
 }
+
+/// A vector path selected with the others is copied too, by its painting operator and the path
+/// built for it; a copy (or a cut) that left it out would lose it.
+#[test]
+fn a_vector_path_is_copied_with_its_construction_and_paint() {
+    let doc = two_pages(SOURCE, "");
+    let path = target(&doc, 0, |o| o.target.kind == ObjectKind::Path);
+    let copied = copy_objects(&doc, 0, &[path]).unwrap();
+    let content = String::from_utf8_lossy(&copied.content).into_owned();
+    let ops = pdfcraft_content::parse(&copied.content).ops;
+    let painted: Vec<_> = ops.iter().filter(|op| matches!(op.op.as_slice(), b"f" | b"Tj" | b"Do")).map(|op| op.op.clone()).collect();
+    assert_eq!(painted, [b"f".to_vec()], "{content}");
+    let filled = ops.iter().position(|op| op.is("f")).unwrap();
+    assert!(ops.get(filled - 1).is_some_and(|op| op.is("re") && op.nums::<4>() == Some([150.0, 230.0, 100.0, 40.0])), "{content}");
+}
