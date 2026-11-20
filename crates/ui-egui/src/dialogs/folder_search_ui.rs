@@ -88,7 +88,7 @@ impl State {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.outcome = Some(Err(tl!("The search stopped unexpectedly.").to_string()));
+                    self.outcome = Some(Err("search stopped unexpectedly".into()));
                     self.reading = None;
                     return;
                 }
@@ -189,6 +189,7 @@ fn search_error(error: &str) -> String {
     match error {
         "the search text is empty" => tl!("Search text is empty.").to_string(),
         "folder listing stopped unexpectedly" => tl!("Folder listing stopped unexpectedly.").to_string(),
+        "search stopped unexpectedly" => tl!("The search stopped unexpectedly.").to_string(),
         "files from earlier searches are still being read; wait for them to finish, or restart PdfCraft" => {
             tl!("Other searches are still reading files. Wait for them to finish or restart PdfCraft.").to_string()
         }
