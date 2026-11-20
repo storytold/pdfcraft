@@ -472,7 +472,11 @@ fn render_page<'a>(
             shared_raster::Error::OutputLimit => (format!("page {} raster size exceeds renderer pixel limit", req.page.saturating_add(1)), false),
             other => (other.to_string(), false),
         })?;
-        let mut pixels = Pixels::zeroed(w, h).ok_or_else(|| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?;
+        let (pw, ph) = (
+            usize::try_from(w).map_err(|_| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?,
+            usize::try_from(h).map_err(|_| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?,
+        );
+        let mut pixels = Pixels::zeroed(pw, ph).ok_or_else(|| (format!("page {} is too large to render", req.page.saturating_add(1)), false))?;
         // Previews render at low detail (tiny images are skipped); finals always draw all.
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
