@@ -521,6 +521,18 @@ pub(crate) fn is_round(doc: &Document, wd: &Dict) -> bool {
     matches!(wd.get(b"PCXfaRound").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
 }
 
+/// Whether `wd` is a text field PdfCraft laid out for an XFA field whose text runs across pages
+/// (`/PCXfaPageText true`, written by the XFA layout): the pages draw its value as lines a page
+/// break falls between, so the widget draws its box and no text.
+fn is_page_text(doc: &Document, wd: &Dict) -> bool {
+    matches!(wd.get(b"PCXfaPageText").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)))
+}
+
+/// The `text` widget `wd` shows: none for one whose text the pages draw ([`is_page_text`]).
+fn unless_page_text(doc: &Document, wd: &Dict, text: String) -> String {
+    if is_page_text(doc, wd) { String::new() } else { text }
+}
+
 /// [`frame`] for a round check button: the `/MK /BG` background as a disc and the `/MK /BC`
 /// border as a circle, both centred in the `w` × `h` box and as wide as its shorter side. A
 /// dashed border stays dashed and an underline stays an underline; any other style is drawn
@@ -827,6 +839,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         values.first().cloned().unwrap_or_default()
     };
     let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+    let text = unless_page_text(doc, &wd, text);
     // Whether `enc` holds what is shown; with `skip_latin`, leaving out what the bundled face draws.
     let can_show = |enc: &FontText, text: &str, skip_latin: bool| {
         let holds = |s: &str| {

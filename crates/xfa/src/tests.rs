@@ -3468,8 +3468,18 @@ fn a_text_field_that_outgrows_a_page_continues_on_the_next_as_text() {
     let long: String = (0..150).map(|i| format!("Line {i} of the notes.\n")).collect();
     let form = layout_xml(&wrapped_form(&format!("<form><body><notes>{long}</notes><after>end</after></body></form>"))).unwrap();
     assert!(form.pages.len() >= 3, "{} pages", form.pages.len());
-    assert!(form.warnings.iter().any(|w| w.starts_with("notes: its text is longer than a page")), "{:?}", form.warnings);
-    // Every line is there, in order, inside the content area of its page; no widget holds it.
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    // The field stays one that can be filled (XFA 3.3 pp. 290–291): its widget, on the page it
+    // starts on and down to that page's break, holds the whole value and draws none of it.
+    let notes: Vec<(usize, &Widget)> =
+        form.pages.iter().enumerate().flat_map(|(i, p)| widgets(p).into_iter().filter(|w| w.name == "notes").map(move |w| (i, w))).collect();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let (page, w) = notes[0];
+    assert!(w.page_text && w.value.as_deref() == Some(long.trim()), "{w:?}");
+    assert!(w.rect.bottom() <= 36.0 + 720.0 + 0.01, "the widget ends at its page's break: {:?}", w.rect);
+    let first_line = form.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Item::Text(s) if s.text == "Line 0 of the notes.")));
+    assert_eq!(Some(page), first_line);
+    // Every line is there, in order, inside the content area of its page, drawn by the page.
     let mut lines = Vec::new();
     for (i, p) in form.pages.iter().enumerate() {
         for it in &p.items {
@@ -3480,7 +3490,6 @@ fn a_text_field_that_outgrows_a_page_continues_on_the_next_as_text() {
                 lines.push(s.text.clone());
             }
         }
-        assert!(widgets(p).iter().all(|w| w.name != "notes"));
     }
     assert_eq!(lines, (0..150).map(|i| format!("Line {i} of the notes.")).collect::<Vec<_>>());
     // What follows comes after the last line, on the last page.
@@ -3488,6 +3497,65 @@ fn a_text_field_that_outgrows_a_page_continues_on_the_next_as_text() {
     let after = widgets(last).into_iter().find(|w| w.name == "after").unwrap();
     let last_line = last.items.iter().filter_map(|it| if let Item::Text(s) = it { Some(s.baseline) } else { None }).fold(0.0, f64::max);
     assert!(after.rect.y >= last_line - 0.01 && after.rect.bottom() <= 36.0 + 720.0 + 0.01, "{:?} after {last_line}", after.rect);
+}
+
+/// A filled text field whose text runs across pages: the page draws its fill under the lines on
+/// every piece, the first too, and its widget, an annotation drawn over the page, has none to
+/// hide them with.
+#[test]
+fn a_filled_text_field_that_outgrows_a_page_keeps_its_fill_under_the_page_text() {
+    let long: String = (0..150).map(|i| format!("Line {i} of the notes.\n")).collect();
+    let xml = wrapped_form(&format!("<form><body><notes>{long}</notes><after>end</after></body></form>")).replace(
+        r#"<field name="notes" w="7.5in" minH="1.5in"><ui><textEdit multiLine="1"/></ui>"#,
+        r#"<field name="notes" w="7.5in" minH="1.5in"><ui><textEdit multiLine="1"><border><edge/><fill><color value="255,255,0"/></fill></border></textEdit></ui>"#,
+    );
+    let form = layout_xml(&xml).unwrap();
+    assert!(form.pages.len() >= 3, "{} pages", form.pages.len());
+    let yellow = [1.0, 1.0, 0.0];
+    let mut pieces = 0;
+    for (i, p) in form.pages.iter().enumerate() {
+        let Some(line) = p.items.iter().position(|it| matches!(it, Item::Text(s) if s.text.starts_with("Line "))) else { continue };
+        let fill = p.items.iter().position(|it| matches!(it, Item::Fill { color, .. } if *color == yellow));
+        assert!(fill.is_some_and(|f| f < line), "page {}: the fill under the lines: {fill:?} {line}", i + 1);
+        pieces += 1;
+    }
+    assert!(pieces >= 3, "{pieces}");
+    let w = form.pages.iter().flat_map(widgets).find(|w| w.name == "notes").unwrap();
+    assert!(w.page_text && w.border.fill.is_none() && w.border.color.is_some(), "{w:?}");
+}
+
+/// Two filled text fields side by side whose text runs across pages: each keeps its own fill on
+/// every page its lines go on to, not only the last one the break reached.
+#[test]
+fn side_by_side_text_fields_that_outgrow_a_page_each_keep_their_fill() {
+    let what: String = (0..150).map(|i| format!("What {i}\n")).collect();
+    let why: String = (0..150).map(|i| format!("Why {i}\n")).collect();
+    let xml = wrapped_form(&format!("<form><body><section><row><what>{what}</what><when>1</when><why>{why}</why></row></section></body></form>"))
+        .replace(
+            r#"<field name="what" w="3.5in" h="1in"><ui><textEdit multiLine="1"/></ui>"#,
+            r#"<field name="what" w="3.5in" minH="1in"><ui><textEdit multiLine="1"><border><edge/><fill><color value="255,255,0"/></fill></border></textEdit></ui>"#,
+        )
+        .replace(
+            r#"<field name="why" w="3.5in" h="1in"><ui><textEdit multiLine="1"/></ui>"#,
+            r#"<field name="why" w="3.5in" minH="1in"><ui><textEdit multiLine="1"><border><edge/><fill><color value="0,255,255"/></fill></border></textEdit></ui>"#,
+        );
+    let form = layout_xml(&xml).unwrap();
+    assert!(form.pages.len() >= 3, "{} pages", form.pages.len());
+    let (yellow, cyan) = ([1.0, 1.0, 0.0], [0.0, 1.0, 1.0]);
+    let mut pieces = 0;
+    for (i, p) in form.pages.iter().enumerate() {
+        let has = |prefix: &str| p.items.iter().any(|it| matches!(it, Item::Text(s) if s.text.starts_with(prefix)));
+        let fill = |c: [f64; 3]| p.items.iter().any(|it| matches!(it, Item::Fill { color, .. } if *color == c));
+        if has("What ") {
+            assert!(fill(yellow), "page {}: the fill of what", i + 1);
+            pieces += 1;
+        }
+        if has("Why ") {
+            assert!(fill(cyan), "page {}: the fill of why", i + 1);
+            pieces += 1;
+        }
+    }
+    assert!(pieces >= 6, "{pieces}");
 }
 
 #[test]

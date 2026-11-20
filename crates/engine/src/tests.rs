@@ -9389,6 +9389,48 @@ fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
     }
 }
 
+/// A growable text field filled past a page splits between its lines (XFA 3.3 pp. 290–291) and
+/// stays a field: the form keeps it after the relayout, and it can be filled again.
+#[test]
+fn growable_xfa_text_that_overflows_onto_a_new_page_keeps_the_form_fillable() {
+    let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();
+    for scripted in [false, true] {
+        let template = pdfcraft_xfa::fixtures::growable_text_template(scripted);
+        let mut s = Session::new();
+        let id = s.open("growing.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text(text.clone()) }).unwrap();
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.info.pages.len(), 3, "scripted={scripted}");
+        let names: Vec<_> = doc.form.iter().map(|f| f.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "ACTIVIDADES"), "scripted={scripted}: {names:?} {:?}", doc.xfa_warnings);
+        // The pages draw the text; the widget over its first piece draws none on top of it.
+        let field = doc.form.iter().find(|f| f.name == "ACTIVIDADES").unwrap();
+        assert_eq!(field.value, vec![text.trim_end()]);
+        let ap = normal_appearance(&doc.editor.as_ref().unwrap().cos, field.widgets[0].obj.num);
+        assert!(!ap.contains("Row") && ap.contains("() Tj"), "{ap}");
+        s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text("Again".into()) }).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "scripted={scripted}");
+    }
+}
+
+/// The same when the form opens with data longer than a page.
+#[test]
+fn growable_xfa_text_opened_with_long_data_keeps_the_form_fillable() {
+    let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();
+    for scripted in [false, true] {
+        let template = pdfcraft_xfa::fixtures::growable_text_template(scripted)
+            .replace("<ACTIVIDADES>Short</ACTIVIDADES>", &format!("<ACTIVIDADES>{text}</ACTIVIDADES>"));
+        let mut s = Session::new();
+        let id = s.open("long.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&template)), None).unwrap();
+        let doc = s.get(id).unwrap();
+        assert_eq!(doc.info.pages.len(), 3, "scripted={scripted}");
+        let names: Vec<_> = doc.form.iter().map(|f| f.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "ACTIVIDADES"), "scripted={scripted}: {names:?} {:?}", doc.xfa_warnings);
+        s.apply(id, Edit::SetFieldValue { name: "ACTIVIDADES".into(), value: FieldValue::Text("Short".into()) }).unwrap();
+        assert_eq!(s.get(id).unwrap().info.pages.len(), 2, "scripted={scripted}");
+    }
+}
+
 #[test]
 fn xfa_text_growth_refreshes_widget_geometry_but_fixed_height_fields_keep_their_widgets() {
     for fixed in [false, true] {

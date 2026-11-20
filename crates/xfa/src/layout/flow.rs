@@ -102,13 +102,16 @@ impl Layouter<'_> {
         Ok(())
     }
 
-    /// The SOM path of the empty widget drawn on the last page since item `first`, when the page
+    /// The SOM path of the empty widget drawn on the last page since item `first`, or of one whose
+    /// text the page draws ([`Widget::page_text`](super::items::Widget::page_text)), when the page
     /// break at `bottom` leaves room above it for a line of its text: only then is the field split.
-    /// A value can't run on from one widget into the next piece, and a field with no line on this
-    /// page moves on whole.
+    /// A value in a widget can't run on from it into the next piece, and a field with no line on
+    /// this page moves on whole.
     fn splittable_widget_since(&self, first: usize, bottom: f64) -> Option<String> {
         self.pages.last()?.items.get(first..)?.iter().find_map(|item| match item {
-            Item::Widget(w) => (w.value.as_deref().is_none_or(|v| v.trim().is_empty()) && w.rect.y + split_line(w) <= bottom).then(|| w.som.clone()),
+            Item::Widget(w) => {
+                ((w.page_text || w.value.as_deref().is_none_or(|v| v.trim().is_empty())) && w.rect.y + split_line(w) <= bottom).then(|| w.som.clone())
+            }
             _ => None,
         })
     }
@@ -150,18 +153,20 @@ impl Layouter<'_> {
             }
         }
         // The empty field being split: its widget is no solid item, so the break may go through it.
+        // Nor is the widget of a field whose text the page draws, whose lines decide the breaks,
+        // even when the field moves on whole first (no room for a line of it here).
         let (som, field) = match &self.splitting {
             Some(s) => (Some(s.som.clone()), Some(s.rect)),
             None => (None, None),
         };
-        let loose = |item: &Item| matches!((item, &som), (Item::Widget(w), Some(som)) if w.som == *som);
+        let loose = |item: &Item| matches!(item, Item::Widget(w) if w.page_text || som.as_ref().is_some_and(|som| w.som == *som));
         let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
         let origin_x = self.cursor().0.x;
         // An item's place on the current page is its drawn place moved by (dx, -shift).
         let (mut dx, mut shift) = (0.0, 0.0);
         let mut seg_top = top;
         let mut first_segment = true;
-        let mut widget_rest: Option<WidgetRest> = None;
+        let mut widget_rests: Vec<WidgetRest> = Vec::new();
         loop {
             // Each pass rescans every item still to be placed. A block split across very many
             // content areas, and so across very many pages, would do this once per page, costing
@@ -199,26 +204,33 @@ impl Layouter<'_> {
             };
             let mut here = Vec::new();
             let mut below = Vec::new();
-            // The rest of the split widget's box: a piece down to this break, closed on every
-            // side, and what is left of it goes on.
-            if let Some((r, border)) = widget_rest.take() {
+            // The rest of each split widget's box (fields side by side can cross the same break):
+            // a piece down to this break, closed on every side, and what is left of it goes on.
+            for (r, border) in std::mem::take(&mut widget_rests) {
                 let bottom = r.bottom().min(cut);
                 if bottom - r.y > 0.01 {
                     here.extend(widget_box(Rect::new(r.x, r.y, r.w, bottom - r.y), &border));
                 }
                 if r.bottom() > cut + 0.01 {
                     let y = cut.max(r.y);
-                    widget_rest = Some((Rect::new(r.x, y, r.w, r.bottom() - y), border));
+                    widget_rests.push((Rect::new(r.x, y, r.w, r.bottom() - y), border));
                 }
             }
             for (item, kept) in rest {
                 if loose(&item) {
-                    let (upper, whole, rest_box) = split_widget(item, cut);
+                    let (mut upper, whole, rest_box) = split_widget(item, cut);
+                    // The fill of a widget whose text the page draws goes on the page, under its
+                    // lines, as the rest of its box's does ([`widget_box`]): an annotation draws
+                    // over the page, so the widget's own would hide them.
+                    if let Some(Item::Widget(w)) = &mut upper
+                        && w.page_text
+                        && let Some(color) = w.border.fill.take()
+                    {
+                        here.insert(0, Item::Fill { rect: w.rect, color });
+                    }
                     here.extend(upper);
                     below.extend(whole.map(|it| (it, None)));
-                    if rest_box.is_some() {
-                        widget_rest = rest_box;
-                    }
+                    widget_rests.extend(rest_box);
                     continue;
                 }
                 if let Some((top, _)) = kept {
@@ -260,7 +272,7 @@ impl Layouter<'_> {
             }
             // A field being split goes on to its own bottom, even when what is left of it draws
             // nothing (no fill, no border).
-            if below.is_empty() && widget_rest.is_none() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
+            if below.is_empty() && widget_rests.is_empty() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
                 if let Some(c) = &mut self.cur {
                     c.y = (end - shift).min(c.rect.bottom()).max(c.y);
                     c.placed = true;

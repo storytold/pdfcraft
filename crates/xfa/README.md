@@ -11,8 +11,9 @@ the automation tools) works on it unchanged. The engine does this when it opens 
 and repeats layout after an edited multiline text field without a fixed height changes value.
 This uses the final datasets after calculations, including on forms without scripts; pages
 and widgets refresh together and undo/redo restores their layout. Text longer than a page
-uses the existing page-text fallback: the full value remains in the datasets and is shown
-across pages, with a warning that it can no longer be edited as a widget. Fixed-height fields
+splits between its lines (XFA 3.3 pp. 290–291): the pages draw it, the full value remains in
+the datasets, and the field's widget, cut at the first page break, keeps it fillable and draws
+no text over the lines (`/PCXfaPageText`). Fixed-height fields
 keep their geometry. If a value cannot be synchronized to the datasets, the engine reports
 that warning and keeps the existing layout and accepted widget values.
 
