@@ -4233,7 +4233,13 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     let drag_to_rail = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
         let from = h.get_by_role_and_label(Role::ListItem, label).rect().center();
         let opener = h.get_by_label("Edit toolbar").rect().center();
-        let to = opener - egui::vec2(0.0, 48.0);
+        // A new slot is created by dropping on the leading third of an existing slot.
+        let slot = h
+            .query_all_by_role_and_label(Role::Button, "Select")
+            .find(|button| (button.rect().center().x - opener.x).abs() < 8.0)
+            .expect("the rail's Select slot")
+            .rect();
+        let to = egui::pos2(slot.center().x, slot.top() + slot.height() * 0.1);
         drag(h, from, to);
         h.run_steps(3);
     };
@@ -4706,7 +4712,10 @@ fn properties_change_every_selected_comment_where_it_applies() {
     open_comment_props(&mut h, 0, 0);
     h.run_steps(2);
     // The dialog says the changes go to every selected comment.
-    h.get_by_label("Changes here apply to all 4 selected comments");
+    h.get_by(|node| {
+        node.role() == Role::Heading
+            && node.description().is_some_and(|description| description.contains("Changes here apply to all 4 selected comments"))
+    });
     set_prop(&mut h, PROP_COLOUR, FieldValue::Color([0.0, 0.0, 1.0]));
     set_prop(&mut h, "width", FieldValue::Number(4.0));
     accept_props(&mut h);
