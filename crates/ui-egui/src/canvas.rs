@@ -850,6 +850,7 @@ fn finish_sign_requests(
 struct PageBodyCx<'a> {
     doc: &'a pdfcraft_engine::Document,
     info: &'a DocInfo,
+    revisions: &'a PageRevisions,
     /// The tool the page sees ([`page_tool`] keeps the rule that copied comments on the pointer make it Select).
     tool: QuickTool,
     /// The tool the user picked, before that rule.
@@ -1455,8 +1456,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallbac
         }
         for placed in body.pages.iter().filter(|p| matches!(p.picture, TextureState::Ready(_))) {
             session.forms.unbaked.retain(|(_, p)| *p != placed.page);
-            session.move_background.page_received(placed.page);
-            session.text_background.page_received(placed.page);
+            let (document, page) = cx.revisions.of(placed.page);
+            if placed.picture_revision == Some(craft::pages::ui::PageRevision { document, page }) {
+                session.move_background.page_received(placed.page);
+                session.text_background.page_received(placed.page);
+            }
         }
         let stale = drag.moving_page().is_some_and(loading);
         drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), stale, cx.render_scale);
@@ -1738,6 +1742,7 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     let cx = PageBodyCx {
         doc,
         info,
+        revisions,
         tool,
         chosen,
         rotation: state.rotation,
