@@ -1663,8 +1663,14 @@ fn combine_tab_uses_tab_interaction_without_changing_close_or_document_state() {
     assert_eq!(h.get_by_role_and_label(Role::Tab, "Combine files").accesskit_node().is_selected(), Some(true));
     h.get_by_role_and_label(Role::Tab, "first.pdf").click();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Tab, "Combine files").focus();
+    // The strip has one keyboard stop; move its lead to Combine without selecting it.
+    h.get_by_role_and_label(Role::Tab, "first.pdf").focus();
     h.run_steps(2);
+    for _ in 0..3 {
+        h.key_press(egui::Key::ArrowRight);
+        h.run_steps(1);
+    }
+    assert!(h.get_by_role_and_label(Role::Tab, "Combine files").is_focused());
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(h.get_by_role_and_label(Role::Tab, "Combine files").accesskit_node().is_selected(), Some(true));
