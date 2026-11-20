@@ -243,6 +243,7 @@ pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut E
             ran_away: false,
             highlight,
             time_scale: cx.xfa_time_scale,
+            signatures: std::sync::Arc::clone(&cx.signatures),
         };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));

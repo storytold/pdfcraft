@@ -135,6 +135,11 @@ pub(crate) struct XfaRun<'a> {
     /// start and each script's own): 1, unless the session was given another
     /// ([`crate::Session::with_xfa_time_scale`]).
     pub time_scale: u32,
+    /// How each signature field's signature checks, by field name
+    /// ([`crate::js::signature_states`]), for
+    /// `signatureInfo()` and `signatureValidate()` on the fields `event.target.getField(…)`
+    /// gives.
+    pub signatures: Arc<HashMap<String, pdfcraft_js::SignatureState>>,
 }
 
 /// The script engine's copies of a form's property trees, by the address of the tree each was
@@ -364,12 +369,18 @@ fn plain_som(som: &str) -> String {
     out
 }
 
-/// The names a script passed to a reset (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, or a
-/// container such as `table`), indexed, so matching an object against them costs the same
-/// however many names there are.
+/// The names a script passed to a reset (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, a
+/// container such as `table`, or a SOM expression with its indexes), indexed by their steps
+/// without indexes, so matching an object against them costs the same however many names
+/// without indexes there are. A name is matched as [`pdfcraft_js::xfa::som_names`] matches it
+/// (an index written in it names that instance only), as `event.target.resetForm` reads the
+/// reset back.
 struct ResetTargets {
-    /// Each name's steps without indexes, joined by `.`.
+    /// The steps without indexes, joined by `.`, of each name that writes no index.
     wants: HashSet<String>,
+    /// The names that write an index, by their steps without indexes joined by `.`: an object
+    /// whose steps run that way is checked against these names only.
+    indexed: HashMap<String, Vec<String>>,
     /// The most steps of a name.
     longest: usize,
 }
@@ -377,22 +388,34 @@ struct ResetTargets {
 impl ResetTargets {
     fn new(names: &[String]) -> Self {
         let mut wants = HashSet::new();
+        let mut indexed: HashMap<String, Vec<String>> = HashMap::new();
+        let mut seen = HashSet::new();
         let mut longest = 0;
         for name in names {
-            let n = plain_som(name.trim());
+            let name = name.trim();
+            let n = plain_som(name);
             let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
             let steps: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
-            if !steps.is_empty() {
-                longest = longest.max(steps.len());
-                wants.insert(steps.join("."));
+            if steps.is_empty() {
+                continue;
+            }
+            longest = longest.max(steps.len());
+            let key = steps.join(".");
+            if name.contains('[') {
+                if seen.insert(name.to_string()) {
+                    indexed.entry(key).or_default().push(name.to_string());
+                }
+            } else {
+                wants.insert(key);
             }
         }
-        ResetTargets { wants, longest }
+        ResetTargets { wants, indexed, longest }
     }
 
     /// Does a name name this SOM or one of its ancestors: is it a run of the SOM's steps? The
     /// runs are looked up, at most [`Self::longest`] steps each, so the work depends on the
-    /// SOM's depth and not on how many names there are.
+    /// SOM's depth and, for names that write an index, on how many of them have that run's
+    /// steps.
     fn matches(&self, som: &str) -> bool {
         let plain = plain_som(som);
         let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
@@ -404,6 +427,9 @@ impl ResetTargets {
                 }
                 run.push_str(step);
                 if self.wants.contains(&run) {
+                    return true;
+                }
+                if self.indexed.get(&run).is_some_and(|names| names.iter().any(|n| pdfcraft_js::xfa::som_names(som, n))) {
                     return true;
                 }
             }
@@ -447,6 +473,9 @@ fn data_text(info: &FieldInfo) -> String {
     }
 }
 
+/// The document's fields as scripts get them, with each one's place by field name.
+type DocFields = (Arc<Vec<pdfcraft_js::FieldState>>, HashMap<String, usize>);
+
 /// Runs the scripts of one event (opening, a change, a click) against one document: what
 /// they change is kept in memory (data, field values, overrides) and written once, when the
 /// event ends or the form has to be laid out again.
@@ -478,6 +507,10 @@ struct Runner<'a, 'b> {
     /// Widget names by the data node they bind to (built with `by_som`).
     by_path: Option<HashMap<pdfcraft_xfa::DataPath, Vec<String>>>,
     fields: Option<HashMap<String, FieldInfo>>,
+    /// The document's fields as `event.target.getField(…)` gives them (named by SOM, values as
+    /// the scripts left them), with each one's place by field name; built for the first script
+    /// and kept up to date as values change, rebuilt when the fields themselves change.
+    doc_fields: Option<DocFields>,
     /// The live form as last built; dropped when a script changed the form.
     cached: Option<LiveForm>,
     /// `cached` as the scripts get it, made once and sent to each script until the live form
@@ -526,6 +559,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             focus_requests: Vec::new(),
             by_path: None,
             fields: None,
+            doc_fields: None,
             cached: None,
             js_root: None,
             session: None,
@@ -544,7 +578,8 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// The script engine for this event.
     fn session(&mut self) -> &mut XfaSession {
-        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count, highlight: self.run.highlight };
+        let doc_info =
+            XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count, highlight: self.run.highlight, ..Default::default() };
         let scale = self.run.time_scale;
         self.session.get_or_insert_with(|| XfaSession::new(doc_info).with_time_scale(scale))
     }
@@ -608,6 +643,38 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn widgets_at(&mut self, path: &pdfcraft_xfa::DataPath) -> Vec<String> {
         self.by_som();
         self.by_path.as_ref().and_then(|m| m.get(path)).cloned().unwrap_or_default()
+    }
+
+    /// The document's fields for [`Script::fields`], see [`Runner::doc_fields`].
+    fn doc_fields(&mut self) -> Arc<Vec<pdfcraft_js::FieldState>> {
+        if let Some((fields, _)) = &self.doc_fields {
+            return Arc::clone(fields);
+        }
+        let som_of: HashMap<String, String> = self.by_som().iter().map(|(som, name)| (name.clone(), som.clone())).collect();
+        let values: HashMap<String, Vec<String>> = self.fields().iter().map(|(name, info)| (name.clone(), info.value.clone())).collect();
+        let mut at = HashMap::new();
+        let mut out = Vec::new();
+        // No page geometry: the XFA event target has no `getPageBox`, and a field's `rect` set
+        // through it is noted and not applied, so it is read in unrotated page space.
+        let geometry = pdfcraft_js::DocInfo::default();
+        for f in pdfcraft_forms::fields(self.doc) {
+            let mut state = crate::js::field_state(self.doc, &f, &geometry);
+            if let Some(v) = values.get(&f.name) {
+                state.value = v.clone();
+            }
+            // Not among the signatures checked (signed since?): as its value shows it.
+            if let Some(s) = self.run.signatures.get(&f.name) {
+                state.signature = *s;
+            }
+            if let Some(som) = som_of.get(&f.name) {
+                state.name = som.clone();
+            }
+            at.insert(f.name, out.len());
+            out.push(state);
+        }
+        let out = Arc::new(out);
+        self.doc_fields = Some((Arc::clone(&out), at));
+        out
     }
 
     fn fields(&mut self) -> &mut HashMap<String, FieldInfo> {
@@ -702,6 +769,11 @@ impl<'a, 'b> Runner<'a, 'b> {
                 continue;
             }
             self.fields().insert(name.clone(), updated);
+            if let Some((fields, at)) = self.doc_fields.as_mut()
+                && let Some(f) = at.get(name).and_then(|i| Arc::make_mut(fields).get_mut(*i))
+            {
+                f.value = new_value.clone();
+            }
             self.field_changes.insert(name.clone(), new_value);
             changed = true;
         }
@@ -736,6 +808,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 .collect();
             pdfcraft_forms::apply_script_changes(self.doc, &changes, &mut pdfcraft_forms::NoScripts).map_err(|e| e.to_string())?;
             self.fields = None;
+            self.doc_fields = None;
         }
         if self.ov_dirty {
             pdfcraft_xfa::set_overrides(self.doc, &self.ov).map_err(|e| e.to_string())?;
@@ -770,6 +843,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.by_som = None;
         self.by_path = None;
         self.fields = None;
+        self.doc_fields = None;
         self.invalidate();
         Ok(())
     }
@@ -799,10 +873,14 @@ impl<'a, 'b> Runner<'a, 'b> {
             }
             out
         };
+        // The instances of floating fields with no widget that the names name, each row's by its
+        // own SOM expression (`row[1].amount` names the second row's only), by their SOM
+        // expressions without indexes.
+        let mut floating: HashMap<String, Vec<String>> = HashMap::new();
         for som in unshown {
-            // A floating field rich text embeds goes back to its default with every row that
-            // holds it (below).
+            // A floating field rich text embeds goes back to its default (below).
             if pdfcraft_xfa::field_is_embedded(self.tpl, &som) {
+                floating.entry(plain_som(&som)).or_default().push(som);
                 continue;
             }
             let Some(text) = pdfcraft_xfa::reset_default(self.tpl, &som) else { continue };
@@ -815,6 +893,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
         }
         self.fields = None;
+        self.doc_fields = None;
         let infos = self.fields().clone();
         let listed: Option<HashSet<&String>> = listed.as_ref().map(|l| l.iter().collect());
         for (som, name) in by_som.iter().filter(|_| widgets) {
@@ -831,12 +910,17 @@ impl<'a, 'b> Runner<'a, 'b> {
         // A floating field without a widget (a hidden one, as forms place them) goes back to
         // its default too, and the text that embeds it shows that.
         for (som, default) in pdfcraft_xfa::embedded_fields(self.tpl) {
-            if by_som.contains_key(&som) || !wanted(&som) {
+            if by_som.contains_key(&som) {
                 continue;
             }
-            // Every row that holds it, not only the first.
-            let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
-            let paths = self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default();
+            let paths = if targets.is_some() {
+                // Named: the rows the names name, matched instance by instance.
+                floating.get(&plain_som(&som)).into_iter().flatten().map(|f| pdfcraft_xfa::data_path(self.tpl, f)).collect()
+            } else {
+                // Every row that holds it, not only the first.
+                let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
+                self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default()
+            };
             for path in paths {
                 if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
                     self.embedded_changed = true;
@@ -996,6 +1080,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 r
             }
         };
+        let fields = Some(self.doc_fields());
         let script = Script {
             source: ev.script.clone(),
             formcalc: ev.formcalc,
@@ -1003,6 +1088,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             root,
             limits: limits_for(&ev.activity),
             timeout: timeout_for(&ev.activity).saturating_mul(self.run.time_scale),
+            fields,
         };
         let o = self.session().run(script);
         if o.abandoned {
@@ -1521,7 +1607,11 @@ mod tests {
         assert!(som_matches("form[0].page1[0].qty[0]", "xfa.form.form.page1.qty"));
         assert!(som_matches("form[0].page1[0].qty[0]", "$form.form.page1.qty"));
         assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table"));
-        assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table.row[0].amount"));
+        // An index written in a name names that instance only; a step without one, every one.
+        assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table.row.amount"));
+        assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table.row[2].amount"));
+        assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "form[0].page1[0].table[0].row[2].amount[0]"));
+        assert!(!som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table.row[0].amount"));
         assert!(!som_matches("form[0].page1[0].qty[0]", "qt"));
         assert!(!som_matches("form[0].page1[0].price[0]", "qty"));
         assert!(!som_matches("form[0].page1[0].qty[0]", "page1.page1.qty"));
@@ -1529,6 +1619,9 @@ mod tests {
         assert!(!ResetTargets::new(&[]).matches("form[0].qty[0]"));
         let many = ResetTargets::new(&["price".into(), "page1.qty".into()]);
         assert!(many.matches("form[0].page1[0].qty[0]") && many.matches("form[0].page2[0].price[0]"));
+        let rows = ResetTargets::new(&["row[1].amount".into(), "row[3].amount".into(), "total".into()]);
+        assert!(rows.matches("form[0].row[1].amount[0]") && rows.matches("form[0].row[3].amount[0]") && rows.matches("form[0].total[0]"));
+        assert!(!rows.matches("form[0].row[2].amount[0]") && !rows.matches("form[0].row[0].amount[0]"));
         assert_eq!(
             split_instance(&Template::default(), "form[0].table[0].row[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
             Some((2, "form[0].table[0]".into(), "row".into(), 2))

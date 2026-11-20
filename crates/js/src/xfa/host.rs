@@ -4,7 +4,7 @@ use super::model::{
 };
 use std::sync::Arc;
 
-use super::{Context, HashMap, JsResult, Message, RefCell, error};
+use super::{Context, HashMap, HashSet, JsResult, Message, RefCell, error};
 
 /// One node of the flattened form, shared by the JavaScript and FormCalc engines. Its text is
 /// shared (`Arc<str>`), so the copy each script starts from costs little: the scripts of one
@@ -88,6 +88,8 @@ pub(crate) struct XHost {
     pub(super) added: usize,
     /// Index of `this`.
     pub(crate) current: usize,
+    /// The event's activity (`initialize`, `click`, …).
+    pub(crate) activity: String,
     /// Where the effect setting a property of an object is in `effects`, by (property, SOM):
     /// setting it again replaces that effect (the last value wins) unless something that
     /// depends on order (rows added or removed, a reset) came after it.
@@ -102,6 +104,14 @@ pub(crate) struct XHost {
     /// Bytes of text kept in effects, console lines and values written, against [`MAX_PAYLOAD`].
     kept: usize,
     dropped_bytes: usize,
+    /// Field properties a script set through `event.target.getField(…)` that the XFA form has
+    /// no counterpart for here (`field.readonly`, say), as "SOM: property", at most
+    /// [`MAX_UNAPPLIED`] of them.
+    unapplied: Vec<String>,
+    /// The SOM expressions of the fields and exclusion groups as they were before the first
+    /// `removeInstance` (which renumbers the instances after the removed one): a document field
+    /// named by one of them that no live node has any more was removed. `None` until then.
+    fields_before_removal: Option<HashSet<Arc<str>>>,
     /// What the script wrote to property objects, by (node, property path): read back later in
     /// the run, applied nowhere yet. Charged against [`MAX_PAYLOAD`].
     pub(crate) prop_writes: super::props::PropWrites,
@@ -111,6 +121,19 @@ pub(crate) struct XHost {
     /// against [`super::props::MAX_COPIED`].
     pub(super) copied: usize,
 }
+
+/// Where the document field a script asks for is in the form (see [`XHost::field_node`]).
+pub(crate) enum FieldNode {
+    /// The live field or exclusion group at this index, which holds the field's value.
+    Live(usize),
+    /// A row the script removed held it: the field is no longer in the form.
+    Removed,
+    /// The form snapshot has no node for it: the document's field is all there is.
+    Untracked,
+}
+
+/// Most unapplied field properties a run names (see [`XHost::unapplied`]).
+const MAX_UNAPPLIED: usize = 20;
 
 impl XHost {
     /// The host for a script on `root` (the template's root subform), with `this` at the node
@@ -150,6 +173,9 @@ impl XHost {
             dropped_console: 0,
             kept: 0,
             dropped_bytes: 0,
+            unapplied: Vec::new(),
+            activity: String::new(),
+            fields_before_removal: None,
             prop_writes: super::props::PropWrites::new(),
             dropped_prop_writes: 0,
             copied: 0,
@@ -288,6 +314,12 @@ impl XHost {
         if self.clipped_values > 0 {
             out.push(format!("the script set {} value(s) longer than {MAX_VALUE} characters; they were cut", self.clipped_values));
         }
+        if !self.unapplied.is_empty() {
+            out.push(format!(
+                "the script set field properties through getField that XFA fields don't take this way; they were left as they were: {}",
+                self.unapplied.join(", ")
+            ));
+        }
         if self.dropped_prop_writes > 0 {
             out.push(format!(
                 "the script wrote more than {} attributes to one property; {} more were left out",
@@ -296,6 +328,63 @@ impl XHost {
             ));
         }
         out
+    }
+
+    /// Where the document field named `som` (its SOM expression with every index written) is in
+    /// the form now.
+    pub(crate) fn field_node(&self, som: &str) -> FieldNode {
+        let live = self
+            .nodes
+            .iter()
+            .enumerate()
+            .position(|(i, n)| &*n.som == som && matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) && self.is_live(i));
+        match live {
+            Some(i) => FieldNode::Live(i),
+            None if self.fields_before_removal.as_ref().is_some_and(|s| s.contains(som)) => FieldNode::Removed,
+            None => FieldNode::Untracked,
+        }
+    }
+
+    /// Is node `i` still in the form: neither it nor a node above it removed? (The nodes of a
+    /// removed row keep their SOM expressions, which the row that moves up takes.)
+    pub(crate) fn is_live(&self, i: usize) -> bool {
+        let mut at = Some(i);
+        for _ in 0..=MAX_DEPTH.saturating_add(1) {
+            match at.and_then(|k| self.nodes.get(k)) {
+                Some(n) if n.gone => return false,
+                Some(n) => at = n.parent,
+                None => return true,
+            }
+        }
+        true
+    }
+
+    /// Before the first instance is removed: remember the fields' SOM expressions as they are
+    /// (see [`XHost::fields_before_removal`]).
+    pub(super) fn before_removal(&mut self) {
+        if self.fields_before_removal.is_none() {
+            let soms = self.nodes.iter().filter(|n| !n.gone && matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup)).map(|n| n.som.clone());
+            self.fields_before_removal = Some(soms.collect());
+        }
+    }
+
+    /// Record `e` as [`XHost::push`] does, and say whether it was kept: a change the script
+    /// sees at once is made only when the effect that applies it is.
+    pub(crate) fn admit(&mut self, e: XfaEffect) -> bool {
+        let e = self.clip_effect(e);
+        if !self.reserve(&e, payload(&e)) {
+            return false;
+        }
+        self.record(e);
+        true
+    }
+
+    /// Note that `what` ("SOM: property") was set through `getField` and not applied.
+    pub(crate) fn unapplied(&mut self, what: String) {
+        let what = clip(what);
+        if self.unapplied.len() < MAX_UNAPPLIED && !self.unapplied.contains(&what) {
+            self.unapplied.push(what);
+        }
     }
 
     /// Give node `i` the value `text` when it is a field or exclusion group (nothing else
