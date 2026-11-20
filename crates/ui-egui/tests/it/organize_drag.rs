@@ -190,3 +190,32 @@ fn replacing_a_document_cancels_an_organize_drag_before_pointer_release() {
     assert_eq!(page_texts(h.state()), expected, "releasing the old drag must not reorder replacement pages");
     assert_saved_order(&h, &expected);
 }
+
+/// A page drag that leaves the window offers the page as a file of its own, and moves nothing.
+#[cfg(windows)]
+#[test]
+fn a_page_dragged_out_of_the_window_is_offered_as_a_file_and_stays_put() {
+    let mut h = organize();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-organize-drag-out-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.state_mut().drag_root_override = Some(dir.clone());
+    let from = h.get_by_label("Page 2").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=5 {
+        h.hover_at(from - egui::vec2(step as f32 * 400.0, 0.0));
+        h.run_steps(1);
+    }
+    let offered = h.state().dragged_out.clone().expect("the drag out offered a file");
+    assert!(offered.starts_with(&dir), "under the test's own folder");
+    assert_eq!(offered.file_name().and_then(|n| n.to_str()), Some("pages (page 2).pdf"));
+    let mut file = PdfCraftApp::new();
+    file.open_bytes("offered.pdf", None, std::fs::read(&offered).unwrap()).unwrap();
+    assert_eq!(page_texts(&file), ["Page 2"]);
+    release(&mut h, from - egui::vec2(2000.0, 0.0), Modifiers::NONE);
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 4"], "nothing moved");
+    assert!(h.state().views[0].org_drag.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}

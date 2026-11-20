@@ -85,6 +85,9 @@ sys-locale = "0.3"
 # Region ▸ Measurement system for the default Units, read from the registry without starting reg.exe;
 # where the pointer is while files are dragged over the window (winit doesn't say).
 winsafe = { version = "0.0.29", default-features = false, features = ["advapi", "user"] }
+# Dragging pages out of the window as a file: the system drag loop (OLE DoDragDrop) behind a safe
+# API, as Tauri's drag plugin uses it (Apache-2.0 OR MIT).
+drag = "=2.1.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rfd = { workspace = true, features = ["file-handle-inner"] }
