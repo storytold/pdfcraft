@@ -28,8 +28,9 @@ fn checked_len(width: u32, height: u32) -> Result<usize, OcrError> {
     pixels.checked_mul(4).ok_or(OcrError::ImageTooLarge)
 }
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The languages offered in the OCR document language picker (ISO 639-1); the built-in models
+/// read the Latin alphabet without accents, while Tesseract uses each language's traineddata.
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("tr", "Turkish")];
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
