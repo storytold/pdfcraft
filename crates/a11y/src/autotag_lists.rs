@@ -9,7 +9,7 @@
 //!
 //! A marker shown by its own operator, before the item's text in the same text object, is tagged
 //! `Lbl` there (see `Evidence::label_op`). Otherwise only whole text objects are grouped: a list
-//! drawn in one text object, a marker in the same show as its item's text (it stays in `LBody`),
+//! drawn in one text object (an object with marked lines after its first stays a paragraph), a marker in the same show as its item's text (it stays in `LBody`),
 //! an item's wrapped lines drawn as separate objects, and nested lists are not recognised. Those
 //! lines end the list, or stay paragraphs, as they were tagged before.
 

@@ -153,8 +153,14 @@ struct Shown {
     moved: bool,
     letters: bool,
     /// The start of the text, without leading white space, up to [`MAX_PREFIX`] characters.
-    /// Show operators, and wide `TJ` gaps, are separated by a space.
     prefix: String,
+    /// The start of the current line after the first, kept the same way.
+    line: Option<String>,
+    /// A line after the first starts with a list marker: the object holds a list of its own.
+    later_marker: bool,
+    /// The next text shown is a separate word: text was moved or a space was shown since the
+    /// last text. Shows that follow each other directly join (`(1) Tj (.) Tj` is `1.`).
+    gap: bool,
     start: Option<(f64, f64)>,
     /// The first operator that shows something, and the start of what it shows.
     first_show: Option<(usize, String)>,
@@ -163,19 +169,14 @@ struct Shown {
 }
 
 impl Shown {
-    /// Text shown from here on is a separate word in the prefix.
-    fn separate(&mut self) {
-        if !self.prefix.is_empty() && !self.prefix.ends_with(' ') && self.prefix.chars().count() < MAX_PREFIX {
-            self.prefix.push(' ');
-        }
-    }
-
     /// `bytes` shown by operator `at`.
     fn show(&mut self, state: &State, at: usize, bytes: &[u8]) {
         let Some(metrics) = state.metrics.as_ref().filter(|_| !state.invisible) else { return };
         let text = metrics.decode(bytes);
         let chars = text.chars().filter(|c| !c.is_whitespace()).count();
         if chars == 0 {
+            // A shown space still separates words (`[(1.)( )(Apples)] TJ`).
+            self.gap |= !text.is_empty();
             return;
         }
         self.letters |= text.chars().any(char::is_alphabetic);
@@ -183,15 +184,18 @@ impl Shown {
             let [.., e, f] = state.tm.then(&state.ctm).0;
             self.start = Some((e, f));
         }
-        let shown = if self.prefix.is_empty() { text.trim_start() } else { text.as_str() };
-        let kept = self.prefix.chars().count();
-        self.prefix.extend(shown.chars().take(MAX_PREFIX.saturating_sub(kept)));
+        if self.shown && self.moved {
+            self.close_line();
+            self.line = Some(String::new());
+        }
+        let gap = std::mem::take(&mut self.gap);
+        keep_start(&mut self.prefix, &text, gap);
+        if let Some(line) = self.line.as_mut() {
+            keep_start(line, &text, gap);
+        }
         match &mut self.first_show {
-            None => self.first_show = Some((at, shown.chars().take(MAX_PREFIX).collect())),
-            Some((first, text)) if *first == at => {
-                let kept = text.chars().count();
-                text.extend(shown.chars().take(MAX_PREFIX.saturating_sub(kept)));
-            }
+            None => self.first_show = Some((at, text.trim_start().chars().take(MAX_PREFIX).collect())),
+            Some((first, start)) if *first == at => keep_start(start, &text, false),
             Some(_) => self.shown_after = true,
         }
         if !self.shown {
@@ -215,9 +219,19 @@ impl Shown {
     /// A line move counts once text is shown after it, so blank lines and trailing moves do not.
     fn new_line(&mut self) {
         self.moved = self.shown;
+        self.gap = true;
     }
 
-    fn finish(self) -> Evidence {
+    fn close_line(&mut self) {
+        if let Some(line) = self.line.take()
+            && autotag_lists::marker(&line).is_some()
+        {
+            self.later_marker = true;
+        }
+    }
+
+    fn finish(mut self) -> Evidence {
+        self.close_line();
         let chars = self.by_size.values().fold(0usize, |n, v| n.saturating_add(v.0));
         let Some((size, (count, bold))) = self.by_size.into_iter().max_by_key(|&(s, (n, _))| (n, s)) else {
             return Evidence::default();
@@ -229,12 +243,27 @@ impl Shown {
             lines: self.lines,
             chars,
             letters: self.letters,
-            marker: autotag_lists::marker(&self.prefix),
+            // An object of several marked lines is a list drawn as one object, which stays a paragraph.
+            marker: autotag_lists::marker(&self.prefix).filter(|_| !self.later_marker),
             label_op: self.first_show.filter(|(_, text)| self.shown_after && autotag_lists::marker(text).is_some_and(|m| m.alone)).map(|(at, _)| at),
             x,
             y,
         }
     }
+}
+
+/// Add `text` to `kept`, up to [`MAX_PREFIX`] characters: without leading white space when `kept`
+/// is empty, and after a space when `gap` separates it from what `kept` holds.
+fn keep_start(kept: &mut String, text: &str, gap: bool) {
+    let count = kept.chars().count();
+    if count >= MAX_PREFIX {
+        return;
+    }
+    let text = if kept.is_empty() { text.trim_start() } else { text };
+    if gap && !kept.is_empty() && !kept.ends_with(char::is_whitespace) && !text.starts_with(char::is_whitespace) {
+        kept.push(' ');
+    }
+    kept.extend(text.chars().take(MAX_PREFIX.saturating_sub(kept.chars().count())));
 }
 
 /// The evidence for each `(BT, ET)` operator span of a page, in order. `resources` is the page's
@@ -282,10 +311,11 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     }
                     state.tlm = Matrix::translate(x, y).then(&state.tlm);
                     state.tm = state.tlm;
-                    if y != 0.0
-                        && let Some(o) = object
-                    {
-                        o.new_line();
+                    if let Some(o) = object {
+                        o.gap = true;
+                        if y != 0.0 {
+                            o.new_line();
+                        }
                     }
                 }
             }
@@ -293,8 +323,11 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                 if let Some(m) = op.nums::<6>() {
                     let moved = m[5] != state.tlm.0[5];
                     (state.tm, state.tlm) = (Matrix(m), Matrix(m));
-                    if moved && let Some(o) = object {
-                        o.new_line();
+                    if let Some(o) = object {
+                        o.gap = true;
+                        if moved {
+                            o.new_line();
+                        }
                     }
                 }
             }
@@ -306,25 +339,29 @@ pub(crate) fn evidence(doc: &Document, fonts: &mut Fonts, resources: &Dict, ops:
                     if op.op != b"T*"
                         && let Some(Object::String(s)) = op.operands.last()
                     {
-                        o.separate();
                         o.show(&state, at, &s.bytes);
                     }
                 }
             }
             b"Tj" => {
                 if let (Some(o), Some(Object::String(s))) = (object, op.operands.first()) {
-                    o.separate();
                     o.show(&state, at, &s.bytes);
                 }
             }
             b"TJ" => {
                 if let (Some(o), Some(Object::Array(items))) = (object, op.operands.first()) {
-                    o.separate();
                     for item in items {
                         match item {
                             Object::String(s) => o.show(&state, at, &s.bytes),
-                            other if other.as_f64().is_some_and(|n| n <= -WORD_GAP) => o.separate(),
-                            _ => {}
+                            other => {
+                                let Some(n) = other.as_f64().filter(|n| n.is_finite()) else { continue };
+                                o.gap |= n <= -WORD_GAP;
+                                // Before the object's first glyph the adjustment only moves where it
+                                // starts; after it, glyph advances are not tracked, so neither is this.
+                                if o.start.is_none() {
+                                    state.tm = Matrix::translate(-n / 1000.0 * state.size, 0.0).then(&state.tm);
+                                }
+                            }
                         }
                     }
                 }
@@ -444,17 +481,29 @@ mod tests {
     }
 
     #[test]
-    fn a_list_marker_is_read_across_kerning_and_leading_space_and_its_own_show_is_found() {
+    fn a_list_marker_is_read_across_kerning_split_shows_and_leading_space_and_its_own_show_is_found() {
         let found = walk(
             b"BT /F1 12 Tf [(1)-15(.)-250(Apples)] TJ ET \
               BT /F1 12 Tf (                    2. Pears) Tj ET \
               BT /F1 12 Tf (3.) Tj 14 0 Td (Plums) Tj ET \
-              BT /F1 12 Tf [(4.)-250(Figs)] TJ ET",
+              BT /F1 12 Tf [(4.)-250(Figs)] TJ ET \
+              BT /F1 12 Tf [(5.)( )(Kiwis)] TJ ET \
+              BT /F1 12 Tf (6) Tj (.) Tj ( Limes) Tj ET \
+              BT /F1 12 Tf (7. A long item) Tj 0 -14 Td (that wraps) Tj ET \
+              BT /F1 12 Tf (8. One) Tj 0 -14 Td (9. Two) Tj ET",
         );
         let markers: Vec<Option<u32>> = found.iter().map(|e| e.marker.filter(|m| !m.alone).map(|m| m.value)).collect();
-        assert_eq!(markers, [Some(1), Some(2), Some(3), Some(4)]);
+        // The last object holds two marked lines, a list of its own: it is not one item.
+        assert_eq!(markers, [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7), None]);
         // Only the marker shown by an operator of its own can be tagged apart: the `(3.) Tj`.
         let labels: Vec<bool> = found.iter().map(|e| e.label_op.is_some()).collect();
-        assert_eq!(labels, [false, false, true, false]);
+        assert_eq!(labels, [false, false, true, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn a_tj_adjustment_before_the_first_glyph_moves_where_the_text_starts() {
+        let found = walk(b"BT /F1 12 Tf 20 100 Td [0 (1. Apples)] TJ ET BT /F1 12 Tf 20 85 Td [-1000 (2. Pears)] TJ ET");
+        assert!(found[1].x > found[0].x, "{found:?}");
+        assert_eq!(found[0].x, 20.0);
     }
 }
