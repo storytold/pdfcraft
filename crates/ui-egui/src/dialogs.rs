@@ -906,8 +906,10 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 row(ui, "PDF version", i.pdf_version.clone());
                 path_row(ui, "Location", doc.path.clone().unwrap_or_default());
                 row(ui, "File size", format!("{} ({})", human_size(i.file_size), crate::panels::byte_count(i.file_size)));
-                let p = &i.pages[0];
-                row(ui, "Page size", units.size(f64::from(p.width), f64::from(p.height)));
+                // A document can open with no pages; it then has no page size to show.
+                if let Some(p) = i.pages.first() {
+                    row(ui, "Page size", units.size(f64::from(p.width), f64::from(p.height)));
+                }
                 // The current page's /Rotate as the document has it now, unsaved rotations
                 // included; turning only the view leaves it alone (#7497).
                 if let Some(p) = i.pages.get(current) {
