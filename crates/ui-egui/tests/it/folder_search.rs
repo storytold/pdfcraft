@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 use crate::commands::fixture;
@@ -122,7 +122,7 @@ fn result_buttons_name_the_document_and_page_for_screen_readers() {
     folder.write("a.pdf", &fixture(3));
     let mut h = harness();
     search(&mut h, &folder.path(), "Page 2");
-    let label = result_row(&h, "Page 2").label().expect("an accessible label");
+    let label = result_row(&h, "Page 2").accesskit_node().label().expect("an accessible label");
     assert!(label.starts_with("a.pdf, Page 2:"), "screen reader needs the file and page: {label}");
 }
 
