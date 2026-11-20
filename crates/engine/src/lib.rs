@@ -194,7 +194,7 @@ use doc_state::{LOW_RESOLUTION_PRINT_DPI, render_threads, renderer_password, sig
 /// The configuration of the pool that draws the viewer: the document's own, plus installed CJK
 /// fonts for fonts a PDF does not embed (`pdfcraft_render::RenderConfig::system_fonts`). Exports,
 /// printing, OCR and automation use the document configuration itself, so nothing drawn with an
-/// installed font is saved or printed (AGENTS.md §1.2, §1.4).
+/// installed font is saved or printed (licences.md; docs/development.md "Fonts and attribution").
 fn display_config(config: &pdfcraft_render::RenderConfig) -> pdfcraft_render::RenderConfig {
     config.clone().on_screen()
 }
