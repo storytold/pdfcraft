@@ -192,6 +192,9 @@ pub(crate) enum Isolation {
     /// Marked content nests past [`ISOLATION_MAX_DEPTH`]: how many sequences a mark on top would
     /// have to close (some may be hidden optional content) is unknown.
     TooDeep,
+    /// The content is too large to read in full (too many streams, bytes or operators), so
+    /// whether it leaves a marked-content sequence open is unknown.
+    TooLarge,
 }
 
 const ISOLATION_MAX_STREAMS: usize = 100_000;
@@ -205,21 +208,29 @@ pub(crate) const ISOLATION_MAX_DEPTH: usize = 10_000;
 pub(crate) fn isolation(doc: &Document, list: &[Object]) -> Isolation {
     let unknown = Isolation::Unknown { unclosed: 0, marked: 0 };
     if list.len() > ISOLATION_MAX_STREAMS {
-        return unknown;
+        return Isolation::TooLarge;
     }
     let mut remaining = ISOLATION_MAX_BYTES;
     let mut data = Vec::with_capacity(list.len());
     for object in list {
         let resolved = doc.resolve(object);
         let Object::Stream(stream) = &*resolved else { return unknown };
-        let Ok(bytes) = stream.decoded_within(remaining) else { return unknown };
-        let Some(left) = remaining.checked_sub(bytes.len().saturating_add(1)) else { return unknown };
+        // Past the byte allowance, as opposed to a stream that does not decode at all.
+        let bytes = match stream.decoded_within(remaining) {
+            Ok(bytes) => bytes,
+            Err(e) if e.to_string().contains("exceeds the limit") => return Isolation::TooLarge,
+            Err(_) => return unknown,
+        };
+        let Some(left) = remaining.checked_sub(bytes.len().saturating_add(1)) else { return Isolation::TooLarge };
         remaining = left;
         data.push(bytes);
     }
     let pieces = pdfcraft_content::Pieces::join(&data);
     let parsed = pieces.parse();
-    if parsed.skipped != 0 || parsed.ops.len() > ISOLATION_MAX_OPS {
+    if parsed.ops.len() > ISOLATION_MAX_OPS {
+        return Isolation::TooLarge;
+    }
+    if parsed.skipped != 0 {
         return unknown;
     }
     let edges = pieces.comment_edges(&parsed);
@@ -357,6 +368,7 @@ pub(crate) fn place_tagged(doc: &mut Document, page: &pdfcraft_model::Page, tag:
             Isolation::Unknown { unclosed, marked } => (behind_marks < list.len()).then_some((behind_marks, unclosed, marked)),
             // Content left inside an optional-content sequence it cannot close could be hidden.
             Isolation::TooDeep => return Err(too_deep_on_top()),
+            Isolation::TooLarge => return Err(too_large_on_top()),
         }
     };
     let mark_ref = doc.add(Object::Stream(Stream::flate(tagged(tag), &content)));
@@ -452,6 +464,9 @@ pub(crate) fn revealed_under_paint(doc: &Document, page: usize, invisible: bool,
 /// none otherwise. The page was checked to take them ([`check_on_top`]) before the edit began.
 pub(crate) fn lift_on_top(over: bool, paragraph: &mut Vec<pdfcraft_content::Op>) -> Vec<pdfcraft_content::Op> {
     if over { std::mem::take(paragraph) } else { Vec::new() }
+
+fn too_large_on_top() -> EditError {
+    EditError::Invalid("the page's content is too large to check for open marked content before adding anything on top of it".into())
 }
 
 fn too_deep_on_top() -> EditError {
@@ -470,6 +485,7 @@ pub(crate) fn check_on_top(doc: &Document, page: &pdfcraft_model::Page) -> Resul
     };
     match isolation(doc, &list) {
         Isolation::TooDeep => Err(too_deep_on_top()),
+        Isolation::TooLarge => Err(too_large_on_top()),
         _ => Ok(()),
     }
 }
