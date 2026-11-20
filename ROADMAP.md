@@ -5,6 +5,10 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+- **2026-11-19 (M0, #4672):** Refresh on current main and limit the remaining change to Wasm compiler and Clippy diagnostics: gate native-only renderer and interface helpers, retain the shared JS runtime handle and native defaults, and type-check browser regressions. Native Clippy is already clean on main; remove the obsolete native style edits. Estimates unchanged.
+
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (M0, #4672: native Clippy cleanup and native-only Wasm gates rebased onto 9bbcde46; behavior and estimates unchanged)
+
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
 > **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged)
@@ -265,6 +269,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-04 (M0, #4672):** Rebase native Clippy and Wasm unused-code cleanup onto main `9bbcde46`. Port platform gates into the split renderer and UI modules; keep the close-path operator with explicit regression coverage. Incorporate the missing Combine and test-expression fixes from heetbeet/pdfcraft#1; the Preferences annotation and forms boolean fixes are already upstream. Local `.work` exclusions are not part of this PR. Behavior, parity and readiness estimates unchanged.
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
 
@@ -912,6 +917,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | patch | M0 #4672: combine the native lint cleanup with platform gates after module splits; retain close-path behavior and native worker tests. Estimates unchanged. |
 | 2026-11-16 | patch | M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |

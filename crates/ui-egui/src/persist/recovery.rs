@@ -158,6 +158,8 @@ impl RecoveryStore {
             Err(TryLockError::WouldBlock) => true,
             Ok(()) => {
                 let _ = file.unlock();
+                // Close before unlinking on native filesystems; wasm's File stub has no Drop.
+                #[cfg(not(target_arch = "wasm32"))]
                 drop(file);
                 let _ = std::fs::remove_file(&path);
                 false

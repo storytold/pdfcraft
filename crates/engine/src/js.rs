@@ -454,6 +454,8 @@ fn changes(
 pub type Runtime = std::sync::Arc<std::sync::Mutex<pdfcraft_js::session::ScriptSession>>;
 
 /// Invalidate pending results while retaining the document's native worker reservation.
+// Wasm's JS session stays on its owning thread; retain the Runtime handle shared with native jobs.
+#[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
 pub(crate) fn replace_runtime(runtime: &mut Runtime) {
     let Ok(mut old) = runtime.lock() else { return };
     let next = old.fresh_realm();

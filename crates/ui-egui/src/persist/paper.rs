@@ -1,6 +1,7 @@
 //! The paper size the system's region prints on: the size of a new blank document (Create ▸
 //! Blank page).
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 use super::units::region_of;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,6 +30,7 @@ impl Paper {
 
 /// The paper for a locale tag's region (`en_US.UTF-8`, `fr-BE`, `es_MX`); `None` without a region.
 /// The Letter regions are CLDR's `paperSize` US-Letter territories.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn paper_for_tag(tag: &str) -> Option<Paper> {
     Some(match region_of(tag)?.as_str() {
         "US" | "CA" | "MX" | "PH" | "PR" | "BZ" | "CL" | "CO" | "CR" | "GT" | "NI" | "PA" | "SV" | "VE" => Paper::Letter,
