@@ -74,6 +74,7 @@ pub(crate) fn expand(template: Node) -> (Option<String>, Vec<String>) {
         soms: HashMap::new(),
         search: MAX_SEARCH,
         work: MAX_WORK,
+        child_counts: HashMap::new(),
         active: HashMap::new(),
         missing: false,
         external: false,
@@ -124,12 +125,30 @@ struct Writer<'a> {
     search: usize,
     /// Children, attributes and namespaces left to look at while merging layers.
     work: usize,
+    /// Bounded memoization only; each use still pays the full child count.
+    child_counts: HashMap<NodeId, usize>,
     /// The elements being written around the current one: inheriting from one is a loop.
     active: HashMap<NodeId, u32>,
     missing: bool,
     external: bool,
     looped: bool,
     layers_cut: bool,
+}
+
+/// Counting a reused prototype must not itself repeatedly walk its descendants.
+/// Cache only complete direct-child counts, and cap the optimization's memory.
+/// Truncated counts are not exact and must never be cached. Budget charging is unchanged.
+fn child_count(node: Node<'_>, work: usize, cache: &mut HashMap<NodeId, usize>) -> usize {
+    const MAX_CACHED_COUNTS: usize = 4_096;
+    let stop = work.saturating_add(1);
+    if let Some(count) = cache.get(&node.id()) {
+        return (*count).min(stop);
+    }
+    let count = node.children().take(stop).count();
+    if count < stop && cache.len() < MAX_CACHED_COUNTS {
+        cache.insert(node.id(), count);
+    }
+    count
 }
 
 fn escape(s: &str, attribute: bool, out: &mut String) {
@@ -439,7 +458,7 @@ impl<'a> Writer<'a> {
         // further than the budget left), attributes and namespaces, and the scope around it.
         let mut cost = scope.len().saturating_add(layers.len());
         for l in &layers {
-            let children = l.children().take(self.work.saturating_add(1)).count();
+            let children = child_count(*l, self.work, &mut self.child_counts);
             cost = cost.saturating_add(children).saturating_add(l.attributes().len()).saturating_add(l.namespaces().len());
         }
         if self.failed.is_some() || !self.charge(cost) {
