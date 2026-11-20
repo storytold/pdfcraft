@@ -6,6 +6,9 @@
 //! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
 //! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
+//!
+//! An inline image (`BI … ID … EI`) is cleared the same way once [`inline_as_xobject`] has written
+//! it as the image XObject it stands for; the caller draws the cleared copy with `Do`.
 
 use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
@@ -88,7 +91,8 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         return None;
     }
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
-    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+    // From the file: a product that overflows is past the limit too, not a panic.
+    if w <= 0 || h <= 0 || (w as u64).checked_mul(h as u64).is_none_or(|pixels| pixels > MAX_PIXELS) {
         return None;
     }
     let (w, h) = (w as usize, h as usize);
@@ -180,6 +184,86 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         dict.remove(b"FDecodeParms");
     }
     Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, is_jbig2)))
+}
+
+/// An inline image (`BI … ID … EI`, dictionary `dict`, data `data`) as the image XObject it
+/// stands for (ISO 32000-2 §8.9.7, Tables 92 and 93): its abbreviated keys, colour spaces and
+/// filters written out in full, and a colour space it names from the resources (`colour_spaces`,
+/// their `/ColorSpace`) given as that space, as an XObject can't name one. `None` when a colour
+/// space it names isn't there, or isn't one an image may use.
+pub(crate) fn inline_as_xobject(colour_spaces: &Dict, dict: &Dict, data: &[u8]) -> Option<Stream> {
+    let mut out = Dict::new();
+    out.set(b"Type".to_vec(), Object::name("XObject"));
+    out.set(b"Subtype".to_vec(), Object::name("Image"));
+    for (key, value) in dict.iter() {
+        let full: &[u8] = match key.as_slice() {
+            b"BPC" => b"BitsPerComponent",
+            b"CS" => b"ColorSpace",
+            b"D" => b"Decode",
+            b"DP" => b"DecodeParms",
+            b"F" => b"Filter",
+            b"H" => b"Height",
+            b"IM" => b"ImageMask",
+            b"I" => b"Interpolate",
+            b"W" => b"Width",
+            // The data's length (`/L`, PDF 2.0) is the new stream's to write, and the entries that
+            // make it an XObject are set above.
+            b"L" | b"Length" | b"Type" | b"Subtype" => continue,
+            other => other,
+        };
+        let value = match full {
+            b"ColorSpace" => inline_colour_space(colour_spaces, value, true)?,
+            b"Filter" => match value {
+                Object::Array(filters) => Object::Array(filters.iter().map(full_filter).collect()),
+                filter => full_filter(filter),
+            },
+            _ => value.clone(),
+        };
+        out.set(full.to_vec(), value);
+    }
+    Some(Stream::from_raw(out, data.to_vec()))
+}
+
+/// An inline image's colour space as an XObject's: the abbreviations in full, and a name the
+/// resources define as its definition. The base of an `/Indexed` space (`indexed_base`, one level
+/// only, §8.6.6.3) is read the same way.
+fn inline_colour_space(colour_spaces: &Dict, cs: &Object, indexed_base: bool) -> Option<Object> {
+    match cs {
+        Object::Name(n) => Some(match n.as_slice() {
+            b"G" | b"DeviceGray" => Object::name("DeviceGray"),
+            b"RGB" | b"DeviceRGB" => Object::name("DeviceRGB"),
+            b"CMYK" | b"DeviceCMYK" => Object::name("DeviceCMYK"),
+            // `/I` alone is no space: `/Indexed` takes its parameters in an array.
+            b"I" | b"Indexed" | b"Pattern" => return None,
+            name => colour_spaces.get(name)?.clone(),
+        }),
+        Object::Array(a) if matches!(a.first().and_then(Object::as_name), Some(b"I" | b"Indexed")) && indexed_base => {
+            let mut a = a.clone();
+            if let Some(first) = a.get_mut(0) {
+                *first = Object::name("Indexed");
+            }
+            let base = a.get_mut(1)?;
+            *base = inline_colour_space(colour_spaces, base, false)?;
+            Some(Object::Array(a))
+        }
+        Object::Array(_) => Some(cs.clone()),
+        _ => None,
+    }
+}
+
+/// A filter's abbreviated name in an inline image (§8.9.7, Table 93) in full.
+fn full_filter(filter: &Object) -> Object {
+    let full = match filter.as_name() {
+        Some(b"AHx") => "ASCIIHexDecode",
+        Some(b"A85") => "ASCII85Decode",
+        Some(b"LZW") => "LZWDecode",
+        Some(b"Fl") => "FlateDecode",
+        Some(b"RL") => "RunLengthDecode",
+        Some(b"CCF") => "CCITTFaxDecode",
+        Some(b"DCT") => "DCTDecode",
+        _ => return filter.clone(),
+    };
+    Object::name(full)
 }
 
 /// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`
