@@ -165,7 +165,8 @@ fn home_removes_one_recent_file_or_clears_them_all() {
     h.get_by(|n| n.role() == egui::accesskit::Role::ListItem && n.label().is_some_and(|s| s.starts_with("first.pdf,"))).click_secondary();
     h.run_steps(2);
     h.get_by_label("Clear Recent Files").click();
-    h.run_steps(2);
+    // The menu delivers its action after closing; the next frame draws the empty list.
+    h.run_steps(3);
     assert!(h.state().recent.is_empty(), "Clear empties the list");
     h.get_by_label_contains("Files you open in PdfCraft appear here");
     assert!(h.query_by_label("Clear Recent Files").is_none(), "and goes away with nothing left to clear");
