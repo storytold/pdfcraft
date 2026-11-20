@@ -55,6 +55,7 @@ pub(crate) struct PageSelectTool<'a> {
     /// Whether `drag` ran in the active gesture: a plain single click without a drag clears the
     /// single-glyph press anchor on release, as production's text selection did.
     dragged: &'a mut bool,
+    column: bool,
 }
 
 impl<'a> PageSelectTool<'a> {
@@ -73,12 +74,13 @@ impl<'a> PageSelectTool<'a> {
         generation: u64,
         dragged: &'a mut bool,
     ) -> Self {
-        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation, cap_clicks: false, dragged }
+        Self { text: TextSelectTool::new(pages, texts, text), info, picks, xforms, generation, cap_clicks: false, dragged, column: false }
     }
 
     /// The Column Select tool is active.
     pub(crate) fn column(mut self, on: bool) -> Self {
         self.text = self.text.column(on);
+        self.column = on;
         self
     }
 
@@ -144,6 +146,9 @@ impl CanvasTool for PageSelectTool<'_> {
         if matches!(key, ToolKey::Cancel) && self.picks.held() {
             self.picks.let_go();
             return true;
+        }
+        if matches!(key, ToolKey::Cancel) && !self.column {
+            return false;
         }
         self.text.key(key, cx)
     }
