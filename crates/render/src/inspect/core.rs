@@ -2,8 +2,8 @@ use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
 use super::navigation::text_string;
 use super::{
-    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
-    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+    Arc, AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, Object, ObjectId, OnceCell, OpenError,
+    Structure, catch_unwind,
 };
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
@@ -15,38 +15,12 @@ pub(super) fn load_options(password: Option<&str>) -> LoadOptions {
     LoadOptions { password: password.map(str::to_owned), max_decompressed_size: Some(LOAD_STREAM_LIMIT), ..LoadOptions::default() }
 }
 
-/// Why the parser can't decrypt a document, in words: its error names (`UnsupportedAlgorithm`)
-/// aren't. A password the parser refuses is told apart by the callers.
-pub(crate) fn decryption_unsupported(e: DecryptionError) -> OpenError {
-    OpenError::Unsupported(
-        match e {
-            DecryptionError::UnsupportedAlgorithm => "the document is encrypted with a security handler or method PdfCraft can't decrypt",
-            DecryptionError::InvalidEncryption => "the document's encryption dictionary (/Encrypt) is invalid, so it can't be decrypted",
-            DecryptionError::MissingIDEntry => "the document is encrypted but has no file identifier (/ID), which its key is made from",
-            DecryptionError::PasswordProtected => "the document is protected by a password",
-        }
-        .into(),
-    )
-}
-
 /// Check that `bytes` still open as the same document: the parser reads them and the page
 /// count matches. Content-only edits skip the full [`inspect`] (seconds on very large files)
 /// but must still catch an edit that produced something the viewer cannot display, so the
 /// caller can roll it back. Never panics: parser crashes are caught and reported.
 pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes, password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => decryption_unsupported(other),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+    let pdf = crate::backend::open(bytes, password)?;
     let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
         .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
     if pages != expected {
@@ -58,19 +32,7 @@ pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize)
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
 /// password). Never panics: parser crashes are caught and reported.
 pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, OpenError> {
-    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes.clone(), password.unwrap_or(""))))
-        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
-        .map_err(|e| match e {
-            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
-                if password.is_some() {
-                    OpenError::WrongPassword
-                } else {
-                    OpenError::NeedsPassword
-                }
-            }
-            LoadPdfError::Decryption(other) => decryption_unsupported(other),
-            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
-        })?;
+    let pdf = crate::backend::open(bytes.clone(), password)?;
     let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
     let pages = catch_unwind(AssertUnwindSafe(|| {
         let mut out = Vec::new();
@@ -78,10 +40,10 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
             let (w, h) = page.render_dimensions();
             let c = page.intersected_crop_box();
             let rotation = match page.rotation() {
-                hayro::hayro_syntax::page::Rotation::None => 0,
-                hayro::hayro_syntax::page::Rotation::Horizontal => 90,
-                hayro::hayro_syntax::page::Rotation::Flipped => 180,
-                hayro::hayro_syntax::page::Rotation::FlippedHorizontal => 270,
+                craft_pdf::syntax::page::Rotation::None => 0,
+                craft_pdf::syntax::page::Rotation::Horizontal => 90,
+                craft_pdf::syntax::page::Rotation::Flipped => 180,
+                craft_pdf::syntax::page::Rotation::FlippedHorizontal => 270,
             };
             let crop = [c.x0 as f32, c.y0 as f32, c.x1 as f32, c.y1 as f32];
             // Degenerate boxes still get a usable placeholder size so layout never divides by zero.
