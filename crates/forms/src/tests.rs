@@ -4394,6 +4394,132 @@ fn document_scripts_read_each_name_tree_node_once() {
 }
 
 #[test]
+fn detection_names_check_boxes_from_the_nearer_neighbouring_label() {
+    use crate::detect::*;
+    let w = |t: &str, x0: f64, y0: f64, x1: f64| Word { text: t.into(), rect: [x0, y0, x1, y0 + 10.0] };
+    let names_of = |words: &[Word], boxes: &[[f64; 4]]| -> Vec<String> {
+        detect(words, &Shapes { boxes: boxes.to_vec(), rules: Vec::new() }, &[], &[])
+            .into_iter()
+            .map(|c| {
+                assert_eq!(c.kind, Kind::CheckBox);
+                c.name
+            })
+            .collect()
+    };
+
+    // #2943: "Monsieur [box]   Madame [box]" — each label ends ~4-5 pt before its box, while
+    // the next label begins 23 pt after the first box. Drawing order does not change the names.
+    let french_words = [w("Monsieur", 100.0, 532.0, 141.0), w("Madame", 180.0, 532.0, 218.0)];
+    let french_boxes = [[146.0, 532.0, 157.0, 542.0], [222.0, 532.0, 233.0, 542.0]];
+    assert_eq!(names_of(&french_words, &french_boxes), ["Monsieur", "Madame"]);
+    assert_eq!(names_of(&french_words, &[french_boxes[1], french_boxes[0]]), ["Monsieur", "Madame"]);
+
+    // Two filers on the same form ("Monsieur [ ] Madame [ ]" repeated) number the second pair.
+    let two_filers_words =
+        [w("Monsieur", 100.0, 532.0, 141.0), w("Madame", 180.0, 532.0, 218.0), w("Monsieur", 320.0, 532.0, 361.0), w("Madame", 400.0, 532.0, 438.0)];
+    let two_filers_boxes = [[146.0, 532.0, 157.0, 542.0], [222.0, 532.0, 233.0, 542.0], [366.0, 532.0, 377.0, 542.0], [442.0, 532.0, 453.0, 542.0]];
+    assert_eq!(names_of(&two_filers_words, &two_filers_boxes), ["Monsieur", "Madame", "Monsieur2", "Madame2"]);
+
+    // Even with equal 5 pt gaps ("Label [ ] Label [ ]" vs "[ ] Label [ ] Label"), each box pairs
+    // with its own neighbour rather than leaving an outer box or label orphaned.
+    let tight_left_words = [w("Monsieur", 100.0, 400.0, 140.0), w("Madame", 160.0, 400.0, 200.0)];
+    let tight_left_boxes = [[145.0, 400.0, 155.0, 410.0], [205.0, 400.0, 215.0, 410.0]];
+    assert_eq!(names_of(&tight_left_words, &tight_left_boxes), ["Monsieur", "Madame"]);
+
+    let tight_right_words = [w("Monsieur", 115.0, 400.0, 155.0), w("Madame", 175.0, 400.0, 215.0)];
+    let tight_right_boxes = [[100.0, 400.0, 110.0, 410.0], [160.0, 400.0, 170.0, 410.0]];
+    assert_eq!(names_of(&tight_right_words, &tight_right_boxes), ["Monsieur", "Madame"]);
+
+    // An unlabelled box does not steal a label that sits closer to the adjacent box.
+    assert_eq!(names_of(&[w("Madame", 180.0, 532.0, 218.0)], &french_boxes), ["Check Box1", "Madame"]);
+    assert_eq!(
+        names_of(&[w("Monsieur", 115.0, 400.0, 155.0)], &[[100.0, 400.0, 110.0, 410.0], [178.0, 400.0, 188.0, 410.0]]),
+        ["Monsieur", "Check Box1"]
+    );
+
+    // Deliberate ambiguity: "[ ] 4pt Yes 3pt [ ] No" gives Yes to the closer box.
+    assert_eq!(
+        names_of(&[w("Yes", 114.0, 400.0, 134.0), w("No", 151.0, 400.0, 166.0)], &[[100.0, 400.0, 110.0, 410.0], [137.0, 400.0, 147.0, 410.0]]),
+        ["Check Box1", "Yes"]
+    );
+
+    // A row heading ending with a colon ("Status: [ ] Single [ ] Married" or French
+    // "Civilité : Monsieur [ ] Madame [ ]") does not beat or merge into the option label,
+    // while a standalone "Married: [ ]" or "Date of birth : [ ]" still uses its prompt.
+    let prompt_words = [w("Status:", 50.0, 300.0, 96.0), w("Single", 115.0, 300.0, 145.0), w("Married", 185.0, 300.0, 225.0)];
+    let prompt_boxes = [[100.0, 300.0, 110.0, 310.0], [170.0, 300.0, 180.0, 310.0]];
+    assert_eq!(names_of(&prompt_words, &prompt_boxes), ["Single", "Married"]);
+    let civilite_words =
+        [w("Civilité", 30.0, 532.0, 72.0), w(":", 75.0, 532.0, 78.0), w("Monsieur", 100.0, 532.0, 141.0), w("Madame", 180.0, 532.0, 218.0)];
+    assert_eq!(names_of(&civilite_words, &french_boxes), ["Monsieur", "Madame"]);
+    assert_eq!(names_of(&[w("Married:", 50.0, 300.0, 95.0)], &[[100.0, 300.0, 110.0, 310.0]]), ["Married"]);
+    assert_eq!(
+        names_of(
+            &[w("Date", 30.0, 300.0, 52.0), w("of", 55.0, 300.0, 65.0), w("birth", 68.0, 300.0, 90.0), w(":", 92.0, 300.0, 95.0)],
+            &[[100.0, 300.0, 110.0, 310.0]]
+        ),
+        ["Date of birth"]
+    );
+
+    // "[ ] Oui   Non [ ]" with an 18 pt gap between "Oui" and "Non" splits the two labels
+    // between their respective boxes instead of merging "Oui Non".
+    let mixed_words = [w("Oui", 115.0, 300.0, 135.0), w("Non", 153.0, 300.0, 175.0)];
+    let mixed_boxes = [[100.0, 300.0, 110.0, 310.0], [180.0, 300.0, 190.0, 310.0]];
+    assert_eq!(names_of(&mixed_words, &mixed_boxes), ["Oui", "Non"]);
+
+    // An existing check-box widget still claims its own label so a neighbouring unlabelled box
+    // does not steal it.
+    let existing = [[100.0, 400.0, 110.0, 410.0]];
+    let remaining =
+        detect(&[w("Monsieur", 115.0, 400.0, 155.0)], &Shapes { boxes: vec![[178.0, 400.0, 188.0, 410.0]], rules: Vec::new() }, &existing, &[]);
+    assert_eq!(remaining.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Check Box1"]);
+
+    // A stray punctuation token right after the first box does not pull the next box's label in.
+    assert_eq!(names_of(&[w(".", 158.0, 532.0, 160.0), w("Madame", 180.0, 532.0, 218.0)], &french_boxes), ["Check Box1", "Madame"]);
+}
+
+/// A hostile vector page can contain arbitrarily many small squares; detection must not run
+/// pairwise comb/overlap/neighbor work on all of them, nor cubic default-name lookup.
+#[test]
+fn detection_bounds_many_small_squares_before_pairwise_work() {
+    use crate::detect::*;
+    let boxes = (0..MAX_DETECTION_BOXES * 50)
+        .map(|i| {
+            let x = (i % 100) as f64 * 30.0;
+            let y = (i / 100) as f64 * 30.0;
+            [x, y, x + 10.0, y + 10.0]
+        })
+        .collect();
+    let shapes = Shapes { boxes, rules: Vec::new() };
+    let found = detect(&[], &shapes, &[], &["Check Box1".into(), "Check Box3".into()]);
+    assert_eq!(found.len(), MAX_DETECTION_BOXES);
+    assert!(found.iter().all(|c| c.kind == Kind::CheckBox));
+    assert_eq!(found.first().unwrap().name, "Check Box2");
+    assert_eq!(found.get(1).unwrap().name, "Check Box4");
+    assert_eq!(found.last().unwrap().name, format!("Check Box{}", MAX_DETECTION_BOXES + 2));
+    assert_eq!(found.iter().map(|c| &c.name).collect::<std::collections::HashSet<_>>().len(), found.len());
+    let prefix = Shapes { boxes: shapes.boxes.iter().take(MAX_DETECTION_BOXES).copied().collect(), rules: Vec::new() };
+    assert_eq!(found, detect(&[], &prefix, &[], &["Check Box1".into(), "Check Box3".into()]));
+}
+
+#[test]
+fn detection_box_budget_counts_rejected_inputs_and_keeps_existing_exclusions() {
+    use crate::detect::*;
+    let first = [0.0, 0.0, 10.0, 10.0];
+    let last = [30.0, 0.0, 40.0, 10.0];
+    // The final input at the limit is included; the next is not, even if earlier inputs are
+    // duplicates. A later input higher on the page stays outside the budget despite reading first.
+    let mut boxes = vec![first; MAX_DETECTION_BOXES - 1];
+    boxes.push(last);
+    boxes.push([60.0, 30.0, 70.0, 40.0]);
+    let shapes = Shapes { boxes, rules: Vec::new() };
+    assert_eq!(detect(&[], &shapes, &[], &[]).iter().map(|c| c.rect).collect::<Vec<_>>(), [first, last]);
+    let mut existing = vec![[90.0, 0.0, 100.0, 10.0]; MAX_DETECTION_BOXES];
+    existing.push(last);
+    assert_eq!(detect(&[], &shapes, &existing, &[]).iter().map(|c| c.rect).collect::<Vec<_>>(), [first]);
+}
+
+#[test]
 fn name_tree_nodes_sharing_one_long_kids_array_queue_it_a_bounded_number_of_times() {
     // 10,000 nodes share one /Kids array of 210,001 entries: the leaf, every node, and the leaf
     // 200,000 times more. Queuing that array once per node would hold two billion entries.
@@ -6175,7 +6301,8 @@ fn set_values_reads_the_form_once_not_per_value() {
     let before = form_reads();
     assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
     let reads = form_reads() - before;
-    assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
+    // Filling starts from the reading the check above made, nothing having changed since.
+    assert_eq!(reads, 2, "one when f0 comes again, one to recalculate");
 }
 
 /// Redrawing every field of a large form reads the form once, not once per field: a laid out XFA
@@ -6204,6 +6331,45 @@ fn redraw_fields_reads_the_form_once_however_many_fields_it_holds() {
         assert!((1..n).all(|i| has_ap(&format!("f{i}"))), "{n} fields");
         assert!(ap(&doc, &field(&all, &format!("f{}", n - 1)).widgets[0]).contains(&format!("(v{})", n - 1)));
     }
+}
+
+/// The fields of a document that has not changed since they were last read are not read again,
+/// and any change, a clone's state or another document reads afresh: a form edit reads them in
+/// several steps, most with nothing changed in between.
+#[test]
+fn fields_are_read_again_only_after_the_document_changes() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 10 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (old) /Rect [50 10 250 30] /P 3 0 R >>".into(),
+    ];
+    let value = |doc: &Document| field(&fields(doc), "name").value.clone();
+    let mut doc = document(&objs);
+    let before = form_reads();
+    assert_eq!(value(&doc), ["old"]);
+    assert_eq!(value(&doc), ["old"]);
+    assert_eq!(fields_with_adopted(&doc).items, fields(&doc));
+    assert_eq!(form_reads() - before, 1, "nothing changed: read once");
+    let unchanged = doc.clone();
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"V".to_vec(), Object::String(PdfString::text("new")))).unwrap();
+    let before = form_reads();
+    assert_eq!(value(&doc), ["new"], "an edit is read");
+    assert_eq!(value(&unchanged), ["old"], "a copy kept from before it is read as it is");
+    assert_eq!(value(&doc), ["new"]);
+    assert_eq!(form_reads() - before, 3);
+    // An object another field's value refers to counts as a change too.
+    let r = doc.add(Object::String(PdfString::text("indirect")));
+    doc.update_dict(ObjRef::new(5, 0), |d| d.set(b"V".to_vec(), Object::Ref(r))).unwrap();
+    assert_eq!(value(&doc), ["indirect"]);
+    doc.set(r, Object::String(PdfString::text("changed in place")));
+    assert_eq!(value(&doc), ["changed in place"]);
+    // Another document with the same bytes is read, not given this one's fields.
+    let other = document(&objs);
+    let before = form_reads();
+    assert_eq!(value(&other), ["old"]);
+    assert_eq!(form_reads() - before, 1);
 }
 
 /// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and

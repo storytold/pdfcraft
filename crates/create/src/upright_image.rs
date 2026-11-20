@@ -3,11 +3,8 @@
 //! crate (pages made from images, stamps, added images, replacements) goes through here first.
 
 use std::borrow::Cow;
-use std::io::Cursor;
 
-use image::codecs::jpeg::{JpegEncoder, PixelDensity, PixelDensityUnit};
-use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use craft_image_codecs::jpeg_probe::{JpegVisit, jfif_dpi, walk_jpeg_segments};
 
 /// Quality of a re-encoded JPEG (the camera's own is rarely higher).
 const QUALITY: u8 = 92;
@@ -18,6 +15,32 @@ const MAX_PIXELS: u64 = 64 << 20;
 thread_local! {
     /// How many JPEGs [`turned`] handed to the decoder on this thread.
     static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Reads the EXIF Orientation tag (1..=8) from APP1 Exif metadata in a JPEG, defaulting to 1.
+pub fn jpeg_exif_orientation(bytes: &[u8]) -> u16 {
+    let mut orientation = 1;
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
+        if marker == 0xE1
+            && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
+        {
+            if let Some(hdr_order) = tiff.get(0..2)
+                && let Some(order) = match hdr_order {
+                    b"II" => Some(craft_tiff::ByteOrder::Little),
+                    b"MM" => Some(craft_tiff::ByteOrder::Big),
+                    _ => None,
+                }
+                && let Some(off) = order.read_u32(tiff, 4)
+                && let Ok((ifd, _)) = craft_tiff::parse_ifd_at(tiff, u64::from(off), order, 0, false, &craft_tiff::ParseOptions::default())
+                && let Some(o) = ifd.u16(craft_tiff::tags::ORIENTATION)
+            {
+                orientation = o;
+            }
+            return Ok(JpegVisit::Stop);
+        }
+        Ok(JpegVisit::Continue)
+    });
+    orientation
 }
 
 /// A JPEG whose EXIF Orientation is not "as stored" has its pixels turned (and re-encoded);
@@ -33,32 +56,25 @@ fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
     if !bytes.starts_with(&[0xFF, 0xD8]) || !decodable_metadata(bytes) {
         return None;
     }
-    #[cfg(test)]
-    DECODES.with(|c| c.set(c.get().saturating_add(1)));
-    let mut decoder = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg).into_decoder().ok()?;
-    let orientation = decoder.orientation().ok()?;
-    let (w, h) = decoder.dimensions();
-    if orientation == Orientation::NoTransforms || u64::from(w) * u64::from(h) > MAX_PIXELS {
+    let orientation = jpeg_exif_orientation(bytes);
+    if !matches!(orientation, 2..=8) {
         return None;
     }
-    let mut image = DynamicImage::from_decoder(decoder).ok()?;
-    image.apply_orientation(orientation);
-    let mut out = Vec::new();
-    {
-        let mut encoder = JpegEncoder::new_with_quality(&mut out, QUALITY);
-        // Keep the resolution, which sets the image's natural size on the page.
-        if let Some(mut density) = jfif_density(bytes) {
-            if matches!(orientation, Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH) {
-                density.density = (density.density.1, density.density.0);
-            }
-            encoder.set_pixel_density(density);
+    #[cfg(test)]
+    DECODES.with(|c| c.set(c.get().saturating_add(1)));
+    let opts = craft_image_codecs::DecodeOptions {
+        keep_orientation: false,
+        limits: craft_image_codecs::Limits { max_pixels: MAX_PIXELS, ..Default::default() },
+    };
+    let mut img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, bytes, &opts).ok()?;
+    if let Some((mut dx, mut dy)) = jfif_density_dpi(bytes) {
+        if matches!(orientation, 5..=8) {
+            (dx, dy) = (dy, dx);
         }
-        match &image {
-            DynamicImage::ImageLuma8(gray) => encoder.encode_image(gray).ok()?,
-            _ => encoder.encode_image(&image.to_rgb8()).ok()?,
-        }
+        img.meta.dpi = Some((dx, dy));
     }
-    Some(out)
+    let enc_opts = craft_image_codecs::EncodeOptions { jpeg_quality: QUALITY, embed_metadata: true, ..Default::default() };
+    craft_image_codecs::encode(&img, craft_image_codecs::Format::Jpeg, &enc_opts).ok()
 }
 
 /// Most Extended XMP chunks a JPEG handed to the decoder may carry (64 MB of metadata). The
@@ -99,57 +115,26 @@ pub(crate) fn without_extended_xmp(bytes: &[u8]) -> Vec<u8> {
 /// Calls `f` with the byte range of each Extended XMP chunk (APP1 segment) before the image data.
 fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
     const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
-    let mut i = 2usize;
-    while let Some(&byte) = bytes.get(i) {
-        // Stray bytes between segments, which the decoder skips too.
-        if byte != 0xFF {
-            i += 1;
-            continue;
+    let _ = walk_jpeg_segments(bytes, |marker, span, seg| {
+        if marker == 0xE1 && seg.starts_with(PREFIX) {
+            f(span);
         }
-        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
-        match marker {
-            // Fill bytes before a marker.
-            0xFF => i += 1,
-            // Markers without a segment.
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            // The image data starts (or ends): no headers after it.
-            0xDA | 0xD9 => break,
-            _ => {
-                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
-                let len = usize::from(u16::from_be_bytes([hi, lo]));
-                let end = i.saturating_add(2).saturating_add(len.max(2));
-                // The prefix must start the APP1 segment's own payload: a zero-length header
-                // followed by prefix bytes is not a chunk.
-                if marker == 0xE1 && bytes.get(i.saturating_add(4)..end.min(bytes.len())).is_some_and(|seg| seg.starts_with(PREFIX)) {
-                    f(i..end.min(bytes.len()));
-                }
-                i = end;
-            }
-        }
-    }
+        Ok(JpegVisit::Continue)
+    });
 }
 
-/// The resolution in a JFIF header, if the file has one in inches or centimetres.
-fn jfif_density(bytes: &[u8]) -> Option<PixelDensity> {
-    let mut i = 2usize;
-    while let Some(&[0xFF, marker, hi, lo]) = bytes.get(i..i.saturating_add(4)) {
-        let len = usize::from(u16::from_be_bytes([hi, lo]));
-        let seg = bytes.get(i + 4..i + 2 + len)?;
-        if marker == 0xE0 && seg.starts_with(b"JFIF\0") {
-            let &[unit, x0, x1, y0, y1] = seg.get(7..12)? else { return None };
-            let unit = match unit {
-                1 => PixelDensityUnit::Inches,
-                2 => PixelDensityUnit::Centimeters,
-                _ => return None,
-            };
-            return Some(PixelDensity { density: (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1])), unit });
+fn jfif_density_dpi(bytes: &[u8]) -> Option<(f32, f32)> {
+    let mut dpi = None;
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
+        if marker == 0xE0
+            && let Some((x, y)) = jfif_dpi(seg)
+        {
+            dpi = Some((x as f32, y as f32));
+            return Ok(JpegVisit::Stop);
         }
-        if marker == 0xDA {
-            return None;
-        }
-        i += 2 + len;
-    }
-    None
+        Ok(JpegVisit::Continue)
+    });
+    dpi
 }
 
 #[cfg(test)]
@@ -162,9 +147,9 @@ pub(crate) mod tests {
         let photo = phone_jpeg(6, 144);
         let turned = upright(&photo);
         assert!(matches!(turned, Cow::Owned(_)));
-        let decoded = image::load_from_memory(&turned).unwrap();
+        let decoded = craft_image_codecs::decode(&turned).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (20, 60));
-        assert_eq!(jfif_density(&turned), Some(PixelDensity { density: (72, 144), unit: PixelDensityUnit::Inches }));
+        assert_eq!(jfif_density_dpi(&turned), Some((72.0, 144.0)));
         let stored = phone_jpeg(1, 72);
         assert!(matches!(upright(&stored), Cow::Borrowed(_)));
         assert!(matches!(upright(b"\x89PNG\r\n\x1a\n"), Cow::Borrowed(_)));
