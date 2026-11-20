@@ -29,6 +29,7 @@ mod links;
 pub mod mcp;
 mod measure;
 mod model3d;
+mod model_pick;
 mod model_render;
 mod print_colour;
 mod printing;
