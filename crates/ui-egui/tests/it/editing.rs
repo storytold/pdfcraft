@@ -2262,29 +2262,39 @@ fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
         app.set_option(&egui::Context::default(), "organize", "on").unwrap();
         app.set_option(&egui::Context::default(), "grid-zoom", "300").unwrap();
     });
-    // The 200 × 300 fixture fits by height; keep its aspect ratio instead of stretching
-    // it to the full cell width. Request enough pixels for that actual preview width.
-    let drawn = 194.0 * 3.0 * (200.0 / 300.0) * h.ctx.pixels_per_point();
-    // The one page's grid texture is width × 1.5 width × 4 bytes (RGBA, the fixture's 2:3), the only
-    // texture in Organize: its width is read back from the view's texture statistics.
-    let sharp = |h: &Harness<'static, PdfCraftApp>, _page: usize| {
-        let bytes = h.state().views[0].textures.bytes;
-        (bytes > 0).then(|| ((bytes as f64) / 6.0).sqrt() as u32)
+    // The grid keeps each page picture in the shared thumbnail store.
+    let picture = |h: &Harness<'static, PdfCraftApp>, page: usize| {
+        use craft::ui::primitives::textures::{Revision, ThumbnailOptions, Thumbnails};
+        Thumbnails::<usize>::in_context(&h.ctx, "page-thumbnails", ThumbnailOptions::new()).cache().state(&h.ctx, &page, Revision::of(&())).shown()
+    };
+    let drawn = |h: &Harness<'static, PdfCraftApp>| {
+        let texture = picture(h, 0)?;
+        h.output().shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id => Some(mesh.calc_bounds().width() * h.ctx.pixels_per_point()),
+            _ => None,
+        })
     };
     for _ in 0..200 {
-        if sharp(&h, 0).is_some_and(|w| w as f32 >= drawn * 0.9) {
+        if picture(&h, 0).zip(drawn(&h)).is_some_and(|(texture, width)| texture.size.width as f32 >= width * 0.9) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
         h.run_steps(1);
     }
-    let width = sharp(&h, 0).expect("the first page has a sharp render");
+    let width = picture(&h, 0).expect("the first page has a sharp render").size.width;
+    let drawn = drawn(&h).expect("the first page picture is drawn");
     assert!((drawn * 0.9..=drawn * 1.6).contains(&(width as f32)), "{width} for {drawn}");
-    assert!(sharp(&h, 399).is_none(), "pages out of view have none");
-    // Zoomed out again, thumbnails are enough and the sharp renders are dropped.
+    assert!(picture(&h, 399).is_none(), "pages out of view have none");
+    // Zooming out replaces the sharp picture with a smaller thumbnail.
     h.set_option("grid-zoom", "50").unwrap();
-    h.run_steps(3);
-    assert!(sharp(&h, 0).is_none(), "page 0 still has a sharp render: {:?}", sharp(&h, 0));
+    for _ in 0..200 {
+        h.run_steps(1);
+        if picture(&h, 0).is_some_and(|small| small.size.width < width) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(picture(&h, 0).is_some_and(|small| small.size.width < width), "page 0 still has a sharp render: {:?}", picture(&h, 0));
 }
 
 #[test]
@@ -5062,7 +5072,7 @@ fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
 
     // Click Superscript: "1" becomes "¹"
     assert!(h.query_all_by_label("Format text").next().is_some(), "the Format text section shows");
-    let btn = h.get_by_label("Superscript");
+    let btn = h.get_by_role_and_label(Role::Button, "Superscript");
     btn.click();
     h.run_steps(4);
 
@@ -5078,7 +5088,7 @@ fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
     h.run_steps(1);
 
     // Click Superscript again: "¹" toggles back to "1"
-    h.get_by_label("Superscript").click();
+    h.get_by_role_and_label(Role::Button, "Superscript").click();
     h.run_steps(4);
     let s2 = h.state();
     let doc2 = s2.session.get(s2.views[0].id).unwrap();
@@ -5092,11 +5102,11 @@ fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
     h.state_mut().views[0].session.content.draft = Some(draft);
     h.run_steps(2);
 
-    h.get_by_label("Subscript").click();
+    h.get_by_role_and_label(Role::Button, "Subscript").click();
     h.run_steps(2);
     assert_eq!(h.state().views[0].session.content.draft.as_ref().map(|d| d.text.as_str()), Some("H₂O"));
 
-    h.get_by_label("Subscript").click();
+    h.get_by_role_and_label(Role::Button, "Subscript").click();
     h.run_steps(2);
     assert_eq!(h.state().views[0].session.content.draft.as_ref().map(|d| d.text.as_str()), Some("H2O"));
 }
@@ -6502,6 +6512,11 @@ fn the_caret_on_a_small_row_is_as_tall_as_that_row() {
         .shapes
         .iter()
         .find_map(|s| match &s.shape {
+            egui::Shape::Path(path) if path.points.len() == 2 => {
+                let [a, b] = [path.points[0], path.points[1]];
+                ((a.x - b.x).abs() < 0.01 && (left..right).contains(&a.x) && a.y.min(b.y) < middle && a.y.max(b.y) > middle)
+                    .then_some((b.y - a.y).abs())
+            }
             egui::Shape::LineSegment { points: [a, b], .. }
                 if (a.x - b.x).abs() < 0.01 && (left..right).contains(&a.x) && a.y.min(b.y) < middle && a.y.max(b.y) > middle =>
             {

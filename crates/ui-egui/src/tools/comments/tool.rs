@@ -51,6 +51,7 @@ pub(crate) struct CommentsTool<'a> {
     allowed: bool,
     hidden: bool,
     caret: Option<CaretSnap>,
+    image_aspect: Option<(craft::review::AnnotationId, f64)>,
 }
 
 impl<'a> CommentsTool<'a> {
@@ -78,6 +79,7 @@ impl<'a> CommentsTool<'a> {
             allowed: false,
             hidden: false,
             caret: None,
+            image_aspect: None,
         }
     }
 
@@ -92,6 +94,30 @@ impl<'a> CommentsTool<'a> {
     pub(crate) fn settings(mut self, quick: QuickTool, prefs: &'a CommentPrefs, allowed: bool, hidden: bool) -> Self {
         (self.quick, self.prefs, self.allowed, self.hidden) = (quick, Some(prefs), allowed, hidden);
         self
+    }
+
+    /// The embedded image's proportions, in the displayed view's axes.
+    pub(crate) fn image_aspect(mut self, aspect: Option<(usize, usize, f32)>) -> Self {
+        self.image_aspect = aspect.map(|(page, index, ratio)| {
+            let ratio = if self.map.rotation.is_multiple_of(180) { ratio } else { ratio.recip() };
+            (bridge::id_of(page, index), f64::from(ratio))
+        });
+        self
+    }
+
+    fn annotations(&self, page: usize) -> Vec<Marked> {
+        bridge::annotations(self.map.info, &self.map, self.quick, self.allowed)
+            .into_iter()
+            .filter(|a| a.page == page)
+            .map(|mut a| {
+                if let Some((id, ratio)) = self.image_aspect
+                    && a.id == id
+                {
+                    a.aspect = Some(ratio);
+                }
+                a
+            })
+            .collect()
     }
 
     /// Where a paste click's edit and notice go.
@@ -177,7 +203,7 @@ impl CanvasTool for CommentsTool<'_> {
         }
         let page = self.annotate.page;
         self.annotate.tool = annotation_tool(self.quick);
-        set_page(self.annotate, page, &self.map, self.quick, self.allowed, self.hidden);
+        self.annotate.annotations = if self.hidden { Vec::new() } else { self.annotations(page) };
         let mut eraser_width = 2.0;
         if let (Some(prefs), QuickTool::Comment(comment)) = (self.prefs, self.quick) {
             let style = prefs.style(comment);
@@ -245,7 +271,8 @@ impl CanvasTool for CommentsTool<'_> {
             && let Some(page) = self.page_under(pointer.pos)
             && page != self.annotate.page
         {
-            set_page(self.annotate, page, &self.map, self.quick, self.allowed, self.hidden);
+            self.annotate.page = page;
+            self.annotate.annotations = if self.hidden { Vec::new() } else { self.annotations(page) };
         }
         let action = self.annotate.press(pointer, cx);
         *self.pressed = action != ToolAction::Ignored;
