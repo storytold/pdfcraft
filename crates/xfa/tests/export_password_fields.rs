@@ -91,7 +91,7 @@ fn xfa_export_data_scans_the_same_wrapped_packet_it_exports() {
         let exported = export_data(&doc, xdp, "form.pdf").unwrap();
         assert!(!exported.contains("leaf-secret") && !exported.contains("other-secret"), "{exported}");
         assert!(exported.contains("<user>Ada</user>") && exported.contains("<preset>0000</preset>"), "{exported}");
-        assert!(roxmltree::Document::parse(&exported).is_ok());
+        assert!(craft_xml::parse(exported.as_bytes()).is_ok());
     }
     assert!(pdfcraft_xfa::read_packets(&doc).unwrap().unwrap().xdp.contains("leaf-secret"), "export does not mutate the open form");
 
@@ -139,12 +139,16 @@ fn xfa_export_data_rejects_an_unreadable_password_template() {
 #[test]
 fn xfa_export_data_scans_wrapped_array_packets() {
     let text = password_export_document("leaf-secret", "other-secret");
-    let parsed = roxmltree::Document::parse(&text).unwrap();
-    let template = parsed.descendants().find(|n| n.has_tag_name(("http://www.xfa.org/schema/xfa-template/3.3/", "template"))).unwrap();
-    let datasets = parsed.descendants().find(|n| n.tag_name().name() == "datasets").unwrap();
+    let slice_packet = |open: &str, close: &str| {
+        let start = text.find(open).unwrap();
+        let end = text[start..].find(close).unwrap() + close.len();
+        &text[start..start + end]
+    };
+    let template_xml = slice_packet("<template ", "</template>");
+    let datasets_xml = slice_packet("<xfa:datasets ", "</xfa:datasets>");
     let mut doc = Document::open(Arc::new(xfa_shell(&text))).unwrap();
-    let template = doc.add(Object::Stream(Stream::from_raw(Dict::new(), text[template.range()].as_bytes().to_vec())));
-    let data = format!("<config/>{}", &text[datasets.range()]);
+    let template = doc.add(Object::Stream(Stream::from_raw(Dict::new(), template_xml.as_bytes().to_vec())));
+    let data = format!("<config/>{datasets_xml}");
     let data = doc.add(Object::Stream(Stream::from_raw(Dict::new(), data.into_bytes())));
     let root = doc.root().unwrap();
     let mut catalog = doc.get(root).as_dict().unwrap().clone();
@@ -273,9 +277,9 @@ fn xfa_export_data_rejects_password_instance_budget_truncation() {
 
 #[test]
 fn xfa_export_data_rejects_static_password_depth_truncation() {
-    for depth in [32, 33] {
+    for depth in [64, 65] {
         let doc = static_password_document("<form><pin>boundary-secret</pin></form>", "form[0].pin[0]", depth);
-        assert_password_scan_boundary(&doc, depth == 32);
+        assert_password_scan_boundary(&doc, depth == 64);
     }
 }
 

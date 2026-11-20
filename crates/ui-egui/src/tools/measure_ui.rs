@@ -331,7 +331,7 @@ pub(crate) fn page_input(
     }
     // Keys belong to a focused text field (the label, unit or viewport name) when there is one.
     let typing = ui.ctx().egui_wants_keyboard_input();
-    if !typing && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if !typing && cx.keys.pressed(ui.ctx(), egui::Key::Escape) {
         state.cancel();
     }
     let screen = |p: Point| {
@@ -391,10 +391,10 @@ pub(crate) fn page_input(
     }
     if state.page == Some(page) && !state.points.is_empty() {
         let double = clicks.double && takes_clicks(state);
-        if (double || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
+        if (double || !typing && cx.keys.pressed(ui.ctx(), egui::Key::Enter)) && matches!(tool, Tool::Perimeter | Tool::Area) {
             finish(state, &mut view.pending_edit, doc, page, tool, author, units);
         }
-        if !typing && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
+        if !typing && cx.keys.pressed(ui.ctx(), egui::Key::Backspace) {
             state.points.pop();
         }
         let mut points = state.points.clone();
