@@ -199,9 +199,7 @@ fn threads(doc: &pdfcraft_engine::Document, prefs: &CommentPrefs) -> (Vec<Commen
         let key = (a.page, a.index);
         let id = thread_id(key.0, key.1);
         let replies = replies.get(&key).map(Vec::as_slice).unwrap_or(&[]);
-        // The framework uses the thread's lock for the root menu; only replies consult the
-        // per-message deletion flag. Avoid a document-wide dependency scan for every root.
-        let mut messages = vec![message(a, false)];
+        let mut messages = vec![message(a, doc.annotation_deletable(a.page, a.index))];
         let mut members = vec![key];
         for r in replies {
             messages.push(message(r, doc.annotation_deletable(r.page, r.index)));
