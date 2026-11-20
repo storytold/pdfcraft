@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use craft_pdf::syntax::{DecryptionError, LoadPdfError, Pdf};
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use pdfcraft_cos::page_labels::{
     MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, alpha, roman,

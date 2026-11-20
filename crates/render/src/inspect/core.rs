@@ -2,8 +2,8 @@ use super::annotations::{FieldWalk, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{Attachment, AttachmentSource, PageInfo, Portfolio, PortfolioView, Xfa};
 use super::navigation::text_string;
 use super::{
-    Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
-    ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
+    Arc, AssertUnwindSafe, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, Object, ObjectId, OnceCell, OpenError,
+    Structure, catch_unwind,
 };
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
