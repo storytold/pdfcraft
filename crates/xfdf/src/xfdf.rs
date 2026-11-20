@@ -793,7 +793,7 @@ fn annot_from_xml(node: &craft_xml::El, ns: &[(String, String)], subtype: &str, 
     if let Some(c) = node.attr("interior-color").and_then(parse_hex) {
         d.set(b"IC".to_vec(), arr(&c));
     }
-    if let Some(o) = node.attr("opacity").and_then(|o| o.parse::<f64>().ok()) {
+    if let Some(o) = node.attr("opacity").and_then(|o| o.parse::<f64>().ok()).filter(|o| o.is_finite()) {
         d.set(b"CA".to_vec(), Object::Real(o.clamp(0.0, 1.0)));
     }
     read_format(node, &mut d);
