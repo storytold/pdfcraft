@@ -1205,8 +1205,9 @@ fn shift_holds_new_lines_and_sides_level_or_plumb() {
     h.set_option("quick", "polyline").unwrap();
     click_pt(&mut h, (20.0, 20.0));
     shift(&mut h, true);
-    click_pt(&mut h, (90.0, 30.0));
-    click_pt(&mut h, (95.0, 80.0));
+    // Pointer events carry the modifier held at each press, as real input does.
+    click_pt_with(&mut h, (90.0, 30.0), egui::Modifiers::SHIFT);
+    click_pt_with(&mut h, (95.0, 80.0), egui::Modifiers::SHIFT);
     shift(&mut h, false);
     click_pt(&mut h, (130.0, 60.0));
     h.key_press(egui::Key::Enter);
