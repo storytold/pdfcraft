@@ -51,7 +51,17 @@ impl Automation {
     pub(crate) fn measurement_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let all = doc.measurements().map_err(failed)?;
-        let only = a.opt_int("page")?.map(|n| usize::try_from(n.max(1).saturating_sub(1)).unwrap_or(usize::MAX));
+        let only = match a.opt_int("page")? {
+            Some(n) => {
+                let n = u64::try_from(n).ok().filter(|n| *n >= 1).ok_or_else(|| ToolError::InvalidArgs("page must be 1 or more".into()))?;
+                let pages = doc.info.pages.len() as u64;
+                if n > pages {
+                    return Err(ToolError::InvalidArgs(format!("page {n} is out of range: the document has {pages} pages")));
+                }
+                Some((n - 1) as usize)
+            }
+            None => None,
+        };
         let measurements: Vec<Value> = all
             .measurements
             .iter()
@@ -128,6 +138,12 @@ impl Automation {
     pub(crate) fn measurement_snap(&self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let at = a.nums::<2>("at")?.ok_or_else(|| failed("snapping needs at"))?;
+        // Reject a bad tolerance before the page's geometry is extracted: it is the argument
+        // that decides how much of it is read.
+        let tolerance = a.opt_num("tolerance")?.unwrap_or(6.0);
+        if !tolerance.is_finite() || !(0.0..=1e9).contains(&tolerance) {
+            return Err(ToolError::InvalidArgs("tolerance must be finite, 0 or more, and no more than 1e9 points".into()));
+        }
         let [x, y] = self.doc(a)?.measurement_to_user(page, at).map_err(failed)?;
         let geometry = self.doc(a)?.measurement_paths(page).map_err(failed)?;
         let options = measure::snap::SnapOptions {
@@ -136,7 +152,6 @@ impl Automation {
             intersections: a.opt_bool("intersections")?.unwrap_or(true),
             paths: a.opt_bool("paths")?.unwrap_or(true),
         };
-        let tolerance = a.opt_num("tolerance")?.unwrap_or(6.0);
         let adjacent = self.doc(a)?.measurement_to_user(page, [at[0] + tolerance, at[1]]).map_err(failed)?;
         let tolerance = measure::distance([x, y], adjacent);
         let intersection_limited = options.intersections && geometry.intersection_limited([x, y], tolerance);
