@@ -65,6 +65,7 @@ pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale,
 /// PdfCraft patch: exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;
+pub use renderer::{device_clips, set_defer_clips};
 /// PdfCraft patch (27): exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_cmyk_band_pixels;

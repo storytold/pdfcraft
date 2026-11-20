@@ -637,6 +637,74 @@ pub fn set_skip_offscreen_paths(skip: bool) {
     SKIP_OFFSCREEN_PATHS.with(|s| s.set(skip));
 }
 
+thread_local! {
+    /// PdfCraft patch (33): whether rectangular clips wait until a draw needs them (see
+    /// [`PendingClip`]). Turned off only by PdfCraft's regression tests, which render with and
+    /// without waiting and compare.
+    static DEFER_CLIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// PdfCraft patch (33): clip paths the renders on this thread have pushed onto the drawing
+    /// context, for tests that check a page's cost by counting (see [`device_clips`]).
+    static DEVICE_CLIPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (33): exported for its regression tests (see [`DEFER_CLIPS`]).
+#[doc(hidden)]
+pub fn set_defer_clips(defer: bool) {
+    DEFER_CLIPS.with(|d| d.set(defer));
+}
+
+/// PdfCraft patch (33): exported for its regression tests (see [`DEVICE_CLIPS`]). The count only
+/// grows; a test takes the difference across a render.
+#[doc(hidden)]
+pub fn device_clips() -> u64 {
+    DEVICE_CLIPS.try_with(std::cell::Cell::get).unwrap_or_default()
+}
+
+/// PdfCraft patch (33): a clip the interpreter pushed. A rectangle along the device's axes waits
+/// (`on_device` false) until something is drawn that it would cut: a solid fill or stroke whose
+/// paint box ([`paint_box`]) lies inside it is drawn as it is, since the clip couldn't change a
+/// pixel of it. CAD exports wrap each object in a clip of its viewport, and applying each costs
+/// a pass over the clip: a made-up A1 sheet of 60,000 such objects drew in 3.4 s at 72 dpi with
+/// every clip applied, 0.6 s with them waiting.
+/// The clips on the device always come first in the stack, so a pop takes off the device's top
+/// clip exactly when the entry popped is on it. Any other clip, and anything other than a solid
+/// fill or stroke (images, glyph runs, groups, knockout, patterns and shadings), puts every
+/// waiting clip on the device first. A soft mask is drawing state, so it leaves them waiting.
+struct PendingClip {
+    /// In device space (the interpreter applies the CTM).
+    path: BezPath,
+    fill: FillRule,
+    /// The clip, when it is a rectangle along the device's axes.
+    rect: Option<Rect>,
+    on_device: bool,
+}
+
+/// PdfCraft patch (33): `path` as a rectangle along the axes, when it is exactly one: four
+/// distinct corners in order, each step along one axis, closed by `ClosePath` or by a last line
+/// back to the start (as the interpreter's `path_as_rect` reads one).
+fn axis_rect(path: &BezPath) -> Option<Rect> {
+    let els = path.elements();
+    let mut points: Vec<Point> = Vec::with_capacity(5);
+    for (i, el) in els.iter().enumerate() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) if i == 0 => points.push(p),
+            kurbo::PathEl::LineTo(p) if i > 0 => points.push(p),
+            kurbo::PathEl::ClosePath if i + 1 == els.len() => {}
+            _ => return None,
+        }
+    }
+    if points.len() == 5 && points.first() == points.last() {
+        points.pop();
+    }
+    let [a, b, c, d] = <[Point; 4]>::try_from(points).ok()?;
+    let ring = [a, b, c, d, a];
+    let steps_on_axes = ring.windows(2).all(|w| (w[0].x == w[1].x) != (w[0].y == w[1].y));
+    let distinct = a != c && b != d;
+    let r = Rect::from_points(a, c);
+    let finite = [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite());
+    (steps_on_axes && distinct && finite && r.width() > 0.0 && r.height() > 0.0).then_some(r)
+}
+
 /// PdfCraft patch (30): what the renders on this thread have drawn offscreen, for tests that check
 /// a page's cost by counting rather than by timing it (see [`offscreen_draws`]).
 #[doc(hidden)]
@@ -711,6 +779,12 @@ fn may_paint_canvas(
     width: u16,
     height: u16,
 ) -> bool {
+    paints_canvas(paint_box(path, transform, reach), width, height)
+}
+
+/// PdfCraft patch: the device box everything `path` paints lies in, drawn with `transform` and
+/// a paint reaching `reach` past it (see [`may_paint_canvas`]).
+fn paint_box(path: &BezPath, transform: Affine, reach: f64) -> Rect {
     let mut points = Rect::new(
         f64::INFINITY,
         f64::INFINITY,
@@ -734,10 +808,9 @@ fn may_paint_canvas(
         }
     }
     let grow = reach + DRAW_SLACK;
-    let device = transform
+    transform
         .transform_rect_bbox(points.inflate(grow, grow))
-        .inflate(2.0, 2.0);
-    paints_canvas(device, width, height)
+        .inflate(2.0, 2.0)
 }
 
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
@@ -838,6 +911,8 @@ pub fn set_cmyk_band_pixels(pixels: Option<u64>) {
 
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
+    /// PdfCraft patch (33): the clips pushed and not yet popped (see [`PendingClip`]).
+    clips: Vec<PendingClip>,
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped
     /// while rendering (the "reading colours" view setting).
     color_replacement: Option<ColorReplacement>,
@@ -998,6 +1073,7 @@ impl Renderer {
         preview: bool,
     ) -> Self {
         Self {
+            clips: Vec::new(),
             ctx: RenderContext::new_with(width, height, settings),
             color_replacement,
             in_annotations: false,
@@ -1063,7 +1139,7 @@ impl Renderer {
             },
         };
 
-        let reach = stroke_reach(&stroke);
+        let reach = stroke_reach(&stroke, Some(path));
         self.ctx.set_stroke(stroke);
         reach
     }
@@ -1099,6 +1175,7 @@ impl Renderer {
                 alpha_data.interpolate = true;
             }
             let mut renderer = Self {
+                clips: Vec::new(),
                 ctx: RenderContext::new_with(
                     self.ctx.width(),
                     self.ctx.height(),
@@ -1643,6 +1720,7 @@ impl Renderer {
             return cell;
         }
         let mut renderer = Self {
+            clips: Vec::new(),
             ctx: RenderContext::new_with(size.0, size.1, derive_settings(self.ctx.render_settings())),
             // PdfCraft patch: a pattern cell is painted as one artwork, so its content is never
             // remapped by the reading-colours setting.
@@ -1673,6 +1751,47 @@ impl Renderer {
             self.tiling_cells.insert(key, pix.clone());
         }
         pix
+    }
+
+    /// PdfCraft patch (33): put every waiting clip on the device, in order.
+    fn apply_clips(&mut self) {
+        self.apply_clips_through(self.clips.len());
+    }
+
+    /// PdfCraft patch (33): put the waiting clips below `end` on the device, in order. The ones on
+    /// it already come first, so they are skipped.
+    fn apply_clips_through(&mut self, end: usize) {
+        let Some(first) = self.clips.iter().position(|c| !c.on_device) else { return };
+        // Clips can go on in the middle of a draw that has set its own fill rule.
+        let draw_fill = *self.ctx.fill_rule();
+        for i in first..end.min(self.clips.len()) {
+            if let Some(c) = self.clips.get_mut(i) {
+                c.on_device = true;
+                let (path, fill) = (c.path.clone(), c.fill);
+                self.push_clip_path_inner(&path, fill);
+                let _ = DEVICE_CLIPS.try_with(|n| n.set(n.get().saturating_add(1)));
+            }
+        }
+        self.ctx.set_fill_rule(draw_fill);
+    }
+
+    /// PdfCraft patch (33): before a solid fill or stroke that paints within `device`, put on the
+    /// device the waiting clips it isn't wholly inside (and those below them).
+    fn clips_for(&mut self, device: Rect) {
+        let inside = |r: &Rect| device.x0 >= r.x0 && device.y0 >= r.y0 && device.x1 <= r.x1 && device.y1 <= r.y1;
+        let cuts = self.clips.iter().rposition(|c| !c.on_device && !c.rect.as_ref().is_some_and(inside));
+        if let Some(i) = cuts {
+            self.apply_clips_through(i + 1);
+        }
+    }
+
+    /// PdfCraft patch (33): get the clips ready for drawing `path` with `paint`: a solid colour
+    /// waits on the clips it falls inside, anything else has them all applied.
+    fn clips_for_path(&mut self, path: &BezPath, transform: Affine, reach: f64, paint: &Paint<'_>) {
+        match paint {
+            Paint::Color(_) => self.clips_for(paint_box(path, transform, reach)),
+            Paint::Pattern(_) => self.apply_clips(),
+        }
     }
 
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
@@ -1715,6 +1834,7 @@ impl Renderer {
         height: u16,
     ) -> Option<Pixmap> {
         let mut renderer = Self {
+            clips: Vec::new(),
             ctx: RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings())),
             color_replacement: None,
             in_annotations: self.in_annotations,
@@ -2015,7 +2135,7 @@ impl Renderer {
                         // device pixels: the most the transform stretches any direction (a skew
                         // stretches some further than either axis), times the reach.
                         let reach = if is_stroke {
-                            path_transform.spectral_norm() * stroke_reach(self.ctx.stroke())
+                            path_transform.spectral_norm() * stroke_reach(self.ctx.stroke(), None)
                         } else {
                             0.0
                         };
@@ -2131,6 +2251,8 @@ impl Renderer {
         if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
             return;
         }
+        // PdfCraft patch (33): before any clip of the paint's own.
+        self.clips_for_path(path, transform, reach, paint);
 
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
@@ -2160,6 +2282,8 @@ impl Renderer {
         if !may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
             return;
         }
+        // PdfCraft patch (33): before any clip of the paint's own.
+        self.clips_for_path(path, transform, 0.0, paint);
 
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
@@ -2257,6 +2381,8 @@ impl Renderer {
 
 impl<'a> Device<'a> for Renderer {
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
         if self.ink.pass.is_some() {
@@ -2457,7 +2583,13 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
-        self.push_clip_path_inner(&clip_path.path, clip_path.fill);
+        // PdfCraft patch (33): a rectangle waits for a draw it would cut; any other clip is
+        // applied now, after the waiting ones below it.
+        let rect = if DEFER_CLIPS.with(std::cell::Cell::get) { axis_rect(&clip_path.path) } else { None };
+        self.clips.push(PendingClip { path: clip_path.path.clone(), fill: clip_path.fill, rect, on_device: false });
+        if rect.is_none() {
+            self.apply_clips();
+        }
     }
 
     /// PdfCraft patch (27): a nested group blending in another space can't be drawn in a pass.
@@ -2477,6 +2609,8 @@ impl<'a> Device<'a> for Renderer {
     /// own CMYK), while erasing for a knockout group (the contents must clear, not paint), and
     /// for contents a pass has no tints for.
     fn draw_isolated_cmyk_group(&mut self, group: &hayro_interpret::CmykGroup<'a, '_>) -> bool {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         if self.color_replacement.is_some() || self.ink.pass.is_some() || self.erasing {
             return false;
         }
@@ -2531,6 +2665,8 @@ impl<'a> Device<'a> for Renderer {
         mask: Option<SoftMask<'_>>,
         blend_mode: BlendMode,
     ) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         // PdfCraft patch (22): nothing is layered in a knockout erase pass.
         if self.erasing {
             self.erase_groups += 1;
@@ -2575,7 +2711,10 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn pop_clip_path(&mut self) {
-        self.ctx.pop_clip_path();
+        // PdfCraft patch (33): a clip that never reached the device has nothing to pop there.
+        if self.clips.pop().is_none_or(|c| c.on_device) {
+            self.ctx.pop_clip_path();
+        }
     }
 
     fn pop_transparency_group(&mut self) {
@@ -2599,6 +2738,8 @@ impl<'a> Device<'a> for Renderer {
     /// whole canvas, transparent where nothing was drawn): what is under their shape is cleared
     /// first (`knockout_shape`, the knockout erase pass) and the layer composites over it.
     fn set_knockout(&mut self) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         if let Some(top) = self.knockout.last_mut() {
             *top = true;
             self.ctx.set_blend_mode(knockout_blend_mode());
@@ -2613,17 +2754,23 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn begin_knockout_erase(&mut self) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         self.erasing = true;
         self.erase_groups = 0;
     }
 
     fn end_knockout_erase(&mut self) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         self.erasing = false;
         self.erase_groups = 0;
         self.ctx.set_blend_mode(knockout_blend_mode());
     }
 
     fn begin_knockout_pass(&mut self, mode: BlendMode) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         if self.in_knockout() && !self.erasing {
             self.knockout_passes.push(KnockoutPass {
                 depth: self.knockout.len(),
@@ -2635,6 +2782,8 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn end_knockout_pass(&mut self) -> Vec<BlendMode> {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         // In an erase pass `begin_knockout_pass` started nothing; the pass at this depth belongs
         // to the knockout group being erased into, and stays.
         if self.erasing {
@@ -2654,6 +2803,8 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn knockout_image(&mut self, image: &hayro_interpret::RasterImage<'_>, transform: Affine) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         if !self.in_knockout() {
             return;
         }
@@ -2671,6 +2822,8 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn knockout_shape(&mut self, shape: &BezPath) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         if !self.in_knockout() {
             return;
         }
@@ -2686,6 +2839,8 @@ impl<'a> Device<'a> for Renderer {
     }
 
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'_>>) {
+        // PdfCraft patch (33): a mask is drawing state, not a layer, so waiting clips stay
+        // waiting: a draw inside a clip is the same with it or without it, masked or not.
         let settings = *self.ctx.render_settings();
         self.cur_mask = mask.map(|m| {
             let width = self.ctx.width();
@@ -2746,6 +2901,8 @@ impl<'a> Device<'a> for Renderer {
                 if !may_paint_canvas(&path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
                     return;
                 }
+                // PdfCraft patch (33): before any clip of the paint's own.
+                self.clips_for_path(&path, transform, 0.0, paint);
 
                 // PdfCraft patch: apply the reading-colours mapping before painting.
                 let paint = self.replaced(paint, false);
@@ -2774,6 +2931,8 @@ impl<'a> Device<'a> for Renderer {
         paint: &Paint<'a>,
         draw_mode: &GlyphDrawMode,
     ) {
+        // PdfCraft patch (33): see `PendingClip`.
+        self.apply_clips();
         match draw_mode {
             GlyphDrawMode::Fill => {
                 Self::fill_glyph(self, glyph, transform, glyph_transform, paint);
@@ -2880,6 +3039,7 @@ fn render_shading_texture(
 
 fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
     let mut renderer = Renderer {
+        clips: Vec::new(),
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
@@ -3064,7 +3224,14 @@ fn convert_blend_mode(blend_mode: BlendMode) -> peniko::BlendMode {
 /// PdfCraft patch: how far a stroke's paint reaches past its path, in user units: half the width
 /// times the larger of the miter limit and √2 (a miter join or a square cap). A miter limit that
 /// isn't finite leaves miters unbounded, so the reach is too.
-fn stroke_reach(stroke: &kurbo::Stroke) -> f64 {
+fn stroke_reach(stroke: &kurbo::Stroke, path: Option<&BezPath>) -> f64 {
+    // PdfCraft patch (33): a miter only reaches past a corner, and only with miter joins; a
+    // stroke without one reaches half its width times √2 at most (a square cap's corner). A path
+    // of one segment has no corner (closing it adds one).
+    let corners = path.is_none_or(|p| p.elements().iter().filter(|e| !matches!(e, kurbo::PathEl::MoveTo(_))).count() > 1);
+    if !corners || !matches!(stroke.join, kurbo::Join::Miter) {
+        return stroke.width / 2.0 * std::f64::consts::SQRT_2;
+    }
     let miter = stroke.miter_limit.abs();
     stroke.width / 2.0
         * if miter.is_finite() {
