@@ -2843,6 +2843,50 @@ fn replace_pages_swaps_content_but_keeps_annotations() {
     assert!(replace_pages(&mut doc, &[0, 1], &src, &[0]).is_err(), "counts must match");
 }
 
+/// Replace Pages takes only what the replacement page shows: none of the replacement file's
+/// fields joins the form, not one with a widget on no page, nor one reached only through a page
+/// key other than /Annots, even when they reuse the form's field names (#7920).
+#[test]
+fn replace_pages_adds_no_field_from_the_replacement_file() {
+    let form: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R] >>".into(),                   // 3
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".into(),                         // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Total) /V (42) /Rect [10 10 90 30] /P 3 0 R >>".into(), // 5
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Payee) /V (user-value) /Rect [10 40 90 60] /P 3 0 R >>".into(), // 6
+        body("old"),                                                                      // 7
+    ];
+    let replacement: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(), // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Contents 8 0 R /Annots [5 0 R] /Zzz 7 0 R >>".into(), // 3
+        "<< /FT /Tx /T (Payee) /V (replacement-value) /Kids [5 0 R 6 0 R] >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [10 40 90 60] /P 3 0 R >>".into(), // 5: on the page
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [0 0 0 0] >>".into(), // 6: on no page
+        "<< /FT /Tx /T (Total) /V (999) >>".into(),                                 // 7: no widget, reached only through /Zzz
+        body("new"),                                                                // 8
+    ];
+    let mut doc = open(build(&form, "/Root 1 0 R"));
+    let before = crate::import::listed_fields(&doc);
+    let src = open(build(&replacement, "/Root 1 0 R"));
+    replace_pages(&mut doc, &[1], &src, &[0]).unwrap();
+    assert_eq!(crate::import::listed_fields(&doc), before, "the form lists the same fields");
+    for saved in [save_and_reopen(&doc), full_roundtrip(&doc)] {
+        assert_eq!(labels(&saved), ["blank", "new"], "the page shows the replacement");
+        assert_eq!(form_field_names(&saved), ["Total", "Payee"]);
+        let form = catalog(&saved).get(b"AcroForm").map(|f| saved.resolve(f).as_dict().cloned().unwrap()).unwrap();
+        let values: Vec<String> = saved
+            .resolve(form.get(b"Fields").unwrap())
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| String::from_utf8_lossy(&saved.resolve(f).as_dict().unwrap().get(b"V").unwrap().as_string().unwrap().bytes).into_owned())
+            .collect();
+        assert_eq!(values, ["42", "user-value"], "the form keeps its values");
+    }
+}
+
 #[test]
 fn a_page_becomes_a_form_xobject_upright() {
     let src = open(fixture());
