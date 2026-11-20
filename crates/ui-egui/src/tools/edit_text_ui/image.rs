@@ -454,7 +454,8 @@ fn crop_controls(
         .bounds(bounds_of(&frame))
         .min_side(least_side(ui, placed))
         .guide((CropGuide::Thirds, 0))
-        .show_at(ui, body.rect);
+        // Its outside hit area must not take input from the other pages in the view.
+        .show_at(ui, placed.rect);
     // The overlay takes every right-click. One on the picture being cropped, its box or its grips is the crop's: crop
     // mode stays and the page's menu stays shut. Anywhere else it goes to what lies there, as without crop mode
     // (#5835).
