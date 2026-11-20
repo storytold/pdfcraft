@@ -371,6 +371,9 @@ fn undoing_saved_redactions_while_the_save_dialog_is_open_asks_again() {
     }
     assert_eq!(h.state().views[0].redactions_undone_after_save, 1);
     let elsewhere = dir.join("contract_restored.pdf");
+    assert!(files.answer(Picked::Paths(vec![copy.clone()])).is_some(), "first Save dialog is open");
+    h.run_steps(3);
+    assert_eq!(files.file(&copy).unwrap(), saved, "the first answer was discarded when redactions changed");
     assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
     // The write runs on a worker: step until it has landed.
     crate::support::wait_until(&mut h, "the save to land", |_| files.file(&elsewhere).is_some());
@@ -406,6 +409,9 @@ fn undoing_apply_redactions_while_the_save_dialog_is_open_asks_again() {
     h.execute("edit.undo");
     assert_eq!(h.state().views[0].redactions_applied, 0);
     let elsewhere = dir.join("contract_copy.pdf");
+    assert!(files.answer(Picked::Paths(vec![copy.clone()])).is_some(), "first Save dialog is open");
+    h.run_steps(3);
+    assert!(files.file(&copy).is_none(), "the first answer was discarded when redactions were undone");
     assert!(files.answer(Picked::Paths(vec![elsewhere.clone()])).is_some(), "Save asked again and waits for the user");
     // The write runs on a worker: step until it has landed.
     crate::support::wait_until(&mut h, "the save to land", |_| files.file(&elsewhere).is_some());

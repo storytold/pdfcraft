@@ -844,7 +844,7 @@ pub(crate) fn paragraph_controls(
 ) -> Option<Edit> {
     let press = parts.press.as_ref().filter(|p| matches!(p.owner, Owner::Paragraph { .. }));
     let hovered = match parts.hovered {
-        Some((Owner::Paragraph { block } | Owner::Frame { block }, page)) => Some((page, block)),
+        Some((Owner::Paragraph { block } | Owner::Frame { block, .. }, page)) => Some((page, block)),
         _ => None,
     };
     let mut edit = None;

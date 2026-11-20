@@ -51,27 +51,6 @@ impl PdfCraftApp {
         false
     }
 
-    /// Hands a fired paste command's content to the clipboard service so `paste_from_clipboard` reads it
-    /// in the pass the command runs (F-89).
-    pub(crate) fn offer_clip(&mut self, clip: &craft::ui::runtime::commands::ClipContent) {
-        let mut flavors = Vec::new();
-        if let Some(text) = &clip.text {
-            flavors.push(Flavor::text(text.as_ref()));
-        }
-        if let Some(image) = &clip.image
-            && let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1]))
-        {
-            let mut data = Vec::with_capacity(8 + image.pixels.len() * 4);
-            data.extend_from_slice(&width.to_le_bytes());
-            data.extend_from_slice(&height.to_le_bytes());
-            data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
-            flavors.push(Flavor::new(RGBA8, data));
-        }
-        if !flavors.is_empty() {
-            self.clipboard.offer_paste(flavors);
-        }
-    }
-
     /// Hands the pastes this frame's raw input carries to the clipboard, once per frame, so the
     /// Paste command reads them. A frame's input is applied once, in the pass that receives it.
     pub(crate) fn offer_pasted(&mut self, input: &egui::RawInput) {
@@ -93,6 +72,26 @@ impl PdfCraftApp {
                 _ => None,
             })
             .collect();
+        if !flavors.is_empty() {
+            self.clipboard.offer_paste(flavors);
+        }
+    }
+
+    /// Hands the paste content carried by a fired paste command (F-89) to the clipboard before the command runs.
+    pub(crate) fn offer_clip_content(&mut self, content: &craft::ui::runtime::commands::ClipContent) {
+        let mut flavors = Vec::new();
+        if let Some(text) = &content.text {
+            flavors.push(Flavor::text(text.as_ref()));
+        }
+        if let Some(image) = &content.image
+            && let (Ok(width), Ok(height)) = (u32::try_from(image.size[0]), u32::try_from(image.size[1]))
+        {
+            let mut data = Vec::with_capacity(8 + image.pixels.len() * 4);
+            data.extend_from_slice(&width.to_le_bytes());
+            data.extend_from_slice(&height.to_le_bytes());
+            data.extend(image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+            flavors.push(Flavor::new(RGBA8, data));
+        }
         if !flavors.is_empty() {
             self.clipboard.offer_paste(flavors);
         }
@@ -179,14 +178,27 @@ impl PdfCraftApp {
     /// still holds their copy; a picture the clipboard holds; its text (XFDF is pasted as
     /// comments, and text beats an image the app only remembers); else the remembered image.
     pub(crate) fn paste_from_clipboard(&mut self, ctx: &egui::Context, i: usize) {
+        self.paste_from_clipboard_with(ctx, i, None);
+    }
+
+    /// [`Self::paste_from_clipboard`], preferring content delivered with the paste event (`pasted`, F-89)
+    /// over a fresh system-clipboard read so desktop `SystemClipboard` hosts still receive event payloads.
+    pub(crate) fn paste_from_clipboard_with(&mut self, ctx: &egui::Context, i: usize, pasted: Option<&craft::ui::runtime::commands::ClipContent>) {
         if self.views.get(i).is_some_and(|v| v.session.forms.focus.is_some() || v.organize) {
             return;
         }
         let page = self.views.get(i).map_or(0, |v| v.current());
-        let text = if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten() } else { None };
-        let non_empty_text = text.as_deref().filter(|t| !t.is_empty());
-        let image = self.clipboard.read_image().ok().flatten();
-        if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(non_empty_text, image.as_ref()) {
+        let delivered_text = pasted.and_then(|c| c.text.as_deref()).filter(|t| !t.is_empty()).map(str::to_owned);
+        let delivered_image = pasted.and_then(|c| c.image.as_ref()).and_then(|img| {
+            let (width, height) = (u32::try_from(img.size[0]).ok()?, u32::try_from(img.size[1]).ok()?);
+            let mut rgba = Vec::with_capacity(img.pixels.len() * 4);
+            rgba.extend(img.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied));
+            Some(ClipboardImage { width, height, rgba })
+        });
+        let text = delivered_text
+            .or_else(|| if self.clipboard.has(&[TEXT]) { self.clipboard.read_text().ok().flatten().filter(|t| !t.is_empty()) } else { None });
+        let image = delivered_image.or_else(|| self.clipboard.read_image().ok().flatten());
+        if self.quick_tool == QuickTool::EditText && self.object_clipboard.is_some() && self.pastes_objects(text.as_deref(), image.as_ref()) {
             self.paste_objects(ctx, i);
             return;
         }

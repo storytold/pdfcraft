@@ -262,7 +262,7 @@ impl LinksOnPage<'_> {
                 Some(LinkEvent::Follow { target: LinkTarget::Uri(uri), javascript: None })
             }
             (LinkMode::Edit, Owner::Link { index }) if primary => Some(LinkEvent::Select { page: self.page, index, clicks: start.clicks }),
-            (LinkMode::Edit, Owner::Link { index }) if start.button == PointerButton::Secondary => {
+            (LinkMode::Follow | LinkMode::Edit, Owner::Link { index }) if start.button == PointerButton::Secondary => {
                 Some(LinkEvent::Context { page: self.page, index })
             }
             _ => None,
@@ -312,8 +312,29 @@ pub(crate) struct OverlayParts {
 /// The sign tabs on `page`'s empty signature fields that a click signs, laid out once: the label's width is
 /// measured in this pass by [`SignTabMetrics`], so the part a press hits and the chip that is painted are
 /// one rectangle. Nothing unless `shown` (the Select tool, no Prepare Form, no full-screen veil).
-pub(crate) fn overlay_parts(ui: &mut egui::Ui, xf: &PageXform, doc: &Document, page: usize, can_fill: bool, shown: bool) -> OverlayParts {
+pub(crate) fn overlay_parts(
+    ui: &mut egui::Ui,
+    xf: &PageXform,
+    doc: &Document,
+    page: usize,
+    can_fill: bool,
+    shown: bool,
+    badge_tips: bool,
+) -> OverlayParts {
     let mut out = OverlayParts { parts: Vec::new(), tabs: Vec::new() };
+    if badge_tips {
+        for (index, badge) in signature_badges(&doc.signatures, page).into_iter().enumerate() {
+            let [x0, y0, x1, y1] = badge.rect;
+            let rect = xf.user_rect(&doc.info, page, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]).expand(2.0).intersect(xf.rect);
+            if rect.is_finite() && rect.is_positive() {
+                out.parts.push(
+                    PagePart::new(Owner::Badge { index }, page, HitShape::Rect(rect), PageLayer::Text)
+                        .passes_drag()
+                        .tip_now(crate::i18n::t(badge.summary).to_string()),
+                );
+            }
+        }
+    }
     if !shown {
         return out;
     }
@@ -635,6 +656,135 @@ impl PageOverlays<'_> {
                 draw.icon(Rect::from_center_size(mark.center(), Vec2::splat(side)), &IconSpec::svg(icon).color(color));
             }
         }
+    }
+}
+
+/// Paints the textless page background (for an open paragraph or added-text draft) and the moving-item
+/// background/preview (`MoveBackground`) over the placed pages before the overlays and controls.
+#[derive(craft::ui::contract::Component)]
+#[component(canvas_control, content_painter, unregistered)]
+pub(crate) struct PageBackdrop<'a> {
+    #[common]
+    common: Common,
+    pages: &'a [PlacedPage],
+    sizes: &'a [(f32, f32)],
+    rotation: u16,
+    info: &'a DocInfo,
+    session: &'a PageSession,
+}
+
+impl<'a> PageBackdrop<'a> {
+    pub(crate) fn new(pages: &'a [PlacedPage], sizes: &'a [(f32, f32)], rotation: u16, info: &'a DocInfo, session: &'a PageSession) -> Self {
+        Self { common: Common::new(), pages, sizes, rotation, info, session }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct PageBackdropStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+impl Component for PageBackdrop<'_> {
+    const ROLE: Role = Role::GROUP;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    const SHOWS_LABEL: bool = false;
+    type Style = PageBackdropStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PageBackdropStyleKey) -> PageBackdropStyle {
+        PageBackdropStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let draw = ui.draw();
+        let content = ui.content_painter(cx);
+        for placed in self.pages {
+            let size = self.sizes.get(placed.page).copied().unwrap_or_default();
+            let xf = PageXform::of(placed, self.rotation, size);
+            self.session.text_background.paint(
+                &draw,
+                &content,
+                &xf,
+                placed.page,
+                self.session.line_editor.as_ref(),
+                self.session.content.draft.as_ref(),
+            );
+            self.session.move_background.paint(&draw, &content, placed, self.info, &self.session.content);
+        }
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// Paints the open added-text draft's paper and text under the editor's caret.
+#[derive(craft::ui::contract::Component)]
+#[component(canvas_control, content_painter, unregistered)]
+pub(crate) struct PageDraft<'a> {
+    #[common]
+    common: Common,
+    content: &'a crate::content_ui::ContentView,
+}
+
+impl<'a> PageDraft<'a> {
+    pub(crate) fn new(content: &'a crate::content_ui::ContentView) -> Self {
+        Self { common: Common::new(), content }
+    }
+}
+
+impl Component for PageDraft<'_> {
+    const ROLE: Role = Role::GROUP;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    const SHOWS_LABEL: bool = false;
+    type Style = PageBackdropStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PageDraftStyleKey) -> PageBackdropStyle {
+        PageBackdropStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let content = ui.content_painter(cx);
+        self.content.paint_draft(&content);
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }
 

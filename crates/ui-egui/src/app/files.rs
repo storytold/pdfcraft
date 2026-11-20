@@ -530,8 +530,8 @@ impl PdfCraftApp {
             (Ok(bytes), _) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.pick_first(PickRequest::save("attachment").file_name(safe_file_name(&att.name, "attachment")), None, move |app, _, path| {
-                    match craft::atomic::atomic_write(&path, &bytes) {
-                        Ok(()) => {
+                    match app.host.files().write(&path, &bytes, craft::host::WriteIntent::SaveAs) {
+                        Ok(_) => {
                             // Windows: the file keeps the document's Mark-of-the-Web (#3990). Best
                             // effort: a volume without alternate data streams can't carry it.
                             let _ = pdfcraft_platform::zone::mark_from(&path, source.as_deref().map(std::path::Path::new));

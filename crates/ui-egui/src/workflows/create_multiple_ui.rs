@@ -59,7 +59,7 @@ impl PdfCraftApp {
             let base = safe_file_stem(stem(&name), "pdf");
             let base = if base.is_empty() { "document" } else { &base };
             let filename = unique_file_name(&format!("{base}.pdf"), CopyNumbering::Parenthesized, |candidate| {
-                used.contains(&candidate.to_lowercase()) || dir.as_ref().is_some_and(|d| d.join(candidate).exists())
+                used.contains(&candidate.to_lowercase()) || dir.as_ref().is_some_and(|d| self.host.files().exists(&d.join(candidate)))
             });
             used.insert(filename.to_lowercase());
             // Without a folder (the web) the write is a download.

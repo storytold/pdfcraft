@@ -166,6 +166,9 @@ pub(crate) struct PageTool<'a> {
     /// Full screen: the presenter's keys the tool took for it in this pass, applied after the run.
     presenting: bool,
     presenter_keys: Vec<(ToolKey, bool)>,
+    /// Select with added content selected (Edit a PDF panel open): Delete removes it.
+    content_delete: bool,
+    delete_content: bool,
 }
 
 /// What the page tool finished in a pass. The fields the page body reads are public; the rest are applied to the
@@ -194,6 +197,8 @@ pub(crate) struct ToolFinish {
     /// The quick tool, when it selects text.
     text_tool: Option<QuickTool>,
     text_finished: bool,
+    /// Delete was pressed with added content selected under Select.
+    delete_content: bool,
 }
 
 /// Whether copied comments hang on the pointer: they take the next click whatever tool is on.
@@ -289,6 +294,7 @@ pub(crate) fn page_tool<'a>(
     let xforms: &'a [(usize, PageXform)] = xforms;
     let map: &'a comments::PageMap<'a> = map_slot.insert(comments::PageMap::new(cx.info, cx.pages, cx.rotation, cx.view));
     let selects_text = tool_selects_text(tool, cx.preparing);
+    let content_delete = tool == QuickTool::Select && session.content.selected.is_some() && session.content.draft.is_none();
     let arm = match tool {
         // Prepare a form under the Select tool: the selection rectangle and the moves of fields are Prepare's.
         QuickTool::Select if cx.preparing => {
@@ -405,7 +411,16 @@ pub(crate) fn page_tool<'a>(
         QuickTool::SignArea { certify } => Arm::SignArea(SignAreaTool::new(certify, &mut session.box_drag, cx.pages, cx.rotation, cx.info)),
         QuickTool::Snapshot => Arm::Snapshot(SnapshotTool::new(&mut session.box_drag, cx.pages, cx.rotation, size)),
     };
-    PageTool { arm, tool, selects_text, released: false, presenting: cx.presenting, presenter_keys: Vec::new() }
+    PageTool {
+        arm,
+        tool,
+        selects_text,
+        released: false,
+        presenting: cx.presenting,
+        presenter_keys: Vec::new(),
+        content_delete,
+        delete_content: false,
+    }
 }
 
 /// The session's Hand tool under the user's navigation choices of this pass.
@@ -454,6 +469,7 @@ impl<'a> PageTool<'a> {
             presenter_keys: self.presenter_keys,
             text_tool: Some(self.tool).filter(|_| self.selects_text),
             text_finished: self.released && self.selects_text,
+            delete_content: self.delete_content,
             ..ToolFinish::default()
         };
         match self.arm {
@@ -516,6 +532,9 @@ impl ToolFinish {
             Some(FillOutcome::Leave) => self.back_to_select = true,
             None => {}
         }
+        if self.delete_content && session.pending_edit.is_none() {
+            session.pending_edit = crate::content_ui::delete_selected(session);
+        }
         // The first page key of the pass turns the page; the rest wait for the next pass's keys.
         self.turn = self.presenter_keys.drain(..).find_map(|(key, shift)| session.presenter.key(&key, shift));
         if let Some(tool @ QuickTool::Comment(_)) = self.text_tool {
@@ -548,7 +567,33 @@ pub(crate) fn edit_text_press(
         return None;
     }
     match press.owner {
-        Owner::Objects | Owner::Frame { .. } => crate::tools::object_ui::objects_press(session, doc, info, press, geo),
+        Owner::Objects { index } => {
+            if let craft::behavior::PressPhase::Release { start, pos, click: true, .. } = press.phase
+                && start.clicks >= 2
+                && start.origin.distance(pos) <= 3.0
+                && let Some(target) = session.objects.target_at(index)
+            {
+                session.objects.clear();
+                let mut forwarded = press.clone();
+                return match target.kind {
+                    pdfcraft_engine::ObjectKind::Text => {
+                        forwarded.owner = Owner::Paragraph { block: target.index };
+                        crate::tools::edit_text_ui::paragraph_press(session, doc, &forwarded, geo)
+                    }
+                    pdfcraft_engine::ObjectKind::Image => {
+                        forwarded.owner = Owner::Picture { index: target.index };
+                        crate::tools::edit_text_ui::picture_press(session, doc, &forwarded, geo)
+                    }
+                    pdfcraft_engine::ObjectKind::Added => {
+                        forwarded.owner = Owner::Added { index: target.index };
+                        let edit_on_click = matches!(tool, QuickTool::AddText | QuickTool::EditText);
+                        crate::tools::content_ui::added_press(session, doc, pages, &forwarded, edit_on_click)
+                    }
+                };
+            }
+            crate::tools::object_ui::objects_press(session, doc, info, press, geo)
+        }
+        Owner::Frame { .. } => crate::tools::object_ui::objects_press(session, doc, info, press, geo),
         Owner::Paragraph { .. } => crate::tools::edit_text_ui::paragraph_press(session, doc, press, geo),
         Owner::Added { .. } => {
             let edit_on_click = matches!(tool, QuickTool::AddText | QuickTool::EditText);
@@ -561,7 +606,7 @@ pub(crate) fn edit_text_press(
         | Owner::Field { .. }
         | Owner::PrepareField { .. }
         | Owner::SignTab { .. }
-        | Owner::SignatureBadge { .. } => None,
+        | Owner::Badge { .. } => None,
     }
 }
 
@@ -595,7 +640,10 @@ impl CanvasTool for PageTool<'_> {
 
     /// The tool's claims; in full screen the presenter's page keys too.
     fn claims(&self) -> ToolClaims {
-        let claims = self.tool().claims();
+        let mut claims = self.tool().claims();
+        if self.content_delete {
+            claims = claims.deletes();
+        }
         if self.presenting { claims.keys(presenter::PRESENT_KEYS) } else { claims }
     }
 
@@ -616,7 +664,14 @@ impl CanvasTool for PageTool<'_> {
             self.presenter_keys.push((key.clone(), cx.mods.shift));
             return true;
         }
-        self.tool_mut().key(key, cx)
+        if self.tool_mut().key(key, cx) {
+            return true;
+        }
+        if self.content_delete && matches!(key, ToolKey::Delete { .. }) {
+            self.delete_content = true;
+            return true;
+        }
+        false
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {

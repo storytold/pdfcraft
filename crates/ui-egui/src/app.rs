@@ -262,6 +262,7 @@ impl PdfCraftApp {
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,
+            last_frame_active: None,
             mode: Mode::AllTools,
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),

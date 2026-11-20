@@ -1404,7 +1404,7 @@ fn step_typing(
     let mut now = crate::edit_text_ui::Typed::of(std::mem::take(text), selection.take(), std::mem::take(aligns));
     let stepped = history.step(&mut now, step);
     *text = now.text;
-    *selection = now.selection;
+    *selection = None;
     *aligns = now.aligns;
     stepped
 }
