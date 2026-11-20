@@ -92,27 +92,40 @@ impl Session {
         let title = if title.is_empty() { "PDF Portfolio" } else { title };
         let labels: Vec<Option<String>> = (0..files.len()).map(|i| exhibit_label(options.exhibits, &options.prefix, i)).collect();
 
+        // Each file's name in the portfolio, settled before the cover sheet indexes it: two files
+        // with the same name become "report.pdf" and "report.pdf (2)" on the cover as in the file
+        // list.
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        let keys = pdfcraft_organize::unique_attachment_keys(&[], &names)?;
         let (mut doc, _escaped) = pdfcraft_create::from_text_escaped(
             title,
-            &cover_sheet(title, options.note.as_deref(), files, &labels, &dates),
+            &cover_sheet(title, options.note.as_deref(), files, &keys, &labels, &dates),
             pdfcraft_create::LETTER,
             11.0,
         )?;
 
         let now = self.now();
-        let mut items = Vec::with_capacity(files.len());
-        for ((file, label), date) in files.iter().zip(labels).zip(&dates) {
-            let modified = file.modified.or(now).map(pdfcraft_cos::pdf_date);
-            let key = pdfcraft_organize::add_attachment(
-                &mut doc,
-                &file.name,
-                &file.bytes,
-                file.description.as_deref(),
-                pdfcraft_organize::mime_for_name(&file.name),
-                modified.as_deref(),
-            )?;
-            items.push(PortfolioItem { key, exhibit: label, document_date: date.map(|d| d.format("D:%Y%m%d").to_string()) });
-        }
+        let modified: Vec<Option<String>> = files.iter().map(|f| f.modified.or(now).map(pdfcraft_cos::pdf_date)).collect();
+        let new: Vec<pdfcraft_organize::NewAttachment<'_>> = files
+            .iter()
+            .zip(&keys)
+            .zip(&modified)
+            .map(|((file, key), modified)| pdfcraft_organize::NewAttachment {
+                name: key,
+                bytes: &file.bytes,
+                description: file.description.as_deref(),
+                mime: pdfcraft_organize::mime_for_name(&file.name),
+                date: modified.as_deref(),
+            })
+            .collect();
+        // The cover sheet holds no attachments, so these are the keys it already names.
+        let added = pdfcraft_organize::add_attachments(&mut doc, &new)?;
+        let items: Vec<PortfolioItem> = added
+            .into_iter()
+            .zip(labels)
+            .zip(&dates)
+            .map(|((key, exhibit), date)| PortfolioItem { key, exhibit, document_date: date.map(|d| d.format("D:%Y%m%d").to_string()) })
+            .collect();
         let initial = options.initial.and_then(|i| items.get(i)).map(|item| item.key.clone());
         pdfcraft_organize::set_portfolio(&mut doc, &PortfolioSpec { items, layout: options.layout, initial })?;
         self.write_new(&doc)
@@ -120,7 +133,14 @@ impl Session {
 }
 
 /// The cover sheet's text: the title and note, a line on what a portfolio is, and the index.
-fn cover_sheet(title: &str, note: Option<&str>, files: &[PortfolioFile], labels: &[Option<String>], dates: &[Option<chrono::NaiveDate>]) -> String {
+fn cover_sheet(
+    title: &str,
+    note: Option<&str>,
+    files: &[PortfolioFile],
+    keys: &[String],
+    labels: &[Option<String>],
+    dates: &[Option<chrono::NaiveDate>],
+) -> String {
     let mut text = format!("{title}\n");
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
         text.push_str(note);
@@ -132,7 +152,8 @@ fn cover_sheet(title: &str, note: Option<&str>, files: &[PortfolioFile], labels:
          reader that shows portfolios, or open the Attachments panel, to read them.\n\nIndex\n"
     ));
     for (i, file) in files.iter().enumerate() {
-        let name = file.name.rsplit(['/', '\\']).next().unwrap_or(&file.name).trim();
+        // The name the file has in the portfolio, as its Attachments panel lists it.
+        let name = keys.get(i).map_or(file.name.as_str(), String::as_str);
         let head = match labels.get(i).cloned().flatten() {
             Some(label) => format!("{label}: {name}"),
             None => format!("{}. {name}", i.saturating_add(1)),

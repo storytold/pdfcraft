@@ -29,6 +29,9 @@ pub enum FilePurpose {
     RedactWords,
     /// Create a PDF ▸ PDF portfolio: files of any type, embedded unchanged.
     Portfolio,
+    /// The portfolio dialog's Add files, for the draft with this id: a result that arrives after
+    /// that draft was made, cancelled or replaced is dropped.
+    PortfolioAdd(u64),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,7 +104,7 @@ fn files_picker(purpose: FilePurpose) -> rfd::AsyncFileDialog {
     if purpose == FilePurpose::RedactWords {
         return dialog.add_filter_any_case(tl!("Text"), &["txt"]);
     }
-    if purpose == FilePurpose::Portfolio {
+    if matches!(purpose, FilePurpose::Portfolio | FilePurpose::PortfolioAdd(_)) {
         // A portfolio holds any kind of file: no filter.
         return dialog.set_title(tl!("Choose files for the portfolio"));
     }
@@ -402,7 +405,7 @@ impl PdfCraftApp {
             }
             return;
         }
-        if purpose == FilePurpose::Portfolio {
+        if matches!(purpose, FilePurpose::Portfolio | FilePurpose::PortfolioAdd(_)) {
             let mut files = Vec::with_capacity(paths.len());
             for p in paths {
                 let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
@@ -418,7 +421,7 @@ impl PdfCraftApp {
                     Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
                 }
             }
-            self.begin_portfolio(files);
+            self.portfolio_files_picked(purpose, files);
             return;
         }
         if purpose == FilePurpose::CreateMultipleSeparate {
@@ -622,7 +625,9 @@ impl PdfCraftApp {
                 let dir = self.export_dir_override.as_ref().map(std::path::PathBuf::from);
                 self.stage_create_separate(files.into_iter().map(Ok), dir);
             }
-            FilePurpose::Portfolio => self.begin_portfolio(files.into_iter().map(|(name, bytes)| (name, bytes, None)).collect()),
+            FilePurpose::Portfolio | FilePurpose::PortfolioAdd(_) => {
+                self.portfolio_files_picked(purpose, files.into_iter().map(|(name, bytes)| (name, bytes, None)).collect());
+            }
             FilePurpose::RedactWords => {
                 let Some((name, bytes)) = files.into_iter().next() else { return };
                 if bytes.len() > crate::redact_ui::MAX_WORD_LIST_BYTES {

@@ -2267,7 +2267,7 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     if req.portfolio_now {
         app.finish_portfolio();
     } else if req.portfolio_add {
-        app.create_portfolio_dialog();
+        app.add_portfolio_files();
     } else if dialog == Dialog::CreatePortfolio && app.dialog != Some(Dialog::CreatePortfolio) {
         app.portfolio_draft = None;
     }

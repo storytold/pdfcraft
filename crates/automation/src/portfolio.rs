@@ -53,7 +53,9 @@ impl Automation {
             files.push(PortfolioFile { name, bytes: Arc::new(bytes), description, document_date: date, modified });
         }
         let bytes = self.session.create_portfolio(&files, &options).map_err(failed)?;
-        let name = format!("{}.pdf", options.title.trim());
+        // The same fallback the cover sheet uses, so a blank title never names the file ".pdf".
+        let title = options.title.trim();
+        let name = format!("{}.pdf", if title.is_empty() { "PDF Portfolio" } else { title });
         self.deliver(a, &name, bytes)
     }
 }

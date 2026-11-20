@@ -5094,3 +5094,36 @@ fn portfolio_layouts_and_exhibit_styles_parse_their_names() {
     assert_eq!(ExhibitStyle::parse("none"), Some(ExhibitStyle::None));
     assert_eq!(ExhibitStyle::parse("roman"), None);
 }
+
+#[test]
+fn attachment_keys_for_a_batch_match_adding_one_by_one() {
+    // The batch keys are the keys adding the same names one at a time gives, including a name
+    // that already looks like a suffixed copy.
+    let names = ["report.pdf", "/a/report.pdf", "report.pdf (2)", "C:\\b\\report.pdf", "notes.txt"];
+    let mut one_by_one = Document::open(Arc::new(fixture())).unwrap();
+    let expected: Vec<String> = names.iter().map(|n| add_attachment(&mut one_by_one, n, b"x", None, None, None).unwrap()).collect();
+    let mut batch = Document::open(Arc::new(fixture())).unwrap();
+    let files: Vec<NewAttachment<'_>> = names.iter().map(|n| NewAttachment { name: n, bytes: b"x", ..Default::default() }).collect();
+    assert_eq!(add_attachments(&mut batch, &files).unwrap(), expected);
+    // The name tree holds every key once (it keeps them sorted, so compare as sets).
+    let mut stored = attachment_keys(&batch);
+    let mut want = expected.clone();
+    stored.sort();
+    want.sort();
+    assert_eq!(stored, want);
+    // Every key is distinct, so no two files share an entry.
+    let distinct: std::collections::HashSet<&String> = expected.iter().collect();
+    assert_eq!(distinct.len(), expected.len());
+    assert!(unique_attachment_keys(&[], &["report.pdf", " "]).is_err());
+}
+
+#[test]
+fn many_attachments_with_one_name_get_distinct_keys() {
+    // Thousands of same-named files (one name from many folders) each get their own key.
+    let names: Vec<String> = (0..5000).map(|i| format!("/case/{i}/document.pdf")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let keys = unique_attachment_keys(&[], &refs).unwrap();
+    let distinct: std::collections::HashSet<&String> = keys.iter().collect();
+    assert_eq!(distinct.len(), names.len());
+    assert!(keys.iter().all(|k| k.starts_with("document.pdf")));
+}

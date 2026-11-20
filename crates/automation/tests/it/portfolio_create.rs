@@ -55,9 +55,50 @@ fn a_portfolio_holds_every_file_unchanged_and_presents_the_one_asked_for() {
     let find = |name: &str| attachments.iter().find(|x| x["name"] == name).cloned().unwrap_or_else(|| panic!("{name} missing: {attachments:?}"));
     assert_eq!(find("Complaint.pdf")["description"], "Filed complaint");
     assert_eq!(find("Lease.docx")["description"], "Signed lease");
-    // Embedded byte for byte: the Word file was not converted.
-    assert_eq!(find("Lease.docx")["size"].as_u64(), Some(std::fs::metadata(dir.path().join("Lease.docx")).unwrap().len()));
     assert_eq!(find("Notice.eml")["description"], Value::Null);
+    // Every file is embedded byte for byte: nothing was converted.
+    let embedded = embedded_files(&dir.path().join("exhibits.pdf"));
+    for name in ["Complaint.pdf", "Lease.docx", "Notice.eml"] {
+        let source = std::fs::read(dir.path().join(name)).unwrap();
+        assert_eq!(embedded.iter().find(|(n, _)| n == name).map(|(_, b)| b), Some(&source), "{name} changed");
+    }
+}
+
+/// Each attachment of the PDF at `path` as (name, bytes), read as the app's Save attachment does.
+fn embedded_files(path: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let bytes = std::fs::read(path).unwrap();
+    let info = pdfcraft_render::inspect(std::sync::Arc::new(bytes.clone()), None).unwrap();
+    info.attachments.iter().map(|att| (att.name.clone(), pdfcraft_render::attachment_data(&bytes, None, att).unwrap())).collect()
+}
+
+#[test]
+fn files_with_the_same_name_stay_apart_on_the_cover_and_in_the_portfolio() {
+    // Two exhibits named report.pdf from different folders, and one already called "report.pdf (2)".
+    let dir = tempfile::tempdir().unwrap();
+    for (folder, body) in [("a", "first"), ("b", "second")] {
+        std::fs::create_dir(dir.path().join(folder)).unwrap();
+        std::fs::write(dir.path().join(folder).join("report.pdf"), body).unwrap();
+    }
+    std::fs::write(dir.path().join("report.pdf (2)"), "third").unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    tool(&mut a, "doc_create_portfolio", json!({ "paths": ["a/report.pdf", "b/report.pdf", "report.pdf (2)"], "out": "p.pdf" }));
+    let embedded = embedded_files(&dir.path().join("p.pdf"));
+    let doc = tool(&mut a, "doc_open", json!({ "path": "p.pdf" }))["doc"].as_u64().unwrap();
+    let cover = tool(&mut a, "text_extract", json!({ "doc": doc, "pages": [1] })).to_string();
+    // Each exhibit's name on the cover sheet is the attachment holding that exhibit's file.
+    for (label, body) in [("Exhibit A", "first"), ("Exhibit B", "second"), ("Exhibit C", "third")] {
+        let (name, _) = embedded.iter().find(|(_, b)| b == body.as_bytes()).unwrap_or_else(|| panic!("{body} missing"));
+        assert!(cover.contains(&format!("{label}: {name}")), "{label} should name {name}: {cover}");
+    }
+}
+
+#[test]
+fn a_portfolio_with_a_blank_title_is_named_like_its_cover_sheet() {
+    let dir = case_files();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let made = tool(&mut a, "doc_create_portfolio", json!({ "paths": ["Notice.eml"], "title": "  " }));
+    let name = made["document"]["name"].as_str().unwrap_or_default().to_string();
+    assert!(name.starts_with("PDF Portfolio"), "{made}");
 }
 
 #[test]

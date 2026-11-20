@@ -4,6 +4,8 @@
 //! A FileAttachment annotation (a paper clip on a page) is a comment and lives in the annot
 //! crate; this is the document level only.
 
+use std::collections::{HashMap, HashSet};
+
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
 use crate::OrganizeError;
@@ -26,48 +28,90 @@ pub fn add_attachment(
     mime: Option<&str>,
     date: Option<&str>,
 ) -> Result<String, OrganizeError> {
-    let name = file_name(name);
-    if name.is_empty() {
-        return Err(OrganizeError::Invalid("the attachment needs a file name".into()));
-    }
+    let mut keys = add_attachments(doc, &[NewAttachment { name, bytes, description, mime, date }])?;
+    keys.pop().ok_or_else(|| OrganizeError::Invalid("the attachment was not added".into()))
+}
+
+/// One file for [`add_attachments`]: the same values [`add_attachment`] takes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NewAttachment<'a> {
+    pub name: &'a str,
+    pub bytes: &'a [u8],
+    pub description: Option<&'a str>,
+    pub mime: Option<&'a str>,
+    pub date: Option<&'a str>,
+}
+
+/// Attach several files at once, in order, each as [`add_attachment`] would, and return their
+/// keys. The keys are the ones [`unique_attachment_keys`] gives for these names after the
+/// attachments already there, and the name tree is written once, however many files there are.
+pub fn add_attachments(doc: &mut Document, files: &[NewAttachment<'_>]) -> Result<Vec<String>, OrganizeError> {
+    let names: Vec<&str> = files.iter().map(|f| f.name).collect();
     let mut all = entries(doc);
     let taken: Vec<String> = all.iter().map(|(k, _)| PdfString::literal(k.clone()).to_text()).collect();
-    let mut key = name.clone();
-    let mut n = 2;
-    while taken.contains(&key) {
-        key = format!("{name} ({n})");
-        n += 1;
-    }
+    let keys = unique_attachment_keys(&taken, &names)?;
+    for (file, key) in files.iter().zip(&keys) {
+        let mut params = Dict::new();
+        params.set(b"Size".to_vec(), Object::Int(i64::try_from(file.bytes.len()).unwrap_or(i64::MAX)));
+        if let Some(d) = file.date {
+            params.set(b"ModDate".to_vec(), Object::String(PdfString::literal(d.as_bytes().to_vec())));
+        }
+        let mut ef = Dict::new();
+        ef.set(b"Type".to_vec(), Object::name("EmbeddedFile"));
+        if let Some(m) = file.mime.map(str::trim).filter(|m| !m.is_empty()) {
+            ef.set(b"Subtype".to_vec(), Object::Name(m.as_bytes().to_vec()));
+        }
+        ef.set(b"Params".to_vec(), Object::Dict(params));
+        let stream = doc.add(Object::Stream(Stream::flate(ef, file.bytes)));
 
-    let mut params = Dict::new();
-    params.set(b"Size".to_vec(), Object::Int(bytes.len() as i64));
-    if let Some(d) = date {
-        params.set(b"ModDate".to_vec(), Object::String(PdfString::literal(d.as_bytes().to_vec())));
+        let mut spec = Dict::new();
+        spec.set(b"Type".to_vec(), Object::name("Filespec"));
+        spec.set(b"F".to_vec(), Object::String(PdfString::text(key)));
+        spec.set(b"UF".to_vec(), Object::String(PdfString::text(key)));
+        if let Some(d) = file.description.map(str::trim).filter(|d| !d.is_empty()) {
+            spec.set(b"Desc".to_vec(), Object::String(PdfString::text(d)));
+        }
+        let mut ef_files = Dict::new();
+        ef_files.set(b"F".to_vec(), Object::Ref(stream));
+        ef_files.set(b"UF".to_vec(), Object::Ref(stream));
+        spec.set(b"EF".to_vec(), Object::Dict(ef_files));
+        let spec = doc.add(spec);
+        all.push((PdfString::text(key).bytes, Object::Ref(spec)));
     }
-    let mut ef = Dict::new();
-    ef.set(b"Type".to_vec(), Object::name("EmbeddedFile"));
-    if let Some(m) = mime.map(str::trim).filter(|m| !m.is_empty()) {
-        ef.set(b"Subtype".to_vec(), Object::Name(m.as_bytes().to_vec()));
-    }
-    ef.set(b"Params".to_vec(), Object::Dict(params));
-    let stream = doc.add(Object::Stream(Stream::flate(ef, bytes)));
-
-    let mut spec = Dict::new();
-    spec.set(b"Type".to_vec(), Object::name("Filespec"));
-    spec.set(b"F".to_vec(), Object::String(PdfString::text(&key)));
-    spec.set(b"UF".to_vec(), Object::String(PdfString::text(&key)));
-    if let Some(d) = description.map(str::trim).filter(|d| !d.is_empty()) {
-        spec.set(b"Desc".to_vec(), Object::String(PdfString::text(d)));
-    }
-    let mut files = Dict::new();
-    files.set(b"F".to_vec(), Object::Ref(stream));
-    files.set(b"UF".to_vec(), Object::Ref(stream));
-    spec.set(b"EF".to_vec(), Object::Dict(files));
-    let spec = doc.add(spec);
-
-    all.push((PdfString::text(&key).bytes, Object::Ref(spec)));
     set_attachments(doc, all)?;
-    Ok(key)
+    Ok(keys)
+}
+
+/// The keys `names` get as attachments after the keys in `taken`, in order: each name's last
+/// path component, trimmed, made unique with " (2)", " (3)"…, the same keys adding them one by
+/// one gives. Each name's next suffix is remembered, so many files with the same name cost no
+/// more than distinct ones. A blank name is an error.
+pub fn unique_attachment_keys(taken: &[String], names: &[&str]) -> Result<Vec<String>, OrganizeError> {
+    let mut used: HashSet<String> = taken.iter().cloned().collect();
+    let mut next: HashMap<String, usize> = HashMap::new();
+    let mut keys = Vec::with_capacity(names.len());
+    for raw in names {
+        let name = file_name(raw);
+        if name.is_empty() {
+            return Err(OrganizeError::Invalid("the attachment needs a file name".into()));
+        }
+        let mut key = name.clone();
+        if used.contains(&key) {
+            // Suffixes only ever pass taken keys, and keys are never freed here, so resuming
+            // from the last one gives the same key as probing from 2.
+            let n = next.entry(name.clone()).or_insert(2);
+            loop {
+                key = format!("{name} ({n})");
+                *n = n.saturating_add(1);
+                if !used.contains(&key) {
+                    break;
+                }
+            }
+        }
+        used.insert(key.clone());
+        keys.push(key);
+    }
+    Ok(keys)
 }
 
 /// Remove the document-level attachment whose name-tree key is `key`. The embedded stream is
@@ -124,7 +168,7 @@ fn entries(doc: &Document) -> Vec<(Vec<u8>, Object)> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    name_tree_entries(doc, &tree, 0, &mut std::collections::HashSet::new(), &mut out);
+    name_tree_entries(doc, &tree, 0, &mut HashSet::new(), &mut out);
     out
 }
 

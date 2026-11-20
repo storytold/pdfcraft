@@ -54,3 +54,25 @@ fn a_date_it_cannot_read_keeps_the_dialog_open_with_the_reason() {
     assert!(error.contains("Complaint.pdf") && error.contains("someday"), "{error}");
     assert!(h.state().session.docs().is_empty());
 }
+
+#[test]
+fn files_added_late_join_only_the_dialog_that_asked_for_them() {
+    use pdfcraft_ui_egui::FilePurpose;
+    let mut h = harness();
+    let id = h.state().portfolio_draft.as_ref().map(|d| d.id).unwrap();
+    let late = || vec![("Photo.jpg".to_string(), b"jpeg".to_vec())];
+    // While its dialog is open, Add files joins it; a result meant for another draft does not.
+    h.state_mut().use_files(FilePurpose::PortfolioAdd(id.wrapping_add(1)), late());
+    h.state_mut().use_files(FilePurpose::PortfolioAdd(id), late());
+    assert_eq!(h.state().portfolio_draft.as_ref().map(|d| d.rows.len()), Some(3));
+    // Draw the dialog with its new row before clicking in it.
+    h.run_steps(2);
+    // After Cancel, a result that arrives late does not reopen the dialog.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().portfolio_draft.is_none());
+    h.state_mut().use_files(FilePurpose::PortfolioAdd(id), late());
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert!(h.state().portfolio_draft.is_none());
+}
