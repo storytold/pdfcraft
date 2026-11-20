@@ -20,7 +20,7 @@ fn choosing_and_placing_stamps() {
     h.run_steps(6);
     assert!(h.execute("comment.stamp"));
     h.run_steps(2);
-    h.get_by_label("Add a stamp");
+    h.get_by_label("Stamps");
     h.get_all_by_label("APPROVED").next().expect("dynamic approved").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved));
@@ -119,6 +119,8 @@ fn creating_placing_and_keeping_custom_stamps() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0));
+    h.get_by_label("Company").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("Company");
     h.get_by_label("logo");
     // Place it.
