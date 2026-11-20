@@ -283,7 +283,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> bool {
         for file in &state.files {
             ui.add_space(6.0);
             let name = file.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-            ui.label(egui::RichText::new(name).font(theme::semibold(13.0))).on_hover_text(file.path.to_string_lossy());
+            ui.label(egui::RichText::new(&name).font(theme::semibold(13.0))).on_hover_text(file.path.to_string_lossy());
             let mut last_page = None;
             for found in &file.matches {
                 if last_page != Some(found.page) {
