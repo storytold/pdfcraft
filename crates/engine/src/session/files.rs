@@ -1,7 +1,7 @@
 use super::{
     Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
-    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, office_to_pdf, open_source, open_source_with, optimize, print,
-    print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, check_reopens, decode_text, guard, office_to_pdf, open_source, open_source_with,
+    optimize, print, print_layer_states, print_raster, set_default_layer_state, source_kind, writable, write_full,
 };
 
 /// Whether a conversion may run LibreOffice for an Office document (seconds, in another
@@ -229,6 +229,14 @@ impl Session {
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
+        let bytes = Arc::new(self.print_pdf_unchecked(id, settings)?);
+        // Checked before it is saved or sent to a printer, like any new file (#2166): it reopens,
+        // and both readers see the same sheets.
+        check_reopens(&bytes, None, None, None)?;
+        Ok(Arc::unwrap_or_clone(bytes))
+    }
+
+    fn print_pdf_unchecked(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if !doc.allows_printing() {
             return Err(EditError::NotPermitted("printing"));
@@ -524,8 +532,7 @@ impl Session {
     pub(crate) fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
         let bytes = self.write_unchecked(doc)?;
         let expected = pdfcraft_organize::page_count(doc)?;
-        pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
-        pdfcraft_render::check_pages(bytes.clone(), None, expected).map_err(|e| EditError::Reopen(e.to_string()))?;
+        check_reopens(&bytes, None, None, Some(expected))?;
         Ok(bytes)
     }
 

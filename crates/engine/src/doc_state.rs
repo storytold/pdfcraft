@@ -106,6 +106,25 @@ pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     })
 }
 
+/// Check that `bytes`, about to be written to a file, reopen before anyone writes them (#1698,
+/// #2166): the object reader opens them with `password`, and the renderer, with
+/// `render_password`, finds `pages` pages. `None` takes the object reader's own page count, for
+/// a file whose page count is new (a print layout).
+pub(crate) fn check_reopens(
+    bytes: &Arc<Vec<u8>>,
+    password: Option<&str>,
+    render_password: Option<&str>,
+    pages: Option<usize>,
+) -> Result<(), EditError> {
+    let reopen = |e: &dyn std::fmt::Display| EditError::Reopen(e.to_string());
+    let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).map_err(|e| reopen(&e))?;
+    let pages = match pages {
+        Some(n) => n,
+        None => pdfcraft_organize::page_count(&cos).map_err(|e| reopen(&e))?,
+    };
+    pdfcraft_render::check_pages(bytes.clone(), render_password, pages).map_err(|e| reopen(&e))
+}
+
 /// Validate the signature fields of `cos` (written as `bytes`).
 pub(crate) fn signatures_of(
     cos: &pdfcraft_cos::Document,

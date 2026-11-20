@@ -1,6 +1,6 @@
 use super::{
     Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
-    display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+    check_reopens, display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
 impl Session {
@@ -57,8 +57,7 @@ impl Session {
     pub fn check_save(&self, id: DocId, bytes: &Arc<Vec<u8>>) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let Some(editor) = doc.editor.as_ref() else { return Ok(()) };
-        pdfcraft_cos::Document::open_with_password(bytes.clone(), editor.keys.reopen.as_deref()).map_err(|e| EditError::Reopen(e.to_string()))?;
-        pdfcraft_render::check_pages(bytes.clone(), doc.password.as_deref(), doc.info.pages.len()).map_err(|e| EditError::Reopen(e.to_string()))
+        check_reopens(bytes, editor.keys.reopen.as_deref(), doc.password.as_deref(), Some(doc.info.pages.len()))
     }
 
     /// Record a successful save of `bytes` (to `path`, if any): rebase editing on the saved file
