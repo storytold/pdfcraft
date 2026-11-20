@@ -32,6 +32,7 @@ mod blob;
 mod cid;
 mod generated;
 mod glyph_simulator;
+mod hint;
 pub(crate) mod outline;
 mod standard_font;
 mod true_type;
@@ -67,6 +68,8 @@ pub(crate) fn strip_subset_prefix(name: &str) -> &str {
 use crate::util::hash128;
 use hayro_cmap::{BfString, CMap, CMapName, CharacterCollection};
 pub use outline::OutlineFontData;
+/// PdfCraft patch (111): the sizes [`OutlineGlyph::hinted_outline`] hints.
+pub use hint::{MAX_HINTED_PPEM, MIN_HINTED_PPEM};
 pub use standard_font::StandardFont;
 
 /// A glyph that can be drawn.
@@ -140,6 +143,16 @@ impl OutlineGlyph {
     /// Return the outline of the glyph, assuming an upem value of 1000.
     pub fn outline(&self) -> BezPath {
         self.font.outline_glyph(self.id, self.char_code)
+    }
+
+    /// PdfCraft patch (111): the outline fitted to the pixel grid for drawing at `ppem` device
+    /// pixels per em, vertically only, in the units of [`Self::outline`] (see `font::hint`).
+    /// `unhinted` is that outline; the hinted one is kept only when it lies within two pixels of
+    /// it. `None` when the size isn't hinted (outside [`MIN_HINTED_PPEM`] to
+    /// [`MAX_HINTED_PPEM`]) or the glyph can't be: then `unhinted` is drawn.
+    pub fn hinted_outline(&self, ppem: f32, unhinted: &BezPath) -> Option<BezPath> {
+        let hinted = self.font.hinted_outline_glyph(self.id, ppem)?;
+        hint::plausible(&hinted, unhinted, ppem).then_some(hinted)
     }
 
     /// Return the identifier of the glyph. You can use this to calculate the cache key

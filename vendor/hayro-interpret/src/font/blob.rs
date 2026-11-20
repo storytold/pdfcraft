@@ -1,13 +1,14 @@
 use crate::font::UNITS_PER_EM;
+use crate::font::hint::{Engine as HintEngine, Hinter};
 use crate::font::outline::OutlinePath;
 use kurbo::BezPath;
 use skrifa::instance::{LocationRef, Size};
 use skrifa::metrics::GlyphMetrics;
 use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, Target};
 use skrifa::raw::TableProvider;
-use skrifa::raw::model::pen::NullPen;
+use skrifa::outline::pen::NullPen;
 use skrifa::raw::ps::cff::{CffFontRef, Subfont, charset::Charset, v1::Cff};
-use skrifa::raw::ps::string::Sid;
+use skrifa::raw::ps::Sid;
 use skrifa::raw::ps::type1::Type1Font;
 use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
 use skrifa::raw::{FontData as ReadFontData, FontRead};
@@ -23,7 +24,11 @@ type CffFontYoke = Yoke<CFFYoke<'static>, FontData>;
 
 /// A font blob for type 1 fonts.
 #[derive(Clone)]
-pub(crate) struct Type1FontBlob(Arc<Type1Font>);
+pub(crate) struct Type1FontBlob(
+    Arc<Type1Font>,
+    /// PdfCraft patch (111): the program's outlines hinted at the size they are drawn.
+    Arc<Hinter>,
+);
 
 impl Debug for Type1FontBlob {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -34,7 +39,8 @@ impl Debug for Type1FontBlob {
 impl Type1FontBlob {
     pub(crate) fn new(data: FontData) -> Option<Self> {
         let table = Type1Font::new(data.as_ref().as_ref()).ok()?;
-        Some(Self(Arc::new(table)))
+        let hinter = Hinter::new(data, 0, HintEngine::Auto);
+        Some(Self(Arc::new(table), Arc::new(hinter)))
     }
 
     pub(crate) fn table(&self) -> &Type1Font {
@@ -47,11 +53,22 @@ impl Type1FontBlob {
 
         path.take()
     }
+
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted.
+    pub(crate) fn hinted_outline_glyph(&self, gid: GlyphId, ppem: f32) -> Option<BezPath> {
+        self.1.outline(gid.to_u32(), ppem)
+    }
 }
 
 /// A font blob for CFF-based fonts.
 #[derive(Clone)]
-pub(crate) struct CffFontBlob(Arc<CffFontYoke>, Arc<OnceLock<GlyphNames>>);
+pub(crate) struct CffFontBlob(
+    Arc<CffFontYoke>,
+    Arc<OnceLock<GlyphNames>>,
+    /// PdfCraft patch (111): the program's outlines hinted at the size they are drawn.
+    Arc<Hinter>,
+);
 
 /// PdfCraft patch: (see vendor/README.md hayro-interpret (50)) glyph name to glyph id, built on
 /// first use.
@@ -94,7 +111,12 @@ impl CffFontBlob {
         });
 
         let _ = (cff, charset);
-        Some(Self(Arc::new(yoke), Arc::new(OnceLock::new())))
+        let hinter = Hinter::new(data, 0, HintEngine::PostScript);
+        Some(Self(
+            Arc::new(yoke),
+            Arc::new(OnceLock::new()),
+            Arc::new(hinter),
+        ))
     }
 
     pub(crate) fn font_data(&self) -> FontData {
@@ -125,6 +147,12 @@ impl CffFontBlob {
             .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path);
 
         path.take()
+    }
+
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` by the
+    /// program's PostScript hints (see `font::hint`), or `None` when it isn't hinted.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        self.2.outline(glyph.to_u32(), ppem)
     }
 
     /// PdfCraft patch (see vendor/README.md hayro-interpret (77)): the glyph's own advance from
@@ -205,6 +233,9 @@ impl CffFontBlob {
 pub(crate) struct OpenTypeFontBlob {
     yoke: Arc<OpenTypeFontYoke>,
     cff_blob: Option<CffFontBlob>,
+    /// PdfCraft patch (111): the `glyf` outlines hinted at the size they are drawn; `None` for
+    /// a CFF OpenType font, whose outlines `cff_blob` draws and hints.
+    hinter: Option<Arc<Hinter>>,
 }
 
 impl Debug for OpenTypeFontBlob {
@@ -310,9 +341,13 @@ impl OpenTypeFontBlob {
                 }
             });
 
+        let hinter = cff_blob
+            .is_none()
+            .then(|| Arc::new(Hinter::new(data, index, HintEngine::Auto)));
         Some(Self {
             yoke: Arc::new(font_ref_yoke),
             cff_blob,
+            hinter,
         })
     }
 
@@ -419,6 +454,16 @@ impl OpenTypeFontBlob {
 
         let _ = outline.draw(draw_settings, &mut path);
         path.take()
+    }
+
+    /// PdfCraft patch (111): [`Self::outline_glyph`] fitted to the grid at `ppem` (see
+    /// `font::hint`), or `None` when it isn't hinted.
+    pub(crate) fn hinted_outline_glyph(&self, glyph: GlyphId, ppem: f32) -> Option<BezPath> {
+        match (self.cff_blob.as_ref(), self.hinter.as_ref()) {
+            (Some(cff_blob), _) => cff_blob.hinted_outline_glyph(glyph, ppem),
+            (None, Some(hinter)) => hinter.outline(glyph.to_u32(), ppem),
+            (None, None) => None,
+        }
     }
 }
 

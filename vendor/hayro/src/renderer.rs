@@ -863,6 +863,9 @@ pub(crate) struct Renderer {
     /// Like `soft_mask_cache` it belongs to one renderer, so to one `preview` setting.
     tiling_cells: TilingCells,
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
+    /// PdfCraft patch (34): whether glyphs are fitted to the pixel grid, and the fitted
+    /// outlines (see [`Renderer::hinted_glyph`]).
+    hinting: GlyphHinting,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
     pub(crate) scaler: Scaler,
@@ -873,6 +876,50 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+}
+
+/// PdfCraft patch (34): glyph outlines fitted to the pixel grid at the size they are drawn
+/// (`RenderSettings::hint_text`, storytold/pdfcraft#730).
+#[derive(Clone)]
+pub(crate) struct GlyphHinting {
+    enabled: bool,
+    outlines: crate::HintedOutlines,
+}
+
+impl GlyphHinting {
+    /// Fitted outlines kept per render cache. A page draws a few thousand glyph and size pairs;
+    /// zooming through many sizes would otherwise keep every one of them for as long as the
+    /// document is open, so past this many the cache starts again.
+    const MAX_ENTRIES: usize = 50_000;
+}
+
+/// PdfCraft patch (34): how a glyph drawn with `transform` (from its outline, in units of
+/// 1/1000 em, to device pixels) is fitted to the pixel grid: the size in device pixels per em
+/// it is hinted at, and the transform that draws the hinted outline with its baseline on a
+/// pixel boundary. `None` when it is drawn as it is.
+///
+/// The hinters fit outlines vertically, so the glyph's vertical axis must stay the device's:
+/// upright or upside-down text, stretched or slanted along the line, but not turned, where the
+/// em's width moving the baseline by more than 1/64 pixel shows. The size is rounded to 1/64
+/// pixel, as text engines size glyphs, and drawn at that rounded size, so the hinted edges land
+/// exactly on pixel boundaries; the glyph changes height by 1/128 pixel at most.
+fn hinted_size(transform: Affine) -> Option<(f32, Affine)> {
+    let [a, b, c, d, e, f] = transform.as_coeffs();
+    if !transform.is_finite() || (b * 1000.0).abs() > 1.0 / 64.0 {
+        return None;
+    }
+    let ppem = (d.abs() * 1000.0 * 64.0).round() / 64.0;
+    let range = f64::from(hayro_interpret::font::MIN_HINTED_PPEM)
+        ..=f64::from(hayro_interpret::font::MAX_HINTED_PPEM);
+    if !range.contains(&ppem) {
+        return None;
+    }
+    // Halves round up, as images snap: `round` takes them away from zero, so a baseline at row
+    // 100.5 went to row 101 in the whole page but, at -0.5 in a tile starting at row 101, to
+    // row 100 there, and a glyph across the tile's edge was torn by a pixel.
+    let baseline = (f + 0.5).floor();
+    let snapped = Affine::new([a, b, c, d.signum() * ppem / 1000.0, e, baseline]);
+    Some((ppem as f32, snapped))
 }
 
 /// PdfCraft patch (30): the cell pixmaps of coloured tiling patterns, keyed by the setting of the
@@ -996,6 +1043,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        hint_text: bool,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -1009,6 +1057,10 @@ impl Renderer {
             soft_mask_cache: HashMap::default(),
             tiling_cells: TilingCells::default(),
             outline_cache: cache.outline_cache.clone(),
+            hinting: GlyphHinting {
+                enabled: hint_text,
+                outlines: cache.hinted_outline_cache.clone(),
+            },
             cur_mask: None,
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -1116,6 +1168,7 @@ impl Renderer {
                 soft_mask_cache: HashMap::default(),
                 tiling_cells: TilingCells::default(),
                 outline_cache: self.outline_cache.clone(),
+                hinting: self.hinting.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
                 scaler: self.scaler,
@@ -1657,6 +1710,7 @@ impl Renderer {
             soft_mask_cache: HashMap::default(),
             tiling_cells: TilingCells::default(),
             outline_cache: self.outline_cache.clone(),
+            hinting: self.hinting.clone(),
             in_type3_glyph: false,
             scaler: self.scaler,
             preview: self.preview,
@@ -1722,6 +1776,7 @@ impl Renderer {
             soft_mask_cache: HashMap::default(),
             tiling_cells: TilingCells::default(),
             outline_cache: self.outline_cache.clone(),
+            hinting: self.hinting.clone(),
             cur_mask: None,
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -2184,11 +2239,16 @@ impl Renderer {
     ) {
         match glyph {
             Glyph::Outline(o) => {
-                let base_outline = self.cached_outline(o);
+                // PdfCraft patch (34): fitted to the pixel grid where the transform allows it.
+                let (base_outline, transform) =
+                    match self.hinted_glyph(o, transform * glyph_transform) {
+                        Some(hinted) => hinted,
+                        None => (self.cached_outline(o), transform * glyph_transform),
+                    };
 
                 self.fill_path(
                     base_outline.as_ref(),
-                    transform * glyph_transform,
+                    transform,
                     paint,
                     FillRule::NonZero,
                     // PdfCraft patch: glyph outlines are text for the reading-colours mapping.
@@ -2216,20 +2276,61 @@ impl Renderer {
     ) {
         match glyph {
             Glyph::Outline(o) => {
-                let base_outline = self.cached_outline(o);
+                // PdfCraft patch (34): the outline a fill of the glyph draws (`fill_glyph`), so
+                // text filled then stroked (a faux bold) is stroked along the edge it was filled
+                // to. The stroke is given in user space, where its width is.
+                let det = transform.determinant();
+                let hinted = self
+                    .hinted_glyph(o, transform * glyph_transform)
+                    .filter(|_| det.is_finite() && det.abs() > f64::EPSILON);
+                let path = match hinted {
+                    Some((outline, snapped)) => {
+                        (transform.inverse() * snapped) * outline.as_ref().clone()
+                    }
+                    None => glyph_transform * self.cached_outline(o).as_ref().clone(),
+                };
 
-                self.stroke_path(
-                    &(glyph_transform * base_outline.as_ref().clone()),
-                    transform,
-                    paint,
-                    stroke_props,
-                    true,
-                );
+                self.stroke_path(&path, transform, paint, stroke_props, true);
             }
             Glyph::Type3(s) => {
                 s.interpret(self, transform, glyph_transform, paint);
             }
         }
+    }
+
+    /// PdfCraft patch (34): the outline of `glyph` fitted to the pixel grid for drawing with
+    /// `transform`, and the transform to draw it with ([`hinted_size`]); `None` when hinting is
+    /// off, the transform doesn't allow it or the glyph isn't hinted at that size. Filled and
+    /// stroked glyphs use it; a glyph that clips keeps its outline.
+    ///
+    /// A glyph of a vertical-writing font is not hinted: its column advances down the page, so
+    /// putting each glyph's origin on a whole pixel would move it along the column and make the
+    /// spaces between characters uneven.
+    fn hinted_glyph(
+        &self,
+        glyph: &hayro_interpret::font::OutlineGlyph,
+        transform: Affine,
+    ) -> Option<(Rc<BezPath>, Affine)> {
+        if !self.hinting.enabled || glyph.is_vertical() {
+            return None;
+        }
+        let (ppem, snapped) = hinted_size(transform)?;
+        let key = (glyph.identifier().cache_key(), ppem.to_bits());
+        let known = self.hinting.outlines.borrow().get(&key).cloned();
+        let hinted = match known {
+            Some(hinted) => hinted,
+            None => {
+                let unhinted = self.cached_outline(glyph);
+                let hinted = glyph.hinted_outline(ppem, &unhinted).map(Rc::new);
+                let mut outlines = self.hinting.outlines.borrow_mut();
+                if outlines.len() >= GlyphHinting::MAX_ENTRIES {
+                    outlines.clear();
+                }
+                outlines.insert(key, hinted.clone());
+                hinted
+            }
+        };
+        Some((hinted?, snapped))
     }
 
     fn cached_outline(&self, glyph: &hayro_interpret::font::OutlineGlyph) -> Rc<BezPath> {
@@ -2564,7 +2665,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, self.hinting.clone()))
                     .clone()
             }),
             None,
@@ -2693,7 +2794,7 @@ impl<'a> Device<'a> for Renderer {
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, self.hinting.clone()))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2878,7 +2979,14 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn draw_soft_mask(
+    mask: &SoftMask<'_>,
+    settings: RenderSettings,
+    width: u16,
+    height: u16,
+    preview: bool,
+    hinting: GlyphHinting,
+) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
@@ -2894,6 +3002,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         soft_mask_cache: HashMap::default(),
         tiling_cells: TilingCells::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
+        hinting,
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,

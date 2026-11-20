@@ -433,6 +433,9 @@ fn render_page<'a>(
             None => (WHITE, None),
         };
         let bg_color = if config.transparent { TRANSPARENT } else { bg_color };
+        // Glyphs are fitted to the pixel grid at the size they are drawn, as text is on screen,
+        // so small text is sharp instead of soft and uneven (#730). Tiles start on whole pixels,
+        // so a glyph across two tiles is fitted alike in both.
         let rs = match req.tile {
             // Tiles are bounded by construction, so the page itself may be arbitrarily large.
             Some(t) => {
@@ -447,6 +450,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    hint_text: true,
                     ..Default::default()
                 }
             }
@@ -469,6 +473,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    hint_text: true,
                     ..Default::default()
                 }
             }
