@@ -45,7 +45,7 @@ struct ScanRequest {
 type ScanAnswer = Result<Result<SignatureImage, ScanError>, String>;
 
 /// A finished scan with the photo version and request it answers.
-type ScanDone = (u64, ScanRequest, ScanAnswer);
+type ScanDone = (u64, u64, ScanRequest, ScanAnswer);
 
 fn next_photo_version() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -168,9 +168,8 @@ struct ScanTabState {
     pick: Option<PickId>,
     /// One key: a newer request replaces a waiting one.
     queue: JobQueue<u8, ScanDone>,
+    request: u64,
     view: CanvasView,
-    /// The frame when the running drag began, to put back on Escape.
-    grab: Option<PhotoRect>,
     /// Why the last photo was not used.
     error: Option<String>,
 }
@@ -204,7 +203,6 @@ impl ScanTabState {
                 self.preview = None;
                 self.shown = None;
                 self.view = unfitted();
-                self.grab = None;
                 self.submit(draft, true);
             }
             Err(e) => self.error = Some(crate::i18n::fmt(tl!("Couldn't use the photo: {e}"), &[("e", &e)])),
@@ -245,19 +243,27 @@ impl ScanTabState {
 
     /// Queue a scan of the current frame and sensitivity; the draft is not ready until a full one answers.
     fn submit(&mut self, draft: &mut SignatureDraft, full: bool) {
+        let Some(frame) = self.scan.as_ref().map(|scan| scan.frame) else { return };
+        self.submit_frame(draft, frame, full);
+    }
+
+    fn submit_frame(&mut self, draft: &mut SignatureDraft, frame: PhotoRect, full: bool) {
         let Some(scan) = self.scan.as_mut() else { return };
         scan.full = false;
         draft.image = None;
-        let (photo, req, version) = (scan.photo.clone(), scan.request(full), scan.version);
-        self.queue.submit(0, Priority::VISIBLE, move |_| (version, req, ScanDraft::run(&photo, req)));
+        let (photo, mut req, version) = (scan.photo.clone(), scan.request(full), scan.version);
+        req.frame = frame;
+        self.request = self.request.wrapping_add(1);
+        let request = self.request;
+        self.queue.submit(0, Priority::VISIBLE, move |_| (version, request, req, ScanDraft::run(&photo, req)));
     }
 
-    /// Takes the finished scans. One of another photo, or a quick one after the full result, is dropped.
+    /// Takes only the newest scan for the current photo.
     fn collect(&mut self, draft: &mut SignatureDraft) {
         while let Some(done) = self.queue.try_recv() {
-            let (version, req, answer) = done.result;
+            let (version, request, req, answer) = done.result;
             let Some(scan) = self.scan.as_mut() else { continue };
-            if version != scan.version || (!req.full && scan.full) {
+            if version != scan.version || request != self.request {
                 continue;
             }
             scan.apply(&mut self.preview, req, answer);
@@ -330,39 +336,28 @@ impl ScanTabState {
         let width = ui.available_width();
         let room = ui.allocate_space(egui::vec2(width, width * (ph / pw).min(0.6) as f32)).1;
         let source = PhotoSource { photo: &scan.photo, version: scan.version };
-        let mut crop = crop_of(scan.frame);
+        let crop = crop_of(scan.frame);
         let bounds = DocRect::new(0.0, 0.0, pw, ph);
         let corners = [Point::new(0.0, 0.0), Point::new(pw, 0.0), Point::new(pw, ph), Point::new(0.0, ph)];
         let shown = Canvas::new(tl!("Photo")).view(Bind::bound(&mut self.view)).document(Size::new(pw, ph)).show_at(ui, room, |ui, body| {
             RasterDisplay::new(tl!("Signature photo"), &source).show_at(ui, body.rect);
-            CropOverlay::new(tl!("Frame"), Bind::bound(&mut crop)).outside(CropOutside::NewFrame).area(corners).bounds(bounds).show_at(ui, body.rect)
+            CropOverlay::new(tl!("Frame"), Bind::given(crop)).outside(CropOutside::NewFrame).area(corners).bounds(bounds).show_at(ui, body.rect)
         });
         let Some(overlay) = shown.inner else { return };
         let mut commit = false;
         for event in overlay.edit.events.iter() {
             match event {
-                EditEvent::Begin { .. } => self.grab = self.scan.as_ref().map(|s| s.frame),
                 EditEvent::Update { value, .. } => {
-                    if let Some(scan) = self.scan.as_mut() {
-                        let frame = frame_of(value.rect, size);
-                        if frame != scan.frame {
-                            scan.frame = frame;
-                            self.submit(draft, false);
-                        }
-                    }
+                    self.submit_frame(draft, frame_of(value.rect, size), false);
                 }
                 EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
                     if let Some(scan) = self.scan.as_mut() {
                         scan.frame = frame_of(after.rect, size);
                         commit = true;
                     }
-                    self.grab = None;
                 }
                 EditEvent::Cancel { .. } => {
-                    if let (Some(scan), Some(frame)) = (self.scan.as_mut(), self.grab.take()) {
-                        scan.frame = frame;
-                        commit = true;
-                    }
+                    commit = true;
                 }
                 _ => {}
             }
@@ -396,6 +391,6 @@ impl ScanTabState {
 /// and sensitivity, and cleared on any change, so the pad's Apply waits for the result.
 pub(crate) fn tab(host: Arc<Host>, wake: Wake) -> impl FnMut(&mut egui::Ui, &mut SignatureDraft, Option<OsFile>) + Send + 'static {
     let queue = JobQueue::new(host.jobs_shared().clone(), wake, QueueOptions::default());
-    let mut state = ScanTabState { host, scan: None, preview: None, shown: None, pick: None, queue, view: unfitted(), grab: None, error: None };
+    let mut state = ScanTabState { host, scan: None, preview: None, shown: None, pick: None, queue, request: 0, view: unfitted(), error: None };
     move |ui, draft, dropped| state.show(ui, draft, dropped)
 }
