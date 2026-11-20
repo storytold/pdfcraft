@@ -29,9 +29,12 @@ orbit.camera(&Bounds, nav::reach(&[WorldMesh], &Bounds), aspect) -> Result<Camer
 - A triangle's own colour wins over its mesh's, which wins over `RenderOptions::colour`.
 - Opaque triangles are drawn first, then translucent ones blended over them; alpha 0 is not drawn.
 - `Lighting::Headlight` (default) shades by the angle to the view direction; `Lighting::Unlit` draws flat colour.
+- `Lighting::Scheme` lights with one of a 3D view's lighting schemes (ISO 32000-1 §13.6.4.5, Table 310): infinite lights fixed to
+  the camera, plus an ambient term, each channel saturating at full colour. `LightingScheme::lighting_for` maps an `/LS`
+  `/Subtype` name to a `Lighting`: `Artwork` is the headlight (the model's own lights are not read yet), `None` is unlit.
 - Perspective triangles are clipped at a near plane 1/10,000 of the eye-to-target distance from the eye; orthographic views are not clipped.
 - `MAX_RENDER_PIXELS` (2^24, about 16 MP) bounds the image: at most 64 MB of RGBA plus 128 MB of depth.
   `MAX_ASSEMBLED_TRIANGLES` and `MAX_ASSEMBLED_VERTICES` (2^24 each) bound one `assemble` call. `MAX_RENDER_WORK` (2^31) bounds
   the pixel centres one `render` tests, summed over each triangle's clipped bounding box; past it the render returns
   `RenderError::TooMuchWork`. That is still seconds of CPU at the top, so callers on a UI thread should render small or off-thread.
-- Not yet: shadows, ambient occlusion, specular light, scene lights, textures, wires and markups.
+- Not yet: shadows, ambient occlusion, specular light, the model's own lights, textures, wires and markups.
