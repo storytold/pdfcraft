@@ -206,12 +206,7 @@ fn windows_junctions_are_skipped_without_following_their_targets() {
     let junction = folder.0.join("junction");
 
     // Creating a directory junction does not require developer mode on Windows.
-    let status = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(&junction)
-        .arg(&outside.0)
-        .status()
-        .unwrap();
+    let status = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&junction).arg(&outside.0).status().unwrap();
     assert!(status.success(), "the Windows junction fixture could not be created");
     let found = run(&Options::new(&folder.0, "needle"));
     assert_eq!(found.summary.matches, 1, "a junction must not be traversed");
