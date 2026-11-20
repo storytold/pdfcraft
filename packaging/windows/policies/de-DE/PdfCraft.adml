@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>PdfCraft-Administrative Vorlage</displayName>
+  <description>Administrative Richtlinien für PdfCraft.</description>
+  <resources>
+    <stringTable>
+      <string id="PdfCraftCategory">PdfCraft</string>
+      <string id="DisableUpdateCheck">Update-Prüfungen deaktivieren</string>
+      <string id="DisableUpdateCheck_Explain">Bei Aktivierung sucht PdfCraft nicht nach Updates. Die Option für die automatische Suche beim Start wird in den Einstellungen leer und deaktiviert angezeigt. Bei Deaktiviert oder Nicht konfiguriert steuert der Benutzer die automatische Suche in den Einstellungen.</string>
+    </stringTable>
+    <presentationTable />
+  </resources>
+</policyDefinitionResources>

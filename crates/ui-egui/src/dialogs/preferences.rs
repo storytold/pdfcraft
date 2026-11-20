@@ -660,7 +660,16 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.reload_changed_files, tl!("Reload documents when their files change on disk"), t);
     #[cfg(not(target_arch = "wasm32"))]
-    ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
+    {
+        let checks_enabled = app.updates.checks_enabled;
+        let mut check_at_start = app.update_check_at_start && checks_enabled;
+        ui.add_enabled_ui(checks_enabled, |ui| {
+            ctx.checkbox(ui, &mut check_at_start, tl!("Check for updates when PdfCraft starts"), t);
+        });
+        if checks_enabled {
+            app.update_check_at_start = check_at_start;
+        }
+    }
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
 
     #[cfg(not(target_arch = "wasm32"))]
