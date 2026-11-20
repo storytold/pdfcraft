@@ -18,6 +18,13 @@ impl Session {
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {
             return Ok(editor.saved.clone());
         }
+        // A signed state restored by undo after a save that dropped its signatures (#4650): its
+        // own file holds the signed byte ranges, so it is written from that file. Laid over the
+        // saved rewrite instead, the signatures would cover bytes that are no longer there.
+        let own_base = !on_saved && doc.is_signed();
+        if own_base && !editor.cos.is_modified() && !editor.cos.reconstructed() {
+            return Ok(editor.cos.bytes().clone());
+        }
         // What the user removed again before saving (a cleared redaction mark) stays out of the file.
         let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), drop_unlinked: true, ..SaveOptions::default() };
         // A restored snapshot can be based on an earlier revision. Append to the last saved
@@ -26,7 +33,7 @@ impl Session {
         let rewrite = editor.cos.full_save_required() || editor.cos.encryption_changed() || editor.cos.revisions().is_empty();
         let cos = writable(&editor.cos)?;
         guard(|| {
-            if on_saved || rewrite {
+            if on_saved || rewrite || own_base {
                 write_incremental(&cos, &opts)
             } else {
                 let mut base = pdfcraft_cos::Document::open_with_password(editor.saved.clone(), editor.saved_keys.reopen.as_deref())?;
