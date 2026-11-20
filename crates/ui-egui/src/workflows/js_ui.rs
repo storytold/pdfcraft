@@ -240,6 +240,8 @@ impl PdfCraftApp {
     pub(crate) fn script_tick(&mut self, ctx: &egui::Context) {
         // A message queued before the window had a context is posted on the first pass.
         if self.script_shown.is_none() && !self.script_messages.is_empty() {
+            // Requests from the same script may already have queued notices; post those first.
+            crate::notices::post_queued(self, ctx);
             self.next_script_message(ctx);
         }
         // Nothing acts on the document under a dialog or prompt (`modal_open`): page actions and
