@@ -15,6 +15,7 @@ pub(super) mod credits;
 pub(super) mod hairlines_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
+pub(super) mod pagesize;
 pub(super) mod palette;
 pub(super) mod preferences;
 pub(super) mod printer_marks_ui;
@@ -57,6 +58,7 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    size_now: bool,
     printer_marks_now: bool,
     colours_now: bool,
     fix_hairlines_now: bool,
@@ -477,6 +479,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.boxes_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::PageSize => {
+            let (go, cancel) = crate::pagesize::body(ui, app, &t);
+            req.size_now = go;
+            req.close = go || cancel;
             return false;
         }
         Dialog::Protect => {
@@ -2173,6 +2181,9 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         let edit = app.boxes_draft.edit(app.views[i].current, count, &units);
         app.apply_edit(edit);
         app.boxes_draft.seeded = None;
+    }
+    if req.size_now {
+        app.change_page_size();
     }
     if req.protect_now && app.apply_edit(app.protect_draft.edit()) {
         app.protect_draft = Default::default();

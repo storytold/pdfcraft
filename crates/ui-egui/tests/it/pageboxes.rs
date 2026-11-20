@@ -1,4 +1,4 @@
-//! Crop tool, Set Page Boxes and Duplicate pages in the real shell (egui_kittest).
+//! Crop tool, Set Page Boxes, Change Page Size and Duplicate pages in the real shell (egui_kittest).
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -138,6 +138,91 @@ fn set_page_boxes_dialog_applies_margins_to_the_chosen_pages() {
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(size(&h, 0), (300.0, 400.0));
+}
+
+/// #7116: Change page size starts from the current page, turns it with Landscape and resizes the
+/// pages without scaling them; pages that lose part of what showed are named in a notice.
+#[test]
+fn change_page_size_dialog_resizes_the_chosen_pages_and_warns_of_cuts() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("page.size"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::PageSize));
+    h.get_by_label("Change Page Size");
+    assert_eq!(h.state().size_draft.size(), [300.0, 400.0], "seeded from the page");
+    h.get_by_label("Current page (1)").click();
+    h.get_by_label("Landscape").click();
+    h.run_steps(2);
+    assert_eq!(h.state().size_draft.size(), [400.0, 300.0], "a custom size turns too");
+    h.get_by_label("Part of page 1 would be cut off");
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(size(&h, 0), (400.0, 300.0));
+    assert_eq!(size(&h, 1), (300.0, 400.0), "only the current page");
+    let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert_eq!(toast, "Part of 1 page is now outside the new page size");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change page size"));
+    // Reopened, it starts again from the page as it is now.
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    assert_eq!(h.state().size_draft.size(), [400.0, 300.0]);
+}
+
+/// The nine placement radios carry their names for a screen reader (the tooltip names a widget
+/// that has no label of its own).
+#[test]
+fn change_page_size_names_each_placement() {
+    let mut h = harness();
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    for name in ["Top left", "Top", "Top right", "Left", "Centre", "Right", "Bottom left", "Bottom", "Bottom right"] {
+        h.get_by_label(name);
+    }
+    h.get_by_label("Bottom right").click();
+    h.run_steps(2);
+    assert_eq!(h.state().size_draft.anchor, (2, 2));
+}
+
+/// Opened through the control channel, the dialog starts again from the page, as from the menu,
+/// not from a draft that was cancelled.
+#[test]
+fn change_page_size_opened_by_option_starts_from_the_page() {
+    let mut h = harness();
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    h.state_mut().size_draft.custom = [500.0, 500.0];
+    h.state_mut().size_draft.paper = None;
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    h.state_mut().set_option("dialog", "page-size").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().size_draft.size(), [300.0, 400.0]);
+}
+
+/// Pages whose `/UserUnit`s leave no size that fits them all: the dialog says so and OK is off,
+/// instead of offering a size the engine refuses. Choosing one page offers its sizes again.
+#[test]
+fn change_page_size_says_when_the_chosen_pages_have_no_size_in_common() {
+    let fixture = String::from_utf8(FIXTURE.to_vec())
+        .unwrap()
+        .replace("4 0 obj << /Type /Page /Parent 2 0 R >>", "4 0 obj << /Type /Page /Parent 2 0 R /UserUnit 20000 >>");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("units.pdf", None, fixture.into_bytes()).unwrap();
+        app
+    });
+    h.run_steps(6);
+    h.state_mut().execute("page.size");
+    h.run_steps(3);
+    h.get_by_label("The chosen pages have no page size in common");
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled());
+    h.get_by_label_contains("Current page (").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("The chosen pages have no page size in common").is_none());
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
 }
 
 #[test]

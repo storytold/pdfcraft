@@ -64,14 +64,8 @@ fn parse_custom_dimensions(s: &str) -> Option<(f64, f64)> {
 fn resolve_paper(name: Option<&str>, printer: Option<&str>) -> Result<((f64, f64), Option<String>)> {
     if let Some(p) = name {
         // 1. Match standard PAPERS presets.
-        for (index, (n, size)) in PAPERS.iter().enumerate() {
-            if n.eq_ignore_ascii_case(p)
-                || n.replace("US ", "").eq_ignore_ascii_case(p)
-                || n.split(" (").next().is_some_and(|label| label.eq_ignore_ascii_case(p))
-            {
-                let media = print::cups_media(index).map(String::from);
-                return Ok((*size, media));
-            }
+        if let Some((index, size)) = paper_preset(p) {
+            return Ok((size, print::cups_media(index).map(String::from)));
         }
         // 2. Match detected driver papers for the given printer.
         if let Some(printer_name) = printer {
@@ -425,17 +419,32 @@ enum Destination {
     Printer(spool::Job),
 }
 
+/// A standard paper (`PAPERS`) by its name, its name without "US ", or the part before " (":
+/// its index and portrait size in points.
+pub(crate) fn paper_preset(name: &str) -> Option<(usize, (f64, f64))> {
+    PAPERS.iter().enumerate().find_map(|(index, (n, size))| {
+        (n.eq_ignore_ascii_case(name)
+            || n.replace("US ", "").eq_ignore_ascii_case(name)
+            || n.split(" (").next().is_some_and(|label| label.eq_ignore_ascii_case(name)))
+        .then_some((index, *size))
+    })
+}
+
 /// "WxH" with a unit (in, mm, cm or pt) as a portrait paper size in points; each side 1 to 200
 /// inches (PDF's own page limit).
 fn paper_size(spec: &str) -> Option<(f64, f64)> {
+    paper_dimensions(spec).map(|(w, h)| (w.min(h), w.max(h)))
+}
+
+/// [`paper_size`] in the order written: width, then height.
+pub(crate) fn paper_dimensions(spec: &str) -> Option<(f64, f64)> {
     let s = spec.trim().to_ascii_lowercase();
     let (body, per_point) = [("in", 1.0 / 72.0), ("mm", 25.4 / 72.0), ("cm", 2.54 / 72.0), ("pt", 1.0)]
         .into_iter()
         .find_map(|(unit, per_point)| s.strip_suffix(unit).map(|b| (b, per_point)))?;
     let (w, h) = body.split_once('x')?;
     let side = |t: &str| t.trim().parse::<f64>().ok().map(|v| v / per_point).filter(|v| (72.0..=14_400.0).contains(v));
-    let (w, h) = (side(w)?, side(h)?);
-    Some((w.min(h), w.max(h)))
+    Some((side(w)?, side(h)?))
 }
 
 #[cfg(test)]

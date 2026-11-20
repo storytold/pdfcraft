@@ -1228,6 +1228,26 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t(
+            "page_set_size",
+            "Change page size",
+            "Give pages a new size without scaling anything on them (Acrobat's Change Page Size): only the media box moves, around each page's visible area, so text and images keep their size and place relative to each other. The size is a `paper` (a standard name such as A4, A3, Letter, Legal or Tabloid, or WxH with a unit, e.g. 210x297mm) or `width` and `height` in points, as the page is shown (a written WxH keeps its order: 297x210mm is landscape); `orientation` turns either portrait or landscape. `align` puts the old visible area on the new page (default center), then `move_right` and `move_down` points move it (negative: left and up). The crop, bleed, trim and art boxes go back to the whole new page; where it reaches past what showed, the content is clipped to what showed, so what the old boxes hid stays hidden. Returns `cut_off`: the 1-based pages where part of what showed is now outside the page. Undoable.",
+        )
+        .cmd("page.size")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to resize (default: all)"),
+                "paper": { "type": "string", "description": "A standard paper name or WxH with a unit (in, mm, cm, pt)." },
+                "width": { "type": "number", "exclusiveMinimum": 0, "description": "Points, as the page is shown." },
+                "height": { "type": "number", "exclusiveMinimum": 0, "description": "Points, as the page is shown." },
+                "orientation": { "type": "string", "enum": ["portrait", "landscape"] },
+                "align": { "type": "string", "enum": ["top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"] },
+                "move_right": { "type": "number", "description": "Points; negative moves left." },
+                "move_down": { "type": "number", "description": "Points; negative moves up." },
+            }),
+            &["doc"],
+        )),
+        t(
             "doc_header_footer",
             "Add header and footer",
             "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> <<dd.mm.yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier; Thai is drawn from PdfCraft's built-in Thai face beside it (a build without one refuses it). replace: true swaps out existing ones (Update). Undoable.",

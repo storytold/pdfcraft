@@ -332,6 +332,7 @@ impl Automation {
                 },
             )?,
             "page_set_box" => self.page_set_box(&a)?,
+            "page_set_size" => self.page_set_size(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
             "xfa_to_static" => self.apply(&a, Edit::XfaToStatic)?,
