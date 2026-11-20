@@ -704,13 +704,7 @@ fn paints_canvas(device: Rect, width: u16, height: u16) -> bool {
 /// everything it paints: a path whose box misses the canvas is skipped without changing a pixel,
 /// so a tile of a large page no longer strokes and fills every path on the page. Bounds that
 /// aren't finite (an empty path) are drawn as before.
-fn may_paint_canvas(
-    path: &BezPath,
-    transform: Affine,
-    reach: f64,
-    width: u16,
-    height: u16,
-) -> bool {
+fn control_bbox(path: &BezPath) -> Rect {
     let mut points = Rect::new(
         f64::INFINITY,
         f64::INFINITY,
@@ -733,11 +727,31 @@ fn may_paint_canvas(
             kurbo::PathEl::ClosePath => {}
         }
     }
+    points
+}
+
+fn may_paint_box(
+    points: Rect,
+    transform: Affine,
+    reach: f64,
+    width: u16,
+    height: u16,
+) -> bool {
     let grow = reach + DRAW_SLACK;
     let device = transform
         .transform_rect_bbox(points.inflate(grow, grow))
         .inflate(2.0, 2.0);
     paints_canvas(device, width, height)
+}
+
+fn may_paint_canvas(
+    path: &BezPath,
+    transform: Affine,
+    reach: f64,
+    width: u16,
+    height: u16,
+) -> bool {
+    may_paint_box(control_bbox(path), transform, reach, width, height)
 }
 
 /// PdfCraft patch: whether a `rect` drawn with `transform` can paint a pixel of a `width` ×
@@ -862,7 +876,7 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (30): coloured tiling cells drawn during this render (see [`TilingCells`]).
     /// Like `soft_mask_cache` it belongs to one renderer, so to one `preview` setting.
     tiling_cells: TilingCells,
-    pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
+    pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<(BezPath, Rect)>>>>,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
     pub(crate) scaler: Scaler,
@@ -2154,10 +2168,26 @@ impl Renderer {
         // reading-colours mapping.
         is_text: bool,
     ) {
+        self.fill_path_with_bbox(path, None, transform, paint, fill_rule, is_text);
+    }
+
+    fn fill_path_with_bbox(
+        &mut self,
+        path: &BezPath,
+        control_bbox: Option<Rect>,
+        transform: Affine,
+        paint: &Paint<'_>,
+        fill_rule: FillRule,
+        is_text: bool,
+    ) {
         self.ctx.set_fill_rule(convert_fill_rule(fill_rule));
         self.ctx.set_transform(transform);
         // PdfCraft patch: see `may_paint_canvas`.
-        if !may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+        let visible = match control_bbox {
+            Some(bbox) => may_paint_box(bbox, transform, 0.0, self.ctx.width(), self.ctx.height()),
+            None => may_paint_canvas(path, transform, 0.0, self.ctx.width(), self.ctx.height()),
+        };
+        if !visible {
             return;
         }
 
@@ -2184,10 +2214,11 @@ impl Renderer {
     ) {
         match glyph {
             Glyph::Outline(o) => {
-                let base_outline = self.cached_outline(o);
+                let cached = self.cached_outline(o);
 
-                self.fill_path(
-                    base_outline.as_ref(),
+                self.fill_path_with_bbox(
+                    &cached.0,
+                    Some(cached.1),
                     transform * glyph_transform,
                     paint,
                     FillRule::NonZero,
@@ -2216,10 +2247,10 @@ impl Renderer {
     ) {
         match glyph {
             Glyph::Outline(o) => {
-                let base_outline = self.cached_outline(o);
+                let cached = self.cached_outline(o);
 
                 self.stroke_path(
-                    &(glyph_transform * base_outline.as_ref().clone()),
+                    &(glyph_transform * cached.0.clone()),
                     transform,
                     paint,
                     stroke_props,
@@ -2232,16 +2263,18 @@ impl Renderer {
         }
     }
 
-    fn cached_outline(&self, glyph: &hayro_interpret::font::OutlineGlyph) -> Rc<BezPath> {
+    fn cached_outline(&self, glyph: &hayro_interpret::font::OutlineGlyph) -> Rc<(BezPath, Rect)> {
         let id = glyph.identifier().cache_key();
 
-        if let Some(path) = self.outline_cache.borrow().get(&id) {
-            return path.clone();
+        if let Some(entry) = self.outline_cache.borrow().get(&id) {
+            return entry.clone();
         }
 
-        let path = Rc::new(glyph.outline());
-        self.outline_cache.borrow_mut().insert(id, path.clone());
-        path
+        let path = glyph.outline();
+        let bbox = control_bbox(&path);
+        let entry = Rc::new((path, bbox));
+        self.outline_cache.borrow_mut().insert(id, entry.clone());
+        entry
     }
 
     fn force_images_may_have_transparency(&self) -> bool {
@@ -2737,16 +2770,22 @@ impl<'a> Device<'a> for Renderer {
         paint: &Paint<'_>,
         draw_mode: &PathDrawMode,
     ) {
-        let path = rect.to_path(0.1);
         match draw_mode {
             PathDrawMode::Fill(fill_rule) => {
                 self.ctx.set_fill_rule(convert_fill_rule(*fill_rule));
                 self.ctx.set_transform(transform);
                 // PdfCraft patch: see `may_paint_canvas`.
-                if !may_paint_canvas(&path, transform, 0.0, self.ctx.width(), self.ctx.height()) {
+                if !may_paint_box(
+                    rect.abs(),
+                    transform,
+                    0.0,
+                    self.ctx.width(),
+                    self.ctx.height(),
+                ) {
                     return;
                 }
 
+                let path = rect.to_path(0.1);
                 // PdfCraft patch: apply the reading-colours mapping before painting.
                 let paint = self.replaced(paint, false);
                 let PaintSetup::Clip(clip_path) = self.set_paint(&paint, &path, false) else { return };
@@ -2761,6 +2800,7 @@ impl<'a> Device<'a> for Renderer {
                 }
             }
             PathDrawMode::Stroke(s) => {
+                let path = rect.to_path(0.1);
                 Self::stroke_path(self, &path, transform, paint, s, false);
             }
         }
@@ -3356,5 +3396,27 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+
+    #[test]
+    fn may_paint_box_with_cached_control_bbox_matches_may_paint_canvas() {
+        let mut curve = super::BezPath::new();
+        curve.move_to((0.0, 0.0));
+        curve.curve_to((10.0, 20.0), (30.0, 20.0), (40.0, 0.0));
+        curve.close_path();
+        let empty = super::BezPath::new();
+        for path in [&curve, &empty] {
+            let bbox = super::control_bbox(path);
+            for transform in [
+                super::Affine::IDENTITY,
+                super::Affine::translate((95.0, 95.0)),
+                super::Affine::translate((500.0, 500.0)),
+            ] {
+                assert_eq!(
+                    super::may_paint_box(bbox, transform, 0.0, 100, 100),
+                    super::may_paint_canvas(path, transform, 0.0, 100, 100),
+                );
+            }
+        }
     }
 }

@@ -11923,3 +11923,57 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+#[test]
+fn page_renderer_session_matches_single_renders_and_tracks_stats() {
+    let p1 = b"BT /F1 14 Tf 10 50 Td (Hello Page One) Tj /F2 12 Tf 0 -18 Td (Courier) Tj ET";
+    let p2 = b"BT /F1 14 Tf 10 50 Td (Hello Page Two) Tj /F2 12 Tf 0 -18 Td (Courier 2) Tj ET";
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 160 80] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{}\nendstream", p1.len(), String::from_utf8_lossy(p1)).into_bytes(),
+        format!("<< /Length {} >>\nstream\n{}\nendstream", p2.len(), String::from_utf8_lossy(p2)).into_bytes(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (idx, body) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
+        bytes.extend_from_slice(body);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+
+    let pdf = std::sync::Arc::new(bytes);
+    let requests = [
+        RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false },
+        RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false },
+        RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 0, preview: false },
+        RenderRequest { page: 0, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false },
+        RenderRequest { page: 1, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false },
+    ];
+    let mut single = PageRenderer::new(pdf.clone(), RenderConfig::default());
+    let expected: Vec<_> = requests.iter().map(|&req| single.render(req)).collect();
+
+    let mut batched = PageRenderer::new(pdf, RenderConfig::default());
+    let got: Vec<_> = batched.session(|s| requests.iter().map(|&req| s.render(req)).collect());
+    for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
+        assert_eq!(g.error, e.error, "request {i}");
+        assert_eq!((g.width, g.height), (e.width, e.height), "request {i}");
+        assert_eq!(g.rgba.as_ref(), e.rgba.as_ref(), "request {i}");
+        assert_eq!(g.text.is_some(), e.text.is_some(), "request {i}");
+        if let (Some(gt), Some(et)) = (&g.text, &e.text) {
+            assert_eq!(gt.glyphs.len(), et.glyphs.len(), "request {i}");
+        }
+    }
+    assert_eq!(batched.stats(), single.stats());
+}
