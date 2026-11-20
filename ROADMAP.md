@@ -5,14 +5,17 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M3, PR #6323: integrate main 207a50ef; a reused tab no longer vouches for a deleted file or describes unsaved edits in Recent; estimates unchanged)
+>
 > **Last reviewed:** 2026-11-16 | **Last updated:** 2026-11-16 | **Change:** patch (M5 #3741: Ctrl+M opens Comments on Windows/Linux without toggling it closed; macOS leaves Command+M for Minimize; platform-specific shortcut surfaces and regressions retained; estimates unchanged)
 
 > **Last reviewed:** 2026-11-15 | **Last updated:** 2026-11-15 | **Change:** minor (craft-libs cutover for codecs, XFA XML, crypt/filters/COS/export/XFDF, PRC and ZIP; print colour management for pictures; M7 line replacement keeps source fonts; auto-tag headings by size and weight; arrow-key comment moves; stream-filter JPEG export; form, signature, optimize, redaction, measurement, PRC-normal and CMYK fixes; v0.21.1 Flatpak fix; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
+> **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M3, PR #6323: Recent deduplicates relative and absolute paths consistently with tab reuse; synchronized with main d2139e58; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-08 | **Last updated:** 2026-11-08 | **Change:** patch (M10 #6514: refresh craft-print to 7ee35a9f, PDF loader to 51934db3 and public GDI kept at 64e7afd4 after #605 merged; preserve crash fix and stream-test repairs; new-graph CI pending; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-07 | **Last updated:** 2026-11-07 | **Change:** patch (M10: file-backed Windows PDF loading without whole-job buffering or per-chunk async waits; approved dependency chain retains #5006; physical output still unqualified; estimates unchanged)
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #2964: directly edit Thai source text inside supported Form XObjects; estimates unchanged)
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** minor (M3, #5452: native Recent rows gain Reveal in Finder / File Explorer; estimates unchanged)
@@ -27,12 +30,13 @@
 > **2026-11-02 (M6, PR #5699 second review):** Count active expression chains instead of whole-source tokens; align native button events and automation schemas, block document input under script prompts, and validate prompt dismissal and idle repaint scheduling.
 > **2026-11-02 (M6, PR #5699 review):** Cache per-edit script geometry/calculation plans, expose live document metadata, and bound persistent worker stacks to 64 MiB; add operation-count, lifecycle and isolated hostile-input/address-space regressions.
 > **2026-11-02 (M6, #5211/#269):** Integrate persistent native AcroForm realms, synchronous calculation, page boxes, appearance/geometry/icon writeback and native button prompt continuation. Synthetic workflow and cancellation tests added; validation details accompany the PR. Remaining JavaScript parity stays partial.
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M3, #6241 candidate: explicit opens of an existing PDF tab refresh Recent and restore cleared entries without reloading unsaved work; estimates unchanged)
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -46,9 +50,9 @@
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (M7, #2750: Single-style Keep source fonts edits retain source glyphs and batch only missing glyphs in fallback fonts. Per-rewrite character eligibility and widths are cached; source and fallback edge spaces stay extractable. Estimates unchanged.)
 
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** patch (M1, #1143: repaired aliases survive preflight, snapshots and normalized saves; retained materialized revisions report generation disagreements; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M1, #1143: explicit live xref/header generation repair policy and bounded diagnostics; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M1: refresh object-generation reference identity against current upstream; estimates unchanged)
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
@@ -264,6 +268,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-11-16 (M3, PR #6323 review):** Integrated main 207a50ef, keeping #5452's Reveal row action. Reopening a file that already has a tab queues it for the missing-file check instead of recording it as read, so a deleted file leaves Recent; while the tab has unsaved edits its row keeps the saved page count and size. Synthetic regressions for both; estimates unchanged.
 
 - **2026-11-16 (M5, #3741):** Ctrl+M opens Comments on Windows/Linux and repeated activation keeps it open. macOS leaves Command+M unbound for Minimize. Dispatch, menus, palette, shortcut help and control/headless metadata resolve the platform-specific registry binding. Mapping and real-input regressions are retained through the rebase; estimates unchanged.
 - **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
@@ -287,6 +292,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-29 (M6, PR #4166/#4088 integration):** Retained automatic-field Print suppression, ShowPanel/SaveAs filtering, explicit button/console printing and document-error provenance while integrating upstream 0.15. All three engine regressions and the headless regression remain in their current test modules, with matching parity evidence. Dependency manifests retain main's integrated craft-libs revision, which includes #366. Estimates unchanged.
 - **2026-10-27 (M10, annotation print precision):** Vector printing preserves small placement coefficients for existing form, comment and stamp appearances with large bounding boxes or matrices.
   Synthetic render and save/reopen regressions cover the change; estimates unchanged.
+- **2026-11-09 (M3, PR #6323 review):** Recent uses the same path comparison as existing-tab lookup, so relative and absolute aliases replace one row rather than displacing another file. Reopening keeps the document ID and unsaved bytes. A regression covers both open entry points, limits of two and three, and persisted history; it fails before the fix and after actually reverting it. Full scoped UI tests: 2,652 passed, five existing ignores; scoped Clippy/WASM, formatting, layers, assets and parity passed. A real opt-in control run retained the dirty document through Clear Recent and reopening, then showed its restored Home row in inspect and screenshot. The original #6241 report was closed after it could no longer be reproduced; this PR addresses the independent existing-tab case. Estimates unchanged.
 
 - **2026-10-13 (M8, redact by regex):** `redact_mark` takes `regex` (caller expression, linear-time engine, length/size/nesting caps, empty-matching refused) with optional `validate` (luhn, mod97, iban). Headless only; issue #1886.
 
@@ -297,6 +303,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-05 (M2, #5889):** A non-embedded Arial set as a TrueType CID font (`CIDFontType2`, `Identity-H`, as Word and PDFMaker write it) draws the glyphs its codes name. Those codes are glyph indexes in the author's Arial, whose first 258 glyphs follow the standard Macintosh order, so the standard substitute now draws each glyph by name (vendored hayro-interpret patch 76). Before, it took each code as one of its own glyph indexes, and "Low Power" drew as "@ck 'Dck Yf". Arial Narrow, Black and Unicode MS, and `CIDFontType0` fonts, are not read this way. Copying or searching those runs still needs a `/ToUnicode`.
 
 - **2026-11-07 (M7, #2964 / #3185):** Supported Form text can be prepared for direct editing; groups left grouped (unsafe compositing, text nested past eight levels) are reported. Legacy Thai keeps the original font programs, Regular/Bold and text settings, also across same-face subsets; the narrow THSarabunPSK map repair is checked glyph by glyph against the font program; cross-family replacement is explicit. Builds on #3067 and #2811. Unsafe groups and mixed contextual styles remain partial; estimates unchanged.
+- **2026-11-06 (M3, #6241 candidate):** Reopening a PDF whose tab is already open records it in Recent again and moves it to the front, while preserving the existing tab and unsaved edits. Initial native picker opens through Home and File already recorded correctly; the regression concerns the existing-tab fast path. The reporter could no longer reproduce the original omission even in older versions; #6241 was closed on November 9, and this independently reproduced case remains scoped to this PR. Validation: 756 UI unit and 1489 integration tests passed with the pinned CI inputs (5 existing ignores); scoped Clippy, WASM, formatting, layers, assets and parity passed. A real opt-in UI control run and screenshot confirmed the restored Home entry. Estimates unchanged.
 
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-07 (M10, `ocr.ocr-web`, port onto #977):** Web OCR rebuilt on main's engines and preprocessing (#977). `OcrJob::run` is now `OcrJob::steps` a page at a time: the page renders, crops to the region and cleans each page, a Web Worker runs ocrs on the result, and `OcrShot::place` maps the words back through the region and preprocessing. Every strategy reads like this when only one engine is present, and the web build has only ocrs. The downloaded models are installed into the engine cache (`ocr::install`), so the Verify screen and the engine-status checks see them too. The batch keeps main's skipped-files bucket, low-confidence notes and cancel. The translations moved to craft-i18n (storytold/craft-i18n#141). The Verify screen starts the model download itself and runs once the models land; before, on a fresh page it failed with the desktop's "set PDFCRAFT_MODELS" message. Known limits: the cleaning steps, and the Verify screen's Run OCR and re-reads, run on the page. Estimates unchanged.
