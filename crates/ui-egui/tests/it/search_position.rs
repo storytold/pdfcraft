@@ -237,7 +237,8 @@ fn zooming_and_stepping_in_any_order_shows_the_match() {
 /// the zoom keeps it where it went instead of holding the point under the pointer still.
 #[test]
 fn a_step_during_a_wheel_zoom_keeps_the_match_on_screen() {
-    let mut h = harness();
+    // Quarter-second harness frames complete the zoom before the search step arrives.
+    let mut h = harness_dt(1.0 / 60.0);
     h.set_option("animation_effects", "on").unwrap();
     set_zoom(&mut h, 3.0);
     settle(&mut h);
