@@ -1,0 +1,6 @@
+#!/bin/sh
+# GNOME Files (Nautilus) has no declarative menu format: its right-click menu takes only scripts a
+# person puts in ~/.local/share/nautilus/scripts/ (they appear under Scripts) or a nautilus-python
+# extension. Copy this file there and make it executable. Nautilus passes the selected files as
+# arguments, as local paths.
+exec pdfcraft --combine "$@"
