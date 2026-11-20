@@ -355,7 +355,8 @@ mod tests {
     use super::*;
 
     fn name(typed: &str) -> Result<String, RenameError> {
-        new_file_name(Path::new("/docs/report.pdf"), typed)
+        // This helper checks the file-name component; a parent would also spend Windows' path budget.
+        new_file_name(Path::new("report.pdf"), typed)
     }
 
     #[test]
