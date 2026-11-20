@@ -662,6 +662,8 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
+    // Viewer chrome only: validation and the Signatures panel are the same either way (#4221).
+    ctx.checkbox(ui, &mut app.show_signature_badges, tl!("Show validation marks over signed signatures"), t);
 
     #[cfg(not(target_arch = "wasm32"))]
     {
