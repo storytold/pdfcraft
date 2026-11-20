@@ -29,6 +29,7 @@ mod buttons;
 mod camera;
 mod column_select;
 mod combine_grid;
+mod combine_unreadable;
 mod commands;
 mod comment_pin;
 mod comments;

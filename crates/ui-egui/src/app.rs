@@ -165,6 +165,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            combine_reads: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             deferred_opens: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             password_retry: None,
@@ -614,6 +616,7 @@ impl PdfCraftApp {
                 worker.set_context(ctx);
             }
             self.poll_pending_opens();
+            self.poll_combine_reads();
             self.show_reveal_errors();
             self.poll_pending_destinations();
         }

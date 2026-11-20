@@ -1,0 +1,11 @@
+[Nemo Action]
+# Nemo (Linux Mint, Cinnamon): right-click PDFs and pictures > "Combine files in PdfCraft". The same
+# file types as the KDE service menu and the Windows installer's "Combine files" menus (#585).
+Name=Combine files in PdfCraft
+Comment=Add the selected files to PdfCraft's Combine files tab
+Exec=pdfcraft --combine %F
+Icon-Name=ai.storyteller.pdfcraft
+Selection=NotNone
+Mimetypes=application/pdf;image/png;image/jpeg;image/tiff;image/gif;image/bmp;image/jp2;image/jpx;image/x-jp2-codestream;
+Quote=double
+Dependencies=pdfcraft;

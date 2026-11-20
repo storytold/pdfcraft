@@ -927,6 +927,26 @@ fn a_repeated_waiting_open_keeps_the_tool_it_brings() {
     assert_eq!(app.deferred_opens.front().and_then(|d| d.then), Some("export.text"));
 }
 
+/// Combine's file reads: one answer, every file in the order the paths were given, a file that
+/// can't be read named with why and its neighbours still read.
+#[test]
+fn combine_reads_answer_in_path_order_and_name_what_failed() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-read-files-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (b, a, missing) = (dir.join("b.pdf"), dir.join("a.pdf"), dir.join("missing.pdf"));
+    std::fs::write(&b, b"bee").unwrap();
+    std::fs::write(&a, b"ay").unwrap();
+    let receiver = open_worker::read_files(vec![b, missing, a], None).unwrap();
+    let files = receiver.recv_timeout(Duration::from_secs(30)).expect("the reader answers");
+    let _ = std::fs::remove_dir_all(&dir);
+    let names: Vec<_> = files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["b.pdf", "missing.pdf", "a.pdf"]);
+    assert_eq!(files[0].read.as_ref().unwrap().0, b"bee");
+    assert!(files[0].read.as_ref().unwrap().1.is_some(), "when it was last modified comes with the bytes");
+    assert!(files[1].read.is_err(), "the missing file says why");
+    assert_eq!(files[2].read.as_ref().unwrap().0, b"ay");
+}
+
 /// A password retry submits with priority and succeeds even when the open worker queue is full
 /// of ordinary background documents, placing the retry at the head of the worker queue.
 #[test]
