@@ -393,7 +393,15 @@ struct FileRead {
     at_limit: bool,
 }
 
-fn search_file(path: &Path, query: &str, options: &Options, room: usize, cancel: &AtomicBool, left: &Mutex<Vec<Retiring>>, deadline: Option<Instant>) -> FileRead {
+fn search_file(
+    path: &Path,
+    query: &str,
+    options: &Options,
+    room: usize,
+    cancel: &AtomicBool,
+    left: &Mutex<Vec<Retiring>>,
+    deadline: Option<Instant>,
+) -> FileRead {
     let mut read = FileRead::default();
     // A whole-search deadline also bounds opening a slow or disconnected file.
     let open_limit = deadline.map_or(options.open_limit, |d| options.open_limit.min(d.saturating_duration_since(Instant::now())));
@@ -444,7 +452,15 @@ fn read_pages(
     read
 }
 
-fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Options, room: usize, cancel: &AtomicBool, search_deadline: Option<Instant>) -> FileRead {
+fn read_queued(
+    pool: &mut RenderPool,
+    pages: usize,
+    query: &str,
+    options: &Options,
+    room: usize,
+    cancel: &AtomicBool,
+    search_deadline: Option<Instant>,
+) -> FileRead {
     let mut read = FileRead::default();
     let mut unread = 0usize;
     let mut first = 0;
@@ -469,9 +485,7 @@ fn read_queued(pool: &mut RenderPool, pages: usize, query: &str, options: &Optio
                 // the whole-file budget is checked here, while waiting for a page, not only once
                 // it arrives. Matches found so far stay in `read`, and the TooSlow return routes
                 // through read_pages' retirement path.
-                if deadline.is_some_and(|d| Instant::now() >= d)
-                    || search_deadline.is_some_and(|d| Instant::now() >= d)
-                {
+                if deadline.is_some_and(|d| Instant::now() >= d) || search_deadline.is_some_and(|d| Instant::now() >= d) {
                     read.skip = Some(Skip::TooSlow);
                     return read;
                 }
