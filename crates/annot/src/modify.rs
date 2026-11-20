@@ -306,7 +306,12 @@ pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, m
     // The text keeps the look it is drawn with (`/DA`, or `/DS` where it sets one).
     let style = text_style::text_style(&before, text_style::dr_face(doc, &before));
     doc.update_dict(r, |d| {
-        d.set(b"Contents".to_vec(), PdfString::text(text));
+        // Cleared text leaves no `/Contents`, as a new comment without text has none (#7434).
+        if text.is_empty() {
+            d.remove(b"Contents");
+        } else {
+            d.set(b"Contents".to_vec(), PdfString::text(text));
+        }
         // The rich-text version follows the new plain text (text boxes), or would contradict it.
         if free_text {
             rich_text_in(d, style);
