@@ -15,4 +15,5 @@ mod pdfa4_metadata;
 mod pdfa_gate;
 mod private_image_resize;
 mod private_text_glyphs;
+mod rename_name_length;
 mod xfa_repeat;
