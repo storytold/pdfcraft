@@ -385,8 +385,8 @@ fn mac_cmd_m_is_left_to_the_os(h: &mut Harness<'static, PdfCraftApp>, c: &Contro
     let command_m = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
     h.input_mut().events.push(egui::Event::Key { key: Key::M, physical_key: None, pressed: true, repeat: false, modifiers: command_m });
     h.step();
-    let available = h.ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::M, pressed: true, .. })));
-    assert!(available, "Comments must leave Command+M unconsumed for Minimize");
+    let chord = craft::menu::Chord::new(craft::keymap::Mods { cmd: true, ..Default::default() }, craft::keymap::Key::M);
+    assert!(craft::ui::runtime::commands::holder(&h.ctx, &chord).is_none(), "Command+M must be available for Minimize");
     h.run_steps(2);
     assert!(!comments_panel_open(h, c), "no app command ran");
 }
@@ -394,7 +394,7 @@ fn mac_cmd_m_is_left_to_the_os(h: &mut Harness<'static, PdfCraftApp>, c: &Contro
 fn mac_cmd_w_closes_the_tab(h: &mut Harness<'static, PdfCraftApp>, _c: &ControlClient) {
     h.ctx.set_os(OperatingSystem::Mac);
     h.run_steps(2);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::W);
+    h.key_press_modifiers(Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }, Key::W);
     h.run_steps(2);
     assert!(h.state().views.is_empty(), "⌘W closes the clean document tab");
 }
@@ -583,6 +583,8 @@ fn quit_shortcut_requires_exact_modifiers_and_preserves_unsaved_work() {
             }
             h.event(egui::Event::Key { key: Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: modifiers | extra });
             h.step();
+            // Catalog commands run in the next frame's input hook.
+            h.step();
             assert_eq!(close_requested(&h), should_close, "{os:?}, extra={extra:?}, dirty={dirty}");
             if dirty {
                 // The save prompt is a modal laid out after the key pass; let that pass settle
@@ -608,7 +610,13 @@ fn command_w_closes_empty_macos_window_but_not_an_empty_windows_window() {
         h.ctx.set_os(os);
         h.run_steps(4);
         assert!(h.state().views.is_empty());
-        h.event(egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+        let modifiers = if os == OperatingSystem::Mac {
+            Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }
+        } else {
+            Modifiers { ctrl: true, command: true, ..Modifiers::NONE }
+        };
+        h.event(egui::Event::Key { key: Key::W, physical_key: None, pressed: true, repeat: false, modifiers });
+        h.step();
         h.step();
         assert_eq!(close_requested(&h), should_close, "{os:?}: only an empty macOS window should close");
     }
