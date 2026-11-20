@@ -200,8 +200,19 @@ pub(super) fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+pub(super) fn editor_galley(
+    ui: &egui::Ui,
+    ed: &LineEditor,
+    text: &str,
+    scale: f32,
+    width: f32,
+    words: Option<&pdfcraft_engine::WordPreview>,
+) -> Arc<egui::Galley> {
     let mut job = editor_job(ui, ed, text, scale, width);
+    // The engine has said where the words go: one row, whatever the box's width.
+    if words.is_some() {
+        job.wrap.max_width = f32::INFINITY;
+    }
     let centered = job.halign == egui::Align::Center;
     job.halign = egui::Align::LEFT;
     let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -273,7 +284,9 @@ pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f
         }
         row.size.y = (ascent + descent).max(1.0);
     }
-    if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 && block.rotation.abs() < 0.5 {
+    if let Some(words) = words {
+        place_on_preview(g, block, words, text, scale);
+    } else if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 && block.rotation.abs() < 0.5 {
         place_on_source_words(g, block, lines, text, scale);
     }
     let mut bounds = Rect::NOTHING;
@@ -304,6 +317,54 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
     let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).collect();
     let chars: Vec<char> = text.chars().collect();
     let x = |user: f64| ((user - block.rect[0]) * f64::from(scale)) as f32;
+    let mut words_at = Vec::new();
+    for (range, index) in &block.spans {
+        let Some(line) = lines.get(*index) else { continue };
+        let (first, end) = (starts.partition_point(|b| *b < range.start), starts.partition_point(|b| *b < range.end));
+        let mut words = Vec::new();
+        let mut i = first;
+        while i < end {
+            if chars.get(i).is_some_and(|c| c.is_whitespace()) {
+                i += 1;
+                continue;
+            }
+            let from = i;
+            while i < end && chars.get(i).is_some_and(|c| !c.is_whitespace()) {
+                i += 1;
+            }
+            words.push(from..i);
+        }
+        let (Some(head), Some(tail)) = (words.first().cloned(), words.last().cloned()) else { continue };
+        if line.ink.len() == words.len() {
+            for (word, ink) in words.iter().zip(&line.ink) {
+                words_at.push((word.clone(), x(ink[0]), x(ink[2])));
+            }
+        } else {
+            words_at.push((head.start..tail.end, x(line.rect[0]), x(line.rect[2])));
+        }
+    }
+    place_glyphs(g, &chars, &words_at);
+}
+
+/// While the draft of an OCR phrase is open the page shows the scan, and the galley is drawn unseen
+/// here too: put its characters on the boxes the engine says each word of the draft will have.
+fn place_on_preview(g: &mut egui::Galley, block: &pdfcraft_engine::TextBlock, words: &pdfcraft_engine::WordPreview, text: &str, scale: f32) {
+    let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).collect();
+    let chars: Vec<char> = text.chars().collect();
+    let x = |user: f64| ((user - block.rect[0]) * f64::from(scale)) as f32;
+    let words_at: Vec<_> = words
+        .placed
+        .iter()
+        .map(|(span, rect)| (starts.partition_point(|b| *b < span.start)..starts.partition_point(|b| *b < span.end), x(rect[0]), x(rect[2])))
+        .collect();
+    place_glyphs(g, &chars, &words_at);
+}
+
+/// Put the characters of each of `words` (a character range, its left and right edges in galley
+/// coordinates) across their place, in the proportions of their advances; whitespace between words
+/// fills the gap. A row with a character this can't place, or with boxes out of reading order, is
+/// left as laid out.
+fn place_glyphs(g: &mut egui::Galley, chars: &[char], words: &[(std::ops::Range<usize>, f32, f32)]) {
     // Each character's glyph advance, in the galley's character order (a newline has no glyph).
     let mut advance = vec![0.0f32; chars.len()];
     let mut at = 0usize;
@@ -331,30 +392,8 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
             pos += width;
         }
     };
-    for (range, index) in &block.spans {
-        let Some(line) = lines.get(*index) else { continue };
-        let (first, end) = (starts.partition_point(|b| *b < range.start), starts.partition_point(|b| *b < range.end));
-        let mut words = Vec::new();
-        let mut i = first;
-        while i < end {
-            if chars.get(i).is_some_and(|c| c.is_whitespace()) {
-                i += 1;
-                continue;
-            }
-            let from = i;
-            while i < end && chars.get(i).is_some_and(|c| !c.is_whitespace()) {
-                i += 1;
-            }
-            words.push(from..i);
-        }
-        let (Some(head), Some(tail)) = (words.first().cloned(), words.last().cloned()) else { continue };
-        if line.ink.len() == words.len() {
-            for (word, ink) in words.iter().zip(&line.ink) {
-                place(word.clone(), x(ink[0]), x(ink[2]), &mut target);
-            }
-        } else {
-            place(head.start..tail.end, x(line.rect[0]), x(line.rect[2]), &mut target);
-        }
+    for (range, left, right) in words {
+        place(range.clone(), *left, *right, &mut target);
     }
     let mut first = 0usize;
     for placed in &mut g.rows {
@@ -362,9 +401,12 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
         let range = first..first.saturating_add(row.glyphs.len());
         first = range.end.saturating_add(usize::from(placed.ends_with_newline));
         let Some(mut spots) = target.get(range.clone()).map(<[_]>::to_vec) else { continue };
+        let row_start = range.start;
         let row_chars = chars.get(range).unwrap_or_default();
-        // Spaces between two placed characters share the gap between them; at the row's ends
-        // they sit against the nearest placed character.
+        // Spaces between two placed characters fill the gap between them, each its own width and
+        // the last what is left: Backspacing over a word leaves two with the caret between them,
+        // which stays by the word before, where a word typed next starts. At the row's ends they
+        // sit against the nearest placed character.
         let mut i = 0;
         while i < spots.len() {
             if spots.get(i).is_some_and(Option::is_some) {
@@ -386,9 +428,15 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
                 (None, Some(r)) => (r, r),
                 (None, None) => break,
             };
-            let width = (right - left) / (i - from) as f32;
-            for (k, spot) in spots.iter_mut().enumerate().take(i).skip(from) {
-                *spot = Some((left + width * (k - from) as f32, width));
+            let mut at = left;
+            for k in from..i {
+                let room = right - at;
+                let own = advance.get(row_start.saturating_add(k)).copied().unwrap_or(0.0);
+                let width = if k.saturating_add(1) == i { room } else { own.min(room) };
+                if let Some(spot) = spots.get_mut(k) {
+                    *spot = Some((at, width));
+                }
+                at += width;
             }
         }
         let placed_all: Option<Vec<(f32, f32)>> = spots.into_iter().collect();
@@ -415,4 +463,54 @@ fn place_on_source_words(g: &mut egui::Galley, block: &pdfcraft_engine::TextBloc
 pub(crate) fn caret_color_on(fill: Color32) -> Color32 {
     let luma = 299 * u32::from(fill.r()) + 587 * u32::from(fill.g()) + 114 * u32::from(fill.b());
     if luma > 127_500 { Color32::BLACK } else { Color32::WHITE }
+}
+
+/// What the editor paints under its unseen text for the draft of an OCR phrase, as Apply will: each
+/// cover in the paper's colour and the words it draws in the ink's, squeezed across to their place
+/// as the rewrite does (letter spacing would run the glyphs together). `to_screen` maps a box in
+/// user space to the screen, and `scale` is screen pixels per point.
+pub(super) fn word_shapes(
+    ui: &egui::Ui,
+    look: &pdfcraft_engine::AddedText,
+    words: &pdfcraft_engine::WordPreview,
+    colours: ([f64; 3], [f64; 3]),
+    scale: f32,
+    to_screen: impl Fn([f64; 4]) -> Rect,
+) -> Vec<egui::Shape> {
+    let (paper, ink) = (color32(colours.0), color32(colours.1));
+    let mut shapes: Vec<egui::Shape> = words.covers.iter().map(|cover| egui::Shape::rect_filled(to_screen(*cover), 0.0, paper)).collect();
+    let font = editor_font(look, (look.size as f32 * scale).clamp(1.0, 300.0));
+    for drawn in &words.drawn {
+        let place = to_screen(drawn.rect);
+        let baseline = to_screen([drawn.rect[0], drawn.baseline, drawn.rect[0], drawn.baseline]).top();
+        let mut galley = ui.fonts_mut(|f| f.layout_no_wrap(drawn.text.clone(), font.clone(), ink));
+        let ascent = galley.rows.first().and_then(|placed| placed.row.glyphs.first()).map_or(0.0, |glyph| glyph.pos.y);
+        squeeze_across(&mut galley, place.width());
+        shapes.push(egui::Shape::galley(egui::pos2(place.left(), baseline - ascent), galley, ink));
+    }
+    shapes
+}
+
+/// Scale `galley` across to `width`. Its glyphs are drawn from its meshes, so those are what scale.
+fn squeeze_across(galley: &mut Arc<egui::Galley>, width: f32) {
+    let natural = galley.rect.width();
+    if !(natural > 0.0 && width > 0.0 && width.is_finite()) {
+        return;
+    }
+    let k = width / natural;
+    let g = Arc::make_mut(galley);
+    for placed in &mut g.rows {
+        let row = Arc::make_mut(&mut placed.row);
+        for vertex in &mut row.visuals.mesh.vertices {
+            vertex.pos.x *= k;
+        }
+        row.visuals.mesh_bounds.min.x *= k;
+        row.visuals.mesh_bounds.max.x *= k;
+        row.size.x *= k;
+        placed.pos.x *= k;
+    }
+    g.rect.min.x *= k;
+    g.rect.max.x *= k;
+    g.mesh_bounds.min.x *= k;
+    g.mesh_bounds.max.x *= k;
 }
