@@ -636,9 +636,15 @@ impl Automation {
                     }
                 };
                 hf.color = color("color", hf.color)?;
-                if let Some(m) = a.get("margins").and_then(Value::as_array) {
-                    let m: Vec<f64> = m.iter().filter_map(Value::as_f64).collect();
-                    hf.margins = <[f64; 4]>::try_from(m).map_err(|_| ToolError::InvalidArgs("margins must be 4 numbers".into()))?;
+                if let Some(m) = a.get("margins") {
+                    // Dropping a non-number would silently reinterpret the caller's margin tuple.
+                    hf.margins = m
+                        .as_array()
+                        .filter(|m| m.len() == 4)
+                        .and_then(|m| m.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+                        .and_then(|m| <[f64; 4]>::try_from(m).ok())
+                        .filter(|m| m.iter().all(|n| n.is_finite() && *n >= 0.0))
+                        .ok_or_else(|| ToolError::InvalidArgs("margins must be 4 nonnegative numbers".into()))?;
                 }
                 if let Some(s) = a.opt_int("start_number")? {
                     hf.start_number = s.clamp(1, u32::MAX as i64) as u32;
