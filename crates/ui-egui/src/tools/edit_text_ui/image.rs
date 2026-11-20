@@ -289,8 +289,13 @@ fn box_controls(
     let bounds = bounds_of(&quad);
     let visible = image.visible_rect.unwrap_or(image.rect);
     let pivot = view.to_doc(user_to_screen(xf, info, page, (visible[0] + visible[2]) * 0.5, (visible[1] + visible[3]) * 0.5));
+    let added = image.object.is_some_and(|object| {
+        doc.added()
+            .iter()
+            .any(|item| item.page == page && matches!(&item.content, pdfcraft_engine::AddedContent::Image(image) if image.image == object))
+    });
     let rules = BoxRules::in_mode(TransformMode::Free)
-        .with_scale(ScaleRule::Proportional)
+        .with_scale(if added { ScaleRule::LargerAxis } else { ScaleRule::Proportional })
         .with_allow(BoxAllow::new(true, false, false))
         .with_min_side(least_side(ui, placed));
     let shown = TransformBox::new(tl!("Picture"), Bind::given(BoxState::new(quad, pivot)), bounds, 0.0)
