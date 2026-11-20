@@ -10,7 +10,7 @@ use crate::PdfCraftApp;
 pub(crate) mod dialogs;
 pub(crate) mod tool;
 
-pub(crate) use tool::RedactTool;
+pub(crate) use tool::AreaMarkTool;
 
 /// Redaction Tool Properties: what new marks look like once applied.
 #[derive(Clone, Debug, PartialEq)]

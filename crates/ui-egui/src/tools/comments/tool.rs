@@ -239,6 +239,17 @@ impl CanvasTool for CommentsTool<'_> {
                 return action;
             }
         }
+        if self.annotate.drawing().is_empty()
+            && let Some(page) = self.page_under(pointer.pos)
+            && page != self.annotate.page
+        {
+            self.annotate.page = page;
+            self.annotate.annotations = if self.hidden {
+                Vec::new()
+            } else {
+                bridge::annotations(self.map.info, &self.map, self.quick, self.allowed).into_iter().filter(|a| a.page == page).collect()
+            };
+        }
         let action = self.annotate.press(pointer, cx);
         *self.pressed = action != ToolAction::Ignored;
         // A press on no comment passes through to the tool beneath (`EmptyPress::PassThrough`): it leaves the comments

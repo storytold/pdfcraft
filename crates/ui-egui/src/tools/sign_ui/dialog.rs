@@ -98,6 +98,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     };
 
     let mut asked = Asked::default();
+    let mut open = true;
     let out = {
         let PdfCraftApp { sign_draft, digital_ids, signature, .. } = &mut *app;
         let Some(draft) = sign_draft.as_mut() else { return };
@@ -105,17 +106,20 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         let extras = extra_buttons(draft, ids);
         let ok_enabled = step != SignStep::Choose || draft.selected.is_some();
         let english_note = tl!("The labels are in English: the signature's font can't draw them in this language.");
-        FormDialog::new(title, Bind::bound(draft)).ok_label(ok_label).ok_enabled(ok_enabled).accept_stays_open(true).extra_buttons(extras).show(
-            ui,
-            |ui, _, d| {
+        FormDialog::new(title, Bind::bound(draft))
+            .opened(Bind::bound(&mut open))
+            .ok_label(ok_label)
+            .ok_enabled(ok_enabled)
+            .accept_stays_open(true)
+            .extra_buttons(extras)
+            .show(ui, |ui, _, d| {
                 match d.step {
                     SignStep::Choose => choose(ui, d, ids, &mut asked),
                     SignStep::Configure => configure(ui, d, &mut asked),
                     SignStep::SignAs => sign_as(ui, d, ids, signature.as_ref(), &date, english_note, &mut asked),
                 }
                 true
-            },
-        )
+            })
     };
     if out.closed.is_some() {
         // Escape and Cancel; the draft's `Drop` clears the passwords.

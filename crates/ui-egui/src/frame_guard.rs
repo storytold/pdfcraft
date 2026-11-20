@@ -65,9 +65,14 @@ impl PdfCraftApp {
     }
 
     /// Cancels every dialog the dialog host has open, the top one first so a child dialog is
-    /// cancelled before the parent it was opened from.
+    /// cancelled before the parent it was opened from. Keeps an active unsaved-changes close
+    /// prompt alive, matching production's `self.dialog = None`.
     pub(crate) fn cancel_dialogs(&mut self, ctx: &egui::Context) {
+        let keep = self.close_guard.is_some().then_some(self.close_guard_dialog).flatten();
         for open in self.dialogs.open_dialogs().into_iter().rev() {
+            if Some(open.id) == keep {
+                continue;
+            }
             self.dialogs.cancel_by_id(ctx, open.id);
         }
     }

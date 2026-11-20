@@ -277,7 +277,10 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         popover_from(
             ui,
             tl!("Fill colour"),
-            |ui| Swatch::optional(tl!("Fill colour"), Mixed::Same(style.fill.map(to_srgba))).show(ui).response,
+            |ui| {
+                let label = if style.fill.is_some() { tl!("Fill colour") } else { tl!("Fill colour: none") };
+                Swatch::optional(label, Mixed::Same(style.fill.map(to_srgba))).show(ui).response
+            },
             |ui| {
                 let pick = fill_choice(ui, style.fill, "comment.tool.fill", recent);
                 if let Some(f) = pick.choice {

@@ -412,7 +412,7 @@ impl PdfCraftApp {
             items.push(self.menu_item("file.clear_recent", Some(tl!("Clear Recent Files")), mac));
         }
         let label = commands::command("file.open_recent").map_or("Open Recent", |c| c.label);
-        Node::submenu(crate::i18n::menu_label("file.open_recent", label), items)
+        Node::submenu(crate::i18n::menu_label("file.open_recent", label), items).enabled(!self.recent.is_empty())
     }
 
     /// View ▸ Tools: the All tools groups, each a submenu of its ready tools that no other menu

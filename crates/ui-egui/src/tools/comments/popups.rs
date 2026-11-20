@@ -129,15 +129,11 @@ fn messages(
         .unwrap_or_else(|| a.clone());
     holder.locked |= a.locked;
     let kind = tl!(crate::comments_panel::kind_label(a));
-    let title = match a.author.as_deref() {
-        Some(who) => format!("{kind} – {who}"),
-        None => kind.to_string(),
-    };
     let mut out = vec![Owned {
         key: (holder.page, holder.index),
         // PLAN: assumed `bridge::id_of(page: usize, index: usize) -> AnnotationId` (pdf-comments-w7)
         id: super::bridge::id_of(holder.page, holder.index).0,
-        title,
+        title: kind.to_string(),
         author: a.author.clone().unwrap_or_default(),
         text: holder.contents.clone().unwrap_or_default(),
         modified: modified_seconds(a),
@@ -216,18 +212,14 @@ pub(crate) fn note_popups(
             // PLAN: `Annotation::color` is f32 components in 0..=1; the window takes 8-bit.
             let color = a.color.map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
             let selected = view.session.comments.is_selected((page, a.index));
+            let popup_id = view.session.comments.popup_id((page, a.index));
+            let window_label = match owned.first() {
+                Some(m) if !m.author.is_empty() => format!("{} – {}", m.title, m.author),
+                Some(m) => m.title.clone(),
+                None => String::new(),
+            };
             let drafts: &mut NoteDrafts = view.session.comments.popup_drafts.entry((page, a.index)).or_default();
-            let mut window = NotePopup::new(
-                super::bridge::id_of(page, a.index).0,
-                owned.first().map_or_else(String::new, |m| m.title.clone()),
-                rect,
-                &msgs,
-                drafts,
-            )
-            .color(color)
-            .selected(selected)
-            .now(now)
-            .allowed(allowed);
+            let mut window = NotePopup::new(popup_id, window_label, rect, &msgs, drafts).color(color).selected(selected).now(now).allowed(allowed);
             if let Some(mark) = mark {
                 window = window.anchor(mark, hovered == Some((page, a.index)));
             }

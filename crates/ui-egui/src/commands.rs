@@ -56,6 +56,9 @@ impl PdfCraftApp {
     /// automation. The catalog's app-side handlers come first; every other id is a registered
     /// command and goes through [`Self::execute`].
     pub(crate) fn run_fired(&mut self, ctx: &egui::Context, fired: &Fired) {
+        if let Some(pasted) = &fired.pasted {
+            self.offer_clip(pasted);
+        }
         let id = fired.command.id.as_str();
         // The OCR Verify screen keeps the window's toolbars and owns F8 and Shift+F8 (the next
         // and previous word to review), so they don't show or hide the interface there.
@@ -104,6 +107,22 @@ impl PdfCraftApp {
                 self.select_combine_rows(&rows);
             }
             crate::menus::DELETE if self.combine_showing() => self.combine_apply(crate::combine_ui::RowAction::Remove),
+            crate::menus::DELETE if !self.covers_pages() => {
+                if let Some(i) = active {
+                    let organize = self.views[i].organize;
+                    if organize {
+                        let _ = self.execute(ctx, "page.delete");
+                    } else if let Some(doc) = self.session.get(self.views[i].id)
+                        && doc.allows_annotation()
+                        && self.views[i].session.comments.primary().is_some()
+                    {
+                        let info = doc.info.clone();
+                        if let Some(edit) = crate::comments::delete_selected(&mut self.views[i].session.comments, &info) {
+                            self.apply_edit(ctx, edit);
+                        }
+                    }
+                }
+            }
             "edit.select_all" => {
                 if let Some(i) = active {
                     self.select_all(i, ctx);

@@ -798,13 +798,13 @@ mod tests {
         if let Ok(path) = std::env::var("PDFCRAFT_OPTIMIZE_PROGRESS_SHOT") {
             h.render().unwrap().save(path).unwrap();
         }
-        h.get_by_label("Optimizing… image 4 of 10");
+        h.get_by_label_contains("Optimizing… image 4 of 10");
 
         h.get_by_label("Cancel").click();
         h.run_steps(2);
         assert!(h.state().optimize_run.is_none(), "the run ended");
         assert!(h.query_by_label("Cancel").is_none(), "the card and its Cancel are gone");
-        assert!(h.query_by_label("Optimizing… image 4 of 10").is_none());
-        h.get_by_label("Optimization cancelled");
+        assert!(h.query_by_label_contains("Optimizing… image 4 of 10").is_none());
+        assert!(h.query_all_by_label("Optimization cancelled").next().is_some());
     }
 }

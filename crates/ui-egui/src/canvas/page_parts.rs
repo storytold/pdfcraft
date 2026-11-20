@@ -41,6 +41,8 @@ pub(crate) enum Owner {
     Added { index: usize },
     /// The sign tab on an empty signature field a click would sign, by the field's index in the form.
     SignTab { field: usize },
+    /// A signed signature widget's validation badge (hover-only verdict tip under any tool).
+    SignatureBadge { index: usize },
 }
 
 const COMMENT: PartKey = PartKey::new("comment");
@@ -54,6 +56,7 @@ const OBJECTS: PartKey = PartKey::new("objects");
 const FRAME: PartKey = PartKey::new("frame");
 const ADDED: PartKey = PartKey::new("added");
 const SIGN_TAB: PartKey = PartKey::new("sign_tab");
+const SIGNATURE_BADGE: PartKey = PartKey::new("signature_badge");
 
 /// `high` in the upper 32 bits of a part index and `low` in the lower; `None` when either does not fit, so no two
 /// things ever share an index.
@@ -87,6 +90,7 @@ impl Owner {
             Owner::Frame { block } => (FRAME, pack(page, block)?),
             Owner::Added { index } => (ADDED, pack(page, index)?),
             Owner::SignTab { field } => (SIGN_TAB, pack(page, field)?),
+            Owner::SignatureBadge { index } => (SIGNATURE_BADGE, pack(page, index)?),
         };
         Some(key.at(index))
     }
@@ -109,6 +113,7 @@ impl Owner {
             FRAME => paged(Owner::Frame { block: low }),
             ADDED => paged(Owner::Added { index: low }),
             SIGN_TAB => paged(Owner::SignTab { field: low }),
+            SIGNATURE_BADGE => paged(Owner::SignatureBadge { index: low }),
             _ => None,
         }
     }
@@ -119,6 +124,8 @@ impl Owner {
 /// editor outrank everything on the page body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PageLayer {
+    /// Hover-only signature validation badges.
+    Badge,
     /// Edit text's pictures.
     Picture,
     /// Edit text's paragraphs.
@@ -141,12 +148,13 @@ impl PageLayer {
     /// The layer's rank in the framework's hit resolution: a higher `(level, sub)` wins where parts overlap.
     pub(crate) fn priority(self) -> HitPriority {
         let (level, sub) = match self {
-            PageLayer::Picture => (HitLevel::Body, 0),
-            PageLayer::Text => (HitLevel::Body, 1),
-            PageLayer::Link => (HitLevel::Body, 2),
-            PageLayer::Comment => (HitLevel::Body, 3),
-            PageLayer::Field => (HitLevel::Body, 4),
-            PageLayer::Placed => (HitLevel::Body, 5),
+            PageLayer::Badge => (HitLevel::Body, 0),
+            PageLayer::Picture => (HitLevel::Body, 1),
+            PageLayer::Text => (HitLevel::Body, 2),
+            PageLayer::Link => (HitLevel::Body, 3),
+            PageLayer::Comment => (HitLevel::Body, 4),
+            PageLayer::Field => (HitLevel::Body, 5),
+            PageLayer::Placed => (HitLevel::Body, 6),
             PageLayer::Handle => (HitLevel::Handle, 0),
             PageLayer::Editor => (HitLevel::Handle, 1),
         };
@@ -171,6 +179,7 @@ pub(crate) struct PagePart {
     stacking: Option<u32>,
     passes_drag: bool,
     context_only: bool,
+    hover_only: bool,
     focusable: bool,
 }
 
@@ -188,6 +197,7 @@ impl PagePart {
             stacking: None,
             passes_drag: false,
             context_only: false,
+            hover_only: false,
             focusable: false,
         }
     }
@@ -246,9 +256,19 @@ impl PagePart {
         self
     }
 
+    /// The part senses hover alone (for tips that let presses go straight to the tool beneath).
+    #[must_use]
+    pub(crate) fn hover_only(mut self) -> Self {
+        self.hover_only = true;
+        self
+    }
+
     /// What the part senses: a click, a secondary click and a drag of its own, or a click that passes its drag on, or
-    /// a secondary click alone.
+    /// a secondary click alone, or hover alone.
     fn sense(&self) -> Sense {
+        if self.hover_only {
+            return Sense::HOVER;
+        }
         if self.context_only {
             return Sense::CONTEXT_CLICK;
         }

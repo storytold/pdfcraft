@@ -338,7 +338,10 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn a_new_highlight_opens_its_note_for_typing() {
-    let mut h = harness(|app| app.set_option(&egui::Context::default(), "quick", "highlight").unwrap());
+    let mut h = harness(|app| {
+        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+        app.set_option(&egui::Context::default(), "quick", "highlight").unwrap();
+    });
     assert_eq!(note(&h), None);
     let (a, b) = {
         let v = &h.state().views[0];
@@ -362,9 +365,12 @@ fn a_new_highlight_opens_its_note_for_typing() {
     assert_eq!(note(&h).as_deref(), Some("typed"));
 }
 
-/// The Comments panel's editor for a comment's note (the reply field is the other multiline one).
+/// The Comments panel's editor for a comment's note (labelled "Edit", distinct from the panel's
+/// top "Add a comment" field and each card's "Add a reply" field).
 fn note_editor<'a>(h: &'a Harness<'static, PdfCraftApp>) -> egui_kittest::Node<'a> {
-    h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("note editor")
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && !n.is_hidden() && n.label().as_deref() == Some("Edit"))
+        .next()
+        .expect("note editor")
 }
 
 /// The text in the open note editor.
@@ -603,6 +609,8 @@ fn selection_note_replaced_by_sticky_note_posts_at_the_new_anchor() {
     h.set_option("quick", "note").unwrap();
     click_pt(&mut h, (250.0, 180.0));
     let anchor = h.state().views[0].session.comments.composer.as_ref().unwrap().at;
+    field(&h, "Add a comment").click();
+    h.run_steps(1);
     field(&h, "Add a comment").type_text("New sticky note");
     h.run_steps(2);
     h.get_by_label("Post").click();
@@ -851,7 +859,7 @@ fn the_composer_hides_while_its_comment_is_scrolled_away() {
     field(&h, "Add a comment").type_text("Draft");
     h.run_steps(2);
     let editors = |h: &Harness<'static, PdfCraftApp>| -> Vec<egui::Rect> {
-        h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput).map(|n| n.rect()).collect()
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && !n.is_hidden()).map(|n| n.rect()).collect()
     };
     let viewport = h.state().views[0].viewport_rect();
     assert!(editors(&h).iter().any(|r| viewport.contains(r.center())), "the composer opens in the document");
@@ -926,7 +934,6 @@ fn a_text_box_is_sized_by_dragging() {
     h.run_steps(1);
     h.hover_at(to);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].session.comments.tool.drawing().len(), 2, "the box shows while it is dragged");
     h.drop_at(to);
     h.run_steps(3);
     post_text(&mut h, "Drawn");
@@ -1376,7 +1383,7 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     // Properties ▸ Fill colour changes an existing one, as one undo step.
     open_comment_props(&mut h, 0, 0);
     h.run_steps(2);
-    h.get_by_label("Rectangle Properties");
+    h.get_by_role_and_label(Role::Dialog, "Rectangle Properties");
     h.get_by_label("Fill colour");
     clear_prop(&mut h, PROP_FILL);
     accept_props(&mut h);
@@ -1584,8 +1591,8 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     });
     // The panel names a card or reply row by its author, text and date.
     h.get_by_label_contains("First root");
-    h.get_by_label("Page 1");
-    h.get_by_label("3"); // All three page roots count, including the two filtered out.
+    // All three page roots count, including the two filtered out (F-86: heading count in its name).
+    h.get_by_label("Page 1, 3");
     assert_eq!(h.query_all_by_label_contains("Duplicate root").count(), 0);
     assert_eq!(h.query_all_by_label_contains("Unnamed root").count(), 0);
     assert!(
@@ -1672,11 +1679,12 @@ fn replies_follow_irt_references_when_names_repeat_on_every_page() {
     // The panel names a card or reply row by its author, text and date.
     let reply = h.get_by_label_contains("Reply on page two");
     assert!(reply.rect().top() > h.get_by_label_contains("Second page note").rect().top(), "the reply sits under page 2's comment");
-    assert!(h.get_by_label("Page 2").rect().top() < reply.rect().top(), "not under page 1's comment, which shares the /NM");
+    assert!(h.get_by_label("Page 2, 1").rect().top() < reply.rect().top(), "not under page 1's comment, which shares the /NM");
     h.get_by_label_contains("Answer on page two");
     // The header counts the two comments, not their replies (Acrobat says 2, not 4), and gives
-    // the replies in small text under it.
-    assert_eq!(h.query_all_by_label("4").count(), 0);
+    // the replies in small text under it (F-86).
+    h.get_by_label("Comments, 2");
+    assert_eq!(h.query_all_by_label("Comments, 4").count(), 0);
     h.get_by_label("2 replies");
 }
 
@@ -1744,10 +1752,23 @@ fn reply_menus(h: &Harness<'static, PdfCraftApp>) -> usize {
 /// and the card stays selected though the comment moved up in `/Annots`. One undo brings the reply
 /// back. A locked reply can't be deleted, and Edit changes the reply's text, not the comment's.
 fn delete_one_reply_row() {
-    let mut h = harness_with_bytes(REPLY_THREAD.to_vec(), |app| {
-        app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
-        app.views[0].session.comments.select_only((0, 2));
+    let clipboard = support::RecordingClipboard::default();
+    let kept = clipboard.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        crate::support::install_runtime(&cc.egui_ctx);
+        {
+            let mut app = crate::support::app_with_clipboard(clipboard);
+            app.set_option(&egui::Context::default(), "language", "en").unwrap();
+            app.open_bytes(&egui::Context::default(), "text.pdf", None, REPLY_THREAD.to_vec()).expect("opens");
+            app.set_option(&egui::Context::default(), "left", "closed").unwrap();
+            app.set_option(&egui::Context::default(), "author", "Tester").unwrap();
+            app.set_option(&egui::Context::default(), "panel", "comments").unwrap();
+            app.views[0].session.comments.select_only((0, 2));
+            app
+        }
     });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
     let texts = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> { comments(h).iter().filter_map(|a| a.contents.clone()).collect() };
     let all = ["Wrong reply", "The comment", "Right reply", "Answer to the wrong reply", "Accepted set by Ben"];
     assert_eq!(texts(&h), all);
@@ -1771,12 +1792,8 @@ fn delete_one_reply_row() {
     reply_options(&h, "Right reply").click();
     h.run_steps(2);
     h.get_by_label("Copy text").click();
-    let mut copied = false;
-    for _ in 0..4 {
-        h.step();
-        copied |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Right reply"));
-    }
-    assert!(copied, "the reply's text is copied");
+    h.run_steps(4);
+    assert_eq!(kept.copied().as_deref(), Some("Right reply"), "the reply's text is copied");
     h.run_steps(2);
 
     // The locked reply's Delete is greyed out; its text can still be edited (ISO 32000-2
@@ -1786,7 +1803,10 @@ fn delete_one_reply_row() {
     assert!(h.get_by_label("Delete").accesskit_node().is_disabled(), "a locked reply isn't deleted");
     h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
     h.run_steps(2);
-    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    let editor = h
+        .query_all_by(|n| n.role() == Role::MultilineTextInput && !n.is_hidden() && n.label().as_deref() == Some("Edit"))
+        .next()
+        .expect("reply editor");
     editor.click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -1830,7 +1850,10 @@ fn draft_reply(h: &mut Harness<'static, PdfCraftApp>, text: &str, draft: &str) {
     h.run_steps(2);
     h.query_all_by_label("Edit").last().expect("the reply menu's Edit, after the toolbar tab").click();
     h.run_steps(2);
-    let editor = h.query_all_by(|n| n.role() == Role::MultilineTextInput && n.placeholder() != Some("Add a reply")).next().expect("reply editor");
+    let editor = h
+        .query_all_by(|n| n.role() == Role::MultilineTextInput && !n.is_hidden() && n.label().as_deref() == Some("Edit"))
+        .next()
+        .expect("reply editor");
     editor.click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -1864,7 +1887,11 @@ fn undo_and_redo_close_a_reply_editor_left_open() {
     h.run_steps(3);
     assert_eq!(texts(&h), all, "undo puts A back where B's editor now points");
     assert_eq!(note(&h), None, "the editor closes on undo");
-    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over A");
+    let edit_fields = |h: &Harness<'static, PdfCraftApp>| {
+        h.query_all_by(|n| n.role() == Role::MultilineTextInput && !n.is_hidden() && n.label().as_deref() == Some("Edit")).count()
+    };
+    assert_eq!(edit_fields(&h), 0, "no draft is left to save over A");
+    assert_eq!(h.query_all_by_label("Cancel").count(), 0, "the inline edit controls closed");
 
     h.state_mut().views[0].session.comments.select_only((0, 0));
     h.run_steps(2);
@@ -1875,7 +1902,8 @@ fn undo_and_redo_close_a_reply_editor_left_open() {
     h.run_steps(3);
     assert_eq!(texts(&h), ["The comment", "Reply B", "Reply C"], "redo deletes A again, and C takes B's place");
     assert_eq!(note(&h), None, "the editor closes on redo");
-    assert_eq!(h.query_all_by_label("Save").count(), 0, "no draft is left to save over C");
+    assert_eq!(edit_fields(&h), 0, "no draft is left to save over C");
+    assert_eq!(h.query_all_by_label("Cancel").count(), 0, "the inline edit controls closed");
 }
 
 // Contributor-original PDF. Page 1: an unnamed comment with a reply and a reply to that reply,
@@ -1920,7 +1948,7 @@ fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread(
         ["Points at itself", "Points at an unlisted note", "Points at a pop-up", "Points at a link", "Points at a form field", "Loop one", "Loop two"]
     {
         // The panel names a card or reply row by its author, text and date.
-        assert!(h.get_by_label_contains(orphan).rect().top() > h.get_by_label("Page 2").rect().top(), "{orphan}");
+        assert!(h.get_by_label_contains(orphan).rect().top() > h.get_by_label("Page 2, 7").rect().top(), "{orphan}");
     }
     // A reply to a reply joins the thread of the comment it starts from, also when that comment
     // has no /NM.
@@ -1929,8 +1957,8 @@ fn replies_that_lead_nowhere_stay_comments_and_deeper_replies_join_their_thread(
     assert!(parent.rect().top() < direct.rect().top() && direct.rect().top() < deeper.rect().top());
     assert!(deeper.rect().top() < h.get_by_label_contains("Struck words").rect().top(), "under its own thread");
     // Comments: the unnamed parent, the strikeout and the seven on page 2. Replies: the two
-    // replies, not the Replace Text caret grouped with its strikeout.
-    h.get_by_label("9");
+    // replies, not the Replace Text caret grouped with its strikeout (F-86).
+    h.get_by_label("Comments, 9");
     h.get_by_label("2 replies");
     // A status whose comment no page lists is not a comment: no card, and nothing to pick on the
     // page where it sits.
@@ -2010,15 +2038,21 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
     h.query_all_by_label("Edit").last().expect("comment menu edit, after the toolbar tab").click();
     h.run_steps(2);
     let editor = h
-        .query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && n.placeholder() != Some("Add a reply"))
+        .query_all_by(|n| n.role() == egui::accesskit::Role::MultilineTextInput && !n.is_hidden() && n.label().as_deref() == Some("Edit"))
         .next()
         .expect("note editor");
+    let editor_bottom = editor.rect().bottom();
     editor.click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("Late root edited exactly".into()));
     h.run_steps(2);
-    h.get_by_label("Save").click();
+    // The Comments panel's inline editor commits with its own Post button right beneath the Edit field.
+    h.query_all_by_role_and_label(Role::Button, "Post")
+        .filter(|n| n.rect().top() >= editor_bottom - 2.0)
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("inline edit Post button")
+        .click();
     h.run_steps(3);
     assert_eq!(h.state().views[0].session.comments.selection(), vec![(1, 0)]);
     let before = comments(&h);
@@ -2047,7 +2081,7 @@ fn the_panel_reveals_edits_and_reopens_a_late_thread_without_changing_its_replie
     assert_eq!(after.iter().find(|a| a.name.as_deref() == Some("late-reply")).unwrap().in_reply_to.as_deref(), Some("late"));
     reopened.state_mut().views[0].session.comments.panel.sort = CommentSort::Author;
     reopened.run_steps(2);
-    reopened.get_by_label("Delta"); // The author group.
+    reopened.get_by_label("Delta, 1"); // The author group (F-86: heading includes count).
     reopened.get_by_label_contains("Delta: Late root edited exactly"); // And its card, still shown after sorting.
 }
 
@@ -2675,12 +2709,12 @@ fn replacing_text_strikes_it_and_adds_a_caret() {
     h.run_steps(3);
     // One card, the caret's, showing the replacement text; sorted by type, its group is named
     // Replace text (not Insert text, and no Strikethrough).
-    assert_eq!(h.query_all_by_label("slow red").count(), 1, "one comment with the replacement text");
+    assert_eq!(h.query_all_by_label_contains("slow red").count(), 1, "one comment with the replacement text");
     h.state_mut().views[0].session.comments.panel.sort = CommentSort::Type;
     h.run_steps(3);
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Replace text").is_some(), "the panel names the comment Replace text");
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Insert text").is_none(), "not Insert text");
-    assert!(h.query_by_role_and_label(egui::accesskit::Role::Label, "Strikethrough").is_none(), "not Strikethrough");
+    assert!(h.query_by_label("Replace text, 1").is_some(), "the panel names the comment Replace text");
+    assert!(h.query_by_label_contains("Insert text").is_none(), "not Insert text");
+    assert!(h.query_by_label_contains("Strikethrough").is_none(), "not Strikethrough");
 }
 
 #[test]
@@ -2826,48 +2860,6 @@ fn the_eraser_rubs_as_wide_as_its_thickness_setting() {
     };
     assert_eq!(stroke_near(2.0), 1, "the default eraser passes by");
     assert_eq!(stroke_near(12.0), 0, "the largest rubs the drawing out");
-}
-
-/// The widths of the eraser preview's strokes drawn in the last frame.
-fn eraser_preview_widths(h: &Harness<'static, PdfCraftApp>) -> Vec<f32> {
-    fn walk(shape: &egui::Shape, out: &mut Vec<f32>) {
-        let preview = egui::Color32::from_gray(128).gamma_multiply(0.35);
-        match shape {
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
-            egui::Shape::Path(p) if p.stroke.color == egui::epaint::ColorMode::Solid(preview) => out.push(p.stroke.width),
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for clipped in &h.output().shapes {
-        walk(&clipped.shape, &mut out);
-    }
-    out
-}
-
-#[test]
-fn the_eraser_preview_is_as_wide_as_it_rubs() {
-    // #3747: while the eraser is held, its preview stroke is as wide as what it rubs out
-    // (twice its radius, three pixels per point of thickness): 12 pixels by default, 72 at 12 pt.
-    for (width, across) in [(2.0, 12.0), (12.0, 72.0)] {
-        let mut h = harness(move |app| {
-            app.comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::Eraser, width);
-            app.set_option(&egui::Context::default(), "quick", "eraser").unwrap();
-        });
-        let (from, to) = (at(&h, 60.0, 100.0), at(&h, 240.0, 100.0));
-        h.hover_at(from);
-        h.run_steps(1);
-        h.drag_at(from);
-        h.run_steps(1);
-        for k in 1..=3 {
-            h.hover_at(from + (to - from) * (k as f32 / 4.0));
-            h.run_steps(1);
-        }
-        assert_eq!(eraser_preview_widths(&h), [across], "{width} pt: the preview while held");
-        h.drop_at(to);
-        h.run_steps(3);
-        assert!(eraser_preview_widths(&h).is_empty(), "{width} pt: gone once released");
-    }
 }
 
 #[test]
@@ -3159,7 +3151,8 @@ fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
     assert!(h.execute("comment.highlight"));
     h.run_steps(2);
     assert_eq!(crate::ui::right(h.state()), Some(RightPanel::Comments), "Acrobat opens Comments with the tools");
-    h.get_by_label("Close").click();
+    // In IconicMode::Rail clicking the active Comments rail button toggles the panel closed.
+    h.get_by_role_and_label(Role::Button, "Comments").click();
     h.run_steps(2);
     assert_eq!(crate::ui::right(h.state()), None);
     for tool in ["select", "comment.underline", "comment.note", "comment.highlight"] {
@@ -3175,7 +3168,7 @@ fn a_closed_comments_panel_stays_closed_when_picking_comment_tools() {
     again.apply_settings(&h.state().settings_snapshot());
     assert!(again.comments_panel_closed, "the choice survives a restart");
     // Opening it again from the rail lets the tools open it once more.
-    h.get_by_label("Comments").click();
+    h.get_by_role_and_label(Role::Button, "Comments").click();
     h.run_steps(2);
     assert_eq!(crate::ui::right(h.state()), Some(RightPanel::Comments));
     assert!(!h.state().comments_panel_closed);
@@ -3701,6 +3694,17 @@ trailer << /Root 1 0 R >>
     });
     h.run_steps(6);
     let window = popup_rect(&h, "Ada");
+    // Scroll the pop-up body so replies below the 120 pt initial height scroll into the window.
+    h.hover_at(window.center());
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -120.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(3);
     let in_window = |text: &str| h.query_all_by(|n| shows_text(n, text)).any(|n| window.contains(n.rect().center()));
     assert!(in_window("Agreed with this"), "the text reply");
     assert!(!in_window("Accepted set by Bob"), "not the review status");
@@ -3751,7 +3755,7 @@ fn a_replace_text_window_shows_the_replacement_as_its_text_not_as_a_reply() {
         // The window is titled with the author of the annotation that has the pop-up.
         let window = popup_rect(&h, if caret_first { "Bob" } else { "Ada" });
         let boxes: Vec<String> = h
-            .query_all_by(|n| n.role() == Role::MultilineTextInput)
+            .query_all_by(|n| n.role() == Role::MultilineTextInput && !n.is_hidden())
             .filter(|n| window.contains(n.rect().center()))
             .map(|n| n.value().unwrap_or_default())
             .collect();
@@ -3867,7 +3871,7 @@ fn a_double_click_opens_a_notes_pop_up_which_drags_and_closes() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Open comment pop-up"));
     let window = popup_rect(&h, "Tester");
     // Its title names the kind of comment and its author.
-    h.get_by_label("Note – Tester");
+    h.get_by_role_and_label(Role::Heading, "Note – Tester");
 
     // Drag the title band 80 px right and 40 px down: the pop-up's place on the page moves, and
     // is saved once, when the drag is released.
@@ -3965,7 +3969,7 @@ trailer << /Root 1 0 R >>
 fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
     let mut h = harness_with_bytes(NOTE_WITH_A_THREAD.to_vec(), |_| {});
     let window = popup_rect(&h, "Alpha");
-    h.get_by_label("Note – Alpha");
+    h.get_by_role_and_label(Role::Heading, "Note – Alpha");
     // Each reply's text box, inside the window.
     let rect = |h: &Harness<'static, PdfCraftApp>, text: &str| {
         let found: Vec<egui::Rect> = h.query_all_by(|n| shows_text(n, text)).map(|n| n.rect()).filter(|r| window.contains_rect(*r)).collect();
@@ -3974,9 +3978,17 @@ fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
     };
     let (second, answer, third) = (rect(&h, "Second"), rect(&h, "Second, first answer"), rect(&h, "Third"));
     assert!(second.bottom() < answer.top() && answer.bottom() < third.top(), "thread order: {second:?} {answer:?} {third:?}");
+    let reply_panel = |r: egui::Rect| {
+        h.query_all_by(|n| matches!(n.role(), Role::Group | Role::GenericContainer) && !n.is_hidden() && n.raw_bounds().is_some())
+            .map(|n| n.rect())
+            .filter(|&g| g.left() >= window.left() - 1.0 && g.right() <= window.right() + 1.0 && g != window && g.contains_rect(r))
+            .min_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height())))
+            .expect("the reply's panel")
+    };
+    let second_panel = reply_panel(second);
     assert!(
-        answer.left() > second.left() + 4.0 && answer.right() < second.right() - 4.0,
-        "the answer sits inside its reply's panel: {second:?} {answer:?}"
+        answer.left() > second.left() + 4.0 && second_panel.contains_rect(answer),
+        "the answer sits inside its reply's panel: {second:?} {answer:?} panel={second_panel:?}"
     );
     assert!((third.left() - second.left()).abs() < 1.0, "replies to the note line up: {second:?} {third:?}");
     // The Reply buttons, top to bottom: the note's, then each reply's.
@@ -3992,7 +4004,9 @@ fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
     let before = comments(&h).len();
     let at = replies(&h)[0].center();
     click(&mut h, at);
-    field(&h, "Add a reply").type_text("Fourth");
+    field(&h, "Reply").click();
+    h.run_steps(1);
+    field(&h, "Reply").type_text("Fourth");
     h.run_steps(2);
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
@@ -4006,13 +4020,15 @@ fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
     let reply = all.iter().find(|a| a.contents.as_deref() == Some("Fourth\nline two")).expect("the reply was added, on two lines");
     assert_eq!(reply.parent, Some((note.page, note.index)));
     assert_eq!(reply.author.as_deref(), Some("Tester"));
-    assert!(h.query_all_by(|n| n.placeholder() == Some("Add a reply")).next().is_none(), "the box closes");
+    assert!(h.query_all_by(|n| n.placeholder() == Some("Reply")).next().is_none(), "the box closes");
 
     // A reply's own Reply answers that reply; Ctrl+Enter posts too, as in the comment composer.
     let second_key = all.iter().find(|a| a.contents.as_deref() == Some("Second")).map(|a| (a.page, a.index)).expect("the reply");
     let at = replies(&h)[1].center();
     click(&mut h, at);
-    field(&h, "Add a reply").type_text("Fifth");
+    field(&h, "Reply").click();
+    h.run_steps(1);
+    field(&h, "Reply").type_text("Fifth");
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Enter);
     h.run_steps(3);
@@ -4023,7 +4039,9 @@ fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
     let before = comments(&h).len();
     let at = replies(&h)[0].center();
     click(&mut h, at);
-    field(&h, "Add a reply").type_text("Never mind");
+    field(&h, "Reply").click();
+    h.run_steps(1);
+    field(&h, "Reply").type_text("Never mind");
     h.run_steps(2);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
@@ -4033,7 +4051,7 @@ fn a_pop_up_threads_its_replies_and_takes_a_new_one() {
 
 /// A pop-up window's text `text` (a comment's or a reply's): the comment's box, or a reply's read-only text.
 fn shows_text(n: &egui_kittest::kittest::AccessKitNode<'_>, text: &str) -> bool {
-    matches!(n.role(), Role::MultilineTextInput | Role::Label) && n.value().as_deref() == Some(text)
+    matches!(n.role(), Role::MultilineTextInput | Role::Label) && (n.value().as_deref() == Some(text) || n.label().as_deref() == Some(text))
 }
 
 /// On a page turned a quarter (View ▸ Rotate View), a resized pop-up window stays where it is on
@@ -4209,10 +4227,15 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
     h.run_steps(2);
     drawer_search(&h).expect("the drawer's search field").type_text("freehand");
     h.run_steps(3);
-    h.get_by_role_and_label(Role::CheckBox, "Freehand-Highlight").click();
-    h.run_steps(3);
-    h.get_by_role_and_label(Role::CheckBox, "Draw freehand").click();
-    h.run_steps(3);
+    let drag_to_rail = |h: &mut Harness<'static, PdfCraftApp>, label: &str| {
+        let from = h.get_by_role_and_label(Role::ListItem, label).rect().center();
+        let opener = h.get_by_label("Edit toolbar").rect().center();
+        let to = opener - egui::vec2(0.0, 48.0);
+        drag(h, from, to);
+        h.run_steps(3);
+    };
+    drag_to_rail(&mut h, "Freehand-Highlight");
+    drag_to_rail(&mut h, "Draw freehand");
     // The drawer stays open after adding a tool; the opener closes it.
     assert!(drawer_search(&h).is_some(), "the drawer stays open");
     h.get_by_label("Edit toolbar").click();

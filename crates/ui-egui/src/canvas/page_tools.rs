@@ -31,7 +31,7 @@ use crate::tools::fill_sign::{FillInput, FillOutcome, FillSignTool, TextBorder};
 use crate::tools::link_ui::LinkTool;
 use crate::tools::measure_ui::MeasureTool;
 use crate::tools::prepare::tool::PrepareTool;
-use crate::tools::redact_ui::tool::{RedactResult, RedactTool};
+use crate::tools::redact_ui::tool::{AreaMarkResult, AreaMarkTool};
 use crate::tools::sign_ui::tool::SignAreaTool;
 use crate::tools::stamps_ui::{CustomStamp, StampChoice, StampTool};
 
@@ -146,8 +146,6 @@ enum Arm<'a> {
     Measure(MeasureTool<'a>),
     /// A stamp, whose placement is an edit.
     Stamp(StampTool<'a>),
-    /// Redact: a text selection or a box, finished into marks.
-    Redact(RedactTool<'a>),
     /// The signature rectangle of Digitally sign.
     SignArea(SignAreaTool<'a>),
     /// Snapshot: the area to copy.
@@ -191,7 +189,6 @@ pub(crate) struct ToolFinish {
     edit: Option<Edit>,
     camera_page: Option<usize>,
     sign_drawn: Option<(usize, [f64; 4])>,
-    redaction: Option<RedactResult>,
     /// The presenter's keys of the pass, each with whether Shift was held.
     presenter_keys: Vec<(ToolKey, bool)>,
     /// The quick tool, when it selects text.
@@ -242,8 +239,9 @@ fn select_tool<'a>(
     texts: &'a dyn PageTexts,
     picks: PickSlots<'a>,
     xforms: &'a [(usize, PageXform)],
+    dragged: &'a mut bool,
 ) -> PageSelectTool<'a> {
-    PageSelectTool::new(cx.pages, texts, text, cx.info, picks, xforms, cx.doc.edit_generation())
+    PageSelectTool::new(cx.pages, texts, text, cx.info, picks, xforms, cx.doc.edit_generation(), dragged)
 }
 
 /// The Insert text tool's snap on `page`, the page the comments tool works on: the caret's tip and side in the page's
@@ -280,6 +278,7 @@ pub(crate) fn page_tool<'a>(
     session: &'a mut PageSession,
     bench: &'a mut ToolBench<'a>,
     fill: &'a mut Option<FillOutcome>,
+    area_mark: &'a mut Option<AreaMarkResult>,
     press: &'a PressState,
 ) -> PageTool<'a> {
     let tool = seen_tool(session, chosen);
@@ -296,22 +295,24 @@ pub(crate) fn page_tool<'a>(
         QuickTool::Select | QuickTool::ColumnSelect | QuickTool::Comment(_) | QuickTool::Redact => {
             let texts: &'a DocTexts<'a> = texts_slot.insert(DocTexts::new(&session.texts, &session.text_failed, cx.rotation, cx.sizes));
             let picks = PickSlots::new(&mut session.pending_pick, &mut session.picked_image, &mut session.actions_dismissed);
-            let select = select_tool(&cx, &mut session.text, texts, picks, xforms);
+            let select = select_tool(&cx, &mut session.text, texts, picks, xforms, &mut session.select_dragged).cap_clicks(tool != QuickTool::Select);
+            let over_text = {
+                let pages = cx.pages;
+                move |at: Pos2| {
+                    pages
+                        .iter()
+                        .find(|placed| placed.rect.contains(at))
+                        .is_some_and(|placed| texts.app(placed.page).is_some_and(|layer| layer.glyph_box_at(placed.to_page(at)).is_some()))
+                }
+            };
             match tool {
                 QuickTool::ColumnSelect => Arm::Select(select.column(true)),
                 QuickTool::Redact => {
-                    let pages = cx.pages;
-                    let over_text = move |at: Pos2| {
-                        pages
-                            .iter()
-                            .find(|placed| placed.rect.contains(at))
-                            .is_some_and(|placed| texts.app(placed.page).is_some_and(|layer| layer.glyph_box_at(placed.to_page(at)).is_some()))
-                    };
-                    let (drag, gesture) = (&mut session.box_drag, &mut session.redact_gesture);
-                    Arm::Redact(RedactTool::new(select, drag, gesture, cx.pages, cx.rotation, cx.info, over_text))
+                    let (drag, gesture) = (&mut session.box_drag, &mut session.mark_gesture);
+                    Arm::Area(Box::new(AreaMarkTool::new(tool, select, drag, gesture, cx.pages, cx.rotation, cx.info, over_text, area_mark)))
                 }
                 // Select runs the comments tool too: a hanging paste is placed by its press, and a press no comment
-                // part took goes on to the text.
+                // part took goes on to the text. Highlight shares Redact's area-box mechanism off text (L-262).
                 _ => {
                     let snap = caret_snap(tool, &cx, &session.texts, session.comments.tool.page);
                     let view = &mut session.comments;
@@ -323,7 +324,14 @@ pub(crate) fn page_tool<'a>(
                         Some(snap) => annotate.caret_snap(snap),
                         None => annotate,
                     };
-                    let annotate = if selects_text { annotate.over(select) } else { annotate };
+                    let annotate = if tool == QuickTool::Comment(comments::CommentTool::Highlight) && cx.allowed {
+                        let (drag, gesture) = (&mut session.box_drag, &mut session.mark_gesture);
+                        annotate.over(AreaMarkTool::new(tool, select, drag, gesture, cx.pages, cx.rotation, cx.info, over_text, area_mark))
+                    } else if selects_text {
+                        annotate.over(select)
+                    } else {
+                        annotate
+                    };
                     Arm::Area(Box::new(annotate))
                 }
             }
@@ -407,7 +415,6 @@ impl<'a> PageTool<'a> {
             Arm::Camera(t) => t,
             Arm::Measure(t) => t,
             Arm::Stamp(t) => t,
-            Arm::Redact(t) => t,
             Arm::SignArea(t) => t,
             Arm::Snapshot(t) => t,
             Arm::Crop(t) => t,
@@ -423,7 +430,6 @@ impl<'a> PageTool<'a> {
             Arm::Camera(t) => t,
             Arm::Measure(t) => t,
             Arm::Stamp(t) => t,
-            Arm::Redact(t) => t,
             Arm::SignArea(t) => t,
             Arm::Snapshot(t) => t,
             Arm::Crop(t) => t,
@@ -448,7 +454,6 @@ impl<'a> PageTool<'a> {
                 finish.edit = tool.placed();
                 finish.back_to_select = finish.edit.is_some();
             }
-            Arm::Redact(tool) => finish.redaction = tool.finished(),
             Arm::SignArea(mut tool) => finish.sign_drawn = tool.finished(),
             Arm::Snapshot(mut tool) => finish.snapshot = tool.take_result(),
             Arm::Crop(mut tool) => {
@@ -467,7 +472,7 @@ impl ToolFinish {
     /// rectangle, the redaction marks, Fill & Sign's `fill` outcome and the presenter's keys; and, under a tool that
     /// selects text, the comments' follow-up of the selection on every placed page (comments-w8 decision: every pass,
     /// with `finished` only in the pass of the release).
-    pub(crate) fn apply(&mut self, fill: Option<FillOutcome>, session: &mut PageSession, cx: &PageToolCx<'_>) {
+    pub(crate) fn apply(&mut self, fill: Option<FillOutcome>, area_mark: Option<AreaMarkResult>, session: &mut PageSession, cx: &PageToolCx<'_>) {
         if let Some(edit) = self.edit.take() {
             session.pending_edit = Some(edit);
         }
@@ -482,8 +487,8 @@ impl ToolFinish {
         if let Some(drawn) = self.sign_drawn.take() {
             session.sign.drawn = Some(drawn);
         }
-        if let Some(redaction) = self.redaction.take() {
-            redaction.land(session, cx.info, cx.geometry());
+        if let Some(mark) = area_mark {
+            mark.land(session, cx.info, cx.geometry());
         }
         match fill {
             Some(FillOutcome::Edit(edit)) => session.pending_edit = Some(*edit),
@@ -541,7 +546,8 @@ pub(crate) fn edit_text_press(
         | Owner::TextLink { .. }
         | Owner::Field { .. }
         | Owner::PrepareField { .. }
-        | Owner::SignTab { .. } => None,
+        | Owner::SignTab { .. }
+        | Owner::SignatureBadge { .. } => None,
     }
 }
 

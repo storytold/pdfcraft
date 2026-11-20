@@ -125,7 +125,7 @@ fn settling_annotation(s: &Settling, prefs: &CommentPrefs, id: AnnotationId, map
         strokes,
         color: [c.r(), c.g(), c.b()],
         opacity: style.opacity as f32,
-        stroke_width: style.width,
+        stroke_width: map.frame(s.page).map_or(style.width, |f| f.doc_len(style.width)),
         text: String::new(),
         locked: true,
         aspect: None,

@@ -110,14 +110,15 @@ impl DocView {
     /// goes, as browsers and word processors do (#6434). [`go_to_page`](Self::go_to_page) shows a
     /// page's top.
     pub fn go_to_end(&mut self) {
-        self.go_to_page(usize::MAX);
-        self.view.go_to_fraction(self.view.current, 1.0);
+        let last = self.page_count.saturating_sub(1);
+        self.go_to_page(last);
+        self.view.go_to_fraction(last, 1.0);
     }
 
     /// Reveal a user-space rectangle without changing zoom, centred where the scroll bounds allow.
     pub(crate) fn reveal_rect(&mut self, page: usize, rect: [f32; 4], info: &DocInfo) {
+        let page = page.min(self.page_count.saturating_sub(1));
         self.go_to_page(page);
-        let page = self.view.current;
         let Some(p) = info.pages.get(page) else { return };
         if !rect.iter().all(|v| v.is_finite()) {
             return;
@@ -147,8 +148,8 @@ impl DocView {
             (DestView::Xyz { left, top, zoom }, Some([x, y])) => DestView::Xyz { left: left.or(Some(x)), top: top.or(Some(y)), zoom },
             (dest, _) => dest,
         };
+        let page = page.min(self.page_count.saturating_sub(1));
         self.go_to_page(page);
-        let page = self.view.current;
         let Some(p) = info.pages.get(page) else { return };
         let rotation = self.view.rotation;
         let size = displayed(p, rotation);

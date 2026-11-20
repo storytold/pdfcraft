@@ -99,6 +99,7 @@ fn at_zero_the_menu_and_the_palette_have_nothing_to_open() {
     support::open_menu(&mut h, "File");
     assert!(h.query_by(|n| n.label().as_deref() == Some("Open Recent") && n.is_disabled()).is_some(), "Open Recent is disabled");
     assert!(h.execute("file.open_recent"));
+    h.step();
     assert!(support::shown_notice(&h).is_some_and(|m| m.contains("No recent files")));
     assert!(h.state().views.is_empty(), "and nothing opened");
 }

@@ -299,7 +299,20 @@ impl DockPanels<PanelId> for Panels<'_> {
         }
         let command = CommandRef::with_params("view.panel", json!({ "panel": panel.name() }));
         match panel.side() {
-            Some(side) => PanelSpec::new(side_label(side)).icon(IconSpec::svg(IconId::new(side_icon(side)))).command(command),
+            Some(side) => {
+                let mut spec = PanelSpec::new(side_label(side)).icon(IconSpec::svg(IconId::new(side_icon(side)))).command(command);
+                if side == RightPanel::Comments
+                    && let Some(info) = self.app.active_ids().and_then(|(_, id)| self.app.session.get(id)).map(|doc| &doc.info)
+                {
+                    spec = spec.count(crate::comments_panel::count(info));
+                    let replies = crate::comments_panel::reply_count(info);
+                    if replies > 0 {
+                        let text = crate::i18n::trn(crate::i18n::current(), replies as u64, "{n} reply", "{n} replies");
+                        spec = spec.caption(text);
+                    }
+                }
+                spec
+            }
             None if self.app.left == LeftPanel::CalculationOrder => PanelSpec::new(crate::i18n::t("Calculation order").to_owned()).command(command),
             None if super::tools::has_footer(self.app) => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command).footer(),
             None => PanelSpec::new(crate::i18n::t("Tools").to_owned()).command(command),
@@ -330,16 +343,19 @@ impl DockPanels<PanelId> for Panels<'_> {
     }
 
     fn group_view(&mut self, panels: &[PanelId], _active: usize, ui: &mut Ui, at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
-        // Measuring is the dock's; a shown view takes the rect it is given.
-        let GroupAt::Show(rect) = at else { return None };
-        if panels.contains(&PanelId::Toolbar) {
-            crate::hotbar::show_rail(self.app, ui);
-        } else if panels.contains(&PanelId::Document) {
-            document_view(self.app, ui, rect);
-        } else {
-            return None;
+        match at {
+            GroupAt::Measure(width) => panels.contains(&PanelId::Toolbar).then(|| crate::hotbar::measure_rail(self.app, ui, width)),
+            GroupAt::Show(rect) => {
+                if panels.contains(&PanelId::Toolbar) {
+                    crate::hotbar::show_rail(self.app, ui);
+                } else if panels.contains(&PanelId::Document) {
+                    document_view(self.app, ui, rect);
+                } else {
+                    return None;
+                }
+                Some(rect.height())
+            }
         }
-        Some(rect.height())
     }
 
     fn group_header(&mut self, panels: &[PanelId], active: usize, ui: &mut Ui, _cx: &mut BodyCx<'_>) {

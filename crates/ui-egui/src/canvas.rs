@@ -282,6 +282,8 @@ pub struct PageSession {
     pub placed: Vec<PlacedPage>,
     /// The text selection, and the selection gesture in progress.
     pub text: TextSelectState,
+    /// Whether the current Select-tool primary press has dragged past the click threshold.
+    pub(crate) select_dragged: bool,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
     pub(crate) all_text: bool,
@@ -317,12 +319,12 @@ pub struct PageSession {
     /// with the user-space rectangle on it to scroll into view (a field Tab moved to), gone to by the app after the
     /// pass: the page view holds the view state while the body runs.
     pub(crate) pending_page: Option<(usize, Option<[f32; 4]>)>,
-    /// Redact tool: the marks to add (page, quads) for the app to style, one per page (a text
-    /// selection can cover several), added in one undo step.
+    /// Text-or-box marks (Redact or area Highlight) to add (page, quads) for the app to style,
+    /// one per page (a text selection can cover several), added in one undo step.
     /// With the tool that made them, read when they are styled: a key handled later in the same
     /// frame (Escape back to Select) must not turn an area highlight into a redaction.
     /// The last field is the page the marks are followed up on (where a selection ended).
-    pub pending_redaction: Option<(QuickTool, PageMarks, usize)>,
+    pub pending_marks: Option<(QuickTool, PageMarks, usize)>,
     /// A text selection Redact did not mark: it covers a page whose text could not be read
     /// ([`ToolMarks::Unreadable`]). The app says so.
     pub(crate) redaction_refused: bool,
@@ -391,8 +393,8 @@ pub struct PageSession {
     /// point, a flick's glide) from pass to pass, so the page tool lends them rather than building them.
     pub(crate) hand: craft::ui::canvas::HandTool,
     pub(crate) marquee_zoom: craft::ui::canvas::ZoomTool,
-    /// What the Redact tool's press is doing, from the press to its release.
-    pub(crate) redact_gesture: crate::tools::redact_ui::tool::RedactGesture,
+    /// What an area-mark press (Redact or Highlight off text) is doing, from the press to its release.
+    pub(crate) mark_gesture: crate::tools::redact_ui::tool::AreaMarkGesture,
     /// The Stamp tool's press, from the press to its release.
     pub(crate) stamp_press: Option<crate::stamps_ui::StampPress>,
     /// What the last secondary press on a page went to, and on which page (`None` off the pages): the page's menu
@@ -408,6 +410,7 @@ impl PageSession {
         Self {
             placed: Vec::new(),
             text: TextSelectState::default(),
+            select_dragged: false,
             all_text: false,
             actions_dismissed: None,
             marks_waiting: None,
@@ -422,7 +425,7 @@ impl PageSession {
             pending_edit: None,
             fill_signature: None,
             pending_page: None,
-            pending_redaction: None,
+            pending_marks: None,
             redaction_refused: false,
             marks_across_pages: None,
             edit_lines: HashMap::new(),
@@ -454,7 +457,7 @@ impl PageSession {
             box_drag: PageBoxDrag::default(),
             hand: craft::ui::canvas::HandTool::new(Default::default()),
             marquee_zoom: craft::ui::canvas::ZoomTool::new(Default::default()),
-            redact_gesture: Default::default(),
+            mark_gesture: Default::default(),
             stamp_press: None,
             menu_for: None,
             context_held: false,
@@ -938,6 +941,22 @@ fn page_parts_of(
 ) -> (Vec<PagePart>, Vec<(usize, PageXform, Vec<SignTab>)>) {
     let geo = cx.geometry(body);
     let mut parts = Vec::new();
+    // Copied comments hanging on the pointer take the next click anywhere on a page, even over an
+    // existing comment, link or field, so no page part may steal it from the paste tool.
+    if session.comments.paste.is_some() {
+        let shown = cx.tool == QuickTool::Select && !cx.preparing;
+        let tabs = body
+            .pages
+            .iter()
+            .map(|placed| {
+                let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
+                let xf = PageXform::of(placed, cx.rotation, size);
+                let overlay = overlay_parts(ui, &xf, cx.doc, placed.page, cx.can_modify, shown);
+                (placed.page, xf, overlay.tabs)
+            })
+            .collect();
+        return (parts, tabs);
+    }
     if cx.editing_content {
         for placed in body.pages {
             parts.extend(crate::edit_text_ui::picture_parts(session, cx.doc, placed.page, placed, geo));
@@ -991,6 +1010,29 @@ fn page_parts_of(
     }
     if cx.tool == QuickTool::EditText && cx.can_modify {
         crate::object_ui::page_parts(&mut parts, session, cx.doc, cx.info, body.pages, geo);
+    }
+    // Validation badges on signed signature fields: hover-only tips that show with any tool beside its own cursor.
+    if cx.unobstructed {
+        for placed in body.pages {
+            let size = cx.sizes.get(placed.page).copied().unwrap_or_default();
+            let xf = PageXform::of(placed, cx.rotation, size);
+            for (index, badge) in area::signature_badges(&cx.doc.signatures, placed.page).into_iter().enumerate() {
+                let [x0, y0, x1, y1] = badge.rect;
+                let rect = xf.user_rect(cx.info, placed.page, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
+                if rect.is_finite() {
+                    parts.push(
+                        PagePart::new(
+                            Owner::SignatureBadge { index },
+                            placed.page,
+                            craft::behavior::HitShape::Rect(rect),
+                            page_parts::PageLayer::Badge,
+                        )
+                        .hover_only()
+                        .tip_now(crate::i18n::t(badge.summary)),
+                    );
+                }
+            }
+        }
     }
     (parts, tabs)
 }
@@ -1128,6 +1170,7 @@ fn route_press(
                 session.sign.field = Some(field.name.clone());
             }
         }
+        Owner::SignatureBadge { .. } => {}
         // PLAN: assumed `prepare::tool::field_press(session, form, press)` (pdf-forms-w9).
         Owner::PrepareField { .. } => crate::prepare::tool::field_press(session, cx.form, press),
         // The Edit text families' presses, a modified press first taking it for the objects selected together.
@@ -1201,7 +1244,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         Some((Owner::Comment { index }, page)) => Some((page, index)),
         _ => None,
     };
-    out.over_part = parts_out.hovered.is_some();
+    out.over_part = parts_out.hovered.is_some_and(|(owner, _)| !matches!(owner, Owner::SignatureBadge { .. }));
     // The pointer entering or leaving a form widget runs its Mouse Enter and Exit scripts, once per real run.
     if body.pass.is_some() {
         let widget = crate::forms_ui::hovered(cx.form, parts_out.hovered.as_ref().map(|(owner, _)| owner));
@@ -1238,7 +1281,8 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         let tool_cx = PageToolCx { pages: body.pages, viewport: body.rect, view: body.view, button_held, ..cx.tools };
         let mut bench = page_tools::ToolBench::default();
         let mut fill = None;
-        let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &pass.press);
+        let mut area_mark = None;
+        let mut tool = page_tool(cx.chosen, tool_cx, &mut *session, &mut bench, &mut fill, &mut area_mark, &pass.press);
         let reply = ToolHost::new().momentary(momentary).run(ui, pass, &mut tool);
         let mut finish = tool.finish();
         // The comment gestures the run finished: each committed one is an engine edit, one undo step per drag.
@@ -1247,7 +1291,7 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         if let Some(edit) = comments::take_edits(&mut session.comments, &map, cx.info, cx.prefs, now) {
             session.pending_edit = Some(edit);
         }
-        finish.apply(fill, session, &tool_cx);
+        finish.apply(fill, area_mark, session, &tool_cx);
         if let Some(why) = finish.refused.take() {
             session.objects.notice = Some(why.into());
         }
@@ -1336,9 +1380,11 @@ fn page_body(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSession, 
         let loading = |page: usize| body.pages.iter().any(|p| p.page == page && matches!(p.picture, TextureState::Loading { .. }));
         let drag = &mut session.signature_drag;
         drag.prepare(&ctx, cx.doc, target, cx.render_scale);
-        for placed in body.pages.iter().filter(|p| !loading(p.page)) {
-            drag.page_received(placed.page);
-            session.comments.page_rendered(placed.page);
+        if session.pending_edit.is_none() {
+            for placed in body.pages.iter().filter(|p| !loading(p.page)) {
+                drag.page_received(placed.page);
+                session.comments.page_rendered(placed.page);
+            }
         }
         let stale = drag.moving_page().is_some_and(loading);
         drag.prepare_move(&ctx, cx.doc, &session.comments, session.pending_edit.as_ref(), stale, cx.render_scale);
@@ -1647,11 +1693,16 @@ pub fn document_area_at(app: &mut PdfCraftApp, index: usize, rect: Rect, ui: &mu
     };
     let source = DocPages::new(&app.session, doc_id).rotated(state.rotation).revisions(revisions).reports(reports);
     // A modal over the pages blocks the canvas's keys and presses in the framework, so the view needs no gate here.
-    let out = PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
-        ui,
-        rect,
-        |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
-    );
+    // Push the view's own key so switching tabs never reuses another tab's PageView layout memory.
+    let out = ui
+        .push_id(view_key, |ui| {
+            PageView::new(tl!("Pages"), &source, state, DataColor::new(paper)).navigation(navigation).border(border).keep(&keep).show_at(
+                ui,
+                rect,
+                |ui, body| page_body(ui, body, session, momentary, &cx, &mut body_out),
+            )
+        })
+        .inner;
     if let Some(canvas) = &body_out.view {
         out.adopt(&mut view.view, canvas);
     }
@@ -1921,7 +1972,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, ctx: &egui::Context, index: usize
     if std::mem::take(&mut app.views[index].session.redaction_refused) {
         app.notify_tr("Part of the selected text is on a page whose text could not be read, so nothing was marked for redaction. Mark that page with a box instead.");
     }
-    if let Some((made_by, marks, head)) = app.views[index].session.pending_redaction.take() {
+    if let Some((made_by, marks, head)) = app.views[index].session.pending_marks.take() {
         let author = app.comment_prefs.author.clone();
         let edits: Vec<pdfcraft_engine::Edit> = marks
             .into_iter()
