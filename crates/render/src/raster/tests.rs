@@ -759,6 +759,91 @@ fn lab_honours_the_space_white_point() {
         }
     }
 }
+/// Renders a 200 × 200 page filled by `content` with `/C` set to `space`
+/// and returns the centre pixel.
+fn centre_pixel_in_space(space: &str, content: &str) -> [u8; 4] {
+    use super::*;
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /ColorSpace << /C {space} >> >> /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        preview: false,
+    });
+    assert!(page.error.is_none(), "{space} / {content}: {:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 200));
+    let mut pixel = [0; 4];
+    pixel.copy_from_slice(&page.rgba[(100 * page.width as usize + 100) * 4..][..4]);
+    pixel
+}
+
+fn assert_pixel_near(got: [u8; 4], expected: [u8; 4], tolerance: u8, what: &str) {
+    for (channel, (got_channel, want)) in got.iter().zip(expected).enumerate() {
+        assert!(got_channel.abs_diff(want) <= tolerance, "{what} channel {channel}: got {got:?}, expected {expected:?}");
+    }
+}
+
+/// PDFBOX-6260 (Ghostscript bug 686749): a CalRGB space whose /WhitePoint is
+/// far from daylight (X 0.5505, Z 1.989) and whose /Matrix maps A = B = C = 1
+/// onto exactly that white. ISO 32000-2 §8.6.5.3 makes the white point the
+/// diffuse white, so 1 1 1 is white and a dark, nearly equal triple is a dark
+/// grey. The Bradford adaptation divided the cone response by the white's XYZ
+/// instead of its cone response, which drew the band dark green and the
+/// white text cyan. Expected values are the Bradford adaptation of the file's
+/// own numbers to D65, then sRGB.
+#[test]
+fn calrgb_with_an_extreme_white_point_keeps_white_white() {
+    let space = "[/CalRGB << /Gamma [2.22221 2.22221 2.22221] /WhitePoint [0.5505 1 1.989] \
+                 /Matrix [0.0124 0.2126 0.9193 0.3576 0.71519 0.1192 0.1805 0.0722 0.9505] >>]";
+    for (abc, expected) in [("1 1 1", [255, 255, 255, 255]), ("0.161 0.145 0.149", [27, 33, 34, 255])] {
+        let got = centre_pixel_in_space(space, &format!("/C cs {abc} sc 0 0 200 200 re f"));
+        assert_pixel_near(got, expected, 2, &format!("CalRGB {abc}"));
+    }
+}
+
+/// An ordinary CalRGB space (sRGB primaries, gamma 2.2, D65 white) and a D50
+/// one keep white white, and the D65 space draws the same colours as before
+/// the adaptation fix: adapting D65 to D65 is the identity either way.
+#[test]
+fn ordinary_calrgb_spaces_keep_their_colours() {
+    let d65 = "[/CalRGB << /Gamma [2.2 2.2 2.2] /WhitePoint [0.9505 1 1.089] \
+               /Matrix [0.4124 0.2126 0.0193 0.3576 0.7152 0.1192 0.1805 0.0722 0.9505] >>]";
+    for (abc, expected) in [
+        ("1 1 1", [255, 255, 255, 255]),
+        ("0 0 0", [0, 0, 0, 255]),
+        ("0.5 0.5 0.5", [128, 128, 128, 255]),
+        ("0.8 0.2 0.1", [205, 47, 19, 255]),
+        ("0.1 0.6 0.9", [19, 154, 230, 255]),
+    ] {
+        let got = centre_pixel_in_space(d65, &format!("/C cs {abc} sc 0 0 200 200 re f"));
+        assert_pixel_near(got, expected, 1, &format!("D65 CalRGB {abc}"));
+    }
+    let d50 = "[/CalRGB << /Gamma [1.8 1.8 1.8] /WhitePoint [0.9642 1 0.8249] \
+               /Matrix [0.6097 0.3111 0.0195 0.2053 0.6257 0.0609 0.1492 0.0632 0.7446] >>]";
+    let got = centre_pixel_in_space(d50, "/C cs 1 1 1 sc 0 0 200 200 re f");
+    assert_pixel_near(got, [255, 255, 255, 255], 1, "D50 CalRGB white");
+}
+
+/// A degenerate /WhitePoint (a zero or huge component) leaves the colour
+/// unadapted instead of dividing by zero or overflowing.
+#[test]
+fn calrgb_with_a_degenerate_white_point_still_draws() {
+    for white in ["[0 1 0]", "[100000000000000000000000000000000000000 1 100000000000000000000000000000000000000]", "[-1 1 -1]"] {
+        let space = format!("[/CalRGB << /WhitePoint {white} /Matrix [0.4124 0.2126 0.0193 0.3576 0.7152 0.1192 0.1805 0.0722 0.9505] >>]");
+        let got = centre_pixel_in_space(&space, "/C cs 0.5 0.5 0.5 sc 0 0 200 200 re f");
+        assert_eq!(got[3], 255, "{white}: {got:?}");
+    }
+}
 /// #1203: an `/Indexed` palette over Lab looks its entries up as
 /// `byte / 255`, which must map onto L* 0..100 and the a*/b* /Range. They
 /// were read as raw L*a*b* (L* below 1), so such palettes drew near black.
