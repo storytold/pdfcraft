@@ -234,11 +234,30 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
+/// How far apart `line` is from `prev` along their shared baseline in the edit path
+/// ([`TextLine::gap_to`]): the boxes' `frame_gap`, or the ink-to-ink gap when the boxes are
+/// apart, whichever is wider. Padding spaces at a run's edge lie inside its box, so where the
+/// boxes touch the gap is only that padding (#7086).
+fn row_gap(prev: &TextLine, line: &TextLine, frame_gap: f64) -> f64 {
+    prev.gap_to(&line.ink, frame_gap, line.size)
+}
+
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let joins = rows.last().and_then(|r| r.last()).and_then(|i| lines.get(*i)).is_some_and(|prev| {
-            let gap = line.frame_rect()[0] - prev.frame_rect()[2];
+            let frame_gap = line.frame_rect()[0] - prev.frame_rect()[2];
+            // The ink-to-ink gap belongs to the edit path (#7086). Reading and export keep the
+            // boxes' gap, so padding spaces there do not split a line as they always have.
+            let gap = if mixed { row_gap(prev, line, frame_gap) } else { frame_gap };
+            // A row that opens with a list marker stays one row: its bullet is often a text
+            // object of its own, a word space from the item's text (#2564, #7086).
+            let marker = rows.last().is_some_and(|r| starts_list_item(r, lines));
+            // The tighter edit cap is for joins across text objects (#7086): a table cell or a
+            // tab stop apart, which an edit must select on its own. A row that opens with a list
+            // marker, and runs a text object split off across their own padding spaces (the
+            // boxes touch), keep the wider row they always grouped. Reading keeps it too.
+            let tight = mixed && !marker && prev.origin.bt_op != line.origin.bt_op;
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
             let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
@@ -257,8 +276,11 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                     || (gap >= 0.0
                         && prev.size.min(line.size) < prev.size.max(line.size) * 0.9
                         && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.max(line.size) * 0.5))
-                && gap >= -prev.size.min(line.size) * 0.2
-                && gap < prev.size.max(line.size) * 1.5
+                && frame_gap >= -prev.size.min(line.size) * 0.2
+                // Neighbouring lines share a row across about one word space; a wider gap is a
+                // table cell or a tab stop, which an edit must select on its own (#7086). Reading
+                // keeps the wider row it always grouped.
+                && gap < prev.size.max(line.size) * if tight { 0.6 } else { 1.5 }
                 // Separate same-style text objects that merely touch or overlap, with no space
                 // between them, are separate labels (for example a paragraph dragged against
                 // another, #594). Style runs and words separated by a space or gap still join.

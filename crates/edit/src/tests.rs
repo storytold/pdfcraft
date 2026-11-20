@@ -1949,6 +1949,82 @@ fn tracked_text_positions_do_not_count_character_spacing_twice() {
     }
 }
 
+/// #7086: neighbouring table cells are each their own edit line and block, while words a
+/// producer splits across text objects still read as one line.
+#[test]
+fn neighbouring_table_cells_in_separate_text_objects_are_not_one_line() {
+    let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
+    // Two cells on one baseline, a column gutter (wider than a word space, well under the old
+    // 1.5 em join window) apart, each in its own BT block.
+    let gutter = w(" ") + 0.9 * 10.0;
+    let rhs = 72.0 + w("AB") + gutter;
+    // The control: two words one word space apart across BT blocks, far below the cells so no
+    // paragraph rule can reach them.
+    let world = 72.0 + w("Hello") + w(" ");
+    let content = format!(
+        "BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB) Tj ET \
+         BT /F1 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (CD) Tj ET \
+         BT /F1 10 Tf 1 0 0 1 72 600 Tm (Hello) Tj ET \
+         BT /F1 10 Tf 1 0 0 1 {world:.4} 600 Tm (world) Tj ET"
+    );
+    let doc = text_page(&content);
+    let texts: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(texts, ["AB", "CD", "Hello world"]);
+    let blocks: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(blocks, ["AB", "CD", "Hello world"]);
+}
+
+/// #7086: padding spaces inside table cells do not glue the cells into one edit line. The pen
+/// gap shrinks by the padding while the glyphs stay a column gutter apart.
+#[test]
+fn padded_table_cells_do_not_share_an_edit_line() {
+    let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
+    let gutter = w(" ") + 0.9 * 10.0;
+    let rhs = 72.0 + w("AB") + gutter - w(" ");
+    let content = format!(
+        "BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB ) Tj ET \
+         BT /F1 10 Tf 1 0 0 1 {rhs:.4} 700 Tm ( CD) Tj ET"
+    );
+    let doc = text_page(&content);
+    let texts: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(texts, ["AB ", " CD"]);
+    // `TextBlock.text` trims edge whitespace; the editor text keeps the padding.
+    let blocks: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect();
+    assert_eq!(blocks, ["AB ", " CD"]);
+}
+
+/// #7086: the tighter edit cap applies across text objects only. Two differently styled runs
+/// in one BT block, 8 pt apart, stay one editable block as before.
+#[test]
+fn same_block_styled_runs_keep_their_wide_row() {
+    let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
+    let rhs = 72.0 + w("AB") + 8.0;
+    let content = format!("BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB) Tj /F2 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (ab) Tj ET");
+    let doc = text_page(&content);
+    let blocks: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect();
+    assert_eq!(blocks, ["AB ab"], "one BT block keeps its 1.5 em row window");
+}
+
+/// #7086: padding spaces are an edit-path concern. Reading and export group with the boxes'
+/// gap, so two padded runs 10 pt apart stay one paragraph instead of splitting on the wider
+/// ink-to-ink gap.
+#[test]
+fn padded_runs_stay_one_reading_block() {
+    let w = |s: &str| pdfcraft_fonts::helvetica_width(s, 10.0);
+    // Their boxes 10 pt apart (past the cross-BT line join, inside the 1.5 em reading window);
+    // four padding spaces each side put the glyphs about 32 pt apart.
+    let rhs = 72.0 + w("AB    ") + 10.0;
+    let content = format!(
+        "BT /F1 10 Tf 1 0 0 1 72 700 Tm (AB    ) Tj ET \
+         BT /F1 10 Tf 1 0 0 1 {rhs:.4} 700 Tm (    CD) Tj ET"
+    );
+    let doc = text_page(&content);
+    let texts: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(texts, ["AB    ", "    CD"], "the runs are separate edit lines");
+    let blocks: Vec<_> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(blocks, ["AB        CD"], "reading keeps the row it always grouped");
+}
+
 fn descriptor_text_page() -> Document {
     let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
     let objs: Vec<String> = vec![
