@@ -969,7 +969,7 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
     if matches!(cx.tool, QuickTool::Select | QuickTool::Link) {
         links_of(session, cx, body).parts(&mut parts);
     }
-    if cx.tool == QuickTool::Select && !cx.comments_hidden {
+    if !cx.comments_hidden {
         // The comment a press under the pointer would take, hit within the theme's reach and with its markers at the
         // icon size, both as the tools on the canvas read them.
         let env = Env::of(ui);
@@ -979,7 +979,11 @@ fn page_parts_of(ui: &mut egui::Ui, body: &PageBody<'_>, session: &mut PageSessi
         let on_link = ui
             .input(|i| i.pointer.hover_pos())
             .is_some_and(|p| parts.iter().any(|part| matches!(part.owner, Owner::Link { .. } | Owner::TextLink { .. }) && part.shape.hit(p)));
-        parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side, on_link));
+        if cx.tool == QuickTool::Select
+            || cx.unobstructed && session.comments.tool.in_flight().is_none() && session.comments.tool.drawing().is_empty()
+        {
+            parts.extend(comments::parts(cx.info, &map, cx.prefs, cx.tool, pointer, &session.comments.tool, tolerance, icon_side, on_link));
+        }
     }
     // Fields take the page's presses under Select only: another tool's press over a field is the tool's (a new
     // text box, a mark, a stamp).
@@ -1061,7 +1065,10 @@ fn route_press(
             }
             // A picture is selected for its menu only when the right-click lands on its visible body
             // on the page; a right-click on its out-of-page frame or anything else lets it go.
-            let on_page = press.phase.start().is_some_and(|start| body.pages.iter().any(|p| p.page == press.page && p.rect.contains(start.origin)));
+            let on_page = press
+                .phase
+                .start()
+                .is_some_and(|start| body.pages.iter().find(|p| p.rect.contains(start.origin)).is_some_and(|p| p.page == press.page));
             if !held {
                 let picture = match owner {
                     Owner::Picture { index } if on_page => Some(index),
@@ -1070,7 +1077,9 @@ fn route_press(
                 crate::edit_text_ui::picture_context(press.page, picture, session);
             }
             if matches!(owner, Owner::Picture { .. }) && !on_page {
-                session.menu_for = None;
+                if let Some(start) = press.phase.start() {
+                    background_context(ui, session, cx, body, start.origin);
+                }
                 return;
             }
         }
@@ -1120,7 +1129,7 @@ fn route_press(
             crate::prepare::tool::field_press(session, cx.form, press);
         }
         // A link reads its own right-click too: its context event selects it for the Link tool's menu.
-        if !matches!(press.owner, Owner::Link { .. } | Owner::TextLink { .. }) {
+        if !matches!(owner, Owner::Link { .. } | Owner::TextLink { .. }) || menu_for != Some((press.page, owner)) {
             return;
         }
     }
@@ -1275,6 +1284,9 @@ fn page_before(ui: &mut egui::Ui, body: &PageBody<'_>, callbacks: &mut PageCallb
             session.all_text = false;
         }
         route_press(ui, session, press, &parts, cx, body, out);
+    }
+    if let Some(at) = parts_out.context {
+        background_context(ui, session, cx, body, at);
     }
     // Focus arrived on a field (Tab, a request or a click): the field opens, a text field with its text selected.
     let field_arrived = match &parts_out.focused {
