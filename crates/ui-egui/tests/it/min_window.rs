@@ -85,6 +85,15 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
 /// A narrow window: the stacked notice bar keeps both buttons inside the window and apart.
 #[test]
 fn the_stacked_notice_keeps_its_buttons_in_view() {
+    fn message_rect(shape: &egui::Shape) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(message_rect),
+            egui::Shape::Text(text) if text.galley.text().starts_with("This document is secured") => {
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+            }
+            _ => None,
+        }
+    }
     let mut h = Harness::builder().with_size(egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1])).build_eframe(|cc| {
         crate::support::install_runtime(&cc.egui_ctx);
         {
@@ -96,7 +105,7 @@ fn the_stacked_notice_keeps_its_buttons_in_view() {
     });
     h.run_steps(8);
     let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(MIN_WINDOW_SIZE[0], MIN_WINDOW_SIZE[1]));
-    let msg = h.get_by_label_contains("This document is secured").rect();
+    let msg = h.output().shapes.iter().find_map(|shape| message_rect(&shape.shape)).expect("the notice message is painted");
     let (unlock, settings) = (h.get_by_label("Unlock…").rect(), h.get_by_label("Security settings").rect());
     for (name, r) in [("unlock", unlock), ("settings", settings)] {
         assert!(window.contains_rect(r), "{name} stays inside the window: {r:?}");
