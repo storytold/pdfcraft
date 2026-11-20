@@ -1,7 +1,7 @@
 use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
 use super::items::Item;
 use super::{
-    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path,
+    Ctx, Frame, Layout, Layouter, MAX_DEPTH, MAX_INSTANCES, MAX_ITEMS, MAX_MEASURES, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path,
     subform_instances,
 };
 
@@ -211,6 +211,7 @@ impl Layouter<'_> {
                     widget_rest = Some((Rect::new(r.x, y, r.w, r.bottom() - y), border));
                 }
             }
+            let before = rest.len();
             for (item, kept) in rest {
                 if loose(&item) {
                     let (upper, whole, rest_box) = split_widget(item, cut);
@@ -238,6 +239,12 @@ impl Layouter<'_> {
                     }
                     (None, None) => {}
                 }
+            }
+            // A cut divides an item in two and a split widget adds its box: the pieces are items too,
+            // and count against the form's total.
+            self.items = self.items.saturating_add((here.len() + below.len()).saturating_sub(before));
+            if self.items > MAX_ITEMS {
+                return Err(XfaError::TooLarge("the form has too many objects to lay out".into()));
             }
             // The piece of the field being split on this page, where its border goes.
             if let Some(f) = field {

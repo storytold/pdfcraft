@@ -118,3 +118,16 @@ fn rows_cut_in_a_positioned_container_are_reported_too() {
         assert!(w.contains("holds 60 rows") && w.contains("first 5"), "{layout}: {w}");
     }
 }
+
+/// Each widget holds its own copy of its tooltip and values, so text in a repeating subform is
+/// counted across the whole layout: many copies of a large tooltip are refused, one is not.
+#[test]
+fn widget_text_repeated_in_many_instances_spends_the_widget_budget() {
+    let tip = "tip ".repeat(5000); // 20,000 bytes; 100 instances are past the test budget of 1 MiB
+    let field = format!(r#"<field name="f" w="1in" h="0.3in"><ui><textEdit/></ui><assist><toolTip>{tip}</toolTip></assist></field>"#);
+    let many =
+        format!(r#"<template><subform layout="tb"><subform layout="tb"><occur initial="100" max="-1"/>{field}</subform></subform></template>"#);
+    assert!(matches!(layout_xml(&many), Err(XfaError::TooLarge(m)) if m.contains("field text")), "repeated tooltips must be refused");
+    let few = format!(r#"<template><subform layout="tb"><subform layout="tb"><occur initial="5" max="-1"/>{field}</subform></subform></template>"#);
+    assert!(layout_xml(&few).is_ok(), "a few copies lay out");
+}
