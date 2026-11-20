@@ -28,15 +28,19 @@ impl ExternalKey for WindowsKey {
         // A key handle acquired silently can never prompt: smart cards and tokens then refuse
         // to sign (NTE_SILENT_CONTEXT, 0x80090022) instead of asking for the PIN. Acquire the
         // signing handle without the silent flag so the provider can show its own dialog.
-        let key = self.context.acquire_key(false).map_err(|e| {
-            SignError::Crypto(format!(
-                "the Windows certificate store key couldn't be opened for signing (is the smart card or token connected?): {}",
-                describe(&e)
-            ))
-        })?;
-        let raw = key.sign(&digest, padding).map_err(|e| {
-            SignError::Crypto(format!("the Windows certificate store didn't sign (key use may have been cancelled): {}", describe(&e)))
-        })?;
+        let context = self.context.clone();
+        let raw = provider_thread(move || {
+            let key = context.acquire_key(false).map_err(|e| {
+                SignError::Crypto(format!(
+                    "the Windows certificate store key couldn't be opened for signing (is the smart card or token connected?): {}",
+                    describe(&e)
+                ))
+            })?;
+            key.sign(&digest, padding).map_err(|e| {
+                SignError::Crypto(format!("the Windows certificate store didn't sign (key use may have been cancelled): {}", describe(&e)))
+            })
+        })
+        .unwrap_or_else(|_| Err(SignError::Crypto("the Windows key provider stopped unexpectedly while signing".to_string())))?;
         self.public.store_signature_der(&raw)
     }
 }
@@ -117,6 +121,11 @@ enum KeyProbe {
     Error(CngError),
 }
 
+/// Run in-process key-provider work on a thread whose provider-owned state is discarded on exit.
+fn provider_thread<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> std::thread::Result<T> {
+    std::thread::spawn(work).join()
+}
+
 /// Ask a certificate's key provider about the key away from the calling thread.
 ///
 /// Third-party KSPs run inside PdfCraft. Some leave the thread's floating-point control state
@@ -125,12 +134,11 @@ enum KeyProbe {
 /// thread also keeps that provider-owned state away from the UI and rendering thread.
 fn probe_key(context: &CertContext, want: StoreKey) -> KeyProbe {
     let context = context.clone();
-    std::thread::spawn(move || match context.acquire_key(true) {
+    provider_thread(move || match context.acquire_key(true) {
         Ok(key) => matches_key(&key, want).map_or_else(KeyProbe::Unusable, |()| KeyProbe::Usable),
         Err(CngError::WindowsError(NTE_SILENT_CONTEXT | NTE_UI_REQUIRED)) => KeyProbe::Usable,
         Err(e) => KeyProbe::Error(e),
     })
-    .join()
     .unwrap_or_else(|_| KeyProbe::Unusable("its key provider stopped unexpectedly while the private key was checked".to_string()))
 }
 
@@ -289,6 +297,14 @@ fn describe(e: &CngError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_work_runs_on_another_thread() {
+        let caller = std::thread::current().id();
+        let worker = provider_thread(|| std::thread::current().id());
+        assert!(worker.is_ok());
+        assert_ne!(worker.ok(), Some(caller));
+    }
 
     #[test]
     fn errors_are_explained_with_their_code() {
