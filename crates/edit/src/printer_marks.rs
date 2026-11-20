@@ -309,7 +309,7 @@ pub fn add_printer_marks(doc: &mut Document, pages: &[usize], marks: &PrinterMar
         let page = page_list(doc)[i].clone();
         let content = marks.content(trim, bleed, i + 1, count);
         let body = format!("{}{}{}", begin(MarkKind::PrinterMarks, "PrinterMarks", [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), content, END);
-        add_resources(doc, &page, None, Some(body.as_bytes()))?;
+        add_resources(doc, &page, None, Some(body.as_bytes()), None)?;
         let page = page_list(doc)[i].clone();
         // add_resources gave the page resources of its own.
         let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
