@@ -150,8 +150,8 @@ fn key(line: &TextLine) -> (&str, [i64; 4]) {
 }
 
 /// How far right a rewrite of the runs `indices` drew (`None` when it drew nothing), or an error
-/// when it moved or lost any other text on the page: text positioned after the end of the text
-/// before it, say, depends on the words that went.
+/// when it moved or lost any other text on the page: text positioned after the end of the words
+/// that went, say, when their advance couldn't be left behind (see `dropped_advances`).
 fn drawn_right(before: &[TextLine], indices: &[usize], after: &[TextLine]) -> Result<Option<f64>, EditError> {
     let mut unmatched: HashMap<_, usize> = HashMap::new();
     for line in before {

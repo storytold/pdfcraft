@@ -132,10 +132,19 @@ const ICACLS: &str = "icacls.exe";
 /// A tool Windows ships, started by its full path (review on #3956). Started by bare name, a
 /// `whoami.exe`, `powershell.exe` or `icacls.exe` found first (next to the app, or earlier on the
 /// search path) would answer instead, and `whoami`'s answer is what every check here trusts.
+///
+/// Each tool is a console program and the app is not, so without `CREATE_NO_WINDOW` Windows gives
+/// every one of them a console window of its own, which flashes up while the app writes its
+/// `--control` file. The flag doesn't touch the pipes `output()` reads the answer through.
 #[cfg(windows)]
 fn system_tool(relative: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt as _;
+    /// `CREATE_NO_WINDOW`, from the Windows process creation flags.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let root = std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
-    std::process::Command::new(root.join("System32").join(relative))
+    let mut command = std::process::Command::new(root.join("System32").join(relative));
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 #[cfg(windows)]
@@ -384,6 +393,28 @@ mod tests {
         }
     }
 
+    /// The tools start without a console window: the app has no console, so a tool that isn't
+    /// told otherwise gets a window of its own, which flashes up. The started PowerShell reports
+    /// its console's window and the processes attached to that console. Both are checked, because
+    /// a tool started without the flag by a process that has a console shares it instead, and that
+    /// console may itself have no window (a test run started by a service or an IDE).
+    #[cfg(windows)]
+    #[test]
+    fn the_tools_start_without_a_console_window() {
+        const PROBE: &str = r#"Add-Type -Namespace PdfCraftProbe -Name Console -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow(); [DllImport("kernel32.dll")] public static extern uint GetConsoleProcessList(uint[] ids, uint count);'
+$ids = New-Object uint32[] 256
+$n = [PdfCraftProbe.Console]::GetConsoleProcessList($ids, 256)
+"$([PdfCraftProbe.Console]::GetConsoleWindow()) $($ids[0..($n-1)] -join ',')""#;
+        let out = system_tool(POWERSHELL).args(["-NoProfile", "-NonInteractive", "-Command", PROBE]).output().unwrap();
+        // The answer still comes back through the pipe.
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{text} {}", String::from_utf8_lossy(&out.stderr));
+        let (window, attached) = text.trim().split_once(' ').unwrap();
+        assert_eq!(window, "0", "the tool has a console window: {text}");
+        let attached: Vec<u32> = attached.split(',').map(|id| id.parse().unwrap()).collect();
+        assert!(!attached.is_empty() && !attached.contains(&std::process::id()), "the tool shares this process's console: {text}");
+    }
+
     #[test]
     fn other_owners_readers_and_missing_lists_are_refused() {
         let other = "S-1-5-21-1-2-3-1002";
@@ -538,7 +569,7 @@ mod tests {
 
     /// An `OWNER RIGHTS` entry replaces what an owner may do implicitly. Granting only *write
     /// owner* that way, the access list can't be replaced although the owner can still be set: the
-    /// file isn't taken as restricted.
+    /// file isn't taken as restricted. Run elevated, it can be replaced, and then must be restricted.
     #[cfg(windows)]
     #[test]
     fn a_file_whose_access_list_cant_be_replaced_is_not_restricted() {
@@ -566,8 +597,22 @@ mod tests {
         // Nothing but the two entries: no Administrators entry for the elevated runner to use.
         let sddl = sddl_of(&file).unwrap();
         assert_eq!(section(&sddl, "D:"), Some(format!("(A;;524288;;;S-1-3-4)(A;;1179785;;;{me})").as_str()), "{sddl}");
-        assert!(restrict_to_owner(&file, &user()).is_err(), "the access list could not be replaced");
+        // An elevated administrator (the windows-latest runner) may replace the list anyway; then the
+        // file must really be the user's alone, since the result is checked before it is trusted.
+        if restrict_to_owner(&file, &user()).is_ok() {
+            let after = sddl_of(&file).unwrap();
+            assert!(elevated(), "the access list could not be replaced: {after}");
+            assert_eq!(foreign_access(&after, &me), None, "{after}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Whether the tests run elevated: `whoami /groups` lists the high (or system) mandatory label.
+    #[cfg(windows)]
+    fn elevated() -> bool {
+        let out = system_tool(WHOAMI).args(["/groups", "/fo", "csv", "/nh"]).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.contains("\"S-1-16-12288\"") || text.contains("\"S-1-16-16384\"")
     }
 
     /// When the tools fail, the functions say so: nothing is taken as restricted or as checked.

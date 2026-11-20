@@ -445,6 +445,7 @@ impl Calculate {
         match self {
             Calculate::None => Vec::new(),
             Calculate::Simple { fields, .. } => unique(fields.iter().cloned()),
+            Calculate::Custom(js) => calculation_reads(js),
             Calculate::Notation(expr) => unique(notation_tokens(expr).into_iter().filter_map(|(_, token)| match token {
                 Notation::Name(name) => Some(name),
                 _ => None,
@@ -612,31 +613,36 @@ pub(super) fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option
     (i == toks.len() && v.is_finite()).then_some(v)
 }
 
+/// Most field values one `AFSimple_Calculate` list may expand to (a form has some thousands).
+const MAX_EXPANDED_VALUES: usize = 1 << 20;
+
 /// The Calculate event: the new value, given the current values of the other fields
 /// (`values(name)` returns every field named `name` or below it, for groups).
 pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<String> {
     let num = |s: &String| make_number(s).unwrap_or(0.0);
     match c {
-        Calculate::None => None,
+        // A custom script is the JavaScript engine's to run.
+        Calculate::None | Calculate::Custom(_) => None,
         // A product of no values is 0, as an empty sum, average, minimum or maximum is, not the
         // empty product 1: a blank quantity × price row reads 0, and a total over the rows
         // doesn't count it as 1. (The form's `values` leaves out a field that has no value.)
         Calculate::Simple { op: CalcOp::Product, fields } if fields.iter().all(|f| values(f).is_empty()) => Some("0".into()),
         Calculate::Simple { op, fields } => {
-            let xs: Vec<f64> = fields.iter().flat_map(|f| values(f)).map(|v| num(&v)).collect();
+            // The values are folded as they are read, never collected: a group name listed many
+            // times would otherwise be held once per listing. A list that expands past
+            // MAX_EXPANDED_VALUES is not calculated.
+            let mut n = 0usize;
+            let xs = fields.iter().flat_map(|f| values(f)).map(|v| num(&v)).inspect(|_| n += 1).take(MAX_EXPANDED_VALUES + 1);
             let v = match op {
-                CalcOp::Sum => xs.iter().sum(),
-                CalcOp::Product => xs.iter().product(),
-                CalcOp::Average => {
-                    if xs.is_empty() {
-                        0.0
-                    } else {
-                        xs.iter().sum::<f64>() / xs.len() as f64
-                    }
-                }
-                CalcOp::Minimum => xs.iter().copied().fold(f64::INFINITY, f64::min),
-                CalcOp::Maximum => xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                CalcOp::Sum | CalcOp::Average => xs.sum(),
+                CalcOp::Product => xs.product(),
+                CalcOp::Minimum => xs.fold(f64::INFINITY, f64::min),
+                CalcOp::Maximum => xs.fold(f64::NEG_INFINITY, f64::max),
             };
+            if n > MAX_EXPANDED_VALUES {
+                return None;
+            }
+            let v = if *op == CalcOp::Average { if n == 0 { 0.0 } else { v / n as f64 } } else { v };
             Some(if v.is_finite() { js_number(v) } else { "0".into() })
         }
         Calculate::Notation(expr) => {
