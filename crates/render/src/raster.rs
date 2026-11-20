@@ -103,6 +103,10 @@ pub struct RenderConfig {
     /// prints its layers differently from how they are shown (the Print event's auto state, ISO
     /// 32000-2 §8.11.4.4): the preview shows the page as it prints. `None`: previews use `layers`.
     pub print_layers: Option<Arc<Vec<(i32, i32, bool)>>>,
+    /// Paint invisible text (rendering modes 3 and 7, how an OCR layer sits under a scan) as
+    /// filled text in this sRGB colour, to show where it lies. `None` follows the standard and
+    /// paints none. Display only; the document never changes.
+    pub invisible_text: Option<[u8; 3]>,
 }
 
 impl RenderConfig {
@@ -133,6 +137,7 @@ impl RenderConfig {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
             jbig2_work: self.jbig2_work.unwrap_or(defaults.jbig2_work),
+            invisible_text: self.invisible_text,
             ..defaults
         }
     }
@@ -389,21 +394,25 @@ fn render_page<'a>(
     // Print previews share the viewer pool, but must use the output font policy and the layers
     // as they print (`print_layers`). Keep the caller's cancellation/warning hooks and annotation
     // settings, except what a document's scripts show while it is read (`annotations`,
-    // `appearances`), which never prints. A fresh cache is essential: hayro keys cached fonts by PDF dictionary, not by the
-    // font resolver, so the viewer cache could supply an installed face even after changing the
-    // resolver (and a cached missing font from print preview could blank the viewer on switching
-    // back); nothing drawn with the viewer's layers is reused either.
+    // `appearances`) and shown invisible text, which never print. A fresh cache is essential:
+    // hayro keys cached fonts by PDF dictionary, not by the font resolver, so the viewer cache
+    // could supply an installed face even after changing the resolver (and a cached missing font
+    // from print preview could blank the viewer on switching back); nothing drawn with the
+    // viewer's layers is reused either.
     let print_settings;
     let print_cache;
     let print = req.tag & PRINT_TAG != 0;
     let print_layers = config.print_layers.as_ref().filter(|_| print);
     let live = !settings.annotation_overrides.is_empty() || !settings.appearance_overrides.is_empty();
-    let (settings, cache) = if print && (config.system_fonts || print_layers.is_some() || live) {
+    let shown = settings.invisible_text.is_some();
+    let (settings, cache) = if print && (config.system_fonts || print_layers.is_some() || live || shown) {
         print_settings = InterpreterSettings {
             font_resolver: RenderConfig { system_fonts: false, ..config.clone() }.settings().font_resolver,
             ocg_overrides: print_layers.cloned().unwrap_or_else(|| settings.ocg_overrides.clone()),
             annotation_overrides: Arc::default(),
             appearance_overrides: Arc::default(),
+            // Invisible text shown on screen is not printed.
+            invisible_text: None,
             ..settings.clone()
         };
         print_cache = RenderCache::new();

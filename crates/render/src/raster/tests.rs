@@ -2793,6 +2793,61 @@ trailer << /Root 1 0 R >>
     assert_eq!((px(&preview, 25, 25), px(&preview, 75, 25)), (vec![255, 255, 255, 255], vec![0, 0, 255, 255]), "the print preview");
 }
 
+/// `RenderConfig::invisible_text` paints text in modes 3 and 7 (ISO 32000-2 §9.3.6), Type 3
+/// glyphs included, on screen only: a print preview and a render without it paint none.
+#[test]
+fn invisible_text_is_shown_in_the_chosen_colour_on_screen_only() {
+    let content = "BT /F1 40 Tf 3 Tr 2 5 Td (XX) Tj ET q BT /F1 40 Tf 7 Tr 52 5 Td (XX) Tj ET Q BT /F2 30 Tf 3 Tr 110 10 Td (a) Tj ET";
+    let glyph = "1 0 0 0 1 1 d1 0 0 1 1 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 150 50] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+6 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 97 /LastChar 97 /Widths [1]
+  /Encoding << /Differences [97 /a] >> /CharProcs << /a 7 0 R >> >> endobj
+7 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        glyph.len()
+    );
+    let bytes = Arc::new(pdf.into_bytes());
+    let red_in = |config: RenderConfig, tag: u64| {
+        let p = PageRenderer::new(bytes.clone(), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag,
+            ..Default::default()
+        });
+        let w = p.width as usize;
+        let mut counts = [0usize; 3];
+        for (i, px) in p.rgba.as_ref().as_chunks::<4>().0.iter().enumerate() {
+            if px[0] > 200
+                && px[1] < 80
+                && px[2] < 80
+                && let Some(c) = counts.get_mut((i % w) / 50)
+            {
+                *c += 1;
+            }
+        }
+        counts
+    };
+    let shown = RenderConfig { invisible_text: Some([255, 0, 0]), ..Default::default() };
+    assert_eq!(red_in(RenderConfig::default(), 0), [0, 0, 0], "invisible text paints nothing by default");
+    let [mode3, mode7, type3] = red_in(shown.clone(), 0);
+    assert!(mode3 > 100 && mode7 > 100 && type3 > 400, "modes 3 and 7 and the Type 3 glyph are shown: {mode3}, {mode7}, {type3}");
+    assert_eq!(red_in(shown, PRINT_TAG), [0, 0, 0], "a print preview shows what prints");
+}
+
 /// ISO 32000-2 Table 167: Invisible hides an annotation of a type that isn't standard and
 /// nothing else; §12.5.6.14: a popup has no appearance of its own, so its `/AP` isn't painted.
 #[test]

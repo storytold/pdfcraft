@@ -205,6 +205,10 @@ working document unchanged.
 `content_list` or `object_list`. It removes only that item in a read-only preview and is
 mutually exclusive with `hide_text_block`.
 
+`page_render.show_invisible_text` (`#RRGGBB` or a colour name) paints text in an invisible
+rendering mode (3 or 7, how an OCR layer sits under a scan) filled in that colour, to check where
+the layer lies. Only that render changes; it is exclusive with the two options above.
+
 When the renderer reports a warning for the page, `page_render` and `render_preview` return a
 JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
 `pdfcraft-cli render` prints, such as "content past the page's safety budget, or a picture whose

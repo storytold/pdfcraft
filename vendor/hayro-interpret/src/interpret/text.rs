@@ -1,4 +1,6 @@
 use crate::GlyphDrawMode;
+use crate::Paint;
+use crate::color::{AlphaColor, Color};
 use crate::context::Context;
 use crate::device::Device;
 use crate::font::Glyph;
@@ -122,16 +124,37 @@ pub(crate) fn show_glyph<'a>(
         TextRenderingMode::Invisible => {
             // Still call draw_glyph for invisible text, so that it can
             // for example be used for text extraction.
-            device.draw_glyph(
-                glyph,
-                ctx.get().ctm,
-                glyph_transform,
-                &get_paint(ctx, false),
-                &GlyphDrawMode::Invisible,
-            );
+            // PdfCraft patch (107): or paint it, when invisible text is shown.
+            if let Some(paint) = shown_invisible(ctx) {
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &paint,
+                    &GlyphDrawMode::Fill,
+                );
+            } else {
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &get_paint(ctx, false),
+                    &GlyphDrawMode::Invisible,
+                );
+            }
         }
         TextRenderingMode::Clip => {
             clip_glyph(ctx, glyph, glyph_transform);
+            // PdfCraft patch (107): paint it too, when invisible text is shown.
+            if let Some(paint) = shown_invisible(ctx) {
+                device.draw_glyph(
+                    glyph,
+                    ctx.get().ctm,
+                    glyph_transform,
+                    &paint,
+                    &GlyphDrawMode::Fill,
+                );
+            }
             // PdfCraft patch: report clipping text separately from invisible OCR text.
             // Extraction filters must retain text that is filled through its
             // clipping path without rendering devices drawing it directly.
@@ -183,6 +206,15 @@ pub(crate) fn show_glyph<'a>(
             });
         }
     }
+}
+
+/// PdfCraft patch (107): the paint for invisible text when `InterpreterSettings::invisible_text`
+/// asks to show it.
+fn shown_invisible<'a>(ctx: &Context<'a>) -> Option<Paint<'a>> {
+    let [r, g, b] = ctx.settings.invisible_text?;
+    Some(Paint::Color(Color::from_rgba(AlphaColor::from_rgba8(
+        r, g, b, 255,
+    ))))
 }
 
 pub(crate) fn clip_glyph(context: &mut Context<'_>, glyph: &Glyph<'_>, transform: Affine) {

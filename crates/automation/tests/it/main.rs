@@ -13,6 +13,7 @@ mod document_actions;
 mod find_text;
 mod form_bulk;
 mod hostile_args;
+mod invisible_text;
 mod link_javascript;
 mod list_selection;
 mod model_3d;

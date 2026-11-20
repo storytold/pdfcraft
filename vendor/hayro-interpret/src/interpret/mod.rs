@@ -140,6 +140,11 @@ pub struct InterpreterSettings {
     /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, nor images
     /// whose masks are past it, each with [`InterpreterWarning::ContentTruncated`].
     pub jbig2_work: u64,
+    /// PdfCraft patch (107): paint text in an invisible rendering mode (3, and 7 alongside its
+    /// clip; ISO 32000-2 §9.3.6) as filled text in this sRGB colour, for a viewer that shows
+    /// where an OCR text layer lies. `None` (the default) paints it not at all, as the standard
+    /// says. Display only.
+    pub invisible_text: Option<[u8; 3]>,
 }
 
 impl Default for InterpreterSettings {
@@ -166,6 +171,7 @@ impl Default for InterpreterSettings {
             cancelled: None,
             preview: false,
             jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,
+            invisible_text: None,
         }
     }
 }

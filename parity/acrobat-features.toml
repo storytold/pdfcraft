@@ -834,6 +834,18 @@ evidence = ["crates/render/src/raster/tests.rs::missing_page_and_garbage_input_f
 notes = "A page that paints more coverage than the rasterizer can index (one form drawn millions of times over) renders what fitted and says content was left out, rather than failing the page."
 
 [[feature]]
+id = "view.show-invisible-text"
+title = "Show invisible text (an OCR layer under a scan)"
+area = "B"
+tier = "P2"
+milestone = "M3"
+status = "partial"
+commands = []
+tools = ["page_render"]
+evidence = ["crates/render/src/raster/tests.rs::invisible_text_is_shown_in_the_chosen_colour_on_screen_only", "crates/automation/tests/it/invisible_text.rs::show_invisible_text_paints_modes_3_and_7_in_that_render_only"]
+notes = "page_render's show_invisible_text paints text in rendering modes 3 and 7 (ISO 32000-2 §9.3.6), Type 3 glyphs included, filled in a chosen colour, so a caller can check where an OCR layer sits against the scan; the document is unchanged and print previews never show it (RenderConfig::invisible_text, hayro-interpret patch 107). Missing: a View menu toggle in the desktop app, and a render of the layer alone on a transparent backdrop."
+
+[[feature]]
 id = "view.render-priority"
 title = "Render visible pages first, then neighbours and thumbnails"
 area = "B"
