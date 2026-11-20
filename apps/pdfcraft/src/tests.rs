@@ -113,9 +113,10 @@ fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
 #[test]
 fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
-    assert_eq!(renderer_choice(None), RendererChoice::Auto);
-    assert_eq!(renderer_choice(Some("")), RendererChoice::Auto);
-    assert_eq!(renderer_choice(Some("vulkan")), RendererChoice::Auto);
+    assert_eq!(renderer_choice(None), RendererChoice::Gl);
+    assert_eq!(renderer_choice(Some("")), RendererChoice::Gl);
+    assert_eq!(renderer_choice(Some("vulkan")), RendererChoice::Gl);
+    assert_eq!(renderer_choice(Some(" Auto ")), RendererChoice::Auto);
     assert_eq!(renderer_choice(Some(" WGPU ")), RendererChoice::Wgpu);
     for gl in ["gl", "OpenGL", "glow"] {
         assert_eq!(renderer_choice(Some(gl)), RendererChoice::Gl);
