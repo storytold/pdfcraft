@@ -28,8 +28,9 @@ pub enum Hidden {
     Bookmarks,
     /// Links, actions (open action, additional actions, what bookmarks run) and document JavaScript.
     LinksActionsScripts,
-    /// Private data of other applications (`/PieceInfo`), and prepress data on images and Forms
-    /// (`/OPI`, `/Alternates`).
+    /// Private data of other applications (`/PieceInfo`), prepress data on images and Forms
+    /// (`/OPI`, `/Alternates`), and page thumbnails (`/Thumb`), which a producer stores as a
+    /// picture of the page as it was.
     PrivateData,
 }
 
@@ -417,6 +418,26 @@ fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
             strip_owned(v, role.child(&k), keys, depth + 1);
         }
     }
+}
+
+/// The pages that hold a thumbnail (`/Thumb`), a picture of the page as it was whatever was removed
+/// from it since (#6749). Only a page's own entry is one: elsewhere `/Thumb` can be a name a
+/// producer chose (a collection item's field), so it is not swept like an [`OWNED`] key.
+///
+/// The page tree's leaves come from the page walk, which also finds leaves without `/Type /Page`.
+/// That walk stops at its limits and skips pages outside the tree, and a full save still keeps
+/// such a page when something else names it (a destination), so every object of the file that
+/// says it is a page is looked at as well.
+fn page_thumbnails(doc: &Document) -> Vec<ObjRef> {
+    let mut found: std::collections::BTreeSet<ObjRef> =
+        pdfcraft_model::pages(doc).into_iter().filter(|p| p.dict.contains(b"Thumb")).map(|p| p.obj).collect();
+    for num in doc.object_numbers() {
+        let r = ObjRef::new(num, doc.generation(num));
+        if doc.get(r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page") && d.contains(b"Thumb")) {
+            found.insert(r);
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// Every value of `key` held outside a name map, as [`owners`] finds them: with the indirect
@@ -819,7 +840,7 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                         + sub(doc, names(), b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                         + outline_action_count(doc, &cat)
                 }
-                Hidden::PrivateData => owned(Hidden::PrivateData),
+                Hidden::PrivateData => owned(Hidden::PrivateData) + page_thumbnails(doc).len(),
             };
             (h, n)
         })
@@ -1042,6 +1063,13 @@ pub(crate) fn remove_counted(
             }
             Hidden::FormFields => {
                 cat.remove(b"AcroForm");
+            }
+            Hidden::PrivateData => {
+                for page in page_thumbnails(doc) {
+                    doc.update_dict(page, |d| {
+                        d.remove(b"Thumb");
+                    })?;
+                }
             }
             _ => {}
         }
