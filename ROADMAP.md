@@ -270,6 +270,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-09 (M10, #5130):** Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Both Windows submission paths preserve DLL guards and current spooler fixes. Review follow-up validates both duplex scopes through craft-print 9fe50c94 and corrects CI formatting. Estimates unchanged.
 
+- **2026-10-30 (M9, batch signing):** `sign_batch` signs every PDF in chosen files and folders with one .p12/.pfx digital ID (PAdES B-B), reusing `doc_batch` discovery, collision-safe outputs and per-file reports; invisible or visible (`rect`, `page`) and certifying signatures. Covered by synthetic integration tests; no desktop UI yet. ICP-Brasil trust roots and the AD-RB/AD-RT policy are not part of this change.
+
 - **2026-10-27 (M10, #5005):** Vector printing retains each annotation's optional-content membership when drawing its appearance.
   Shared appearances and existing layer state remain independent; estimates unchanged.
 
