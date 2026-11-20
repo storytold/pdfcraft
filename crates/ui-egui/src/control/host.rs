@@ -158,6 +158,7 @@ impl Host for crate::PdfCraftApp {
             "theme": format!("{:?}", self.theme),
             "theme_preference": self.theme_preference,
             "show_page_edge_shadows": self.show_page_edge_shadows,
+            "keep_bookmark_zoom": self.keep_bookmark_zoom,
             "language": self.language,
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
             "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
