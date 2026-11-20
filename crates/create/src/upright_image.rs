@@ -4,6 +4,8 @@
 
 use std::borrow::Cow;
 
+use craft_image_codecs::jpeg_probe::{JpegVisit, jfif_dpi, walk_jpeg_segments};
+
 /// Quality of a re-encoded JPEG (the camera's own is rarely higher).
 const QUALITY: u8 = 92;
 /// Larger photos are embedded as they are: turning them would take hundreds of MB.
@@ -17,46 +19,28 @@ thread_local! {
 
 /// Reads the EXIF Orientation tag (1..=8) from APP1 Exif metadata in a JPEG, defaulting to 1.
 pub fn jpeg_exif_orientation(bytes: &[u8]) -> u16 {
-    let mut i = 2usize;
-    while let Some(&byte) = bytes.get(i) {
-        if byte != 0xFF {
-            i += 1;
-            continue;
-        }
-        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
-        match marker {
-            0xFF => i += 1,
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            0xDA | 0xD9 => break,
-            _ => {
-                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
-                let len = usize::from(u16::from_be_bytes([hi, lo]));
-                if len < 2 {
-                    break;
+    let mut orientation = 1;
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
+        if marker == 0xE1
+            && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
+        {
+            if let Some(hdr_order) = tiff.get(0..2)
+                && let Some(order) = match hdr_order {
+                    b"II" => Some(craft_tiff::ByteOrder::Little),
+                    b"MM" => Some(craft_tiff::ByteOrder::Big),
+                    _ => None,
                 }
-                let Some(seg) = bytes.get(i + 4..i + 2 + len) else { break };
-                if marker == 0xE1
-                    && let Some(tiff) = seg.strip_prefix(b"Exif\0\0")
-                {
-                    let Some(hdr_order) = tiff.get(0..2) else { return 1 };
-                    let order = match hdr_order {
-                        b"II" => craft_tiff::ByteOrder::Little,
-                        b"MM" => craft_tiff::ByteOrder::Big,
-                        _ => return 1,
-                    };
-                    let Some(off) = order.read_u32(tiff, 4) else { return 1 };
-                    if let Ok((ifd, _)) = craft_tiff::parse_ifd_at(tiff, u64::from(off), order, 0, false, &craft_tiff::ParseOptions::default())
-                        && let Some(o) = ifd.u16(craft_tiff::tags::ORIENTATION)
-                    {
-                        return o;
-                    }
-                    return 1;
-                }
-                i += 2 + len;
+                && let Some(off) = order.read_u32(tiff, 4)
+                && let Ok((ifd, _)) = craft_tiff::parse_ifd_at(tiff, u64::from(off), order, 0, false, &craft_tiff::ParseOptions::default())
+                && let Some(o) = ifd.u16(craft_tiff::tags::ORIENTATION)
+            {
+                orientation = o;
             }
+            return Ok(JpegVisit::Stop);
         }
-    }
-    1
+        Ok(JpegVisit::Continue)
+    });
+    orientation
 }
 
 /// A JPEG whose EXIF Orientation is not "as stored" has its pixels turned (and re-encoded);
@@ -131,78 +115,26 @@ pub(crate) fn without_extended_xmp(bytes: &[u8]) -> Vec<u8> {
 /// Calls `f` with the byte range of each Extended XMP chunk (APP1 segment) before the image data.
 fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
     const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
-    let mut i = 2usize;
-    while let Some(&byte) = bytes.get(i) {
-        // Stray bytes between segments, which the decoder skips too.
-        if byte != 0xFF {
-            i += 1;
-            continue;
+    let _ = walk_jpeg_segments(bytes, |marker, span, seg| {
+        if marker == 0xE1 && seg.starts_with(PREFIX) {
+            f(span);
         }
-        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
-        match marker {
-            // Fill bytes before a marker.
-            0xFF => i += 1,
-            // Markers without a segment.
-            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
-            // The image data starts (or ends): no headers after it.
-            0xDA | 0xD9 => break,
-            _ => {
-                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
-                let len = usize::from(u16::from_be_bytes([hi, lo]));
-                let end = i.saturating_add(2).saturating_add(len.max(2));
-                // The prefix must start the APP1 segment's own payload: a zero-length header
-                // followed by prefix bytes is not a chunk.
-                if marker == 0xE1 && bytes.get(i.saturating_add(4)..end.min(bytes.len())).is_some_and(|seg| seg.starts_with(PREFIX)) {
-                    f(i..end.min(bytes.len()));
-                }
-                i = end;
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DensityUnit {
-    Inches,
-    Centimeters,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PixelDensity {
-    density: (u16, u16),
-    unit: DensityUnit,
-}
-
-/// The resolution in a JFIF header, if the file has one in inches or centimetres.
-fn jfif_density(bytes: &[u8]) -> Option<PixelDensity> {
-    let mut i = 2usize;
-    while let Some(&[0xFF, marker, hi, lo]) = bytes.get(i..i.saturating_add(4)) {
-        let len = usize::from(u16::from_be_bytes([hi, lo]));
-        let seg = bytes.get(i + 4..i + 2 + len)?;
-        if marker == 0xE0 && seg.starts_with(b"JFIF\0") {
-            let &[unit, x0, x1, y0, y1] = seg.get(7..12)? else { return None };
-            let unit = match unit {
-                1 => DensityUnit::Inches,
-                2 => DensityUnit::Centimeters,
-                _ => return None,
-            };
-            return Some(PixelDensity { density: (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1])), unit });
-        }
-        if marker == 0xDA {
-            return None;
-        }
-        i += 2 + len;
-    }
-    None
+        Ok(JpegVisit::Continue)
+    });
 }
 
 fn jfif_density_dpi(bytes: &[u8]) -> Option<(f32, f32)> {
-    let d = jfif_density(bytes)?;
-    let scale = match d.unit {
-        DensityUnit::Inches => 1.0,
-        DensityUnit::Centimeters => 2.54,
-    };
-    Some((f32::from(d.density.0) * scale, f32::from(d.density.1) * scale))
+    let mut dpi = None;
+    let _ = walk_jpeg_segments(bytes, |marker, _span, seg| {
+        if marker == 0xE0
+            && let Some((x, y)) = jfif_dpi(seg)
+        {
+            dpi = Some((x as f32, y as f32));
+            return Ok(JpegVisit::Stop);
+        }
+        Ok(JpegVisit::Continue)
+    });
+    dpi
 }
 
 #[cfg(test)]
@@ -217,7 +149,7 @@ pub(crate) mod tests {
         assert!(matches!(turned, Cow::Owned(_)));
         let decoded = craft_image_codecs::decode(&turned).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (20, 60));
-        assert_eq!(jfif_density(&turned), Some(PixelDensity { density: (72, 144), unit: DensityUnit::Inches }));
+        assert_eq!(jfif_density_dpi(&turned), Some((72.0, 144.0)));
         let stored = phone_jpeg(1, 72);
         assert!(matches!(upright(&stored), Cow::Borrowed(_)));
         assert!(matches!(upright(b"\x89PNG\r\n\x1a\n"), Cow::Borrowed(_)));
