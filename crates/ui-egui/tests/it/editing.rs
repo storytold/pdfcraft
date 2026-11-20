@@ -4749,7 +4749,11 @@ fn image_right_click_context_menu_items_and_actions() {
         "Create Link",
         "Recognize Text",
     ] {
-        h.get_by_label_contains(item);
+        if item == "Paste" {
+            h.get_by_role_and_label(Role::MenuItem, item);
+        } else {
+            h.get_by_label_contains(item);
+        }
     }
 
     // Top horizontal icon buttons
