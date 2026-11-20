@@ -27,6 +27,10 @@ pub enum AltError {
     TooLarge,
     #[error("the figure's content may be in a damaged or unreadable content stream, or after the damage, so nothing was changed")]
     Damaged,
+    #[error("the figure's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
+    ContentElsewhere,
+    #[error("the figure has child structure elements, which would leave the tag tree with it, so nothing was changed")]
+    HasChildren,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -40,6 +44,8 @@ pub enum ArtifactError {
     NotATag(u32),
     #[error("the tag has child structure elements; mark a leaf tag instead")]
     HasChildren,
+    #[error("the tag's content is in a form XObject or on another page, which this edit can't rewrite, so nothing was changed")]
+    ContentElsewhere,
     #[error("the tag has no direct marked content")]
     NoMarkedContent,
     #[error("the tag has no page")]
@@ -136,20 +142,52 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
 
 /// The marked-content ids an element owns directly.
 fn mcids(doc: &Document, d: &Dict) -> Vec<i64> {
+    mcids_where(doc, d, |_| true)
+}
+
+/// The marked-content ids an element owns directly in the content of its page `page`: not those of
+/// a marked-content reference with /Stm, which are ids in that stream's content, nor of one whose
+/// /Pg is another page, which are ids on that page (ISO 32000-2 Table 357). An equal id on `page`
+/// is another sequence.
+fn page_mcids(doc: &Document, d: &Dict, page: Option<ObjRef>) -> Vec<i64> {
+    mcids_where(doc, d, |m| on_page(m, page))
+}
+
+/// Whether marked-content reference `m` names content in the page content of `page`, the page of
+/// the element holding it (ISO 32000-2 Table 357).
+fn on_page(m: &Dict, page: Option<ObjRef>) -> bool {
+    !m.contains(b"Stm") && m.get(b"Pg").and_then(Object::as_ref).is_none_or(|p| Some(p) == page)
+}
+
+/// Whether element `d` directly holds a marked-content reference to content outside the page
+/// content of `page`: in a form XObject (/Stm) or on another page (ISO 32000-2 Table 357).
+fn holds_content_elsewhere(doc: &Document, d: &Dict, page: Option<ObjRef>) -> bool {
+    let elsewhere = |o: &Object| matches!(&*doc.resolve(o), Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && !on_page(m, page));
+    let Some(k) = d.get(b"K").map(|k| doc.resolve(k)) else { return false };
+    match &*k {
+        Object::Array(a) => a.iter().any(elsewhere),
+        o => elsewhere(o),
+    }
+}
+
+/// The marked-content ids an element owns directly: integers, and those of the marked-content
+/// references `keep` accepts.
+fn mcids_where(doc: &Document, d: &Dict, keep: impl Fn(&Dict) -> bool) -> Vec<i64> {
     let mut out = Vec::new();
     let mut push = |o: &Object| match &*doc.resolve(o) {
         Object::Int(n) => out.push(*n),
-        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") => {
+        Object::Dict(m) if m.name(b"Type") == Some(b"MCR") && keep(m) => {
             if let Some(n) = m.get(b"MCID").and_then(Object::as_int) {
                 out.push(n)
             }
         }
         _ => {}
     };
-    match d.get(b"K") {
-        Some(Object::Array(a)) => a.iter().for_each(&mut push),
-        Some(o) => push(o),
-        None => {}
+    // /K may be an indirect reference to the array of kids, the same kids as an inline array.
+    let Some(k) = d.get(b"K").map(|k| doc.resolve(k)) else { return out };
+    match &*k {
+        Object::Array(a) => a.iter().for_each(&mut push),
+        o => push(o),
     }
     out
 }
@@ -318,13 +356,15 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
 
 /// The figures, in document order.
 pub fn figures(doc: &Document) -> Vec<Figure> {
-    let Some(root) = tree_root(doc) else { return Vec::new() };
-    let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    if tree_root(doc).is_none() {
+        return Vec::new();
+    }
+    let role_map = crate::structure::root_role_map(doc);
     let pages = pdfcraft_model::pages(doc);
     let index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let figures: Vec<(Element, Option<usize>)> = elements(doc)
         .into_iter()
-        .filter(|e| e.dict.name(b"S").is_some_and(|s| standard(doc, &role_map, s) == b"Figure"))
+        .filter(|e| crate::structure::is_figure(doc, &role_map, &e.dict))
         .map(|e| {
             let page = e.page.and_then(|p| index.get(&p).copied());
             (e, page)
@@ -333,7 +373,7 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     let mut wanted: HashMap<usize, HashSet<i64>> = HashMap::new();
     for (e, page) in &figures {
         if let Some(p) = page {
-            wanted.entry(*p).or_default().extend(mcids(doc, &e.dict));
+            wanted.entry(*p).or_default().extend(page_mcids(doc, &e.dict, e.page));
         }
     }
     let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
@@ -343,20 +383,18 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
         .map(|(e, page)| {
             let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
             let on_page = page.and_then(|p| bounds.get(&p));
-            let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
+            let bbox =
+                on_page.and_then(|b| page_mcids(doc, &e.dict, e.page).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
         })
         .collect()
 }
 
 fn check_figure(doc: &Document, obj: ObjRef) -> Result<Dict, AltError> {
-    let root = tree_root(doc).ok_or(AltError::Untagged)?;
-    let role_map = root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    tree_root(doc).ok_or(AltError::Untagged)?;
+    let role_map = crate::structure::root_role_map(doc);
     let d = doc.get(obj).as_dict().cloned().ok_or(AltError::NotAFigure(obj.num))?;
-    match d.name(b"S") {
-        Some(s) if standard(doc, &role_map, s) == b"Figure" => Ok(d),
-        _ => Err(AltError::NotAFigure(obj.num)),
-    }
+    if crate::structure::is_figure(doc, &role_map, &d) { Ok(d) } else { Err(AltError::NotAFigure(obj.num)) }
 }
 
 /// Set (or, with `None` or blank text, remove) a figure's alternate text.
@@ -520,6 +558,28 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
     let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
+    // Only the page's own content is rewritten. An id in a form XObject or on another page is
+    // another sequence there, and an equal id on this page is unrelated content: refuse before
+    // anything changes, the tag tree included.
+    if holds_content_elsewhere(doc, &d, pg) {
+        return Err(AltError::ContentElsewhere);
+    }
+    // Its child elements (a Caption, say) would leave the tree with it.
+    if has_child_structure(doc, &d) {
+        return Err(AltError::HasChildren);
+    }
+    // Its parent's kids without it, worked out before anything changes. /K may be an indirect
+    // reference to the array, which is the same kids as an inline one.
+    let parent = d.get(b"P").and_then(Object::as_ref);
+    let unlinked = parent.and_then(|parent| {
+        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned())?;
+        let keep = |o: &Object| o.as_ref() != Some(obj);
+        match (&kids, &*doc.resolve(&kids)) {
+            (Object::Ref(r), _) if *r == obj => Some((parent, Object::Array(Vec::new()))),
+            (_, Object::Array(a)) => Some((parent, Object::Array(a.iter().filter(|o| keep(o)).cloned().collect()))),
+            _ => None,
+        }
+    });
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         match artifact_marked_content(doc, page, streams, &ids, false)? {
@@ -534,17 +594,8 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
         }
     }
     // Out of its parent's kids.
-    if let Some(parent) = d.get(b"P").and_then(Object::as_ref) {
-        let kids = doc.get(parent).as_dict().and_then(|p| p.get(b"K").cloned());
-        let keep = |o: &Object| o.as_ref() != Some(obj);
-        let new = match kids {
-            Some(Object::Array(a)) => Some(Object::Array(a.into_iter().filter(keep).collect())),
-            Some(Object::Ref(r)) if r == obj => Some(Object::Array(Vec::new())),
-            _ => None,
-        };
-        if let Some(k) = new {
-            doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
-        }
+    if let Some((parent, k)) = unlinked {
+        doc.update_dict(parent, |p| p.set(b"K".to_vec(), k))?;
     }
     Ok(())
 }
@@ -560,6 +611,12 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     let Some(element) = elements.iter().find(|e| e.object == obj) else { return Err(ArtifactError::NotATag(obj.num)) };
     if has_child_structure(doc, &element.dict) {
         return Err(ArtifactError::HasChildren);
+    }
+    // Only the page's own content is rewritten. An id in a form XObject or on another page is
+    // another sequence there, and an equal id on this page is unrelated content: refuse before
+    // anything changes (ISO 32000-2 Table 357).
+    if holds_content_elsewhere(doc, &element.dict, element.page) {
+        return Err(ArtifactError::ContentElsewhere);
     }
     let ids: HashSet<i64> = mcids(doc, &element.dict).into_iter().collect();
     if ids.is_empty() {
@@ -587,6 +644,9 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     Ok(())
 }
 
+/// Whether `tag` has a structure element among its kids. /K may be an indirect reference to the
+/// array of kids, read like an inline one; a reference inside it is followed to a dictionary only,
+/// so a cycle of arrays ends there.
 fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
     fn child(doc: &Document, item: &Object) -> bool {
         match item {
@@ -596,7 +656,13 @@ fn has_child_structure(doc: &Document, tag: &Dict) -> bool {
             _ => false,
         }
     }
-    tag.get(b"K").is_some_and(|items| child(doc, items))
+    tag.get(b"K").is_some_and(|items| match items {
+        Object::Ref(r) => match &*doc.get(*r) {
+            Object::Array(items) => items.iter().any(|item| child(doc, item)),
+            other => child(doc, other),
+        },
+        items => child(doc, items),
+    })
 }
 
 fn replacement_kids(doc: &Document, parent: ObjRef, obj: ObjRef) -> Result<Object, ArtifactError> {

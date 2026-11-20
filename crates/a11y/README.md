@@ -20,8 +20,10 @@ let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  /
   character collection (`GB1`, `CNS1`, `Japan1`, `Korea1`, `KR`), including Identity-H/V.
   Unknown CMaps and foreign registries do not establish that route. This is a font-level
   declaration check, not validation of every ToUnicode entry or used glyph.
-- **Structure checks** read the structure tree through the role map; table regularity counts
-  `ColSpan`/`RowSpan` attributes.
+- **Structure checks** read the structure tree through the role maps: the tree root's `/RoleMap`
+  for a tag without a namespace, and for a tag with one (`/NS`, PDF 2.0) the `/RoleMapNS` of its
+  namespace dictionary, whichever namespace that is (XHTML, a custom one), following mappings
+  across namespaces to a standard type. Table regularity counts `ColSpan`/`RowSpan` attributes.
 - The report is a self-contained HTML page. Fixes that edit the document (language, title, tab
   order) live in the engine (`Document::accessibility_fix`).
 
