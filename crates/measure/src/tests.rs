@@ -709,3 +709,10 @@ fn a_compound_y_keeps_its_units_and_cyx() {
     overflow_y.y = 2.0;
     assert!(overflow_y.dictionary().is_err());
 }
+
+#[test]
+fn scale_accepts_24_char_unit() {
+    let unit = "a".repeat(24);
+    assert!(Scale::new(1.0, &unit, 2).is_ok(), "24-char unit rejected");
+    assert!(Scale::new(1.0, &"a".repeat(25), 2).is_err());
+}
