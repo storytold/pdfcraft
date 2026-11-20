@@ -226,6 +226,8 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
 /// The name of the installed Tamil face [`installed_font_definitions`] may add.
 pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
+/// The name of the installed Khmer face [`installed_font_definitions`] may add.
+pub const SYSTEM_KHMER_FALLBACK: &str = "system-khmer-fallback";
 /// The name of the installed Hebrew face [`installed_font_definitions`] may add.
 pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
@@ -262,10 +264,10 @@ fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
-/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
-/// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
-/// without such faces.
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Khmer, Hebrew and Hangul faces, when there are,
+/// end every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688),
+/// Khmer and Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw
+/// in a build without such faces.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -280,6 +282,7 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
+            (SYSTEM_KHMER_FALLBACK, crate::system_fonts::khmer_fallback()),
             (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
             (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
         ] {

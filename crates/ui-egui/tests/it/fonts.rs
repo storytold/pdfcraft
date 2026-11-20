@@ -236,13 +236,18 @@ fn system_fallback_covers_telugu() {
     assert!(layout_widths(&mut fonts, TELUGU).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
-/// On a machine with installed Sinhala and Tamil fonts, the installed definitions include them
-/// and Sinhala and Tamil text, such as a file name, has glyphs instead of boxes (#1688). macOS
-/// always ships Sinhala Sangam MN and Tamil Sangam MN, so there the test never skips.
+/// On a machine with installed Sinhala, Tamil and Khmer fonts, the installed definitions include
+/// them and Sinhala, Tamil and Khmer text, such as a file name, has glyphs instead of boxes
+/// (#1688). macOS ships Sinhala Sangam MN, Tamil Sangam MN and Khmer Sangam MN, so there the test
+/// never skips.
 #[test]
-fn system_fallback_covers_sinhala_and_tamil() {
-    for (name, text) in [(theme::SYSTEM_SINHALA_FALLBACK, "ශ්‍රී ලංකා ගොනුව"), (theme::SYSTEM_TAMIL_FALLBACK, "தமிழ் கோப்பு")]
-    {
+fn system_fallback_covers_sinhala_tamil_and_khmer() {
+    for (name, text) in [
+        (theme::SYSTEM_SINHALA_FALLBACK, "ශ්‍රී ලංකා ගොනුව"),
+        (theme::SYSTEM_TAMIL_FALLBACK, "தமிழ் கோப்பு"),
+        // "Khmer file": a coeng subscript (ខ្មែ) and a vowel drawn before its consonant (ែ).
+        (theme::SYSTEM_KHMER_FALLBACK, "ឯកសារខ្មែរ"),
+    ] {
         assert!(!theme::font_definitions().font_data.contains_key(name));
         let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
         let off = std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0");
