@@ -1,7 +1,7 @@
-//! Middle-button scrolling for the document viewport: Linux latches auto-scroll, other
-//! platforms pan while the button is held. Either way the page tools never see the button,
-//! because egui's drag responses accept every pointer button. Also the edge scrolling of a
-//! text-selection drag.
+//! Middle-button scrolling for the document viewport: auto-scroll (a click latches it, a held
+//! drag scrolls until the release) or a 1:1 pan while the button is held, as Preferences ▸
+//! Middle button says. Either way the page tools never see the button, because egui's drag
+//! responses accept every pointer button. Also the edge scrolling of a text-selection drag.
 
 use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Stroke, Vec2, vec2};
 
@@ -13,6 +13,45 @@ const SPEED_MULTIPLIER: f32 = 0.04;
 // Bound hostile coordinates before exponentiation, far beyond ordinary screen distances.
 const MAX_DISPLACEMENT: f32 = 1_000_000.0;
 
+/// Preferences ▸ Middle button: what pressing the middle (wheel) button in a document does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MiddleButton {
+    /// Click to latch auto-scroll, or hold and drag to scroll until the release, as in web
+    /// browsers (#915).
+    #[default]
+    Autoscroll,
+    /// Pan the page 1:1 while the button is held, like the Hand tool (#565, #3895).
+    Pan,
+}
+
+impl MiddleButton {
+    pub const ALL: [Self; 2] = [Self::Autoscroll, Self::Pan];
+
+    /// The English label. Lower-cased, it is also the saved and `ui.set middle_button` value.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Autoscroll => "Autoscroll",
+            Self::Pan => "Pan",
+        }
+    }
+
+    /// Reads a `ui.set middle_button` value, ignoring case and surrounding space.
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        Self::ALL.into_iter().find(|mode| mode.label().eq_ignore_ascii_case(value))
+    }
+}
+
+/// The middle-button preferences [`AutoScroll::update`] follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Middle {
+    /// Preferences ▸ Middle button.
+    pub mode: MiddleButton,
+    /// Preferences ▸ Invert middle-button drag: the returned delta scrolls the other way.
+    pub invert: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct AutoScroll {
     anchor: Option<Pos2>,
@@ -23,7 +62,7 @@ pub(crate) struct AutoScroll {
     /// Own a cancelling click through its release, so it cannot also edit page content.
     cancel_button: Option<PointerButton>,
     block_input: bool,
-    /// Where the pointer was last frame during a held middle-button pan (not Linux).
+    /// Where the pointer was last frame during a held middle-button pan ([`MiddleButton::Pan`]).
     drag: Option<Pos2>,
 }
 
@@ -32,7 +71,7 @@ impl AutoScroll {
         self.anchor.is_some()
     }
 
-    /// Whether a held middle-button pan is under way (platforms without auto-scroll).
+    /// Whether a held middle-button pan is under way ([`MiddleButton::Pan`]).
     pub(crate) fn panning(&self) -> bool {
         self.drag.is_some()
     }
@@ -50,14 +89,19 @@ impl AutoScroll {
     }
 
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
-    /// once started, moving outside that viewport still controls the speed. `invert` is
-    /// Preferences ▸ Invert middle-button drag: the returned delta scrolls the other way.
-    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, invert: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"), invert)
+    /// once started, moving outside that viewport still controls the speed. `middle` holds the
+    /// two middle-button preferences.
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, middle: Middle) -> Vec2 {
+        self.update_for_mode(ui, viewport, organize, middle.mode == MiddleButton::Autoscroll, middle.invert)
     }
 
-    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool, invert: bool) -> Vec2 {
-        let delta = if supported { self.update_latched(ui, viewport, organize) } else { self.update_drag(ui, viewport) };
+    fn update_for_mode(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, latched: bool, invert: bool) -> Vec2 {
+        // The preference changed mid-gesture (through `ui.set`): drop the other mode's gesture,
+        // so a stale pan or latch can neither linger nor keep blocking page input.
+        if (latched && self.drag.is_some()) || (!latched && self.active()) {
+            self.cancel();
+        }
+        let delta = if latched { self.update_latched(ui, viewport, organize) } else { self.update_drag(ui, viewport) };
         oriented(delta, invert)
     }
 
@@ -136,7 +180,7 @@ impl AutoScroll {
         vec2(0.0, delta)
     }
 
-    /// Without auto-scroll, a middle-button drag pans the view 1:1, like the Hand tool. Input is
+    /// With [`MiddleButton::Pan`], a middle-button drag pans the view 1:1, like the Hand tool. Input is
     /// blocked from the press through the release, so the drag cannot also draw, select or move.
     fn update_drag(&mut self, ui: &egui::Ui, viewport: egui::Rect) -> Vec2 {
         self.anchor = None;
@@ -284,17 +328,17 @@ mod tests {
         Event::PointerButton { pos, button: PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE }
     }
 
-    /// Run one frame of the non-Linux path; `check` sees the pan delta inside the frame.
+    /// Run one frame of the Pan path; `check` sees the pan delta inside the frame.
     fn drag_frame(ctx: &Context, scroll: &mut AutoScroll, events: Vec<Event>, focused: bool, check: impl Fn(&AutoScroll, Vec2)) {
         frame(ctx, scroll, events, focused, (false, false), check);
     }
 
-    /// Run one frame; `mode` is (latched auto-scroll supported, inverted).
+    /// Run one frame; `mode` is (latched auto-scroll, inverted).
     fn frame(ctx: &Context, scroll: &mut AutoScroll, events: Vec<Event>, focused: bool, mode: (bool, bool), check: impl Fn(&AutoScroll, Vec2)) {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused, ..Default::default() },
             |ui| {
-                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, mode.0, mode.1);
+                let delta = scroll.update_for_mode(ui, ui.max_rect(), false, mode.0, mode.1);
                 check(scroll, delta);
             },
         );
@@ -443,7 +487,7 @@ mod tests {
         drag_frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, |s, d| {
             assert_eq!(d, Vec2::ZERO);
             assert!(s.panning() && s.blocks_input(), "the press itself must not reach the page tools");
-            assert!(!s.active(), "no auto-scroll latch outside Linux");
+            assert!(!s.active(), "no auto-scroll latch in Pan mode");
         });
         drag_frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(-30.0, 40.0))], true, |s, d| {
             assert_eq!(d, vec2(-30.0, 40.0), "the page follows the pointer on both axes");
@@ -457,6 +501,60 @@ mod tests {
         drag_frame(&ctx, &mut scroll, vec![Event::PointerMoved(p)], true, |s, d| {
             assert_eq!(d, Vec2::ZERO, "nothing moves once the button is up");
             assert!(!s.blocks_input());
+        });
+    }
+
+    #[test]
+    fn the_middle_button_preference_picks_the_gesture() {
+        assert_eq!(MiddleButton::default(), MiddleButton::Autoscroll, "auto-scroll, as in web browsers, unless asked");
+        for mode in MiddleButton::ALL {
+            assert_eq!(MiddleButton::parse(&format!(" {} ", mode.label().to_uppercase())), Some(mode));
+        }
+        assert_eq!(MiddleButton::parse("hand"), None);
+        assert_eq!(MiddleButton::parse(""), None);
+
+        // Through the public entry point: Autoscroll latches on a click, Pan does not.
+        let p = egui::pos2(100.0, 100.0);
+        for (mode, latches) in [(MiddleButton::Autoscroll, true), (MiddleButton::Pan, false)] {
+            let (ctx, mut scroll) = (Context::default(), AutoScroll::default());
+            let mut run = |events: Vec<Event>| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+                        events,
+                        focused: true,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        scroll.update(ui, ui.max_rect(), false, Middle { mode, invert: false });
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            run(vec![]);
+            run(vec![Event::PointerMoved(p), middle(p, true), middle(p, false)]);
+            assert_eq!(scroll.active(), latches, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn changing_the_preference_mid_gesture_drops_the_other_gesture() {
+        let (ctx, p) = (Context::default(), egui::pos2(100.0, 100.0));
+        // A pan in progress, then Autoscroll: no stale Grabbing pan is left behind.
+        let mut scroll = AutoScroll::default();
+        frame(&ctx, &mut scroll, vec![], true, (false, false), |_, _| {});
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (false, false), |s, _| assert!(s.panning()));
+        frame(&ctx, &mut scroll, vec![middle(p, false)], true, (true, false), |s, d| {
+            assert!(!s.panning(), "switching to Autoscroll ends the pan");
+            assert!(!s.active(), "and does not turn its release into a latch");
+            assert_eq!(d, Vec2::ZERO);
+        });
+        // A latched auto-scroll, then Pan: the latch stops.
+        let mut scroll = AutoScroll::default();
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true), middle(p, false)], true, (true, false), |s, _| assert!(s.active()));
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, 80.0))], true, (false, false), |s, d| {
+            assert!(!s.active(), "switching to Pan stops the auto-scroll");
+            assert_eq!(d, Vec2::ZERO);
         });
     }
 
