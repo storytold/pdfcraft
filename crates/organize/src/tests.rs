@@ -14,6 +14,8 @@ fn page_rotation_resolves_inheritance_overrides_and_missing_pages() {
     assert_eq!(page_rotation(&doc, 1).unwrap(), 270);
     assert_eq!(page_rotation(&doc, 0).unwrap(), 90);
     assert_eq!(page_rotation(&doc, 3), Err(OrganizeError::NoSuchPage(3)));
+    // One walk gives each page's rotation, as the per-page call does.
+    assert_eq!(crate::page_rotations(&doc).unwrap(), [90, 270, 90]);
 }
 
 #[test]
@@ -2000,7 +2002,7 @@ fn bookmarks_add_rename_move_delete() {
 fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
-    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, top: None };
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, left: None, top: None };
     let se = ObjRef::new(4242, 0);
     let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
