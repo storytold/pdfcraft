@@ -12,6 +12,10 @@
 //! removed run, is removed whole: editing the XML in place could leave it malformed or keep the
 //! term in another spelling. A PDF/A identification in that packet goes with it.
 //!
+//! A catalog or page XMP packet that carries a thumbnail (`xmp:Thumbnails`, an `xmpGImg:image`
+//! in base 64) is removed the same way, whatever text it holds: the picture shows the page as it
+//! was before the marks were applied, and no text search can find what it shows (#7921).
+//!
 //! Fail-closed: XMP that isn't UTF-8 or UTF-16, or whose filter data is damaged or behind more than
 //! one filter (it is decoded strictly, so nothing after damage goes unsearched), goes; text too
 //! large to search against every term counts as matching, and when the removed text itself was cut short (too many runs or terms,
@@ -470,14 +474,15 @@ impl Search {
 /// What [`scrub`] did.
 #[derive(Debug, Default)]
 pub(crate) struct Scrubbed {
-    /// `/Info` entries and XMP streams removed.
+    /// `/Info` entries and XMP streams removed (for the removed text or a thumbnail).
     pub(crate) removed: usize,
     /// What became of the PDF/A and PDF/UA identification of a removed catalog packet.
     pub(crate) identification: crate::Identification,
 }
 
 /// Remove the metadata that still holds `removed` text: matching `/Info` entries, and the
-/// catalog's and pages' XMP streams that mention it. `complete` is false when the collection of
+/// catalog's and pages' XMP streams that mention it or carry a thumbnail ([`has_thumbnail`],
+/// which goes even when no text was removed). `complete` is false when the collection of
 /// removed text was cut short; then, as when the terms themselves exceed their limits, every
 /// `/Info` string and every XMP stream goes. A removed catalog packet's PDF/A and PDF/UA
 /// identification is written back in a packet of its own ([`crate::identification`]).
@@ -489,13 +494,11 @@ pub(crate) fn scrub(doc: &mut Document, removed: &[String], complete: bool) -> R
 pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: bool, limit: usize) -> Result<Scrubbed, pdfcraft_cos::CosError> {
     let search = Search::new(removed, complete, limit);
     let mut out = Scrubbed::default();
-    if search.is_nothing() {
-        return Ok(out);
-    }
     let mut n = 0;
 
-    // The information dictionary, direct in the trailer or an object of its own.
-    let info_obj = doc.trailer().get(b"Info").cloned();
+    // The information dictionary, direct in the trailer or an object of its own. Only text can
+    // hold the removed text: with none removed, nothing here goes.
+    let info_obj = doc.trailer().get(b"Info").cloned().filter(|_| !search.is_nothing());
     if let Some(info) = info_obj.as_ref().and_then(|i| doc.resolve(i).as_dict().cloned()) {
         let doomed: Vec<Vec<u8>> =
             info.iter().filter(|(_, v)| doc.resolve(v).as_string().is_some_and(|s| search.text(&text_string(s)))).map(|(k, _)| k.to_vec()).collect();
@@ -512,11 +515,12 @@ pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: boo
         }
     }
 
-    // XMP on the catalog and on every page.
+    // XMP on the catalog and on every page: a packet goes when it holds the removed text, or a
+    // thumbnail, which pictures a page as it was before the marks were applied (#7921).
     let root = doc.root();
     for holder in catalog_and_pages(doc) {
         let Some(xmp) = doc.get(holder).as_dict().and_then(|d| d.get(b"Metadata").cloned()) else { continue };
-        if search.xmp(doc, &xmp) {
+        if search.xmp(doc, &xmp) || has_thumbnail(doc, &xmp) {
             // The catalog's packet says whether the file conforms to PDF/A or PDF/UA: that much
             // is written back, in a packet of its own.
             let replacement = if Some(holder) == root {
@@ -537,6 +541,22 @@ pub(crate) fn scrub_within(doc: &mut Document, removed: &[String], complete: boo
     }
     out.removed = n;
     Ok(out)
+}
+
+/// The namespace of the `Thumbnail` structure's fields (`xmpGImg`, XMP Specification Part 2
+/// Table 6, as `pdfcraft_preflight`'s XMP types name it), whose `image` is a picture in base 64.
+const XMP_GIMG: &str = "http://ns.adobe.com/xap/1.0/g/img/";
+
+/// Does the XMP stream `o` carry a thumbnail: an `xmp:Thumbnails` property (by its local name,
+/// under any prefix) or anything in the `xmpGImg` namespace? The packet is searched as written,
+/// entities decoded, so a value that merely says "Thumbnails" counts too, and a packet that can't
+/// be read might hold one, so it does (fail-closed). [`scrub`] runs only once marks were applied,
+/// so every such picture shows a page as it was (#7921).
+fn has_thumbnail(doc: &Document, o: &Object) -> bool {
+    xmp_text(doc, o).is_none_or(|text| {
+        let text = unescape(&text);
+        text.contains(XMP_GIMG) || text.contains("Thumbnails")
+    })
 }
 
 /// The catalog and the pages: the objects whose XMP [`scrub`] checks.
