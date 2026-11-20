@@ -5,7 +5,7 @@ use craft::behavior::{DisplayOrder, ItemSource};
 use craft::ui::contract::{Bind, CollectionEvent, LeadOnOpen, Show as _, ShowCollection as _, ShowContainer as _, overlay::Anchor};
 use craft::ui::fonts::FontRef;
 use craft::ui::list::{DocumentRows, List, ListRow};
-use craft::ui::popover::PopupList;
+use craft::ui::popover::{PopupList, PopupListKind};
 use craft::ui::primitives::HAlign;
 use egui::Rect;
 use pdfcraft_engine::FormField;
@@ -53,6 +53,7 @@ pub(super) fn choice_list(ui: &mut egui::Ui, field: &FormField, rect: Rect, zoom
     let names: Vec<&str> = field.options.iter().map(|(_, shown)| shown.as_str()).collect();
     let source = Names(&names);
     let shown = PopupList::new(tl!("Options"), Bind::bound(&mut *open))
+        .kind(PopupListKind::Document)
         .overlay(|overlay| {
             let dismiss = overlay.dismiss.focus_left(false);
             overlay.anchor(Anchor::Rect(rect)).dismiss(dismiss)
