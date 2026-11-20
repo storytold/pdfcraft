@@ -221,6 +221,27 @@ pub struct TypeBox {
     pub focus: bool,
 }
 
+/// What opens after the current type box's queued placement succeeds. The submitted draft
+/// stays in `fill_text` until then, so a refusal cannot replace or consume it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TextPlacement {
+    pub next: Option<TypeBox>,
+}
+
+fn submit_text(view: &mut DocView, next: Option<TypeBox>, info: &DocInfo, author: &str) -> Option<Edit> {
+    if view.fill_text_placement.is_some() {
+        return None;
+    }
+    let Some(tb) = view.fill_text.as_ref().filter(|tb| !tb.text.trim().is_empty()) else {
+        view.fill_text = next;
+        return None;
+    };
+    let look = TypedLook { color: tb.color, border: tb.border };
+    let edit = typed_with(tb.page, tb.at, &tb.text, tb.size, crate::comments::page_rotation(info, tb.page), author, look);
+    view.fill_text_placement = Some(TextPlacement { next });
+    Some(edit)
+}
+
 /// The border around typed text: its width in points (0: none), its own colour (`None`: the
 /// text's) and its shape (an oval or a circle goes around the text).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -539,26 +560,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bo
             // deselects, as a comment tool's note or text box does: Escape then closes the box and
             // leaves the tool in two presses.
             view.comments.clear_selection();
-            let open = view.fill_text.replace(TypeBox {
-                page,
-                at: top,
-                text: String::new(),
-                size: text_size,
-                color: text_color,
-                border: text_border,
-                focus: true,
-            });
-            open.filter(|tb| !tb.text.trim().is_empty()).map(|tb| {
-                FillAction::Edit(Box::new(typed_with(
-                    tb.page,
-                    tb.at,
-                    &tb.text,
-                    tb.size,
-                    crate::comments::page_rotation(info, tb.page),
-                    author,
-                    TypedLook { color: tb.color, border: tb.border },
-                )))
-            })
+            let next = TypeBox { page, at: top, text: String::new(), size: text_size, color: text_color, border: text_border, focus: true };
+            submit_text(view, Some(next), info, author).map(|edit| FillAction::Edit(Box::new(edit)))
         }
         FillTool::Date => Some(match date_text {
             Ok(text) => FillAction::Edit(Box::new(typed_with(
@@ -604,6 +607,11 @@ pub enum FillAction {
 
 /// The in-place editor for typed text. Returns the edit once committed.
 pub(crate) fn type_box(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, info: &DocInfo, author: &str) -> Option<Edit> {
+    // The page may already have submitted this box while handling the same click. Its lost
+    // focus must not queue it again or discard the next box requested by that click.
+    if view.fill_text_placement.is_some() {
+        return None;
+    }
     let tb = view.fill_text.clone()?;
     let xf = view.page_xform(tb.page)?;
     let v = info.pages.get(tb.page)?.user_to_view(tb.at[0] as f32, tb.at[1] as f32);
@@ -690,11 +698,7 @@ pub(crate) fn type_box(ctx: &egui::Context, keys: PageKeys, view: &mut DocView, 
         return None;
     }
     if commit {
-        let tb = view.fill_text.take()?;
-        if !tb.text.trim().is_empty() {
-            let look = TypedLook { color: tb.color, border: tb.border };
-            return Some(typed_with(tb.page, tb.at, &tb.text, tb.size, crate::comments::page_rotation(info, tb.page), author, look));
-        }
+        return submit_text(view, None, info, author);
     }
     None
 }
