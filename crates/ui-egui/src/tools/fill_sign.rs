@@ -14,7 +14,7 @@ use craft::ui::contract::{ActivateOn, Bind, CollectionEvent, Props as _, SelectM
 use craft::ui::list::ThumbAspect;
 use craft::ui::primitives::Draw;
 use craft::ui::style::DataColor;
-use craft::ui::tile_grid::{Tile, TileActionPlace, TileGrid};
+use craft::ui::tile_grid::{Tile, TileActionPlace, TileGrid, TilePartEvent};
 use egui::Pos2;
 use pdfcraft_engine::{BorderShape, Edit, FillMark, NewAnnotation, Rgb, Shape, Style};
 use pdfcraft_render::{DocInfo, PageInfo};
@@ -549,13 +549,16 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp)
                 .thumb(ThumbAspect::new(3, 1), move |cx, rect| {
                     cx.with_draw(|draw| paint_signature(cx.painter.ctx(), draw, rect, saved, DataColor::new(cx.ink())));
                 })
-                .action(IconId::new("pencil"), CommandRef::new(slot.change_id))
-                .action(IconId::new("x"), CommandRef::new(slot.remove_id))
+                .action_named(IconId::new("pencil"), CommandRef::new(slot.change_id), ctx_less_label("Change {what}", slot.what))
+                .action_named(IconId::new("x"), CommandRef::new(slot.remove_id), ctx_less_label("Remove saved {what}", slot.what))
         });
     for event in out.response.events {
-        if let CollectionEvent::Activate(key) = event {
-            command = shown.get(key).map(|s| s.use_id);
-        }
+        command = match event {
+            CollectionEvent::Activate(key) => shown.get(key).map(|s| s.use_id),
+            CollectionEvent::Item(key, TilePartEvent::Action(0)) => shown.get(key).map(|s| s.change_id),
+            CollectionEvent::Item(key, TilePartEvent::Action(1)) => shown.get(key).map(|s| s.remove_id),
+            _ => command,
+        };
     }
     command
 }
