@@ -1441,6 +1441,10 @@ impl crate::PdfCraftApp {
 
     /// Paste the integration's delivered pixels without rereading a clipboard that may have changed.
     pub(crate) fn paste_received_image(&mut self, ctx: &egui::Context, page: usize, image: &egui::ColorImage) -> bool {
+        self.paste_received_image_at(ctx, page, image, None)
+    }
+
+    pub(crate) fn paste_received_image_at(&mut self, ctx: &egui::Context, page: usize, image: &egui::ColorImage, at: Option<[f64; 2]>) -> bool {
         let [width, height] = image.size;
         let pixels = width.checked_mul(height);
         let bytes = pixels.and_then(|n| n.checked_mul(4));
@@ -1456,7 +1460,7 @@ impl crate::PdfCraftApp {
         }
         let rgba = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
         let delivered = crate::create_ui::Clip::Image { width, height, rgba };
-        self.paste_image_with_system(ctx, page, None, None, None, false, Some(delivered))
+        self.paste_image_with_system(ctx, page, None, at, None, false, Some(delivered))
     }
 
     /// Paste an image from the clipboard onto `page`.

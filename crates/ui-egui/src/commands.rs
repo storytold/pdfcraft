@@ -88,7 +88,7 @@ impl PdfCraftApp {
         };
         if !organize && !self.is_preparing() && id == crate::menus::PASTE && fired.pasted.is_some() {
             if let Some(i) = self.active.filter(|&i| i < self.views.len()) {
-                self.paste_from_clipboard_with(ctx, i, fired.pasted.as_ref());
+                self.paste_from_clipboard_at(ctx, i, fired.pasted.as_ref(), fired.paste_at);
             }
             return;
         }
