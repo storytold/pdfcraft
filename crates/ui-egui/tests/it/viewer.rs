@@ -1579,11 +1579,14 @@ fn optimizer_audits_space_usage() {
     h.run_steps(2);
     h.get_by_label("Audit space usage…").click();
     h.run_steps(3);
-    h.get_by_label("Space Audit");
-    assert!(crate::support::step_until(&mut h, |h| h.query_by_label("Content Streams").is_some()), "the measure finished");
-    h.get_by_label("Total");
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Space Audit");
+    assert!(
+        crate::support::step_until(&mut h, |h| h.query_by_role_and_label(egui::accesskit::Role::ListItem, "Content Streams").is_some()),
+        "the measure finished"
+    );
+    h.get_by_role_and_label(egui::accesskit::Role::ListItem, "Total");
     assert_eq!(h.state().dialogs.open_dialogs().len(), 2, "the audit is open over the optimizer");
-    h.get_all_by_label("OK").last().expect("the audit's OK").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Dialog, "Space Audit").get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialogs.open_dialogs().len(), 1, "back to the optimizer");
 }
