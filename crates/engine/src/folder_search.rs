@@ -233,7 +233,7 @@ fn search_inner(options: &Options, cancel: &AtomicBool, events: &mut impl FnMut(
             break;
         }
         events(Event::Reading { index, path: path.clone() });
-        let read = search_file(&path, query, options, options.limit.saturating_sub(summary.matches), cancel, left, deadline);
+        let read = search_file(&path, options, options.limit.saturating_sub(summary.matches), cancel, left, deadline);
         if !read.matches.is_empty() {
             summary.matches = summary.matches.saturating_add(read.matches.len());
             summary.files_with_matches = summary.files_with_matches.saturating_add(1);
@@ -420,7 +420,6 @@ struct FileRead {
 
 fn search_file(
     path: &Path,
-    query: &str,
     options: &Options,
     room: usize,
     cancel: &AtomicBool,
@@ -441,7 +440,7 @@ fn search_file(
             return read;
         }
     };
-    read_pages(bytes, pages, query, options, room, cancel, left, deadline)
+    read_pages(bytes, pages, options, room, cancel, left, deadline)
 }
 
 /// How many of the threads let go of are still running.
@@ -458,7 +457,6 @@ fn let_go(left: &Mutex<Vec<Retiring>>, threads: Retiring) {
 fn read_pages(
     bytes: Arc<Vec<u8>>,
     pages: usize,
-    query: &str,
     options: &Options,
     room: usize,
     cancel: &AtomicBool,
@@ -469,7 +467,7 @@ fn read_pages(
     // No replacement: its retry would run beside the stuck thread, with a time limit of its own.
     let mut pool = RenderPool::new(bytes, 1, RenderConfig::default()).without_replacements();
     pool.set_stuck_after(options.page_limit);
-    let read = read_queued(&mut pool, pages, query, options, room, cancel, deadline);
+    let read = read_queued(&mut pool, pages, options, room, cancel, deadline);
     // With every page answered its worker is idle; otherwise it may be on a page that never ends.
     if read.cancelled || read.at_limit || read.skip == Some(Skip::TooSlow) {
         let_go(left, pool.retire());
@@ -480,13 +478,14 @@ fn read_pages(
 fn read_queued(
     pool: &mut RenderPool,
     pages: usize,
-    query: &str,
     options: &Options,
     room: usize,
     cancel: &AtomicBool,
     search_deadline: Option<Instant>,
 ) -> FileRead {
     let mut read = FileRead::default();
+    // The validated, trimmed query is already stored in the search options.
+    let query = options.query.trim();
     let mut unread = 0usize;
     let mut first = 0;
     let deadline = Instant::now().checked_add(options.file_limit);
