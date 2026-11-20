@@ -662,9 +662,12 @@ impl OcrVerify {
         true
     }
 
+    /// The settings a page or a region is read again with: the toolbar's choices, in the
+    /// language the reading under review was made in, as far as the engine chosen now can be
+    /// asked for it (a Tesseract language read again by another engine reads as English).
     fn reread_settings(&self, draft: &super::ocr_ui::OcrDraft) -> OcrSettings {
         let mut settings = draft.settings();
-        settings.language = self.dictionary_language.clone();
+        settings.language = pdfcraft_engine::ocr::language_for(settings.engine, &self.dictionary_language).to_string();
         settings
     }
 
@@ -964,19 +967,8 @@ impl OcrVerify {
         self.message = if is_region { tl!("Re-reading the region…").to_string() } else { tl!("Re-reading the page…").to_string() };
         let p = progress.clone();
         let work = move || {
-            let result = pdfcraft_engine::ocr::recognizers(&job.settings).and_then(|r| {
-                let found = job.run(&r, |_, _| !p.lock().map(|s| s.cancel).unwrap_or(false));
-                let words: Vec<PlacedWord> = found.into_iter().flat_map(|pg| pg.words).collect();
-                if words.is_empty() {
-                    Err(if is_region {
-                        "the region re-read found no text; the existing words are unchanged".into()
-                    } else {
-                        "the re-read found no text; the existing words are unchanged".into()
-                    })
-                } else {
-                    Ok(words)
-                }
-            });
+            let result = pdfcraft_engine::ocr::recognizers(&job.settings)
+                .and_then(|r| reread_words(job.run(&r, |_, _| !p.lock().map(|s| s.cancel).unwrap_or(false)), is_region));
             if let Ok(mut s) = p.lock() {
                 s.result = Some(result);
             }
@@ -1176,7 +1168,12 @@ impl OcrVerify {
                 &[("n", &found_words.to_string()), ("m", &read.to_string()), ("t", &total.to_string())],
             )
         } else if found_words == 0 {
-            tl!("OCR complete — no text recognized on this page.").to_string()
+            // A page that could not be read says why (a language pack that is not installed,
+            // for one); "no text recognized" is for a page that was read and has none.
+            match self.pages.iter().find_map(|p| p.failure()) {
+                Some(why) => why.to_string(),
+                None => tl!("OCR complete — no text recognized on this page.").to_string(),
+            }
         } else {
             crate::i18n::fmt(
                 tl!("Read {n} words on {m} of {t} pages"),
@@ -1455,11 +1452,12 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     // Row 1: the settings (each written back into the persisted draft).
     ui.horizontal_wrapped(|ui| {
         craft_ui::ComboBox::from_id_salt("ocr-verify-language").width(150.0).selected_text(language_name(&d.language)).show_ui(ui, |ui| {
-            for (code, name) in pdfcraft_engine::ocr::LANGUAGES {
-                ui.selectable_value(&mut d.language, (*code).to_string(), *name);
+            for (code, name) in pdfcraft_engine::ocr::document_languages(d.engine) {
+                ui.selectable_value(&mut d.language, code.to_string(), name);
             }
         });
         engine_combo(ui, &mut d.engine, &mut d.strategy);
+        d.keep_language_readable();
         strategy_combo(ui, &mut d.strategy);
         output_combo(ui, &mut d.output_mode);
         for (flag, label, why) in [
@@ -1531,9 +1529,28 @@ fn toolbar(app: &mut PdfCraftApp, ui: &mut egui::Ui, n: &mut Intents) {
     });
 }
 
+/// The words a re-read found, or why the words under review stay as they are: the page
+/// could not be read (its reason is kept: a language pack removed since the reading, for one,
+/// which "found no text" would hide), or nothing was found.
+fn reread_words(found: Vec<OcrPage>, is_region: bool) -> Result<Vec<PlacedWord>, String> {
+    if let Some(why) = found.iter().find_map(|page| page.failure()) {
+        return Err(format!("{why}; the existing words are unchanged"));
+    }
+    let words: Vec<PlacedWord> = found.into_iter().flat_map(|page| page.words).collect();
+    if words.is_empty() {
+        Err(if is_region {
+            "the region re-read found no text; the existing words are unchanged".into()
+        } else {
+            "the re-read found no text; the existing words are unchanged".into()
+        })
+    } else {
+        Ok(words)
+    }
+}
+
 /// A language code's dropdown text: its name and its code ("English (en)").
 fn language_name(code: &str) -> String {
-    pdfcraft_engine::ocr::LANGUAGES.iter().find(|l| l.0 == code).map_or_else(|| code.to_owned(), |l| format!("{} ({})", l.1, l.0))
+    pdfcraft_engine::ocr::language_name(code).map_or_else(|| code.to_owned(), |name| format!("{name} ({code})"))
 }
 
 /// The Engine dropdown's text.
@@ -3047,15 +3064,69 @@ mod tests {
         assert_eq!(v.review.dictionary, std::collections::BTreeSet::from(["external".into(), "original".into()]));
     }
 
+    /// A run on the Verify screen that could not read its pages says why in the status,
+    /// not "no text recognized"; a page that was read and has no text still says that.
+    #[test]
+    fn a_run_that_could_not_read_says_why_in_the_status() {
+        let page =
+            |skipped: Option<&str>| OcrPage { page: 0, words: Vec::new(), already_on_page: 0, skipped: skipped.map(String::from), notes: Vec::new() };
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        let mut v = OcrVerify::default();
+        v.finished(vec![page(Some(why))], false);
+        assert_eq!(v.message, why);
+        assert_eq!(v.phase, Phase::ReviewReady);
+        v.finished(vec![page(None)], false);
+        assert!(v.message.contains("no text recognized"), "{}", v.message);
+        v.finished(vec![page(Some(pdfcraft_engine::ocr::PAGE_HAS_TEXT))], false);
+        assert!(v.message.contains("no text recognized"), "{}", v.message);
+    }
+
+    /// A re-read that failed says why (the reading's language pack was removed, say) and
+    /// leaves the words alone; only a re-read that ran and found nothing "found no text".
+    #[test]
+    fn a_failed_reread_keeps_its_reason() {
+        let page = |words: Vec<PlacedWord>, skipped: Option<&str>| OcrPage {
+            page: 0,
+            words,
+            already_on_page: 0,
+            skipped: skipped.map(String::from),
+            notes: Vec::new(),
+        };
+        let why = "tesseract failed: Error opening data file ara.traineddata";
+        assert_eq!(reread_words(vec![page(Vec::new(), Some(why))], false), Err(format!("{why}; the existing words are unchanged")));
+        assert_eq!(reread_words(vec![page(Vec::new(), Some(why))], true), Err(format!("{why}; the existing words are unchanged")));
+        assert_eq!(reread_words(vec![page(Vec::new(), None)], false), Err("the re-read found no text; the existing words are unchanged".into()));
+        assert_eq!(
+            reread_words(vec![page(Vec::new(), None)], true),
+            Err("the region re-read found no text; the existing words are unchanged".into())
+        );
+        // A page passed over for having text of its own is not a failure.
+        assert_eq!(
+            reread_words(vec![page(Vec::new(), Some(pdfcraft_engine::ocr::PAGE_HAS_TEXT))], false),
+            Err("the re-read found no text; the existing words are unchanged".into())
+        );
+        let word =
+            PlacedWord { text: "word".into(), origin: [1.0, 1.0], across: [9.0, 0.0], up: [0.0, 9.0], confidence: None, source: "tesseract".into() };
+        assert_eq!(reread_words(vec![page(vec![word.clone()], None)], false), Ok(vec![word]));
+    }
+
     #[test]
     fn rereading_keeps_captured_language_when_the_draft_changes() {
         let mut session = Session::new();
         let (_, mut v) = loaded(&mut session, &[Some(40.0)]);
         v.dictionary_language = "ja".into();
-        let draft = super::ocr_ui::OcrDraft { language: "fr".into(), ..Default::default() };
+        let draft = super::ocr_ui::OcrDraft { language: "fr".into(), engine: EngineChoice::Tesseract, ..Default::default() };
         let settings = v.reread_settings(&draft);
         assert_eq!(settings.language, "ja");
         assert_eq!(settings.dpi, draft.settings().dpi);
+        // The engine was changed since the reading: the built-in engine (alone, or first under
+        // Automatic) is never asked for a Tesseract language.
+        for engine in [EngineChoice::Ocrs, EngineChoice::Auto] {
+            let draft = super::ocr_ui::OcrDraft { language: "fr".into(), engine, ..Default::default() };
+            assert_eq!(v.reread_settings(&draft).language, "en", "{engine:?}");
+        }
+        v.dictionary_language = "en".into();
+        assert_eq!(v.reread_settings(&draft).language, "en");
         assert!(dictionary_path(std::path::Path::new("prefs"), "../outside").is_err());
     }
 

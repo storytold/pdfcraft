@@ -506,3 +506,57 @@ fn recognize_text_keeps_its_buttons_in_a_short_window() {
         assert!(h.state().dialog.is_none(), "{height}: Cancel closes the dialog");
     }
 }
+
+/// #7496: with Tesseract chosen, the Document language list offers the allow-listed languages
+/// the installed program has a pack for; one can be chosen, reaches the run's settings, and
+/// goes back to English when the engine is changed to one that cannot be asked for it.
+/// (Skipped without a tesseract program that has a second allow-listed language pack.)
+#[test]
+fn tesseract_languages_are_offered_as_document_languages() {
+    use egui::accesskit::Role;
+    use pdfcraft_engine::ocr::{self, EngineChoice};
+    // This waits for the probe, so the dialog below finds its answer already remembered.
+    if !ocr::engines_status().iter().any(|e| e.id == "tesseract" && e.available) {
+        eprintln!("skipped: no tesseract program");
+        return;
+    }
+    let Some((code, name)) = ocr::document_languages(EngineChoice::Tesseract).into_iter().find(|l| l.0 != "en") else {
+        eprintln!("skipped: tesseract has no allow-listed language pack besides English");
+        return;
+    };
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    /// The dropdown that shows `value` now.
+    fn combo<'a>(h: &'a Harness<'static, PdfCraftApp>, value: &'a str) -> egui_kittest::Node<'a> {
+        h.get_by(move |n| n.role() == Role::ComboBox && n.value().is_some_and(|v| v == value))
+    }
+    /// Open the dropdown that shows `shown` and choose `entry` in it.
+    fn pick(h: &mut Harness<'static, PdfCraftApp>, shown: &str, entry: &str) {
+        combo(h, shown).click();
+        h.run_steps(2);
+        h.get_by_label(entry).click_accesskit();
+        h.run_steps(3);
+    }
+
+    // The built-in engine (the default) reads English only: choosing a Tesseract language
+    // needs Tesseract chosen.
+    assert_eq!(ocr::document_languages(h.state().ocr_draft.settings().engine), ocr::LANGUAGES.to_vec());
+    pick(&mut h, "Built-in", "Tesseract");
+    assert_eq!(h.state().ocr_draft.settings().engine, EngineChoice::Tesseract);
+    pick(&mut h, "English", name);
+    assert_eq!(h.state().ocr_draft.language, code, "{name} was chosen");
+    assert_eq!(h.state().ocr_draft.settings().language, code, "and is what a run is asked for");
+    combo(&h, name);
+
+    // Automatic reads with the built-in engine first, which cannot be asked for it.
+    pick(&mut h, "Tesseract", "Automatic");
+    assert_eq!(h.state().ocr_draft.language, "en");
+    combo(&h, "English");
+}
