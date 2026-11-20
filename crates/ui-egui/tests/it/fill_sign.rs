@@ -2345,8 +2345,7 @@ fn placing_a_signature_offers_to_lock_it_now() {
     assert!(h.state_mut().save_active(&ctx_h, SaveTarget::InPlace), "already locked: no question");
     // Dismiss hides it until the next signature.
     place(&mut h, 200.0);
-    h.get_by_label(NOTICE);
-    h.get_by_label("Dismiss").click();
+    h.get_by_label(NOTICE).get_by_label("Dismiss").click();
     h.run_steps(2);
     assert!(h.query_by_label(NOTICE).is_none(), "dismissed");
     place(&mut h, 100.0);
