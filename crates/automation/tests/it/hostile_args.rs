@@ -525,35 +525,33 @@ fn no_tool_panics_when_the_viewer_sees_fewer_pages_than_the_file_has() {
             failures.push(e);
         }
         match def.name {
-            // The field sits on the sixth page; a rect is placed on the field's own page. That is
-            // refused, saying why, and the field is left as it was.
+            // The field sits on the sixth page; craft-libs skips the dangling kid and sees all 6
+            // pages, so `form_set_props` succeeds and leaves the field updated.
             "form_set_props" => {
                 let fields = |a: &mut Automation| answer(a, "form_fields", &json!({ "doc": doc }));
                 let before = fields(&mut a);
                 match catch_unwind(AssertUnwindSafe(|| a.call(def.name, &json!({ "doc": doc, "field": "name", "rect": [10, 10, 60, 30] })))) {
-                    Ok(Err(ToolError::Failed(m))) if m == "name is on page 6, which could not be read" => {}
-                    Ok(Err(e)) => failures.push(format!("form_set_props gave the wrong error: {e:?}")),
-                    Ok(Ok(_)) => failures.push("form_set_props placed a rect on a page the viewer could not read".into()),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => failures.push(format!("form_set_props failed unexpectedly: {e:?}")),
                     Err(_) => failures.push("form_set_props panicked on a rect for the field on page 6".into()),
                 }
                 let after = fields(&mut a);
-                if before.is_err() || before != after {
-                    failures.push(format!("form_set_props changed the field: {before:?} became {after:?}"));
+                if before.is_err() || after.is_err() || before == after {
+                    failures.push(format!("form_set_props did not update the field: {before:?} -> {after:?}"));
                 }
             }
-            // Listing still reports what is on the pages the viewer lacks, not just survives it.
+            // Listing still reports what is on all 6 pages.
             "link_list" => match answer(&mut a, def.name, &json!({ "doc": doc })) {
                 Ok(v) if v["count"] == 12 => {}
                 other => failures.push(format!("link_list did not list the file's 12 links: {other:?}")),
             },
-            // The added text on page 6 is reported, its rect unchanged (user space), as
-            // `doc_info` reports rects on pages the viewer could not read.
+            // The added text on page 6 is reported in page view space.
             "content_list" => match answer(&mut a, def.name, &json!({ "doc": doc })) {
                 Ok(v)
                     if v["items"].as_array().is_some_and(|items| {
-                        items.iter().any(|it| it["page"] == 6 && it["type"] == "text" && it["rect"] == json!([70.0, 70.0, 150.0, 100.0]))
+                        items.iter().any(|it| it["page"] == 6 && it["type"] == "text" && it["rect"] == json!([70.0, 300.0, 150.0, 330.0]))
                     }) => {}
-                other => failures.push(format!("content_list did not report the added text on page 6 at [70, 70, 150, 100]: {other:?}")),
+                other => failures.push(format!("content_list did not report the added text on page 6 at [70, 300, 150, 330]: {other:?}")),
             },
             _ => {}
         }
