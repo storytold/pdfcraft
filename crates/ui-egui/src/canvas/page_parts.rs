@@ -136,6 +136,8 @@ pub(crate) enum PageLayer {
     Comment,
     /// Form fields' widgets and the sign tabs over them.
     Field,
+    /// Movable comment bodies, above filled form fields and below added content.
+    MovableComment,
     /// What a tool placed and moves: added content, Prepare's fields, the objects selected together.
     Placed,
     /// Handles on what is selected, and the frame band of the paragraph open for typing.
@@ -154,7 +156,8 @@ impl PageLayer {
             PageLayer::Link => (HitLevel::Body, 3),
             PageLayer::Comment => (HitLevel::Body, 4),
             PageLayer::Field => (HitLevel::Body, 5),
-            PageLayer::Placed => (HitLevel::Body, 6),
+            PageLayer::MovableComment => (HitLevel::Body, 6),
+            PageLayer::Placed => (HitLevel::Body, 7),
             PageLayer::Handle => (HitLevel::Handle, 0),
             PageLayer::Editor => (HitLevel::Handle, 1),
         };
@@ -312,6 +315,8 @@ pub(crate) struct PagePartsOutput {
     pub(crate) response: Response,
     /// The press on a part, in the phase this pass reports.
     pub(crate) press: Option<PagePress>,
+    /// A secondary click beside an ongoing press on a part.
+    pub(crate) context: Option<egui::Pos2>,
     /// A key the focused part was given: a form field's toggle, its arrows, Enter or typed text.
     pub(crate) key: Option<(Owner, Intent)>,
     /// Tab (`true`) or Shift+Tab (`false`) pressed while a focusable field part held focus.
@@ -347,6 +352,7 @@ pub(crate) struct PageParts<'a> {
 #[derive(Debug, Default)]
 struct Report {
     press: Option<PagePress>,
+    context: Option<egui::Pos2>,
     key: Option<(Owner, Intent)>,
     tab: Option<(Owner, bool)>,
     hovered: Option<(Owner, usize)>,
@@ -464,6 +470,9 @@ impl Component for PageParts<'_> {
             let Some(at) = part.owner.part_ref(part.page) else { continue };
             let Some(result) = cx.part_if_declared(at) else { continue };
             let (press, hovered) = (result.press, result.hovered);
+            if self.report.context.is_none() {
+                self.report.context = press.context;
+            }
             if hovered && self.report.hovered.is_none() {
                 self.report.hovered = Some((part.owner, part.page));
             }
@@ -500,7 +509,7 @@ impl Component for PageParts<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PagePartsOutput {
-        let Report { press, key, tab, hovered, focused } = self.report;
-        PagePartsOutput { response: cx.response.clone(), press, key, tab, hovered, focused }
+        let Report { press, context, key, tab, hovered, focused } = self.report;
+        PagePartsOutput { response: cx.response.clone(), press, context, key, tab, hovered, focused }
     }
 }

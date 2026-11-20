@@ -70,11 +70,13 @@ pub(crate) fn page_parts(
 /// goes to [`PrepareTool`].
 pub(crate) fn field_press(session: &mut PageSession, form: &[FormField], press: &PagePress) {
     let Owner::PrepareField { field, widget } = press.owner else { return };
-    let PressPhase::Down { start, .. } = press.phase else { return };
+    let Some(start) = press.phase.start() else { return };
     let Some(f) = form.get(field) else { return };
     match start.button {
-        PointerButton::Secondary => super::context(form, field, widget, session),
-        PointerButton::Primary => {
+        PointerButton::Secondary if matches!(press.phase, PressPhase::Down { .. } | PressPhase::Release { click: true, .. }) => {
+            super::context(form, field, widget, session)
+        }
+        PointerButton::Primary if matches!(press.phase, PressPhase::Down { .. }) => {
             let extend = press.mods.shift || press.mods.cmd;
             session.prepare.select((f.name.clone(), widget), extend);
             // The `Down` of a second primary press: the one double press, as `PressState::double_pressed` reads it.

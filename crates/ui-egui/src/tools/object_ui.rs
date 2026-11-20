@@ -462,8 +462,10 @@ pub(crate) fn page_parts(
             && let Ok(objects) = session.objects.inventory(doc, page)
             && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
         {
-            out.extend(frame_band(screen(&xf, info, page, object)).into_iter().enumerate().map(|(side, band)| {
-                PagePart::new(Owner::Frame { block, side }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move)
+            out.extend(frame_band(screen(&xf, info, page, object)).into_iter().enumerate().filter_map(|(side, band)| {
+                let band = band.intersect(placed.rect);
+                band.is_positive()
+                    .then(|| PagePart::new(Owner::Frame { block, side }, page, HitShape::Rect(band), PageLayer::Handle).cursor(CursorIcon::Move))
             }));
         }
         let s = &session.objects;
