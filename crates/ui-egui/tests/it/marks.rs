@@ -3,7 +3,7 @@
 use crate::support;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use pdfcraft_engine::MarkKind;
+use pdfcraft_engine::{MarkKind, Repeat};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 const FIXTURE: &[u8] = b"%PDF-1.7
@@ -121,6 +121,79 @@ fn watermark_and_background_dialogs() {
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(marks(&h).len(), 2);
+}
+
+#[test]
+fn a_watermark_can_be_repeated_and_a_repeat_that_needs_too_many_copies_is_held_back() {
+    let mut h = harness();
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    h.get_by_label("Repeat");
+    assert!(h.query_by_label("Spacing between copies").is_none(), "the spacing fields appear with the repeat");
+    h.state_mut().marks_draft.wm.text = "DRAFT".into();
+    // Switching it on, as the check box does.
+    h.state_mut().marks_draft.wm.repeat = Some(Repeat::default());
+    h.run_steps(2);
+    h.get_by_label("Spacing between copies");
+    h.get_by_label("Stagger rows");
+    assert!(h.query_by_label("Too many copies: increase the spacing or the size.").is_none());
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_none(), "OK is available");
+    // The smallest text the dialog allows (6 points), a narrow "I" turned 45° and no gap on a
+    // 300 × 400 page: a 6-point box, so about 50 across and 66 down, over 3,000 copies.
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.fit = false;
+        d.wm.text = "I".into();
+        d.wm.font_size = 6.0;
+        d.wm.repeat = Some(Repeat { spacing: [0.0, 0.0], stagger: false });
+    }
+    h.run_steps(2);
+    h.get_by_label("Too many copies: increase the spacing or the size.");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_some(), "OK is held back");
+    // More room between the copies and it can go ahead.
+    h.state_mut().marks_draft.wm.repeat = Some(Repeat { spacing: [60.0, 60.0], stagger: true });
+    h.run_steps(2);
+    assert!(h.query_by_label("Too many copies: increase the spacing or the size.").is_none());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert_eq!(marks(&h), [MarkKind::Watermark]);
+}
+
+#[test]
+fn a_repeat_too_big_for_any_selected_page_holds_ok_back_not_only_for_the_page_shown() {
+    // Page 1 (the one shown) is tiny and takes the repeat; page 2 is 300 x 400 and would need
+    // over 3,000 copies, which the engine refuses.
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let mut h = harness_with(pdf);
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.fit = false;
+        d.wm.text = "I".into();
+        d.wm.font_size = 6.0;
+        d.wm.repeat = Some(Repeat { spacing: [0.0, 0.0], stagger: false });
+    }
+    h.run_steps(2);
+    h.get_by_label("Too many copies: increase the spacing or the size.");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_some(), "OK is held back");
+    // Leaving the big page out of the range lets it go ahead.
+    {
+        let r = &mut h.state_mut().marks_draft.range;
+        r.all = false;
+        r.from = 1;
+        r.to = 1;
+    }
+    h.run_steps(2);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_none(), "OK is available");
 }
 
 #[test]
