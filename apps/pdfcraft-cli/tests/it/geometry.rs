@@ -83,3 +83,49 @@ fn geometry_refuses_bad_arguments() {
         assert!(String::from_utf8_lossy(&out.stderr).contains("geometry"), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// The refusal of a command that must not run: a failure, nothing on stdout, and stderr naming
+/// what was wrong.
+fn refused(args: &[&str], why: &str) {
+    let out = Command::new(BIN).arg("geometry").args(args).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{args:?}");
+    assert!(out.stdout.is_empty(), "{args:?}: {}", String::from_utf8_lossy(&out.stdout));
+    assert!(stderr.contains(why), "{args:?}: {stderr}");
+}
+
+/// A value-taking option given with no value is refused before the document is read, rather
+/// than running with the option's default; one left out is still fine.
+#[test]
+fn geometry_refuses_an_option_with_no_value() {
+    let path = file("novalue.pdf");
+    for option in ["--pages", "--coords", "--password", "--max-segments", "--max-targets", "--max-bytes", "--max-total-segments"] {
+        refused(&[&path, option], &format!("geometry: {option} needs a value"));
+        refused(&[&path, "--pages", "1", option], &format!("geometry: {option} needs a value"));
+        // Before the file is opened: the missing value is the complaint, not the missing file.
+        refused(&["missing.pdf", option], &format!("geometry: {option} needs a value"));
+    }
+    // A password may be anything, another option's name included, as for the other commands.
+    assert_eq!(geometry(&[&path, "--password", "--coords"])["pages"].as_array().unwrap().len(), 2);
+}
+
+/// One input file: a second is refused, wherever it stands, rather than ignored.
+#[test]
+fn geometry_refuses_a_second_input_file() {
+    let (first, second) = (file("first.pdf"), file("second.pdf"));
+    refused(&[&first, &second], "geometry: unexpected argument");
+    refused(&[&first, "--pages", "1", &second], &format!("unexpected argument {second:?}"));
+    refused(&[], "geometry: missing file");
+}
+
+/// `--max-total-segments` bounds the whole answer, which then says where to continue.
+#[test]
+fn geometry_max_total_segments_reaches_the_tool() {
+    let path = file("total.pdf");
+    let all = geometry(&[&path]);
+    assert!(all.get("next_page").is_none(), "every page fits by default");
+    let first = geometry(&[&path, "--max-total-segments", "1"]);
+    assert_eq!(first["pages"], json!([all["pages"][0]]));
+    assert_eq!((first["next_page"].clone(), first["pages_left"].clone()), (json!(2), json!(1)));
+    refused(&[&path, "--max-total-segments", "lots"], "--max-total-segments");
+}

@@ -3,11 +3,44 @@
 use serde_json::{Map, Value, json};
 
 use super::commands::page_list;
-use super::options::{GEOMETRY_OPTIONS, flag, positional, validate_options};
+use super::options::{GEOMETRY_OPTIONS, flag, needs_value, positional, validate_options};
 use super::{CliError, stdout_line};
 
 /// The limit options, and the `page_geometry` argument each sets.
-const LIMITS: [(&str, &str); 3] = [("--max-segments", "max_segments"), ("--max-targets", "max_targets"), ("--max-bytes", "max_bytes")];
+const LIMITS: [(&str, &str); 4] = [
+    ("--max-segments", "max_segments"),
+    ("--max-targets", "max_targets"),
+    ("--max-bytes", "max_bytes"),
+    ("--max-total-segments", "max_total_segments"),
+];
+
+/// The value-taking option given last with no value after it. `flag` reads that as the option
+/// being absent, so `geometry FILE --coords` ran with the default. The walk is the one
+/// `validate_options` makes, so `--password --coords` is still a password of `--coords`.
+fn missing_value(args: &[String]) -> Option<&'static str> {
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        match GEOMETRY_OPTIONS.iter().find(|spec| spec.name == arg) {
+            Some(spec) if spec.takes_value && i + 1 == args.len() => return Some(spec.name),
+            Some(spec) if spec.takes_value => i += 2,
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The one input file, once every option given has its value: both are checked before the
+/// document is opened, so a mistyped command prints nothing on stdout.
+fn input_file(args: &[String]) -> Result<&str, String> {
+    if let Some(option) = missing_value(args) {
+        return Err(needs_value("geometry", option, None));
+    }
+    match positional(args, GEOMETRY_OPTIONS)[..] {
+        [] => Err("geometry: missing file".into()),
+        [path] => Ok(path),
+        [_, extra, ..] => Err(format!("geometry: unexpected argument {extra:?} (one input file)")),
+    }
+}
 
 /// The `page_geometry` arguments the command line asks for (without the document).
 fn tool_args(args: &[String]) -> Result<Map<String, Value>, String> {
@@ -38,7 +71,7 @@ fn json_of(content: Vec<pdfcraft_automation::Content>) -> Option<Value> {
 
 pub(crate) fn geometry(args: &[String]) -> Result<(), CliError> {
     validate_options("geometry", args, GEOMETRY_OPTIONS)?;
-    let path = *positional(args, GEOMETRY_OPTIONS).first().ok_or("geometry: missing file")?;
+    let path = input_file(args)?;
     let mut tool = tool_args(args)?;
     let mut auto = pdfcraft_automation::Automation::new();
     let mut open = json!({ "path": path });
@@ -54,6 +87,7 @@ pub(crate) fn geometry(args: &[String]) -> Result<(), CliError> {
     if let Some(object) = result.as_object_mut() {
         object.insert("file".into(), json!(path));
     }
-    // One line: a heavy sheet lists millions of segments.
-    stdout_line(format_args!("{}", serde_json::to_string(&result).unwrap_or_default()))
+    // One line: a heavy sheet lists millions of segments. `Value`'s `Display` writes the same
+    // compact JSON as `to_string` straight to stdout, without a second copy of it in memory.
+    stdout_line(format_args!("{result}"))
 }

@@ -4,7 +4,7 @@ use pdfcraft_engine::{
     Edit, Style,
     measure::{self, Kind, NewMeasurement, PageUnit, Scale},
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 impl Automation {
     fn measurement_points(&self, a: &Args) -> Result<(usize, Vec<measure::Point>)> {
@@ -149,7 +149,9 @@ impl Automation {
             .transpose()?;
         Ok(json!({"snap":snap,"truncated":geometry.truncated,"intersection_limited":intersection_limited,"segments":geometry.segment_count()}))
     }
-    /// The segments `measurement_snap` snaps to, listed for whole pages.
+    /// The segments `measurement_snap` snaps to, listed for whole pages. Each page is bounded by
+    /// snapping's limits and the answer by `max_total_segments`; `next_page` and `pages_left`
+    /// appear only when the answer stopped short, as `link_list`'s `text_links_next_page` does.
     pub(crate) fn page_geometry(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let pages = if a.get("pages").is_some() { self.pages(a, "pages")? } else { (0..doc.info.pages.len()).collect() };
@@ -159,12 +161,18 @@ impl Automation {
             _ => return Err(ToolError::InvalidArgs("coords must be page or display".into())),
         };
         let limits = geometry_limits(a)?;
-        let pages = pages.into_iter().map(|page| page_geometry_json(doc, page, limits, display)).collect::<Result<Vec<_>>>()?;
-        Ok(json!({
-            "coords": if display { "display" } else { "page" },
-            "limits": {"segments": limits.segments, "targets": limits.targets, "bytes": limits.bytes},
-            "pages": pages,
-        }))
+        let budget = total_segments(a, limits)?;
+        let (listed, stopped) = pages_within(doc, &pages, limits, budget, display)?;
+        // Built by moving the pages in: `json!` would serialize a copy of every segment.
+        let mut out = Map::new();
+        out.insert("coords".into(), json!(if display { "display" } else { "page" }));
+        out.insert("limits".into(), json!({"segments": limits.segments, "targets": limits.targets, "bytes": limits.bytes}));
+        out.insert("pages".into(), Value::Array(listed));
+        if let Some(i) = stopped {
+            out.insert("next_page".into(), json!(pages[i] + 1));
+            out.insert("pages_left".into(), json!(pages.len() - i));
+        }
+        Ok(Value::Object(out))
     }
     pub(crate) fn measurement_export(&self, a: &Args) -> Result<Value> {
         let all = self.doc(a)?.measurements().map_err(failed)?;
@@ -214,19 +222,62 @@ fn view_matrix(doc: &pdfcraft_engine::Document, page: usize) -> Result<[f64; 6]>
     Ok([a - e, b - f, c - e, d - f, e, f])
 }
 
-fn page_geometry_json(doc: &pdfcraft_engine::Document, page: usize, limits: measure::snap::Limits, display: bool) -> Result<Value> {
-    let geometry = doc.measurement_paths_within(page, limits).map_err(failed)?;
+/// The most segments one answer may hold across its pages (`max_total_segments`). By default
+/// the call's `max_segments`, so a whole answer holds no more than one page may.
+fn total_segments(a: &Args, limits: measure::snap::Limits) -> Result<usize> {
+    let most = MAX_GEOMETRY_LIMITS.segments;
+    let Some(n) = a.opt_int("max_total_segments")? else { return Ok(limits.segments) };
+    usize::try_from(n)
+        .ok()
+        .filter(|n| (1..=most).contains(n))
+        .ok_or_else(|| ToolError::InvalidArgs(format!("max_total_segments must be between 1 and {most}")))
+}
+
+/// The pages' answers, in the order asked, up to the first page that would take the segments
+/// listed past `budget`; that page's index in `pages` comes back as where to resume. The first
+/// page is always listed (its own limits bound it), so following `next_page` always progresses.
+fn pages_within(
+    doc: &pdfcraft_engine::Document,
+    pages: &[usize],
+    limits: measure::snap::Limits,
+    budget: usize,
+    display: bool,
+) -> Result<(Vec<Value>, Option<usize>)> {
+    let (mut listed, mut total) = (Vec::new(), 0usize);
+    for (i, &page) in pages.iter().enumerate() {
+        let geometry = doc.measurement_paths_within(page, limits).map_err(failed)?;
+        // Counted before any JSON is built, so a page that doesn't fit costs only its extraction.
+        total = total.saturating_add(geometry.segment_count());
+        if i > 0 && total > budget {
+            return Ok((listed, Some(i)));
+        }
+        listed.push(page_geometry_json(doc, page, geometry, display)?);
+    }
+    Ok((listed, None))
+}
+
+fn page_geometry_json(doc: &pdfcraft_engine::Document, page: usize, geometry: measure::snap::Geometry, display: bool) -> Result<Value> {
     let m = if display { Some(view_matrix(doc, page)?) } else { None };
     let point = |[x, y]: measure::Point| match m {
         Some(m) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]],
         None => [x, y],
     };
-    let segments: Vec<[f64; 4]> = geometry
+    let segments: Vec<Value> = geometry
         .segments()
         .map(|[from, to]| {
             let ([x0, y0], [x1, y1]) = (point(from), point(to));
-            [x0, y0, x1, y1].map(round)
+            json!([x0, y0, x1, y1].map(round))
         })
         .collect();
-    Ok(json!({"page": page + 1, "count": segments.len(), "segments": segments, "truncated": geometry.truncated, "unreadable": geometry.unreadable}))
+    let (truncated, unreadable) = (geometry.truncated, geometry.unreadable);
+    // The extraction and its snapping index go before the page's answer is assembled, and the
+    // segments are moved in rather than copied by `json!`.
+    drop(geometry);
+    let mut out = Map::new();
+    out.insert("page".into(), json!(page + 1));
+    out.insert("count".into(), json!(segments.len()));
+    out.insert("segments".into(), Value::Array(segments));
+    out.insert("truncated".into(), json!(truncated));
+    out.insert("unreadable".into(), json!(unreadable));
+    Ok(Value::Object(out))
 }

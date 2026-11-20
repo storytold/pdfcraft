@@ -103,6 +103,7 @@ pub(crate) const GEOMETRY_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--max-segments", takes_value: true },
     OptionSpec { name: "--max-targets", takes_value: true },
     OptionSpec { name: "--max-bytes", takes_value: true },
+    OptionSpec { name: "--max-total-segments", takes_value: true },
 ];
 
 pub(crate) const RENDER_OPTIONS: &[OptionSpec] = &[
