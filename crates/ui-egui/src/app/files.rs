@@ -175,6 +175,8 @@ impl PdfCraftApp {
         {
             self.password_retry = None;
         }
+        let flagged_retry =
+            self.password_retry.is_some_and(|token| pending_opens.iter().any(|pending| pending.token == token && pending.display_override.is_some()));
         let mut remaining = pending_opens.into_iter();
         let mut waiting = Vec::new();
         while let Some(mut pending) = remaining.next() {
@@ -186,6 +188,11 @@ impl PdfCraftApp {
                 break;
             }
             let retry = self.password_retry == Some(pending.token);
+            // Startup display overrides settle in request order, including a password retry.
+            if flagged_retry && !retry && pending.display_override.is_some() {
+                waiting.push(pending);
+                continue;
+            }
             let Some(kind) = pending.ready.take() else {
                 waiting.push(pending);
                 continue;
