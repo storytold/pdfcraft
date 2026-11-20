@@ -200,7 +200,7 @@ impl Snapshot {
         for r in created {
             let obj = doc.try_get(r.num).map_err(|_| RedactError::OverlayUnreadable)?;
             let Object::Stream(s) = &*obj else { continue };
-            let data = ctx.decode(s).map_err(|_| RedactError::OverlayUnreadable)?;
+            let data = ctx.decode(doc, s).map_err(|_| RedactError::OverlayUnreadable)?;
             digests.insert(sha256(&[data]));
         }
         self.overlay = digests;

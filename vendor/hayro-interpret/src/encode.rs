@@ -226,7 +226,8 @@ fn encode_axial_shading(
 }
 
 /// PdfCraft patch: pixel visits one mesh shading may make, per pixel of the area it is drawn in
-/// and per triangle. Sampling walks each triangle's bounding box (rounded out to whole pixels),
+/// and per triangle. Sampling walks each triangle's bounding box (rounded out to whole pixels;
+/// patch 99: only the columns of each row the triangle can reach),
 /// so triangles far off the page (a fuzzed patch decoded onto ±40000) asked for 65536 × 65536
 /// samples, and many triangles covering the same pixels repeat the work. A triangle's box is
 /// about twice its area, and a sub-pixel triangle's box is at most 2 × 2 pixels.
@@ -346,13 +347,43 @@ impl TriangleSampler {
         }
         self.visits_left = self.visits_left.saturating_add(MESH_VISITS_PER_TRIANGLE);
 
+        let (columns_start, columns_end) = (bbox.x0.floor() as u16, bbox.x1.ceil() as u16);
         for y in (bbox.y0.floor() as u16)..(bbox.y1.ceil() as u16) {
-            for x in (bbox.x0.floor() as u16)..(bbox.x1.ceil() as u16) {
-                if self.visits_left == 0 {
-                    warn!("mesh shading visit budget exceeded; the rest is not drawn");
+            // PdfCraft patch (99): only the columns where this row's sample points (the
+            // corner and the centre, at heights `y` and `y + 0.5`) can lie in the triangle,
+            // not the whole box. A thin triangle lying across the pixel grid has a box many
+            // times its area (the cells of a narrow curved band of patches, cut into a fixed
+            // 19 × 19 grid, are a few pixels long and a fraction of one wide, at every angle),
+            // and walking the box spent the visit budget before the last patches: painted
+            // through a path the size of its own box, a rainbow of tensor patches lost its
+            // inner bands. A box two columns wide or less is walked whole (no row of it is
+            // narrower by more than a column, which isn't worth finding), and a row with no
+            // column still costs a visit, so the walk stays within the budget however tall
+            // the triangle is.
+            let columns = if columns_end.saturating_sub(columns_start) <= 2 {
+                columns_start..columns_end
+            } else {
+                let top = f64::from(y);
+                match x_extent_between(&t, top - SPAN_SLACK, top + 0.5 + SPAN_SLACK) {
+                    // Pixel `x` samples at `x` and `x + 0.5`; the casts saturate.
+                    Some((lo, hi)) => {
+                        let start = (lo - 0.5 - SPAN_SLACK).floor() as u16;
+                        let end = ((hi + SPAN_SLACK).floor() as u16).saturating_add(1);
+                        columns_start.max(start)..columns_end.min(end)
+                    }
+                    None => 0..0,
+                }
+            };
+            if columns.is_empty() {
+                if !self.take_visit() {
                     return false;
                 }
-                self.visits_left -= 1;
+                continue;
+            }
+            for x in columns {
+                if !self.take_visit() {
+                    return false;
+                }
                 let corner = Point::new(x as f64, y as f64);
                 let sampled = if t.contains_point(corner) {
                     self.map.insert((x, y), t.interpolate(corner));
@@ -379,6 +410,53 @@ impl TriangleSampler {
         }
         true
     }
+
+    /// Spend one visit; `false` (with a warning) when none is left.
+    fn take_visit(&mut self) -> bool {
+        if self.visits_left == 0 {
+            warn!("mesh shading visit budget exceeded; the rest is not drawn");
+            return false;
+        }
+        self.visits_left -= 1;
+        true
+    }
+}
+
+/// PdfCraft patch (99): how far past a row's sample points the triangle's extent is still
+/// walked, in pixels. A sample a little outside the triangle can still pass `covers`, whose
+/// tolerance is relative to the triangle's size (1e-9 of it, under 1e-4 pixel on a 65536-pixel
+/// canvas); this is wider than that and than the rounding of the extent itself. A triangle
+/// whose corners all but coincide (two of them 1e-13 pixel apart, its area 1e-14) can pass
+/// `covers` for points well outside it, through rounding in its barycentric division; the
+/// box walk took such points, the extent leaves them out.
+const SPAN_SLACK: f64 = 1e-3;
+
+/// PdfCraft patch (99): the least and greatest x of the part of `t` between the heights `y0`
+/// and `y1`, or `None` when no part of it is there: the ends of that part are the triangle's
+/// corners inside the band and the points where its edges cross the band's two lines.
+fn x_extent_between(t: &Triangle, y0: f64, y1: f64) -> Option<(f64, f64)> {
+    let corners = [t.p0.point, t.p1.point, t.p2.point];
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut add = |x: f64| {
+        lo = lo.min(x);
+        hi = hi.max(x);
+    };
+    for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
+        if (y0..=y1).contains(&a.y) {
+            add(a.x);
+        }
+        // A level edge lies along the band or misses it; its corners are taken above.
+        if a.y != b.y {
+            for line in [y0, y1] {
+                let s = (line - a.y) / (b.y - a.y);
+                if (0.0..=1.0).contains(&s) {
+                    add(a.x + s * (b.x - a.x));
+                }
+            }
+        }
+    }
+    // NaN corners add nothing (every comparison fails), so this is `None` for them.
+    (lo <= hi).then_some((lo, hi))
 }
 
 /// The triangle `v0`, `v1`, `v2` with its points mapped through `transform` (its colours as
