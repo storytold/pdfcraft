@@ -72,7 +72,8 @@ fn run_and_create_actions() {
     arg.focus();
     arg.type_text("DRAFT");
     h.run_steps(2);
-    h.get_by_label("Save").click();
+    // Exiting overlays remain in the accessibility tree while hidden during their fade.
+    h.get_by(|node| node.role() == Role::Button && !node.is_hidden() && node.label().as_deref() == Some("Save")).click();
     h.run_steps(3);
     assert_eq!(h.state().custom_actions.len(), 1);
     h.get_by_label("1. Add watermark: DRAFT");
