@@ -230,6 +230,9 @@ pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
 /// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
 pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
+/// The name of the installed letterlike-symbol face (ℝ, ℕ, …) [`installed_font_definitions`] may
+/// add.
+pub const SYSTEM_LETTERLIKE_FALLBACK: &str = "system-letterlike-fallback";
 
 /// Which installed face an interface language needs, given whether the build embeds a `Hans`
 /// face.
@@ -267,6 +270,12 @@ fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate
 /// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
 /// without such faces.
 ///
+/// An installed face with the letterlike symbols, when there is one, ends every family after all
+/// of those, so the double-struck letters of a bookmark or tab title (ℝ, ℕ, #7107) draw. It comes
+/// after the general face, not before it like the script faces: the faces that have these letters
+/// (Segoe UI Symbol, DejaVu Sans) have much else too, and placed earlier would take over text the
+/// general face draws today, such as an Arabic file name.
+///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
@@ -299,6 +308,13 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
                     Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
                 };
                 stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());
+            }
+        }
+        // Last of all, so it draws only what no face above has (see the function's comment).
+        if let Some(data) = crate::system_fonts::letterlike_fallback() {
+            fonts.font_data.insert(SYSTEM_LETTERLIKE_FALLBACK.to_owned(), data);
+            for stack in fonts.families.values_mut() {
+                stack.push(SYSTEM_LETTERLIKE_FALLBACK.to_owned());
             }
         }
     }
