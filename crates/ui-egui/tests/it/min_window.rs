@@ -26,12 +26,11 @@ fn at_the_minimum_width_the_modes_fold_into_a_menu_and_search_stays() {
     h.get_by_role_and_label(Role::Button, "E-Sign").click();
     h.run_steps(4);
     assert!(h.query_by_role_and_label(Role::Button, "E-Sign").is_some(), "the menu button is named after the mode");
-    // The menu bar folds the titles that don't fit into "⋯", or all of them into one "Menu" when not
-    // even the first fits (craft-menu's `MenuBarUi`). macOS's system font is wider, and at this width
-    // the bar is the "Menu" button there; a real macOS window has the native menu bar instead.
-    let menus = |label| h.query_by_role_and_label(Role::MenuItem, label).is_some();
-    let folded = cfg!(target_os = "macos") && menus("Menu");
-    assert!(menus("File") || folded, "main menu reachable");
+    // The modebar's Menu popup opens every top-level menu. On macOS the system font is wider, and
+    // at this width the craft-menu bar folds all of its titles into one "Menu" button (a real macOS
+    // window has the native menu bar instead); `open_menu` clicks it before "File".
+    crate::support::open_menu(&mut h, "File");
+    assert!(h.query_by_role_and_label(Role::MenuItem, "File").is_some(), "main menu reachable");
 }
 
 #[test]

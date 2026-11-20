@@ -35,7 +35,7 @@ impl PdfCraftApp {
         {
             return;
         }
-        // The in-window menu bar holds the keys while one of its menus is open or it has the
+        // The menu holds the keys while one of its menus is open or it has the
         // keyboard (Alt, F10); a command shortcut has left it already (`logic`) and runs. The
         // chords wait meanwhile: the registered commands', Select all and the view's.
         let chords = !craft_menu::bar::is_open(ctx) && !craft_menu::bar::is_focused(ctx);

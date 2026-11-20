@@ -561,8 +561,7 @@ fn language_switch_preserves_document_and_command_ids() {
         let lang = i18n::Lang::from_code(code).unwrap();
         // A title without an ASCII letter shows its mnemonic after it ("ファイル(F)").
         let file = i18n::tr(lang, "File");
-        h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(file))).click();
-        h.run_steps(2);
+        crate::support::open_menu(&mut h, file);
         // The mnemonic goes before an ellipsis: "開く(O)…".
         let open = i18n::tr(lang, "Open…").trim_end_matches('…');
         let open_row = |n: &egui_kittest::kittest::AccessKitNode<'_>| {
@@ -1131,9 +1130,8 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
             n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l.starts_with(text))
         }
     };
-    h.get_by(menu_row(menu)).click();
-    h.run_steps(2);
-    h.get_by(menu_row(preferences)).click();
+    crate::support::open_menu(&mut h, menu);
+    h.get_by(menu_row(preferences)).click_accesskit();
     h.run_steps(2);
     for (current, next, code) in [("日本語", "English", "en"), ("English", "Українська", "uk"), ("Українська", "日本語", "ja")]
     {
