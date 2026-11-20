@@ -169,7 +169,7 @@ fn options_dialog(fields: &mut DialogFields, pages: usize, current: usize) -> Pa
         .companions(shown_rule_keys(fields)),
     );
     params.push(Param::new("show_dialog", tl!("Show this dialog when the Checker starts"), ParamKind::bool(true)));
-    ParamDialog::new("a11y.options", tl!("Accessibility Checker Options"), params).ok_label(tl!("Start Checking").into())
+    ParamDialog::new("a11y.options", tl!("Accessibility Checker Options"), params).values(Bind::bound(fields)).ok_label(tl!("Start Checking").into())
 }
 
 /// Opens the Accessibility Checker Options dialog over the saved options.

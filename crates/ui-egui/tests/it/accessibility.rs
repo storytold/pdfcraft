@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::support::AppHarness as _;
-use craft::host::ScriptedFiles;
+use craft::host::{PickKind, Picked, ScriptedFiles};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -67,7 +67,7 @@ fn automatic_text_tagging_opens_reviewable_tags() {
 
 #[test]
 fn checking_fixing_skipping_and_reporting() {
-    let files = Arc::new(ScriptedFiles::new().saving_suggested());
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["/reports".into()])]));
     let scripted = files.clone();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
         crate::support::install_runtime(&cc.egui_ctx);
@@ -102,7 +102,7 @@ fn checking_fixing_skipping_and_reporting() {
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     assert!(h.state().dialogs.is_empty());
-    h.get_by_label("Compare");
+    h.get_by_role_and_label(Role::Heading, "Compare");
     h.get_by_label_contains("Title: Failed (2) → Passed (0)");
     // Skip a rule; it stays skipped when checking again.
     right_click(&mut h, "Tagged PDF - Failed");
@@ -126,9 +126,8 @@ fn checking_fixing_skipping_and_reporting() {
     h.run_steps(2);
     let requests = files.requests();
     assert_eq!(requests.len(), 1, "the report asks where to be saved once");
-    assert_eq!(requests[0].file_name.as_deref(), Some("notes Accessibility Report.html"));
-    // PLAN: assumed the scripted save lands at the suggested directory and name (pdf-workflows-w13, A-6)
-    let saved = requests[0].directory.clone().unwrap_or_default().join("notes Accessibility Report.html");
+    assert_eq!(requests[0].kind, PickKind::Folder, "the report uses the export folder picker");
+    let saved = std::path::Path::new("/reports/notes Accessibility Report.html");
     let html = String::from_utf8(files.file(&saved).expect("the report was written")).unwrap();
     assert!(html.contains("Accessibility Report") && html.contains("Skipped"));
 }
