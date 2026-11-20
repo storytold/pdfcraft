@@ -60,11 +60,30 @@ struct Line {
     page: usize,
     text: String,
     style: TextStyle,
-    /// Top, bottom, left and right of its box in user space.
+    /// Top, bottom, left and right of its box as displayed (after the page's `/Rotate`, y up), so
+    /// reading order and the join of a heading's lines are right on a turned page. Only
+    /// differences between these values are used: they are offset from points on the page.
     top: f64,
     bottom: f64,
     left: f64,
     right: f64,
+    /// The `/XYZ` position `[left, top]` (user space) that puts the top of the line as displayed
+    /// at the top of the window. The box edge displayed on top depends on the rotation: the top
+    /// edge, the left edge (90), the bottom edge (180) or the right edge (270). On a page turned
+    /// a quarter it is a user-space x, so it is `left`, and `top` stays unspecified.
+    anchor: [Option<f64>; 2],
+}
+
+/// A box in user space `[x0, y0, x1, y1]` on a page turned `rotation` degrees clockwise → its
+/// displayed top, bottom, left and right (y up), and the `/XYZ` anchor of its displayed top.
+fn displayed(rotation: i64, [x0, y0, x1, y1]: [f64; 4]) -> ([f64; 4], [Option<f64>; 2]) {
+    let (xl, xh, yl, yh) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+    match rotation {
+        90 => ([-xl, -xh, yl, yh], [Some(xl), None]),
+        180 => ([-yl, -yh, -xh, -xl], [None, Some(yl)]),
+        270 => ([xh, xl, -yh, -yl], [Some(xh), None]),
+        _ => ([yh, yl, xl, xh], [None, Some(yh)]),
+    }
 }
 
 /// `name` without a subset tag: six capital letters and a `+` (ISO 32000-2 §9.9.2).
@@ -79,8 +98,10 @@ fn without_subset_tag(name: &str) -> &str {
 /// is only whitespace, or whose size can't be read, is left out.
 fn lines(doc: &Document) -> Vec<Line> {
     let pages = pdfcraft_organize::page_count(doc).unwrap_or(0).min(MAX_PAGES);
+    let rotations = pdfcraft_organize::page_rotations(doc).unwrap_or_default();
     let mut out = Vec::new();
     for page in 0..pages {
+        let rotation = rotations.get(page).copied().unwrap_or(0);
         let Ok(found) = pdfcraft_edit::text_lines(doc, page) else { continue };
         let mut on_page: Vec<Line> = found
             .into_iter()
@@ -91,6 +112,7 @@ fn lines(doc: &Document) -> Vec<Line> {
                 let size = l.size;
                 let [x0, y0, x1, y1] = l.rect;
                 let ok = !text.is_empty() && size.is_finite() && size > 0.0 && [x0, y0, x1, y1].iter().all(|v| v.is_finite());
+                let ([top, bottom, left, right], anchor) = displayed(rotation, l.rect);
                 ok.then(|| Line {
                     page,
                     text,
@@ -100,10 +122,11 @@ fn lines(doc: &Document) -> Vec<Line> {
                         bold: l.bold,
                         italic: l.italic,
                     },
-                    top: y0.max(y1),
-                    bottom: y0.min(y1),
-                    left: x0.min(x1),
-                    right: x0.max(x1),
+                    top,
+                    bottom,
+                    left,
+                    right,
+                    anchor,
                 })
             })
             .collect();
@@ -157,7 +180,7 @@ pub fn styles(doc: &Document) -> Vec<TextStyleUse> {
 /// The bookmarks for the lines in `levels`' styles: a line in `levels[0]`'s style is a level-1
 /// bookmark, `levels[1]`'s a level-2 one under the level-1 bookmark before it, and so on. A
 /// heading set on several lines (one after another in the same style, close below each other)
-/// is one bookmark. Each goes to the top of its heading.
+/// is one bookmark. Each goes to the top of its heading as displayed, also on a turned page.
 pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
     let mut entries: Vec<OutlineEntry> = Vec::new();
     // The heading the previous line belonged to: its level, and the top, bottom, left and right
@@ -191,13 +214,8 @@ pub fn headings(doc: &Document, levels: &[TextStyle]) -> Vec<OutlineEntry> {
             // The level counts from 1; the position in `levels` is at most its length, which a
             // caller keeps small (a few levels), so it fits a u8.
             let level = u8::try_from(level.saturating_add(1)).unwrap_or(u8::MAX);
-            entries.push(OutlineEntry {
-                level,
-                title: line.text.chars().take(MAX_TITLE_CHARS).collect(),
-                page: line.page,
-                element: None,
-                top: Some(line.top),
-            });
+            let [left, top] = line.anchor;
+            entries.push(OutlineEntry { level, title: line.text.chars().take(MAX_TITLE_CHARS).collect(), page: line.page, element: None, left, top });
         }
         open = Some((level, line.top, line.bottom, line.left, line.right));
     }
