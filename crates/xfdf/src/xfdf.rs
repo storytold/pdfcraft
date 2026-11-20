@@ -717,7 +717,11 @@ pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> 
 
 // ── import ──────────────────────────────────────────────────────────────────────────────────
 
-/// Set the values of fields named in `values` (full names), counting what took.
+/// Set the values of fields named in `values` (full names), counting what took. The values are
+/// filled in one batch ([`pdfcraft_forms::set_values`]): the form is read a fixed number of times
+/// and recalculated once, after the last value, where filling them one by one read the whole form
+/// twice per value and recalculated it after each, which took minutes on a form with thousands of
+/// fields.
 pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &mut Report) {
     let all = pdfcraft_forms::fields(doc);
     // The first field of a name, as the scan it replaces found it.
@@ -725,6 +729,11 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
     for (i, f) in all.iter().enumerate() {
         by_name.entry(f.name.as_str()).or_insert(i);
     }
+    let mut batch: Vec<(String, FieldValue)> = Vec::new();
+    // Read-only fields still take imported data: their flag is cleared for the batch and put back
+    // after it.
+    let mut unlocked: Vec<(ObjRef, u32)> = Vec::new();
+    let mut seen_unlocked = std::collections::HashSet::new();
     for (name, vals) in values {
         let Some(f) = by_name.get(name.as_str()).and_then(|&i| all.get(i)) else { continue };
         let first = vals.first().cloned().unwrap_or_default();
@@ -740,18 +749,27 @@ pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)],
             FieldKind::Combo | FieldKind::List => FieldValue::Choice(vals.iter().filter(|v| !v.is_empty()).cloned().collect()),
             FieldKind::PushButton | FieldKind::Signature => continue,
         };
-        // Read-only fields still take imported data, as in Acrobat.
-        let ro = f.read_only();
-        if ro {
+        if f.read_only() && seen_unlocked.insert(f.obj) {
             let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int((f.flags & !pdfcraft_forms::flags::READ_ONLY) as i64)));
+            unlocked.push((f.obj, f.flags));
         }
-        match pdfcraft_forms::set_value(doc, name, &v) {
-            Ok(()) => report.fields += 1,
-            Err(_) => report.rejected.push(name.clone()),
+        batch.push((name.clone(), v));
+    }
+    // An `Err` is the recalculation after the batch failing: as with one value at a time, no
+    // value then counts as filled.
+    match pdfcraft_forms::set_values(doc, &batch) {
+        Ok(results) => {
+            for ((name, _), result) in batch.iter().zip(results) {
+                match result {
+                    Ok(()) => report.fields += 1,
+                    Err(_) => report.rejected.push(name.clone()),
+                }
+            }
         }
-        if ro {
-            let _ = doc.update_dict(f.obj, |d| d.set(b"Ff".to_vec(), Object::Int(f.flags as i64)));
-        }
+        Err(_) => report.rejected.extend(batch.iter().map(|(name, _)| name.clone())),
+    }
+    for (obj, flags) in unlocked {
+        let _ = doc.update_dict(obj, |d| d.set(b"Ff".to_vec(), Object::Int(i64::from(flags))));
     }
 }
 
