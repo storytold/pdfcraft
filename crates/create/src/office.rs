@@ -86,11 +86,13 @@ mod native {
         candidates(std::env::var_os("PDFCRAFT_SOFFICE"), std::env::var_os("PATH"), defaults).into_iter().find(|p| p.is_file())
     }
 
-    /// Where to look, in order: the override, each `PATH` folder, then `defaults`.
+    /// Where to look, in order: the override, each `PATH` folder, then `defaults`. A relative
+    /// override or `PATH` entry is skipped: it would resolve against the working folder, where a
+    /// planted program could run instead of LibreOffice.
     pub(super) fn candidates(override_path: Option<OsString>, path: Option<OsString>, defaults: Vec<PathBuf>) -> Vec<PathBuf> {
-        let mut out: Vec<PathBuf> = override_path.filter(|p| !p.is_empty()).map(PathBuf::from).into_iter().collect();
+        let mut out: Vec<PathBuf> = override_path.filter(|p| !p.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute()).into_iter().collect();
         if let Some(path) = path {
-            for dir in std::env::split_paths(&path) {
+            for dir in std::env::split_paths(&path).filter(|d| d.is_absolute()) {
                 out.extend(PATH_NAMES.iter().map(|name| dir.join(name)));
             }
         }
@@ -390,13 +392,24 @@ mod tests {
 
         #[test]
         fn the_override_comes_first_then_the_path_then_the_defaults() {
-            let path = std::env::join_paths([Path::new("first"), Path::new("second")]).unwrap();
-            let found = candidates(Some(OsString::from("custom/soffice")), Some(path), vec![PathBuf::from("default/soffice")]);
-            assert_eq!(found.first(), Some(&PathBuf::from("custom/soffice")));
-            assert!(found.get(1).is_some_and(|p| p.starts_with("first")));
+            let base = std::env::temp_dir();
+            let (first, second, custom) = (base.join("first"), base.join("second"), base.join("custom").join("soffice"));
+            let path = std::env::join_paths([first.as_path(), second.as_path()]).unwrap();
+            let found = candidates(Some(custom.clone().into_os_string()), Some(path), vec![PathBuf::from("default/soffice")]);
+            assert_eq!(found.first(), Some(&custom));
+            assert!(found.get(1).is_some_and(|p| p.starts_with(&first)));
             assert_eq!(found.last(), Some(&PathBuf::from("default/soffice")));
             // An empty override is no override.
             assert_eq!(candidates(Some(OsString::new()), None, Vec::new()), Vec::<PathBuf>::new());
+        }
+
+        #[test]
+        fn relative_path_entries_and_a_relative_override_are_ignored() {
+            let abs = std::env::temp_dir().join("bin");
+            let path = std::env::join_paths([Path::new("."), Path::new("planted"), abs.as_path()]).unwrap();
+            let found = candidates(Some(OsString::from("./soffice")), Some(path), Vec::new());
+            assert!(!found.is_empty() && found.iter().all(|p| p.is_absolute()), "{found:?}");
+            assert!(found.iter().all(|p| p.starts_with(&abs)), "{found:?}");
         }
 
         #[test]
