@@ -337,7 +337,7 @@ fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize, ap
     if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
         let r = nums_of(doc, pd.get(b"Rect"));
         if r.len() == 4 {
-            let open = matches!(pd.get(b"Open"), Some(Object::Bool(true)));
+            let open = pd.get(b"Open").is_some_and(|o| matches!(&*doc.resolve(o), Object::Bool(true)));
             let _ = write!(
                 out,
                 "<popup page=\"{pi}\" rect=\"{},{},{},{}\" open=\"{}\"/>",

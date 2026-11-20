@@ -909,6 +909,27 @@ fn reimporting_a_note_replaces_its_popup() {
     assert!(refs.contains(&parent), "the pop-up belongs to a note that is still on the page");
 }
 
+/// A pop-up's `/Open` may be a reference to the boolean (ISO 32000-2, 7.3.10). The export tested
+/// the entry unresolved, so such a pop-up left as `open="no"` and importing the file closed it.
+#[test]
+fn an_open_popup_exports_as_open_when_its_flag_is_a_reference() {
+    let xfdf = concat!(
+        r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="n1" rect="10,10,30,30"><contents>body</contents>"#,
+        r#"<popup page="0" rect="40,10,140,60" open="yes"/></text></annots></xfdf>"#,
+    );
+    let mut doc = blank();
+    import(&mut doc, xfdf.as_bytes()).unwrap();
+    assert!(export_xfdf(&doc, true, false, "a.pdf").contains(r#"open="yes""#), "a direct /Open true");
+    let note = find_by_name(&doc, "n1").unwrap();
+    let popup = doc.get(note).as_dict().and_then(|d| d.reference(b"Popup")).unwrap();
+    for (flag, exported) in [(true, r#"open="yes""#), (false, r#"open="no""#)] {
+        let flag = doc.add(Object::Bool(flag));
+        doc.update_dict(popup, |d| d.set(b"Open".to_vec(), Object::Ref(flag))).unwrap();
+        let out = export_xfdf(&doc, true, false, "a.pdf");
+        assert!(out.contains(exported), "{out}");
+    }
+}
+
 /// A partial import updates the parent without detaching replies and review statuses that
 /// weren't included in the data file. FDF export only carries parents still on a page.
 #[test]
