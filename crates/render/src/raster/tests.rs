@@ -11923,3 +11923,59 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
 }
+
+#[test]
+fn large_soft_mask_shrink_averages_non_uniform_regions_accurately() {
+    // 2x2 red image drawn at 10x6 pts with a 37x19 grayscale soft mask (> SOFT_MASK_SHRINK_FACTOR),
+    // exercising `shrink_luma` across non-power-of-two dimensions and non-uniform bands.
+    let mut mask = Vec::with_capacity(37 * 19);
+    for y in 0..19 {
+        for x in 0..37 {
+            let v = if y < 9 {
+                if x < 12 {
+                    0
+                } else if x < 24 {
+                    128
+                } else {
+                    255
+                }
+            } else if x < 12 {
+                255
+            } else {
+                0
+            };
+            mask.push(v);
+        }
+    }
+    let content = b"q 10 0 0 6 0 0 cm /Im0 Do Q\n";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 6] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n\
+4 0 obj << /Length {} >> stream\n",
+        content.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(content);
+    pdf.extend_from_slice(
+        b"endstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Interpolate false /SMask 6 0 R /Length 12 >> stream\n\
+\xff\x00\x00\xff\x00\x00\xff\x00\x00\xff\x00\x00\nendstream endobj\n",
+    );
+    pdf.extend_from_slice(
+        format!("6 0 obj << /Type /XObject /Subtype /Image /Width 37 /Height 19 /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate false /Length {} >> stream\n", mask.len()).as_bytes(),
+    );
+    pdf.extend_from_slice(&mask);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+
+    let page = render_first_page(pdf);
+    // Page top half: left=transparent (white), middle=half-red, right=opaque red.
+    assert_eq!(rgb_at(&page.rgba, 10, 1, 1), [255, 255, 255], "top-left transparent");
+    let mid = rgb_at(&page.rgba, 10, 5, 1);
+    assert!(mid[0] == 255 && (115..=145).contains(&mid[1]) && (115..=145).contains(&mid[2]), "top-mid half-alpha: {mid:?}");
+    assert_eq!(rgb_at(&page.rgba, 10, 8, 1), [255, 0, 0], "top-right opaque red");
+    // Bottom half: left=opaque red, right=transparent (white).
+    assert_eq!(rgb_at(&page.rgba, 10, 1, 4), [255, 0, 0], "bottom-left opaque red");
+    assert_eq!(rgb_at(&page.rgba, 10, 8, 4), [255, 255, 255], "bottom-right transparent");
+}
