@@ -120,33 +120,40 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// Lexically and physically normalize a path, including paths that do not exist yet.
 fn normalize_path(path: &Path) -> PathBuf {
-    // Resolve `.` and `..` first so an alias such as `out/../out/good.pdf` cannot hide behind
-    // a textual mismatch.
-    let mut lexical = PathBuf::new();
+    // Resolve symlinks in existing components before applying `..`, so an alias such as
+    // `out/link/../../protected.pdf` cannot hide behind lexical path normalization.
+    let mut resolved = PathBuf::new();
     for component in path.components() {
         match component {
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
-                if matches!(lexical.components().next_back(), Some(std::path::Component::Normal(_))) {
-                    lexical.pop();
+                if matches!(resolved.components().next_back(), Some(std::path::Component::Normal(_))) {
+                    resolved.pop();
                 } else {
-                    lexical.push(component.as_os_str());
+                    resolved.push(component.as_os_str());
                 }
             }
-            _ => lexical.push(component.as_os_str()),
+            _ => {
+                resolved.push(component.as_os_str());
+                if resolved.exists() {
+                    if let Ok(canonical) = resolved.canonicalize() {
+                        resolved = canonical;
+                    }
+                }
+            }
         }
     }
-    if lexical.as_os_str().is_empty() {
-        lexical = PathBuf::from(".");
+    if resolved.as_os_str().is_empty() {
+        resolved = PathBuf::from(".");
     }
 
-    if let Ok(canonical) = lexical.canonicalize() {
+    if let Ok(canonical) = resolved.canonicalize() {
         return finish_path(canonical);
     }
 
     // Canonicalize the deepest existing ancestor, then reattach the (possibly nonexistent) tail.
     // This also resolves symlinks in the existing portion of the path.
-    let mut ancestor = lexical.as_path();
+    let mut ancestor = resolved.as_path();
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     while !ancestor.exists() {
         match ancestor.file_name() {
