@@ -7218,7 +7218,7 @@ fn a_resized_image_keeps_its_new_size_until_the_page_is_redrawn() {
     });
     h.run_steps(4);
     assert!(h.execute("edit.edit_text"));
-    h.state_mut().views[0].view.zoom = 1.2;
+    h.state_mut().views[0].view.fit = pdfcraft_ui_egui::canvas::Fit::Page;
     h.run_steps(4);
     // The page raster.
     support::settle_held(&mut h, &jobs);
