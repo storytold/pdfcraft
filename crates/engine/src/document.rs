@@ -60,8 +60,11 @@ pub struct Document {
     /// Dynamic XFA forms: what laying the template out produced (pages and fields are
     /// PdfCraft's; Adobe's viewers draw the form from the XFA packets themselves).
     pub xfa: Option<XfaLayout>,
-    /// The parsed template of a laid-out XFA form, for its scripts.
+    /// The parsed template of a laid-out XFA form, or of a static one that has scripts, for its scripts.
     pub(crate) xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
+    /// A static XFA form whose template scripts run on its own fields: its template stays though PdfCraft didn't lay it
+    /// out ([`crate::xfa_form::sync_xfa_state`]).
+    pub(crate) xfa_static: bool,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     pub(crate) xfa_scripts_off: bool,
     /// SOM paths of the XFA fields whose exit scripts ran with a value change ([`xfa::on_changes`])

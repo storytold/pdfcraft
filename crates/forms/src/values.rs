@@ -312,14 +312,32 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
 }
 
 pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    write_value_impl(doc, f, value, scripts, false)
+    write_value_impl(doc, f, value, scripts, false, true)
+}
+
+/// [`write_value`], with `/MaxLen` checked or not (`max_len`): an XFA form script's value isn't held to it.
+pub(crate) fn write_value_checked(
+    doc: &mut Document,
+    f: &Field,
+    value: &FieldValue,
+    scripts: &mut dyn Scripts,
+    max_len: bool,
+) -> Result<(), FormError> {
+    write_value_impl(doc, f, value, scripts, false, max_len)
 }
 
 /// Persist a value according to the field kind. A reset bypasses custom input validation and defers text and choice appearances.
-fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, resetting: bool) -> Result<(), FormError> {
+fn write_value_impl(
+    doc: &mut Document,
+    f: &Field,
+    value: &FieldValue,
+    scripts: &mut dyn Scripts,
+    resetting: bool,
+    check_max_len: bool,
+) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
-            if let Some(max) = f.max_len
+            if let Some(max) = f.max_len.filter(|_| check_max_len)
                 && t.chars().count() > max
             {
                 return invalid(format!("{:?} takes at most {max} characters", f.name));
@@ -1003,7 +1021,7 @@ pub fn reset_with_formatting(
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        match write_value_impl(doc, &tmp, &v, scripts, true) {
+        match write_value_impl(doc, &tmp, &v, scripts, true, true) {
             Ok(()) => {
                 changed += 1;
                 if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
