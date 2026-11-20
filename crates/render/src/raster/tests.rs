@@ -1649,6 +1649,25 @@ fn wide_non_interpolated_sources_draw_after_shrinking() {
     assert_eq!(pixel(19), &[255, 255, 255, 255]);
 }
 
+/// A source wider than the filter's 2^20-pixel side cap with `/Interpolate true` is refused by
+/// the smooth sizing, then retried with nearest sizing instead of being skipped or handed to the
+/// backend at full resolution (which a u16 pixmap side cannot hold).
+#[test]
+fn wide_interpolated_sources_fall_back_to_nearest_after_shrinking() {
+    let data = "7f".repeat(1_100_000);
+    let pdf = strip_image_pdf(1_100_000, "q 16 0 0 1 2 2 cm /Im0 Do Q\n", "DeviceGray", &data, None);
+    let pdf = String::from_utf8(pdf).unwrap().replace("/BitsPerComponent 8 ", "/BitsPerComponent 8 /Interpolate true ");
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (20, 4));
+    let pixel = |x: usize| &page.rgba[(20 + x) * 4..][..4];
+    assert_eq!(pixel(1), &[255, 255, 255, 255]);
+    assert_eq!(pixel(3), &[127, 127, 127, 255], "source image was not dropped");
+    assert_eq!(pixel(17), &[127, 127, 127, 255]);
+    assert_eq!(pixel(19), &[255, 255, 255, 255]);
+}
+
 #[test]
 fn image_resampling_mismatched_alpha_mask_keeps_pixels_and_placement() {
     let data = "ff0000".repeat(16);
