@@ -533,8 +533,8 @@ impl Session {
     /// Like a save, a new file never carries a typed Password-field value (#3926): Extract and
     /// Split copy the fields of the pages they take.
     fn write_unchecked(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        let doc = writable(doc)?;
+        let (doc, mod_date) = crate::metadata::prepare_save(writable(doc)?, self.now().map(pdfcraft_cos::pdf_date))?;
+        let opts = SaveOptions { mod_date, ..SaveOptions::default() };
         write_full(&doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 }

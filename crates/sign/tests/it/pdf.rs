@@ -3606,3 +3606,17 @@ fn the_catalogs_perms_do_not_change_under_no_changes() {
         );
     }
 }
+
+/// A caller that keeps the document's metadata in XMP (a PDF/A-4 file, ISO 19005-4 §6.1.3) can
+/// sign and timestamp without an `/Info` being added; by default `/ModDate` is stamped as before.
+#[test]
+fn signing_and_timestamping_can_leave_the_document_information_alone() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let has_info = |b: &[u8]| open(b).trailer().get(b"Info").is_some();
+    let quiet = SignOptions { no_info_mod_date: true, ..opts() };
+    assert!(!has_info(&pdfcraft_sign::sign(&open(&fixture()), &id, &quiet).unwrap()));
+    assert!(has_info(&pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap()));
+    assert!(!has_info(&pdfcraft_sign::timestamp_document_with(&open(&fixture()), &tsa, "D:20261006120000Z", false).unwrap()));
+    assert!(has_info(&pdfcraft_sign::timestamp_document_with(&open(&fixture()), &tsa, "D:20261006120000Z", true).unwrap()));
+}
