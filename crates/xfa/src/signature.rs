@@ -1,6 +1,6 @@
 //! Effective field scopes of PDF signature widgets in XFA templates.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::XfaError;
 use crate::data::DataNode;
@@ -268,28 +268,51 @@ pub fn signature_manifest_for_field(
     Ok(Some(manifest))
 }
 
-/// Every instantiated XFA field, including fields without a visible PDF widget. The live form
-/// already applies repeat counts and data binding; a truncated walk cannot define a safe scope.
-pub fn field_soms(template: &Template, data: Option<&DataNode>) -> Result<Vec<String>, XfaError> {
+/// The field and non-field paths available to an XFA PDF signature manifest.
+#[derive(Default)]
+pub struct ManifestCandidates {
+    /// Field paths to consider for lock policies, including generated PDF widgets.
+    pub fields: Vec<String>,
+    /// Live nodes that may resolve a SOM reference but are skipped in a PDF manifest.
+    non_fields: HashSet<String>,
+}
+
+/// Collect the instantiated nodes and generated PDF widget paths in the signature's scope.
+/// The live form applies repeat counts and data binding. A truncated walk cannot define a safe scope.
+pub fn manifest_candidates(
+    template: &Template,
+    data: Option<&DataNode>,
+    widget_names: &HashMap<String, String>,
+) -> Result<ManifestCandidates, XfaError> {
     let live = form_tree(template, data, &Overrides::default());
     if live.truncated {
-        return Err(XfaError::TooLarge("the live XFA form is too large to resolve signature fields".into()));
+        return Err(XfaError::TooLarge("the live XFA form is too large to resolve signature references".into()));
     }
-    let mut out = Vec::new();
-    let mut pending = vec![&live.root];
+    let mut out = ManifestCandidates::default();
+    let mut pending = vec![live.root];
     while let Some(node) = pending.pop() {
-        if node.kind == Some(NodeKind::Field) {
-            out.push(node.som.clone());
+        match node.kind {
+            Some(NodeKind::Field) => out.fields.push(node.som),
+            Some(_) if !node.som.is_empty() => {
+                out.non_fields.insert(node.som);
+            }
+            _ => {}
         }
-        pending.extend(node.children.iter().rev());
+        pending.extend(node.children.into_iter().rev());
     }
+    let fields: HashSet<_> = out.fields.iter().collect();
+    out.non_fields.retain(|som| !fields.contains(som));
+    let extra: Vec<_> = widget_names.keys().filter(|som| !fields.contains(som)).cloned().collect();
+    out.fields.extend(extra);
     Ok(out)
 }
 
 fn step_matches(pattern: &str, value: &str) -> bool {
     let (name, index) = pattern.split_once('[').map_or((pattern, None), |(name, rest)| (name, rest.strip_suffix(']')));
     let (actual, actual_index) = value.split_once('[').map_or((value, None), |(name, rest)| (name, rest.strip_suffix(']')));
-    (name == "*" || name == actual) && index.is_none_or(|index| index == "*" || Some(index) == actual_index)
+    // The caller uses the signer's indexed path for the relative prefix (XFA 3.3, p. 119).
+    let index = index.unwrap_or("0");
+    (name == "*" || name == actual) && (index == "*" || Some(index) == actual_index)
 }
 
 fn supported_pattern(path: &str) -> bool {
@@ -321,8 +344,8 @@ fn supported_pattern(path: &str) -> bool {
     !path.starts_with('.') && !path.ends_with('.') && !path.contains("...")
 }
 
-/// Match a reference's steps against one field path. A double dot permits descendant search;
-/// a single dot requires the next direct child. The field itself must be the final matched node.
+/// Match a reference's steps against one node path. A double dot permits descendant search;
+/// a single dot requires the next direct child. The node itself must be the final match.
 fn matches_steps(steps: &[(bool, &str)], path: &[&str], work: &mut usize) -> Result<bool, XfaError> {
     if steps.len() > path.len() {
         return Ok(false);
@@ -331,7 +354,7 @@ fn matches_steps(steps: &[(bool, &str)], path: &[&str], work: &mut usize) -> Res
     // through every combination when the reference contains several descendant searches.
     *work = work.saturating_add(steps.len().saturating_mul(path.len()));
     if *work > MAX_MATCH_WORK {
-        return Err(XfaError::TooLarge("the signature manifest needs too many field comparisons".into()));
+        return Err(XfaError::TooLarge("the signature manifest needs too many node comparisons".into()));
     }
     let mut reachable = vec![false; path.len() + 1];
     reachable[0] = true;
@@ -351,8 +374,8 @@ fn matches_steps(steps: &[(bool, &str)], path: &[&str], work: &mut usize) -> Res
 }
 
 /// Expand the manifest's references to actual field SOM paths, retaining duplicate matches as
-/// the XFA node collection does. Only field nodes supplied by `candidates` can be returned.
-pub fn referenced_field_soms(manifest: &SignatureManifest, candidates: &[String]) -> Result<Vec<String>, XfaError> {
+/// the XFA node collection does. For a PDF signature, skip resolved non-field nodes (XFA 3.3, p. 774).
+pub fn referenced_field_soms(manifest: &SignatureManifest, candidates: &ManifestCandidates) -> Result<Vec<String>, XfaError> {
     if manifest.action == ManifestAction::All {
         return Ok(Vec::new());
     }
@@ -361,6 +384,12 @@ pub fn referenced_field_soms(manifest: &SignatureManifest, candidates: &[String]
     let mut out = Vec::new();
     let mut work = 0usize;
     let mut matched_bytes = 0usize;
+    let nodes = candidates
+        .fields
+        .iter()
+        .filter(|som| !candidates.non_fields.contains(*som))
+        .map(|som| (som, true))
+        .chain(candidates.non_fields.iter().map(|som| (som, false)));
     for reference in &manifest.refs {
         let raw = reference.trim();
         let absolute = raw.starts_with("xfa[0].template[0].") || raw.starts_with("$template.") || raw.starts_with("$form.");
@@ -382,21 +411,25 @@ pub fn referenced_field_soms(manifest: &SignatureManifest, candidates: &[String]
             return Err(XfaError::TooLarge("the signature manifest reference is too deeply nested".into()));
         }
         let depths: Vec<usize> = if absolute { vec![0] } else { (0..=parent.len()).rev().collect() };
-        let previous_matches = out.len();
+        let mut resolved = false;
         for depth in depths {
-            for candidate in candidates {
+            for (candidate, is_field) in nodes.clone() {
                 work += 1;
                 if work > MAX_MATCH_WORK {
-                    return Err(XfaError::TooLarge("the signature manifest needs too many field comparisons".into()));
+                    return Err(XfaError::TooLarge("the signature manifest needs too many node comparisons".into()));
                 }
                 if candidate.len() > MAX_SOM_BYTES {
-                    return Err(XfaError::TooLarge("a field path is too long to resolve the signature manifest".into()));
+                    return Err(XfaError::TooLarge("a node path is too long to resolve the signature manifest".into()));
                 }
                 let parts: Vec<&str> = candidate.split('.').collect();
                 if let Some(suffix) = parts.get(depth..)
                     && parts.iter().take(depth).copied().eq(parent.iter().take(depth).copied())
                     && matches_steps(&steps, suffix, &mut work)?
                 {
+                    resolved = true;
+                    if !is_field {
+                        continue;
+                    }
                     matched_bytes = matched_bytes.saturating_add(candidate.len().saturating_add(std::mem::size_of::<String>()));
                     if matched_bytes > MAX_MATCH_BYTES {
                         return Err(XfaError::TooLarge("the signature manifest selects too many field names".into()));
@@ -404,11 +437,11 @@ pub fn referenced_field_soms(manifest: &SignatureManifest, candidates: &[String]
                     out.push(candidate.clone());
                 }
             }
-            if out.len() > previous_matches {
+            if resolved {
                 break;
             }
         }
-        if manifest.action == ManifestAction::Include && out.len() == previous_matches {
+        if manifest.action == ManifestAction::Include && !resolved {
             return Err(XfaError::Malformed(format!("unresolved signature manifest reference {reference:?}")));
         }
     }
@@ -453,13 +486,35 @@ mod tests {
             certify: None,
             lock_document: None,
         };
-        let candidates = [
+        let fields = vec![
             "form[0].body[0].rows[0].amount[0]".to_string(),
             "form[0].body[0].rows[1].nested[0].amount[0]".to_string(),
             "form[0].elsewhere[0].rows[0].amount[0]".to_string(),
         ];
+        let candidates = ManifestCandidates { fields, ..Default::default() };
         let selected = referenced_field_soms(&manifest, &candidates).unwrap();
-        assert_eq!(selected, [candidates[0].clone(), candidates[1].clone(), candidates[0].clone(), candidates[1].clone()]);
+        let first = candidates.fields[0].as_str();
+        let second = candidates.fields[1].as_str();
+        assert_eq!(selected, [first, second, first, second]);
+    }
+
+    #[test]
+    fn manifest_omitted_index_selects_only_the_first_detail_in_the_signers_row() {
+        let mut manifest = SignatureManifest {
+            signature_field: "form[0].row[1].sign[0]".into(),
+            action: ManifestAction::Exclude,
+            refs: vec!["detail.amount[0]".into()],
+            explicit: true,
+            certify: None,
+            lock_document: None,
+        };
+        let other = "form[0].row[0].detail[0].amount[0]".to_string();
+        let first = "form[0].row[1].detail[0].amount[0]".to_string();
+        let second = "form[0].row[1].detail[1].amount[0]".to_string();
+        let candidates = ManifestCandidates { fields: vec![other, first.clone(), second.clone()], ..Default::default() };
+        assert_eq!(referenced_field_soms(&manifest, &candidates).unwrap(), [first.as_str()]);
+        manifest.refs[0] = "detail[*].amount[0]".into();
+        assert_eq!(referenced_field_soms(&manifest, &candidates).unwrap(), [first, second]);
     }
 
     #[test]
@@ -472,7 +527,8 @@ mod tests {
             certify: None,
             lock_document: None,
         };
-        assert!(referenced_field_soms(&manifest, &["form[0].amount[0]".into()]).is_err());
+        let candidates = ManifestCandidates { fields: vec!["form[0].amount[0]".into()], ..Default::default() };
+        assert!(referenced_field_soms(&manifest, &candidates).is_err());
     }
 
     #[test]
@@ -482,8 +538,8 @@ mod tests {
             <field name="hidden" presence="hidden"><ui><textEdit/></ui></field>
             </subform></template>"#;
         let (template, _) = crate::parse(xml).unwrap();
-        let fields = field_soms(&template, None).unwrap();
-        assert!(fields.contains(&"form[0].hidden[0]".to_string()));
+        let candidates = manifest_candidates(&template, None, &HashMap::new()).unwrap();
+        assert!(candidates.fields.contains(&"form[0].hidden[0]".to_string()));
     }
 
     #[test]
@@ -509,10 +565,13 @@ mod tests {
         let (template, _) = crate::parse(xml).unwrap();
         let names = HashMap::from([("form[0].row[1].sign[0]".into(), "Second approval".into())]);
         let mut manifest = signature_manifest_for_field(xml, &template, &names, "Second approval").unwrap().unwrap();
-        let candidates = field_soms(&template, None).unwrap();
+        let candidates = manifest_candidates(&template, None, &names).unwrap();
         assert_eq!(manifest.signature_field, "form[0].row[1].sign[0]");
         assert_eq!(manifest.certify, Some(2));
         assert_eq!(manifest.lock_document, Some(true));
+        assert_eq!(referenced_field_soms(&manifest, &candidates).unwrap(), ["form[0].row[1].amount[0]"]);
+
+        manifest.refs.push("row[1]".into());
         assert_eq!(referenced_field_soms(&manifest, &candidates).unwrap(), ["form[0].row[1].amount[0]"]);
 
         manifest.refs.push("missing".into());

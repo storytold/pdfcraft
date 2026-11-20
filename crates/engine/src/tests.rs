@@ -8544,6 +8544,7 @@ fn signed_xfa_manifest_keeps_calculated_values_and_warns_on_input_changes() {
     <calculate><script contentType="application/x-javascript">"x\n " + (Number(Sum.rawValue) == 3 ? "y " : "z ")</script></calculate></field>
    <field name="sign" w="2in" h="0.5in"><ui><signature type="PDF1.6"><manifest action="include" use="#locked"/></signature></ui></field>
   <variables><manifest id="locked">
+   <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0]</ref>
    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].D[0]</ref>
    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].Sum[0]</ref>
    <ref>xfa[0].template[0].form1[0].#subform[0].Subform1[0].Pick[0]</ref>

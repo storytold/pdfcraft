@@ -37,9 +37,7 @@ pub(crate) fn signing_policy(doc: &Document, field_name: &str) -> Result<Option<
         Some(FieldMdpPolicy { action: FieldMdpAction::All, fields: Vec::new() })
     } else if manifest.explicit {
         let data = pdfcraft_xfa::parse_datasets(&packets.xdp);
-        let mut candidates = pdfcraft_xfa::signature::field_soms(&template, data.as_ref())?;
-        let mut seen: HashSet<_> = candidates.iter().cloned().collect();
-        candidates.extend(by_som.keys().filter(|som| seen.insert((**som).clone())).cloned());
+        let candidates = pdfcraft_xfa::signature::manifest_candidates(&template, data.as_ref(), &by_som)?;
         let listed = pdfcraft_xfa::signature::referenced_field_soms(&manifest, &candidates)?;
         let mut fields: Vec<String> = listed.into_iter().map(|som| by_som.get(&som).cloned().unwrap_or(som)).collect();
         fields.sort();

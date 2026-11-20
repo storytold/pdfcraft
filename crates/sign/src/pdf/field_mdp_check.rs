@@ -94,9 +94,7 @@ pub fn signed_xfa_scope(revision: &Document, xdp: &str, signature_field: &str, r
         return Ok(None);
     }
     let original_data = pdfcraft_xfa::parse_datasets(xdp);
-    let mut candidates = signature::field_soms(&template, original_data.as_ref())?;
-    let mut seen: HashSet<_> = candidates.iter().cloned().collect();
-    candidates.extend(names.keys().filter(|som| seen.insert((**som).clone())).cloned());
+    let candidates = signature::manifest_candidates(&template, original_data.as_ref(), &names)?;
     let listed: HashSet<_> = match &manifest {
         Some(manifest) => signature::referenced_field_soms(manifest, &candidates)?.into_iter().collect(),
         None => HashSet::new(),
@@ -105,6 +103,7 @@ pub fn signed_xfa_scope(revision: &Document, xdp: &str, signature_field: &str, r
     // explicit manifest, the XFA default still applies to the instantiated form.
     let manifest_action = manifest.as_ref().filter(|m| rules.0.is_empty() || !m.explicit).map(|m| m.action);
     let fields = candidates
+        .fields
         .into_iter()
         .map(|som| {
             let protected = match manifest_action {
