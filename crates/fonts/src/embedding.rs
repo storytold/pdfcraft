@@ -10,7 +10,7 @@ use skrifa::{
     raw::TableProvider,
 };
 
-use crate::wire::{
+use craft_pdf::fonts::wire::{
     CidMapping, FontDescriptorSpec, build_cid_encoding_cmap, build_cid_font_dict, build_font_descriptor, build_to_unicode_cmap,
     build_type0_font_dict, font_program_stream,
 };
