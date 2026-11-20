@@ -149,6 +149,61 @@ impl Automation {
             .transpose()?;
         Ok(json!({"snap":snap,"truncated":geometry.truncated,"intersection_limited":intersection_limited,"segments":geometry.segment_count()}))
     }
+    pub(crate) fn measurement_geo(&self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let doc = self.doc(a)?;
+        let geo = doc.geo_page(page).map_err(failed)?;
+        let location = match a.nums::<2>("at")? {
+            Some(at) => {
+                let user = doc.measurement_to_user(page, at).map_err(failed)?;
+                Some(geo.locate(user))
+            }
+            None => None,
+        };
+        let point = match (a.opt_num("lat")?, a.opt_num("lon")?) {
+            (Some(lat), Some(lon)) => {
+                if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+                    return Err(failed("lat must be between -90 and 90 and lon between -180 and 180"));
+                }
+                Some(geo.find(lat, lon).map(|p| doc.measurement_to_view(page, p)).transpose().map_err(failed)?)
+            }
+            (None, None) => None,
+            _ => return Err(failed("pass both lat and lon")),
+        };
+        let viewports = geo
+            .viewports
+            .iter()
+            .map(|v| -> Result<Value> {
+                let [x0, y0, x1, y1] = v.bbox;
+                let corners = [[x0, y0], [x1, y1], [x0, y1], [x1, y0]].map(|c| doc.measurement_to_view(page, c));
+                let corners = corners.into_iter().collect::<std::result::Result<Vec<_>, _>>().map_err(failed)?;
+                let (lo, hi) = corners.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), c| {
+                    ([lo[0].min(c[0]), lo[1].min(c[1])], [hi[0].max(c[0]), hi[1].max(c[1])])
+                });
+                let mut out = json!({"name":v.name,"rect":[lo[0],lo[1],hi[0],hi[1]]});
+                match &v.kind {
+                    measure::geo::ViewportKind::Geo(r) => {
+                        out["crs"] = json!(r.crs);
+                        out["method"] = json!(r.method);
+                        if let Some(note) = &r.note {
+                            out["note"] = json!(note);
+                        }
+                    }
+                    measure::geo::ViewportKind::Unsupported(why) => out["unsupported"] = json!(why),
+                    measure::geo::ViewportKind::Other => out["scale"] = json!(true),
+                }
+                Ok(out)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut out = json!({"georeferenced":geo.georeferenced(),"viewports":viewports});
+        if let Some(location) = location {
+            out["location"] = json!(location);
+        }
+        if let Some(point) = point {
+            out["point"] = json!(point);
+        }
+        Ok(out)
+    }
     pub(crate) fn measurement_export(&self, a: &Args) -> Result<Value> {
         let all = self.doc(a)?.measurements().map_err(failed)?;
         let csv = measure::csv(&all.measurements);
