@@ -102,6 +102,7 @@ impl PdfCraftApp {
                     view.redactions_applied = view.redactions_downloaded;
                     view.redactions_undone_after_save = 0;
                     view.saved_redactions_cut_off = false;
+                    self.share_redaction_state(i);
                 }
                 // A signature placed since the last save is gone with the rest: the next save
                 // doesn't ask to lock it (#2149).
