@@ -203,6 +203,8 @@ pub enum Dialog {
     RenameFile,
     /// Pin tools to Home: selection modal.
     PinTool,
+    /// Signatures ▸ Import certificates…: choose which of a file's certificates to trust.
+    ImportCertificates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
