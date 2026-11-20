@@ -7706,6 +7706,64 @@ fn a_turned_or_mirrored_minified_image_snaps_to_whole_pixels() {
     }
 }
 
+/// Issue #7219: an image shrunk below its resolution and drawn at a slant (8°, as PowerPoint
+/// tilts photos) is area-averaged like an upright one, but it can't be snapped, so the averaged
+/// raster is drawn under the full transform. Sampled nearest-neighbour there, every device pixel
+/// took one averaged sample whole, so edges inside the image were hard staircases. The image is
+/// black on its left half and white on its right; across that edge the rows need grey pixels,
+/// with and without a soft mask.
+#[test]
+fn a_slanted_minified_image_is_drawn_smoothly() {
+    let halves: Vec<u8> = (0..400).flat_map(|_| (0..400).map(|x| if x < 200 { 0u8 } else { 255 })).collect();
+    let opaque = vec![255u8; 400 * 400];
+    let (cos, sin) = (8f64.to_radians().cos() * 100.0, 8f64.to_radians().sin() * 100.0);
+    for alpha in [None, Some(&opaque)] {
+        let image = hex(&halves);
+        let (smask, mask) = match alpha {
+            Some(a) => (
+                "/SMask 6 0 R ",
+                format!(
+                    "6 0 obj << /Type /XObject /Subtype /Image /Width 400 /Height 400 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{}>\nendstream endobj\n",
+                    hex(a).len() + 1,
+                    hex(a)
+                ),
+            ),
+            None => ("", String::new()),
+        };
+        let content = format!("q {cos:.4} {sin:.4} {:.4} {cos:.4} 30 20 cm /Im0 Do Q", -sin);
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 140 140] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+                 4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+                 5 0 obj << /Type /XObject /Subtype /Image /Width 400 /Height 400 /ColorSpace /DeviceGray /BitsPerComponent 8 {smask}/Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+                 {mask}trailer << /Root 1 0 R >>\n%%EOF\n",
+            content.len(),
+            image.len() + 1
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!((page.width, page.height), (140, 140));
+        let gray = |x: usize, y: usize| page.rgba[(y * 140 + x) * 4];
+        // Device rows 40..90 cross the middle of the image (user y 50..100). In each, the edge
+        // between the halves is at user x = 30 + 0.5 × cos − v × sin for v = (y − 20 − 0.5 × sin) / cos.
+        // Nearest-neighbour left every pixel there black or white; bilinear greys the edge, though
+        // in a row where it falls on a pixel boundary only faintly, so most rows, not all.
+        let mut grey_rows = 0;
+        for row in 40..90 {
+            let y = 140.0 - row as f64 - 0.5;
+            let v = (y - 20.0 - 0.5 * sin) / cos;
+            let edge = (30.0 + 0.5 * cos - v * sin).round() as usize;
+            if (edge - 3..=edge + 3).any(|x| (16..=240).contains(&gray(x, row))) {
+                grey_rows += 1;
+            }
+            assert!(gray(edge - 8, row) < 16 && gray(edge + 8, row) > 240, "mask {}: row {row} lost its halves", alpha.is_some());
+        }
+        assert!(grey_rows >= 40, "mask {}: only {grey_rows} of 50 rows have a grey edge pixel", alpha.is_some());
+    }
+}
+
 #[test]
 fn non_interpolated_gray_images_are_not_smoothed_when_minified() {
     let levels = [0u8, 255, 85, 170, 40, 200, 120, 230];
