@@ -15,7 +15,7 @@ pdfcraft-fonts = { workspace = true }
 pdfcraft-geom = { workspace = true }
 craft-pdf = { workspace = true, features = ["raster"] }
 # Picks the face of an installed font collection (the version pdfcraft-fonts already uses).
-skrifa = "0.44"
+skrifa = "0.47"
 lopdf = { workspace = true }
 kurbo = { workspace = true }
 thiserror = { workspace = true }
