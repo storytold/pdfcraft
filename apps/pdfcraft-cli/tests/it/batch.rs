@@ -142,3 +142,40 @@ fn cli_batch_writes_the_log_file_only_when_asked_review_regression_2() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn cli_batch_writes_the_log_file_only_when_asked_review_regression_3() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-cli-batch-log-regression3-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("input")).unwrap();
+    std::fs::write(dir.join("input/good.txt"), "Hello world").unwrap();
+
+    let bad_log = dir.join("log_dir");
+    std::fs::create_dir_all(&bad_log).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["batch", "input", "--steps", "convert", "--out-dir", "out", "--log"])
+        .arg(&bad_log)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let mut child = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["batch", "input", "--steps", "convert", "--out-dir", "out", "--log"])
+        .arg(&bad_log)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        !output.status.success(),
+        "a failed --log write must survive stdout closure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

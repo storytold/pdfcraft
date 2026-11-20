@@ -90,7 +90,9 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
             .collect();
         match auto.resolve_path(path, true) {
             Ok(target) => {
-                if protected.iter().any(|p| same_file(&target, p)) {
+                if target.is_dir() {
+                    log_error = Some(format!("batch: --log {path} is a directory"));
+                } else if protected.iter().any(|p| same_file(&target, p)) {
                     log_error = Some(format!("batch: --log {path} would overwrite a batch input or output"));
                 } else if let Err(e) = pdfcraft_platform::staging::write_atomically(
                     &target,
@@ -105,10 +107,11 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
             }
         }
     }
-    print_output(&auto, content, None)?;
+    let print_result = print_output(&auto, content, None);
     if let Some(error) = log_error {
         return Err(error.into());
     }
+    print_result?;
     if failed { Err("batch: one or more files failed; see the JSON report".into()) } else { Ok(()) }
 }
 
