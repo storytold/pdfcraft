@@ -2367,3 +2367,146 @@ fn a_form_cut_short_on_one_page_is_read_again_on_the_next() {
     let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
     assert_eq!(said, ["Page 2 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }
+
+/// The 6.1.8 findings of a document of a catalog with `catalog` added, a page with `resources`
+/// and `page` added, and the further objects `more` from object 4 on.
+fn name_findings(catalog: &str, resources: &str, page: &str, more: &[&str]) -> Vec<String> {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>");
+    let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << {resources} >> {page} >>");
+    let mut objs = vec![catalog.as_str(), "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", page.as_str()];
+    objs.extend_from_slice(more);
+    verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.1.8").map(|i| i.message).collect()
+}
+
+#[test]
+fn names_that_stand_for_text_are_utf8_clause_6_1_8() {
+    let none = Vec::<String>::new();
+    let font = |base: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont {base} >>");
+    let bad_font = ["The font name F#E4MonoBold isn't valid UTF-8"];
+    // A font the page holds, used or not, and in a form XObject, an annotation's appearance or a
+    // Type 3 font's resources.
+    assert_eq!(name_findings("", "/Font << /F1 4 0 R >>", "", &[&font("/F#E4MonoBold")]), bad_font);
+    assert_eq!(name_findings("", "/Font << /F1 4 0 R >>", "", &[&font("/Caf#C3#A9")]), none);
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F1 5 0 R >> /XObject << /X 4 0 R >> >> /Length 0 >>\nstream\n\nendstream";
+    assert_eq!(name_findings("", "/XObject << /X 4 0 R >>", "", &[form, &font("/F#E4MonoBold")]), bad_font);
+    let annot = "<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] /F 4 /AP << /N << /On 5 0 R >> >> >>";
+    let ap = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F1 6 0 R >> >> /Length 0 >>\nstream\n\nendstream";
+    assert_eq!(name_findings("", "", "/Annots [4 0 R]", &[annot, ap, &font("/F#E4MonoBold")]), bad_font);
+    let annot_stream = "<< /Type /Annot /Subtype /Square /Rect [0 0 1 1] /F 4 /AP << /N 5 0 R >> >>";
+    assert_eq!(name_findings("", "", "/Annots [4 0 R]", &[annot_stream, ap, &font("/F#E4MonoBold")]), bad_font);
+    let type3 = "<< /Type /Font /Subtype /Type3 /BaseFont /T#E4 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << >> /Resources << /Font << /F 5 0 R >> >> >>";
+    assert_eq!(name_findings("", "/Font << /F1 4 0 R >>", "", &[type3, &font("/F#E4MonoBold")]), ["The font name T#E4 isn't valid UTF-8"]);
+    // A Type 0 font: its descendant's name, not its own.
+    let type0 = |own: &str| format!("<< /Type /Font /Subtype /Type0 /BaseFont {own} /Encoding /Identity-H /DescendantFonts [5 0 R] >>");
+    let cid = |base: &str| {
+        format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont {base} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>")
+    };
+    assert_eq!(name_findings("", "/Font << /F1 4 0 R >>", "", &[&type0("/T#E4"), &cid("/Good")]), none);
+    assert_eq!(name_findings("", "/Font << /F1 4 0 R >>", "", &[&type0("/Good"), &cid("/C#E4")]), ["The font name C#E4 isn't valid UTF-8"]);
+    // Not read: a descriptor's FontName, a font only the form's default resources or private data
+    // hold, one nothing refers to, resource names, annotation states.
+    let described = "<< /Type /Font /Subtype /TrueType /BaseFont /Arial /FontDescriptor 5 0 R >>";
+    assert_eq!(name_findings("", "/Font << /F1 4 0 R >>", "", &[described, "<< /Type /FontDescriptor /FontName /F#E4 >>"]), none);
+    assert_eq!(name_findings("/AcroForm << /Fields [] /DR << /Font << /F 4 0 R >> >> >>", "", "", &[&font("/F#E4")]), none);
+    assert_eq!(name_findings("/Foo 4 0 R", "", "", &[&font("/F#E4")]), none);
+    assert_eq!(name_findings("", "", "", &[&font("/F#E4")]), none);
+    assert_eq!(name_findings("", "/Font << /F#E4 4 0 R >>", "", &[&font("/Helvetica")]), none);
+    let widget = "<< /Type /Annot /Subtype /Widget /FT /Btn /Rect [0 0 1 1] /F 4 /AS /m#E4 /V /m#E4 /AP << /N << /m#E4 5 0 R >> >> >>";
+    let off = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 0 >>\nstream\n\nendstream";
+    assert_eq!(name_findings("", "", "/Annots [4 0 R]", &[widget, off]), none);
+
+    // Colorant names of Separation and DeviceN spaces, wherever the page's colour spaces are.
+    let tint = "<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>";
+    let bad_colorant = ["The colorant name C#E4n isn't valid UTF-8"];
+    let sep = format!("[/Separation /C#E4n /DeviceGray {tint}]");
+    assert_eq!(name_findings("", &format!("/ColorSpace << /C {sep} >>"), "", &[]), bad_colorant);
+    assert_eq!(name_findings("", &format!("/ColorSpace << /C [/DeviceN [/Cyan /C#E4n] /DeviceGray {tint}] >>"), "", &[]), bad_colorant);
+    let colorants = format!("[/DeviceN [/Spot] /DeviceGray {tint} << /Colorants << /Spot {sep} >> >>]");
+    assert_eq!(name_findings("", &format!("/ColorSpace << /C {colorants} >>"), "", &[]), bad_colorant);
+    assert_eq!(name_findings("", &format!("/ColorSpace << /C [/Indexed {sep} 0 <00>] >>"), "", &[]), bad_colorant);
+    let image =
+        format!("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace {sep} /Length 1 >>\nstream\n\0\nendstream");
+    assert_eq!(name_findings("", "/XObject << /I 4 0 R >>", "", &[&image]), bad_colorant);
+    let shading = format!("<< /ShadingType 2 /ColorSpace {sep} /Coords [0 0 1 1] /Function {tint} >>");
+    assert_eq!(name_findings("", "/Shading << /S 4 0 R >>", "", &[&shading]), bad_colorant);
+    assert_eq!(name_findings("", "/Pattern << /P << /PatternType 2 /Shading 4 0 R >> >>", "", &[&shading]), bad_colorant);
+    assert_eq!(name_findings("", &format!("/ColorSpace << /C [/Separation /Caf#C3#A9 /DeviceGray {tint}] >>"), "", &[]), none);
+
+    // Structure types: the elements' /S and the role map, for the tree /StructTreeRoot reaches.
+    let tree = |role_map: &str| format!("<< /Type /StructTreeRoot /K [5 0 R] {role_map} >>");
+    let root = "/StructTreeRoot 4 0 R";
+    let bad_type = ["The structure type P#E4 isn't valid UTF-8"];
+    assert_eq!(name_findings(root, "", "", &[&tree(""), "<< /Type /StructElem /S /Sect /K [<< /S /P#E4 >>] >>"]), bad_type);
+    assert_eq!(name_findings(root, "", "", &[&tree("/RoleMap << /P#E4 /P >>"), "<< /S /P >>"]), bad_type);
+    assert_eq!(name_findings(root, "", "", &[&tree("/RoleMap << /Q /P#E4 >>"), "<< /S /Q >>"]), bad_type);
+    assert_eq!(name_findings("", "", "/Foo 4 0 R", &["<< /Type /StructElem /S /P#E4 >>"]), none);
+
+    // Each kind is named once, with its first name, and none is fixable.
+    let all = name_findings(
+        root,
+        &format!("/Font << /F1 6 0 R /F2 7 0 R >> /ColorSpace << /C {sep} >>"),
+        "",
+        &[&tree(""), "<< /S /P#E4 /K 5 0 R >>", &font("/F#E4MonoBold"), &font("/G#E4")],
+    );
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert!(all.contains(&bad_font[0].to_owned()));
+    let doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F 4 0 R >> >> >>",
+            &font("/F#E4"),
+        ],
+        "",
+    );
+    assert!(verify(&doc, Level::A2b).iter().filter(|i| i.clause == "6.1.8").all(|i| !i.fixable));
+}
+
+#[test]
+fn fonts_a_graphics_state_reaches_are_utf8_clause_6_1_8() {
+    let font = |base: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont {base} >>");
+    let bad_font = ["The font name F#E4MonoBold isn't valid UTF-8"];
+    // A soft mask's group, a form XObject (11.6.5.2), and the font a graphics state selects
+    // (ISO 32000-2 Table 57).
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /Font << /F1 5 0 R >> >> /Length 0 >>
+stream
+
+endstream";
+    let masked = "/ExtGState << /GS << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >>";
+    assert_eq!(name_findings("", masked, "", &[form, &font("/F#E4MonoBold")]), bad_font);
+    let selects = "<< /Type /ExtGState /Font [5 0 R 12] >>";
+    assert_eq!(name_findings("", "/ExtGState << /GS 4 0 R >>", "", &[selects, &font("/F#E4MonoBold")]), bad_font);
+    assert_eq!(name_findings("", "/ExtGState << /GS << /SMask /None /Font 4 >> >>", "", &[]), Vec::<String>::new());
+    // A shading pattern's own graphics state (ISO 32000-2 Table 76).
+    let pattern = "/Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 1] >> /ExtGState 4 0 R >> >>";
+    assert_eq!(name_findings("", pattern, "", &[selects, &font("/F#E4MonoBold")]), bad_font);
+    // One dictionary (4) that is both the pattern's /Shading and its /ExtGState is read as each.
+    let shared = "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 1] /Font [5 0 R 12] >>";
+    let both = "/Pattern << /P << /PatternType 2 /Shading 4 0 R /ExtGState 4 0 R >> >>";
+    assert_eq!(name_findings("", both, "", &[shared, &font("/F#E4MonoBold")]), bad_font);
+}
+
+/// An object the walk reached first too deep to read all of is read again when another path
+/// reaches it less deep.
+#[test]
+fn a_name_reached_again_less_deep_is_read_clause_6_1_8() {
+    // Forms 4 to 34 in a chain, the last holding a Type 0 font (35) whose descendant (36) has a
+    // name that isn't UTF-8. The page's graphics state reaches form 4 as a soft mask's group, one
+    // level deeper than its /XObject entry does, and is read first: from there the descendant is
+    // one level past the depth limit; from /XObject it is at the limit.
+    let mut more: Vec<String> = (4..34).map(|n| form_with(&format!("/XObject << /X {} 0 R >>", n + 1))).collect();
+    more.push(form_with("/Font << /F 35 0 R >>"));
+    more.push("<< /Type /Font /Subtype /Type0 /BaseFont /Good /Encoding /Identity-H /DescendantFonts [36 0 R] >>".to_owned());
+    more.push("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /C#E4 >>".to_owned());
+    let more: Vec<&str> = more.iter().map(String::as_str).collect();
+    let resources = "/ExtGState << /GS << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >> /XObject << /X 4 0 R >>";
+    assert_eq!(name_findings("", resources, "", &more), ["The font name C#E4 isn't valid UTF-8"]);
+    // Through the graphics state alone it is past the limit.
+    let deep = "/ExtGState << /GS << /SMask << /Type /Mask /S /Luminosity /G 4 0 R >> >> >>";
+    assert_eq!(name_findings("", deep, "", &more), Vec::<String>::new());
+}
+
+/// A form XObject with the resources `resources`.
+fn form_with(resources: &str) -> String {
+    format!("<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << {resources} >> /Length 0 >>\nstream\n\nendstream")
+}
