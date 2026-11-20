@@ -11119,7 +11119,7 @@ trailer << /Root 1 0 R >>
         let shown = ink(RenderConfig { system_fonts: true, ..RenderConfig::default() });
         assert!(shown > 300, "{base_font}: the text is drawn ({shown} dark pixels)");
         // Off by default: exports, printing and OCR render without an installed font, so
-        // nothing drawn with one can be saved (AGENTS.md §1.2, §1.4).
+        // nothing drawn with one can be saved (licences.md; docs/development.md "Fonts and attribution").
         let saved = ink(RenderConfig::default());
         assert!(saved < 50, "{base_font}: not drawn without system_fonts ({saved} dark pixels)");
         if encoding == "GBK-EUC-H" {

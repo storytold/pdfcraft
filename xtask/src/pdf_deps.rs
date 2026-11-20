@@ -6,7 +6,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-const SHARED_REV: &str = "5630f3ac16a6f4d44f6d6187dd5ee5bfa8da8554";
+const SHARED_REV: &str = "1f8609e71aacc3b962cd871253dbabdf02ef5dc0";
 const PACKAGES: &[(&str, &str)] = &[
     ("craft-pdf", "0.1.0"),
     ("hayro", "0.7.1"),
