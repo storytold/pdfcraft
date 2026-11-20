@@ -77,6 +77,8 @@ pub enum MarkKind {
     HeaderFooter,
     Watermark,
     Background,
+    /// Printer marks: trim, bleed, registration, colour bars, page information.
+    PrinterMarks,
 }
 
 impl MarkKind {
@@ -85,6 +87,7 @@ impl MarkKind {
             MarkKind::HeaderFooter => "HeaderFooter",
             MarkKind::Watermark => "Watermark",
             MarkKind::Background => "Background",
+            MarkKind::PrinterMarks => "PrinterMarks",
         }
     }
 }

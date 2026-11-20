@@ -61,6 +61,15 @@ impl PageImage {
         self.clips.iter().any(|clip| clip.app_crop)
     }
 
+    /// The editing frame, respecting explicit PDF/editor crops but not the page boundary.
+    /// Selected handles remain reachable outside the page; body hits still use `contains`.
+    pub fn frame_rect(&self) -> Option<[f64; 4]> {
+        self.clips.iter().try_fold(self.rect, |rect, clip| {
+            let b = clip.path.bounding_box();
+            intersection(rect, [b.x0, b.y0, b.x1, b.y1])
+        })
+    }
+
     /// Whether a user-space point belongs to the placed artwork and every active clip.
     pub fn contains(&self, point: [f64; 2]) -> bool {
         if !point.iter().all(|v| v.is_finite()) {

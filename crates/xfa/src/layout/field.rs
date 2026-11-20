@@ -1,8 +1,8 @@
 use super::common::{button_action, date_pattern};
 use super::items::{BorderShape, Item, Widget, WidgetBorder, WidgetKind};
 use super::{
-    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, XfaError,
-    data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
+    Access, Border, Ctx, Engine, Face, Field, HAlign, Layouter, MAX_DATA_IMAGE, Margin, Para, Placement, Presence, Rect, Ui, VAlign, Value, Views,
+    XfaError, data_date_letters, data_path, data_to_iso, is_on, iso_to_pattern, text,
 };
 
 impl Layouter<'_> {
@@ -27,7 +27,10 @@ impl Layouter<'_> {
         let fctx = ctx.child(&f.common);
         let inner = rect.inset(&f.common.margin);
         let (mut ui, mut cap_rect) = (inner, None);
-        if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, ctx) {
+        // A caption without a font of its own is drawn in the field's (XFA 3.3, "Formatting Text
+        // That Appears as Fixed or Variable Content", p. 43), in the paragraph around the field,
+        // as it is measured.
+        if let Some((placement, reserve)) = self.caption_reserve(f, inner.w, &fctx, &ctx.para) {
             let reserve = auto_check_reserve(f, placement, inner.w, Some(inner.h)).unwrap_or(reserve);
             let r = reserve.max(0.0);
             match placement {
@@ -52,7 +55,7 @@ impl Layouter<'_> {
         if let (Some(cr), Some(cap)) = (cap_rect, &f.caption)
             && cap.presence == Presence::Visible
         {
-            let font = ctx.font.apply(&cap.font);
+            let font = fctx.font.apply(&cap.font);
             let para = ctx.para.apply(&cap.para);
             self.draw_value_text(&cap.value, cr, &font, &para, &ctx.som)?;
         }
@@ -97,7 +100,7 @@ impl Layouter<'_> {
                 let box_ = ui.inset(&f.ui_margin);
                 match (&from_data, &f.value) {
                     (Some(d), _) => self.draw_image(d, "", box_)?,
-                    (None, Value::Image { content_type, data }) => self.draw_image(data, content_type, box_)?,
+                    (None, Value::Image { content_type, data, .. }) => self.draw_image(data, content_type, box_)?,
                     _ => {}
                 }
                 // Then the field itself, which clicking gives a new picture.
@@ -147,14 +150,14 @@ impl Layouter<'_> {
         }
         let face = match (&f.ui, &f.caption) {
             // Buttons show their caption in the caption's font.
-            (Ui::Button, Some(cap)) => Face::of(&ctx.font.apply(&cap.font)).unscaled(),
+            (Ui::Button, Some(cap)) => Face::of(&fctx.font.apply(&cap.font)).unscaled(),
             _ => Face::of(&fctx.font).unscaled(),
         };
         let h_align = match (&f.ui, &f.caption) {
             (Ui::Button, Some(cap)) => ctx.para.apply(&cap.para).h_align,
             _ => fctx.para.h_align,
         };
-        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"));
+        let name = self.unique_name(f.common.name.as_deref().unwrap_or("field"), f.common.name.is_none());
         let som = som_path();
         let read_only = matches!(f.access, Access::ReadOnly | Access::Protected);
         // The data's value wins over the template's default.
@@ -265,6 +268,9 @@ impl Layouter<'_> {
             action,
             items,
             no_scroll: f.no_scroll,
+            // `push` sets where it shows.
+            views: Views::ALL,
+            required: f.required,
         })))
     }
 }
