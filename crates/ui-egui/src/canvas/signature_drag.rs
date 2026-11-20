@@ -5,8 +5,8 @@
 use craft::behavior::{Input, Sense};
 use craft::review::AnnotationEdit;
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Role};
-use craft::ui::primitives::textures::{CachedTexture, TextureStore, TextureStoreOptions};
-use craft::ui::primitives::{Draw, backdrop};
+use craft::ui::primitives::Draw;
+use craft::ui::primitives::textures::{CachedTexture, Revision, TextureStore, TextureStoreOptions};
 use craft::ui::style::{ComponentStyle, Metrics, StyleCx};
 use egui::{ColorImage, Pos2, Rect, Response, TextureId, Vec2, pos2, vec2};
 use pdfcraft_engine::{Document, Edit};
@@ -122,11 +122,9 @@ impl SignatureDrag {
                     self.aspect_ratio = Some(if shown.rem_euclid(180) == 0 { ratio } else { ratio.recip() });
                     let image_key = (generation, page, index, Layer::Image);
                     let image = ColorImage::from_rgba_unmultiplied(preview.image.size(), preview.image.rgba());
-                    // An image past the store's limits has no sharp preview: the frame alone follows the pointer.
-                    if let Some(texture) = backdrop::upload(&drag_store(ctx), ctx, image_key, image) {
-                        let front = Front::Image { texture, opacity: preview.opacity, turn: preview.turn };
-                        self.layers = Some(Layers::new(front, preview.renderer(), vec![image_key]));
-                    }
+                    let texture = drag_store(ctx).put(ctx, image_key, Revision::new(generation), image);
+                    let front = Front::Image { texture, opacity: preview.opacity, turn: preview.turn };
+                    self.layers = Some(Layers::new(front, preview.renderer(), vec![image_key]));
                 } else if let Ok(Some(preview)) = doc.stamp_preview(page, index) {
                     let stamp = StampLayer { renderer: preview.stamp_renderer(), from: a.rect, tag: None, pixels: None, failed: None, stored: None };
                     self.layers = Some(Layers::new(Front::Stamp(Box::new(stamp)), preview.background_renderer(), Vec::new()));
@@ -149,7 +147,7 @@ impl SignatureDrag {
             let background_key = (generation, page, index, Layer::Background);
             let uploaded = if out.error.is_none() {
                 let image = ColorImage::from_rgba_premultiplied([out.width as usize, out.height as usize], &out.rgba);
-                backdrop::upload(&drag_store(ctx), ctx, background_key, image)
+                Some(drag_store(ctx).put(ctx, background_key, Revision::new(tag), image))
             } else {
                 None
             };
@@ -496,10 +494,7 @@ impl StampLayer {
             let area = [t.x as f32 / s, t.y as f32 / s, t.x.saturating_add(t.w) as f32 / s, t.y.saturating_add(t.h) as f32 / s];
             let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
             let store = drag_store(ctx);
-            let Some(texture) = backdrop::upload(&store, ctx, key, image) else {
-                self.failed = Some(tag);
-                return None;
-            };
+            let texture = store.put(ctx, key, Revision::new(tag), image);
             // The edit generation moved on while the layer was kept: its pixels are under the new key now.
             if let Some(old) = self.stored.filter(|old| *old != key) {
                 store.forget(ctx, &old);
