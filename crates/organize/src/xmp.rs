@@ -287,7 +287,9 @@ fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
         if element.get(..open_end)?.ends_with('/') {
             return None;
         }
-        let inner = element.get(open_end + 1..)?.strip_suffix(&format!("</{name}>"))?;
+        let inner = element.get(open_end + 1..)?;
+        // Up to the end tag, which `element_span` lets have white space before its `>`.
+        let inner = inner.get(..inner.rfind(&format!("</{name}"))?)?;
         let items = list_items(inner);
         if items.is_empty() {
             // An empty `<rdf:Alt/>` or `<rdf:Seq></rdf:Seq>` has no value, not its markup.
