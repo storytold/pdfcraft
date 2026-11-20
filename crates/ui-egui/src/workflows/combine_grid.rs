@@ -70,7 +70,8 @@ fn rows_of(draft: &[CombineFile], lists: &HashMap<u64, PageList>) -> Rows {
         match lists.get(&f.id) {
             Some(list) => {
                 let detail = crate::i18n::fmt(tl!("Pages: {k} of {n}"), &[("k", &list.order.len().to_string()), ("n", &f.pages.to_string())]);
-                out.groups.push(TileGroup::new(CombineKey::File(f.id), out.tiles.len(), list.order.len(), f.name.clone()).detail(detail));
+                out.groups
+                    .push(TileGroup::new(CombineKey::File(f.id), out.tiles.len(), list.order.len(), f.name.clone()).detail(detail).selectable());
                 out.rows.push(CombineKey::File(f.id));
                 for nth in 0..list.order.len() {
                     out.tiles.push(CombineKey::Page(f.id, nth));
