@@ -433,7 +433,7 @@ fn blocker(fields: &[SignedField], name: &str) -> Option<(Blocker, ClearError)> 
 /// unchanged, when another signature's certification or lock forbids it, or when the result
 /// would have references it didn't have before.
 pub fn clear(doc: &mut Document, name: &str, remove_field: bool) -> Result<Cleared, ClearError> {
-    // A failure part way (a parent that can't be updated, say) must not leave a half-removed
+    // A failure part way (a removal that would leave a broken reference, say) must not leave a half-removed
     // field: work on a copy (clones share all unchanged data) and keep it only on success.
     let mut work = doc.clone();
     let done = clear_in(&mut work, name, remove_field)?;
@@ -462,9 +462,11 @@ fn clear_in(doc: &mut Document, name: &str, remove_field: bool) -> Result<Cleare
     let before = problems(doc);
     let mut done = Cleared { field: name.into(), removed_field: remove_field, widgets: widgets.len(), ..Cleared::default() };
     if remove_field {
-        let parent = doc.get(obj).as_dict().and_then(|d| d.reference(b"Parent"));
+        // Taken before the deletion: `delete_field` also removes the ancestors it leaves without
+        // kids, and writes an empty one in place of a missing one, which isn't counted.
+        let ancestors = ancestors(doc, doc.get(obj).as_dict().and_then(|d| d.reference(b"Parent")));
         pdfcraft_forms::delete_field(doc, name).map_err(|e| ClearError::Form(e.to_string()))?;
-        done.parents = prune_empty_parents(doc, parent)?;
+        done.parents = count_emptied_parents(doc, &ancestors);
     } else {
         // The field stays, empty and ready to sign: no value, and no appearance showing the
         // old signature. Its own /Lock and seed values (/SV) are the field's, and stay.
@@ -492,57 +494,32 @@ fn update(doc: &mut Document, r: ObjRef, f: impl FnOnce(&mut Dict)) -> Result<()
     doc.update_dict(r, f).map_err(|e| ClearError::Form(e.to_string()))
 }
 
-/// After a field leaves its parent, parents left without kids leave theirs, up the tree.
-fn prune_empty_parents(doc: &mut Document, mut node: Option<ObjRef>) -> Result<usize, ClearError> {
-    let mut removed = 0;
-    let mut seen = HashSet::new();
+/// The field's ancestors that exist, nearest first.
+fn ancestors(doc: &Document, mut node: Option<ObjRef>) -> Vec<ObjRef> {
+    let mut out = Vec::new();
     while let Some(n) = node {
-        if !seen.insert(n) || seen.len() > MAX_DEPTH {
+        if out.contains(&n) || out.len() >= MAX_DEPTH {
             break;
         }
-        let d = doc.get(n).as_dict().cloned().unwrap_or_default();
-        let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-        // A node that still has kids, or is itself a widget, stays.
-        if !kids.is_empty() || d.name(b"Subtype") == Some(b"Widget") {
-            break;
-        }
-        let up = d.reference(b"Parent");
-        match up {
-            Some(p) => detach(doc, p, b"Kids", n)?,
-            None => detach_from_form(doc, n)?,
-        }
-        removed += 1;
+        let Some(up) = doc.get(n).as_dict().map(|d| d.reference(b"Parent")) else { break };
+        out.push(n);
         node = up;
     }
-    Ok(removed)
+    out
 }
 
-/// Take `r` out of the array `key` of `holder` (written into the array object when it is
-/// indirect, so other holders of it see the change).
-fn detach(doc: &mut Document, holder: ObjRef, key: &[u8], r: ObjRef) -> Result<(), ClearError> {
-    let entry = doc.get(holder).as_dict().and_then(|d| d.get(key).cloned());
-    let list = entry.as_ref().map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
-    let kept: Vec<Object> = list.into_iter().filter(|o| o.as_ref() != Some(r)).collect();
-    match entry.as_ref().and_then(Object::as_ref) {
-        Some(a) if doc.get(a).as_array().is_some() => {
-            doc.set(a, Object::Array(kept));
-            Ok(())
-        }
-        _ => update(doc, holder, |d| d.set(key.to_vec(), Object::Array(kept))),
-    }
-}
-
-fn detach_from_form(doc: &mut Document, r: ObjRef) -> Result<(), ClearError> {
-    let Some(root) = doc.root() else { return Ok(()) };
-    match doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) {
-        Some(Object::Ref(af)) => detach(doc, af, b"Fields", r),
-        Some(Object::Dict(mut af)) => {
-            let list = af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
-            af.set(b"Fields".to_vec(), Object::Array(list.into_iter().filter(|o| o.as_ref() != Some(r)).collect()));
-            update(doc, root, |d| d.set(b"AcroForm".to_vec(), Object::Dict(af)))
-        }
-        _ => Ok(()),
-    }
+/// How many of `ancestors` (nearest first) the field's deletion left without kids: those
+/// `delete_field` took out with it.
+fn count_emptied_parents(doc: &Document, ancestors: &[ObjRef]) -> usize {
+    ancestors
+        .iter()
+        .take_while(|&&n| {
+            let Some(d) = doc.get(n).as_dict().cloned() else { return false };
+            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+            // A node that still has kids, or is itself a widget, stayed.
+            kids.is_empty() && d.name(b"Subtype") != Some(b"Widget")
+        })
+        .count()
 }
 
 /// Remove the catalog's `/Perms /DocMDP` when it names the removed signature: the document is no
@@ -940,11 +917,10 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_part_way_leaves_the_document_unchanged() {
+    fn a_missing_grandparent_does_not_stop_the_removal() {
         let (mut doc, page, form) = base();
         let v = doc.add(dict(vec![(b"Type", Object::name("Sig"))]));
-        // An empty parent whose own parent is a missing object: pruning it fails after the
-        // field itself has already been taken out.
+        // An empty parent whose own parent is a missing object.
         let missing = ObjRef { num: 900, generation: 0 };
         let parent = doc.add(dict(vec![(b"T", PdfString::text("a").into()), (b"Parent", Object::Ref(missing))]));
         let leaf = doc.add(dict(vec![
@@ -958,9 +934,10 @@ mod tests {
         add_to(&mut doc, page, b"Annots", leaf);
         doc.update_dict(parent, |d| d.set(b"Kids".to_vec(), arr(&[leaf]))).unwrap();
         doc.update_dict(form, |d| d.set(b"Fields".to_vec(), arr(&[parent]))).unwrap();
-        let before = doc.clone();
-        assert!(clear(&mut doc, "a.b", true).is_err());
-        assert_eq!((doc.get(parent), doc.get(leaf), annots(&doc, page)), (before.get(parent), before.get(leaf), annots(&before, page)));
+        let done = clear(&mut doc, "a.b", true).unwrap();
+        assert_eq!((done.widgets, done.parents), (1, 1));
+        assert!(names(&doc).is_empty());
+        assert!(annots(&doc, page).is_empty());
     }
 
     #[test]
@@ -975,7 +952,8 @@ mod tests {
         .unwrap();
         add_to(&mut doc, form, b"Fields", loop_node);
         let _ = problems(&doc);
-        assert_eq!(prune_empty_parents(&mut doc, Some(loop_node)), Ok(0), "a node that is its own kid isn't empty");
+        assert_eq!(ancestors(&doc, Some(loop_node)), [loop_node], "a node that is its own parent is listed once");
+        assert_eq!(count_emptied_parents(&doc, &[loop_node]), 0, "a node that is its own kid isn't empty");
         clear(&mut doc, "Signature1", true).unwrap();
         assert!(doc.get(f).as_dict().is_some());
     }
