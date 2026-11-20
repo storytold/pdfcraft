@@ -5285,6 +5285,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-oracle",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
