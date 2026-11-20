@@ -610,6 +610,9 @@ pub struct DocView {
     text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
+    /// Whether this view's find ignores character width (Preferences ▸ Search, which the app
+    /// copies in through [`DocView::set_find_ignore_width`]).
+    find_ignore_width: bool,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
@@ -1072,6 +1075,7 @@ impl DocView {
             current: 0,
             organize: false,
             highlight_fields: defaults.highlight_fields,
+            find_ignore_width: true,
             page_input: "1".into(),
             page_input_reselect: false,
             notice_dismissed: false,
@@ -1279,6 +1283,7 @@ impl DocView {
         // Same view key (`pane`), so the scroll offset egui keeps for it is still this view's.
         fresh.shown = self.shown;
         fresh.highlight_fields = self.highlight_fields;
+        fresh.find_ignore_width = self.find_ignore_width;
         fresh.notice_dismissed = self.notice_dismissed;
         fresh.cut_notice_dismissed = std::mem::take(&mut self.cut_notice_dismissed);
         fresh.snapshot = self.snapshot.clone();
@@ -1329,6 +1334,7 @@ impl DocView {
         v.current = self.current;
         v.page_input = self.page_input.clone();
         v.highlight_fields = self.highlight_fields;
+        v.find_ignore_width = self.find_ignore_width;
         v.notice_dismissed = self.notice_dismissed;
         v.scripts_off_noted = self.scripts_off_noted;
         v.full_screen_fill = self.full_screen_fill;

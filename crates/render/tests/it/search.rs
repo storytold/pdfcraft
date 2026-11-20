@@ -1,4 +1,7 @@
-use pdfcraft_render::{PageText, TextGlyph, text::fold_case};
+use pdfcraft_render::{
+    PageText, TextGlyph,
+    text::{FindOptions, find_in_text_with, fold_case},
+};
 use std::ops::Range;
 
 fn page(parts: &[&str]) -> PageText {
@@ -11,12 +14,14 @@ fn page(parts: &[&str]) -> PageText {
 }
 
 /// The letters of the property test's alphabet that come from scripts written without spaces
-/// between words: 界 (CJK Unified Ideographs, U+4E00..U+9FFF) and ก (Thai, U+0E00..U+0E7F).
+/// between words: 界 (CJK Unified Ideographs, U+4E00..U+9FFF), ก (Thai, U+0E00..U+0E7F),
+/// カ and the sound mark U+3099 that the halfwidth forms and ガ fold to (Katakana, Hiragana), and,
+/// read as written where width counts, ガ, ｶ and ﾞ (Halfwidth Katakana, U+FF66..U+FF9F).
 /// 한 (Hangul Syllables) is written with spaces and bounds a word. The reference knows only
-/// these three letters, so it does not share the block table in `text/search.rs`; that table is
+/// these letters, so it does not share the block table in `text/search.rs`; that table is
 /// checked against `UNSPACED_BLOCK_SAMPLES` instead.
 fn unspaced(c: char) -> bool {
-    matches!(c, '界' | 'ก')
+    matches!(c, '界' | 'ก' | 'カ' | '\u{3099}' | 'ガ' | 'ｶ' | 'ﾞ')
 }
 
 /// Letters at the edges of each block of a script written without spaces (`true`), and letters
@@ -91,7 +96,7 @@ const UNSPACED_BLOCK_SAMPLES: &[(char, bool, &str)] = &[
 // The original straightforward search is an independent oracle for valid page metadata, extended
 // with ligature letters and the three readings of a line-end hyphen between letters: as written,
 // joined (no hyphen, no break) and kept (hyphen, no break).
-fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
+fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, ignore_width: bool, limit: usize) -> Vec<Range<usize>> {
     let letters = |s: &str| {
         s.replace('\u{FB00}', "ff")
             .replace('\u{FB01}', "fi")
@@ -100,7 +105,17 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
             .replace('\u{FB04}', "ffl")
             .replace(['\u{FB05}', '\u{FB06}'], "st")
     };
-    let fold = |s: &str| if sensitive { letters(s) } else { fold_case(&letters(s)) };
+    // The halfwidth and fullwidth forms of the property test's alphabet at their ordinary width,
+    // and a voiced katakana as its base and sound mark (UnicodeData.txt). Like `unspaced`, this
+    // knows only the alphabet's characters, so it does not share the table in `text/search.rs`.
+    // Where width counts, characters are compared as written.
+    let width = |s: String| {
+        if !ignore_width {
+            return s;
+        }
+        s.replace('Ａ', "A").replace('１', "1").replace('，', ",").replace('ｶ', "カ").replace('ﾞ', "\u{3099}").replace('ガ', "カ\u{3099}")
+    };
+    let fold = |s: &str| if sensitive { width(letters(s)) } else { fold_case(&width(letters(s))) };
     // Soft hyphens and zero width characters draw nothing and are skipped on both sides.
     let invisible = |c: char| matches!(c, '\u{AD}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}');
     let visible = |s: String| s.chars().filter(|&c| !invisible(c)).collect::<String>();
@@ -134,8 +149,9 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
             } else {
                 None
             };
+            // A sound mark after the letter it voices ends the word too: folded, ガ is カ and U+3099.
             hyphen(last)
-                && before.is_some_and(char::is_alphabetic)
+                && before.is_some_and(|c| c.is_alphabetic() || matches!(c, '\u{3099}' | '\u{309A}'))
                 && i + 1 < n
                 && new_line(i + 1)
                 && visible(texts[i + 1].clone()).chars().next().is_some_and(char::is_alphabetic)
@@ -183,7 +199,9 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
         while start + needle.len() <= chars.len() {
             let end = start + needle.len();
             let bounded = (edge(start) || !word(start.checked_sub(1))) && (edge(end) || !word(Some(end)));
-            if (!whole || bounded) && chars[start..end].iter().map(|&(c, ..)| c).eq(needle.iter().copied()) {
+            // A hit never ends between a kana and its sound mark, where width is ignored.
+            let whole_kana = !(ignore_width && chars[end - 1].0 == 'カ' && chars.get(end).is_some_and(|&(c, ..)| c == '\u{3099}'));
+            if (!whole || bounded) && whole_kana && chars[start..end].iter().map(|&(c, ..)| c).eq(needle.iter().copied()) {
                 hits.push(chars[start].1..chars[end - 1].1 + 1);
                 if hits.len() == limit {
                     break;
@@ -230,6 +248,83 @@ fn a_ligature_matches_its_letters() {
     assert!(text.find("o\u{FB13}").is_empty(), "no other compatibility folding");
 }
 
+/// A halfwidth or fullwidth form matches the character at its ordinary width, in the page and in
+/// the query alike, and its hit covers exactly the glyphs that drew it.
+#[test]
+fn halfwidth_and_fullwidth_forms_match_their_ordinary_width() {
+    let wide = page(&["Ａ", "Ｂ", "Ｃ", " ", "１", "２", "３", "（", "株", "）"]);
+    assert_eq!(wide.find("ABC"), vec![0..3]);
+    assert_eq!(wide.find("abc"), vec![0..3], "case folds after width");
+    assert_eq!(wide.find_opts("ABC", true, false), vec![0..3], "case-sensitive keeps the width rule");
+    assert!(wide.find_opts("abc", true, false).is_empty(), "and the case");
+    assert_eq!(wide.find("123"), vec![4..7]);
+    assert_eq!(wide.find("(株)"), vec![7..10]);
+    assert_eq!(wide.find_opts("ABC", false, true), vec![0..3], "a whole word");
+    assert!(page(&["Ａ", "Ｂ", "Ｃ", "Ｄ"]).find_opts("ABC", false, true).is_empty(), "inside a longer word");
+    let narrow = page(&["A", "B", "C", " ", "1", "2", "3"]);
+    assert_eq!(narrow.find("ＡＢＣ"), vec![0..3], "a fullwidth query finds ASCII");
+    assert_eq!(narrow.find("ａｂｃ\u{3000}１２３"), vec![0..7], "with an ideographic space for the word gap");
+    // Halfwidth katakana, their sound marks as glyphs of their own, and full-width katakana.
+    let half = page(&["ｶ", "ﾀ", "ｶ", "ﾅ", " ", "ｶ", "ﾞ", "ｲ", "ﾄ", "ﾞ", " ", "ﾊ", "ﾟ", "ﾝ", "｡"]);
+    assert_eq!(half.find("カタカナ"), vec![0..4]);
+    assert_eq!(half.find("ガイド"), vec![5..10], "a voiced katakana takes the base and the mark glyph");
+    assert_eq!(half.find("パン。"), vec![11..15]);
+    assert_eq!(half.find("ｶﾞｲﾄﾞ"), vec![5..10], "and the query as written still matches");
+    assert_eq!(half.find("カ"), vec![0..1, 2..3], "not the ｶ that takes a sound mark");
+    let full = page(&["ガ", "イ", "ド", " ", "パ", "ン"]);
+    assert_eq!(full.find("ｶﾞｲﾄﾞ"), vec![0..3]);
+    assert_eq!(full.find("ﾊﾟﾝ"), vec![4..6]);
+    assert!(full.find("カ").is_empty(), "カ is not found in ガ");
+    assert!(page(&["カ", "イ"]).find("ガ").is_empty(), "nor ガ in カ");
+    assert_eq!(page(&["カ\u{3099}"]).find("ガ"), vec![0..1], "a base and combining mark match the precomposed letter");
+    // Halfwidth Hangul and signs.
+    assert_eq!(page(&["ﾡ", "ￂ", " ", "￥", "５"]).find("ㄱㅏ ¥5"), vec![0..5]);
+    // The ideographic space is whitespace in the page too.
+    assert_eq!(page(&["東", "\u{3000}", "京"]).find("東 京"), vec![0..3]);
+    // Nothing else is folded: superscripts, circled digits, compatibility ideographs.
+    assert!(page(&["²", "①", "\u{F900}"]).find("21\u{8C48}").is_empty());
+}
+
+/// With width significant, nothing of the above is folded: ASCII and fullwidth letters, halfwidth
+/// and full-width katakana are different characters, as is a precomposed ガ and カ with a
+/// combining mark, and a hit may end on a kana before a sound mark, as written. Case still folds.
+#[test]
+fn where_width_counts_halfwidth_and_fullwidth_forms_match_only_themselves() {
+    let exact = FindOptions { ignore_width: false, ..FindOptions::default() };
+    let find = |text: &PageText, q: &str| text.find_with_options(q, exact, usize::MAX);
+    let wide = page(&["Ａ", "Ｂ", "Ｃ", " ", "A", "B", "C"]);
+    assert_eq!(find(&wide, "ABC"), vec![4..7], "ASCII finds ASCII only");
+    assert_eq!(find(&wide, "ＡＢＣ"), vec![0..3], "fullwidth finds fullwidth only");
+    assert_eq!(find(&wide, "ａｂｃ"), vec![0..3], "case still folds");
+    assert_eq!(wide.find("ABC"), vec![0..3, 4..7], "both by default");
+    let kana = page(&["ｶ", "ﾞ", "ｲ", " ", "ガ", "イ", " ", "カ", "\u{3099}"]);
+    assert_eq!(find(&kana, "ｶﾞｲ"), vec![0..3]);
+    assert_eq!(find(&kana, "ガイ"), vec![4..6]);
+    assert_eq!(find(&kana, "ｶ"), vec![0..1], "a halfwidth base before its mark, as written");
+    assert_eq!(find(&kana, "カ"), vec![7..8], "and a full-width one");
+    assert_eq!(find(&kana, "ガ"), vec![4..5], "ガ is not カ and a combining mark");
+    // The ideographic space is whitespace in any case: it is a space, not a width form.
+    assert_eq!(find(&page(&["東", "\u{3000}", "京"]), "東 京"), vec![0..3]);
+    // The string search behind find and replace agrees.
+    let line = "ＡＢＣ ABC ｶﾞｲ ガイ";
+    let bytes =
+        |q: &str, opts: FindOptions| -> Vec<&str> { find_in_text_with(line, q, opts, usize::MAX).into_iter().filter_map(|r| line.get(r)).collect() };
+    assert_eq!(bytes("abc", exact), vec!["ABC"]);
+    assert_eq!(bytes("ガイ", exact), vec!["ガイ"]);
+    assert_eq!(bytes("abc", FindOptions::default()), vec!["ＡＢＣ", "ABC"]);
+    assert_eq!(bytes("ガイ", FindOptions::default()), vec!["ｶﾞｲ", "ガイ"]);
+}
+
+/// A line of Chinese that ends in a FULLWIDTH COMMA still runs on to the next with no word break,
+/// though find reads the comma as an ASCII one.
+#[test]
+fn a_chinese_line_ending_in_a_fullwidth_comma_still_runs_on() {
+    let text = laid_out(&[(10.0, 10.0, "台北，"), (10.0, 25.0, "高雄")], 10.0);
+    assert_eq!(text.find("台北，高雄"), vec![0..5]);
+    assert_eq!(text.find("台北,高雄"), vec![0..5]);
+    assert!(text.find("台北, 高雄").is_empty());
+}
+
 #[test]
 fn a_word_divided_by_a_line_end_hyphen_matches_whole_and_as_written() {
     // "exam-" ends line 0, "ple" starts line 1; the hyphen is its own glyph.
@@ -254,6 +349,24 @@ fn a_word_divided_by_a_line_end_hyphen_matches_whole_and_as_written() {
     assert!(lined(&["a", "-", "2", "0"], &[0, 0, 1, 1]).find("a20").is_empty(), "before a number");
     assert!(lined(&["1", "0", "-", "a", "b"], &[0, 0, 0, 1, 1]).find("10ab").is_empty(), "after a number");
     assert!(lined(&["a", "-"], &[0, 0]).find("a-").len() == 1, "at the end of the page");
+}
+
+/// A word divided after a voiced katakana matches whole whether width is ignored or not: folded,
+/// ガ is カ and the sound mark U+3099, which is not a letter but still ends the letter it voices.
+/// So does a halfwidth ｶﾞ, the mark a glyph of its own.
+#[test]
+fn a_word_divided_after_a_voiced_kana_matches_whole() {
+    let exact = FindOptions { ignore_width: false, ..FindOptions::default() };
+    for (glyphs, lines, query, hit) in [
+        (&["ガ", "-", "イ", "ド"][..], &[0, 0, 1, 1][..], "ガイド", 0..4),
+        (&["ガ-", "イ", "ド"][..], &[0, 1, 1][..], "ガイド", 0..3),
+        (&["ｶ", "ﾞ", "-", "ｲ", "ﾄ", "ﾞ"][..], &[0, 0, 0, 1, 1, 1][..], "ｶﾞｲﾄﾞ", 0..6),
+    ] {
+        let text = lined(glyphs, lines);
+        assert_eq!(text.find(query), vec![hit.clone()], "{glyphs:?}, width ignored");
+        assert_eq!(text.find_with_options(query, exact, usize::MAX), vec![hit], "{glyphs:?}, width counts");
+    }
+    assert_eq!(lined(&["ガ", "-", "イ", "ド"], &[0, 0, 1, 1]).find("ｶﾞｲﾄﾞ"), vec![0..4], "across widths");
 }
 
 #[test]
@@ -301,6 +414,9 @@ fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
     let alphabet = ["a", "b", " ", "-", "İ", "ı", "ς", "Σ", "\t", "\n", "ffi", "", "界", "ก", "한", "e\u{301}", "العربية", "\u{AD}", "a\u{200B}"];
     // Ligatures, digits and HYPHEN exercise the readings of a line-end hyphen.
     let alphabet: Vec<&str> = alphabet.into_iter().chain(["\u{FB01}", "1", "\u{2010}"]).collect();
+    // Halfwidth and fullwidth forms, the characters they fold to, and an ideographic space; and a
+    // combining sound mark, which ends no hit on the kana before it only while width is ignored.
+    let alphabet: Vec<&str> = alphabet.into_iter().chain(["Ａ", "A", "１", "，", ",", "ｶ", "ﾞ", "ガ", "カ", "\u{3000}", "\u{3099}"]).collect();
     let mut seed = 1234567u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -320,12 +436,15 @@ fn search_matches_reference_for_unicode_gaps_limits_and_word_boundaries() {
         }
         for sensitive in [false, true] {
             for whole in [false, true] {
-                for limit in [0, 1, 2, usize::MAX] {
-                    assert_eq!(
-                        text.find_opts_limited(&query, sensitive, whole, limit),
-                        reference(&text, &query, sensitive, whole, limit),
-                        "case {case}: {query:?}, sensitive={sensitive}, whole={whole}, limit={limit}"
-                    );
+                for ignore_width in [true, false] {
+                    let opts = FindOptions { case_sensitive: sensitive, whole_words: whole, ignore_width };
+                    for limit in [0, 1, 2, usize::MAX] {
+                        assert_eq!(
+                            text.find_with_options(&query, opts, limit),
+                            reference(&text, &query, sensitive, whole, ignore_width, limit),
+                            "case {case}: {query:?}, sensitive={sensitive}, whole={whole}, ignore_width={ignore_width}, limit={limit}"
+                        );
+                    }
                 }
             }
         }
@@ -814,13 +933,13 @@ fn reference_and_find_join_past_empty_and_invisible_glyphs_after_a_soft_hyphen()
     let mut text = page(&["Mitar\u{AD}", "", "\u{200B}", "beiterinnen"]);
     text.line_of = vec![0, 0, 0, 1];
     assert_eq!(text.find("Mitarbeiterinnen"), vec![0..4]);
-    assert_eq!(reference(&text, "Mitarbeiterinnen", false, false, usize::MAX), vec![0..4]);
+    assert_eq!(reference(&text, "Mitarbeiterinnen", false, false, true, usize::MAX), vec![0..4]);
 
     // A visible glyph after the soft hyphen ends the hyphenated word there: the line end stays a space.
     let mut text = page(&["Mitar\u{AD}", "x", "", "\u{200B}", "beiterinnen"]);
     text.line_of = vec![0, 0, 0, 0, 1];
     assert!(text.find("Mitarbeiterinnen").is_empty());
-    assert!(reference(&text, "Mitarbeiterinnen", false, false, usize::MAX).is_empty());
+    assert!(reference(&text, "Mitarbeiterinnen", false, false, true, usize::MAX).is_empty());
     assert_eq!(text.find("Mitarx beiterinnen"), vec![0..5]);
-    assert_eq!(reference(&text, "Mitarx beiterinnen", false, false, usize::MAX), vec![0..5]);
+    assert_eq!(reference(&text, "Mitarx beiterinnen", false, false, true, usize::MAX), vec![0..5]);
 }

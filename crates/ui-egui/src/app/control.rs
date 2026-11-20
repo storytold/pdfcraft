@@ -56,6 +56,9 @@ impl PdfCraftApp {
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
+            ("ignore_asian_width", _) => {
+                self.ignore_asian_width = value.parse::<bool>().map_err(|_| "ignore_asian_width must be true or false")?;
+            }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }

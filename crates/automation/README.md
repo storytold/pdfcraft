@@ -86,6 +86,12 @@ past the last match, not a promise of another one; following it may return no ma
 `complete: true`. When it is `false`, the search ran out of pages first and `complete` means what
 it always does.
 
+`text_find`, `text_replace` and `redact_mark` (with `find` or `words`) take `ignore_width`
+(default `true`, as the app's Search preference "Ignore Asian character width"): a halfwidth or
+fullwidth form matches the character its Unicode `<wide>` or `<narrow>` decomposition names, so
+`ABC` finds `ＡＢＣ` and `ガ` finds `ｶﾞ`. With `false`, characters of different widths are
+different characters.
+
 `text_extract`, comment placement and redaction keep strict all-requested-pages-must-succeed
 semantics; they never silently act on partial text.
 
