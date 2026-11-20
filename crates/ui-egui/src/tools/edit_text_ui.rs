@@ -891,9 +891,11 @@ fn open_waiting(
     }
     // A click on grouped text prepared the page: the paragraph now at the point clicked opens, and
     // none if the point is on the group's artwork. A preparation that failed left the page as it
-    // was, where no paragraph is at that point. It is taken either way.
+    // was, where no paragraph is at that point. It is taken either way, once the queued
+    // preparation has run; this control also runs in the pass that queued it.
     let open_here = session.line_editor.as_ref().is_some_and(|e| e.page == page);
-    if let Some((_, [x, y])) = session.grouped_text_click.take_if(|(p, _)| *p == page)
+    if session.pending_edit.is_none()
+        && let Some((_, [x, y])) = session.grouped_text_click.take_if(|(p, _)| *p == page)
         && gate
         && !open_here
         && let Some(xf) = session.page_xform(page, geo)
@@ -1206,6 +1208,8 @@ fn editor_session(
     let cover = ed.has_changes() && !background_ready;
     let laid = ParagraphCover::new(doc, ed, scale, room, draft_rect, cover).show_at(ui, page_clip);
     let (faces, width, live) = (laid.faces, laid.width, laid.live);
+    let frame = [rect_path(doc_rect(&body.view, live.expand(2.0)))];
+    let _ = SelectionOutline::solid(tl!("Text editing line").to_string(), &frame).show_at(ui, page_clip);
     ed.overflow = laid.overflow;
     let len = ed.text.chars().count();
     let mut selection = ed.selection.map_or_else(|| TextSelection::caret_at(len), |s| TextSelection::new(s.anchor.min(len), s.caret.min(len)));
