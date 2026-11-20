@@ -411,7 +411,7 @@ pub(crate) fn parts(
     let (Some(page), at) = (map.page_at(screen), ()) else { return Vec::new() };
     let _ = at;
     let Some(at) = map.to_page(page, screen) else { return Vec::new() };
-    let anns: Vec<Marked> = annotations(info, map, tool, true).into_iter().filter(|a| a.page == page).collect();
+    let anns: Vec<Marked> = annotations(info, map, QuickTool::Select, true).into_iter().filter(|a| a.page == page).collect();
     let markers = marker_boxes(map, &anns, icon_side);
     let Some(id) = pick_at(&anns, at, tolerance, icon_side, &markers) else { return Vec::new() };
     let Some(found) = anns.iter().find(|a| a.id == id) else { return Vec::new() };
@@ -451,7 +451,14 @@ pub(crate) fn parts(
         return vec![PagePart::new(owner, page, shape, PageLayer::Comment).context_only()];
     }
     let tip = tips(info, prefs, tool).into_iter().find(|(t, _)| *t == id).map(|(_, tip)| tip);
-    let layer = if engine(info, page, index).is_some_and(|a| a.fill_sign) { PageLayer::Placed } else { PageLayer::Comment };
+    let layer = if found.kind.is_markup() && !engine(info, page, index).is_some_and(|a| a.fill_sign) {
+        PageLayer::Comment
+    } else {
+        PageLayer::MovableComment
+    };
+    if tool != QuickTool::Select {
+        return tip.map(|tip| vec![PagePart::new(owner, page, shape, layer).hover_only().tip_now(tip)]).unwrap_or_default();
+    }
     let part = PagePart::new(owner, page, shape, layer).passes_drag().cursor(icon);
     vec![match tip {
         Some(tip) => part.tip_now(tip),
