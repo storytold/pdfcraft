@@ -966,6 +966,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         prefs,
         preparing,
         redact_mark,
+        signature_badges: show_badges,
         t,
         table_preview,
         tool,
@@ -1105,9 +1106,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     // Validation badges are viewer chrome over the widget. A recognised named-layer appearance may
     // show the verdict in the display copy too; saves retain its original streams. Badges never
     // enter document streams, exports or either print path. Their tips show where the comments'
-    // do (`comments::tips_shown`).
+    // do (`comments::tips_shown`). Preferences can turn them off, leaving the signer's artwork
+    // uncovered (#4221).
     let tips = comments::tips_shown(tool, view);
-    for badge in signature_badges(&doc.signatures, i) {
+    let badges = if show_badges { signature_badges(&doc.signatures, i) } else { Vec::new() };
+    for badge in badges {
         let [x0, y0, x1, y1] = badge.rect;
         let sr = xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]);
         // The page transform can turn a finite widget into one the screen cannot place; stroking

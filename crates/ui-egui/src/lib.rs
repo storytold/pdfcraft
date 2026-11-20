@@ -491,6 +491,10 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: draw the validation outline and mark over signed signature widgets. Off
+    /// leaves the signer's own appearance uncovered; validation and the Signatures panel are
+    /// unchanged (#4221). Kept in the settings.
+    pub show_signature_badges: bool,
     /// Preferences: web and email addresses written as plain page text open on a click, like
     /// links (#4207).
     pub text_links: bool,

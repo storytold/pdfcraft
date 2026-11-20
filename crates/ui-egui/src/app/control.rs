@@ -405,6 +405,14 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--signature-badges false`: no validation outline and mark over signed signatures.
+            ("signature-badges", _) => {
+                self.show_signature_badges = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("signature-badges must be true or false".into()),
+                };
+            }
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,
