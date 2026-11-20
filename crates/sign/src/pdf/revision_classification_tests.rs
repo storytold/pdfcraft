@@ -434,4 +434,7 @@ fn set_aside_xref_entries_are_compared_in_linear_time() {
     let took = started.elapsed();
     assert_eq!(judged, Modification::Disallowed(vec![super::kind::OTHER]), "the entry set aside after signing");
     assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
+    // The entries set aside before signing are not a change: the signed revision judged against
+    // itself is allowed, so the verdict above comes from the new entry alone.
+    assert_eq!(verdict(&signed.open(), signed.open(), Some(2)), Modification::Allowed(Vec::new()), "the signed revision unchanged");
 }
