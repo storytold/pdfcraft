@@ -23,18 +23,17 @@ use pdfcraft_forms::{FieldKind, FieldValue};
 mod appearance;
 mod common;
 mod fdf;
-mod grammar;
 mod xfdf;
 
 #[cfg(test)]
 use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
 use common::{check_form_xml_depth, el_text, esc, parse_form_xml, xml_name};
+use craft_xfdf::grammar::SUBTYPES;
+pub use craft_xfdf::grammar::is_xfdf_comments;
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
-use grammar::SUBTYPES;
-pub use grammar::is_xfdf_comments;
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
 pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments};
