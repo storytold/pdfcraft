@@ -44,7 +44,12 @@ pub(crate) fn shell(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 /// documents; the Combine files tab takes its own through its veil.
 fn window_body(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut dropped = None;
-    let _ = DropVeil::new(tl!("Drop to open the files")).show(ui, |ui, files| {
+    let organize = app.active_ids().is_some_and(|(index, id)| {
+        app.session.get(id).is_some_and(|doc| doc.allows_assembly()) && app.views.get(index).is_some_and(|view| view.organize)
+    });
+    let veil = DropVeil::new(tl!("Drop to open the files"));
+    let veil = if organize { veil.positional() } else { veil };
+    let _ = veil.show(ui, |ui, files| {
         if let Some(files) = files {
             dropped = Some(files.files.clone());
         }
