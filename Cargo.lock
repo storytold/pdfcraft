@@ -1376,6 +1376,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-jsonrpc"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb2d4b299d87191a79444c6e4e02d69d9325059#fbb2d4b299d87191a79444c6e4e02d69d9325059"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-keymap"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc#453b0da782ccef39be9a6dac8d27c80b553ef1cc"
@@ -1402,6 +1410,14 @@ source = "git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6d
 dependencies = [
  "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=453b0da782ccef39be9a6dac8d27c80b553ef1cc)",
  "serde",
+]
+
+[[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=fbb2d4b299d87191a79444c6e4e02d69d9325059#fbb2d4b299d87191a79444c6e4e02d69d9325059"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -4861,6 +4877,8 @@ dependencies = [
  "craft-cms",
  "craft-docx",
  "craft-image-codecs",
+ "craft-jsonrpc",
+ "craft-mcp-server",
  "craft-prc",
  "craft-wordmodel",
  "flate2",
