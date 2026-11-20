@@ -1364,8 +1364,20 @@ fn an_earlier_revision_opens_from_document_properties() {
     h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
     h.run_steps(2);
     h.run_steps(2);
-    // Let the dialog finish centering before the revision button is clicked.
+    // Let the dialog finish centering before the revision button is clicked. The Advanced tab
+    // scrolls, so scroll it down to bring the button into view first.
     h.run_steps(2);
+    let over = h.get_by_label("JavaScript").rect().center();
+    h.hover_at(over);
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(3);
     h.get_by_label("View revision 1").click();
     h.run_steps(3);
     let s = h.state();
@@ -2768,4 +2780,40 @@ fn the_accessible_window_has_the_window_title_as_its_name() {
     // Unsaved, so it carries the window title's mark too (#3640).
     assert_eq!(name(&h).as_deref(), Some("Quarterly report • — PdfCraft"));
     assert_eq!(name(&h), Some(h.state().window_title.clone()));
+}
+
+/// #7497: Advanced shows the current page's stored rotation, unsaved page rotations included,
+/// and not the view's own rotation.
+#[test]
+fn advanced_properties_show_the_current_pages_rotation() {
+    let mut h = harness();
+    h.state_mut().dialog = Some(Dialog::Properties(pdfcraft_ui_egui::PropsTab::Advanced));
+    h.run_steps(2);
+    h.get_by_label("Current page rotation");
+    h.get_by_label("0°");
+    {
+        let s = h.state_mut();
+        s.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![1], degrees: 90 });
+        let active = s.active.unwrap();
+        s.views[active].go_to_page(1);
+    }
+    h.run_steps(2);
+    h.get_by_label("90°");
+    // Turning the view alone is not the page's rotation.
+    {
+        let s = h.state_mut();
+        let active = s.active.unwrap();
+        s.views[active].rotation = 180;
+    }
+    h.run_steps(2);
+    h.get_by_label("90°");
+    assert!(h.query_by_label("270°").is_none() && h.query_by_label("180°").is_none());
+    // Another page shows its own.
+    {
+        let s = h.state_mut();
+        let active = s.active.unwrap();
+        s.views[active].go_to_page(0);
+    }
+    h.run_steps(2);
+    h.get_by_label("0°");
 }

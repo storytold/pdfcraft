@@ -567,9 +567,10 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
     });
     ui.separator();
     let units = app.units;
-    let Some((_, id)) = app.active_ids() else { return false };
+    let Some((view, id)) = app.active_ids() else { return false };
     let Some(doc) = app.session.get(id) else { return false };
     let i = &doc.info;
+    let current = app.views.get(view).map_or(0, |v| v.current);
     // Description shows plain values among text fields; they start where the fields' text does.
     let editable_info = tab == PropsTab::Description && doc.allows_modification() && app.props_draft.is_some();
     let inset = if editable_info { widgets::FIELD_TEXT_INSET } else { 0.0 };
@@ -907,6 +908,11 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                 row(ui, "File size", format!("{} ({})", human_size(i.file_size), crate::panels::byte_count(i.file_size)));
                 let p = &i.pages[0];
                 row(ui, "Page size", units.size(f64::from(p.width), f64::from(p.height)));
+                // The current page's /Rotate as the document has it now, unsaved rotations
+                // included; turning only the view leaves it alone (#7497).
+                if let Some(p) = i.pages.get(current) {
+                    row(ui, "Current page rotation", format!("{}°", p.rotation));
+                }
                 row(ui, "Number of pages", i.pages.len().to_string());
                 row(ui, "Tagged PDF", yes(i.tagged));
                 row(ui, "Form fields", i.fields.len().to_string());
