@@ -180,7 +180,7 @@ pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // Leaving the workspace needs the whole app, so it waits until the view is done with: leaving
     // Edit puts Edit text down and applies a paragraph still open on the page.
     if back && !close {
-        app.enter_mode(crate::Mode::AllTools);
+        app.back_to_all_tools();
     }
 }
 
