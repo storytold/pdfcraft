@@ -25,6 +25,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
 mod elsewhere;
+mod font_lists;
 mod globals;
 mod identification;
 mod image;
@@ -603,6 +604,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         .collect::<Result<Vec<_>, _>>()?;
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
+    // What the marked pages show before the apply, for the fonts' character lists after it.
+    let shown_before = type3::shown_codes(doc, Some(&by_page));
     let widget_owner: Vec<(ObjRef, ObjRef)> =
         pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
     let listed_before = listed_annotations(doc);
@@ -809,6 +812,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     if residue > 0 {
         return Err(RedactError::Residue(residue));
     }
+    // A character only the removed text showed leaves its font's lists.
+    font_lists::prune(doc, shown_before)?;
     // The interpreter can remove a pattern's paint while another use keeps the cell reachable.
     // Inspect the finished selected pages, including rewritten Forms, and all pages if a removed
     // pattern or appearance may still be shared. Retained unsafe cells refuse the redaction;

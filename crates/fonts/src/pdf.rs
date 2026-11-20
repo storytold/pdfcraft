@@ -1518,6 +1518,34 @@ fn parse_to_unicode_within(data: &[u8], out: &mut Unicode, mut budget: usize) {
     out.explicit_low = bit_set_below_64k(out.explicit.keys().copied());
 }
 
+/// A simple font's ToUnicode CMap `data`, written again without the codes in `drop`; `None` when
+/// it maps none of them, or builds on another map (`usecmap`) that this one couldn't carry over,
+/// so the caller keeps the map as it is.
+pub fn to_unicode_without(data: &[u8], drop: &HashSet<u32>) -> Option<Vec<u8>> {
+    if data.windows(7).any(|w| w == b"usecmap") {
+        return None;
+    }
+    let mut map = Unicode::default();
+    parse_to_unicode(data, &mut map);
+    if !drop.iter().any(|&code| code <= 0xFF && map.text(code).is_some()) {
+        return None;
+    }
+    let kept: Vec<(u32, String)> = (0..=0xFF).filter(|c| !drop.contains(c)).filter_map(|c| map.text(c).map(|t| (c, t.into_owned()))).collect();
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n",
+    );
+    // At most 100 entries per section, as for any CMap file.
+    for chunk in kept.chunks(100) {
+        cmap.push_str(&format!("{} beginbfchar\n", chunk.len()));
+        for (code, text) in chunk {
+            let units: String = text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+            cmap.push_str(&format!("<{code:02X}> <{units}>\n"));
+        }
+        cmap.push_str("endbfchar\n");
+    }
+    Some(format!("{cmap}endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n").into_bytes())
+}
+
 /// A glyph name's text, by the Adobe Glyph List *algorithm* — the published naming rules, not
 /// the AGL data table, which this crate does not hold.
 ///
