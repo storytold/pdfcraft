@@ -96,3 +96,23 @@ fn an_oversized_property_list_is_read_once_for_a_stream() {
     let (one, many) = (redaction(|| oversized(b"/P /M0 BDC EMC ")), redaction(|| oversized(&b"/P /M0 BDC EMC ".repeat(100))));
     assert!(about_as_long(many, one), "100 operators {many:?}, one {one:?}");
 }
+
+/// Written when stripping a property list of its replacement text copied the whole list, the text
+/// and all, while only what stayed was charged: a list whose `/ActualText` is an array of 200,000
+/// numbers, reached through 2,000 references, each named by a block whose paint went, was copied
+/// whole 2,000 times. The list is small enough for the document to keep it parsed, so each
+/// reference reaches it without parsing it again.
+#[test]
+fn stripping_a_property_list_costs_what_stays() {
+    let _serial = one_at_a_time();
+    let doc = |n: usize| {
+        let lists: String = (0..n).map(|k| format!("/M{k} {} 0 R ", 6 + k)).collect();
+        let ops: Vec<u8> = (0..n).map(|k| format!("/Span /M{k} BDC 20 250 5 5 re f EMC ")).collect::<String>().into_bytes();
+        let list = format!("<< /ActualText [{}] /Lang (en) >>", "0 ".repeat(200_000));
+        let mut extra = vec![list.into_bytes()];
+        extra.extend((0..n).map(|_| b"5 0 R".to_vec()));
+        page(&format!("/Properties << {lists}>>"), &ops, extra)
+    };
+    let (one, many) = (redaction(|| doc(1)), redaction(|| doc(2_000)));
+    assert!(about_as_long(many, one), "2,000 references {many:?}, one {one:?}");
+}
