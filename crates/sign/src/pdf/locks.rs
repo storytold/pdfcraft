@@ -12,15 +12,67 @@
 
 use std::collections::{BTreeMap, HashSet as NameSet};
 
-use super::listing::{Field, MAX_ENTRIES, MAX_FIELD_NAME_BYTES, MAX_FIELDS, MAX_NAME_BYTES};
+use super::listing::{Field, MAX_ENTRIES, MAX_FIELD_NAME_BYTES, MAX_FIELDS, MAX_NAME_BYTES, sig_fields, walk_sig_fields};
 use super::{Dict, Document, HashSet, ObjRef, Object};
 
 /// What a lock covers (`/Action`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
+pub enum FieldMdpAction {
     All,
     Include,
     Exclude,
+}
+
+type Action = FieldMdpAction;
+
+/// Field selection written when signing. XFA references are resolved to PDF field names by the
+/// caller before reaching the PDF signer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldMdpPolicy {
+    pub action: FieldMdpAction,
+    pub fields: Vec<String>,
+}
+
+impl FieldMdpPolicy {
+    /// FieldMDP field lists select a set; their order and repeated names do not change the lock.
+    pub fn equivalent(&self, other: &Self) -> bool {
+        if self.action != other.action {
+            return false;
+        }
+        if self.action == FieldMdpAction::All {
+            return true;
+        }
+        fn selection(fields: &[String]) -> NameSet<&str> {
+            let names: NameSet<_> = fields.iter().map(String::as_str).collect();
+            names.iter().copied().filter(|name| !has_listed_parent(name, &names)).collect()
+        }
+        selection(&self.fields) == selection(&other.fields)
+    }
+}
+
+/// One signed field's FieldMDP transform, with its field names as written in the PDF.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldMdp {
+    pub signature_field: String,
+    pub action: FieldMdpAction,
+    pub fields: Vec<String>,
+}
+
+/// A bounded listing of signed FieldMDP transforms.
+pub struct FieldMdpListing {
+    pub entries: Vec<FieldMdp>,
+    /// False when malformed data or a limit prevented reading all transforms.
+    pub complete: bool,
+}
+
+fn has_listed_parent(mut name: &str, names: &NameSet<&str>) -> bool {
+    while let Some((parent, _)) = name.rsplit_once('.') {
+        if names.contains(parent) {
+            return true;
+        }
+        name = parent;
+    }
+    false
 }
 
 /// One lock: its action and the fully qualified names it lists, exactly as written.
@@ -54,6 +106,8 @@ const MAX_LOCK_NAMES: usize = MAX_FIELDS;
 /// Most locks read for one signature: its `/Lock` and its FieldMDP references. Real signatures
 /// carry one or two; each one costs a pass over the form's names.
 const MAX_RULES: usize = 16;
+/// References can carry other transforms too, but reading them still costs a lookup each.
+const MAX_REFERENCES: usize = 64;
 /// Deepest field tree walked, and deepest nesting (references included) compared. Real forms nest
 /// a few levels.
 const MAX_FIELD_DEPTH: usize = 64;
@@ -106,6 +160,91 @@ fn rule(doc: &Document, d: &Dict) -> Result<Rule, ()> {
     Ok(Rule { action, names })
 }
 
+fn policy(rule: Rule) -> FieldMdpPolicy {
+    let mut fields: Vec<_> = rule.names.into_iter().collect();
+    fields.sort();
+    FieldMdpPolicy { action: rule.action, fields }
+}
+
+/// An authored `/Lock` on a signature field. A null lock means no policy; a malformed lock is
+/// kept as authored but cannot be combined with a requested FieldMDP policy.
+pub(super) fn lock_policy_checked(doc: &Document, field: &Dict) -> Result<Option<FieldMdpPolicy>, ()> {
+    let Some(lock) = field.get(b"Lock") else { return Ok(None) };
+    match doc.resolve(lock).as_ref() {
+        Object::Null => Ok(None),
+        Object::Dict(dict) => rule(doc, dict).map(policy).map(Some),
+        _ => Err(()),
+    }
+}
+
+/// The signature field's `/Lock` in a signed revision. A missing lock is distinct from an
+/// unreadable one: callers must not treat an invalid lock as an empty selection.
+pub fn signature_field_lock(doc: &Document, signature_field: &str) -> Result<Option<FieldMdpPolicy>, &'static str> {
+    let field = sig_fields(doc).into_iter().find(|field| field.name == signature_field).ok_or("signature field not found")?;
+    lock_policy_checked(doc, &field.dict).map_err(|_| "invalid /Lock policy")
+}
+
+/// All policies belonging to one signature in its signed revision. An unreadable policy leaves
+/// the scope unknown, as it does when validating the signature.
+pub fn signed_field_policies(doc: &Document, signature_field: &str) -> Result<Vec<FieldMdpPolicy>, &'static str> {
+    let field = sig_fields(doc).into_iter().find(|field| field.name == signature_field).ok_or("signature field not found")?;
+    let signature = field.signature(doc).ok_or("signature value not found")?;
+    policies(doc, &field, &signature).map_err(|_| "invalid /Lock or FieldMDP policy")
+}
+
+pub(super) fn policies(doc: &Document, field: &Field, signature: &Dict) -> Result<Vec<FieldMdpPolicy>, ()> {
+    rules(doc, field, signature).map(|rules| rules.into_iter().map(policy).collect())
+}
+
+/// Read the valid FieldMDP transforms of signature fields. Use [`signed_field_policies`] to
+/// decide a signature's full lock scope, including its `/Lock` and any unreadable transforms.
+pub fn field_mdp(doc: &Document) -> FieldMdpListing {
+    field_mdp_with_budget(doc, MAX_NAME_BYTES)
+}
+
+fn field_mdp_with_budget(doc: &Document, mut budget: usize) -> FieldMdpListing {
+    let (fields, complete) = walk_sig_fields(doc);
+    let mut listing = FieldMdpListing { entries: Vec::new(), complete };
+    for field in fields {
+        let Some(signature) = field.signature(doc) else { continue };
+        let Some(references) = signature.get(b"Reference").map(|value| doc.resolve(value)) else { continue };
+        if matches!(&*references, Object::Null) {
+            continue;
+        }
+        let Some(references) = references.as_array() else {
+            listing.complete = false;
+            continue;
+        };
+        listing.complete &= references.len() <= MAX_REFERENCES;
+        for reference in references.iter().take(MAX_REFERENCES) {
+            let resolved = doc.resolve(reference);
+            let Some(reference) = resolved.as_dict() else {
+                listing.complete = false;
+                continue;
+            };
+            if reference.name(b"TransformMethod") != Some(b"FieldMDP") {
+                continue;
+            }
+            let params = reference.get(b"TransformParams").map(|value| doc.resolve(value));
+            let Some(parsed) = params.as_deref().and_then(Object::as_dict).and_then(|params| rule(doc, params).ok()) else {
+                listing.complete = false;
+                continue;
+            };
+            let cost = parsed.names.iter().fold(std::mem::size_of::<FieldMdp>().saturating_add(field.name.len()), |bytes, name| {
+                bytes.saturating_add(std::mem::size_of::<String>()).saturating_add(name.capacity())
+            });
+            let Some(remaining) = budget.checked_sub(cost) else {
+                listing.complete = false;
+                return listing;
+            };
+            budget = remaining;
+            let policy = policy(parsed);
+            listing.entries.push(FieldMdp { signature_field: field.name.clone(), action: policy.action, fields: policy.fields });
+        }
+    }
+    listing
+}
+
 /// The locks of signature field `field`, whose value is `value`, both as the signed revision `old`
 /// has them. `Err` when one is there but can't be read: a `/Lock` or `/Reference` of the wrong
 /// type, a reference that is not a dictionary, a FieldMDP reference without parameters, or more
@@ -122,7 +261,7 @@ fn rules(old: &Document, field: &Field, value: &Dict) -> Result<Vec<Rule>, ()> {
     let refs = value.get(b"Reference").map(|r| old.resolve(r));
     let refs: &[Object] = match refs.as_deref() {
         None | Some(Object::Null) => &[],
-        Some(Object::Array(a)) => a,
+        Some(Object::Array(a)) if a.len() <= MAX_REFERENCES => a,
         // A single reference dictionary where an array belongs may still be a FieldMDP lock.
         Some(_) => return Err(()),
     };
@@ -505,6 +644,31 @@ mod tests {
     }
 
     const ALL_NAMES: &[&str] = &["amount", "note", "address", "address.city", "addressee"];
+
+    #[test]
+    fn equivalent_field_mdp_policies_ignore_redundant_descendants() {
+        for action in [Action::Include, Action::Exclude] {
+            let policy = |fields: &[&str]| FieldMdpPolicy { action, fields: fields.iter().map(|name| (*name).to_owned()).collect() };
+            let parent = policy(&["address", "note"]);
+            assert!(parent.equivalent(&policy(&["address.city.zip", "address", "note", "note"])));
+            assert!(!parent.equivalent(&policy(&["address.city", "note"])));
+            assert!(!parent.equivalent(&policy(&["address", "note", "addresses.city"])));
+            assert!(!parent.equivalent(&policy(&["address ", "note"])));
+        }
+    }
+
+    #[test]
+    fn field_mdp_listing_reports_total_budget_exhaustion() {
+        let doc = open(write_pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R 4 0 R] >> >>",
+            "<< /Type /Pages /Count 0 /Kids [] >>",
+            "<< /T (one) /FT /Sig /V << /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Action /All >> >>] >> >>",
+            "<< /T (two) /FT /Sig /V << /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Action /All >> >>] >> >>",
+        ]));
+        let listing = field_mdp_with_budget(&doc, std::mem::size_of::<FieldMdp>() + "one".len());
+        assert!(!listing.complete);
+        assert_eq!(listing.entries, [FieldMdp { signature_field: "one".into(), action: Action::All, fields: Vec::new() }]);
+    }
 
     /// A FieldMDP reference in the signature value locks as a `/Lock` on its field does: the
     /// signers that write only one of them are read either way.

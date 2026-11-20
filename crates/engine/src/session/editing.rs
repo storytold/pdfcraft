@@ -6,6 +6,7 @@ use super::{
     inspect, js, keys_after, note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state,
     undrawn_notices, uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
+use crate::signature_locks::SignatureLocks;
 use crate::{EditNotice, MarkKind, print_preview_layers};
 
 /// Add scan cover and ink to edits of invisible OCR text, returning no edit for an unchanged draft.
@@ -46,8 +47,13 @@ fn deletes_pages(edit: &Edit) -> bool {
 }
 
 /// Keep edits to the working copy until both the operation and its script callbacks succeed.
-fn run_checked_edit(next: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
-    let result = guard(|| run_edit(next, edit, cx))
+fn run_checked_edit(
+    next: &mut pdfcraft_cos::Document,
+    edit: &Edit,
+    cx: &mut EditCtx,
+    locks: &crate::signature_locks::SignatureLocks,
+) -> Result<(), EditError> {
+    let result = guard(|| run_edit(next, edit, cx, Some(locks)))
         .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))));
     let refusal = cx.js.as_mut().and_then(|runner| runner.refused.take());
     if refusal.is_some() || result.is_err() {
@@ -171,6 +177,9 @@ impl Session {
         let Some(edit) = prepare_ocr_text_edit(editor, &doc.info, edit) else {
             return Ok(None);
         };
+        if let Some(name) = doc.signature_locks.targeted(&edit) {
+            return Err(EditError::Invalid(format!("the signature locks {name}; the document was not changed")));
+        }
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
             return Ok(None);
@@ -188,7 +197,7 @@ impl Session {
         cx.redaction_overlays.clear();
         cx.redaction_marks.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
-        run_checked_edit(&mut next, &edit, &mut cx)?;
+        run_checked_edit(&mut next, &edit, &mut cx, &doc.signature_locks)?;
         // A field's enter or exit scripts that changed nothing leave no edit behind (no undo step,
         // nothing unsaved); what they showed or asked for still goes out. Only an event on its own:
         // a batch keeps the other edits it holds.
@@ -281,8 +290,21 @@ impl Session {
                 };
                 // Every changed field's scripts, then the calculations once (after a reset,
                 // only those).
-                let ran = guard(|| xfa::on_changes(&mut next, &tpl, &changed, &mut run, &mut exited))
-                    .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
+                let ran = guard(|| {
+                    xfa::on_changes(
+                        &mut next,
+                        &tpl,
+                        &changed,
+                        &mut run,
+                        &mut exited,
+                        Some(xfa::SignedCalculation {
+                            before: &editor.cos,
+                            locks: &doc.signature_locks,
+                            suppressed: &mut cx.xfa_suppressed_calculations,
+                        }),
+                    )
+                })
+                .unwrap_or_else(|m| Err(format!("the form's scripts failed unexpectedly ({m})")));
                 cx.xfa_datasets = run.datasets;
                 cx.xfa_ran_away |= run.ran_away;
                 // The next edit of a batch reads the highlight this one's scripts set.
@@ -328,7 +350,14 @@ impl Session {
             discard_edit_callbacks(&cx);
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
+        if let Some(name) = doc.signature_locks.changed(&editor.cos, &next) {
+            discard_edit_callbacks(&cx);
+            return Err(EditError::Invalid(format!("the signature locks {name}; the document was not changed")));
+        }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
+        if !cx.xfa_suppressed_calculations.is_empty() {
+            notices.insert(0, EditNotice::SignedCalculationSkipped { fields: std::mem::take(&mut cx.xfa_suppressed_calculations) });
+        }
         // Places applied redactions left that still hold the removed text, and what became of
         // the PDF/A or PDF/UA identification in the XMP they removed: said, not silent.
         notices.extend(cx.redaction_elsewhere.filter(|e| e.total() > 0 || e.unsearched).map(EditNotice::RedactionElsewhere));
@@ -539,6 +568,7 @@ impl Session {
         }
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
+        doc.signature_locks.apply(&mut form);
         let form = Arc::new(form);
         match scope {
             Scope::Metadata => return Ok(()),
@@ -741,6 +771,13 @@ impl Session {
         doc.fonts_stale = false;
         let mut form = pdfcraft_forms::fields(&editor.cos);
         xfa::mark_script_buttons(&editor.cos, &mut form);
+        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        doc.signature_locks = SignatureLocks::read(&editor.cos, &bytes, &form, &signatures, doc.xfa_template.as_deref());
+        if let Some(warning) = doc.signature_locks.warning() {
+            note_warnings(&mut doc.xfa_warnings, &[warning.to_string()]);
+            note_warnings(&mut doc.info.warnings, &[warning.to_string()]);
+        }
+        doc.signature_locks.apply(&mut form);
         doc.form = Arc::new(form);
         if invalidate_markers {
             doc.marker_scan = OnceLock::new();
@@ -748,7 +785,7 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        let mut signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let mut signatures = signatures;
         doc.display = display_bytes(Some(editor), &bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));

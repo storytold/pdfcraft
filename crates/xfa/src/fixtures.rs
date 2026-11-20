@@ -749,7 +749,10 @@ pub fn signing_events_template() -> String {
  <subform name="page1" layout="tb" w="7.5in">
   <field name="when" w="2in" h="0.3in"><ui><textEdit/></ui></field>
   <field name="after" w="2in" h="0.3in"><ui><textEdit/></ui></field>
-  <field name="sign" w="3in" h="1in"><ui><signature/></ui>
+  <field name="sign" w="3in" h="1in"><ui><signature type="PDF1.6"><manifest action="exclude">
+   <ref>form[0].page1[0].after[0]</ref>
+   <ref>form[0].page1[0].plain[0]</ref>
+  </manifest></signature></ui>
    <event activity="preSign"><script contentType="application/x-javascript">xfa.host.messageBox("Signing notice"); when.rawValue = "signed"; when.access = "readOnly";</script></event>
    <event activity="postSign"><script contentType="application/x-javascript">after.rawValue = "done";</script></event>
   </field>
@@ -760,6 +763,23 @@ pub fn signing_events_template() -> String {
 </xdp:xdp>
 "##
     .to_string()
+}
+
+/// An editable quantity and a calculated total selected by a PDF signature manifest.
+pub fn signature_calculation_template() -> &'static str {
+    r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <field name="qty" w="2in" h="0.3in"><ui><numericEdit/></ui><value><integer>2</integer></value></field>
+  <field name="total" w="2in" h="0.3in"><ui><numericEdit/></ui><value><integer>4</integer></value>
+   <calculate><script contentType="application/x-javascript">Number(qty.rawValue) * 2</script></calculate>
+  </field>
+  <field name="approval" w="2in" h="0.5in"><ui><signature type="PDF1.6"><manifest action="include">
+   <ref>form[0].page1[0].total[0]</ref>
+  </manifest></signature></ui></field>
+ </subform>
+</subform></template></xdp:xdp>"#
 }
 
 /// A form of `sections` sections of `rows` rows, each row with a calculated total (half in

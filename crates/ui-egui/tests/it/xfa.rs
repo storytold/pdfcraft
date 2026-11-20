@@ -127,6 +127,43 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(4);
 }
 
+#[test]
+fn editing_an_unlocked_xfa_input_shows_the_signed_calculation_warning() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_engine::{Session, SignOptions, sign};
+    use std::sync::Arc;
+
+    let p12 = include_bytes!("../../../sign/tests/data/ec-p256.p12");
+    let identity = sign::pkcs12::open(p12, "test").unwrap();
+    let mut session = Session::new().with_clock(|| 1_800_000_000);
+    let xdp = pdfcraft_xfa::fixtures::signature_calculation_template();
+    let id = session.open("form.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).unwrap();
+    let approval = "form[0].page1[0].approval[0]";
+    let name = |leaf: &str| {
+        session.get(id).unwrap().form.iter().find(|field| field.name == leaf || field.name.ends_with(&format!(".{leaf}[0]"))).unwrap().name.as_str()
+    };
+    let (qty, total) = (name("qty"), name("total"));
+    let signed = session.sign(id, &identity, SignOptions { field: Some(approval.into()), ..SignOptions::default() }).unwrap();
+    let mut h = open(signed.as_ref().clone());
+    crate::support::settle(&mut h);
+
+    click_field(&mut h, total);
+    assert!(h.state().views[0].forms.focus.is_none(), "the protected total cannot be edited");
+    click_field(&mut h, qty);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|field| field.name.as_str()), Some(qty));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    h.get_by_label_contains("kept its previous value");
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let value = |name| doc.form.iter().find(|field| field.name == name).unwrap().value.as_slice();
+    assert_eq!(value(qty), ["5"]);
+    assert_eq!(value(total), ["4"]);
+}
+
 /// Clicking an XFA button in the app runs its click script: one adds a row, another shows its
 /// message as a notice.
 #[test]

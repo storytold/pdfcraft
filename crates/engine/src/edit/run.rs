@@ -258,6 +258,7 @@ pub(crate) struct EditCtx {
     pub(crate) xfa_ran_away: bool,
     /// An XFA enter or exit event whose scripts changed nothing: no edit to keep.
     pub(crate) xfa_unchanged: bool,
+    pub(crate) xfa_suppressed_calculations: Vec<String>,
     /// What the XFA scripts' time limits are multiplied by ([`Session::with_xfa_time_scale`]).
     pub(crate) xfa_time_scale: u32,
     /// The edit took the XFA out of the form: what went with it, for the document's warnings.
@@ -330,6 +331,7 @@ impl EditCtx {
             xfa_datasets: None,
             xfa_ran_away: false,
             xfa_unchanged: false,
+            xfa_suppressed_calculations: Vec::new(),
             xfa_time_scale: 1,
             xfa_removed: Vec::new(),
             pages: 0,
@@ -551,7 +553,12 @@ fn invalidate_form_script_snapshot(cx: &mut EditCtx) {
 }
 
 /// Perform an edit on a working copy (the caller discards it on error).
-pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
+pub(crate) fn run_edit(
+    doc: &mut pdfcraft_cos::Document,
+    edit: &Edit,
+    cx: &mut EditCtx,
+    locks: Option<&crate::signature_locks::SignatureLocks>,
+) -> Result<(), EditError> {
     match edit {
         Edit::RotatePages { pages, degrees } => pdfcraft_organize::rotate_pages(doc, pages, *degrees)?,
         Edit::DeletePages { pages } => pdfcraft_organize::delete_pages(doc, pages)?,
@@ -796,11 +803,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 highlight,
                 time_scale: cx.xfa_time_scale,
             };
-            let ran = if matches!(activity.as_str(), "enter" | "exit") {
-                xfa::on_focus(doc, &tpl, som, activity, &mut run).map(|changes| changes.is_empty())
-            } else {
-                xfa::on_event(doc, &tpl, som, activity, &mut run).map(|()| false)
-            };
+            let signed = locks.map(|locks| (locks, &mut cx.xfa_suppressed_calculations));
+            let ran = xfa::on_event(doc, &tpl, som, activity, &mut run, signed);
             cx.xfa_datasets = run.datasets;
             cx.xfa_ran_away |= run.ran_away;
             // The next edit of a batch reads the highlight this one's scripts set.
@@ -933,7 +937,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
-        Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx))?,
+        Edit::DeleteObjects { page, objects } => crate::object_clip::delete(doc, *page, objects, |doc, edit| run_edit(doc, edit, cx, locks))?,
         Edit::PasteObjects { page, clip, offset } => crate::object_clip::paste(doc, *page, clip, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
@@ -1176,13 +1180,18 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
             doc.remove_encryption();
         }
-        Edit::Batch { edits, .. } => run_batch(doc, edits, cx)?,
+        Edit::Batch { edits, .. } => run_batch(doc, edits, cx, locks)?,
     }
     Ok(())
 }
 
 /// Apply an edit batch while keeping reset deferral scoped to adjacent script writeback.
-fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx) -> Result<(), EditError> {
+fn run_batch(
+    doc: &mut pdfcraft_cos::Document,
+    edits: &[Edit],
+    cx: &mut EditCtx,
+    locks: Option<&crate::signature_locks::SignatureLocks>,
+) -> Result<(), EditError> {
     // A form-script event runs on its own: in a batch, its scripts and those the batch's
     // value edits run afterwards (change, exit) would interleave, an exit running twice.
     if edits.iter().any(|e| matches!(e, Edit::XfaEvent { .. })) {
@@ -1202,7 +1211,7 @@ fn run_batch(doc: &mut pdfcraft_cos::Document, edits: &[Edit], cx: &mut EditCtx)
     let deferred = cx.defer_reset_callbacks;
     for (index, e) in edits.iter().enumerate() {
         cx.defer_reset_callbacks = script_writeback[index];
-        let result = run_edit(doc, e, cx);
+        let result = run_edit(doc, e, cx, locks);
         cx.defer_reset_callbacks = deferred;
         result?;
         if let Some(js) = cx.js.as_mut() {

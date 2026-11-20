@@ -3,6 +3,25 @@ use super::{
     display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
 };
 
+fn configure_xfa_signature(cos: &pdfcraft_cos::Document, opts: &mut SignOptions) -> Result<(), EditError> {
+    let Some(field) = opts.field.as_deref() else { return Ok(()) };
+    let Some(policy) = crate::signature_locks::signing_policy(cos, field).map_err(|e| EditError::Sign(e.to_string()))? else { return Ok(()) };
+    if policy.field_mdp.is_none() && opts.field_mdp.as_ref().is_some_and(|requested| requested.action != pdfcraft_sign::pdf::FieldMdpAction::All) {
+        return Err(EditError::Sign("a signature without an XFA manifest cannot limit its field locks".into()));
+    }
+    if let (Some(requested), Some(manifest)) = (opts.field_mdp.as_ref(), policy.field_mdp.as_ref())
+        && !requested.equivalent(manifest)
+    {
+        return Err(EditError::Sign("the requested FieldMDP policy conflicts with the XFA manifest".into()));
+    }
+    if opts.certify.is_some() && policy.certify.is_some() && opts.certify != policy.certify {
+        return Err(EditError::Sign("the requested certification permissions conflict with the XFA filter".into()));
+    }
+    opts.field_mdp = opts.field_mdp.take().or(policy.field_mdp);
+    opts.certify = opts.certify.or(policy.certify);
+    Ok(())
+}
+
 impl Session {
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
     /// with `/ModDate` stamped. Call `mark_saved` after writing them successfully.
@@ -340,6 +359,12 @@ impl Session {
     /// `opts.date` takes the session clock.
     pub fn sign(&self, doc: DocId, id: &pdfcraft_sign::DigitalId, mut opts: SignOptions) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        if let Some(field) = opts.field.as_deref().filter(|field| d.signature_locks.is_locked(field)) {
+            return Err(EditError::Sign(format!("the signature locks {field}; the document was not changed")));
+        }
+        if opts.field.is_none() && d.signature_locks.blocks_new_signature() {
+            return Err(EditError::Sign("the signed document does not permit a new signature field".into()));
+        }
         // Encrypted documents are signed under their permissions (the signer checks them).
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
@@ -347,6 +372,7 @@ impl Session {
         }
         // A typed Password-field value is not signed into the file (#3926), as it isn't saved.
         let cos = drawn_for_first_signature(writable(&editor.cos)?);
+        configure_xfa_signature(&cos, &mut opts)?;
         Ok(Arc::new(pdfcraft_sign::sign(&cos, id, &opts)?))
     }
 
@@ -360,11 +386,18 @@ impl Session {
         tsa: &dyn pdfcraft_sign::TimestampAuthority,
     ) -> Result<Arc<Vec<u8>>, EditError> {
         let d = self.get(doc).ok_or(EditError::NoDocument)?;
+        if let Some(field) = opts.field.as_deref().filter(|field| d.signature_locks.is_locked(field)) {
+            return Err(EditError::Sign(format!("the signature locks {field}; the document was not changed")));
+        }
+        if opts.field.is_none() && d.signature_locks.blocks_new_signature() {
+            return Err(EditError::Sign("the signed document does not permit a new signature field".into()));
+        }
         let editor = d.editor.as_ref().ok_or_else(|| EditError::ReadOnly(d.read_only_reason.clone().unwrap_or_default()))?;
         if opts.date.is_empty() {
             opts.date = self.signing_date();
         }
         let cos = drawn_for_first_signature(writable(&editor.cos)?);
+        configure_xfa_signature(&cos, &mut opts)?;
         let signed = Arc::new(pdfcraft_sign::sign_with_timestamp(&cos, id, &opts, tsa)?);
         // Checked like a save before anyone writes it (#2166).
         self.check_save(doc, &signed)?;
