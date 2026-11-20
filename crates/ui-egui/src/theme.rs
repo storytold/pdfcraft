@@ -305,10 +305,10 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     fonts
 }
 
-/// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
-/// the CJK, Arabic, Telugu, Hebrew and Thai faces of the optional craft-fonts build input as the
-/// last fallback in every family. Without craft-fonts there is no Japanese, Chinese, Arabic,
-/// Telugu, Hebrew or Thai face here.
+/// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults. The
+/// proportional families use JetBrains Mono after those for missing glyphs, followed by the CJK,
+/// Arabic, Telugu, Hebrew and Thai faces of the optional craft-fonts build input. Without
+/// craft-fonts there is no Japanese, Chinese, Arabic, Telugu, Hebrew or Thai face here.
 pub fn font_definitions() -> FontDefinitions {
     font_definitions_for(false)
 }
@@ -367,6 +367,9 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
     add(&mut fonts, "Inter-SemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
+    // Inter and egui's proportional defaults lack U+FFFD, which lossy display of non-UTF-8 PDF
+    // names needs. JetBrains Mono has it; keep it after those faces so it only fills their gaps.
+    fonts.families.entry(FontFamily::Proportional).or_default().push("JetBrainsMono".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
     // Keep missing Latin/Cyrillic letters in the app's own faces (for example Bulgarian ѝ,
     // absent from JetBrains Mono), before egui's defaults or optional system/CJK fallbacks.
