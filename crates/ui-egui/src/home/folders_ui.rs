@@ -337,7 +337,17 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use crate::{icons, widgets};
 
     let t = Tokens::get(ui.ctx());
-    app.refresh_pinned(ui.input(|i| i.time));
+    let now = ui.input(|i| i.time);
+    app.refresh_pinned(now);
+    // A running scan requests its own repaint on completion. Otherwise, wake idle Home
+    // at the next scan deadline so new files appear even without window input.
+    if !app.pinned.folders.is_empty()
+        && app.pinned.scan.is_none()
+        && let Some(last) = app.pinned.last_scan
+        && let Ok(delay) = std::time::Duration::try_from_secs_f64((RESCAN_SECS - (now - last)).max(0.0))
+    {
+        ui.ctx().request_repaint_after(delay);
+    }
     let mut pin = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Folders")).font(theme::semibold(17.0)));
