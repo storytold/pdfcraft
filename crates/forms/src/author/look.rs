@@ -326,7 +326,8 @@ pub(super) fn redraw_widgets_target(doc: &mut Document, name: &str, object: Opti
         .into_iter()
         .find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj))
         .ok_or_else(|| FormError::NoSuchField(name.into()))?;
-    redraw_widgets_of(doc, &f, only)
+    // A fresh pool per top-level call (undo safety), as `redraw_field` always had.
+    redraw_widgets_of(doc, &f, only, &mut crate::LazyPool::new())
 }
 
 /// [`redraw_field`] for each field [`fields`] lists that `keep` accepts. The form's fields are
@@ -335,16 +336,19 @@ pub(super) fn redraw_widgets_target(doc: &mut Document, name: &str, object: Opti
 /// which grows with the square of the field count (a laid out XFA form with a thousand rows holds
 /// thousands of fields). A failure names the field it stopped at.
 pub fn redraw_fields(doc: &mut Document, mut keep: impl FnMut(&Document, &Field) -> bool) -> Result<(), FormError> {
+    // One pool for every field drawn, so the form's glyphs are read once.
+    let mut pool = crate::LazyPool::new();
     for f in fields(doc) {
         if keep(doc, &f) {
-            redraw_widgets_of(doc, &f, None).map_err(|e| FormError::Invalid(format!("{}: {e}", f.name)))?;
+            redraw_widgets_of(doc, &f, None, &mut pool).map_err(|e| FormError::Invalid(format!("{}: {e}", f.name)))?;
         }
     }
     Ok(())
 }
 
-/// [`redraw_widgets`] for the field `f`, as `fields(doc)` read it.
-fn redraw_widgets_of(doc: &mut Document, f: &Field, only: Option<usize>) -> Result<(), FormError> {
+/// [`redraw_widgets`] for the field `f`, as `fields(doc)` read it, storing Type 3 glyph procedures
+/// through `pool`, once per document.
+fn redraw_widgets_of(doc: &mut Document, f: &Field, only: Option<usize>, pool: &mut crate::LazyPool) -> Result<(), FormError> {
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {
@@ -355,8 +359,8 @@ fn redraw_widgets_of(doc: &mut Document, f: &Field, only: Option<usize>) -> Resu
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
                 let (mut s, m) = appearance::field_appearance_drawn(doc, f, w, &f.value, true);
                 missing = m;
-                // Thai glyphs are streams of their own.
-                pdfcraft_fonts::shaped_text::store_streams(doc, &mut s.dict);
+                // Shaped glyphs are streams of their own, each stored once per document (#6867).
+                pool.store(doc, &mut s.dict);
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
                 d.set(b"N".to_vec(), Object::Ref(r));

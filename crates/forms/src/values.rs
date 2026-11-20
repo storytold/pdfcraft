@@ -1,8 +1,8 @@
 use super::appearances::{declares_pdfa, need_appearances};
 use super::read::{acroform, field_flags, fields, listed_indices, listing_fields_named, page_refs, selected_options};
 use super::{
-    Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
-    author, calc_order, flags, invalid, name_obj, scripting,
+    Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, LazyPool, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af,
+    appearance, author, calc_order, flags, invalid, name_obj, scripting,
 };
 
 // ── writing ─────────────────────────────────────────────────────────────────────────────────
@@ -14,13 +14,18 @@ pub fn set_value(doc: &mut Document, name: &str, value: &FieldValue) -> Result<(
 
 /// [`set_value`], running the fields' JavaScript through `scripts`.
 pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    set_value_in(doc, name, value, scripts, &mut LazyPool::new())
+}
+
+/// [`set_value_with`], storing glyph procedures through `pool` (one per public call).
+fn set_value_in(doc: &mut Document, name: &str, value: &FieldValue, scripts: &mut dyn Scripts, pool: &mut LazyPool) -> Result<(), FormError> {
     let all = fields(doc);
     if all.is_empty() {
         return Err(FormError::NoForm);
     }
     let named: Vec<usize> = all.iter().enumerate().filter(|(_, f)| f.name == name).map(|(i, _)| i).collect();
-    fill(doc, &all, &named, name, value, scripts)?;
-    recalculate_with(doc, scripts)?;
+    fill(doc, &all, &named, name, value, scripts, pool)?;
+    recalculate_in(doc, scripts, pool)?;
     Ok(())
 }
 
@@ -32,6 +37,8 @@ pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, script
 /// which, as with [`set_value`], no value counts as filled (though each was written).
 pub fn set_values(doc: &mut Document, values: &[(String, FieldValue)]) -> Result<Vec<Result<(), FormError>>, FormError> {
     let mut scripts = NoScripts;
+    // One pool for the batch, so the form's glyphs are read once, not once per value.
+    let mut pool = LazyPool::new();
     let mut form = NamedFields::read(doc);
     // The field objects this batch wrote since the form was last read.
     let mut written = std::collections::HashSet::new();
@@ -49,13 +56,13 @@ pub fn set_values(doc: &mut Document, values: &[(String, FieldValue)]) -> Result
             written.clear();
         }
         let named = form.named(name);
-        let result = fill(doc, &form.all, named, name, value, &mut scripts);
+        let result = fill(doc, &form.all, named, name, value, &mut scripts, &mut pool);
         written.extend(form.objs(name));
         filled |= result.is_ok();
         results.push(result);
     }
     if filled {
-        recalculate_with(doc, &mut scripts)?;
+        recalculate_in(doc, &mut scripts, &mut pool)?;
     }
     Ok(results)
 }
@@ -88,7 +95,15 @@ impl NamedFields {
 
 /// Write `value` into the field `name`, without recalculating: `named` are the positions in
 /// `all` (the form as read before this write) of the fields with that name, in field order.
-fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
+fn fill(
+    doc: &mut Document,
+    all: &[Field],
+    named: &[usize],
+    name: &str,
+    value: &FieldValue,
+    scripts: &mut dyn Scripts,
+    pool: &mut LazyPool,
+) -> Result<(), FormError> {
     let mut same = named.iter().filter_map(|&i| all.get(i));
     let first = same.clone().next().ok_or_else(|| FormError::NoSuchField(name.into()))?;
     // Fields with the same fully qualified name are one field (ISO 32000-2 §12.7.4.2), so a radio
@@ -108,7 +123,7 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     if f.read_only() || first.read_only() || radio_locked {
         return Err(FormError::ReadOnly(name.into()));
     }
-    write_value(doc, f, value, scripts)?;
+    write_value(doc, f, value, scripts, pool)?;
     author::form_fonts_as_objects(doc, all)?;
     // Fields with the same fully qualified name are one field (§12.7.3.1). Writers that repeat a
     // name as separate field dictionaries, instead of widgets under one parent, get the value
@@ -117,7 +132,7 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
     if !twins.is_empty() {
         let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
         for t in twins {
-            share_value(doc, (f.obj, &f.options), t, &taken, scripts)?;
+            share_value(doc, (f.obj, &f.options), t, &taken, scripts, pool)?;
         }
     }
     // A field whose `/Kids` lists radio fields that don't name it as their `/Parent` has their
@@ -141,6 +156,7 @@ fn share_value(
     twin: &Field,
     value: &[String],
     scripts: &mut dyn Scripts,
+    pool: &mut LazyPool,
 ) -> Result<(), FormError> {
     match twin.kind {
         FieldKind::CheckBox => {
@@ -189,7 +205,7 @@ fn share_value(
             if matches!(twin.kind, FieldKind::Combo | FieldKind::List) {
                 shown.selected = selected_options(&twin.options, value, positions.as_deref());
             }
-            redraw(doc, &shown, value, scripts)
+            redraw(doc, &shown, value, scripts, pool)
         }
         FieldKind::PushButton | FieldKind::Signature => Ok(()),
     }
@@ -203,14 +219,21 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
 
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
-    recalculate_values(doc, scripts, None)
+    recalculate_in(doc, scripts, &mut LazyPool::new())
+}
+
+/// [`recalculate_with`], storing glyph procedures through `pool`, the calling entry point's.
+pub(crate) fn recalculate_in(doc: &mut Document, scripts: &mut dyn Scripts, pool: &mut LazyPool) -> Result<usize, FormError> {
+    recalculate_values(doc, scripts, None, pool)
 }
 
 /// Evaluate fields in calculation order. When a redraw set is supplied, record changed fields for formatting after the pass.
+/// `pool` is the calling entry point's glyph pool; it is independent of the redraw set.
 fn recalculate_values(
     doc: &mut Document,
     scripts: &mut dyn Scripts,
     mut deferred: Option<&mut std::collections::HashSet<ObjRef>>,
+    pool: &mut LazyPool,
 ) -> Result<usize, FormError> {
     let mut all = fields(doc);
     if !all.iter().any(calc_order::is_calculated) {
@@ -241,7 +264,7 @@ fn recalculate_values(
                 .find(|c| c.name == f.name && c.object.is_none_or(|obj| obj == f.obj))
                 .and_then(|c| c.value.as_ref())
                 .map(|v| v.first().cloned().unwrap_or_default());
-            scripting::apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts)?;
+            scripting::apply_changes(doc, &r.changes, &f.name, Some(f.obj), scripts, pool)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
             }
@@ -283,7 +306,7 @@ fn recalculate_values(
                 pending.insert(obj);
             } else {
                 let current = all.iter().find(|field| field.obj == obj).unwrap_or(&f);
-                redraw(doc, current, std::slice::from_ref(&v), scripts)?;
+                redraw(doc, current, std::slice::from_ref(&v), scripts, pool)?;
             }
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
@@ -311,12 +334,26 @@ pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    write_value_impl(doc, f, value, scripts, false)
+pub(crate) fn write_value(
+    doc: &mut Document,
+    f: &Field,
+    value: &FieldValue,
+    scripts: &mut dyn Scripts,
+    pool: &mut LazyPool,
+) -> Result<(), FormError> {
+    write_value_impl(doc, f, value, scripts, false, pool)
 }
 
 /// Persist a value according to the field kind. A reset bypasses custom input validation and defers text and choice appearances.
-fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut dyn Scripts, resetting: bool) -> Result<(), FormError> {
+/// A reset is still a fill: the same `pool` dedups its glyph procedures.
+fn write_value_impl(
+    doc: &mut Document,
+    f: &Field,
+    value: &FieldValue,
+    scripts: &mut dyn Scripts,
+    resetting: bool,
+    pool: &mut LazyPool,
+) -> Result<(), FormError> {
     match (f.kind, value) {
         (FieldKind::Text, FieldValue::Text(t)) => {
             if let Some(max) = f.max_len
@@ -332,7 +369,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &f.actions.keystroke(&f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts)? };
+            let (t, refresh_field) = if resetting { (t.clone(), false) } else { scripting::accept(doc, f, t, scripts, pool)? };
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
@@ -346,7 +383,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
                 return Ok(());
             }
             let current = refresh_field.then(|| fields(doc).into_iter().find(|current| current.obj == f.obj)).flatten();
-            redraw(doc, current.as_ref().unwrap_or(f), std::slice::from_ref(&t), scripts)
+            redraw(doc, current.as_ref().unwrap_or(f), std::slice::from_ref(&t), scripts, pool)
         }
         (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
             // A button can be read-only on its own (its own `/Ff`), though the field isn't.
@@ -505,7 +542,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             let mut shown = f.clone();
             shown.value = exports.clone();
             shown.selected = picked;
-            redraw(doc, &shown, &exports, scripts)
+            redraw(doc, &shown, &exports, scripts, pool)
         }
         (FieldKind::PushButton, _) => invalid(format!("{:?} is a button; it has no value", f.name)),
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
@@ -514,8 +551,14 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
 }
 
 /// Redraw a calculated value without running input validation or calculation again.
-pub(crate) fn redraw_calculated_value(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    redraw(doc, f, values, scripts)
+pub(crate) fn redraw_calculated_value(
+    doc: &mut Document,
+    f: &Field,
+    values: &[String],
+    scripts: &mut dyn Scripts,
+    pool: &mut LazyPool,
+) -> Result<(), FormError> {
+    redraw(doc, f, values, scripts, pool)
 }
 
 /// A list box's first visible row (`/TI`) before and after scrolling so the `picked` positions of
@@ -654,8 +697,9 @@ pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) ->
     apd
 }
 
-/// Regenerate the normal appearance of every widget of a text or choice field.
-fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+/// Regenerate the normal appearance of every widget of a text or choice field. Type 3 glyph
+/// procedures the appearances draw are stored through `pool`, once per document.
+fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts, pool: &mut LazyPool) -> Result<(), FormError> {
     let shown = match values {
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),
         _ => None,
@@ -683,8 +727,8 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
-        // Thai glyphs are streams of their own.
-        pdfcraft_fonts::shaped_text::store_streams(doc, &mut stream.dict);
+        // Shaped glyphs are streams of their own, each stored once per document (#6867).
+        pool.store(doc, &mut stream.dict);
         let existing_ap = in_place
             .then(|| {
                 doc.get(w.obj)
@@ -837,8 +881,9 @@ pub fn password_values(doc: &Document) -> Vec<(String, String)> {
 /// Put values from [`password_values`] back into the open document, in memory only. A field
 /// that is gone or read-only keeps what it has.
 pub fn restore_password_values(doc: &mut Document, values: &[(String, String)]) -> Result<(), FormError> {
+    let mut pool = LazyPool::new();
     for (name, v) in values {
-        match set_value(doc, name, &FieldValue::Text(v.clone())) {
+        match set_value_in(doc, name, &FieldValue::Text(v.clone()), &mut NoScripts, &mut pool) {
             Ok(()) | Err(FormError::NoSuchField(_) | FormError::ReadOnly(_)) => {}
             Err(e) => return Err(e),
         }
@@ -889,6 +934,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     // Each field's ancestors, found once: only values change below, never `/Parent` (#3943
     // review: walking them again for every ancestor of every target was quadratic).
     let chains: Vec<(bool, Vec<ObjRef>)> = fields(doc).iter().map(|g| (is_password(g), field_chain(doc, g.obj))).collect();
+    let mut pool = LazyPool::new();
     for f in &targets {
         let chain = field_chain(doc, f.obj);
         for w in &f.widgets {
@@ -921,7 +967,7 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
             None if shared_value_kept => doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text("")))?,
             None => {}
         }
-        redraw(doc, f, &restored, &mut NoScripts)?;
+        redraw(doc, f, &restored, &mut NoScripts, &mut pool)?;
     }
     Ok(targets.len())
 }
@@ -984,6 +1030,8 @@ pub fn reset_with_formatting(
     }
     let named: Option<std::collections::HashSet<&str>> = names.map(|n| n.iter().map(String::as_str).collect());
     let mut changed = 0;
+    // One pool for the whole reset (writes, calculations and the final redraws), seeded per call.
+    let mut pool = LazyPool::new();
     let mut redraw_fields = std::collections::HashSet::new();
     for f in all.iter().filter(|f| named.as_ref().is_none_or(|n| n.contains(f.name.as_str()))) {
         // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
@@ -1003,7 +1051,7 @@ pub fn reset_with_formatting(
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        match write_value_impl(doc, &tmp, &v, scripts, true) {
+        match write_value_impl(doc, &tmp, &v, scripts, true, &mut pool) {
             Ok(()) => {
                 changed += 1;
                 if matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
@@ -1017,7 +1065,7 @@ pub fn reset_with_formatting(
         }
     }
     let calculation_runner: &mut dyn Scripts = if calculate_with_scripts { scripts } else { &mut NoScripts };
-    let recalculated = recalculate_values(doc, calculation_runner, Some(&mut redraw_fields))?;
+    let recalculated = recalculate_values(doc, calculation_runner, Some(&mut redraw_fields), &mut pool)?;
     // Format scripts can read other fields. Draw from the final values once all
     // selected defaults and calculated values have been written.
     if !redraw_fields.is_empty() {
@@ -1026,7 +1074,7 @@ pub fn reset_with_formatting(
             // A host may stop callbacks and still commit the reset. Its widgets must
             // continue to reflect the saved values.
             let formatting: &mut dyn Scripts = if scripts.stopped() { &mut no_scripts } else { scripts };
-            redraw(doc, &f, &f.value, formatting)?;
+            redraw(doc, &f, &f.value, formatting, &mut pool)?;
         }
     }
     Ok((changed, recalculated))
