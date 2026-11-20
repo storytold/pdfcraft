@@ -161,6 +161,7 @@ impl State {
             Some(Stop::Cancelled) => lines.push(tl!("Stopped before the end.").to_string()),
             Some(Stop::MatchLimit) => lines.push(fmt(tl!("Stopped at {limit} matches."), &[("limit", &folder_search::DEFAULT_LIMIT.to_string())])),
             Some(Stop::TooManySlowFiles) => lines.push(tl!("Stopped: too many files took too long to read.").to_string()),
+            Some(Stop::TimeLimit) => lines.push(tl!("Stopped: the folder search exceeded its time limit.").to_string()),
             None => {}
         }
         if summary.folder_cut_short {
@@ -412,6 +413,10 @@ mod tests {
         assert_eq!(
             finished(Summary { stopped: Some(Stop::TooManySlowFiles), ..summary }).status(),
             [line, "Stopped: too many files took too long to read."]
+        );
+        assert_eq!(
+            finished(Summary { stopped: Some(Stop::TimeLimit), ..summary }).status(),
+            [line, "Stopped: the folder search exceeded its time limit."]
         );
         assert_eq!(
             finished(Summary { folder_cut_short: true, ..summary }).status(),
